@@ -1,0 +1,20 @@
+[workspace]
+members = ["agentflow-core"]
+resolver = "2"
+
+[package]
+name = "agentflow"
+version = "0.1.0"
+edition = "2021"
+authors = ["AgentFlow Contributors"]
+description = "A high-performance LLM framework inspired by PocketFlow"
+repository = "https://github.com/agentflow/agentflow"
+license = "MIT"
+keywords = ["llm", "ai", "workflow", "agent", "mcp"]
+categories = ["development-tools", "web-programming"]
+
+[dependencies]
+agentflow-core = { path = "agentflow-core" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
