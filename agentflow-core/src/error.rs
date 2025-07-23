@@ -25,6 +25,34 @@ pub enum AgentFlowError {
   
   #[error("Generic error: {0}")]
   Generic(#[from] anyhow::Error),
+
+  // Phase 2: Async and robustness errors
+  #[error("Timeout exceeded after {duration_ms}ms")]
+  TimeoutExceeded { duration_ms: u64 },
+  
+  #[error("Circuit breaker open for node: {node_id}")]
+  CircuitBreakerOpen { node_id: String },
+  
+  #[error("Rate limit exceeded: {limit} requests per {window_ms}ms")]
+  RateLimitExceeded { limit: u32, window_ms: u64 },
+  
+  #[error("Load shed due to high system load")]
+  LoadShed,
+  
+  #[error("Resource pool exhausted: {resource_type}")]
+  ResourcePoolExhausted { resource_type: String },
+  
+  #[error("Task cancelled")]
+  TaskCancelled,
+  
+  #[error("Async execution error: {message}")]
+  AsyncExecutionError { message: String },
+  
+  #[error("Batch processing failed: {failed_items} of {total_items} items failed")]
+  BatchProcessingFailed { failed_items: usize, total_items: usize },
+  
+  #[error("Monitoring error: {message}")]
+  MonitoringError { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, AgentFlowError>;
