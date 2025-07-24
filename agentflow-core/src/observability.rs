@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(feature = "observability")]
 use tracing::{info, warn, error, span, Level};
 
 // Core observability types
@@ -99,7 +100,9 @@ mod tests {
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::{Duration, Instant};
-  use tracing::{info, warn, error, span, Level};
+  #[cfg(feature = "observability")]
+use tracing::{info, warn, error, span, Level};
+  #[cfg(feature = "observability")]
   use tracing_test::traced_test;
 
   // Mock observability components
@@ -149,6 +152,7 @@ mod tests {
   #[async_trait]
   impl AsyncNode for TracedNode {
     async fn prep_async(&self, _shared: &SharedState) -> Result<Value> {
+      #[cfg(feature = "observability")]
       info!("entering {}", self.id);
       Ok(Value::String(format!("prep_{}", self.id)))
     }
@@ -161,6 +165,7 @@ mod tests {
     }
 
     async fn post_async(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+      #[cfg(feature = "observability")]
       info!("exiting {}", self.id);
       Ok(None)
     }
@@ -171,7 +176,7 @@ mod tests {
   }
 
   #[tokio::test]
-  #[traced_test]
+  #[cfg(feature = "observability")]
   async fn test_distributed_tracing() {
     // Test distributed tracing across async flow
     let node1 = TracedNode {

@@ -10,13 +10,18 @@ license = "MIT"
 name = "hello_world"
 path = "examples/hello_world.rs"
 
+[features]
+default = []
+observability = ["tracing"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-tracing = "0.1"
+tracing = { version = "0.1", optional = true }
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
 async-trait = "0.1"
