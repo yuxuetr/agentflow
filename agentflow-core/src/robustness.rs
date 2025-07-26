@@ -1,234 +1,241 @@
 // Robustness and fault tolerance - tests first, implementation follows
-
-use crate::{SharedState, AsyncNode, AgentFlowError, Result};
-use async_trait::async_trait;
-use serde_json::Value;
+#[allow(unused)]
+use crate::{AgentFlowError, AsyncNode, Result, SharedState};
+// use async_trait::async_trait;
+// use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use tokio::time::{sleep, timeout};
-use uuid::Uuid;
+// use tokio::time::{sleep, timeout};
+// use uuid::Uuid;
 
 /// Circuit breaker implementation for fault tolerance
 #[derive(Debug)]
 pub struct CircuitBreaker {
-    pub id: String,
-    failure_threshold: u32,
-    recovery_timeout: Duration,
-    current_failures: Arc<Mutex<u32>>,
-    last_failure_time: Arc<Mutex<Option<Instant>>>,
-    state: Arc<RwLock<CircuitBreakerState>>,
+  pub id: String,
+  failure_threshold: u32,
+  recovery_timeout: Duration,
+  current_failures: Arc<Mutex<u32>>,
+  last_failure_time: Arc<Mutex<Option<Instant>>>,
+  state: Arc<RwLock<CircuitBreakerState>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitBreakerState {
-    Closed,  // Normal operation
-    Open,    // Blocking requests
-    HalfOpen, // Testing recovery
+  Closed,   // Normal operation
+  Open,     // Blocking requests
+  HalfOpen, // Testing recovery
 }
 
 impl CircuitBreaker {
-    pub fn new(id: String, failure_threshold: u32, recovery_timeout: Duration) -> Self {
-        Self {
-            id,
-            failure_threshold,
-            recovery_timeout,
-            current_failures: Arc::new(Mutex::new(0)),
-            last_failure_time: Arc::new(Mutex::new(None)),
-            state: Arc::new(RwLock::new(CircuitBreakerState::Closed)),
+  pub fn new(id: String, failure_threshold: u32, recovery_timeout: Duration) -> Self {
+    Self {
+      id,
+      failure_threshold,
+      recovery_timeout,
+      current_failures: Arc::new(Mutex::new(0)),
+      last_failure_time: Arc::new(Mutex::new(None)),
+      state: Arc::new(RwLock::new(CircuitBreakerState::Closed)),
+    }
+  }
+
+  pub fn get_state(&self) -> CircuitBreakerState {
+    self.state.read().unwrap().clone()
+  }
+
+  pub async fn call<F, T>(&self, operation: F) -> Result<T>
+  where
+    F: futures::Future<Output = Result<T>>,
+  {
+    // Check if circuit breaker should allow the call
+    if !self.should_allow_request().await {
+      return Err(AgentFlowError::CircuitBreakerOpen {
+        node_id: self.id.clone(),
+      });
+    }
+
+    // Execute the operation
+    match operation.await {
+      Ok(result) => {
+        self.on_success().await;
+        Ok(result)
+      }
+      Err(error) => {
+        self.on_failure().await;
+        Err(error)
+      }
+    }
+  }
+
+  async fn should_allow_request(&self) -> bool {
+    let state = self.get_state();
+    match state {
+      CircuitBreakerState::Closed => true,
+      CircuitBreakerState::Open => {
+        // Check if recovery timeout has passed
+        if let Some(last_failure) = *self.last_failure_time.lock().unwrap() {
+          if last_failure.elapsed() >= self.recovery_timeout {
+            // Transition to half-open
+            *self.state.write().unwrap() = CircuitBreakerState::HalfOpen;
+            true
+          } else {
+            false
+          }
+        } else {
+          false
         }
+      }
+      CircuitBreakerState::HalfOpen => true,
     }
+  }
 
-    pub fn get_state(&self) -> CircuitBreakerState {
-        self.state.read().unwrap().clone()
+  async fn on_success(&self) {
+    *self.current_failures.lock().unwrap() = 0;
+    *self.state.write().unwrap() = CircuitBreakerState::Closed;
+  }
+
+  async fn on_failure(&self) {
+    let mut failures = self.current_failures.lock().unwrap();
+    *failures += 1;
+    *self.last_failure_time.lock().unwrap() = Some(Instant::now());
+
+    if *failures >= self.failure_threshold {
+      *self.state.write().unwrap() = CircuitBreakerState::Open;
     }
-
-    pub async fn call<F, T>(&self, operation: F) -> Result<T>
-    where
-        F: futures::Future<Output = Result<T>>,
-    {
-        // Check if circuit breaker should allow the call
-        if !self.should_allow_request().await {
-            return Err(AgentFlowError::CircuitBreakerOpen {
-                node_id: self.id.clone(),
-            });
-        }
-
-        // Execute the operation
-        match operation.await {
-            Ok(result) => {
-                self.on_success().await;
-                Ok(result)
-            }
-            Err(error) => {
-                self.on_failure().await;
-                Err(error)
-            }
-        }
-    }
-
-    async fn should_allow_request(&self) -> bool {
-        let state = self.get_state();
-        match state {
-            CircuitBreakerState::Closed => true,
-            CircuitBreakerState::Open => {
-                // Check if recovery timeout has passed
-                if let Some(last_failure) = *self.last_failure_time.lock().unwrap() {
-                    if last_failure.elapsed() >= self.recovery_timeout {
-                        // Transition to half-open
-                        *self.state.write().unwrap() = CircuitBreakerState::HalfOpen;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            CircuitBreakerState::HalfOpen => true,
-        }
-    }
-
-    async fn on_success(&self) {
-        *self.current_failures.lock().unwrap() = 0;
-        *self.state.write().unwrap() = CircuitBreakerState::Closed;
-    }
-
-    async fn on_failure(&self) {
-        let mut failures = self.current_failures.lock().unwrap();
-        *failures += 1;
-        *self.last_failure_time.lock().unwrap() = Some(Instant::now());
-
-        if *failures >= self.failure_threshold {
-            *self.state.write().unwrap() = CircuitBreakerState::Open;
-        }
-    }
+  }
 }
 
 /// Rate limiter for controlling request rates
 #[derive(Debug)]
 pub struct RateLimiter {
-    pub id: String,
-    max_requests: u32,
-    window_duration: Duration,
-    requests: Arc<Mutex<Vec<Instant>>>,
+  pub id: String,
+  max_requests: u32,
+  window_duration: Duration,
+  requests: Arc<Mutex<Vec<Instant>>>,
 }
 
 impl RateLimiter {
-    pub fn new(id: String, max_requests: u32, window_duration: Duration) -> Self {
-        Self {
-            id,
-            max_requests,
-            window_duration,
-            requests: Arc::new(Mutex::new(Vec::new())),
-        }
+  pub fn new(id: String, max_requests: u32, window_duration: Duration) -> Self {
+    Self {
+      id,
+      max_requests,
+      window_duration,
+      requests: Arc::new(Mutex::new(Vec::new())),
+    }
+  }
+
+  pub async fn acquire(&self) -> Result<()> {
+    let now = Instant::now();
+    let mut requests = self.requests.lock().unwrap();
+
+    // Clean up old requests outside the window
+    requests.retain(|&timestamp| now.duration_since(timestamp) < self.window_duration);
+
+    // Check if we can make a new request
+    if requests.len() >= self.max_requests as usize {
+      return Err(AgentFlowError::RateLimitExceeded {
+        limit: self.max_requests,
+        window_ms: self.window_duration.as_millis() as u64,
+      });
     }
 
-    pub async fn acquire(&self) -> Result<()> {
-        let now = Instant::now();
-        let mut requests = self.requests.lock().unwrap();
-
-        // Clean up old requests outside the window
-        requests.retain(|&timestamp| now.duration_since(timestamp) < self.window_duration);
-
-        // Check if we can make a new request
-        if requests.len() >= self.max_requests as usize {
-            return Err(AgentFlowError::RateLimitExceeded {
-                limit: self.max_requests,
-                window_ms: self.window_duration.as_millis() as u64,
-            });
-        }
-
-        // Record this request
-        requests.push(now);
-        Ok(())
-    }
+    // Record this request
+    requests.push(now);
+    Ok(())
+  }
 }
 
 /// Timeout manager for handling operation timeouts
 #[derive(Debug)]
 pub struct TimeoutManager {
-    pub id: String,
-    default_timeout: Duration,
-    operation_timeouts: Arc<RwLock<HashMap<String, Duration>>>,
+  pub id: String,
+  default_timeout: Duration,
+  operation_timeouts: Arc<RwLock<HashMap<String, Duration>>>,
 }
 
 impl TimeoutManager {
-    pub fn new(id: String, default_timeout: Duration) -> Self {
-        Self {
-            id,
-            default_timeout,
-            operation_timeouts: Arc::new(RwLock::new(HashMap::new())),
-        }
+  pub fn new(id: String, default_timeout: Duration) -> Self {
+    Self {
+      id,
+      default_timeout,
+      operation_timeouts: Arc::new(RwLock::new(HashMap::new())),
     }
+  }
 
-    pub fn set_timeout(&self, operation: String, timeout_duration: Duration) {
-        self.operation_timeouts.write().unwrap()
-            .insert(operation, timeout_duration);
-    }
+  pub fn set_timeout(&self, operation: String, timeout_duration: Duration) {
+    self
+      .operation_timeouts
+      .write()
+      .unwrap()
+      .insert(operation, timeout_duration);
+  }
 
-    pub fn get_timeout(&self, operation: &str) -> Duration {
-        self.operation_timeouts.read().unwrap()
-            .get(operation)
-            .copied()
-            .unwrap_or(self.default_timeout)
-    }
+  pub fn get_timeout(&self, operation: &str) -> Duration {
+    self
+      .operation_timeouts
+      .read()
+      .unwrap()
+      .get(operation)
+      .copied()
+      .unwrap_or(self.default_timeout)
+  }
 
-    pub async fn execute_with_timeout<F, T>(&self, operation: &str, future: F) -> Result<T>
-    where
-        F: futures::Future<Output = Result<T>>,
-    {
-        let timeout_duration = self.get_timeout(operation);
-        match tokio::time::timeout(timeout_duration, future).await {
-            Ok(result) => result,
-            Err(_) => Err(AgentFlowError::TimeoutExceeded {
-                duration_ms: timeout_duration.as_millis() as u64,
-            }),
-        }
+  pub async fn execute_with_timeout<F, T>(&self, operation: &str, future: F) -> Result<T>
+  where
+    F: futures::Future<Output = Result<T>>,
+  {
+    let timeout_duration = self.get_timeout(operation);
+    match tokio::time::timeout(timeout_duration, future).await {
+      Ok(result) => result,
+      Err(_) => Err(AgentFlowError::TimeoutExceeded {
+        duration_ms: timeout_duration.as_millis() as u64,
+      }),
     }
+  }
 }
 
 /// Resource pool for managing limited resources
+#[allow(unused)]
 #[derive(Debug)]
 pub struct ResourcePool {
-    pub id: String,
-    max_resources: usize,
-    available_resources: Arc<Mutex<usize>>,
+  pub id: String,
+  max_resources: usize,
+  available_resources: Arc<Mutex<usize>>,
 }
 
 impl ResourcePool {
-    pub fn new(id: String, max_resources: usize) -> Self {
-        Self {
-            id,
-            max_resources,
-            available_resources: Arc::new(Mutex::new(max_resources)),
-        }
+  pub fn new(id: String, max_resources: usize) -> Self {
+    Self {
+      id,
+      max_resources,
+      available_resources: Arc::new(Mutex::new(max_resources)),
     }
+  }
 
-    pub async fn acquire(&self) -> Result<ResourceGuard> {
-        let mut available = self.available_resources.lock().unwrap();
-        if *available == 0 {
-            return Err(AgentFlowError::ResourcePoolExhausted {
-                resource_type: self.id.clone(),
-            });
-        }
-        *available -= 1;
-        Ok(ResourceGuard {
-            pool: self.available_resources.clone(),
-        })
+  pub async fn acquire(&self) -> Result<ResourceGuard> {
+    let mut available = self.available_resources.lock().unwrap();
+    if *available == 0 {
+      return Err(AgentFlowError::ResourcePoolExhausted {
+        resource_type: self.id.clone(),
+      });
     }
+    *available -= 1;
+    Ok(ResourceGuard {
+      pool: self.available_resources.clone(),
+    })
+  }
 }
 
 /// RAII guard for resource pool
 pub struct ResourceGuard {
-    pool: Arc<Mutex<usize>>,
+  pool: Arc<Mutex<usize>>,
 }
 
 impl Drop for ResourceGuard {
-    fn drop(&mut self) {
-        let mut available = self.pool.lock().unwrap();
-        *available += 1;
-    }
+  fn drop(&mut self) {
+    let mut available = self.pool.lock().unwrap();
+    *available += 1;
+  }
 }
 
 /// Retry policy with exponential backoff and jitter
@@ -250,7 +257,11 @@ impl RetryPolicy {
     }
   }
 
-  pub fn exponential_backoff_with_jitter(max_retries: u32, base_delay: Duration, jitter_ratio: f64) -> Self {
+  pub fn exponential_backoff_with_jitter(
+    max_retries: u32,
+    base_delay: Duration,
+    jitter_ratio: f64,
+  ) -> Self {
     Self {
       max_retries,
       base_delay,
@@ -266,22 +277,22 @@ impl RetryPolicy {
   pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
     let base_delay_ms = self.base_delay.as_millis() as f64;
     let exponential_delay = base_delay_ms * self.backoff_multiplier.powi(attempt as i32);
-    
+
     // Add jitter
     let jitter = if self.jitter_ratio > 0.0 {
       use std::collections::hash_map::DefaultHasher;
       use std::hash::{Hash, Hasher};
-      
+
       let mut hasher = DefaultHasher::new();
       (attempt, std::time::SystemTime::now()).hash(&mut hasher);
       let hash_val = hasher.finish();
-      
+
       let jitter_factor = (hash_val % 1000) as f64 / 1000.0; // 0.0 to 1.0
       exponential_delay * self.jitter_ratio * (jitter_factor - 0.5) * 2.0
     } else {
       0.0
     };
-    
+
     Duration::from_millis((exponential_delay + jitter).max(0.0) as u64)
   }
 }
@@ -330,11 +341,11 @@ impl FaultInjector {
   pub async fn should_inject_failure(&self) -> bool {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     std::time::SystemTime::now().hash(&mut hasher);
     let hash_val = hasher.finish();
-    
+
     (hash_val % 1000) as f64 / 1000.0 < self.failure_rate
   }
 
@@ -369,20 +380,20 @@ impl AdaptiveTimeout {
   pub fn record_execution_time(&mut self, duration: Duration) {
     let mut history = self.history.lock().unwrap();
     history.push(duration);
-    
+
     if history.len() > self.max_history {
       history.remove(0);
     }
-    
+
     // Calculate new timeout based on percentile
     if history.len() >= 3 {
       let mut sorted_history = history.clone();
       sorted_history.sort();
-      
+
       // Use 95th percentile + buffer
       let index = (sorted_history.len() as f64 * 0.95) as usize;
       let p95 = sorted_history.get(index).copied().unwrap_or(duration);
-      
+
       let new_timeout = Duration::from_millis((p95.as_millis() as f64 * 1.5) as u64);
       *self.current_timeout.lock().unwrap() = new_timeout;
     }
@@ -392,7 +403,7 @@ impl AdaptiveTimeout {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{SharedState, AsyncNode, AgentFlowError, Result};
+  use crate::{AgentFlowError, AsyncNode, Result, SharedState};
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::{Duration, Instant};
@@ -443,40 +454,59 @@ mod tests {
       }
 
       let attempt_count = *self.attempts.lock().unwrap();
-      
+
       // For high failure rates (>0.9), make first few attempts always fail to ensure retry testing
       if self.failure_rate > 0.9 && attempt_count <= 3 {
         return Err(AgentFlowError::AsyncExecutionError {
-          message: format!("Unreliable node {} failed on attempt {}", self.id, attempt_count),
+          message: format!(
+            "Unreliable node {} failed on attempt {}",
+            self.id, attempt_count
+          ),
         });
       }
-      
+
       // Determine if this attempt should fail based on failure_rate
       use std::collections::hash_map::DefaultHasher;
       use std::hash::{Hash, Hasher};
-      
+
       let mut hasher = DefaultHasher::new();
       (self.id.clone(), attempt_count, std::time::SystemTime::now()).hash(&mut hasher);
       let hash_val = hasher.finish();
-      
+
       let random_val = (hash_val % 1000) as f32 / 1000.0;
-      
+
       if random_val < self.failure_rate {
         return Err(AgentFlowError::AsyncExecutionError {
-          message: format!("Unreliable node {} failed on attempt {}", self.id, attempt_count),
+          message: format!(
+            "Unreliable node {} failed on attempt {}",
+            self.id, attempt_count
+          ),
         });
       }
 
       Ok(Value::String(format!("success_attempt_{}", attempt_count)))
     }
 
-    async fn post_async(&self, shared: &SharedState, _prep_result: Value, exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      exec_result: Value,
+    ) -> Result<Option<String>> {
       shared.insert("result".to_string(), exec_result);
-      shared.insert("degraded_result".to_string(), Value::String("partial_result".to_string()));
+      shared.insert(
+        "degraded_result".to_string(),
+        Value::String("partial_result".to_string()),
+      );
       Ok(None)
     }
 
-    async fn run_async_with_retries(&self, shared: &SharedState, max_retries: u32, wait_duration: Duration) -> Result<Option<String>> {
+    async fn run_async_with_retries(
+      &self,
+      shared: &SharedState,
+      max_retries: u32,
+      wait_duration: Duration,
+    ) -> Result<Option<String>> {
       for retry in 0..max_retries {
         match self.run_async(shared).await {
           Ok(result) => return Ok(result),
@@ -491,22 +521,33 @@ mod tests {
       unreachable!()
     }
 
-    async fn run_async_with_timeout(&self, shared: &SharedState, timeout_duration: Duration) -> Result<Option<String>> {
+    async fn run_async_with_timeout(
+      &self,
+      shared: &SharedState,
+      timeout_duration: Duration,
+    ) -> Result<Option<String>> {
       match tokio::time::timeout(timeout_duration, self.run_async(shared)).await {
         Ok(result) => result,
         Err(_) => {
           // Provide graceful degradation by setting partial result
-          shared.insert("degraded_result".to_string(), Value::String("partial_result".to_string()));
+          shared.insert(
+            "degraded_result".to_string(),
+            Value::String("partial_result".to_string()),
+          );
           Err(AgentFlowError::TimeoutExceeded {
             duration_ms: timeout_duration.as_millis() as u64,
           })
-        },
+        }
       }
     }
   }
 
   impl UnreliableNode {
-    async fn run_async_with_retry(&self, shared: &SharedState, retry_policy: RetryPolicy) -> Result<Option<String>> {
+    async fn run_async_with_retry(
+      &self,
+      shared: &SharedState,
+      retry_policy: RetryPolicy,
+    ) -> Result<Option<String>> {
       for attempt in 0..retry_policy.max_retries() {
         match self.run_async(shared).await {
           Ok(result) => return Ok(result),
@@ -522,7 +563,11 @@ mod tests {
       unreachable!()
     }
 
-    async fn run_async_with_rate_limit(&self, shared: &SharedState, rate_limiter: &RateLimiter) -> Result<Option<String>> {
+    async fn run_async_with_rate_limit(
+      &self,
+      shared: &SharedState,
+      rate_limiter: &RateLimiter,
+    ) -> Result<Option<String>> {
       // Keep trying until we can acquire the rate limit
       loop {
         match rate_limiter.acquire().await {
@@ -536,31 +581,39 @@ mod tests {
       self.run_async(shared).await
     }
 
-    async fn run_async_with_fault_injection(&self, shared: &SharedState, fault_injector: &FaultInjector) -> Result<Option<String>> {
+    async fn run_async_with_fault_injection(
+      &self,
+      shared: &SharedState,
+      fault_injector: &FaultInjector,
+    ) -> Result<Option<String>> {
       if fault_injector.should_inject_failure().await {
         return Err(AgentFlowError::AsyncExecutionError {
           message: "Fault injected".to_string(),
         });
       }
-      
+
       fault_injector.inject_latency().await;
       self.run_async(shared).await
     }
 
-    async fn run_async_with_adaptive_timeout(&self, shared: &SharedState, adaptive_timeout: &mut AdaptiveTimeout) -> Result<Option<String>> {
+    async fn run_async_with_adaptive_timeout(
+      &self,
+      shared: &SharedState,
+      adaptive_timeout: &mut AdaptiveTimeout,
+    ) -> Result<Option<String>> {
       let timeout_duration = adaptive_timeout.current_timeout();
       let start = Instant::now();
-      
+
       let result = match tokio::time::timeout(timeout_duration, self.run_async(shared)).await {
         Ok(result) => result,
         Err(_) => Err(AgentFlowError::TimeoutExceeded {
           duration_ms: timeout_duration.as_millis() as u64,
         }),
       };
-      
+
       let elapsed = start.elapsed();
       adaptive_timeout.record_execution_time(elapsed);
-      
+
       result
     }
 
@@ -568,7 +621,16 @@ mod tests {
       let mut status = serde_json::Map::new();
       status.insert("node_id".to_string(), Value::String(self.id.clone()));
       status.insert("status".to_string(), Value::String("healthy".to_string()));
-      status.insert("last_check".to_string(), Value::String(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string()));
+      status.insert(
+        "last_check".to_string(),
+        Value::String(
+          std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string(),
+        ),
+      );
       Ok(status)
     }
   }
@@ -581,7 +643,7 @@ mod tests {
 
     async fn exec_async(&self, _prep_result: Value) -> Result<Value> {
       let failures = *self.current_failures.lock().unwrap();
-      
+
       if failures >= self.failure_threshold {
         // Check if recovery timeout has passed
         if let Some(last_failure) = *self.last_failure_time.lock().unwrap() {
@@ -592,22 +654,27 @@ mod tests {
           }
         }
       }
-      
+
       // Simulate operation that might fail
       if failures < self.failure_threshold {
         // Increment failures to simulate failing operations
         *self.current_failures.lock().unwrap() += 1;
         *self.last_failure_time.lock().unwrap() = Some(Instant::now());
-        
+
         return Err(AgentFlowError::AsyncExecutionError {
           message: "Circuit breaker test failure".to_string(),
         });
       }
-      
+
       Ok(Value::String("circuit_breaker_success".to_string()))
     }
 
-    async fn post_async(&self, _shared: &SharedState, _prep_result: Value, exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -636,7 +703,12 @@ mod tests {
       Ok(Value::String("bulkhead_exec".to_string()))
     }
 
-    async fn post_async(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       // Release the resource slot
       let mut active = self.active_requests.lock().unwrap();
       *active -= 1;
@@ -645,15 +717,20 @@ mod tests {
   }
 
   impl BulkheadNode {
-    async fn run_async_with_load_shedding(&self, shared: &SharedState, load_shedder: &LoadShedder) -> Result<Option<String>> {
-      let current_load = *self.active_requests.lock().unwrap() as f64 / self.resource_pool_size as f64;
-      
+    async fn run_async_with_load_shedding(
+      &self,
+      shared: &SharedState,
+      load_shedder: &LoadShedder,
+    ) -> Result<Option<String>> {
+      let current_load =
+        *self.active_requests.lock().unwrap() as f64 / self.resource_pool_size as f64;
+
       if load_shedder.should_shed_load(current_load) {
         return Err(AgentFlowError::AsyncExecutionError {
           message: "Load shed".to_string(),
         });
       }
-      
+
       self.run_async(shared).await
     }
   }
@@ -662,7 +739,11 @@ mod tests {
   impl AsyncNode for FallbackNode {
     async fn prep_async(&self, _shared: &SharedState) -> Result<Value> {
       {
-        self.execution_log.lock().unwrap().push("primary_attempted".to_string());
+        self
+          .execution_log
+          .lock()
+          .unwrap()
+          .push("primary_attempted".to_string());
       }
       Ok(Value::String("fallback_prep".to_string()))
     }
@@ -676,11 +757,15 @@ mod tests {
       Ok(Value::String("primary_success".to_string()))
     }
 
-    async fn post_async(&self, shared: &SharedState, _prep_result: Value, exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      exec_result: Value,
+    ) -> Result<Option<String>> {
       shared.insert("result".to_string(), exec_result);
       Ok(None)
     }
-
   }
 
   impl FallbackNode {
@@ -690,9 +775,16 @@ mod tests {
         Err(_) => {
           // Execute fallback
           {
-            self.execution_log.lock().unwrap().push("fallback_executed".to_string());
+            self
+              .execution_log
+              .lock()
+              .unwrap()
+              .push("fallback_executed".to_string());
           }
-          shared.insert("result".to_string(), Value::String(self.fallback_result.clone()));
+          shared.insert(
+            "result".to_string(),
+            Value::String(self.fallback_result.clone()),
+          );
           Ok(None)
         }
       }
@@ -711,7 +803,7 @@ mod tests {
 
     let shared = SharedState::new();
     let retry_policy = RetryPolicy::exponential_backoff(5, Duration::from_millis(10));
-    
+
     let start = Instant::now();
     let _result = node.run_async_with_retry(&shared, retry_policy).await;
     let elapsed = start.elapsed();
@@ -719,7 +811,7 @@ mod tests {
     // Should eventually succeed or exhaust retries
     let attempts = *node.attempts.lock().unwrap();
     assert!(attempts > 1); // Should have retried
-    
+
     // Should have exponential backoff delay
     let expected_min_delay = Duration::from_millis(10 + 20 + 40); // First few backoffs
     if attempts >= 3 {
@@ -739,16 +831,18 @@ mod tests {
 
     let shared = SharedState::new();
     let retry_policy = RetryPolicy::exponential_backoff_with_jitter(
-      3, 
+      3,
       Duration::from_millis(10),
-      0.2 // 20% jitter
+      0.2, // 20% jitter
     );
 
     // Run multiple retries and measure timing variation
     let mut durations = Vec::new();
     for _ in 0..5 {
       let start = Instant::now();
-      let _ = node.run_async_with_retry(&shared, retry_policy.clone()).await;
+      let _ = node
+        .run_async_with_retry(&shared, retry_policy.clone())
+        .await;
       durations.push(start.elapsed());
     }
 
@@ -756,7 +850,7 @@ mod tests {
     let min_duration = durations.iter().min().unwrap();
     let max_duration = durations.iter().max().unwrap();
     let variation = max_duration.saturating_sub(*min_duration);
-    
+
     assert!(variation > Duration::from_millis(1)); // Should have some jitter variation (reduced threshold)
   }
 
@@ -776,7 +870,7 @@ mod tests {
     // First few requests should fail and increment failure count
     for i in 0..5 {
       let result = node.run_async(&shared).await;
-      
+
       if i < 3 {
         // Should still attempt and fail
         assert!(result.is_err());
@@ -811,9 +905,7 @@ mod tests {
     let shared_clone = &shared;
     let futures = (0..5).map(|_| {
       let node_ref = &node;
-      async move {
-        node_ref.run_async(shared_clone).await
-      }
+      async move { node_ref.run_async(shared_clone).await }
     });
 
     let start = Instant::now();
@@ -844,7 +936,7 @@ mod tests {
     let result = node.run_async_with_fallback(&shared).await;
 
     assert!(result.is_ok());
-    
+
     let log = node.execution_log.lock().unwrap();
     assert!(log.contains(&"primary_attempted".to_string()));
     assert!(log.contains(&"fallback_executed".to_string()));
@@ -862,7 +954,7 @@ mod tests {
     let node = UnreliableNode {
       id: "slow".to_string(),
       failure_rate: 0.0, // Never fail, just slow
-      delay_ms: 1000, // 1 second
+      delay_ms: 1000,    // 1 second
       attempts: Arc::new(Mutex::new(0)),
     };
 
@@ -873,7 +965,10 @@ mod tests {
 
     // Should timeout
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AgentFlowError::TimeoutExceeded { .. }));
+    assert!(matches!(
+      result.unwrap_err(),
+      AgentFlowError::TimeoutExceeded { .. }
+    ));
 
     // Should have attempted graceful degradation
     assert!(shared.contains_key("degraded_result")); // Partial result available
@@ -890,10 +985,10 @@ mod tests {
     };
 
     let health_status = node.health_check().await;
-    
+
     // Health check should provide status
     assert!(health_status.is_ok());
-    
+
     let status = health_status.unwrap();
     assert!(status.contains_key("node_id"));
     assert!(status.contains_key("status"));
@@ -911,13 +1006,15 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    let rate_limiter = RateLimiter::new("test_rate_limiter".to_string(), 2, Duration::from_millis(100)); // 2 requests per 100ms
+    let rate_limiter = RateLimiter::new(
+      "test_rate_limiter".to_string(),
+      2,
+      Duration::from_millis(100),
+    ); // 2 requests per 100ms
 
     // Send 5 requests rapidly
     let start = Instant::now();
-    let futures = (0..5).map(|_| {
-      node.run_async_with_rate_limit(&shared, &rate_limiter)
-    });
+    let futures = (0..5).map(|_| node.run_async_with_rate_limit(&shared, &rate_limiter));
 
     let results = futures::future::join_all(futures).await;
     let elapsed = start.elapsed();
@@ -942,7 +1039,7 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    
+
     // Configure load shedding: reject requests when >80% capacity
     let load_shedder = LoadShedder::new(0.8);
 
@@ -953,7 +1050,9 @@ mod tests {
       let shared_ref = &shared;
       let load_shedder_ref = &load_shedder;
       futures.push(async move {
-        node_ref.run_async_with_load_shedding(shared_ref, load_shedder_ref).await
+        node_ref
+          .run_async_with_load_shedding(shared_ref, load_shedder_ref)
+          .await
       });
     }
 
@@ -987,14 +1086,16 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    
+
     // Inject faults for testing
     let fault_injector = FaultInjector::new()
       .with_failure_rate(0.5)
       .with_latency_injection(Duration::from_millis(50));
 
     let start = Instant::now();
-    let result = node.run_async_with_fault_injection(&shared, &fault_injector).await;
+    let result = node
+      .run_async_with_fault_injection(&shared, &fault_injector)
+      .await;
     let elapsed = start.elapsed();
 
     // May succeed or fail due to injection
@@ -1019,12 +1120,14 @@ mod tests {
 
     // Run several times to build history
     for _ in 0..5 {
-      let _ = node.run_async_with_adaptive_timeout(&shared, &mut adaptive_timeout).await;
+      let _ = node
+        .run_async_with_adaptive_timeout(&shared, &mut adaptive_timeout)
+        .await;
     }
 
     // Timeout should adapt to observed performance
     let current_timeout = adaptive_timeout.current_timeout();
-    
+
     // Should be somewhere around 50ms + buffer
     assert!(current_timeout >= Duration::from_millis(50));
     assert!(current_timeout <= Duration::from_millis(150));
