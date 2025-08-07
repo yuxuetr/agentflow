@@ -1,0 +1,67 @@
+flowchart TD
+    %% Input and Context Setup
+    START[👤 User Input:<br/>'What is Deep Learning?'<br/>Context: 'Planning activities'] --> INIT[🚀 Initialize Flow<br/>Enable Tracing]
+    
+    %% Initial LLM Processing
+    INIT --> LLM1[🤖 Initial LLM Node<br/>moonshot-v1-8k<br/>Template: 'You are a helpful assistant...<br/>{user_input} with {context}']
+    
+    %% Response Processing
+    LLM1 --> |LLM Response| PROC[🔍 Response Processor<br/>Word Count: 45<br/>Sentiment Analysis<br/>Extract Metadata]
+    
+    %% Decision Logic
+    PROC --> |Analysis Results| DEC{🤔 Decision Node<br/>Route Based On:<br/>• Sentiment<br/>• Word Count}
+    
+    %% Routing Paths
+    DEC --> |Positive Sentiment| SUCCESS[🎉 Success Node<br/>Celebratory Follow-up<br/>moonshot-v1-8k]
+    DEC --> |Negative Sentiment| RETRY[🔄 Retry Node<br/>Encouraging Response<br/>moonshot-v1-8k]
+    DEC --> |Neutral + Long<br/>> 10 words| DETAILED[📄 Detailed Node<br/>Summarize Response<br/>moonshot-v1-8k]
+    DEC --> |Neutral + Short<br/>≤ 10 words| SIMPLE[📝 Simple Node<br/>Expand with Details<br/>moonshot-v1-8k]
+    
+    %% Final Processing
+    SUCCESS --> FINAL[📋 Flow Summary<br/>• Execution trace<br/>• Response analysis<br/>• Final output]
+    RETRY --> FINAL
+    DETAILED --> FINAL
+    SIMPLE --> FINAL
+    
+    %% Shared State Flow
+    subgraph SHARED [" 💾 Shared State Management"]
+        STATE1[initial_llm_response]
+        STATE2[response_analysis]  
+        STATE3[decision_made]
+        STATE4[final_node_response]
+    end
+    
+    LLM1 -.-> STATE1
+    PROC -.-> STATE2
+    DEC -.-> STATE3
+    SUCCESS -.-> STATE4
+    RETRY -.-> STATE4
+    DETAILED -.-> STATE4
+    SIMPLE -.-> STATE4
+    
+    %% Observability
+    subgraph OBS [" 📊 Observability & Metrics"]
+        METRICS[Flow Tracing<br/>Node Execution Times<br/>Success/Error Rates]
+        LOGS[Detailed Logging<br/>Request/Response<br/>Decision Logic]
+    end
+    
+    INIT -.-> METRICS
+    LLM1 -.-> LOGS
+    PROC -.-> LOGS
+    DEC -.-> LOGS
+    
+    %% Styling
+    classDef llmNode fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef processingNode fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef decisionNode fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef terminalNode fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef errorNode fill:#ffebee,stroke:#b71c1c,stroke-width:2px
+    classDef sharedState fill:#f5f5f5,stroke:#424242,stroke-width:1px
+    classDef observability fill:#f0f4c3,stroke:#827717,stroke-width:1px
+    
+    class LLM1,SUCCESS,RETRY,DETAILED,SIMPLE llmNode
+    class PROC processingNode
+    class DEC decisionNode
+    class FINAL terminalNode
+    class SHARED,STATE1,STATE2,STATE3,STATE4 sharedState
+    class OBS,METRICS,LOGS observability

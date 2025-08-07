@@ -1,0 +1,314 @@
+# yaml-language-server: $schema=null
+# file-type: agentflow-models-config
+# STEP Models Configuration
+# Based on official Step API documentation
+# Last updated: 2025-08-06
+# AgentFlow LLM vendor-specific model configuration
+
+models:
+  step-1-8k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-1-32k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-1-256k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 262144
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-1x-medium:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2-mini:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2x-large:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-3:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+
+  # Multimodal (Vision + Text) Models
+  step-1v-8k:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1v-32k:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-2-16k:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-2-16k-202411:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-2-16k-exp:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1o-vision-32k:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1o-turbo-vision:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-r1-v-mini:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+
+  # Audio Models
+  step-1o-audio:
+    vendor: step
+    type: audio
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+  step-1f-audio:
+    vendor: step
+    type: audio
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+  step-asr:
+    vendor: step
+    type: asr
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+
+  # Text-to-Speech Models
+  step-tts-mini:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  step-tts-vivid:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

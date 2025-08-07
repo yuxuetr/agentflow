@@ -1,0 +1,84 @@
+sequenceDiagram
+    participant User as 👤 User
+    participant Flow as 🔄 AsyncFlow
+    participant SharedState as 💾 SharedState
+    participant LLM1 as 🤖 Initial LLM
+    participant Processor as 🔍 Processor
+    participant Decision as 🤔 Decision
+    participant Terminal as 🎯 Terminal Node
+    participant Moonshot as 🌙 Moonshot API
+    
+    User->>Flow: cargo run --example simple_agent_llm_flow
+    
+    Note over Flow: Initialize Flow with Tracing
+    Flow->>SharedState: Set user_input: "What is Deep Learning?"
+    Flow->>SharedState: Set context: "Planning activities"
+    
+    Note over Flow: Execute Initial LLM Node
+    Flow->>LLM1: prep_async(shared_state)
+    LLM1->>SharedState: Get user_input & context
+    LLM1->>LLM1: Build prompt template
+    LLM1-->>Flow: Return prepared prompt
+    
+    Flow->>LLM1: exec_async(prep_result)
+    LLM1->>Moonshot: AgentFlow::model("moonshot-v1-8k")<br/>.prompt("You are a helpful assistant...")<br/>.execute()
+    Moonshot-->>LLM1: "Deep Learning is a subset of ML<br/>that uses neural networks..."
+    LLM1-->>Flow: LLM response object
+    
+    Flow->>LLM1: post_async(shared, prep, exec)
+    LLM1->>SharedState: Store initial_llm_response
+    LLM1->>SharedState: Store last_llm_result
+    LLM1-->>Flow: Return "processor" (next node)
+    
+    Note over Flow: Execute Response Processor
+    Flow->>Processor: prep_async(shared_state)
+    Processor->>SharedState: Get last_llm_result
+    Processor-->>Flow: Return LLM result
+    
+    Flow->>Processor: exec_async(prep_result)
+    Processor->>Processor: Analyze word count (45 words)
+    Processor->>Processor: Analyze sentiment (neutral)
+    Processor-->>Flow: Analysis result object
+    
+    Flow->>Processor: post_async(shared, prep, exec)
+    Processor->>SharedState: Store response_analysis
+    Processor-->>Flow: Return "decision" (next node)
+    
+    Note over Flow: Execute Decision Node
+    Flow->>Decision: prep_async(shared_state)
+    Decision->>SharedState: Get response_analysis
+    Decision-->>Flow: Return analysis data
+    
+    Flow->>Decision: exec_async(prep_result)
+    Decision->>Decision: sentiment="neutral", words=45
+    Decision->>Decision: Route logic: neutral + >10 words
+    Decision-->>Flow: Return "detailed_node"
+    
+    Flow->>Decision: post_async(shared, prep, exec)
+    Decision->>SharedState: Store decision_made
+    Decision-->>Flow: Return "detailed_node" (next node)
+    
+    Note over Flow: Execute Detailed Terminal Node
+    Flow->>Terminal: prep_async(shared_state)
+    Terminal->>SharedState: Get user_input & context
+    Terminal->>Terminal: Build summarization prompt
+    Terminal-->>Flow: Return prepared prompt
+    
+    Flow->>Terminal: exec_async(prep_result)
+    Terminal->>Moonshot: AgentFlow::model("moonshot-v1-8k")<br/>.prompt("Summarize previous response...")<br/>.execute()
+    Moonshot-->>Terminal: "Deep Learning uses neural networks<br/>to learn patterns."
+    Terminal-->>Flow: Final LLM response
+    
+    Flow->>Terminal: post_async(shared, prep, exec)
+    Terminal->>SharedState: Store detailed_response
+    Terminal-->>Flow: Return None (end flow)
+    
+    Note over Flow: Flow Completion
+    Flow->>Flow: Generate execution summary
+    Flow->>SharedState: Collect all stored results
+    Flow-->>User: 🎉 Flow completed!<br/>📋 Execution summary<br/>🏁 Demo completed!
+    
+    Note over User, Moonshot: Key Data Flow
+    rect rgb(240, 248, 255)
+        Note over SharedState: Shared State Contents:<br/>• user_input: "What is Deep Learning?"<br/>• context: "Planning activities"<br/>• initial_llm_response: "Deep Learning is..."<br/>• response_analysis: {word_count: 45, sentiment: "neutral"}<br/>• decision_made: "detailed_node"<br/>• detailed_response: "Deep Learning uses neural networks..."
+    end

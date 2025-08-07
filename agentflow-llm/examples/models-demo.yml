@@ -1,0 +1,48 @@
+# Demo model configuration file - works without real API keys
+# For actual usage, copy examples/.env.example to .env and add real API keys
+
+models:
+  # OpenAI Models
+  gpt-4o-mini:
+    vendor: openai
+    temperature: 0.7
+    max_tokens: 4096
+    supports_streaming: true
+
+  # Anthropic Models  
+  claude-3-haiku:
+    vendor: anthropic
+    model_id: "claude-3-haiku-20240307"
+    temperature: 0.3
+    max_tokens: 4096
+    supports_streaming: true
+
+  # Moonshot Models
+  moonshot-v1-8k:
+    vendor: moonshot
+    temperature: 0.7
+    max_tokens: 100
+    supports_streaming: true
+
+# Provider configurations
+providers:
+  openai:
+    api_key_env: "DEMO_OPENAI_API_KEY"
+    base_url: "https://api.openai.com/v1"
+    timeout_seconds: 60
+
+  anthropic:
+    api_key_env: "DEMO_ANTHROPIC_API_KEY"
+    base_url: "https://api.anthropic.com"
+    timeout_seconds: 90
+
+  moonshot:
+    api_key_env: "DEMO_MOONSHOT_API_KEY"
+    base_url: "https://api.moonshot.cn/v1"
+    timeout_seconds: 60
+
+# Global defaults
+defaults:
+  timeout_seconds: 60
+  max_retries: 3
+  retry_delay_ms: 1000

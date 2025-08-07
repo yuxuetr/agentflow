@@ -1,0 +1,35 @@
+# OPENAI Models Configuration
+# Auto-generated from monolithic config
+# Last updated: 2025-07-31 17:06:17 UTC
+
+models:
+  gpt-4o-mini:
+    vendor: openai
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  gpt-4o:
+    vendor: openai
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 4096
+    frequency_penalty: 0.0
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null

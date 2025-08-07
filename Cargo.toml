@@ -1,5 +1,5 @@
 [workspace]
-members = ["agentflow-core"]
+members = ["agentflow-core", "agentflow-llm"]
 resolver = "2"
 
 [package]
@@ -19,11 +19,16 @@ observability = ["agentflow-core/observability"]
 
 [dependencies]
 agentflow-core = { path = "agentflow-core" }
+agentflow-llm = { path = "agentflow-llm" }
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 tokio = { version = "1.0", features = ["full"] }
+
+[[example]]
+name = "simple_agent_llm_flow"
+path = "examples/simple_agent_llm_flow.rs"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

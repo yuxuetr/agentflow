@@ -1,0 +1,53 @@
+# AgentFlow LLM Main Configuration
+# Contains providers and defaults only
+# Models are loaded from models/*.yml files
+# Last updated: 2025-07-31 17:06:17 UTC
+
+models: {}
+providers:
+  moonshot:
+    api_key_env: MOONSHOT_API_KEY
+    base_url: https://api.moonshot.cn/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  google:
+    api_key_env: GEMINI_API_KEY
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 1000
+      tokens_per_minute: 32000
+  dashscope:
+    api_key_env: DASHSCOPE_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com/v1
+    timeout_seconds: 90
+    rate_limit:
+      requests_per_minute: 300
+      tokens_per_minute: 40000
+  openai:
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  step:
+    api_key_env: STEP_API_KEY
+    base_url: https://api.stepfun.com/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+defaults:
+  timeout_seconds: 60
+  max_retries: 3
+  retry_delay_ms: 1000

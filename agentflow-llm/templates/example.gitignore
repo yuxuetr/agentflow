@@ -1,0 +1,21 @@
+# Environment files - NEVER commit API keys!
+.env
+.env.local
+.env.production
+.env.development
+
+# AgentFlow user configuration
+.agentflow/
+
+# Common IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Logs
+*.log

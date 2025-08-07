@@ -211,6 +211,33 @@ AgentFlow is designed for production environments with:
 - **Scalability**: Built-in support for horizontal scaling patterns
 - **Monitoring**: Full observability stack for production insights
 
+## 📚 Examples
+
+### 🤖 Featured Example: LLM-Powered Agent Flow
+
+```bash
+# Run the comprehensive LLM integration example
+cargo run --example simple_agent_llm_flow
+```
+
+This example demonstrates:
+- **LLM Integration**: Using moonshot API within AgentFlow workflows
+- **Intelligent Routing**: Dynamic flow branching based on AI response analysis
+- **Response Processing**: Automated sentiment and complexity analysis
+- **Context Management**: Dynamic prompt templates with state substitution
+- **Full Observability**: Real-time metrics and execution tracing
+
+### 📂 All Examples
+
+See the [examples directory](./examples) for working examples:
+- `hello_world.rs` - Basic AsyncNode functionality
+- `batch_processing.rs` - Parallel processing patterns  
+- `workflow.rs` - Sequential multi-stage workflows
+- `chat.rs` - Interactive conversation flows
+- `simple_agent_llm_flow.rs` - **LLM integration with intelligent routing**
+
+📚 **[Complete Documentation](./docs/examples/)** with workflow diagrams and detailed guides.
+
 ## 🛣️ Roadmap
 
 - **v0.3.0**: MCP (Model Context Protocol) integration
