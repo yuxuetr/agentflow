@@ -11,22 +11,23 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-pub struct OpenAIProvider {
+/// StepFun provider implementation (OpenAI-compatible but optimized for multimodal)
+pub struct StepFunProvider {
   client: Client,
   api_key: String,
   base_url: String,
 }
 
-impl OpenAIProvider {
+impl StepFunProvider {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {
-        provider: "openai".to_string(),
+        provider: "stepfun".to_string(),
       });
     }
 
     let client = Client::new();
-    let base_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let base_url = base_url.unwrap_or_else(|| "https://api.stepfun.com/v1".to_string());
 
     Ok(Self {
       client,
@@ -59,9 +60,9 @@ impl OpenAIProvider {
 }
 
 #[async_trait]
-impl LLMProvider for OpenAIProvider {
+impl LLMProvider for StepFunProvider {
   fn name(&self) -> &str {
-    "openai"
+    "stepfun"
   }
 
   async fn execute(&self, request: &ProviderRequest) -> Result<ProviderResponse> {
@@ -91,10 +92,10 @@ impl LLMProvider for OpenAIProvider {
       });
     }
 
-    let openai_response: OpenAIResponse = response.json().await?;
+    let stepfun_response: StepFunResponse = response.json().await?;
     
-    // Handle both string and array content formats
-    let content_text = if let Some(first_choice) = openai_response.choices.first() {
+    // Handle both string and array content formats (StepFun supports multimodal)
+    let content_text = if let Some(first_choice) = stepfun_response.choices.first() {
       match &first_choice.message.content {
         Some(serde_json::Value::String(text)) => text.clone(),
         Some(serde_json::Value::Array(_)) => {
@@ -111,10 +112,10 @@ impl LLMProvider for OpenAIProvider {
       String::new()
     };
 
-    // Convert to ContentType - OpenAI currently only returns text
+    // Convert to ContentType
     let content = ContentType::Text(content_text);
 
-    let usage = openai_response.usage.clone().map(|u| crate::providers::TokenUsage {
+    let usage = stepfun_response.usage.clone().map(|u| crate::providers::TokenUsage {
       prompt_tokens: Some(u.prompt_tokens),
       completion_tokens: Some(u.completion_tokens),
       total_tokens: Some(u.total_tokens),
@@ -123,7 +124,7 @@ impl LLMProvider for OpenAIProvider {
     Ok(ProviderResponse {
       content,
       usage,
-      metadata: Some(serde_json::to_value(&openai_response)?),
+      metadata: Some(serde_json::to_value(&stepfun_response)?),
     })
   }
 
@@ -154,24 +155,30 @@ impl LLMProvider for OpenAIProvider {
       });
     }
 
-    Ok(Box::new(OpenAIStreamingResponse::new(response)))
+    Ok(Box::new(StepFunStreamingResponse::new(response)))
   }
 
   async fn validate_config(&self) -> Result<()> {
-    // Simple health check - try to list models
-    let url = format!("{}/models", self.base_url);
+    // Simple health check - try to make a minimal request
+    let url = format!("{}/chat/completions", self.base_url);
+    let test_body = json!({
+      "model": "step-1-8k",
+      "messages": [{"role": "user", "content": "test"}],
+      "max_tokens": 1
+    });
     
     let response = self
       .client
-      .get(&url)
+      .post(&url)
       .headers(self.build_headers())
+      .json(&test_body)
       .send()
       .await?;
 
     if !response.status().is_success() {
       return Err(LLMError::AuthenticationError {
-        provider: "openai".to_string(),
-        message: "Failed to authenticate with OpenAI API".to_string(),
+        provider: "stepfun".to_string(),
+        message: "Failed to authenticate with StepFun API".to_string(),
       });
     }
 
@@ -184,81 +191,100 @@ impl LLMProvider for OpenAIProvider {
 
   fn supported_models(&self) -> Vec<String> {
     vec![
-      "gpt-4o".to_string(),
-      "gpt-4o-mini".to_string(),
-      "gpt-4-turbo".to_string(),
-      "gpt-4".to_string(),
-      "gpt-3.5-turbo".to_string(),
+      "step-1-8k".to_string(),
+      "step-1-32k".to_string(),
+      "step-1-128k".to_string(),
+      "step-1-256k".to_string(),
+      "step-1o".to_string(),
+      "step-1o-turbo".to_string(),
+      "step-1o-turbo-vision".to_string(), // Multimodal model
+      "step-2-16k".to_string(),
     ]
   }
 }
 
-// OpenAI API response structures
+// StepFun API response structures (similar to OpenAI but with StepFun specifics)
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIResponse {
+struct StepFunResponse {
   id: String,
   object: String,
   created: u64,
   model: String,
-  choices: Vec<OpenAIChoice>,
-  usage: Option<OpenAIUsage>,
+  choices: Vec<StepFunChoice>,
+  usage: Option<StepFunUsage>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  service_tier: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  system_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIChoice {
+struct StepFunChoice {
   index: u32,
-  message: OpenAIMessage,
+  message: StepFunMessage,
   finish_reason: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  logprobs: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIMessage {
+struct StepFunMessage {
   role: String,
-  content: Option<serde_json::Value>, // Can be string or array of content objects
+  content: Option<serde_json::Value>, // Can be string or array for multimodal
+  #[serde(skip_serializing_if = "Option::is_none")]
+  refusal: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  function_call: Option<Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  tool_calls: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct OpenAIUsage {
+struct StepFunUsage {
   prompt_tokens: u32,
   completion_tokens: u32,
   total_tokens: u32,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  completion_tokens_details: Option<Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  cached_tokens: Option<u32>,
 }
 
 // Streaming response structures
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIStreamingChunk {
+struct StepFunStreamingChunk {
   id: String,
   object: String,
   created: u64,
   model: String,
-  choices: Vec<OpenAIStreamingChoice>,
-  usage: Option<OpenAIUsage>,
+  choices: Vec<StepFunStreamingChoice>,
+  usage: Option<StepFunUsage>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIStreamingChoice {
+struct StepFunStreamingChoice {
   index: u32,
-  delta: OpenAIStreamingDelta,
+  delta: StepFunStreamingDelta,
   finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIStreamingDelta {
+struct StepFunStreamingDelta {
   role: Option<String>,
-  content: Option<serde_json::Value>, // Can be string or array of content objects
+  content: Option<serde_json::Value>, // Can be string or array for multimodal
 }
 
-pub struct OpenAIStreamingResponse {
+pub struct StepFunStreamingResponse {
   stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
   buffer: Option<String>,
   finished: bool,
 }
 
 // Make it Send + Sync
-unsafe impl Send for OpenAIStreamingResponse {}
-unsafe impl Sync for OpenAIStreamingResponse {}
+unsafe impl Send for StepFunStreamingResponse {}
+unsafe impl Sync for StepFunStreamingResponse {}
 
-impl OpenAIStreamingResponse {
+impl StepFunStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
     let byte_stream = response.bytes_stream();
     let string_stream = byte_stream.map(|chunk_result| {
@@ -293,7 +319,7 @@ impl OpenAIStreamingResponse {
       });
     }
 
-    if let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data) {
+    if let Ok(chunk) = serde_json::from_str::<StepFunStreamingChunk>(data) {
       if let Some(choice) = chunk.choices.first() {
         if let Some(content) = &choice.delta.content {
           // Handle both string and array content in streaming
@@ -322,7 +348,7 @@ impl OpenAIStreamingResponse {
 }
 
 #[async_trait]
-impl StreamingResponse for OpenAIStreamingResponse {
+impl StreamingResponse for StepFunStreamingResponse {
   async fn next_chunk(&mut self) -> Result<Option<StreamChunk>> {
     if self.finished {
       return Ok(None);
@@ -367,33 +393,19 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_openai_provider_creation() {
-    let provider = OpenAIProvider::new("test-key", None);
+  fn test_stepfun_provider_creation() {
+    let provider = StepFunProvider::new("test-key", None);
     assert!(provider.is_ok());
 
-    let provider = OpenAIProvider::new("", None);
+    let provider = StepFunProvider::new("", None);
     assert!(provider.is_err());
   }
 
   #[test]
-  fn test_build_request_body() {
-    let provider = OpenAIProvider::new("test-key", None).unwrap();
-    
-    let mut params = std::collections::HashMap::new();
-    params.insert("temperature".to_string(), json!(0.7));
-    params.insert("max_tokens".to_string(), json!(100));
-
-    let request = ProviderRequest {
-      model: "gpt-4o".to_string(),
-      messages: vec![json!({"role": "user", "content": "test"})],
-      stream: false,
-      parameters: params,
-    };
-
-    let body = provider.build_request_body(&request);
-    assert_eq!(body["model"], "gpt-4o");
-    assert_eq!(body["temperature"], 0.7);
-    assert_eq!(body["max_tokens"], 100);
-    assert_eq!(body["stream"], false);
+  fn test_supported_models() {
+    let provider = StepFunProvider::new("test-key", None).unwrap();
+    let models = provider.supported_models();
+    assert!(models.contains(&"step-1o-turbo-vision".to_string()));
+    assert!(models.len() > 5);
   }
 }

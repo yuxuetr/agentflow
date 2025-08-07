@@ -8,11 +8,13 @@ pub mod openai;
 pub mod anthropic;
 pub mod google;
 pub mod moonshot;
+pub mod stepfun;
 
 pub use openai::OpenAIProvider;
 pub use anthropic::AnthropicProvider;
 pub use google::GoogleProvider;
 pub use moonshot::MoonshotProvider;
+pub use stepfun::StepFunProvider;
 
 /// Request structure for LLM providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,8 +177,8 @@ pub fn create_provider(provider_name: &str, api_key: &str, base_url: Option<Stri
     "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key, base_url)?)),
     "google" | "gemini" => Ok(Box::new(GoogleProvider::new(api_key, base_url)?)),
     "moonshot" => Ok(Box::new(MoonshotProvider::new(api_key, base_url)?)),
+    "stepfun" | "step" => Ok(Box::new(StepFunProvider::new(api_key, base_url)?)), // Use dedicated StepFun provider
     "dashscope" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // Dashscope is OpenAI-compatible
-    "step" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // Step is OpenAI-compatible
     _ => Err(LLMError::UnsupportedProvider {
       provider: provider_name.to_string(),
     }),

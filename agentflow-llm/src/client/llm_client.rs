@@ -2,6 +2,7 @@ use crate::{
   config::ModelConfig,
   providers::{ProviderRequest},
   registry::ModelRegistry,
+  multimodal::MultimodalMessage,
   StreamingResponse, Result,
 };
 use agentflow_core::observability::{ExecutionEvent, MetricsCollector};
@@ -36,6 +37,7 @@ pub enum ResponseFormat {
 pub struct LLMClient {
   pub model_name: String,
   pub prompt: String,
+  pub multimodal_messages: Option<Vec<MultimodalMessage>>,
   pub temperature: Option<f32>,
   pub max_tokens: Option<u32>,
   pub top_p: Option<f32>,
@@ -54,6 +56,7 @@ impl LLMClient {
     Self {
       model_name: model_name.to_string(),
       prompt: String::new(),
+      multimodal_messages: None,
       temperature: None,
       max_tokens: None,
       top_p: None,
@@ -324,12 +327,48 @@ impl LLMClient {
       params.insert(key.clone(), value.clone());
     }
 
+    // Build messages based on input type
+    let messages = if let Some(ref multimodal_messages) = self.multimodal_messages {
+      // Use multimodal messages directly
+      self.build_multimodal_messages(multimodal_messages, model_config)?
+    } else {
+      // Use traditional prompt
+      vec![self.build_message_content(model_config)?]
+    };
+
     Ok(ProviderRequest {
       model: model_config.model_id.clone().unwrap_or_else(|| self.model_name.clone()),
-      messages: vec![self.build_message_content(model_config)?],
+      messages,
       stream: streaming,
       parameters: params,
     })
+  }
+
+  /// Build multimodal messages for the request
+  fn build_multimodal_messages(
+    &self,
+    multimodal_messages: &[MultimodalMessage],
+    model_config: &ModelConfig,
+  ) -> Result<Vec<serde_json::Value>> {
+    let mut messages = Vec::new();
+
+    for msg in multimodal_messages {
+      match model_config.model_type() {
+        "multimodal" => {
+          // Use full multimodal format for multimodal models
+          messages.push(msg.to_openai_format());
+        },
+        _ => {
+          // Convert to text-only for non-multimodal models
+          messages.push(serde_json::json!({
+            "role": msg.role,
+            "content": msg.to_text_format()
+          }));
+        }
+      }
+    }
+
+    Ok(messages)
   }
 
   /// Build message content based on model type and capabilities
@@ -376,7 +415,39 @@ impl LLMClientBuilder {
 
   pub fn prompt(mut self, prompt: &str) -> Self {
     self.client.prompt = prompt.to_string();
+    self.client.multimodal_messages = None; // Clear multimodal if using prompt
     self
+  }
+
+  /// Set multimodal messages (replaces any existing prompt or messages)
+  pub fn multimodal_messages(mut self, messages: Vec<MultimodalMessage>) -> Self {
+    self.client.multimodal_messages = Some(messages);
+    self.client.prompt = String::new(); // Clear prompt if using multimodal
+    self
+  }
+
+  /// Add a single multimodal message
+  pub fn add_multimodal_message(mut self, message: MultimodalMessage) -> Self {
+    if let Some(ref mut messages) = self.client.multimodal_messages {
+      messages.push(message);
+    } else {
+      self.client.multimodal_messages = Some(vec![message]);
+      self.client.prompt = String::new(); // Clear prompt if using multimodal
+    }
+    self
+  }
+
+  /// Shortcut for creating a multimodal prompt with text and image
+  pub fn multimodal_prompt(mut self, message: MultimodalMessage) -> Self {
+    self.client.multimodal_messages = Some(vec![message]);
+    self.client.prompt = String::new(); // Clear prompt if using multimodal
+    self
+  }
+
+  /// Helper method to create text + image message quickly
+  pub fn text_and_image<T: Into<String>, U: Into<String>>(self, text: T, image_url: U) -> Self {
+    let message = MultimodalMessage::text_and_image("user", text, image_url);
+    self.multimodal_prompt(message)
   }
 
 

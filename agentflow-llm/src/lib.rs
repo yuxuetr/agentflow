@@ -4,6 +4,7 @@
 //! 
 //! ## Quick Start
 //! 
+//! ### Text-only Models
 //! ```rust
 //! use agentflow_llm::AgentFlow;
 //! 
@@ -19,6 +20,36 @@
 //!     .execute().await?;
 //!   
 //!   println!("Response: {}", response);
+//!   Ok(())
+//! }
+//! ```
+//! 
+//! ### Multimodal Models (Text + Images)
+//! ```rust
+//! use agentflow_llm::{AgentFlow, MultimodalMessage};
+//! 
+//! #[tokio::main]
+//! async fn main() -> Result<(), agentflow_llm::LLMError> {
+//!   AgentFlow::init().await?;
+//!   
+//!   // Simple text + image
+//!   let response = AgentFlow::model("step-1o-turbo-vision")
+//!     .text_and_image("Describe this image", "https://example.com/image.jpg")
+//!     .temperature(0.7)
+//!     .execute().await?;
+//!   
+//!   // Or build complex multimodal messages
+//!   let message = MultimodalMessage::user()
+//!     .add_text("Analyze these images:")
+//!     .add_image_url("https://example.com/img1.jpg")
+//!     .add_image_url("https://example.com/img2.jpg")
+//!     .build();
+//!   
+//!   let response = AgentFlow::model("step-1o-turbo-vision")
+//!     .multimodal_prompt(message)
+//!     .execute().await?;
+//!   
+//!   println!("Analysis: {}", response);
 //!   Ok(())
 //! }
 //! ```
@@ -49,10 +80,11 @@
 //! 
 //! ## Supported Providers
 //! 
-//! - **OpenAI**: GPT-4o, GPT-4o-mini, GPT-4-turbo
-//! - **Anthropic**: Claude-3.5-Sonnet, Claude-3-Haiku
-//! - **Google**: Gemini-1.5-Pro, Gemini-1.5-Flash
-//! - **Moonshot**: Various models
+//! - **OpenAI**: GPT-4o, GPT-4o-mini, GPT-4-turbo (text-only)
+//! - **Anthropic**: Claude-3.5-Sonnet, Claude-3-Haiku (text-only)  
+//! - **Google**: Gemini-1.5-Pro, Gemini-1.5-Flash (text-only)
+//! - **Moonshot**: Various models (text-only)
+//! - **StepFun**: step-1o-turbo-vision, step-2-16k (multimodal support)
 
 pub mod config;
 pub mod providers;
@@ -60,6 +92,7 @@ pub mod client;
 pub mod registry;
 pub mod error;
 pub mod discovery;
+pub mod multimodal;
 
 // Re-export main API components
 pub use client::{LLMClient, StreamingResponse, ResponseFormat};
@@ -67,6 +100,7 @@ pub use config::{ModelConfig, LLMConfig, VendorConfigManager, LoadingBenchmark, 
 pub use error::{LLMError, Result};
 pub use registry::ModelRegistry;
 pub use discovery::{ModelFetcher, ModelValidator, ConfigUpdater};
+pub use multimodal::{MultimodalMessage, MessageContent, ImageUrl, ImageData};
 
 // External dependencies for configuration
 use dirs;
