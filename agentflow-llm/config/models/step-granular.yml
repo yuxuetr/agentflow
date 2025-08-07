@@ -1,0 +1,184 @@
+# StepFun Models with Granular Type Classification
+# This configuration demonstrates the new granular model type system
+# with specific input/output type classifications
+
+models:
+  # Text-only Models
+  step-1-8k:
+    vendor: step
+    type: text  # Text-based language model - input: text, output: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+
+  step-2-mini:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+
+  # Image Understanding Models  
+  step-1o-turbo-vision:
+    vendor: step
+    type: imageunderstand  # Image understanding - input: text + image, output: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+
+  step-2-16k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+
+  step-1v-32k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+
+  # Text-to-Speech Models
+  step-tts-mini:
+    vendor: step
+    type: tts  # Text-to-speech - input: text, output: audio (wav/mp3/opus)
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    max_tokens: 4096
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+
+  step-tts-vivid:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    max_tokens: 4096
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+
+  # Automatic Speech Recognition Models
+  step-asr:
+    vendor: step
+    type: asr  # ASR - input: audio (flac/mp3/wav/etc), output: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    max_tokens: 4096
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true  # Takes audio as input
+
+  # Audio Understanding Models (if available)
+  step-1o-audio:
+    vendor: step
+    type: asr  # Could also be a more general audio understanding type
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    max_tokens: 16384
+    supports_streaming: true
+    supports_tools: false
+    supports_multimodal: true
+
+  # Code Generation Models (if StepFun had specialized code models)
+  # step-code-1-8k:
+  #   vendor: step
+  #   type: codegen  # Code generation - input: text, output: code/text
+  #   model_id: null
+  #   base_url: null
+  #   temperature: 0.2  # Lower temperature for more deterministic code
+  #   max_tokens: 8192
+  #   supports_streaming: true
+  #   supports_tools: true
+  #   supports_multimodal: false
+
+  # Function Calling Models
+  step-1-8k-functions:
+    vendor: step
+    type: functioncalling  # Function calling - input: text + schemas, output: function calls
+    model_id: "step-1-8k"  # Use the base model but configure for function calling
+    base_url: null
+    temperature: 0.1  # Low temperature for precise function calls
+    max_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+
+# Example of extended configuration with detailed capabilities
+extended_models:
+  step-vision-pro:
+    vendor: step
+    type: imageunderstand
+    model_id: "step-1o-turbo-vision"
+    base_url: null
+    temperature: 0.7
+    max_tokens: 16384
+    # Detailed capabilities specification
+    capabilities:
+      model_type: imageunderstand
+      supports_streaming: true
+      requires_streaming: false
+      supports_tools: true
+      max_context_tokens: 32768
+      max_output_tokens: 16384
+      supports_system_messages: true
+      custom_capabilities:
+        max_images_per_request: 10
+        supported_image_formats: ["jpeg", "png", "webp"]
+        max_image_size_mb: 20
+        vision_capabilities: ["ocr", "object_detection", "scene_analysis"]
+
+# Future model types that could be added:
+#
+# Text-to-Image Models:
+#   type: text2image  # input: text, output: image
+#
+# Image-to-Image Models:  
+#   type: image2image  # input: image, output: image
+#
+# Image Editing Models:
+#   type: imageedit  # input: image + text, output: image
+#
+# Video Understanding:
+#   type: videounderstand  # input: text + video, output: text
+#
+# Text-to-Video:
+#   type: text2video  # input: text, output: video
+#
+# Document Understanding:
+#   type: docunderstand  # input: text + document, output: text
+#
+# Embedding Models:
+#   type: embedding  # input: text, output: vector

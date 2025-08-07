@@ -1,4 +1,4 @@
-use crate::{LLMError, Result};
+use crate::{LLMError, Result, model_types::{ModelType, ModelCapabilities, InputType}};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -10,8 +10,14 @@ pub struct ModelConfig {
   /// The vendor/provider name (e.g., "openai", "anthropic", "google")
   pub vendor: String,
 
-  /// The model type (e.g., "text", "multimodal", "image", "audio")
+  /// The model type (granular classification with input/output types)
+  /// New granular types: text, imageunderstand, text2image, image2image, imageedit, tts, asr, etc.
+  /// Legacy types: text, multimodal, image, audio (maintained for backward compatibility)
   pub r#type: Option<String>,
+  
+  /// Detailed model capabilities (computed from type)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub capabilities: Option<ModelCapabilities>,
   
   /// The actual model ID used by the provider API (optional, defaults to the config key)
   pub model_id: Option<String>,
@@ -60,34 +66,134 @@ impl ModelConfig {
     self.r#type.as_deref().unwrap_or("text")
   }
 
-  /// Check if this is a multimodal model
+  /// Get the granular model type enum
+  pub fn granular_type(&self) -> ModelType {
+    let type_str = self.model_type();
+    
+    // Handle granular types first
+    match type_str {
+      "text" => ModelType::Text,
+      "imageunderstand" => ModelType::ImageUnderstand,
+      "text2image" => ModelType::Text2Image,
+      "image2image" => ModelType::Image2Image,
+      "imageedit" => ModelType::ImageEdit,
+      "tts" => ModelType::Tts,
+      "asr" => ModelType::Asr,
+      "videounderstand" => ModelType::VideoUnderstand,
+      "text2video" => ModelType::Text2Video,
+      "codegen" => ModelType::CodeGen,
+      "docunderstand" => ModelType::DocUnderstand,
+      "embedding" => ModelType::Embedding,
+      "functioncalling" => ModelType::FunctionCalling,
+      // Legacy type mapping
+      _ => ModelType::from(type_str),
+    }
+  }
+
+  /// Get or compute model capabilities
+  pub fn get_capabilities(&self) -> ModelCapabilities {
+    if let Some(ref capabilities) = self.capabilities {
+      capabilities.clone()
+    } else {
+      // Compute capabilities from model type and config
+      let mut capabilities = ModelCapabilities::from_model_type(self.granular_type());
+      
+      // Override with explicit config values
+      if let Some(streaming) = self.supports_streaming {
+        capabilities.supports_streaming = streaming;
+      }
+      if let Some(tools) = self.supports_tools {
+        capabilities.supports_tools = tools;
+      }
+      if let Some(max_tokens) = self.max_tokens {
+        capabilities.max_output_tokens = Some(max_tokens);
+      }
+      
+      capabilities
+    }
+  }
+
+  /// Check if this is a multimodal model (legacy method for backward compatibility)
   pub fn is_multimodal(&self) -> bool {
-    self.model_type() == "multimodal" || self.supports_multimodal.unwrap_or(false)
+    self.get_capabilities().is_multimodal() || self.supports_multimodal.unwrap_or(false)
   }
 
   /// Check if this is an image generation model
   pub fn is_image_model(&self) -> bool {
-    self.model_type() == "image"
+    matches!(self.granular_type(), ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit)
   }
 
   /// Check if this is an audio model
   pub fn is_audio_model(&self) -> bool {
-    self.model_type() == "audio"
+    matches!(self.granular_type(), ModelType::Tts | ModelType::Asr)
   }
 
   /// Check if this is a text-to-speech model
   pub fn is_tts_model(&self) -> bool {
-    self.model_type() == "tts"
+    matches!(self.granular_type(), ModelType::Tts)
   }
 
-  /// Check if this model supports the given content type
+  /// Check if this model supports the given input type
+  pub fn supports_input_type(&self, input_type: &InputType) -> bool {
+    self.get_capabilities().supports_input(input_type)
+  }
+
+  /// Check if this model supports the given content type (legacy method)
   pub fn supports_content_type(&self, content_type: &str) -> bool {
-    match content_type {
-      "text" => true, // All models support text
-      "image" => self.is_multimodal() || self.is_image_model(),
-      "audio" => self.is_audio_model() || self.is_tts_model(),
-      _ => false,
-    }
+    let input_type = match content_type {
+      "text" => InputType::Text,
+      "image" => InputType::Image,
+      "audio" => InputType::Audio,
+      "video" => InputType::Video,
+      "document" => InputType::Document,
+      _ => return false,
+    };
+    
+    self.supports_input_type(&input_type)
+  }
+
+  /// Validate a request against this model's capabilities
+  pub fn validate_request(&self, has_text: bool, has_images: bool, has_audio: bool, 
+                         has_video: bool, requires_streaming: bool, uses_tools: bool) -> Result<()> {
+    let capabilities = self.get_capabilities();
+    
+    capabilities.validate_request(has_text, has_images, has_audio, has_video, requires_streaming, uses_tools)
+      .map_err(|msg| LLMError::InvalidModelConfig { message: msg })
+  }
+
+  /// Get supported input types for this model
+  pub fn supported_inputs(&self) -> std::collections::HashSet<InputType> {
+    self.granular_type().supported_inputs()
+  }
+
+  /// Get the primary output type for this model
+  pub fn primary_output(&self) -> crate::model_types::OutputType {
+    self.granular_type().primary_output()
+  }
+
+  /// Check if this model supports streaming
+  pub fn supports_streaming_capability(&self) -> bool {
+    self.get_capabilities().supports_streaming
+  }
+
+  /// Check if this model requires streaming (no non-streaming mode)
+  pub fn requires_streaming(&self) -> bool {
+    self.get_capabilities().requires_streaming
+  }
+
+  /// Check if this model supports tools/function calling
+  pub fn supports_tools_capability(&self) -> bool {
+    self.get_capabilities().supports_tools
+  }
+
+  /// Get a description of what this model does
+  pub fn description(&self) -> &'static str {
+    self.granular_type().description()
+  }
+
+  /// Get typical use cases for this model
+  pub fn use_cases(&self) -> Vec<&'static str> {
+    self.granular_type().use_cases()
   }
 }
 

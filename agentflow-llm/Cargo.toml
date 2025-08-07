@@ -55,3 +55,7 @@ tempfile = "3.8"
 [[example]]
 name = "multimodal_demo"
 path = "examples/multimodal_demo.rs"
+
+[[example]]
+name = "granular_types_demo"
+path = "examples/granular_types_demo.rs"

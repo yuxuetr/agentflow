@@ -93,6 +93,7 @@ pub mod registry;
 pub mod error;
 pub mod discovery;
 pub mod multimodal;
+pub mod model_types;
 
 // Re-export main API components
 pub use client::{LLMClient, StreamingResponse, ResponseFormat};
@@ -101,6 +102,7 @@ pub use error::{LLMError, Result};
 pub use registry::ModelRegistry;
 pub use discovery::{ModelFetcher, ModelValidator, ConfigUpdater};
 pub use multimodal::{MultimodalMessage, MessageContent, ImageUrl, ImageData};
+pub use model_types::{ModelType, InputType, OutputType, ModelCapabilities};
 
 // External dependencies for configuration
 use dirs;

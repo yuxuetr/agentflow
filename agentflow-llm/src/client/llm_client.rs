@@ -77,7 +77,7 @@ impl LLMClient {
     if self.enable_logging {
       self.log_request_start();
     }
-    
+
     // Record start event
     if let Some(ref collector) = self.metrics_collector {
       let event = ExecutionEvent {
@@ -98,6 +98,20 @@ impl LLMClient {
 
     let registry = ModelRegistry::global();
     let model_config = registry.get_model(&self.model_name)?;
+    
+    // Validate request against model capabilities
+    let has_images = self.multimodal_messages.as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
+      .unwrap_or(false);
+    
+    model_config.validate_request(
+      true, // has text
+      has_images,
+      false, // has audio
+      false, // has video
+      false, // requires streaming (this is non-streaming)
+      self.tools.is_some(), // uses tools
+    )?;
     let provider = registry.get_provider(&model_config.vendor)?;
 
     let request = self.build_request(&model_config, false)?;
@@ -240,6 +254,21 @@ impl LLMClient {
     
     let registry = ModelRegistry::global();
     let model_config = registry.get_model(&self.model_name)?;
+    
+    // Validate request against model capabilities (streaming mode)
+    let has_images = self.multimodal_messages.as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
+      .unwrap_or(false);
+    
+    model_config.validate_request(
+      true, // has text
+      has_images,
+      false, // has audio
+      false, // has video
+      true, // requires streaming
+      self.tools.is_some(), // uses tools
+    )?;
+    
     let provider = registry.get_provider(&model_config.vendor)?;
 
     let request = self.build_request(&model_config, true)?;
@@ -352,19 +381,37 @@ impl LLMClient {
   ) -> Result<Vec<serde_json::Value>> {
     let mut messages = Vec::new();
 
+    // Analyze input types in the messages
+    let has_images = multimodal_messages.iter().any(|msg| msg.has_images());
+    let has_text = multimodal_messages.iter().any(|msg| !msg.get_text().is_empty());
+
+    // Validate against model capabilities
+    model_config.validate_request(
+      has_text, 
+      has_images, 
+      false, // audio
+      false, // video  
+      false, // streaming (checked separately)
+      self.tools.is_some() // uses tools
+    )?;
+
     for msg in multimodal_messages {
-      match model_config.model_type() {
-        "multimodal" => {
-          // Use full multimodal format for multimodal models
-          messages.push(msg.to_openai_format());
-        },
-        _ => {
-          // Convert to text-only for non-multimodal models
-          messages.push(serde_json::json!({
-            "role": msg.role,
-            "content": msg.to_text_format()
-          }));
+      let capabilities = model_config.get_capabilities();
+      
+      if capabilities.is_multimodal() {
+        // Use full multimodal format for multimodal models
+        messages.push(msg.to_openai_format());
+      } else {
+        // Convert to text-only for non-multimodal models
+        if msg.has_images() {
+          return Err(crate::LLMError::InvalidModelConfig {
+            message: format!("Model {} does not support image input", self.model_name),
+          });
         }
+        messages.push(serde_json::json!({
+          "role": msg.role,
+          "content": msg.to_text_format()
+        }));
       }
     }
 
