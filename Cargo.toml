@@ -1,5 +1,5 @@
 [workspace]
-members = ["agentflow-core", "agentflow-llm"]
+members = ["agentflow-core", "agentflow-llm", "agentflow-cli"]
 resolver = "2"
 
 [package]

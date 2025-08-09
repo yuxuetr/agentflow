@@ -1,0 +1,1 @@
+// Template rendering node implementation will be added here

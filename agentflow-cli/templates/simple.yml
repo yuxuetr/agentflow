@@ -1,0 +1,62 @@
+# Simple AgentFlow Workflow Template
+name: "Simple Text Generation"
+version: "1.0.0"
+description: "A basic workflow template for text generation"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-01T00:00:00Z"
+  tags: ["text-generation", "basic", "example"]
+  category: "example"
+
+config:
+  timeout: "5m"
+  max_retries: 3
+  output_format: "text"
+  log_level: "info"
+
+inputs:
+  prompt:
+    type: "string"
+    required: true
+    description: "The text prompt for generation"
+    example: "Write a haiku about programming"
+  
+  model:
+    type: "string"
+    required: false
+    default: "gpt-4o"
+    description: "LLM model to use"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "sequential"
+  nodes:
+    - name: "generate_text"
+      type: "llm"
+      description: "Generate text from the prompt"
+      config:
+        model: "{{ inputs.model }}"
+        prompt: "{{ inputs.prompt }}"
+        temperature: 0.7
+        max_tokens: 200
+        timeout: "2m"
+      outputs:
+        response: "$.response"
+        tokens_used: "$.usage.total_tokens"
+
+outputs:
+  result:
+    source: "{{ outputs.generate_text.response }}"
+    format: "text"
+    file: "result.txt"
+  
+  execution_report:
+    source: "$"
+    format: "json"
+    file: "execution_report.json"
+    include:
+      - execution_time
+      - tokens_used
