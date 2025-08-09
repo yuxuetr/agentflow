@@ -1,0 +1,496 @@
+# StepFun Workflow Examples Collection
+# This file contains various workflow examples demonstrating StepFun model usage
+
+## Example 1: Text Model Comparison Workflow
+text_model_comparison:
+  name: "StepFun Text Models Comparison"
+  description: "Compare different StepFun text models on the same task"
+  
+  inputs:
+    test_prompt:
+      type: "string"
+      required: true
+      description: "Prompt to test across all models"
+      example: "解释人工智能的基本概念"
+  
+  workflow:
+    type: "parallel"
+    nodes:
+      - name: "test_step_2_mini"
+        type: "llm"
+        config:
+          model: "step-2-mini"
+          prompt: "{{ inputs.test_prompt }}"
+          temperature: 0.7
+          max_tokens: 300
+        outputs:
+          response: "$.response"
+          tokens_used: "$.usage.total_tokens"
+      
+      - name: "test_step_2_16k"
+        type: "llm"
+        config:
+          model: "step-2-16k"
+          prompt: "{{ inputs.test_prompt }}"
+          temperature: 0.7
+          max_tokens: 300
+        outputs:
+          response: "$.response"
+          tokens_used: "$.usage.total_tokens"
+      
+      - name: "test_step_1_32k"
+        type: "llm"
+        config:
+          model: "step-1-32k"
+          prompt: "{{ inputs.test_prompt }}"
+          temperature: 0.7
+          max_tokens: 300
+        outputs:
+          response: "$.response"
+          tokens_used: "$.usage.total_tokens"
+      
+      - name: "compare_results"
+        type: "template"
+        depends_on: ["test_step_2_mini", "test_step_2_16k", "test_step_1_32k"]
+        config:
+          template: |
+            # StepFun 模型对比结果
+            
+            **测试提示**: {{ inputs.test_prompt }}
+            **测试时间**: {{ now() }}
+            
+            ## step-2-mini 响应
+            **Token使用**: {{ outputs.test_step_2_mini.tokens_used }}
+            {{ outputs.test_step_2_mini.response }}
+            
+            ## step-2-16k 响应  
+            **Token使用**: {{ outputs.test_step_2_16k.tokens_used }}
+            {{ outputs.test_step_2_16k.response }}
+            
+            ## step-1-32k 响应
+            **Token使用**: {{ outputs.test_step_1_32k.tokens_used }}
+            {{ outputs.test_step_1_32k.response }}
+            
+            ## 模型对比总结
+            - **step-2-mini**: 速度最快，适合简单任务
+            - **step-2-16k**: 平衡性能，适合代码和分析
+            - **step-1-32k**: 详细回答，适合复杂解释
+  
+  outputs:
+    comparison_report:
+      source: "{{ outputs.compare_results.rendered }}"
+      format: "markdown"
+      file: "stepfun_model_comparison.md"
+
+---
+
+## Example 2: Vision Analysis Pipeline  
+vision_analysis_pipeline:
+  name: "StepFun Vision Models Analysis"
+  description: "Multi-stage image analysis using different vision models"
+  
+  inputs:
+    image_path:
+      type: "string"
+      required: true
+      description: "Path to image for analysis"
+    analysis_type:
+      type: "string"
+      default: "comprehensive"
+      enum: ["basic", "technical", "comprehensive"]
+  
+  workflow:
+    type: "sequential"
+    nodes:
+      - name: "basic_description"
+        type: "llm"
+        config:
+          model: "step-1o-turbo-vision"
+          prompt: |
+            请简要描述这张图片的主要内容，包括：
+            1. 主要对象和场景
+            2. 基本颜色和光线
+            3. 整体构图特点
+        file: "{{ inputs.image_path }}"
+        temperature: 0.7
+        max_tokens: 400
+        outputs:
+          description: "$.response"
+      
+      - name: "technical_analysis"
+        type: "llm"
+        depends_on: ["basic_description"]
+        condition: "{{ inputs.analysis_type != 'basic' }}"
+        config:
+          model: "step-1v-8k"
+          prompt: |
+            基于基本描述：{{ outputs.basic_description.description }}
+            
+            请提供技术性分析：
+            1. 摄影技术参数推测
+            2. 构图原则应用
+            3. 视觉设计元素
+            4. 可能的后期处理
+        file: "{{ inputs.image_path }}"
+        temperature: 0.6
+        max_tokens: 600
+        outputs:
+          technical_details: "$.response"
+      
+      - name: "comprehensive_evaluation"
+        type: "llm"  
+        depends_on: ["basic_description", "technical_analysis"]
+        condition: "{{ inputs.analysis_type == 'comprehensive' }}"
+        config:
+          model: "step-1v-32k"
+          prompt: |
+            基于以下分析，提供综合评估：
+            
+            基本描述：{{ outputs.basic_description.description }}
+            技术分析：{{ outputs.technical_analysis.technical_details }}
+            
+            请从以下角度综合评估：
+            1. 艺术价值和美学意义
+            2. 情感表达和文化内涵
+            3. 商业或实用价值
+            4. 改进建议和创意启发
+        file: "{{ inputs.image_path }}"
+        temperature: 0.8
+        max_tokens: 800
+        outputs:
+          comprehensive_review: "$.response"
+      
+      - name: "generate_report"
+        type: "template"
+        depends_on: ["basic_description", "technical_analysis", "comprehensive_evaluation"]
+        config:
+          template: |
+            # 图片分析报告
+            
+            **图片路径**: {{ inputs.image_path }}
+            **分析类型**: {{ inputs.analysis_type }}  
+            **分析时间**: {{ now() }}
+            
+            ## 基本描述
+            {{ outputs.basic_description.description }}
+            
+            {% if outputs.technical_analysis.executed %}
+            ## 技术分析
+            {{ outputs.technical_analysis.technical_details }}
+            {% endif %}
+            
+            {% if outputs.comprehensive_evaluation.executed %}
+            ## 综合评估
+            {{ outputs.comprehensive_evaluation.comprehensive_review }}
+            {% endif %}
+            
+            ---
+            
+            ## 分析模型使用
+            - **基础描述**: step-1o-turbo-vision
+            {% if outputs.technical_analysis.executed %}- **技术分析**: step-1v-8k{% endif %}
+            {% if outputs.comprehensive_evaluation.executed %}- **综合评估**: step-1v-32k{% endif %}
+            
+            *报告由 AgentFlow CLI 自动生成*
+  
+  outputs:
+    analysis_report:
+      source: "{{ outputs.generate_report.rendered }}"
+      format: "markdown"
+      file: "vision_analysis_{{ inputs.analysis_type }}.md"
+
+---
+
+## Example 3: Content Creation Pipeline
+content_creation_pipeline:
+  name: "Multi-Modal Content Creation"
+  description: "Create comprehensive content using text and vision models"
+  
+  inputs:
+    topic:
+      type: "string"
+      required: true
+      description: "Content topic"
+    target_audience:
+      type: "string"
+      default: "general"
+      enum: ["general", "technical", "academic", "children"]
+    content_length:
+      type: "string"
+      default: "medium"
+      enum: ["short", "medium", "long"]
+    include_images:
+      type: "boolean"
+      default: false
+  
+  workflow:
+    type: "sequential"
+    nodes:
+      - name: "research_topic"
+        type: "llm"
+        config:
+          model: "step-2-16k"
+          prompt: |
+            研究主题：{{ inputs.topic }}
+            目标受众：{{ inputs.target_audience }}
+            
+            请提供：
+            1. 核心概念和关键术语
+            2. 最新发展和趋势
+            3. 实际应用案例
+            4. 常见误解和澄清
+            5. 相关资源和延伸阅读
+            
+            内容应适合{{ inputs.target_audience }}受众理解。
+          temperature: 0.3
+          max_tokens: 1200
+        outputs:
+          research_data: "$.response"
+      
+      - name: "create_outline"
+        type: "llm"
+        depends_on: ["research_topic"]
+        config:
+          model: "step-1-32k"
+          prompt: |
+            基于研究资料：{{ outputs.research_topic.research_data }}
+            
+            为"{{ inputs.topic }}"创建{{ inputs.content_length }}篇幅的内容大纲：
+            目标受众：{{ inputs.target_audience }}
+            
+            大纲要求：
+            - 逻辑清晰，层次分明
+            - 包含引言、主体和结论
+            - 适合{{ inputs.target_audience }}的理解水平
+            - {{ inputs.content_length }}篇幅规划
+          temperature: 0.5
+          max_tokens: 800
+        outputs:
+          content_outline: "$.response"
+      
+      - name: "write_content"
+        type: "llm"
+        depends_on: ["research_topic", "create_outline"] 
+        config:
+          model: "step-1-32k"
+          prompt: |
+            基于研究资料和大纲，撰写关于"{{ inputs.topic }}"的内容：
+            
+            研究资料：{{ outputs.research_topic.research_data }}
+            内容大纲：{{ outputs.create_outline.content_outline }}
+            
+            写作要求：
+            - 目标受众：{{ inputs.target_audience }}
+            - 篇幅：{{ inputs.content_length }}
+            - 语言清晰易懂
+            - 结构完整，逻辑严密
+            - 包含具体例子和案例
+          temperature: 0.7
+          max_tokens: 2500
+        outputs:
+          main_content: "$.response"
+      
+      - name: "image_analysis"  
+        type: "llm"
+        condition: "{{ inputs.include_images }}"
+        depends_on: ["write_content"]
+        config:
+          model: "step-1v-8k"
+          prompt: |
+            基于以下内容，建议配图方案：
+            {{ outputs.write_content.main_content }}
+            
+            请提供：
+            1. 建议的配图类型和数量
+            2. 每张配图的具体描述
+            3. 配图在文章中的最佳位置
+            4. 配图与内容的关联性说明
+        temperature: 0.6
+        max_tokens: 600
+        outputs:
+          image_suggestions: "$.response"
+      
+      - name: "final_assembly"
+        type: "template"
+        depends_on: ["write_content", "image_analysis"]
+        config:
+          template: |
+            # {{ inputs.topic }}
+            
+            > **目标受众**: {{ inputs.target_audience }}  
+            > **篇幅**: {{ inputs.content_length }}  
+            > **创建时间**: {{ now() }}
+            
+            ## 内容正文
+            
+            {{ outputs.write_content.main_content }}
+            
+            {% if outputs.image_analysis.executed %}
+            ## 配图建议
+            
+            {{ outputs.image_analysis.image_suggestions }}
+            {% endif %}
+            
+            ---
+            
+            ## 创作信息
+            - **研究模型**: step-2-16k (资料收集)
+            - **写作模型**: step-1-32k (内容创作)
+            {% if outputs.image_analysis.executed %}- **配图分析**: step-1v-8k (视觉规划){% endif %}
+            - **生成工具**: AgentFlow CLI
+            
+            *本内容由AI辅助创作，请结合实际情况使用*
+  
+  outputs:
+    final_content:
+      source: "{{ outputs.final_assembly.rendered }}"
+      format: "markdown"
+      file: "{{ inputs.topic | slugify }}_content.md"
+    
+    research_notes:
+      source: "{{ outputs.research_topic.research_data }}"
+      format: "markdown"
+      file: "{{ inputs.topic | slugify }}_research.md"
+
+---
+
+## Example 4: Educational Material Generator
+educational_generator:
+  name: "Educational Content Generator"
+  description: "Generate structured educational materials with StepFun models"
+  
+  inputs:
+    subject:
+      type: "string"
+      required: true
+      description: "Educational subject"
+    grade_level:
+      type: "string" 
+      required: true
+      enum: ["elementary", "middle", "high", "college"]
+    lesson_type:
+      type: "string"
+      default: "introduction"
+      enum: ["introduction", "deep_dive", "review", "assessment"]
+  
+  workflow:
+    type: "sequential" 
+    nodes:
+      - name: "curriculum_analysis"
+        type: "llm"
+        config:
+          model: "step-2-16k"
+          prompt: |
+            分析教育内容需求：
+            科目：{{ inputs.subject }}
+            年级：{{ inputs.grade_level }}
+            课程类型：{{ inputs.lesson_type }}
+            
+            请提供：
+            1. 该年级学生的认知水平特点
+            2. 该科目的核心学习目标
+            3. 适合的教学方法和策略
+            4. 评估方式建议
+          temperature: 0.4
+          max_tokens: 800
+        outputs:
+          curriculum_guide: "$.response"
+      
+      - name: "create_lesson_plan"
+        type: "llm"
+        depends_on: ["curriculum_analysis"]
+        config:
+          model: "step-1-32k"
+          prompt: |
+            基于课程分析：{{ outputs.curriculum_analysis.curriculum_guide }}
+            
+            为"{{ inputs.subject }}"创建{{ inputs.lesson_type }}课程方案：
+            年级：{{ inputs.grade_level }}
+            
+            课程方案包括：
+            1. 学习目标 (3-5个具体目标)
+            2. 课程大纲 (详细的教学流程)
+            3. 教学活动 (互动环节和实践练习)
+            4. 评估方法 (检验学习效果的方式)
+            5. 作业设计 (巩固知识的练习题)
+            6. 扩展资源 (额外学习材料推荐)
+          temperature: 0.6
+          max_tokens: 2000
+        outputs:
+          lesson_plan: "$.response"
+      
+      - name: "generate_materials"
+        type: "llm"
+        depends_on: ["create_lesson_plan"]
+        config:
+          model: "step-1-32k"
+          prompt: |
+            基于课程方案：{{ outputs.create_lesson_plan.lesson_plan }}
+            
+            生成具体教学材料：
+            1. 学生讲义 (重点概念解释)
+            2. 课堂讨论问题 (启发思考)
+            3. 练习题目 (不同难度层次)
+            4. 实验/项目指导 (如适用)
+            5. 参考答案和解析
+            
+            内容要适合{{ inputs.grade_level }}年级学生。
+          temperature: 0.7
+          max_tokens: 2200
+        outputs:
+          teaching_materials: "$.response"
+      
+      - name: "create_assessment"
+        type: "llm"
+        depends_on: ["lesson_plan", "generate_materials"]
+        config:
+          model: "step-2-16k"
+          prompt: |
+            基于课程内容，设计评估工具：
+            课程：{{ inputs.subject }} ({{ inputs.grade_level }})
+            
+            评估内容：
+            1. 形成性评估 (课堂小测)
+            2. 总结性评估 (单元测试)
+            3. 评价标准 (评分指标)
+            4. 反馈建议 (改进方向)
+            
+            评估要全面检验学习目标达成情况。
+          temperature: 0.5
+          max_tokens: 1000
+        outputs:
+          assessment_tools: "$.response"
+  
+  outputs:
+    complete_lesson_package:
+      source: |
+        # {{ inputs.subject }} 教学包
+        
+        **年级**: {{ inputs.grade_level }}
+        **类型**: {{ inputs.lesson_type }}
+        **生成时间**: {{ now() }}
+        
+        ## 课程分析
+        {{ outputs.curriculum_analysis.curriculum_guide }}
+        
+        ## 课程方案
+        {{ outputs.create_lesson_plan.lesson_plan }}
+        
+        ## 教学材料
+        {{ outputs.generate_materials.teaching_materials }}
+        
+        ## 评估工具
+        {{ outputs.create_assessment.assessment_tools }}
+      format: "markdown"
+      file: "{{ inputs.subject }}_{{ inputs.grade_level }}_lesson.md"
+
+---
+
+# Usage Instructions:
+# 
+# Save individual workflows to separate .yml files and run with:
+# 
+# agentflow run text_model_comparison.yml --input test_prompt="解释机器学习的基本原理"
+# agentflow run vision_analysis_pipeline.yml --input image_path="./photo.jpg" --input analysis_type="comprehensive"  
+# agentflow run content_creation_pipeline.yml --input topic="区块链技术" --input target_audience="technical"
+# agentflow run educational_generator.yml --input subject="数据结构" --input grade_level="college"
