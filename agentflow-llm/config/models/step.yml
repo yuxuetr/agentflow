@@ -1,11 +1,12 @@
-# yaml-language-server: $schema=null
-# file-type: agentflow-models-config
-# STEP Models Configuration
-# Based on official Step API documentation
-# Last updated: 2025-08-06
-# AgentFlow LLM vendor-specific model configuration
+# StepFun Models Configuration
+# Comprehensive configuration with granular model type system
+# Includes detailed input/output classifications for all StepFun models
+# Last updated: 2025-08-09
 
 models:
+  # =============================================================================
+  # TEXT MODELS (Input: text, Output: text)
+  # =============================================================================
   step-1-8k:
     vendor: step
     type: text
@@ -21,6 +22,7 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+
   step-1-32k:
     vendor: step
     type: text
@@ -36,6 +38,7 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+
   step-1-256k:
     vendor: step
     type: text
@@ -51,7 +54,8 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
-  step-1x-medium:
+
+  step-2-16k:
     vendor: step
     type: text
     model_id: null
@@ -66,6 +70,7 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+
   step-2-mini:
     vendor: step
     type: text
@@ -73,37 +78,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: 0.9
-    max_tokens: 16384
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-2x-large:
-    vendor: step
-    type: text
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 32768
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-3:
-    vendor: step
-    type: text
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 32768
+    max_tokens: 8192
     frequency_penalty: null
     stop: null
     n: null
@@ -112,55 +87,9 @@ models:
     supports_multimodal: false
     response_format: null
 
-  # Multimodal (Vision + Text) Models
-  step-1v-8k:
-    vendor: step
-    type: multimodal
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  step-1v-32k:
-    vendor: step
-    type: multimodal
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 32768
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  step-2-16k:
-    vendor: step
-    type: multimodal
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 16384
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
   step-2-16k-202411:
     vendor: step
-    type: multimodal
+    type: text
     model_id: null
     base_url: null
     temperature: 0.7
@@ -171,11 +100,31 @@ models:
     n: null
     supports_streaming: true
     supports_tools: true
-    supports_multimodal: true
+    supports_multimodal: false
     response_format: null
+
   step-2-16k-exp:
     vendor: step
-    type: multimodal
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+
+  # =============================================================================
+  # IMAGE UNDERSTANDING MODELS (Input: text + image, Output: text)
+  # =============================================================================
+  step-1o-turbo-vision:
+    vendor: step
+    type: imageunderstand
     model_id: null
     base_url: null
     temperature: 0.7
@@ -188,9 +137,10 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
+
   step-1o-vision-32k:
     vendor: step
-    type: multimodal
+    type: imageunderstand
     model_id: null
     base_url: null
     temperature: 0.7
@@ -203,14 +153,15 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
-  step-1o-turbo-vision:
+
+  step-1v-8k:
     vendor: step
-    type: multimodal
+    type: imageunderstand
     model_id: null
     base_url: null
     temperature: 0.7
     top_p: 0.9
-    max_tokens: 16384
+    max_tokens: 8192
     frequency_penalty: null
     stop: null
     n: null
@@ -218,7 +169,27 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
-  step-r1-v-mini:
+
+  step-1v-32k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+
+  # =============================================================================
+  # MULTIMODAL MODELS (Input: text + image + audio, Output: text + multimedia)
+  # =============================================================================
+  step-3:
     vendor: step
     type: multimodal
     model_id: null
@@ -234,69 +205,9 @@ models:
     supports_multimodal: true
     response_format: null
 
-  # Audio Models
-  step-1o-audio:
-    vendor: step
-    type: audio
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 16384
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: false
-    supports_multimodal: true
-    response_format: null
-  step-1f-audio:
-    vendor: step
-    type: audio
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: 0.9
-    max_tokens: 16384
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: false
-    supports_multimodal: true
-    response_format: null
-  step-asr:
-    vendor: step
-    type: asr
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 4096
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: false
-    supports_tools: false
-    supports_multimodal: true
-    response_format: null
-
-  # Text-to-Speech Models
-  step-tts-mini:
-    vendor: step
-    type: tts
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 4096
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: false
-    supports_tools: false
-    supports_multimodal: false
-    response_format: null
+  # =============================================================================
+  # TEXT-TO-SPEECH MODELS (Input: text, Output: audio)
+  # =============================================================================
   step-tts-vivid:
     vendor: step
     type: tts
@@ -304,7 +215,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 4096
+    max_tokens: null
     frequency_penalty: null
     stop: null
     n: null
@@ -312,3 +223,179 @@ models:
     supports_tools: false
     supports_multimodal: false
     response_format: null
+
+  step-tts-mini:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+
+  # =============================================================================
+  # AUTOMATIC SPEECH RECOGNITION MODELS (Input: audio, Output: text)
+  # =============================================================================
+  step-asr:
+    vendor: step
+    type: asr
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+
+  # =============================================================================
+  # IMAGE GENERATION MODELS (Input: text, Output: image)
+  # =============================================================================
+  step-2x-large:
+    vendor: step
+    type: generateimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+
+  step-1x-medium:
+    vendor: step
+    type: generateimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+
+  # =============================================================================
+  # IMAGE EDITING MODELS (Input: image + text, Output: image)
+  # =============================================================================
+  step-1x-edit:
+    vendor: step
+    type: editimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+
+  # =============================================================================
+  # EXPERIMENTAL & EXTENDED MODELS
+  # =============================================================================
+  
+  # Function Calling Specialized Configuration
+  step-1-8k-functions:
+    vendor: step
+    type: functioncalling
+    model_id: "step-1-8k"  # Uses base model with specialized configuration
+    base_url: null
+    temperature: 0.1  # Lower temperature for precise function calls
+    top_p: 0.9
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+
+# =============================================================================
+# EXTENDED MODEL CONFIGURATIONS WITH DETAILED CAPABILITIES
+# =============================================================================
+extended_models:
+  step-vision-pro:
+    vendor: step
+    type: imageunderstand
+    model_id: "step-1o-turbo-vision"
+    base_url: null
+    temperature: 0.7
+    max_tokens: 16384
+    # Detailed capabilities specification
+    capabilities:
+      model_type: imageunderstand
+      supports_streaming: true
+      requires_streaming: false
+      supports_tools: true
+      max_context_tokens: 32768
+      max_output_tokens: 16384
+      supports_system_messages: true
+      custom_capabilities:
+        max_images_per_request: 10
+        supported_image_formats: ["jpeg", "png", "webp"]
+        max_image_size_mb: 20
+        vision_capabilities: ["ocr", "object_detection", "scene_analysis"]
+
+# =============================================================================
+# MODEL TYPE DEFINITIONS & FUTURE EXTENSIONS
+# =============================================================================
+
+# Current supported model types:
+# - text: Pure text language models (input: text, output: text)
+# - imageunderstand: Vision + text models (input: text + image, output: text)  
+# - multimodal: Full multimodal models (input: text + image + audio, output: multimedia)
+# - tts: Text-to-speech (input: text, output: audio)
+# - asr: Automatic speech recognition (input: audio, output: text)
+# - generateimage: Text-to-image generation (input: text, output: image)
+# - editimage: Image editing (input: image + text, output: image)
+# - functioncalling: Function calling models (input: text + schemas, output: function calls)
+
+# Future model types that could be added:
+#
+# Video Understanding:
+#   type: videounderstand  # input: text + video, output: text
+#
+# Text-to-Video Generation:
+#   type: text2video  # input: text, output: video
+#
+# Video-to-Video Editing:
+#   type: editvideo  # input: video + text, output: video
+#
+# Document Understanding:
+#   type: docunderstand  # input: text + document, output: text
+#
+# Code Generation:
+#   type: codegen  # input: text, output: code/text
+#
+# Embedding Models:
+#   type: embedding  # input: text, output: vector
+#
+# 3D Understanding:
+#   type: 3dunderstand  # input: text + 3d_model, output: text
+#
+# Text-to-3D Generation:
+#   type: text23d  # input: text, output: 3d_model

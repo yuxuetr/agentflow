@@ -2583,6 +2583,290 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+  
+  # StepFun Text Models
+  step-1-8k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-1-32k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-1-256k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 262144
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2-16k:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2-mini:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2-16k-202411:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-2-16k-exp:
+    vendor: step
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 16384
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+
+  # StepFun Image Understanding Models
+  step-1o-turbo-vision:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1o-vision-32k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1v-8k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-1v-32k:
+    vendor: step
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 32768
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+
+  # StepFun Multimodal Models
+  step-3:
+    vendor: step
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+
+  # StepFun Text-to-Speech Models
+  step-tts-vivid:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  step-tts-mini:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+
+  # StepFun Automatic Speech Recognition Models
+  step-asr:
+    vendor: step
+    type: asr
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+
+  # StepFun Image Generation Models  
+  step-2x-large:
+    vendor: step
+    type: generateimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  step-1x-medium:
+    vendor: step
+    type: generateimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+
+  # StepFun Image Editing Models
+  step-1x-edit:
+    vendor: step
+    type: editimage
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
 providers:
   moonshot:
     api_key_env: MOONSHOT_API_KEY
@@ -2615,6 +2899,13 @@ providers:
   dashscope:
     api_key_env: DASHSCOPE_API_KEY
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  step:
+    api_key_env: STEPFUN_API_KEY
+    base_url: https://api.stepfun.com/v1
     timeout_seconds: 60
     rate_limit:
       requests_per_minute: 500

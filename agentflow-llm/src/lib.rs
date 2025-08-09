@@ -103,6 +103,7 @@ pub use registry::ModelRegistry;
 pub use discovery::{ModelFetcher, ModelValidator, ConfigUpdater};
 pub use multimodal::{MultimodalMessage, MessageContent, ImageUrl, ImageData};
 pub use model_types::{ModelType, InputType, OutputType, ModelCapabilities};
+pub use providers::stepfun::{StepFunSpecializedClient, Text2ImageBuilder, TTSBuilder, Text2ImageRequest, Image2ImageRequest, ImageEditRequest, TTSRequest, ASRRequest, VoiceCloningRequest, ImageGenerationResponse, VoiceCloningResponse, VoiceListResponse};
 
 // External dependencies for configuration
 use dirs;
@@ -441,6 +442,63 @@ impl AgentFlow {
   pub async fn suggest_similar_models(target_model: &str, vendor: &str) -> Result<Vec<String>> {
     let validator = discovery::ModelValidator::new()?;
     validator.suggest_similar_models(target_model, vendor).await
+  }
+
+  /// Create a StepFun specialized client for image generation, TTS, ASR, and voice cloning
+  /// 
+  /// Example:
+  /// ```rust
+  /// let stepfun_client = AgentFlow::stepfun_client(api_key).await?;
+  /// 
+  /// // Generate image from text
+  /// let image_request = Text2ImageBuilder::new("step-1x-medium", "A beautiful sunset")
+  ///     .size("1024x1024")
+  ///     .response_format("b64_json")
+  ///     .build();
+  /// let image_response = stepfun_client.text_to_image(image_request).await?;
+  /// 
+  /// // Convert text to speech
+  /// let tts_request = TTSBuilder::new("step-tts-mini", "Hello world", "default_voice")
+  ///     .response_format("mp3")
+  ///     .speed(1.2)
+  ///     .build();
+  /// let audio_data = stepfun_client.text_to_speech(tts_request).await?;
+  /// ```
+  pub async fn stepfun_client(api_key: &str) -> Result<providers::stepfun::StepFunSpecializedClient> {
+    providers::stepfun::StepFunSpecializedClient::new(api_key, None)
+  }
+
+  /// Create a StepFun specialized client with custom base URL
+  pub async fn stepfun_client_with_base_url(api_key: &str, base_url: &str) -> Result<providers::stepfun::StepFunSpecializedClient> {
+    providers::stepfun::StepFunSpecializedClient::new(api_key, Some(base_url.to_string()))
+  }
+
+  /// Create a Text2Image builder for StepFun image generation
+  /// 
+  /// Example:
+  /// ```rust
+  /// let image_request = AgentFlow::text2image("step-1x-medium", "A cyberpunk cityscape")
+  ///     .size("1280x800")
+  ///     .cfg_scale(7.5)
+  ///     .steps(50)
+  ///     .build();
+  /// ```
+  pub fn text2image(model: &str, prompt: &str) -> providers::stepfun::Text2ImageBuilder {
+    providers::stepfun::Text2ImageBuilder::new(model, prompt)
+  }
+
+  /// Create a TTS builder for StepFun text-to-speech
+  /// 
+  /// Example:
+  /// ```rust
+  /// let tts_request = AgentFlow::text_to_speech("step-tts-vivid", "Welcome to AgentFlow!", "default_voice")
+  ///     .response_format("wav")
+  ///     .speed(1.0)
+  ///     .emotion("高兴")
+  ///     .build();
+  /// ```
+  pub fn text_to_speech(model: &str, input: &str, voice: &str) -> providers::stepfun::TTSBuilder {
+    providers::stepfun::TTSBuilder::new(model, input, voice)
   }
 }
 
