@@ -1,9 +1,12 @@
 use anyhow::Result;
-use agentflow_llm::registry::{ModelRegistry, model_registry::ModelInfo};
+use agentflow_llm::{AgentFlow, registry::{ModelRegistry, model_registry::ModelInfo}};
 use colored::*;
 
 pub async fn execute(provider: Option<String>, detailed: bool) -> Result<()> {
-    let registry = ModelRegistry::new();
+    // Initialize AgentFlow with builtin configuration
+    AgentFlow::init_with_builtin_config().await?;
+    
+    let registry = ModelRegistry::global();
     let model_names = registry.list_models();
     
     // Convert model names to ModelInfo structs

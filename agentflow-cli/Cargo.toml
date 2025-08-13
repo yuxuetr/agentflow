@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 name = "agentflow"
 path = "src/main.rs"
 
+
 [dependencies]
 # Core dependencies
 agentflow-core = { path = "../agentflow-core" }

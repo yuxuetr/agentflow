@@ -14,6 +14,10 @@ pub async fn execute(
     stream: bool,
     system: Option<String>,
 ) -> Result<()> {
+    // Initialize AgentFlow with builtin configuration
+    AgentFlow::init_with_builtin_config().await
+        .with_context(|| "Failed to initialize AgentFlow LLM system")?;
+
     // Build the prompt, including file content if provided
     let prompt = if let Some(file_path) = &file {
         build_prompt_with_file(&text, file_path)?
@@ -22,7 +26,7 @@ pub async fn execute(
     };
 
     // Use default model if none specified
-    let model_name = model.unwrap_or_else(|| "gpt-4o".to_string());
+    let model_name = model.unwrap_or_else(|| "step-2-mini".to_string());
 
     // Initialize AgentFlow with the specified model  
     let mut agent = AgentFlow::model(&model_name);

@@ -7,7 +7,7 @@ mod config;
 mod executor;
 mod utils;
 
-use commands::{config as config_cmd, llm, workflow};
+use commands::{config as config_cmd, llm, workflow, image, audio};
 
 #[derive(Parser)]
 #[command(
@@ -96,6 +96,18 @@ enum Commands {
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
+    },
+
+    /// Image generation and understanding
+    Image {
+        #[command(subcommand)]
+        command: ImageCommands,
+    },
+
+    /// Audio processing (TTS, ASR, voice cloning)
+    Audio {
+        #[command(subcommand)]
+        command: AudioCommands,
     },
 }
 
@@ -195,6 +207,157 @@ enum ConfigCommands {
     Validate,
 }
 
+#[derive(Subcommand)]
+enum ImageCommands {
+    /// Generate images from text descriptions
+    #[command(alias = "gen")]
+    Generate {
+        /// Text prompt for image generation
+        prompt: String,
+
+        /// Specify model name (default: step-1x-medium)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Image size (e.g., "1024x1024", "768x768")
+        #[arg(short, long, default_value = "1024x1024")]
+        size: String,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+
+        /// Response format (b64_json, url)
+        #[arg(short, long, default_value = "b64_json")]
+        format: String,
+
+        /// Number of inference steps (higher = better quality)
+        #[arg(long, default_value = "30")]
+        steps: u32,
+
+        /// CFG scale for guidance (higher = more prompt adherence)
+        #[arg(long, default_value = "7.5")]
+        cfg_scale: f32,
+
+        /// Random seed for reproducible generation
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Strength for image-to-image (0.0-1.0)
+        #[arg(long)]
+        strength: Option<f32>,
+
+        /// Input image for image-to-image generation
+        #[arg(long)]
+        input_image: Option<String>,
+    },
+
+    /// Understand and analyze images
+    #[command(alias = "analyze")]
+    Understand {
+        /// Path to image file
+        image_path: String,
+
+        /// Analysis prompt
+        prompt: String,
+
+        /// Specify model name (default: step-1v-8k)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Set temperature (0.0-1.0)
+        #[arg(short, long)]
+        temperature: Option<f32>,
+
+        /// Maximum tokens to generate
+        #[arg(long)]
+        max_tokens: Option<u32>,
+
+        /// Output file
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AudioCommands {
+    /// Convert text to speech
+    #[command(alias = "tts")]
+    TextToSpeech {
+        /// Text to convert to speech
+        text: String,
+
+        /// Specify model name (default: step-tts-mini)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Voice name
+        #[arg(short, long, default_value = "default")]
+        voice: String,
+
+        /// Audio format (mp3, wav, flac)
+        #[arg(short, long, default_value = "mp3")]
+        format: String,
+
+        /// Speech speed (0.5-2.0)
+        #[arg(long, default_value = "1.0")]
+        speed: f32,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+
+        /// Emotion/style (for supported models)
+        #[arg(long)]
+        emotion: Option<String>,
+    },
+
+    /// Convert speech to text
+    #[command(alias = "asr")]
+    SpeechToText {
+        /// Audio file path
+        audio_path: String,
+
+        /// Specify model name (default: step-asr)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Output format (text, json, srt)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Language code (auto-detect if not specified)
+        #[arg(short, long)]
+        language: Option<String>,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+
+    /// Clone voice from reference audio
+    #[command(alias = "clone")]
+    VoiceClone {
+        /// Reference audio file for voice cloning
+        reference_audio: String,
+
+        /// New text to speak in cloned voice
+        text: String,
+
+        /// Specify model name (default: step-speech)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Audio format (mp3, wav, flac)
+        #[arg(short, long, default_value = "mp3")]
+        format: String,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+    },
+}
+
 fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let pos = s
         .find('=')
@@ -267,6 +430,70 @@ async fn main() {
             ConfigCommands::Init { force } => config_cmd::init::execute(force).await,
             ConfigCommands::Show { section } => config_cmd::show::execute(section).await,
             ConfigCommands::Validate => config_cmd::validate::execute().await,
+        },
+
+        Commands::Image { command } => match command {
+            ImageCommands::Generate {
+                prompt,
+                model,
+                size,
+                output,
+                format,
+                steps,
+                cfg_scale,
+                seed,
+                strength,
+                input_image,
+            } => {
+                image::generate::execute(
+                    prompt, model, size, output, format, steps, cfg_scale, seed, strength, input_image,
+                ).await
+            }
+
+            ImageCommands::Understand {
+                image_path,
+                prompt,
+                model,
+                temperature,
+                max_tokens,
+                output,
+            } => {
+                image::understand::execute(image_path, prompt, model, temperature, max_tokens, output).await
+            }
+        },
+
+        Commands::Audio { command } => match command {
+            AudioCommands::TextToSpeech {
+                text,
+                model,
+                voice,
+                format,
+                speed,
+                output,
+                emotion,
+            } => {
+                audio::tts::execute(text, model, voice, format, speed, output, emotion).await
+            }
+
+            AudioCommands::SpeechToText {
+                audio_path,
+                model,
+                format,
+                language,
+                output,
+            } => {
+                audio::asr::execute(audio_path, model, format, language, output).await
+            }
+
+            AudioCommands::VoiceClone {
+                reference_audio,
+                text,
+                model,
+                format,
+                output,
+            } => {
+                audio::clone::execute(reference_audio, text, model, format, output).await
+            }
         },
     };
 

@@ -23,6 +23,9 @@ if [ -z "$STEP_API_KEY" ]; then
     exit 1
 fi
 
+# Set the API key with the correct variable name expected by AgentFlow
+export STEPFUN_API_KEY="$STEP_API_KEY"
+
 echo "✅ Environment check passed"
 echo
 
@@ -49,10 +52,10 @@ echo
 # Demo 2: Code generation with step-2-16k
 echo "💻 Demo 2: Code Generation with step-2-16k"
 echo "--------------------------------------------"
-agentflow llm prompt "用Python实现一个二分查找算法，包含详细注释和测试用例。" \
+agentflow llm prompt "用Python实现一个二分查找算法，包含详细注释。" \
   --model step-2-16k \
   --temperature 0.7 \
-  --max-tokens 1000 \
+  --max-tokens 800 \
   --output binary_search.py
 
 echo "✅ Generated Python code saved to: binary_search.py"
