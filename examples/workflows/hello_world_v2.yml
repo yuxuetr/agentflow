@@ -1,0 +1,27 @@
+# Simplified AgentFlow Workflow - No Infrastructure Cruft!
+name: "Hello World Q&A v2"
+version: "1.0.0"
+description: "Simple Q&A workflow using clean configuration"
+
+# Only declare what inputs the workflow needs
+inputs:
+  question:
+    type: string
+    required: true
+    description: "Question to ask the AI"
+
+# Simple sequential workflow - direct array of nodes
+workflow:
+  - type: llm
+    name: answer_question
+    model: "step-2-mini"
+    prompt: "{{ inputs.question }}"
+    system: "You are a helpful AI assistant. Provide clear, concise, and accurate answers."
+    temperature: 0.7
+    max_tokens: 500
+
+# What the workflow produces
+outputs:
+  answer:
+    from: "answer_question.response"
+    description: "The AI's answer to the question"
