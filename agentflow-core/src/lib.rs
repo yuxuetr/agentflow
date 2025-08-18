@@ -1,23 +1,32 @@
 // Core AgentFlow library - Phase 2: Async Concurrency Framework
 
-pub mod shared_state;
-pub mod node;
-pub mod flow;
 pub mod error;
+pub mod flow;
+pub mod node;
+pub mod shared_state;
 
 // Phase 2: Async modules
-pub mod async_node;
 pub mod async_flow;
-pub mod robustness;
+pub mod async_node;
 pub mod observability;
+pub mod robustness;
 
-pub use shared_state::SharedState;
-pub use node::{Node, BaseNode};
-pub use flow::Flow;
+// Configuration-first modules
+pub mod config;
+pub mod nodes;
+pub mod workflow_runner;
+
 pub use error::{AgentFlowError, Result};
+pub use flow::Flow;
+pub use node::{BaseNode, Node};
+pub use shared_state::SharedState;
 
 // Phase 2 exports
-pub use async_node::{AsyncNode, AsyncBaseNode};
 pub use async_flow::AsyncFlow;
+pub use async_node::{AsyncBaseNode, AsyncNode};
+pub use observability::{AlertManager, ExecutionEvent, MetricsCollector};
 pub use robustness::{CircuitBreaker, RateLimiter, TimeoutManager};
-pub use observability::{MetricsCollector, AlertManager, ExecutionEvent};
+
+// Configuration-first exports
+pub use config::WorkflowConfig;
+pub use workflow_runner::ConfigWorkflowRunner;

@@ -1,4 +1,4 @@
-use crate::{SharedState, AgentFlowError, Result};
+use crate::{AgentFlowError, Result, SharedState};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,17 +7,27 @@ use uuid::Uuid;
 pub trait Node: Send + Sync {
   fn prep(&self, shared: &SharedState) -> Result<Value>;
   fn exec(&self, prep_result: Value) -> Result<Value>;
-  fn post(&self, shared: &SharedState, prep_result: Value, exec_result: Value) -> Result<Option<String>>;
-  
+  fn post(
+    &self,
+    shared: &SharedState,
+    prep_result: Value,
+    exec_result: Value,
+  ) -> Result<Option<String>>;
+
   fn run(&self, shared: &SharedState) -> Result<Option<String>> {
     let prep_result = self.prep(shared)?;
     let exec_result = self.exec(prep_result.clone())?;
     self.post(shared, prep_result, exec_result)
   }
-  
-  fn run_with_retries(&self, shared: &SharedState, max_retries: u32, wait_duration: Duration) -> Result<Option<String>> {
+
+  fn run_with_retries(
+    &self,
+    shared: &SharedState,
+    max_retries: u32,
+    wait_duration: Duration,
+  ) -> Result<Option<String>> {
     let mut _last_error = None;
-    
+
     for attempt in 1..=max_retries {
       match self.run(shared) {
         Ok(result) => return Ok(result),
@@ -29,8 +39,10 @@ pub trait Node: Send + Sync {
         }
       }
     }
-    
-    Err(AgentFlowError::RetryExhausted { attempts: max_retries })
+
+    Err(AgentFlowError::RetryExhausted {
+      attempts: max_retries,
+    })
   }
 }
 
@@ -46,15 +58,15 @@ impl BaseNode {
       successors: HashMap::new(),
     }
   }
-  
+
   pub fn add_successor(&mut self, action: String, node: Box<dyn Node>) {
     self.successors.insert(action, node);
   }
-  
+
   pub fn has_successor(&self, action: &str) -> bool {
     self.successors.contains_key(action)
   }
-  
+
   pub fn get_successor(&self, action: &str) -> Option<&Box<dyn Node>> {
     self.successors.get(action)
   }
@@ -79,7 +91,7 @@ impl<'a> std::ops::Shr<Box<dyn Node>> for &'a mut BaseNode {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{SharedState, AgentFlowError, Result};
+  use crate::{AgentFlowError, Result, SharedState};
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::Duration;
@@ -87,7 +99,7 @@ mod tests {
   // Mock node for testing
   struct MockNode {
     prep_result: Option<String>,
-    exec_result: Option<String>, 
+    exec_result: Option<String>,
     post_action: Option<String>,
     should_fail: bool,
     call_count: Arc<Mutex<u32>>,
@@ -97,7 +109,7 @@ mod tests {
     fn prep(&self, _shared: &SharedState) -> Result<Value> {
       let mut count = self.call_count.lock().unwrap();
       *count += 1;
-      
+
       if let Some(ref result) = self.prep_result {
         Ok(Value::String(result.clone()))
       } else {
@@ -107,11 +119,11 @@ mod tests {
 
     fn exec(&self, _prep_result: Value) -> Result<Value> {
       if self.should_fail {
-        return Err(AgentFlowError::NodeExecutionFailed { 
-          message: "Mock node failed".to_string() 
+        return Err(AgentFlowError::NodeExecutionFailed {
+          message: "Mock node failed".to_string(),
         });
       }
-      
+
       if let Some(ref result) = self.exec_result {
         Ok(Value::String(result.clone()))
       } else {
@@ -119,7 +131,12 @@ mod tests {
       }
     }
 
-    fn post(&self, shared: &SharedState, _prep_result: Value, exec_result: Value) -> Result<Option<String>> {
+    fn post(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      exec_result: Value,
+    ) -> Result<Option<String>> {
       // Store the execution result in shared state
       shared.insert("output".to_string(), exec_result);
       Ok(self.post_action.clone())
@@ -139,17 +156,22 @@ mod tests {
     fn exec(&self, _prep_result: Value) -> Result<Value> {
       let mut attempts = self.attempts.lock().unwrap();
       *attempts += 1;
-      
+
       if *attempts < self.fail_until_attempt {
-        Err(AgentFlowError::NodeExecutionFailed { 
-          message: format!("Attempt {} failed", *attempts) 
+        Err(AgentFlowError::NodeExecutionFailed {
+          message: format!("Attempt {} failed", *attempts),
         })
       } else {
         Ok(Value::String("success".to_string()))
       }
     }
 
-    fn post(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    fn post(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -169,7 +191,12 @@ mod tests {
       Ok(prep_result)
     }
 
-    fn post(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    fn post(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -190,7 +217,7 @@ mod tests {
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), Some("next".to_string()));
-    
+
     // Verify the node was called
     let count = *node.call_count.lock().unwrap();
     assert_eq!(count, 1);
@@ -225,7 +252,7 @@ mod tests {
     let result = node.run_with_retries(&shared, 5, Duration::from_millis(10));
 
     assert!(result.is_ok());
-    
+
     let attempts = *node.attempts.lock().unwrap();
     assert_eq!(attempts, 3);
   }
@@ -242,7 +269,7 @@ mod tests {
     let result = node.run_with_retries(&shared, 3, Duration::from_millis(1));
 
     assert!(result.is_err());
-    
+
     let attempts = *node.attempts.lock().unwrap();
     assert_eq!(attempts, 3); // Should have tried exactly max_retries times
   }
@@ -250,7 +277,9 @@ mod tests {
   #[test]
   fn test_base_node_successor_chaining() {
     // Test successor chaining with >> operator
-    let node2 = CounterNode { counter: Arc::new(Mutex::new(0)) };
+    let node2 = CounterNode {
+      counter: Arc::new(Mutex::new(0)),
+    };
 
     // Test manual successor addition
     let mut base_node = BaseNode::new();
@@ -263,12 +292,14 @@ mod tests {
   #[test]
   fn test_node_chaining_operator() {
     // Test >> operator for node chaining
-    let node2 = CounterNode { counter: Arc::new(Mutex::new(0)) };
+    let node2 = CounterNode {
+      counter: Arc::new(Mutex::new(0)),
+    };
     let mut base_node = BaseNode::new();
-    
+
     // Use the >> operator
     let _ = &mut base_node >> Box::new(node2);
-    
+
     assert!(base_node.has_successor("default"));
   }
 
@@ -276,8 +307,12 @@ mod tests {
   fn test_conditional_transitions() {
     // Test conditional transitions with action routing
     let mut node = BaseNode::new();
-    let success_node = CounterNode { counter: Arc::new(Mutex::new(0)) };
-    let error_node = CounterNode { counter: Arc::new(Mutex::new(0)) };
+    let success_node = CounterNode {
+      counter: Arc::new(Mutex::new(0)),
+    };
+    let error_node = CounterNode {
+      counter: Arc::new(Mutex::new(0)),
+    };
 
     node.add_successor("success".to_string(), Box::new(success_node));
     node.add_successor("error".to_string(), Box::new(error_node));
@@ -300,7 +335,10 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    shared.insert("input".to_string(), Value::String("initial_value".to_string()));
+    shared.insert(
+      "input".to_string(),
+      Value::String("initial_value".to_string()),
+    );
 
     let result = node.run(&shared);
     assert!(result.is_ok());

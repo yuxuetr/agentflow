@@ -1,4 +1,4 @@
-use crate::{SharedState, Node, AgentFlowError, Result};
+use crate::{AgentFlowError, Node, Result, SharedState};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +15,7 @@ impl Flow {
       start_node: Some(start_node),
       nodes: HashMap::new(),
       parameters: HashMap::new(),
-      max_iterations: 100,  // Default limit to prevent infinite loops
+      max_iterations: 100, // Default limit to prevent infinite loops
     }
   }
 
@@ -43,9 +43,11 @@ impl Flow {
 
     let mut current_node = match &self.start_node {
       Some(node) => node,
-      None => return Err(AgentFlowError::FlowExecutionFailed {
-        message: "No start node defined".to_string(),
-      }),
+      None => {
+        return Err(AgentFlowError::FlowExecutionFailed {
+          message: "No start node defined".to_string(),
+        })
+      }
     };
 
     let mut iterations = 0;
@@ -53,7 +55,7 @@ impl Flow {
 
     loop {
       iterations += 1;
-      
+
       if iterations > self.max_iterations {
         shared.insert("max_iterations_reached".to_string(), Value::Bool(true));
         return Err(AgentFlowError::FlowExecutionFailed {
@@ -92,7 +94,7 @@ impl Flow {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{SharedState, Node, AgentFlowError, Result};
+  use crate::{AgentFlowError, Node, Result, SharedState};
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
 
@@ -113,7 +115,12 @@ mod tests {
       Ok(Value::String(format!("exec_{}", self.id)))
     }
 
-    fn post(&self, shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    fn post(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       shared.insert(format!("{}_executed", self.id), Value::Bool(true));
       Ok(self.next_action.clone())
     }
@@ -134,8 +141,14 @@ mod tests {
       Ok(Value::String("conditional_exec".to_string()))
     }
 
-    fn post(&self, shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
-      let condition = shared.get(&self.condition_key)
+    fn post(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
+      let condition = shared
+        .get(&self.condition_key)
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
@@ -166,7 +179,12 @@ mod tests {
       }
     }
 
-    fn post(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    fn post(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -276,11 +294,14 @@ mod tests {
     };
 
     let mut flow = Flow::new(Box::new(node1));
-    flow.add_node("node1".to_string(), Box::new(SimpleNode {
-      id: "node1_copy".to_string(),
-      next_action: Some("node2".to_string()),
-      execution_log: Arc::new(Mutex::new(Vec::new())),
-    }));
+    flow.add_node(
+      "node1".to_string(),
+      Box::new(SimpleNode {
+        id: "node1_copy".to_string(),
+        next_action: Some("node2".to_string()),
+        execution_log: Arc::new(Mutex::new(Vec::new())),
+      }),
+    );
     flow.add_node("node2".to_string(), Box::new(node2));
     flow.set_max_iterations(10); // Lower limit to trigger max iterations
 
@@ -310,7 +331,10 @@ mod tests {
     flow.add_node("node2".to_string(), Box::new(node2));
 
     let shared = SharedState::new();
-    shared.insert("initial_value".to_string(), Value::String("test".to_string()));
+    shared.insert(
+      "initial_value".to_string(),
+      Value::String("test".to_string()),
+    );
 
     let result = flow.run(&shared);
     assert!(result.is_ok());
@@ -348,7 +372,7 @@ mod tests {
   fn test_flow_copy_semantics() {
     // Test that flows handle max iterations correctly
     let execution_log = Arc::new(Mutex::new(Vec::new()));
-    
+
     let node1 = SimpleNode {
       id: "node1".to_string(),
       next_action: Some("nonexistent".to_string()), // Will cause flow to end
@@ -362,7 +386,7 @@ mod tests {
     let result = flow.run(&shared);
 
     assert!(result.is_ok());
-    
+
     // Should have executed once before ending on unknown transition
     let log = execution_log.lock().unwrap();
     assert_eq!(log.len(), 1);
@@ -377,7 +401,10 @@ mod tests {
       execution_log: Arc::new(Mutex::new(Vec::new())),
     }));
 
-    flow.set_parameter("global_param".to_string(), Value::String("global_value".to_string()));
+    flow.set_parameter(
+      "global_param".to_string(),
+      Value::String("global_value".to_string()),
+    );
 
     let shared = SharedState::new();
     let result = flow.run(&shared);

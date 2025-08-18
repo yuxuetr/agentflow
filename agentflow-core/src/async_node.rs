@@ -1,7 +1,7 @@
 // Async Node implementation - tests first, implementation follows
 
-use crate::{SharedState, AgentFlowError, Result};
-use crate::observability::{MetricsCollector, ExecutionEvent};
+use crate::observability::{ExecutionEvent, MetricsCollector};
+use crate::{AgentFlowError, Result, SharedState};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -14,13 +14,22 @@ use uuid::Uuid;
 pub trait AsyncNode: Send + Sync {
   async fn prep_async(&self, shared: &SharedState) -> Result<Value>;
   async fn exec_async(&self, prep_result: Value) -> Result<Value>;
-  async fn post_async(&self, shared: &SharedState, prep_result: Value, exec_result: Value) -> Result<Option<String>>;
-  
+  async fn post_async(
+    &self,
+    shared: &SharedState,
+    prep_result: Value,
+    exec_result: Value,
+  ) -> Result<Option<String>>;
+
   async fn run_async(&self, shared: &SharedState) -> Result<Option<String>> {
     self.run_async_with_observability(shared, None).await
   }
 
-  async fn run_async_with_observability(&self, shared: &SharedState, metrics_collector: Option<Arc<MetricsCollector>>) -> Result<Option<String>> {
+  async fn run_async_with_observability(
+    &self,
+    shared: &SharedState,
+    metrics_collector: Option<Arc<MetricsCollector>>,
+  ) -> Result<Option<String>> {
     let node_id = self.get_node_id().unwrap_or_else(|| "unknown".to_string());
     let start_time = Instant::now();
 
@@ -41,7 +50,8 @@ pub trait AsyncNode: Send + Sync {
       let prep_result = self.prep_async(shared).await?;
       let exec_result = self.exec_async(prep_result.clone()).await?;
       self.post_async(shared, prep_result, exec_result).await
-    }.await;
+    }
+    .await;
 
     let duration = start_time.elapsed();
 
@@ -49,15 +59,23 @@ pub trait AsyncNode: Send + Sync {
     if let Some(ref collector) = metrics_collector {
       let event = ExecutionEvent {
         node_id: node_id.clone(),
-        event_type: if result.is_ok() { "node_success" } else { "node_error" }.to_string(),
+        event_type: if result.is_ok() {
+          "node_success"
+        } else {
+          "node_error"
+        }
+        .to_string(),
         timestamp: start_time,
         duration_ms: Some(duration.as_millis() as u64),
         metadata: HashMap::new(),
       };
       collector.record_event(event);
-      
+
       // Update metrics
-      collector.increment_counter(&format!("{}.duration_ms", node_id), duration.as_millis() as f64);
+      collector.increment_counter(
+        &format!("{}.duration_ms", node_id),
+        duration.as_millis() as f64,
+      );
       if result.is_ok() {
         collector.increment_counter(&format!("{}.success_count", node_id), 1.0);
       } else {
@@ -71,10 +89,15 @@ pub trait AsyncNode: Send + Sync {
   fn get_node_id(&self) -> Option<String> {
     None // Default implementation, can be overridden
   }
-  
-  async fn run_async_with_retries(&self, shared: &SharedState, max_retries: u32, wait_duration: Duration) -> Result<Option<String>> {
+
+  async fn run_async_with_retries(
+    &self,
+    shared: &SharedState,
+    max_retries: u32,
+    wait_duration: Duration,
+  ) -> Result<Option<String>> {
     let mut last_error = None;
-    
+
     for attempt in 1..=max_retries {
       match self.run_async(shared).await {
         Ok(result) => return Ok(result),
@@ -86,22 +109,31 @@ pub trait AsyncNode: Send + Sync {
         }
       }
     }
-    
+
     // Return the last error if available, otherwise return retry exhausted
     match last_error {
       Some(err) => Err(err),
-      None => Err(AgentFlowError::RetryExhausted { attempts: max_retries })
+      None => Err(AgentFlowError::RetryExhausted {
+        attempts: max_retries,
+      }),
     }
   }
 
-  async fn run_async_with_timeout(&self, shared: &SharedState, timeout_duration: Duration) -> Result<Option<String>> {
+  async fn run_async_with_timeout(
+    &self,
+    shared: &SharedState,
+    timeout_duration: Duration,
+  ) -> Result<Option<String>> {
     match timeout(timeout_duration, self.run_async(shared)).await {
       Ok(result) => result,
       Err(_) => {
         // Add graceful degradation marker
-        shared.insert("degraded_result".to_string(), Value::String("timeout_degraded".to_string()));
-        Err(AgentFlowError::TimeoutExceeded { 
-          duration_ms: timeout_duration.as_millis() as u64 
+        shared.insert(
+          "degraded_result".to_string(),
+          Value::String("timeout_degraded".to_string()),
+        );
+        Err(AgentFlowError::TimeoutExceeded {
+          duration_ms: timeout_duration.as_millis() as u64,
         })
       }
     }
@@ -109,9 +141,15 @@ pub trait AsyncNode: Send + Sync {
 
   async fn health_check(&self) -> Result<serde_json::Map<String, Value>> {
     let mut status = serde_json::Map::new();
-    status.insert("node_id".to_string(), Value::String("test_node".to_string()));
+    status.insert(
+      "node_id".to_string(),
+      Value::String("test_node".to_string()),
+    );
     status.insert("status".to_string(), Value::String("healthy".to_string()));
-    status.insert("last_check".to_string(), Value::String(chrono::Utc::now().to_rfc3339()));
+    status.insert(
+      "last_check".to_string(),
+      Value::String(chrono::Utc::now().to_rfc3339()),
+    );
     Ok(status)
   }
 }
@@ -128,15 +166,15 @@ impl AsyncBaseNode {
       successors: HashMap::new(),
     }
   }
-  
+
   pub fn add_successor(&mut self, action: String, node: Box<dyn AsyncNode>) {
     self.successors.insert(action, node);
   }
-  
+
   pub fn has_successor(&self, action: &str) -> bool {
     self.successors.contains_key(action)
   }
-  
+
   pub fn get_successor(&self, action: &str) -> Option<&Box<dyn AsyncNode>> {
     self.successors.get(action)
   }
@@ -151,7 +189,7 @@ impl Default for AsyncBaseNode {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{SharedState, AgentFlowError, Result};
+  use crate::{AgentFlowError, Result, SharedState};
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::{Duration, Instant};
@@ -174,11 +212,11 @@ mod tests {
         let mut count = self.call_count.lock().unwrap();
         *count += 1;
       }
-      
+
       if self.delay_ms > 0 {
         sleep(Duration::from_millis(self.delay_ms)).await;
       }
-      
+
       if let Some(ref result) = self.prep_result {
         Ok(Value::String(result.clone()))
       } else {
@@ -188,11 +226,11 @@ mod tests {
 
     async fn exec_async(&self, _prep_result: Value) -> Result<Value> {
       if self.should_fail {
-        return Err(AgentFlowError::AsyncExecutionError { 
-          message: "Mock async node failed".to_string() 
+        return Err(AgentFlowError::AsyncExecutionError {
+          message: "Mock async node failed".to_string(),
         });
       }
-      
+
       if let Some(ref result) = self.exec_result {
         Ok(Value::String(result.clone()))
       } else {
@@ -200,7 +238,12 @@ mod tests {
       }
     }
 
-    async fn post_async(&self, shared: &SharedState, _prep_result: Value, exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      shared: &SharedState,
+      _prep_result: Value,
+      exec_result: Value,
+    ) -> Result<Option<String>> {
       shared.insert("output".to_string(), exec_result);
       Ok(self.post_action.clone())
     }
@@ -220,12 +263,21 @@ mod tests {
     async fn exec_async(&self, _prep_result: Value) -> Result<Value> {
       sleep(Duration::from_millis(self.delay_ms)).await;
       {
-        self.execution_log.lock().unwrap().push("executed".to_string());
+        self
+          .execution_log
+          .lock()
+          .unwrap()
+          .push("executed".to_string());
       }
       Ok(Value::String("delay_complete".to_string()))
     }
 
-    async fn post_async(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -247,17 +299,22 @@ mod tests {
         *attempts += 1;
         *attempts
       };
-      
+
       if current_attempts < self.fail_after_attempts {
-        Err(AgentFlowError::AsyncExecutionError { 
-          message: format!("Attempt {} failed", current_attempts) 
+        Err(AgentFlowError::AsyncExecutionError {
+          message: format!("Attempt {} failed", current_attempts),
         })
       } else {
         Ok(Value::String("success".to_string()))
       }
     }
 
-    async fn post_async(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -277,12 +334,21 @@ mod tests {
     async fn exec_async(&self, _prep_result: Value) -> Result<Value> {
       sleep(Duration::from_millis(self.delay_ms)).await;
       {
-        self.execution_log.lock().unwrap().push((self.id.clone(), Instant::now()));
+        self
+          .execution_log
+          .lock()
+          .unwrap()
+          .push((self.id.clone(), Instant::now()));
       }
       Ok(Value::String(format!("exec_{}", self.id)))
     }
 
-    async fn post_async(&self, _shared: &SharedState, _prep_result: Value, _exec_result: Value) -> Result<Option<String>> {
+    async fn post_async(
+      &self,
+      _shared: &SharedState,
+      _prep_result: Value,
+      _exec_result: Value,
+    ) -> Result<Option<String>> {
       Ok(None)
     }
   }
@@ -356,10 +422,10 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    
+
     // Set timeout to 100ms, node takes 1000ms
     let result = timeout(Duration::from_millis(100), node.run_async(&shared)).await;
-    
+
     assert!(result.is_err()); // Should timeout
   }
 
@@ -372,10 +438,12 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    let result = node.run_async_with_retries(&shared, 5, Duration::from_millis(10)).await;
+    let result = node
+      .run_async_with_retries(&shared, 5, Duration::from_millis(10))
+      .await;
 
     assert!(result.is_ok());
-    
+
     let attempts = *node.attempts.lock().unwrap();
     assert_eq!(attempts, 3);
   }
@@ -389,10 +457,12 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    let result = node.run_async_with_retries(&shared, 3, Duration::from_millis(1)).await;
+    let result = node
+      .run_async_with_retries(&shared, 3, Duration::from_millis(1))
+      .await;
 
     assert!(result.is_err());
-    
+
     let attempts = *node.attempts.lock().unwrap();
     assert_eq!(attempts, 3);
   }
@@ -401,12 +471,14 @@ mod tests {
   async fn test_async_parallel_execution() {
     // Test that multiple async nodes can run in parallel
     let execution_log = Arc::new(Mutex::new(Vec::new()));
-    
-    let nodes = (0..3).map(|i| ParallelTestNode {
-      id: format!("node_{}", i),
-      delay_ms: 50,
-      execution_log: execution_log.clone(),
-    }).collect::<Vec<_>>();
+
+    let nodes = (0..3)
+      .map(|i| ParallelTestNode {
+        id: format!("node_{}", i),
+        delay_ms: 50,
+        execution_log: execution_log.clone(),
+      })
+      .collect::<Vec<_>>();
 
     let shared = SharedState::new();
     let start = Instant::now();
@@ -416,7 +488,7 @@ mod tests {
     let results = futures::future::join_all(futures).await;
 
     let elapsed = start.elapsed();
-    
+
     // All should succeed
     for result in results {
       assert!(result.is_ok());
@@ -424,7 +496,7 @@ mod tests {
 
     // Should complete in ~50ms (parallel) not ~150ms (sequential)
     assert!(elapsed < Duration::from_millis(100));
-    
+
     let log = execution_log.lock().unwrap();
     assert_eq!(log.len(), 3);
   }
@@ -439,11 +511,9 @@ mod tests {
     };
 
     let shared = SharedState::new();
-    
+
     // Start the node but cancel it after 50ms
-    let handle = tokio::spawn(async move {
-      node.run_async(&shared).await
-    });
+    let handle = tokio::spawn(async move { node.run_async(&shared).await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
@@ -459,16 +529,21 @@ mod tests {
   async fn test_async_shared_state_concurrent_access() {
     // Test concurrent access to shared state from multiple async nodes
     let shared = SharedState::new();
-    shared.insert("counter".to_string(), Value::Number(serde_json::Number::from(0)));
+    shared.insert(
+      "counter".to_string(),
+      Value::Number(serde_json::Number::from(0)),
+    );
 
-    let nodes = (0..10).map(|_| MockAsyncNode {
-      prep_result: Some("increment".to_string()),
-      exec_result: Some("done".to_string()),
-      post_action: None,
-      should_fail: false,
-      delay_ms: 10,
-      call_count: Arc::new(Mutex::new(0)),
-    }).collect::<Vec<_>>();
+    let nodes = (0..10)
+      .map(|_| MockAsyncNode {
+        prep_result: Some("increment".to_string()),
+        exec_result: Some("done".to_string()),
+        post_action: None,
+        should_fail: false,
+        delay_ms: 10,
+        call_count: Arc::new(Mutex::new(0)),
+      })
+      .collect::<Vec<_>>();
 
     // Run all nodes concurrently, each incrementing the counter
     let futures = nodes.iter().map(|node| async {
@@ -476,7 +551,10 @@ mod tests {
       // Simulate incrementing shared counter
       if let Some(Value::Number(n)) = shared.get("counter") {
         if let Some(val) = n.as_u64() {
-          shared.insert("counter".to_string(), Value::Number(serde_json::Number::from(val + 1)));
+          shared.insert(
+            "counter".to_string(),
+            Value::Number(serde_json::Number::from(val + 1)),
+          );
         }
       }
     });
@@ -484,10 +562,8 @@ mod tests {
     futures::future::join_all(futures).await;
 
     // Final counter value should reflect all increments
-    let final_count = shared.get("counter")
-      .and_then(|v| v.as_u64())
-      .unwrap_or(0);
-    
+    let final_count = shared.get("counter").and_then(|v| v.as_u64()).unwrap_or(0);
+
     assert!(final_count > 0); // Some increments should have succeeded
   }
 }

@@ -4,53 +4,56 @@ use thiserror::Error;
 pub enum AgentFlowError {
   #[error("Node execution failed: {message}")]
   NodeExecutionFailed { message: String },
-  
+
   #[error("Retry attempts exhausted after {attempts} attempts")]
   RetryExhausted { attempts: u32 },
-  
+
   #[error("Flow execution failed: {message}")]
   FlowExecutionFailed { message: String },
-  
+
   #[error("Circular flow detected")]
   CircularFlow,
-  
+
   #[error("Unknown transition: {action}")]
   UnknownTransition { action: String },
-  
+
   #[error("Shared state error: {message}")]
   SharedStateError { message: String },
-  
+
   #[error("Serialization error: {0}")]
   SerializationError(#[from] serde_json::Error),
-  
+
   #[error("Generic error: {0}")]
   Generic(#[from] anyhow::Error),
 
   // Phase 2: Async and robustness errors
   #[error("Timeout exceeded after {duration_ms}ms")]
   TimeoutExceeded { duration_ms: u64 },
-  
+
   #[error("Circuit breaker open for node: {node_id}")]
   CircuitBreakerOpen { node_id: String },
-  
+
   #[error("Rate limit exceeded: {limit} requests per {window_ms}ms")]
   RateLimitExceeded { limit: u32, window_ms: u64 },
-  
+
   #[error("Load shed due to high system load")]
   LoadShed,
-  
+
   #[error("Resource pool exhausted: {resource_type}")]
   ResourcePoolExhausted { resource_type: String },
-  
+
   #[error("Task cancelled")]
   TaskCancelled,
-  
+
   #[error("Async execution error: {message}")]
   AsyncExecutionError { message: String },
-  
+
   #[error("Batch processing failed: {failed_items} of {total_items} items failed")]
-  BatchProcessingFailed { failed_items: usize, total_items: usize },
-  
+  BatchProcessingFailed {
+    failed_items: usize,
+    total_items: usize,
+  },
+
   #[error("Monitoring error: {message}")]
   MonitoringError { message: String },
 }
@@ -72,7 +75,8 @@ mod tests {
   #[test]
   fn test_error_chaining() {
     // Create a simple JSON parsing error
-    let json_result: std::result::Result<serde_json::Value, serde_json::Error> = serde_json::from_str("{invalid");
+    let json_result: std::result::Result<serde_json::Value, serde_json::Error> =
+      serde_json::from_str("{invalid");
     let inner_error = json_result.unwrap_err();
     let error = AgentFlowError::SerializationError(inner_error);
     assert!(error.to_string().contains("Serialization error"));
@@ -81,6 +85,9 @@ mod tests {
   #[test]
   fn test_retry_exhausted_error() {
     let error = AgentFlowError::RetryExhausted { attempts: 3 };
-    assert_eq!(error.to_string(), "Retry attempts exhausted after 3 attempts");
+    assert_eq!(
+      error.to_string(),
+      "Retry attempts exhausted after 3 attempts"
+    );
   }
 }
