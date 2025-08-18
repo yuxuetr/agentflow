@@ -1,6 +1,6 @@
 use crate::{
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
-  providers::{LLMProvider, ProviderRequest, ProviderResponse, ContentType},
+  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   LLMError, Result,
 };
 use async_trait::async_trait;
@@ -13,23 +13,23 @@ use tokio_stream::Stream;
 
 /// Model types supported by StepFun
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]  // Some variants like VoiceClone are defined but not yet used in routing logic
+#[allow(dead_code)] // Some variants like VoiceClone are defined but not yet used in routing logic
 enum ModelType {
   Text,
   ImageUnderstand,
   Multimodal,
-  TTS,         // Text-to-Speech: input text, output audio
-  ASR,         // Automatic Speech Recognition: input audio, output text
-  VoiceClone,  // Voice Cloning: input audio sample, output voice profile
+  TTS,        // Text-to-Speech: input text, output audio
+  ASR,        // Automatic Speech Recognition: input audio, output text
+  VoiceClone, // Voice Cloning: input audio sample, output voice profile
   GenerateImage,
   EditImage,
 }
 
 /// StepFun provider implementation
-/// 
+///
 /// Handles chat-compatible models (Text, ImageUnderstand, Multimodal) via /chat/completions endpoint.
 /// For specialized APIs (TTS, ASR, Image Generation, etc.), use StepFunSpecializedClient instead.
-/// 
+///
 /// Supported endpoints:
 /// - Text Models: /chat/completions (streaming + non-streaming)
 /// - Image Understanding: /chat/completions with multimodal content
@@ -61,7 +61,10 @@ impl StepFunProvider {
   fn build_headers(&self) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("Authorization", format!("Bearer {}", self.api_key).parse().unwrap());
+    headers.insert(
+      "Authorization",
+      format!("Bearer {}", self.api_key).parse().unwrap(),
+    );
     headers
   }
 
@@ -83,27 +86,29 @@ impl StepFunProvider {
   fn get_model_type(&self, model: &str) -> ModelType {
     match model {
       // Text models
-      "step-1-8k" | "step-1-32k" | "step-1-256k" | "step-2-16k" | "step-2-mini" | 
-      "step-2-16k-202411" | "step-2-16k-exp" => ModelType::Text,
-      
+      "step-1-8k" | "step-1-32k" | "step-1-256k" | "step-2-16k" | "step-2-mini"
+      | "step-2-16k-202411" | "step-2-16k-exp" => ModelType::Text,
+
       // Image understanding models
-      "step-1o-turbo-vision" | "step-1o-vision-32k" | "step-1v-8k" | "step-1v-32k" => ModelType::ImageUnderstand,
-      
+      "step-1o-turbo-vision" | "step-1o-vision-32k" | "step-1v-8k" | "step-1v-32k" => {
+        ModelType::ImageUnderstand
+      }
+
       // Multimodal models
       "step-3" => ModelType::Multimodal,
-      
+
       // Text-to-Speech models
       "step-tts-vivid" | "step-tts-mini" => ModelType::TTS,
-      
-      // Automatic Speech Recognition models  
+
+      // Automatic Speech Recognition models
       "step-asr" => ModelType::ASR,
-      
+
       // Image generation models
       "step-2x-large" | "step-1x-medium" => ModelType::GenerateImage,
-      
+
       // Image editing models
       "step-1x-edit" => ModelType::EditImage,
-      
+
       // Default to text for unknown models
       _ => ModelType::Text,
     }
@@ -128,7 +133,7 @@ impl StepFunProvider {
     }
 
     let stepfun_response: StepFunResponse = response.json().await?;
-    
+
     // Handle both string and array content formats (StepFun supports multimodal)
     let content_text = if let Some(first_choice) = stepfun_response.choices.first() {
       match &first_choice.message.content {
@@ -136,11 +141,13 @@ impl StepFunProvider {
         Some(serde_json::Value::Array(_)) => {
           // For multimodal responses that return structured content,
           // extract text parts or convert to string representation
-          first_choice.message.content
+          first_choice
+            .message
+            .content
             .as_ref()
             .map(|v| v.to_string())
             .unwrap_or_default()
-        },
+        }
         _ => String::new(),
       }
     } else {
@@ -150,11 +157,14 @@ impl StepFunProvider {
     // Convert to ContentType
     let content = ContentType::Text(content_text);
 
-    let usage = stepfun_response.usage.clone().map(|u| crate::providers::TokenUsage {
-      prompt_tokens: Some(u.prompt_tokens),
-      completion_tokens: Some(u.completion_tokens),
-      total_tokens: Some(u.total_tokens),
-    });
+    let usage = stepfun_response
+      .usage
+      .clone()
+      .map(|u| crate::providers::TokenUsage {
+        prompt_tokens: Some(u.prompt_tokens),
+        completion_tokens: Some(u.completion_tokens),
+        total_tokens: Some(u.total_tokens),
+      });
 
     Ok(ProviderResponse {
       content,
@@ -163,7 +173,11 @@ impl StepFunProvider {
     })
   }
 
-  async fn execute_streaming_chat(&self, url: String, body: Value) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming_chat(
+    &self,
+    url: String,
+    body: Value,
+  ) -> Result<Box<dyn StreamingResponse>> {
     let response = self
       .client
       .post(&url)
@@ -206,16 +220,26 @@ impl LLMProvider for StepFunProvider {
         let body = self.build_request_body(request);
         self.execute_chat_completion(url, body).await
       }
-      ModelType::TTS | ModelType::ASR | ModelType::VoiceClone | ModelType::GenerateImage | ModelType::EditImage => {
+      ModelType::TTS
+      | ModelType::ASR
+      | ModelType::VoiceClone
+      | ModelType::GenerateImage
+      | ModelType::EditImage => {
         // These model types require specialized APIs that are not suitable for streaming chat interface
         return Err(LLMError::InternalError {
-          message: format!("Model '{}' requires specialized API. Use StepFunSpecializedClient instead.", request.model),
+          message: format!(
+            "Model '{}' requires specialized API. Use StepFunSpecializedClient instead.",
+            request.model
+          ),
         });
       }
     }
   }
 
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>> {
     if !request.stream {
       return Err(LLMError::InternalError {
         message: "Streaming not enabled in request".to_string(),
@@ -230,7 +254,11 @@ impl LLMProvider for StepFunProvider {
         let body = self.build_request_body(request);
         self.execute_streaming_chat(url, body).await
       }
-      ModelType::TTS | ModelType::ASR | ModelType::VoiceClone | ModelType::GenerateImage | ModelType::EditImage => {
+      ModelType::TTS
+      | ModelType::ASR
+      | ModelType::VoiceClone
+      | ModelType::GenerateImage
+      | ModelType::EditImage => {
         // These model types don't support streaming
         return Err(LLMError::InternalError {
           message: format!("Model '{}' does not support streaming", request.model),
@@ -247,7 +275,7 @@ impl LLMProvider for StepFunProvider {
       "messages": [{"role": "user", "content": "test"}],
       "max_tokens": 1
     });
-    
+
     let response = self
       .client
       .post(&url)
@@ -280,21 +308,17 @@ impl LLMProvider for StepFunProvider {
       "step-2-mini".to_string(),
       "step-2-16k-202411".to_string(),
       "step-2-16k-exp".to_string(),
-      
       // Image understanding models
       "step-1o-turbo-vision".to_string(),
       "step-1o-vision-32k".to_string(),
       "step-1v-8k".to_string(),
       "step-1v-32k".to_string(),
-      
       // Multimodal models
       "step-3".to_string(),
-      
       // Audio models (for chat completions interface)
       "step-tts-vivid".to_string(),
       "step-tts-mini".to_string(),
       "step-asr".to_string(),
-      
       // Image generation models (for chat completions interface)
       "step-2x-large".to_string(),
       "step-1x-medium".to_string(),
@@ -427,7 +451,7 @@ impl StepFunStreamingResponse {
             serde_json::Value::String(text) => text.clone(),
             _ => content.to_string(), // Convert other types to string
           };
-          
+
           return Some(StreamChunk {
             content: content_text,
             is_final: choice.finish_reason.is_some(),
@@ -491,7 +515,7 @@ impl StreamingResponse for StepFunStreamingResponse {
 // =============================================================================
 // STEPFUN SPECIALIZED APIS
 // =============================================================================
-// 
+//
 // This section provides specialized support for StepFun's image generation,
 // audio synthesis, and voice processing APIs beyond standard chat completions.
 
@@ -552,9 +576,9 @@ pub struct ImageEditRequest {
   pub image_filename: String,
   pub prompt: String,
   pub seed: Option<i32>,
-  pub steps: Option<u32>, // Default 28
-  pub cfg_scale: Option<f32>, // Default 6
-  pub size: Option<String>, // "512x512", "768x768", "1024x1024"
+  pub steps: Option<u32>,              // Default 28
+  pub cfg_scale: Option<f32>,          // Default 6
+  pub size: Option<String>,            // "512x512", "768x768", "1024x1024"
   pub response_format: Option<String>, // "b64_json" or "url"
 }
 
@@ -599,7 +623,7 @@ pub struct VoiceCloningRequest {
 /// ASR (Automatic Speech Recognition) parameters
 #[derive(Debug, Clone)]
 pub struct ASRRequest {
-  pub model: String, // "step-asr"
+  pub model: String,           // "step-asr"
   pub response_format: String, // "json", "text", "srt", "vtt"
   pub audio_data: Vec<u8>,
   pub filename: String,
@@ -627,7 +651,7 @@ pub struct ImageData {
 /// Voice cloning response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceCloningResponse {
-  pub id: String, // Voice ID for future use
+  pub id: String,     // Voice ID for future use
   pub object: String, // "audio.voice"
   #[serde(skip_serializing_if = "Option::is_none")]
   pub duplicated: Option<bool>,
@@ -683,14 +707,17 @@ impl StepFunSpecializedClient {
 
   fn build_auth_headers(&self) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Authorization", format!("Bearer {}", self.api_key).parse().unwrap());
+    headers.insert(
+      "Authorization",
+      format!("Bearer {}", self.api_key).parse().unwrap(),
+    );
     headers
   }
 
   /// Generate image from text prompt
   pub async fn text_to_image(&self, request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
     let url = format!("{}/images/generations", self.base_url);
-    
+
     let mut headers = self.build_auth_headers();
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
@@ -716,9 +743,12 @@ impl StepFunSpecializedClient {
   }
 
   /// Transform image using another image as reference
-  pub async fn image_to_image(&self, request: Image2ImageRequest) -> Result<ImageGenerationResponse> {
+  pub async fn image_to_image(
+    &self,
+    request: Image2ImageRequest,
+  ) -> Result<ImageGenerationResponse> {
     let url = format!("{}/images/image2image", self.base_url);
-    
+
     let mut headers = self.build_auth_headers();
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
@@ -746,35 +776,46 @@ impl StepFunSpecializedClient {
   /// Edit image with text instructions
   pub async fn edit_image(&self, request: ImageEditRequest) -> Result<ImageGenerationResponse> {
     let url = format!("{}/images/edits", self.base_url);
-    
+
     let form = reqwest::multipart::Form::new()
       .text("model", request.model.clone())
       .text("prompt", request.prompt.clone())
-      .part("image", 
+      .part(
+        "image",
         reqwest::multipart::Part::bytes(request.image_data)
           .file_name(request.image_filename)
-          .mime_str("image/jpeg")?
+          .mime_str("image/jpeg")?,
       );
 
     let form = if let Some(seed) = request.seed {
       form.text("seed", seed.to_string())
-    } else { form };
+    } else {
+      form
+    };
 
     let form = if let Some(steps) = request.steps {
       form.text("steps", steps.to_string())
-    } else { form };
+    } else {
+      form
+    };
 
     let form = if let Some(cfg_scale) = request.cfg_scale {
       form.text("cfg_scale", cfg_scale.to_string())
-    } else { form };
+    } else {
+      form
+    };
 
     let form = if let Some(size) = request.size {
       form.text("size", size)
-    } else { form };
+    } else {
+      form
+    };
 
     let form = if let Some(response_format) = request.response_format {
       form.text("response_format", response_format)
-    } else { form };
+    } else {
+      form
+    };
 
     let response = self
       .client
@@ -800,7 +841,7 @@ impl StepFunSpecializedClient {
   /// Convert text to speech
   pub async fn text_to_speech(&self, request: TTSRequest) -> Result<Vec<u8>> {
     let url = format!("{}/audio/speech", self.base_url);
-    
+
     let mut headers = self.build_auth_headers();
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
@@ -828,7 +869,7 @@ impl StepFunSpecializedClient {
   /// Create voice clone from audio sample
   pub async fn clone_voice(&self, request: VoiceCloningRequest) -> Result<VoiceCloningResponse> {
     let url = format!("{}/audio/voices", self.base_url);
-    
+
     let mut headers = self.build_auth_headers();
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
@@ -854,8 +895,13 @@ impl StepFunSpecializedClient {
   }
 
   /// List available voices
-  pub async fn list_voices(&self, limit: Option<u32>, order: Option<String>, 
-                          before: Option<String>, after: Option<String>) -> Result<VoiceListResponse> {
+  pub async fn list_voices(
+    &self,
+    limit: Option<u32>,
+    order: Option<String>,
+    before: Option<String>,
+    after: Option<String>,
+  ) -> Result<VoiceListResponse> {
     let mut url = format!("{}/audio/voices", self.base_url);
     let mut params = Vec::new();
 
@@ -900,14 +946,15 @@ impl StepFunSpecializedClient {
   /// Transcribe audio to text
   pub async fn speech_to_text(&self, request: ASRRequest) -> Result<String> {
     let url = format!("{}/audio/transcriptions", self.base_url);
-    
+
     let form = reqwest::multipart::Form::new()
       .text("model", request.model.clone())
       .text("response_format", request.response_format.clone())
-      .part("file", 
+      .part(
+        "file",
         reqwest::multipart::Part::bytes(request.audio_data)
           .file_name(request.filename)
-          .mime_str("audio/mpeg")?
+          .mime_str("audio/mpeg")?,
       );
 
     let response = self
@@ -936,11 +983,11 @@ impl StepFunSpecializedClient {
         }
         let json_result: JsonResponse = response.json().await?;
         Ok(json_result.text)
-      },
+      }
       "text" | "srt" | "vtt" => {
         let text_result = response.text().await?;
         Ok(text_result)
-      },
+      }
       _ => {
         let text_result = response.text().await?;
         Ok(text_result)
@@ -967,7 +1014,7 @@ impl Text2ImageBuilder {
         steps: None,
         cfg_scale: None,
         style_reference: None,
-      }
+      },
     }
   }
 
@@ -1026,7 +1073,7 @@ impl TTSBuilder {
         volume: None,
         voice_label: None,
         sample_rate: None,
-      }
+      },
     }
   }
 
@@ -1149,6 +1196,9 @@ mod tests {
     assert_eq!(request.input, "Hello world");
     assert_eq!(request.speed, Some(1.2));
     assert!(request.voice_label.is_some());
-    assert_eq!(request.voice_label.unwrap().emotion, Some("高兴".to_string()));
+    assert_eq!(
+      request.voice_label.unwrap().emotion,
+      Some("高兴".to_string())
+    );
   }
 }

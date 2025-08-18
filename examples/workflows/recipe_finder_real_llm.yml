@@ -1,0 +1,229 @@
+# AgentFlow Real LLM Recipe Finder Workflow - Configuration-First
+# Converted from recipe_finder_real_llm.rs code-first example
+# Uses real StepFun API calls with step-2-mini model
+name: "Real LLM Recipe Finder"
+description: "Find and suggest recipes using real LLM API calls with StepFun step-2-mini model"
+
+# Input parameters for the workflow
+inputs:
+  ingredient:
+    type: string
+    required: true
+    description: "Main ingredient to find recipes for"
+    default: "salmon"
+  approval_rate:
+    type: number
+    required: false
+    description: "Simulated user approval rate (0.0-1.0) for demo purposes"
+    default: 0.6
+  max_retries:
+    type: number
+    required: false
+    description: "Maximum number of recipe suggestions before giving up"
+    default: 4
+
+# Sequential workflow with real LLM integration
+workflow:
+  # Step 1: Fetch recipes using real LLM API
+  - name: fetch_recipes
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      You are a recipe API service. Generate exactly 5 different recipes using "{{ ingredient }}" as the main ingredient.
+
+      Return ONLY a JSON array of recipe names, like this:
+      ["Recipe Name 1", "Recipe Name 2", "Recipe Name 3", "Recipe Name 4", "Recipe Name 5"]
+
+      Make each recipe distinct and appetizing. Include various cooking methods like grilled, baked, stir-fried, roasted, and curry or soup forms.
+
+      Ingredient: {{ ingredient }}
+    system: "You are a helpful recipe API that returns JSON arrays of recipe names. Always respond with valid JSON only."
+    temperature: 0.8
+    max_tokens: 200
+    outputs:
+      recipe_list: response  # Store the JSON array of recipes
+
+  # Step 2: Parse and display recipes (using LLM to handle JSON parsing)
+  - name: parse_recipes
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      Parse this JSON array of recipes and return a numbered list format:
+
+      JSON: {{ recipe_list }}
+
+      Convert to this format:
+      1. [Recipe Name 1]
+      2. [Recipe Name 2]
+      3. [Recipe Name 3]
+      4. [Recipe Name 4]
+      5. [Recipe Name 5]
+
+      Return only the numbered list, nothing else.
+    system: "You are a JSON parser that converts recipe arrays to numbered lists. Return only the formatted list."
+    temperature: 0.1
+    max_tokens: 150
+    outputs:
+      formatted_recipes: response
+
+  # Step 3: Select best recipe using LLM intelligence
+  - name: suggest_best_recipe
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      From this list of {{ ingredient }} recipes, choose the most appealing and well-balanced one. Consider factors like:
+      - Cooking method variety
+      - Flavor profile balance
+      - Nutritional value
+      - Popular appeal
+      - Ease of preparation
+
+      Recipe list:
+      {{ formatted_recipes }}
+
+      Return ONLY the recipe name you choose, nothing else.
+    system: "You are a culinary expert who selects the best recipe from a list. Return only the recipe name."
+    temperature: 0.7
+    max_tokens: 50
+    outputs:
+      suggested_recipe: response
+
+  # Step 4: Simulate realistic user approval using LLM
+  - name: evaluate_user_approval
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      You are simulating a typical person being offered this recipe: "{{ suggested_recipe }}"
+
+      Consider these factors:
+      - Recipe appeal and popularity ({{ approval_rate }}% of people generally approve recipes)
+      - How common/interesting the recipe sounds
+      - Whether it seems easy or difficult to make
+      - General food preferences for {{ ingredient }}
+      - Cooking method complexity
+
+      Based on an approval rate of {{ approval_rate }} (where 1.0 = 100% approval, 0.5 = 50% approval, etc.), 
+      would a typical person approve this recipe?
+
+      Respond with exactly one word: either "APPROVED" or "REJECTED" - nothing else.
+    system: "You are simulating user preferences for recipe approval. Respond with exactly 'APPROVED' or 'REJECTED' based on the approval rate and recipe appeal."
+    temperature: 0.3
+    max_tokens: 10
+    outputs:
+      approval_decision: response
+
+  # Step 5: Generate final result based on approval
+  - name: generate_final_result
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      The user was offered: "{{ suggested_recipe }}" using {{ ingredient }}
+      Their decision was: {{ approval_decision }}
+
+      Generate a final result message based on this outcome:
+
+      If APPROVED:
+      - Congratulate them on their choice
+      - Mention the main ingredient used
+      - Provide a brief encouraging comment about the recipe
+
+      If REJECTED:
+      - Acknowledge their rejection politely
+      - Suggest they might try a different recipe next time
+      - Mention that taste preferences vary
+
+      Keep the response friendly and helpful, 2-3 sentences maximum.
+    system: "You are a helpful cooking assistant providing final workflow results. Be encouraging and friendly."
+    temperature: 0.7
+    max_tokens: 100
+    outputs:
+      final_message: response
+
+  # Step 6: Summary and workflow status
+  - name: workflow_summary
+    type: llm
+    model: "step-2-mini"
+    prompt: |
+      Summarize this recipe finder workflow session:
+
+      Ingredient searched: {{ ingredient }}
+      Total recipes found: 5 (from {{ recipe_list }})
+      LLM suggested: {{ suggested_recipe }}
+      User decision: {{ approval_decision }}
+      Approval rate setting: {{ approval_rate }}
+
+      Create a brief technical summary of what happened in this workflow, including:
+      - What the LLM generated
+      - What choice was made
+      - Whether it was successful
+      - Key metrics
+
+      Format as a JSON object with these fields:
+      {
+        "ingredient": "...",
+        "suggested_recipe": "...",
+        "user_decision": "...",
+        "workflow_status": "...",
+        "success": true/false
+      }
+    system: "You are a workflow analyzer that creates JSON summaries. Return only valid JSON."
+    temperature: 0.1
+    max_tokens: 150
+    outputs:
+      workflow_summary: response
+
+# Final outputs available to the user
+outputs:
+  ingredient_used:
+    from: "{{ ingredient }}"
+    description: "The ingredient that was used for recipe search"
+  
+  all_recipes:
+    from: parse_recipes_output
+    description: "Formatted list of all generated recipes"
+  
+  recommended_recipe:
+    from: suggest_best_recipe_output
+    description: "The LLM's recommended recipe choice"
+  
+  user_approval:
+    from: evaluate_user_approval_output
+    description: "Simulated user approval decision (APPROVED/REJECTED)"
+  
+  final_result:
+    from: generate_final_result_output
+    description: "Final encouraging message based on approval outcome"
+  
+  session_summary:
+    from: workflow_summary_output
+    description: "Technical summary of the entire workflow session as JSON"
+
+# Workflow metadata
+metadata:
+  version: "1.0.0"
+  author: "AgentFlow Team"
+  created: "2025-01-16"
+  tags: ["recipe", "llm", "stepfun", "cooking", "real-api"]
+  complexity: "intermediate"
+  estimated_tokens: 800
+  estimated_cost_usd: 0.02
+  
+# Notes for users
+notes: |
+  This workflow demonstrates real LLM API integration using StepFun's step-2-mini model.
+  
+  Required environment variables:
+  - STEPFUN_API_KEY: Your StepFun API key
+  
+  The workflow simulates the complete recipe finding process:
+  1. Generates 5 real recipes using LLM
+  2. Selects the best option using LLM intelligence
+  3. Simulates user approval decision
+  4. Provides appropriate feedback
+  5. Summarizes the entire session
+  
+  This converts the code-first recipe_finder_real_llm.rs example to a 
+  configuration-first approach while maintaining all the real API functionality.
+  
+  Example usage:
+  agentflow workflow run recipe_finder_real_llm.yml --input ingredient="chicken" --input approval_rate="0.8"

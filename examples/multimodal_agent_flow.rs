@@ -46,7 +46,8 @@ impl AsyncNode for MultimodalAnalyzerNode {
   async fn prep_async(&self, shared: &SharedState) -> Result<Value> {
     // Get image URLs and context from shared state
     let image_urls: Vec<String> = if let Some(Value::Array(urls)) = shared.get("image_urls") {
-      urls.iter()
+      urls
+        .iter()
         .filter_map(|v| v.as_str())
         .map(|s| s.to_string())
         .collect()
@@ -167,7 +168,10 @@ impl AsyncNode for MultimodalAnalyzerNode {
     shared.insert(format!("{}_executed", self.node_id), Value::Bool(true));
     shared.insert("last_multimodal_result".to_string(), exec_result);
 
-    println!("✨ [{}] Multimodal analysis post-processing completed", self.node_id);
+    println!(
+      "✨ [{}] Multimodal analysis post-processing completed",
+      self.node_id
+    );
     Ok(self.next_node.clone())
   }
 }
@@ -199,7 +203,7 @@ impl AsyncNode for SummarizerNode {
   async fn prep_async(&self, shared: &SharedState) -> Result<Value> {
     // Find all analysis results in shared state
     let mut analyses = Vec::new();
-    
+
     // Look for any keys ending with "_analysis"
     for (key, value) in shared.iter() {
       if key.ends_with("_analysis") {
@@ -242,7 +246,12 @@ impl AsyncNode for SummarizerNode {
 
     let full_prompt = format!("{}\n\n{}", summary_prompt, combined_analysis);
 
-    println!("📝 [{}] Creating {} summary of {} analyses", self.node_id, self.summary_style, analyses.len());
+    println!(
+      "📝 [{}] Creating {} summary of {} analyses",
+      self.node_id,
+      self.summary_style,
+      analyses.len()
+    );
 
     // Use a text model for summarization
     match LLMAgentFlow::model("step-1-8k") // Use a text-only model for summarization
@@ -292,17 +301,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
   println!("This demonstrates automated image analysis workflows using StepFun's vision models\n");
 
   // Create the multimodal analysis nodes
-  let image_analyzer = MultimodalAnalyzerNode::new(
-    "primary_analyzer",
-    "step-1o-turbo-vision",
-    "analysis"
-  ).with_next_node("detail_analyzer");
+  let image_analyzer =
+    MultimodalAnalyzerNode::new("primary_analyzer", "step-1o-turbo-vision", "analysis")
+      .with_next_node("detail_analyzer");
 
-  let detail_analyzer = MultimodalAnalyzerNode::new(
-    "detail_analyzer", 
-    "step-1o-turbo-vision",
-    "business"
-  ).with_next_node("summarizer");
+  let detail_analyzer =
+    MultimodalAnalyzerNode::new("detail_analyzer", "step-1o-turbo-vision", "business")
+      .with_next_node("summarizer");
 
   let summarizer = SummarizerNode::new("summarizer", "detailed");
 
@@ -316,7 +321,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
   // Set up shared state with image URLs and context
   let shared = SharedState::new();
-  
+
   // Example with StepFun's website image
   shared.insert(
     "image_url".to_string(),
@@ -338,23 +343,35 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
       // Display the journey through the flow
       println!("\n📋 Flow execution summary:");
-      
+
       // Show primary analysis
       if shared.contains_key("primary_analyzer_executed") {
         println!("✅ Primary image analysis completed");
         if let Some(analysis) = shared.get("primary_analyzer_analysis") {
-          println!("   Analysis preview: {}...", 
-            analysis.as_str().unwrap_or("").chars().take(100).collect::<String>()
+          println!(
+            "   Analysis preview: {}...",
+            analysis
+              .as_str()
+              .unwrap_or("")
+              .chars()
+              .take(100)
+              .collect::<String>()
           );
         }
       }
 
-      // Show detail analysis  
+      // Show detail analysis
       if shared.contains_key("detail_analyzer_executed") {
         println!("✅ Detailed business analysis completed");
         if let Some(analysis) = shared.get("detail_analyzer_analysis") {
-          println!("   Business analysis preview: {}...", 
-            analysis.as_str().unwrap_or("").chars().take(100).collect::<String>()
+          println!(
+            "   Business analysis preview: {}...",
+            analysis
+              .as_str()
+              .unwrap_or("")
+              .chars()
+              .take(100)
+              .collect::<String>()
           );
         }
       }
@@ -368,7 +385,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
       }
 
-      println!("\n💡 This demonstrates how multimodal AI can be integrated into automated workflows!");
+      println!(
+        "\n💡 This demonstrates how multimodal AI can be integrated into automated workflows!"
+      );
     }
     Err(e) => {
       println!("❌ Flow execution failed: {}", e);

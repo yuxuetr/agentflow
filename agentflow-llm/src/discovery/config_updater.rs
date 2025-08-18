@@ -1,7 +1,10 @@
 //! Configuration updater for adding discovered models to default_models.yml
 
 use super::{DiscoveredModel, ModelFetcher};
-use crate::{LLMError, Result, config::{LLMConfig, ModelConfig}};
+use crate::{
+  config::{LLMConfig, ModelConfig},
+  LLMError, Result,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
@@ -22,7 +25,7 @@ impl ConfigUpdater {
   pub async fn update_default_models(&self, config_path: &str) -> Result<UpdateResult> {
     info!("Fetching models from all supported vendors...");
     let discovered_models = self.fetcher.fetch_all_models().await;
-    
+
     if discovered_models.is_empty() {
       return Err(LLMError::ConfigurationError {
         message: "No models could be fetched from any vendor".to_string(),
@@ -30,7 +33,7 @@ impl ConfigUpdater {
     }
 
     info!("Fetched models from {} vendors", discovered_models.len());
-    
+
     // Load existing configuration
     let mut config = if Path::new(config_path).exists() {
       LLMConfig::from_file(config_path).await?
@@ -40,7 +43,7 @@ impl ConfigUpdater {
     };
 
     let mut stats = UpdateResult::new();
-    
+
     // Add discovered models to configuration
     for (vendor, models) in discovered_models {
       info!("Processing {} models from {}", models.len(), vendor);
@@ -50,21 +53,28 @@ impl ConfigUpdater {
 
     // Write updated configuration back to file
     self.write_config(&config, config_path).await?;
-    
-    info!("Configuration updated successfully: {} new models, {} updated models", 
-      stats.added_models, stats.updated_models);
-    
+
+    info!(
+      "Configuration updated successfully: {} new models, {} updated models",
+      stats.added_models, stats.updated_models
+    );
+
     Ok(stats)
   }
 
   /// Add models from a specific vendor to the configuration
-  async fn add_vendor_models(&self, config: &mut LLMConfig, vendor: &str, models: &[DiscoveredModel]) -> UpdateResult {
+  async fn add_vendor_models(
+    &self,
+    config: &mut LLMConfig,
+    vendor: &str,
+    models: &[DiscoveredModel],
+  ) -> UpdateResult {
     let mut stats = UpdateResult::new();
-    
+
     for model in models {
       let model_key = self.generate_model_key(&model.id, vendor);
       let model_config = self.create_model_config(model, vendor);
-      
+
       if config.models.contains_key(&model_key) {
         // Update existing model
         config.models.insert(model_key.clone(), model_config);
@@ -77,7 +87,7 @@ impl ConfigUpdater {
         stats.added_model_names.push(model_key);
       }
     }
-    
+
     stats
   }
 
@@ -88,12 +98,15 @@ impl ConfigUpdater {
       "google" => {
         // Remove "models/" prefix from Gemini models
         if model_id.starts_with("models/") {
-          model_id.strip_prefix("models/").unwrap_or(model_id).to_string()
+          model_id
+            .strip_prefix("models/")
+            .unwrap_or(model_id)
+            .to_string()
         } else {
           model_id.to_string()
         }
       }
-      _ => model_id.to_string()
+      _ => model_id.to_string(),
     }
   }
 
@@ -102,7 +115,7 @@ impl ConfigUpdater {
     let mut config = ModelConfig {
       vendor: vendor.to_string(),
       r#type: Some("text".to_string()), // Default type
-      capabilities: None, // Will be computed from type
+      capabilities: None,               // Will be computed from type
       model_id: if model.id != self.generate_model_key(&model.id, vendor) {
         Some(model.id.clone())
       } else {
@@ -179,7 +192,11 @@ impl ConfigUpdater {
           config.r#type = Some("audio".to_string());
           config.supports_tools = Some(false);
           config.supports_multimodal = Some(true);
-        } else if model.id.contains("v-") || model.id.contains("-v") || model.id.contains("vision") || model.id.starts_with("step-2") {
+        } else if model.id.contains("v-")
+          || model.id.contains("-v")
+          || model.id.contains("vision")
+          || model.id.starts_with("step-2")
+        {
           config.r#type = Some("multimodal".to_string());
           config.supports_multimodal = Some(true);
         } else {
@@ -221,10 +238,16 @@ impl ConfigUpdater {
   fn model_supports_tools(&self, model_id: &str, vendor: &str) -> bool {
     match vendor {
       "anthropic" => true, // Most Claude models support tools
-      "google" => !model_id.contains("embedding") && !model_id.contains("imagen") && !model_id.contains("veo"),
+      "google" => {
+        !model_id.contains("embedding") && !model_id.contains("imagen") && !model_id.contains("veo")
+      }
       "moonshot" => true,
-      "dashscope" => !model_id.contains("tts") && !model_id.contains("vl") && !model_id.contains("embedding"),
-      "step" => !model_id.contains("tts") && !model_id.contains("asr") && !model_id.contains("audio"),
+      "dashscope" => {
+        !model_id.contains("tts") && !model_id.contains("vl") && !model_id.contains("embedding")
+      }
+      "step" => {
+        !model_id.contains("tts") && !model_id.contains("asr") && !model_id.contains("audio")
+      }
       _ => false,
     }
   }
@@ -236,24 +259,41 @@ impl ConfigUpdater {
       "google" => self.is_google_multimodal(model_id),
       "moonshot" => model_id.contains("vision"),
       "dashscope" => self.is_qwen_multimodal(model_id),
-      "step" => model_id.contains("v-") || model_id.contains("-v") || model_id.contains("vision") || model_id.starts_with("step-2") || model_id.contains("audio") || model_id.contains("asr"),
+      "step" => {
+        model_id.contains("v-")
+          || model_id.contains("-v")
+          || model_id.contains("vision")
+          || model_id.starts_with("step-2")
+          || model_id.contains("audio")
+          || model_id.contains("asr")
+      }
       _ => false,
     }
   }
 
   fn is_anthropic_multimodal(&self, model_id: &str) -> bool {
     // Claude 3+ models support multimodal
-    model_id.contains("claude-3") || model_id.contains("claude-4") || model_id.contains("sonnet") || model_id.contains("haiku")
+    model_id.contains("claude-3")
+      || model_id.contains("claude-4")
+      || model_id.contains("sonnet")
+      || model_id.contains("haiku")
   }
 
   fn is_google_multimodal(&self, model_id: &str) -> bool {
     // Gemini models except embedding and generation models
-    model_id.contains("gemini") && !model_id.contains("embedding") && !model_id.contains("imagen") && !model_id.contains("veo")
+    model_id.contains("gemini")
+      && !model_id.contains("embedding")
+      && !model_id.contains("imagen")
+      && !model_id.contains("veo")
   }
 
   fn is_google_tools_model(&self, model_id: &str) -> bool {
     // Most Gemini models support tools, except specialized ones
-    model_id.contains("gemini") && !model_id.contains("embedding") && !model_id.contains("imagen") && !model_id.contains("veo") && !model_id.contains("tts")
+    model_id.contains("gemini")
+      && !model_id.contains("embedding")
+      && !model_id.contains("imagen")
+      && !model_id.contains("veo")
+      && !model_id.contains("tts")
   }
 
   fn is_qwen_multimodal(&self, model_id: &str) -> bool {
@@ -274,9 +314,11 @@ impl ConfigUpdater {
       yaml_content
     );
 
-    tokio::fs::write(path, full_content).await.map_err(|e| LLMError::ConfigurationError {
-      message: format!("Failed to write config file: {}", e),
-    })?;
+    tokio::fs::write(path, full_content)
+      .await
+      .map_err(|e| LLMError::ConfigurationError {
+        message: format!("Failed to write config file: {}", e),
+      })?;
 
     Ok(())
   }
@@ -314,10 +356,10 @@ impl UpdateResult {
   /// Create a summary report of the update
   pub fn create_report(&self) -> String {
     let mut report = String::new();
-    
+
     report.push_str("Model Configuration Update Report\n");
     report.push_str("=================================\n\n");
-    
+
     report.push_str(&format!("✅ Added Models: {}\n", self.added_models));
     if !self.added_model_names.is_empty() {
       for name in &self.added_model_names {
@@ -325,7 +367,7 @@ impl UpdateResult {
       }
     }
     report.push('\n');
-    
+
     report.push_str(&format!("🔄 Updated Models: {}\n", self.updated_models));
     if !self.updated_model_names.is_empty() {
       for name in &self.updated_model_names {
@@ -333,18 +375,23 @@ impl UpdateResult {
       }
     }
     report.push('\n');
-    
+
     if !self.failed_vendors.is_empty() {
-      report.push_str(&format!("❌ Failed Vendors: {}\n", self.failed_vendors.len()));
+      report.push_str(&format!(
+        "❌ Failed Vendors: {}\n",
+        self.failed_vendors.len()
+      ));
       for vendor in &self.failed_vendors {
         report.push_str(&format!("  - {}\n", vendor));
       }
       report.push('\n');
     }
-    
-    report.push_str(&format!("Total changes: {} models processed\n", 
-      self.added_models + self.updated_models));
-    
+
+    report.push_str(&format!(
+      "Total changes: {} models processed\n",
+      self.added_models + self.updated_models
+    ));
+
     report
   }
 }
@@ -362,34 +409,46 @@ mod tests {
   #[test]
   fn test_model_key_generation() {
     let updater = ConfigUpdater::new().unwrap();
-    
+
     // Google models should have "models/" prefix removed
-    assert_eq!(updater.generate_model_key("models/gemini-1.5-pro", "google"), "gemini-1.5-pro");
-    assert_eq!(updater.generate_model_key("gemini-1.5-flash", "google"), "gemini-1.5-flash");
-    
+    assert_eq!(
+      updater.generate_model_key("models/gemini-1.5-pro", "google"),
+      "gemini-1.5-pro"
+    );
+    assert_eq!(
+      updater.generate_model_key("gemini-1.5-flash", "google"),
+      "gemini-1.5-flash"
+    );
+
     // Other vendors should keep original ID
-    assert_eq!(updater.generate_model_key("moonshot-v1-8k", "moonshot"), "moonshot-v1-8k");
-    assert_eq!(updater.generate_model_key("claude-3-sonnet", "anthropic"), "claude-3-sonnet");
+    assert_eq!(
+      updater.generate_model_key("moonshot-v1-8k", "moonshot"),
+      "moonshot-v1-8k"
+    );
+    assert_eq!(
+      updater.generate_model_key("claude-3-sonnet", "anthropic"),
+      "claude-3-sonnet"
+    );
   }
 
   #[test]
   fn test_multimodal_detection() {
     let updater = ConfigUpdater::new().unwrap();
-    
+
     // Anthropic
     assert!(updater.is_anthropic_multimodal("claude-3-sonnet"));
     assert!(updater.is_anthropic_multimodal("claude-3-haiku"));
     assert!(!updater.is_anthropic_multimodal("claude-2"));
-    
+
     // Google
     assert!(updater.is_google_multimodal("gemini-1.5-pro"));
     assert!(!updater.is_google_multimodal("text-embedding-004"));
     assert!(!updater.is_google_multimodal("imagen-3.0-generate-002"));
-    
+
     // Moonshot
     assert!(updater.model_supports_multimodal("moonshot-v1-8k-vision-preview", "moonshot"));
     assert!(!updater.model_supports_multimodal("moonshot-v1-8k", "moonshot"));
-    
+
     // Qwen/DashScope
     assert!(updater.is_qwen_multimodal("qwen-vl-max"));
     assert!(!updater.is_qwen_multimodal("qwen-turbo"));
@@ -403,9 +462,9 @@ mod tests {
     result.added_model_names = vec!["model1".to_string(), "model2".to_string()];
     result.updated_model_names = vec!["model3".to_string()];
     result.failed_vendors = vec!["vendor1".to_string()];
-    
+
     let report = result.create_report();
-    
+
     assert!(report.contains("Added Models: 2"));
     assert!(report.contains("Updated Models: 1"));
     assert!(report.contains("Failed Vendors: 1"));

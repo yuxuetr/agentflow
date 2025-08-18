@@ -30,13 +30,13 @@ impl ModelRegistry {
   /// Load configuration from a YAML file and initialize providers
   pub async fn load_config(&self, config_path: &str) -> Result<()> {
     let config = LLMConfig::from_file(config_path).await?;
-    
+
     // Validate configuration
     config.validate()?;
-    
+
     // Initialize providers
     self.initialize_providers(&config).await?;
-    
+
     // Store the config
     {
       let mut config_guard = self.config.write().unwrap();
@@ -55,13 +55,13 @@ impl ModelRegistry {
   /// Load configuration from YAML string
   pub async fn load_config_from_yaml(&self, yaml_content: &str) -> Result<()> {
     let config = LLMConfig::from_yaml(yaml_content)?;
-    
+
     // Validate configuration
     config.validate()?;
-    
+
     // Initialize providers
     self.initialize_providers(&config).await?;
-    
+
     // Store the config
     {
       let mut config_guard = self.config.write().unwrap();
@@ -74,21 +74,29 @@ impl ModelRegistry {
   /// Get a model configuration by name
   pub fn get_model(&self, model_name: &str) -> Result<ModelConfig> {
     let config_guard = self.config.read().unwrap();
-    let config = config_guard.as_ref().ok_or_else(|| LLMError::ConfigurationError {
-      message: "No configuration loaded. Call load_config() first.".to_string(),
-    })?;
+    let config = config_guard
+      .as_ref()
+      .ok_or_else(|| LLMError::ConfigurationError {
+        message: "No configuration loaded. Call load_config() first.".to_string(),
+      })?;
 
-    config.get_model(model_name).cloned().map_err(|_| LLMError::ModelNotFound {
-      model_name: model_name.to_string(),
-    })
+    config
+      .get_model(model_name)
+      .cloned()
+      .map_err(|_| LLMError::ModelNotFound {
+        model_name: model_name.to_string(),
+      })
   }
 
   /// Get a provider instance by name
   pub fn get_provider(&self, provider_name: &str) -> Result<Arc<dyn LLMProvider>> {
     let providers_guard = self.providers.read().unwrap();
-    providers_guard.get(provider_name).cloned().ok_or_else(|| LLMError::UnsupportedProvider {
-      provider: provider_name.to_string(),
-    })
+    providers_guard
+      .get(provider_name)
+      .cloned()
+      .ok_or_else(|| LLMError::UnsupportedProvider {
+        provider: provider_name.to_string(),
+      })
   }
 
   /// List all available model names
@@ -120,9 +128,12 @@ impl ModelRegistry {
   /// Get the current configuration
   pub async fn get_config(&self) -> Result<LLMConfig> {
     let config_guard = self.config.read().unwrap();
-    config_guard.as_ref().cloned().ok_or_else(|| LLMError::ConfigurationError {
-      message: "No configuration loaded".to_string(),
-    })
+    config_guard
+      .as_ref()
+      .cloned()
+      .ok_or_else(|| LLMError::ConfigurationError {
+        message: "No configuration loaded".to_string(),
+      })
   }
 
   /// Get model information for debugging/inspection
@@ -133,8 +144,12 @@ impl ModelRegistry {
     Ok(ModelInfo {
       name: model_name.to_string(),
       vendor: model_config.vendor.clone(),
-      model_id: model_config.model_id.unwrap_or_else(|| model_name.to_string()),
-      base_url: model_config.base_url.unwrap_or_else(|| provider.base_url().to_string()),
+      model_id: model_config
+        .model_id
+        .unwrap_or_else(|| model_name.to_string()),
+      base_url: model_config
+        .base_url
+        .unwrap_or_else(|| provider.base_url().to_string()),
       temperature: model_config.temperature,
       max_tokens: model_config.max_tokens,
       supports_streaming: model_config.supports_streaming.unwrap_or(true),
@@ -149,11 +164,13 @@ impl ModelRegistry {
     };
 
     let providers_guard = self.providers.read().unwrap();
-    
+
     for (provider_name, provider) in providers_guard.iter() {
       match provider.validate_config().await {
         Ok(()) => report.valid_providers.push(provider_name.clone()),
-        Err(e) => report.invalid_providers.push((provider_name.clone(), e.to_string())),
+        Err(e) => report
+          .invalid_providers
+          .push((provider_name.clone(), e.to_string())),
       }
     }
 
@@ -172,7 +189,7 @@ impl ModelRegistry {
     // Initialize each provider
     for provider_name in unique_providers {
       let api_key = config.get_api_key(&provider_name)?;
-      
+
       let base_url = config
         .get_provider(&provider_name)
         .and_then(|p| p.base_url.clone());
@@ -223,7 +240,7 @@ impl ValidationReport {
 
   pub fn summary(&self) -> String {
     let mut summary = String::new();
-    
+
     if !self.valid_providers.is_empty() {
       summary.push_str("Valid providers:\n");
       for provider in &self.valid_providers {
@@ -291,7 +308,7 @@ providers:
   async fn test_global_registry() {
     let registry1 = ModelRegistry::global();
     let registry2 = ModelRegistry::global();
-    
+
     // Should be the same instance
     assert!(std::ptr::eq(registry1, registry2));
   }
@@ -301,7 +318,7 @@ providers:
     let registry = ModelRegistry::new();
     let result = registry.get_model("nonexistent");
     assert!(matches!(result, Err(LLMError::ConfigurationError { .. })));
-    
+
     assert!(!registry.has_model("nonexistent"));
   }
 }

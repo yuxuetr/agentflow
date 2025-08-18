@@ -1,0 +1,239 @@
+# Multi-Agent Game - Taboo Word Game
+name: "Multi-Agent Taboo Game"
+version: "1.0.0"
+description: "A collaborative game between two AI agents using OpenAI models - one gives hints, the other guesses"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-15T00:00:00Z"
+  tags: ["openai", "multi-agent", "game", "collaboration", "interactive"]
+  category: "advanced"
+
+config:
+  timeout: "10m"
+  max_retries: 3
+  output_format: "json"
+  log_level: "info"
+
+inputs:
+  target_word:
+    type: "string"
+    required: true
+    description: "The word that the guesser needs to identify"
+    example: "nostalgic"
+  
+  forbidden_words:
+    type: "array"
+    required: true
+    description: "Words that the hinter cannot use in hints"
+    example: ["memory", "past", "remember", "feeling", "longing"]
+  
+  max_rounds:
+    type: "number"
+    required: false
+    default: 5
+    description: "Maximum number of hint-guess rounds"
+  
+  hint_model:
+    type: "string"
+    required: false
+    default: "gpt-4o"
+    enum: ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"]
+    description: "OpenAI model for the hint-giving agent"
+
+  guess_model:
+    type: "string"
+    required: false
+    default: "gpt-4o"
+    enum: ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"]
+    description: "OpenAI model for the guessing agent"
+
+  temperature:
+    type: "number"
+    required: false
+    default: 0.7
+    description: "Temperature for creative hint generation"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "iterative"
+  max_iterations: "{{ inputs.max_rounds }}"
+  nodes:
+    # Initialize game state
+    - name: "initialize_game"
+      type: "template"
+      description: "Set up initial game state"
+      run_once: true
+      config:
+        template: |
+          {
+            "target_word": "{{ inputs.target_word }}",
+            "forbidden_words": {{ inputs.forbidden_words | tojson }},
+            "past_guesses": [],
+            "round": 0,
+            "game_over": false,
+            "correct_guess": false
+          }
+      outputs:
+        game_state: "$.rendered"
+
+    # Hinter Agent: Generate hints
+    - name: "generate_hint"
+      type: "llm"
+      description: "AI agent generates hints for the target word"
+      condition: "{{ not (initialize_game.game_state | fromjson).game_over and not (previous_guess.game_state | fromjson).game_over if previous_guess is defined else true }}"
+      config:
+        model: "{{ inputs.hint_model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 100
+        system: "You are the Hinter in a Taboo word game. Your goal is to help the Guesser identify the target word without using any forbidden words."
+        prompt: |
+          Target word: {{ inputs.target_word }}
+          Forbidden words that you CANNOT use: {{ inputs.forbidden_words | join(', ') }}
+          {% if previous_guess is defined %}
+          {% set state = previous_guess.game_state | fromjson %}
+          {% if state.past_guesses %}
+          Previous incorrect guesses: {{ state.past_guesses | join(', ') }}
+          Make your hint more specific to help distinguish from these wrong guesses.
+          {% endif %}
+          {% endif %}
+
+          Generate a helpful hint for the target word using at most 5 words. 
+          DO NOT use any of the forbidden words.
+          Be creative but clear.
+
+          Hint:
+        timeout: "2m"
+      outputs:
+        hint: "$.response"
+        round_number: "{{ (previous_guess.game_state | fromjson).round + 1 if previous_guess is defined else 1 }}"
+
+    # Guesser Agent: Make guesses based on hints
+    - name: "make_guess"
+      type: "llm"
+      description: "AI agent makes guesses based on the hint"
+      depends_on: ["generate_hint"]
+      config:
+        model: "{{ inputs.guess_model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 50
+        system: "You are the Guesser in a Taboo word game. Your goal is to identify the target word based on the hints given."
+        prompt: |
+          Current hint: {{ generate_hint.hint }}
+          {% if previous_guess is defined %}
+          {% set state = previous_guess.game_state | fromjson %}
+          {% if state.past_guesses %}
+          Your previous incorrect guesses: {{ state.past_guesses | join(', ') }}
+          Do not repeat these guesses.
+          {% endif %}
+          {% endif %}
+
+          Based on the hint, make your best guess for the target word.
+          Respond with ONLY a single word - your guess.
+
+          Guess:
+        timeout: "2m"
+      outputs:
+        guess: "$.response"
+
+    # Evaluate the guess and update game state
+    - name: "evaluate_guess"
+      type: "template"
+      description: "Check if the guess is correct and update game state"
+      depends_on: ["make_guess", "generate_hint"]
+      config:
+        template: |
+          {% set current_guess = make_guess.guess.strip().lower() %}
+          {% set target = inputs.target_word.lower() %}
+          {% set is_correct = current_guess == target %}
+          {% set prev_state = previous_guess.game_state | fromjson if previous_guess is defined else {"past_guesses": [], "round": 0} %}
+          {% set new_past_guesses = prev_state.past_guesses %}
+          {% if not is_correct %}
+            {% set _ = new_past_guesses.append(make_guess.guess.strip()) %}
+          {% endif %}
+          {
+            "target_word": "{{ inputs.target_word }}",
+            "forbidden_words": {{ inputs.forbidden_words | tojson }},
+            "current_hint": "{{ generate_hint.hint }}",
+            "current_guess": "{{ make_guess.guess.strip() }}",
+            "is_correct": {{ is_correct | lower }},
+            "past_guesses": {{ new_past_guesses | tojson }},
+            "round": {{ generate_hint.round_number }},
+            "game_over": {{ (is_correct or generate_hint.round_number >= inputs.max_rounds) | lower }},
+            "rounds_used": {{ generate_hint.round_number }},
+            "max_rounds": {{ inputs.max_rounds }}
+          }
+      outputs:
+        game_state: "$.rendered"
+        round_result: |
+          {
+            "round": {{ generate_hint.round_number }},
+            "hint": "{{ generate_hint.hint }}",
+            "guess": "{{ make_guess.guess.strip() }}",
+            "correct": {{ (make_guess.guess.strip().lower() == inputs.target_word.lower()) | lower }}
+          }
+
+    # Store this evaluation for the next iteration
+    - name: "previous_guess"
+      type: "template"
+      description: "Store the current guess evaluation for next round"
+      depends_on: ["evaluate_guess"]
+      config:
+        template: "{{ evaluate_guess.game_state }}"
+      outputs:
+        game_state: "$.rendered"
+
+  # Stop condition: game is over
+  stop_condition: "{{ (evaluate_guess.game_state | fromjson).game_over }}"
+
+outputs:
+  game_result:
+    source: |
+      {% set final_state = evaluate_guess.game_state | fromjson %}
+      {
+        "game_completed": true,
+        "target_word": "{{ final_state.target_word }}",
+        "success": {{ final_state.is_correct | lower }},
+        "rounds_played": {{ final_state.rounds_used }},
+        "final_guess": "{{ final_state.current_guess }}",
+        "all_guesses": {{ final_state.past_guesses | tojson }},
+        "winner": "{{ 'Guesser' if final_state.is_correct else 'Hinter' }}"
+      }
+    format: "json"
+    file: "output/game_result.json"
+  
+  game_transcript:
+    source: |
+      # Taboo Game Transcript
+      
+      **Target Word**: {{ inputs.target_word }}
+      **Forbidden Words**: {{ inputs.forbidden_words | join(', ') }}
+      **Result**: {{ 'SUCCESS' if (evaluate_guess.game_state | fromjson).is_correct else 'FAILED' }}
+      
+      ## Game Rounds
+      {% for round in workflow.iterations %}
+      
+      ### Round {{ round.generate_hint.round_number }}
+      - **Hinter**: "{{ round.generate_hint.hint }}"
+      - **Guesser**: "{{ round.make_guess.guess }}"
+      - **Result**: {{ '✅ Correct!' if round.make_guess.guess.strip().lower() == inputs.target_word.lower() else '❌ Wrong' }}
+      {% endfor %}
+      
+      ## Final Statistics
+      - Total rounds: {{ (evaluate_guess.game_state | fromjson).rounds_used }}
+      - Success rate: {{ 'Won' if (evaluate_guess.game_state | fromjson).is_correct else 'Lost' }}
+    format: "markdown"
+    file: "output/game_transcript.md"
+  
+  execution_report:
+    source: "$"
+    format: "json"
+    file: "output/execution_report.json"
+    include:
+      - execution_time
+      - hint_model_used
+      - guess_model_used
+      - total_rounds
+      - game_success

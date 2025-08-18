@@ -1,8 +1,8 @@
-use agentflow_llm::{AgentFlow, Text2ImageBuilder, ImageGenerationResponse};
+use agentflow_llm::{AgentFlow, ImageGenerationResponse, Text2ImageBuilder};
 use anyhow::Result;
+use base64::{engine::general_purpose, Engine as _};
 use std::env;
 use tokio::fs;
-use base64::{engine::general_purpose, Engine as _};
 
 pub async fn execute(
   prompt: String,
@@ -17,11 +17,13 @@ pub async fn execute(
   input_image: Option<String>,
 ) -> Result<()> {
   let model = model.unwrap_or_else(|| "step-1x-medium".to_string());
-  
+
   // Get API key from environment
   let api_key = env::var("STEPFUN_API_KEY")
     .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set"))?;
+    .map_err(|_| {
+      anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set")
+    })?;
 
   println!("🎨 AgentFlow Image Generation");
   println!("Model: {}", model);
@@ -65,11 +67,13 @@ pub async fn execute(
   // Generate image with timeout and retry logic
   println!("🚀 Generating image...");
   let start_time = std::time::Instant::now();
-  
+
   let response: ImageGenerationResponse = match tokio::time::timeout(
     std::time::Duration::from_secs(120), // 2 minute timeout
-    stepfun_client.text_to_image(request)
-  ).await {
+    stepfun_client.text_to_image(request),
+  )
+  .await
+  {
     Ok(result) => result.map_err(|e| {
       eprintln!("Error: Internal LLM error: {}", e);
       anyhow::anyhow!("Image generation failed: {}", e)
@@ -78,21 +82,24 @@ pub async fn execute(
       return Err(anyhow::anyhow!("Image generation timed out after 2 minutes. This may be due to:\n  - Network connectivity issues\n  - API server overload\n  - Complex prompt requiring more processing time\n\nTry again with a simpler prompt or check your internet connection."));
     }
   };
-  
+
   let duration = start_time.elapsed();
   println!("✅ Image generated in {:?}", duration);
   println!();
 
   // Save image
   println!("💾 Saving image to: {}", output);
-  
+
   if let Some(image_data) = response.data.first() {
     match format.as_str() {
       "b64_json" => {
         if let Some(b64_data) = &image_data.b64_json {
           let image_bytes = general_purpose::STANDARD.decode(b64_data)?;
           fs::write(&output, &image_bytes).await?;
-          println!("✅ Image saved as base64 data ({} bytes)", image_bytes.len());
+          println!(
+            "✅ Image saved as base64 data ({} bytes)",
+            image_bytes.len()
+          );
         } else {
           return Err(anyhow::anyhow!("No base64 image data received"));
         }

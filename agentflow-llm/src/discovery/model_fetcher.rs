@@ -1,11 +1,11 @@
 //! Model fetcher implementation for retrieving model lists from vendors
 
-use super::{VendorConfig, ModelListResponse, DiscoveredModel, create_http_client};
+use super::{create_http_client, DiscoveredModel, ModelListResponse, VendorConfig};
 use crate::{LLMError, Result};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::env;
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 /// Main struct for fetching model lists from various vendors
 pub struct ModelFetcher {
@@ -28,7 +28,11 @@ impl ModelFetcher {
       info!("Fetching models from vendor: {}", vendor.name);
       match self.fetch_models_for_vendor(&vendor).await {
         Ok(models) => {
-          info!("Successfully fetched {} models from {}", models.len(), vendor.name);
+          info!(
+            "Successfully fetched {} models from {}",
+            models.len(),
+            vendor.name
+          );
           all_models.insert(vendor.name.clone(), models);
         }
         Err(e) => {
@@ -42,19 +46,25 @@ impl ModelFetcher {
   }
 
   /// Fetch models from a specific vendor
-  pub async fn fetch_models_for_vendor(&self, vendor: &VendorConfig) -> Result<Vec<DiscoveredModel>> {
+  pub async fn fetch_models_for_vendor(
+    &self,
+    vendor: &VendorConfig,
+  ) -> Result<Vec<DiscoveredModel>> {
     if !vendor.supports_model_list {
       return Err(LLMError::UnsupportedOperation {
-        message: format!("Vendor {} does not support model list fetching", vendor.name),
+        message: format!(
+          "Vendor {} does not support model list fetching",
+          vendor.name
+        ),
       });
     }
 
     let api_key = self.get_api_key(&vendor.api_key_env)?;
     let response = self.make_request(vendor, &api_key).await?;
-    
+
     let models = self.parse_response(response, &vendor.name).await?;
     debug!("Parsed {} models from {}", models.len(), vendor.name);
-    
+
     Ok(models)
   }
 
@@ -75,7 +85,7 @@ impl ModelFetcher {
       "x-api-key" => api_key.to_string(),
       _ => format!("Bearer {}", api_key),
     };
-    
+
     request = request.header(&vendor.auth_header, auth_value);
 
     // Add additional headers
@@ -84,7 +94,7 @@ impl ModelFetcher {
     }
 
     debug!("Making request to: {}", vendor.models_endpoint);
-    
+
     let response = request.send().await.map_err(|e| LLMError::NetworkError {
       message: format!("Failed to fetch models from {}: {}", vendor.name, e),
     })?;
@@ -103,16 +113,27 @@ impl ModelFetcher {
   }
 
   /// Parse response from vendor API
-  async fn parse_response(&self, response: reqwest::Response, vendor_name: &str) -> Result<Vec<DiscoveredModel>> {
+  async fn parse_response(
+    &self,
+    response: reqwest::Response,
+    vendor_name: &str,
+  ) -> Result<Vec<DiscoveredModel>> {
     let response_text = response.text().await.map_err(|e| LLMError::NetworkError {
       message: format!("Failed to read response body: {}", e),
     })?;
 
-    debug!("Response from {}: {}", vendor_name, &response_text[..response_text.len().min(500)]);
+    debug!(
+      "Response from {}: {}",
+      vendor_name,
+      &response_text[..response_text.len().min(500)]
+    );
 
-    let model_response: ModelListResponse = serde_json::from_str(&response_text)
-      .map_err(|e| LLMError::ParseError {
-        message: format!("Failed to parse models response from {}: {}", vendor_name, e),
+    let model_response: ModelListResponse =
+      serde_json::from_str(&response_text).map_err(|e| LLMError::ParseError {
+        message: format!(
+          "Failed to parse models response from {}: {}",
+          vendor_name, e
+        ),
       })?;
 
     let mut models = Vec::new();
@@ -126,9 +147,12 @@ impl ModelFetcher {
   }
 
   /// Fetch models from a specific vendor by name
-  pub async fn fetch_models_by_vendor_name(&self, vendor_name: &str) -> Result<Vec<DiscoveredModel>> {
-    let vendor = VendorConfig::get_by_name(vendor_name)
-      .ok_or_else(|| LLMError::UnsupportedProvider {
+  pub async fn fetch_models_by_vendor_name(
+    &self,
+    vendor_name: &str,
+  ) -> Result<Vec<DiscoveredModel>> {
+    let vendor =
+      VendorConfig::get_by_name(vendor_name).ok_or_else(|| LLMError::UnsupportedProvider {
         provider: vendor_name.to_string(),
       })?;
 
@@ -142,7 +166,11 @@ impl ModelFetcher {
   }
 
   /// Get model information if it exists
-  pub async fn get_model_info(&self, vendor_name: &str, model_id: &str) -> Result<Option<DiscoveredModel>> {
+  pub async fn get_model_info(
+    &self,
+    vendor_name: &str,
+    model_id: &str,
+  ) -> Result<Option<DiscoveredModel>> {
     let models = self.fetch_models_by_vendor_name(vendor_name).await?;
     Ok(models.into_iter().find(|m| m.id == model_id))
   }
@@ -192,7 +220,7 @@ mod tests {
 
     let fetcher = ModelFetcher::new().unwrap();
     let result = fetcher.fetch_models_by_vendor_name("moonshot").await;
-    
+
     match result {
       Ok(models) => {
         assert!(!models.is_empty());

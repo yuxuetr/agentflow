@@ -1,0 +1,173 @@
+# OpenAI Parallel Processing Workflow
+name: "OpenAI Parallel Content Processing"
+version: "1.0.0"
+description: "Demonstrates parallel processing using multiple OpenAI models simultaneously"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-15T00:00:00Z"
+  tags: ["openai", "parallel", "processing", "performance"]
+  category: "advanced"
+
+config:
+  timeout: "5m"
+  max_retries: 2
+  output_format: "json"
+  log_level: "info"
+  parallel_limit: 4
+  batch_size: 2
+
+inputs:
+  base_topic:
+    type: "string"
+    required: true
+    description: "Base topic to process from multiple perspectives"
+    example: "Sustainable energy solutions"
+  
+  perspectives:
+    type: "string"
+    required: false
+    default: "technical,economic,environmental,social"
+    description: "Comma-separated list of perspectives to analyze"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "parallel"
+  nodes:
+    # Technical Analysis Node
+    - name: "technical_analysis"
+      type: "llm"
+      description: "Analyze from technical perspective"
+      config:
+        model: "gpt-4o"
+        prompt: |
+          Analyze "{{ inputs.base_topic }}" from a TECHNICAL perspective.
+          
+          Focus on:
+          - Technical specifications and requirements
+          - Implementation challenges and solutions
+          - Technology trends and innovations
+          - Performance metrics and benchmarks
+          - Technical feasibility and constraints
+          
+          Provide detailed technical insights with specific examples.
+        system: "You are a technical expert with deep knowledge of engineering and technology systems."
+        temperature: 0.2
+        max_tokens: 1200
+        timeout: "2m"
+      outputs:
+        technical_insights: "$.response"
+
+    # Economic Analysis Node
+    - name: "economic_analysis"
+      type: "llm"
+      description: "Analyze from economic perspective"
+      config:
+        model: "gpt-4"
+        prompt: |
+          Analyze "{{ inputs.base_topic }}" from an ECONOMIC perspective.
+          
+          Focus on:
+          - Cost-benefit analysis
+          - Market dynamics and opportunities
+          - Investment requirements and ROI
+          - Economic impact and implications
+          - Pricing strategies and models
+          
+          Provide quantitative analysis where possible with market examples.
+        system: "You are an economic analyst with expertise in market analysis and financial modeling."
+        temperature: 0.3
+        max_tokens: 1200
+        timeout: "2m"
+      outputs:
+        economic_insights: "$.response"
+
+    # Environmental Analysis Node
+    - name: "environmental_analysis"
+      type: "llm"
+      description: "Analyze from environmental perspective"
+      config:
+        model: "gpt-3.5-turbo"
+        prompt: |
+          Analyze "{{ inputs.base_topic }}" from an ENVIRONMENTAL perspective.
+          
+          Focus on:
+          - Environmental impact and sustainability
+          - Carbon footprint and emissions
+          - Resource utilization and efficiency
+          - Ecosystem effects and biodiversity
+          - Regulatory and compliance considerations
+          
+          Provide evidence-based environmental assessment.
+        system: "You are an environmental scientist focused on sustainability and ecological impact assessment."
+        temperature: 0.3
+        max_tokens: 1200
+        timeout: "2m"
+      outputs:
+        environmental_insights: "$.response"
+
+    # Social Analysis Node
+    - name: "social_analysis"
+      type: "llm"
+      description: "Analyze from social perspective"
+      config:
+        model: "gpt-4o-mini"
+        prompt: |
+          Analyze "{{ inputs.base_topic }}" from a SOCIAL perspective.
+          
+          Focus on:
+          - Social benefits and challenges
+          - Community impact and acceptance
+          - Accessibility and equity considerations
+          - Behavioral changes and adoption
+          - Policy and governance implications
+          
+          Provide insights on social dynamics and community effects.
+        system: "You are a social scientist who understands community dynamics and social impact assessment."
+        temperature: 0.4
+        max_tokens: 1200
+        timeout: "2m"
+      outputs:
+        social_insights: "$.response"
+
+outputs:
+  technical_report:
+    source: "{{ technical_analysis_response }}"
+    format: "text"
+    file: "output/technical_analysis.txt"
+  
+  economic_report:
+    source: "{{ economic_analysis_response }}"
+    format: "text"
+    file: "output/economic_analysis.txt"
+  
+  environmental_report:
+    source: "{{ environmental_analysis_response }}"
+    format: "text"
+    file: "output/environmental_analysis.txt"
+  
+  social_report:
+    source: "{{ social_analysis_response }}"
+    format: "text"
+    file: "output/social_analysis.txt"
+  
+  comprehensive_analysis:
+    source: "$"
+    format: "json"
+    file: "output/comprehensive_analysis.json"
+    include:
+      - technical_analysis_response
+      - economic_analysis_response
+      - environmental_analysis_response
+      - social_analysis_response
+  
+  performance_metrics:
+    source: "$"
+    format: "json"
+    file: "output/parallel_execution_metrics.json"
+    include:
+      - execution_time
+      - parallel_performance
+      - model_usage_stats

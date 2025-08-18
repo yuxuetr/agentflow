@@ -1,6 +1,5 @@
-use agentflow_llm::{AgentFlow, VoiceCloningRequest};
+use agentflow_llm::VoiceCloningRequest;
 use anyhow::Result;
-use std::env;
 use tokio::fs;
 
 pub async fn execute(
@@ -12,10 +11,7 @@ pub async fn execute(
 ) -> Result<()> {
   let model = model.unwrap_or_else(|| "step-speech".to_string());
 
-  // Get API key from environment
-  let api_key = env::var("STEPFUN_API_KEY")
-    .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set"))?;
+  // No need to handle API keys in CLI - agentflow-llm handles this internally
 
   println!("🎭 AgentFlow Voice Cloning");
   println!("Model: {}", model);
@@ -33,7 +29,10 @@ pub async fn execute(
   {
     // Check if reference audio file exists
     if !std::path::Path::new(&reference_audio).exists() {
-      return Err(anyhow::anyhow!("Reference audio file not found: {}", reference_audio));
+      return Err(anyhow::anyhow!(
+        "Reference audio file not found: {}",
+        reference_audio
+      ));
     }
 
     // Read reference audio file
@@ -41,9 +40,10 @@ pub async fn execute(
     let audio_data = fs::read(&reference_audio).await?;
     println!("💾 Audio size: {} bytes", audio_data.len());
 
-    // Create StepFun specialized client
-    println!("📡 Creating StepFun client...");
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await?;
+    // Create client using model name - agentflow-llm handles API keys internally
+    println!("📡 Creating client for model: {}", model);
+    // TODO: Use proper agentflow-llm client creation with model name
+    // let client = LLMClientBuilder::new(&model).build().await?;
 
     // TODO: First, we need to upload the audio file to get file_id
     // let file_id = stepfun_client.upload_file(audio_data, filename).await?;
@@ -60,12 +60,16 @@ pub async fn execute(
     // Clone voice
     println!("🚀 Cloning voice...");
     let start_time = std::time::Instant::now();
-    
-    let cloning_response = stepfun_client.clone_voice(request).await?;
-    
+
+    // TODO: Implement voice cloning with proper model-based client
+    // let cloning_response = client.clone_voice(request).await?;
+    return Err(anyhow::anyhow!(
+      "Voice cloning implementation needs to be updated to use model-based API approach"
+    ));
+
     let duration = start_time.elapsed();
     println!("✅ Voice cloning completed in {:?}", duration);
-    println!("🆔 Voice ID: {}", cloning_response.id);
+    // println!("🆔 Voice ID: {}", cloning_response.id);
 
     // TODO: Generate speech with the cloned voice
     // This would require a separate TTS call using the cloned voice ID

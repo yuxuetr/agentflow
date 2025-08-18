@@ -1,4 +1,4 @@
-use agentflow_llm::{AgentFlow, ResponseFormat, LLMError};
+use agentflow_llm::{AgentFlow, LLMError, ResponseFormat};
 use serde_json::{json, Value};
 
 #[tokio::main]
@@ -7,7 +7,7 @@ async fn main() -> Result<(), LLMError> {
 
   // Initialize logging (if feature is enabled)
   AgentFlow::init_logging().ok();
-  
+
   // Load configuration and environment
   AgentFlow::init_with_env().await?;
 
@@ -24,7 +24,8 @@ async fn main() -> Result<(), LLMError> {
     .prompt("Explain what JSON is in one sentence.")
     .temperature(0.7)
     .enable_logging(true)
-    .execute().await;
+    .execute()
+    .await;
 
   match _basic_response {
     Ok(response) => println!("✅ Basic request completed: {} chars\\n", response.len()),
@@ -52,12 +53,13 @@ async fn main() -> Result<(), LLMError> {
     .json_mode()
     .temperature(0.3)
     .enable_logging(true)
-    .execute().await;
+    .execute()
+    .await;
 
   match _json_response {
     Ok(response) => {
       println!("✅ JSON response received:");
-      
+
       // Parse and pretty-print the JSON
       match serde_json::from_str::<Value>(&response) {
         Ok(parsed) => {
@@ -102,12 +104,13 @@ async fn main() -> Result<(), LLMError> {
     })
     .temperature(0.5)
     .enable_logging(true)
-    .execute().await;
+    .execute()
+    .await;
 
   match _schema_response {
     Ok(response) => {
       println!("✅ Schema-validated response received:");
-      
+
       match serde_json::from_str::<Value>(&response) {
         Ok(parsed) => {
           println!("{}", serde_json::to_string_pretty(&parsed).unwrap());
@@ -130,20 +133,21 @@ async fn main() -> Result<(), LLMError> {
     .prompt("Write a short JSON object describing a cat, stream the response")
     .json_mode()
     .enable_logging(true)
-    .execute_streaming().await;
+    .execute_streaming()
+    .await;
 
   match _streaming_result {
     Ok(mut stream) => {
       println!("📡 Streaming response:");
       let mut full_response = String::new();
-      
+
       while let Ok(Some(chunk)) = stream.next_chunk().await {
         print!("{}", chunk.content);
         full_response.push_str(&chunk.content);
-        
+
         if chunk.is_final {
           println!("\\n\\n✅ Stream completed");
-          
+
           // Validate the complete JSON
           if let Ok(parsed) = serde_json::from_str::<Value>(&full_response) {
             println!("🔍 Complete JSON validation: ✅");
@@ -169,7 +173,8 @@ async fn main() -> Result<(), LLMError> {
   let _error_response = AgentFlow::model("nonexistent-model")
     .prompt("This should fail")
     .enable_logging(true)
-    .execute().await;
+    .execute()
+    .await;
 
   match _error_response {
     Ok(_) => println!("❌ Expected error but got success"),
@@ -182,7 +187,7 @@ async fn main() -> Result<(), LLMError> {
   println!("   ✅ JSON schema validation");
   println!("   ✅ Streaming with real-time logging");
   println!("   ✅ Comprehensive error handling");
-  
+
   println!("\\n💡 Logging Configuration:");
   println!("   - Set RUST_LOG=debug for detailed logs");
   println!("   - Set RUST_LOG=agentflow_llm=info for request summaries");

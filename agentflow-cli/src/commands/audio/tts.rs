@@ -17,7 +17,9 @@ pub async fn execute(
   // Get API key from environment
   let api_key = env::var("STEPFUN_API_KEY")
     .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set"))?;
+    .map_err(|_| {
+      anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set")
+    })?;
 
   println!("🎙️  AgentFlow Text-to-Speech");
   println!("Model: {}", model);
@@ -50,9 +52,9 @@ pub async fn execute(
   // Generate speech
   println!("🚀 Generating speech...");
   let start_time = std::time::Instant::now();
-  
+
   let audio_data = stepfun_client.text_to_speech(request).await?;
-  
+
   let duration = start_time.elapsed();
   println!("✅ Speech generated in {:?}", duration);
   println!("💾 Audio size: {} bytes", audio_data.len());

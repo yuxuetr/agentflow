@@ -6,7 +6,7 @@ async fn main() -> Result<(), LLMError> {
   println!("=== AgentFlow LLM Configuration Management ===\n");
 
   let args: Vec<String> = env::args().collect();
-  
+
   if args.len() < 2 {
     print_usage();
     return Ok(());
@@ -20,7 +20,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Initialization failed: {}", e),
       }
     }
-    
+
     "init-builtin" => {
       println!("🔧 Initializing with built-in defaults...");
       match AgentFlow::init_with_builtin_config().await {
@@ -28,7 +28,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Initialization failed: {}", e),
       }
     }
-    
+
     "generate" => {
       let path = args.get(2).unwrap_or(&"models.yml".to_string()).clone();
       println!("📝 Generating configuration file: {}", path);
@@ -43,7 +43,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Failed to generate config: {}", e),
       }
     }
-    
+
     "generate-user" => {
       println!("🏠 Generating user-specific configuration...");
       match AgentFlow::generate_user_config().await {
@@ -54,7 +54,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Failed to generate user config: {}", e),
       }
     }
-    
+
     "generate-env" => {
       let path = args.get(2).unwrap_or(&".env".to_string()).clone();
       println!("🔑 Generating environment file: {}", path);
@@ -67,7 +67,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Failed to generate env file: {}", e),
       }
     }
-    
+
     "generate-env-user" => {
       println!("🏠 Generating user-specific environment file...");
       match AgentFlow::generate_user_env().await {
@@ -78,7 +78,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Failed to generate user env: {}", e),
       }
     }
-    
+
     "setup" => {
       println!("🚀 Complete setup for new project...");
       println!("📝 Generating models.yml...");
@@ -86,7 +86,7 @@ async fn main() -> Result<(), LLMError> {
         Ok(()) => println!("✅ models.yml generated"),
         Err(e) => println!("❌ Failed to generate models.yml: {}", e),
       }
-      
+
       println!("🔑 Generating .env...");
       match AgentFlow::generate_project_env().await {
         Ok(()) => {
@@ -99,7 +99,7 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Failed to generate .env: {}", e),
       }
     }
-    
+
     "init-env" => {
       println!("🔄 Initializing with environment auto-loading...");
       match AgentFlow::init_with_env().await {
@@ -107,54 +107,54 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Initialization failed: {}", e),
       }
     }
-    
+
     "demo" => {
       println!("🧪 Demonstrating configuration priority...");
       println!("Configuration search order:");
       println!("  1. ./models.yml (project-specific)");
       println!("  2. ~/.agentflow/models.yml (user-specific)");
       println!("  3. Built-in defaults (bundled in crate)");
-      
+
       // Initialize logging for demo
       AgentFlow::init_logging().ok();
-      
+
       match AgentFlow::init().await {
         Ok(()) => {
           println!("✅ Configuration loaded successfully");
-          
+
           // Show which models are available
           use agentflow_llm::ModelRegistry;
           let registry = ModelRegistry::global();
           let models = registry.list_models();
-          
+
           println!("\n📋 Available models:");
           for model in models {
             if let Ok(info) = registry.get_model_info(&model) {
               println!("  • {} ({})", model, info.vendor);
             }
           }
-          
+
           println!("\n📈 Logging initialized - use RUST_LOG=debug for detailed logs");
         }
         Err(e) => println!("❌ Configuration failed: {}", e),
       }
     }
-    
+
     "test-json" => {
       println!("📝 Testing JSON output capabilities...");
-      
+
       AgentFlow::init_logging().ok();
-      
+
       match AgentFlow::init_with_env().await {
         Ok(()) => {
           println!("✅ Testing JSON mode with gpt-4o-mini...");
-          
+
           let result = AgentFlow::model("gpt-4o-mini")
             .prompt("Return a JSON object with fields: name='AgentFlow', version='0.1.0', status='testing'")
             .json_mode()
             .enable_logging(true)
             .execute().await;
-            
+
           match result {
             Ok(response) => {
               println!("✅ JSON response received:");
@@ -170,13 +170,13 @@ async fn main() -> Result<(), LLMError> {
         Err(e) => println!("❌ Initialization failed: {}", e),
       }
     }
-    
+
     _ => {
       println!("❌ Unknown command: {}", args[1]);
       print_usage();
     }
   }
-  
+
   Ok(())
 }
 

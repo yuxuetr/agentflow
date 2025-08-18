@@ -1,17 +1,17 @@
 //! # Multimodal Support for AgentFlow LLM
-//! 
+//!
 //! This module provides support for multimodal inputs (text + images) to LLMs.
-//! 
+//!
 //! ## Example Usage
-//! 
+//!
 //! ```rust
 //! use agentflow_llm::{AgentFlow, multimodal::{MultimodalMessage, MessageContent}};
-//! 
+//!
 //! let message = MultimodalMessage::new("user")
 //!   .add_text("Describe this image in elegant language")
 //!   .add_image_url("https://example.com/image.jpg")
 //!   .build();
-//! 
+//!
 //! let response = AgentFlow::model("step-1o-turbo-vision")
 //!   .multimodal_prompt(message)
 //!   .temperature(0.7)
@@ -27,17 +27,11 @@ use std::collections::HashMap;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
   /// Plain text content
-  Text { 
-    text: String 
-  },
+  Text { text: String },
   /// Image from URL
-  ImageUrl { 
-    image_url: ImageUrl 
-  },
+  ImageUrl { image_url: ImageUrl },
   /// Base64 encoded image
-  ImageData {
-    image_data: ImageData
-  },
+  ImageData { image_data: ImageData },
 }
 
 /// Image URL configuration
@@ -51,7 +45,7 @@ pub struct ImageUrl {
 /// Base64 image data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageData {
-  pub data: String, // base64 encoded data
+  pub data: String,       // base64 encoded data
   pub media_type: String, // "image/jpeg", "image/png", etc.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detail: Option<String>, // "low", "high", "auto"
@@ -60,9 +54,7 @@ pub struct ImageData {
 impl MessageContent {
   /// Create text content
   pub fn text<S: Into<String>>(text: S) -> Self {
-    Self::Text { 
-      text: text.into() 
-    }
+    Self::Text { text: text.into() }
   }
 
   /// Create image URL content
@@ -71,7 +63,7 @@ impl MessageContent {
       image_url: ImageUrl {
         url: url.into(),
         detail: None,
-      }
+      },
     }
   }
 
@@ -81,7 +73,7 @@ impl MessageContent {
       image_url: ImageUrl {
         url: url.into(),
         detail: Some(detail.into()),
-      }
+      },
     }
   }
 
@@ -92,7 +84,7 @@ impl MessageContent {
         data: data.into(),
         media_type: media_type.into(),
         detail: None,
-      }
+      },
     }
   }
 
@@ -103,7 +95,7 @@ impl MessageContent {
         data: data.into(),
         media_type: media_type.into(),
         detail: Some(detail.into()),
-      }
+      },
     }
   }
 
@@ -114,7 +106,10 @@ impl MessageContent {
 
   /// Check if this content is an image
   pub fn is_image(&self) -> bool {
-    matches!(self, MessageContent::ImageUrl { .. } | MessageContent::ImageData { .. })
+    matches!(
+      self,
+      MessageContent::ImageUrl { .. } | MessageContent::ImageData { .. }
+    )
   }
 
   /// Get text content if this is text
@@ -172,7 +167,8 @@ impl MultimodalMessage {
 
   /// Get all text content concatenated
   pub fn get_text(&self) -> String {
-    self.content
+    self
+      .content
       .iter()
       .filter_map(|c| c.as_text())
       .cloned()
@@ -194,7 +190,8 @@ impl MultimodalMessage {
       self.get_text()
     } else {
       // For mixed content, include placeholders for images
-      self.content
+      self
+        .content
         .iter()
         .map(|content| match content {
           MessageContent::Text { text } => text.clone(),
@@ -229,19 +226,30 @@ impl MultimodalMessageBuilder {
 
   /// Add image from URL with detail level
   pub fn add_image_url_with_detail<S: Into<String>>(mut self, url: S, detail: S) -> Self {
-    self.content.push(MessageContent::image_url_with_detail(url, detail));
+    self
+      .content
+      .push(MessageContent::image_url_with_detail(url, detail));
     self
   }
 
   /// Add base64 image data
   pub fn add_image_data<S: Into<String>>(mut self, data: S, media_type: S) -> Self {
-    self.content.push(MessageContent::image_data(data, media_type));
+    self
+      .content
+      .push(MessageContent::image_data(data, media_type));
     self
   }
 
   /// Add base64 image data with detail level
-  pub fn add_image_data_with_detail<S: Into<String>>(mut self, data: S, media_type: S, detail: S) -> Self {
-    self.content.push(MessageContent::image_data_with_detail(data, media_type, detail));
+  pub fn add_image_data_with_detail<S: Into<String>>(
+    mut self,
+    data: S,
+    media_type: S,
+    detail: S,
+  ) -> Self {
+    self.content.push(MessageContent::image_data_with_detail(
+      data, media_type, detail,
+    ));
     self
   }
 
@@ -271,16 +279,14 @@ impl MultimodalMessageBuilder {
 impl MultimodalMessage {
   /// Create a text-only message (shortcut)
   pub fn text<R: Into<String>, T: Into<String>>(role: R, text: T) -> Self {
-    Self::new(role)
-      .add_text(text)
-      .build()
+    Self::new(role).add_text(text).build()
   }
 
   /// Create a text + image URL message (common pattern)
   pub fn text_and_image<R: Into<String>, T: Into<String>, U: Into<String>>(
-    role: R, 
-    text: T, 
-    image_url: U
+    role: R,
+    text: T,
+    image_url: U,
   ) -> Self {
     Self::new(role)
       .add_text(text)
@@ -292,7 +298,7 @@ impl MultimodalMessage {
   pub fn text_and_images<R: Into<String>, T: Into<String>, U: Into<String>>(
     role: R,
     text: T,
-    image_urls: Vec<U>
+    image_urls: Vec<U>,
   ) -> Self {
     let mut builder = Self::new(role).add_text(text);
     for url in image_urls {
@@ -331,9 +337,9 @@ mod tests {
   #[test]
   fn test_create_multimodal_message() {
     let msg = MultimodalMessage::text_and_image(
-      "user", 
-      "Describe this image", 
-      "https://example.com/image.jpg"
+      "user",
+      "Describe this image",
+      "https://example.com/image.jpg",
     );
     assert_eq!(msg.role, "user");
     assert_eq!(msg.content.len(), 2);
@@ -360,7 +366,7 @@ mod tests {
     let msg = MultimodalMessage::text_and_image(
       "user",
       "What's in this image?",
-      "https://example.com/test.jpg"
+      "https://example.com/test.jpg",
     );
 
     let json = msg.to_openai_format();

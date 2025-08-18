@@ -1,5 +1,5 @@
 //! Model Discovery Example
-//! 
+//!
 //! This example demonstrates how to:
 //! 1. Fetch model lists from supported vendors
 //! 2. Validate existing model configurations
@@ -13,7 +13,7 @@ use std::env;
 async fn main() -> Result<(), LLMError> {
   // Initialize logging to see what's happening
   AgentFlow::init_logging().ok();
-  
+
   println!("🔍 AgentFlow Model Discovery Demo");
   println!("==================================\n");
 
@@ -36,7 +36,7 @@ async fn main() -> Result<(), LLMError> {
     Ok(all_models) => {
       for (vendor, models) in &all_models {
         println!("   📦 {}: {} models", vendor, models.len());
-        
+
         // Show first few models as examples
         for model in models.iter().take(3) {
           println!("      - {}", model.id);
@@ -104,7 +104,11 @@ async fn main() -> Result<(), LLMError> {
   for (model, vendor) in models_to_check {
     match AgentFlow::model_exists(model, vendor).await {
       Ok(exists) => {
-        let status = if exists { "✅ Exists" } else { "❌ Not found" };
+        let status = if exists {
+          "✅ Exists"
+        } else {
+          "❌ Not found"
+        };
         println!("   {} {}/{}", status, vendor, model);
       }
       Err(e) => {
@@ -139,7 +143,8 @@ async fn main() -> Result<(), LLMError> {
   // 6. Suggest similar models
   println!("6️⃣ Model suggestions for typos...");
   if api_keys.contains(&"moonshot".to_string()) {
-    match AgentFlow::suggest_similar_models("moonshot-v1-8000", "moonshot").await { // Typo: 8000 instead of 8k
+    match AgentFlow::suggest_similar_models("moonshot-v1-8000", "moonshot").await {
+      // Typo: 8000 instead of 8k
       Ok(suggestions) => {
         println!("   💡 Suggestions for 'moonshot-v1-8000':");
         for suggestion in suggestions.iter().take(3) {
@@ -158,14 +163,17 @@ async fn main() -> Result<(), LLMError> {
   match AgentFlow::init().await {
     Ok(()) => {
       println!("   ✅ AgentFlow initialized successfully");
-      
+
       match AgentFlow::validate_models().await {
         Ok(result) => {
           println!("   📊 Validation Report:");
           println!("      - Valid models: {}", result.valid_models.len());
           println!("      - Invalid models: {}", result.invalid_models.len());
-          println!("      - Unavailable vendors: {}", result.unavailable_vendors.len());
-          
+          println!(
+            "      - Unavailable vendors: {}",
+            result.unavailable_vendors.len()
+          );
+
           if !result.invalid_models.is_empty() {
             println!("      Invalid models found:");
             for invalid in result.invalid_models.iter().take(3) {
@@ -187,7 +195,9 @@ async fn main() -> Result<(), LLMError> {
   // 8. Update models configuration (commented out to avoid overwriting)
   println!("8️⃣ Updating models configuration (simulation)...");
   println!("   💡 To actually update the configuration, uncomment the following code:");
-  println!("   // let result = AgentFlow::update_models_config(\"templates/default_models.yml\").await?;");
+  println!(
+    "   // let result = AgentFlow::update_models_config(\"templates/default_models.yml\").await?;"
+  );
   println!("   // println!(\"Update report:\\n{}\", result.create_report());");
   println!();
 
@@ -199,7 +209,7 @@ async fn main() -> Result<(), LLMError> {
       println!("   📈 Update Report:");
       println!("      - Added models: {}", result.added_models);
       println!("      - Updated models: {}", result.updated_models);
-      
+
       if !result.added_model_names.is_empty() {
         println!("      New models added:");
         for name in result.added_model_names.iter().take(5) {
@@ -221,25 +231,25 @@ async fn main() -> Result<(), LLMError> {
   println!("   1. Set up API keys for the vendors you want to use");
   println!("   2. Run `AgentFlow::update_models_config()` to update your configuration");
   println!("   3. Use `AgentFlow::validate_models()` regularly to check model availability");
-  
+
   Ok(())
 }
 
 fn check_available_api_keys() -> Vec<String> {
   let mut available = Vec::new();
-  
+
   let keys_to_check = vec![
     ("MOONSHOT_API_KEY", "moonshot"),
     ("DASHSCOPE_API_KEY", "dashscope"),
     ("ANTHROPIC_API_KEY", "anthropic"),
     ("GEMINI_API_KEY", "google"),
   ];
-  
+
   for (env_var, vendor) in keys_to_check {
     if env::var(env_var).is_ok() {
       available.push(vendor.to_string());
     }
   }
-  
+
   available
 }

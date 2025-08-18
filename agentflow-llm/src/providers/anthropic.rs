@@ -1,6 +1,6 @@
 use crate::{
   client::streaming::{StreamChunk, StreamingResponse},
-  providers::{LLMProvider, ProviderRequest, ProviderResponse, ContentType},
+  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   LLMError, Result,
 };
 use async_trait::async_trait;
@@ -133,7 +133,7 @@ impl LLMProvider for AnthropicProvider {
     }
 
     let anthropic_response: AnthropicResponse = response.json().await?;
-    
+
     let content_text = anthropic_response
       .content
       .first()
@@ -145,11 +145,14 @@ impl LLMProvider for AnthropicProvider {
     // Convert to ContentType - Anthropic currently only returns text
     let content = ContentType::Text(content_text);
 
-    let usage = anthropic_response.usage.clone().map(|u| crate::providers::TokenUsage {
-      prompt_tokens: Some(u.input_tokens),
-      completion_tokens: Some(u.output_tokens),
-      total_tokens: Some(u.input_tokens + u.output_tokens),
-    });
+    let usage = anthropic_response
+      .usage
+      .clone()
+      .map(|u| crate::providers::TokenUsage {
+        prompt_tokens: Some(u.input_tokens),
+        completion_tokens: Some(u.output_tokens),
+        total_tokens: Some(u.input_tokens + u.output_tokens),
+      });
 
     Ok(ProviderResponse {
       content,
@@ -158,7 +161,10 @@ impl LLMProvider for AnthropicProvider {
     })
   }
 
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>> {
     if !request.stream {
       return Err(LLMError::InternalError {
         message: "Streaming not enabled in request".to_string(),
@@ -397,7 +403,7 @@ mod tests {
   #[test]
   fn test_build_request_body() {
     let provider = AnthropicProvider::new("test-key", None).unwrap();
-    
+
     let mut params = std::collections::HashMap::new();
     params.insert("temperature".to_string(), json!(0.7));
     params.insert("max_tokens".to_string(), json!(100));
@@ -406,7 +412,7 @@ mod tests {
       model: "claude-3-sonnet-20240229".to_string(),
       messages: vec![
         json!({"role": "system", "content": "You are helpful"}),
-        json!({"role": "user", "content": "test"})
+        json!({"role": "user", "content": "test"}),
       ],
       stream: false,
       parameters: params,

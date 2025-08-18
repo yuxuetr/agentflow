@@ -1,4 +1,7 @@
-use crate::{LLMError, Result, model_types::{ModelType, ModelCapabilities, InputType}};
+use crate::{
+  model_types::{InputType, ModelCapabilities, ModelType},
+  LLMError, Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -14,47 +17,47 @@ pub struct ModelConfig {
   /// New granular types: text, imageunderstand, text2image, image2image, imageedit, tts, asr, etc.
   /// Legacy types: text, multimodal, image, audio (maintained for backward compatibility)
   pub r#type: Option<String>,
-  
+
   /// Detailed model capabilities (computed from type)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub capabilities: Option<ModelCapabilities>,
-  
+
   /// The actual model ID used by the provider API (optional, defaults to the config key)
   pub model_id: Option<String>,
-  
+
   /// Base URL for the API (optional, uses provider default if not specified)
   pub base_url: Option<String>,
-  
+
   /// Default temperature for this model
   pub temperature: Option<f32>,
-  
+
   /// Default top_p for this model
   pub top_p: Option<f32>,
-  
+
   /// Default max_tokens for this model
   pub max_tokens: Option<u32>,
-  
+
   /// Default frequency penalty for this model
   pub frequency_penalty: Option<f32>,
-  
+
   /// Default stop sequences for this model
   pub stop: Option<Vec<String>>,
-  
+
   /// Default number of responses to generate
   pub n: Option<u32>,
-  
+
   /// Whether streaming is supported for this model
   pub supports_streaming: Option<bool>,
-  
+
   /// Whether this model supports function calling/tools
   pub supports_tools: Option<bool>,
-  
+
   /// Whether this model supports multimodal input (images)
   pub supports_multimodal: Option<bool>,
-  
+
   /// Response format configuration (e.g., "json_object")
   pub response_format: Option<String>,
-  
+
   /// Additional model-specific parameters
   #[serde(flatten)]
   pub additional_params: HashMap<String, serde_json::Value>,
@@ -69,7 +72,7 @@ impl ModelConfig {
   /// Get the granular model type enum
   pub fn granular_type(&self) -> ModelType {
     let type_str = self.model_type();
-    
+
     // Handle granular types first
     match type_str {
       "text" => ModelType::Text,
@@ -97,7 +100,7 @@ impl ModelConfig {
     } else {
       // Compute capabilities from model type and config
       let mut capabilities = ModelCapabilities::from_model_type(self.granular_type());
-      
+
       // Override with explicit config values
       if let Some(streaming) = self.supports_streaming {
         capabilities.supports_streaming = streaming;
@@ -108,7 +111,7 @@ impl ModelConfig {
       if let Some(max_tokens) = self.max_tokens {
         capabilities.max_output_tokens = Some(max_tokens);
       }
-      
+
       capabilities
     }
   }
@@ -120,7 +123,10 @@ impl ModelConfig {
 
   /// Check if this is an image generation model
   pub fn is_image_model(&self) -> bool {
-    matches!(self.granular_type(), ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit)
+    matches!(
+      self.granular_type(),
+      ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit
+    )
   }
 
   /// Check if this is an audio model
@@ -148,16 +154,31 @@ impl ModelConfig {
       "document" => InputType::Document,
       _ => return false,
     };
-    
+
     self.supports_input_type(&input_type)
   }
 
   /// Validate a request against this model's capabilities
-  pub fn validate_request(&self, has_text: bool, has_images: bool, has_audio: bool, 
-                         has_video: bool, requires_streaming: bool, uses_tools: bool) -> Result<()> {
+  pub fn validate_request(
+    &self,
+    has_text: bool,
+    has_images: bool,
+    has_audio: bool,
+    has_video: bool,
+    requires_streaming: bool,
+    uses_tools: bool,
+  ) -> Result<()> {
     let capabilities = self.get_capabilities();
-    
-    capabilities.validate_request(has_text, has_images, has_audio, has_video, requires_streaming, uses_tools)
+
+    capabilities
+      .validate_request(
+        has_text,
+        has_images,
+        has_audio,
+        has_video,
+        requires_streaming,
+        uses_tools,
+      )
       .map_err(|msg| LLMError::InvalidModelConfig { message: msg })
   }
 
@@ -202,13 +223,13 @@ impl ModelConfig {
 pub struct ProviderConfig {
   /// Environment variable name for the API key
   pub api_key_env: String,
-  
+
   /// Default base URL for this provider
   pub base_url: Option<String>,
-  
+
   /// Default timeout in seconds
   pub timeout_seconds: Option<u64>,
-  
+
   /// Rate limiting configuration
   pub rate_limit: Option<RateLimitConfig>,
 }
@@ -224,11 +245,11 @@ pub struct RateLimitConfig {
 pub struct LLMConfig {
   /// Model configurations keyed by model name
   pub models: HashMap<String, ModelConfig>,
-  
+
   /// Provider configurations keyed by provider name
   #[serde(default)]
   pub providers: HashMap<String, ProviderConfig>,
-  
+
   /// Global defaults
   #[serde(default)]
   pub defaults: GlobalDefaults,
@@ -244,11 +265,12 @@ pub struct GlobalDefaults {
 impl LLMConfig {
   /// Load configuration from a YAML file
   pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-      LLMError::ConfigurationError {
-        message: format!("Failed to read config file: {}", e),
-      }
-    })?;
+    let content =
+      tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| LLMError::ConfigurationError {
+          message: format!("Failed to read config file: {}", e),
+        })?;
 
     Self::from_yaml(&content)
   }
@@ -262,9 +284,12 @@ impl LLMConfig {
 
   /// Get a model configuration by name
   pub fn get_model(&self, model_name: &str) -> Result<&ModelConfig> {
-    self.models.get(model_name).ok_or_else(|| LLMError::ModelNotFound {
-      model_name: model_name.to_string(),
-    })
+    self
+      .models
+      .get(model_name)
+      .ok_or_else(|| LLMError::ModelNotFound {
+        model_name: model_name.to_string(),
+      })
   }
 
   /// Get a provider configuration by name
@@ -287,6 +312,7 @@ impl LLMConfig {
       "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"],
       "google" | "gemini" => vec!["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_AI_KEY"],
       "moonshot" => vec!["MOONSHOT_API_KEY", "MOONSHOT_KEY"],
+      "stepfun" | "step" => vec!["STEPFUN_API_KEY", "STEP_API_KEY"],
       _ => vec![],
     };
 
@@ -305,7 +331,17 @@ impl LLMConfig {
   pub fn validate(&self) -> Result<()> {
     for (model_name, model_config) in &self.models {
       // Check if provider exists
-      if !["openai", "anthropic", "google", "gemini", "moonshot", "dashscope", "step"].contains(&model_config.vendor.as_str()) {
+      if ![
+        "openai",
+        "anthropic",
+        "google",
+        "gemini",
+        "moonshot",
+        "dashscope",
+        "step",
+      ]
+      .contains(&model_config.vendor.as_str())
+      {
         return Err(LLMError::UnsupportedProvider {
           provider: model_config.vendor.clone(),
         });
@@ -322,7 +358,10 @@ impl LLMConfig {
       if let Some(temp) = model_config.temperature {
         if temp < 0.0 || temp > 2.0 {
           return Err(LLMError::InvalidModelConfig {
-            message: format!("Temperature for model '{}' must be between 0.0 and 2.0", model_name),
+            message: format!(
+              "Temperature for model '{}' must be between 0.0 and 2.0",
+              model_name
+            ),
           });
         }
       }
@@ -330,7 +369,10 @@ impl LLMConfig {
       if let Some(top_p) = model_config.top_p {
         if top_p < 0.0 || top_p > 1.0 {
           return Err(LLMError::InvalidModelConfig {
-            message: format!("top_p for model '{}' must be between 0.0 and 1.0", model_name),
+            message: format!(
+              "top_p for model '{}' must be between 0.0 and 1.0",
+              model_name
+            ),
           });
         }
       }
@@ -338,7 +380,10 @@ impl LLMConfig {
       if let Some(freq_penalty) = model_config.frequency_penalty {
         if freq_penalty < 0.0 || freq_penalty > 2.0 {
           return Err(LLMError::InvalidModelConfig {
-            message: format!("frequency_penalty for model '{}' must be between 0.0 and 2.0", model_name),
+            message: format!(
+              "frequency_penalty for model '{}' must be between 0.0 and 2.0",
+              model_name
+            ),
           });
         }
       }
@@ -403,24 +448,27 @@ defaults:
 "#;
 
     let config = LLMConfig::from_yaml(yaml).unwrap();
-    
+
     assert_eq!(config.models.len(), 2);
     assert_eq!(config.providers.len(), 2);
-    
+
     let gpt4_config = config.get_model("gpt-4o").unwrap();
     assert_eq!(gpt4_config.vendor, "openai");
     assert_eq!(gpt4_config.temperature, Some(0.7));
     assert_eq!(gpt4_config.supports_streaming, Some(true));
-    
+
     let claude_config = config.get_model("claude-3-sonnet").unwrap();
     assert_eq!(claude_config.vendor, "anthropic");
-    assert_eq!(claude_config.model_id, Some("claude-3-sonnet-20240229".to_string()));
+    assert_eq!(
+      claude_config.model_id,
+      Some("claude-3-sonnet-20240229".to_string())
+    );
   }
 
   #[test]
   fn test_api_key_resolution() {
     env::set_var("TEST_OPENAI_KEY", "test-key");
-    
+
     let yaml = r#"
 models:
   gpt-4o:
@@ -434,7 +482,7 @@ providers:
     let config = LLMConfig::from_yaml(yaml).unwrap();
     let api_key = config.get_api_key("openai").unwrap();
     assert_eq!(api_key, "test-key");
-    
+
     env::remove_var("TEST_OPENAI_KEY");
   }
 }

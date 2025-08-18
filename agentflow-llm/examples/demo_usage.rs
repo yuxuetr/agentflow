@@ -1,4 +1,4 @@
-use agentflow_llm::{AgentFlow, LLMError, registry::ModelRegistry};
+use agentflow_llm::{registry::ModelRegistry, AgentFlow, LLMError};
 
 #[tokio::main]
 async fn main() -> Result<(), LLMError> {
@@ -20,7 +20,7 @@ async fn main() -> Result<(), LLMError> {
   let registry = ModelRegistry::global();
   let models = registry.list_models();
   let providers = registry.list_providers();
-  
+
   println!("\n📋 Available models:");
   if models.is_empty() {
     println!("  (No models loaded - this might indicate a configuration issue)");

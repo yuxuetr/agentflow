@@ -1,6 +1,6 @@
 use crate::{
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
-  providers::{LLMProvider, ProviderRequest, ProviderResponse, ContentType},
+  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   LLMError, Result,
 };
 use async_trait::async_trait;
@@ -38,7 +38,10 @@ impl MoonshotProvider {
   fn build_headers(&self) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("Authorization", format!("Bearer {}", self.api_key).parse().unwrap());
+    headers.insert(
+      "Authorization",
+      format!("Bearer {}", self.api_key).parse().unwrap(),
+    );
     headers
   }
 
@@ -92,7 +95,7 @@ impl LLMProvider for MoonshotProvider {
     }
 
     let moonshot_response: MoonshotResponse = response.json().await?;
-    
+
     let content_text = moonshot_response
       .choices
       .first()
@@ -103,11 +106,14 @@ impl LLMProvider for MoonshotProvider {
     // Convert to ContentType - Moonshot currently only returns text
     let content = ContentType::Text(content_text);
 
-    let usage = moonshot_response.usage.clone().map(|u| crate::providers::TokenUsage {
-      prompt_tokens: Some(u.prompt_tokens),
-      completion_tokens: Some(u.completion_tokens),
-      total_tokens: Some(u.total_tokens),
-    });
+    let usage = moonshot_response
+      .usage
+      .clone()
+      .map(|u| crate::providers::TokenUsage {
+        prompt_tokens: Some(u.prompt_tokens),
+        completion_tokens: Some(u.completion_tokens),
+        total_tokens: Some(u.total_tokens),
+      });
 
     Ok(ProviderResponse {
       content,
@@ -116,7 +122,10 @@ impl LLMProvider for MoonshotProvider {
     })
   }
 
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>> {
     if !request.stream {
       return Err(LLMError::InternalError {
         message: "Streaming not enabled in request".to_string(),
@@ -149,7 +158,7 @@ impl LLMProvider for MoonshotProvider {
   async fn validate_config(&self) -> Result<()> {
     // Simple health check - try to list models
     let url = format!("{}/models", self.base_url);
-    
+
     let response = self
       .client
       .get(&url)
@@ -359,7 +368,7 @@ mod tests {
   #[test]
   fn test_build_request_body() {
     let provider = MoonshotProvider::new("test-key", None).unwrap();
-    
+
     let mut params = std::collections::HashMap::new();
     params.insert("temperature".to_string(), json!(0.7));
     params.insert("max_tokens".to_string(), json!(100));

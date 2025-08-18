@@ -1,19 +1,19 @@
-use crate::{StreamingResponse, LLMError, Result};
+use crate::{LLMError, Result, StreamingResponse};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub mod openai;
 pub mod anthropic;
 pub mod google;
 pub mod moonshot;
+pub mod openai;
 pub mod stepfun;
 
-pub use openai::OpenAIProvider;
 pub use anthropic::AnthropicProvider;
 pub use google::GoogleProvider;
 pub use moonshot::MoonshotProvider;
+pub use openai::OpenAIProvider;
 pub use stepfun::StepFunProvider;
 
 /// Request structure for LLM providers
@@ -31,15 +31,9 @@ pub enum ContentType {
   /// Plain text content
   Text(String),
   /// Image content with binary data and media type
-  Image {
-    data: Vec<u8>,
-    media_type: String,
-  },
+  Image { data: Vec<u8>, media_type: String },
   /// Audio content with binary data and media type
-  Audio {
-    data: Vec<u8>,
-    media_type: String,
-  },
+  Audio { data: Vec<u8>, media_type: String },
   /// Mixed content containing multiple blocks
   Mixed(Vec<ContentBlock>),
 }
@@ -50,15 +44,9 @@ pub enum ContentBlock {
   /// Text block
   Text(String),
   /// Image block
-  Image {
-    data: Vec<u8>,
-    media_type: String,
-  },
+  Image { data: Vec<u8>, media_type: String },
   /// Audio block
-  Audio {
-    data: Vec<u8>,
-    media_type: String,
-  },
+  Audio { data: Vec<u8>, media_type: String },
 }
 
 impl ContentType {
@@ -68,16 +56,15 @@ impl ContentType {
       ContentType::Text(text) => text.clone(),
       ContentType::Image { .. } => "[Image]".to_string(),
       ContentType::Audio { .. } => "[Audio]".to_string(),
-      ContentType::Mixed(blocks) => {
-        blocks.iter()
-          .map(|block| match block {
-            ContentBlock::Text(text) => text.clone(),
-            ContentBlock::Image { .. } => "[Image]".to_string(),
-            ContentBlock::Audio { .. } => "[Audio]".to_string(),
-          })
-          .collect::<Vec<_>>()
-          .join(" ")
-      }
+      ContentType::Mixed(blocks) => blocks
+        .iter()
+        .map(|block| match block {
+          ContentBlock::Text(text) => text.clone(),
+          ContentBlock::Image { .. } => "[Image]".to_string(),
+          ContentBlock::Audio { .. } => "[Audio]".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" "),
     }
   }
 
@@ -90,7 +77,9 @@ impl ContentType {
   pub fn has_images(&self) -> bool {
     match self {
       ContentType::Image { .. } => true,
-      ContentType::Mixed(blocks) => blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. })),
+      ContentType::Mixed(blocks) => blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Image { .. })),
       _ => false,
     }
   }
@@ -99,7 +88,9 @@ impl ContentType {
   pub fn has_audio(&self) -> bool {
     match self {
       ContentType::Audio { .. } => true,
-      ContentType::Mixed(blocks) => blocks.iter().any(|b| matches!(b, ContentBlock::Audio { .. })),
+      ContentType::Mixed(blocks) => blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Audio { .. })),
       _ => false,
     }
   }
@@ -110,13 +101,14 @@ impl ContentType {
       ContentType::Text(text) => text.len(),
       ContentType::Image { data, .. } => data.len(),
       ContentType::Audio { data, .. } => data.len(),
-      ContentType::Mixed(blocks) => {
-        blocks.iter().map(|block| match block {
+      ContentType::Mixed(blocks) => blocks
+        .iter()
+        .map(|block| match block {
           ContentBlock::Text(text) => text.len(),
           ContentBlock::Image { data, .. } => data.len(),
           ContentBlock::Audio { data, .. } => data.len(),
-        }).sum()
-      }
+        })
+        .sum(),
     }
   }
 }
@@ -158,7 +150,10 @@ pub trait LLMProvider: Send + Sync {
   async fn execute(&self, request: &ProviderRequest) -> Result<ProviderResponse>;
 
   /// Execute a streaming request
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>>;
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>>;
 
   /// Validate that the provider is properly configured
   async fn validate_config(&self) -> Result<()>;
@@ -171,7 +166,11 @@ pub trait LLMProvider: Send + Sync {
 }
 
 /// Factory function to create providers by name
-pub fn create_provider(provider_name: &str, api_key: &str, base_url: Option<String>) -> Result<Box<dyn LLMProvider>> {
+pub fn create_provider(
+  provider_name: &str,
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn LLMProvider>> {
   match provider_name.to_lowercase().as_str() {
     "openai" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)),
     "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key, base_url)?)),

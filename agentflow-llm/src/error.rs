@@ -55,7 +55,11 @@ pub enum LLMError {
   ParseError { message: String },
 
   #[error("API error from '{provider}': {status_code} - {message}")]
-  ApiError { provider: String, status_code: u16, message: String },
+  ApiError {
+    provider: String,
+    status_code: u16,
+    message: String,
+  },
 
   #[error("Unsupported operation: {message}")]
   UnsupportedOperation { message: String },

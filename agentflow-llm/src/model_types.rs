@@ -1,5 +1,5 @@
 //! # Model Type System
-//! 
+//!
 //! This module defines granular model types with specific input/output capabilities.
 //! This enables automatic validation of requests and proper handling of different
 //! model capabilities.
@@ -62,51 +62,55 @@ impl ModelType {
   /// Get supported input types for this model
   pub fn supported_inputs(&self) -> HashSet<InputType> {
     let mut inputs = HashSet::new();
-    
+
     match self {
       ModelType::Text | ModelType::CodeGen | ModelType::FunctionCalling => {
         inputs.insert(InputType::Text);
-      },
+      }
       ModelType::ImageUnderstand | ModelType::ImageEdit => {
         inputs.insert(InputType::Text);
         inputs.insert(InputType::Image);
-      },
+      }
       ModelType::Text2Image => {
         inputs.insert(InputType::Text);
-      },
+      }
       ModelType::Image2Image => {
         inputs.insert(InputType::Image);
-      },
+      }
       ModelType::Tts => {
         inputs.insert(InputType::Text);
-      },
+      }
       ModelType::Asr => {
         inputs.insert(InputType::Audio);
-      },
+      }
       ModelType::VideoUnderstand => {
         inputs.insert(InputType::Text);
         inputs.insert(InputType::Video);
-      },
+      }
       ModelType::Text2Video => {
         inputs.insert(InputType::Text);
-      },
+      }
       ModelType::DocUnderstand => {
         inputs.insert(InputType::Text);
         inputs.insert(InputType::Document);
-      },
+      }
       ModelType::Embedding => {
         inputs.insert(InputType::Text);
-      },
+      }
     }
-    
+
     inputs
   }
 
   /// Get the primary output type for this model
   pub fn primary_output(&self) -> OutputType {
     match self {
-      ModelType::Text | ModelType::ImageUnderstand | ModelType::VideoUnderstand 
-      | ModelType::DocUnderstand | ModelType::CodeGen | ModelType::Asr => OutputType::Text,
+      ModelType::Text
+      | ModelType::ImageUnderstand
+      | ModelType::VideoUnderstand
+      | ModelType::DocUnderstand
+      | ModelType::CodeGen
+      | ModelType::Asr => OutputType::Text,
       ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit => OutputType::Image,
       ModelType::Tts => OutputType::Audio,
       ModelType::Text2Video => OutputType::Video,
@@ -118,12 +122,18 @@ impl ModelType {
   /// Check if this model type supports streaming
   pub fn supports_streaming(&self) -> bool {
     match self {
-      ModelType::Text | ModelType::ImageUnderstand | ModelType::VideoUnderstand 
-      | ModelType::DocUnderstand | ModelType::CodeGen | ModelType::FunctionCalling => true,
-      ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit 
+      ModelType::Text
+      | ModelType::ImageUnderstand
+      | ModelType::VideoUnderstand
+      | ModelType::DocUnderstand
+      | ModelType::CodeGen
+      | ModelType::FunctionCalling => true,
+      ModelType::Text2Image
+      | ModelType::Image2Image
+      | ModelType::ImageEdit
       | ModelType::Text2Video => false, // Generation models typically don't stream
-      ModelType::Tts => true, // TTS can stream audio
-      ModelType::Asr => false, // ASR processes complete audio files
+      ModelType::Tts => true,        // TTS can stream audio
+      ModelType::Asr => false,       // ASR processes complete audio files
       ModelType::Embedding => false, // Embeddings are single vectors
     }
   }
@@ -139,8 +149,12 @@ impl ModelType {
   /// Check if this model supports tools/function calling
   pub fn supports_tools(&self) -> bool {
     match self {
-      ModelType::Text | ModelType::ImageUnderstand | ModelType::VideoUnderstand 
-      | ModelType::DocUnderstand | ModelType::CodeGen | ModelType::FunctionCalling => true,
+      ModelType::Text
+      | ModelType::ImageUnderstand
+      | ModelType::VideoUnderstand
+      | ModelType::DocUnderstand
+      | ModelType::CodeGen
+      | ModelType::FunctionCalling => true,
       _ => false,
     }
   }
@@ -154,7 +168,12 @@ impl ModelType {
   pub fn use_cases(&self) -> Vec<&'static str> {
     match self {
       ModelType::Text => vec!["Conversation", "Q&A", "Text generation", "Summarization"],
-      ModelType::ImageUnderstand => vec!["Image description", "Visual Q&A", "Object detection", "Scene analysis"],
+      ModelType::ImageUnderstand => vec![
+        "Image description",
+        "Visual Q&A",
+        "Object detection",
+        "Scene analysis",
+      ],
       ModelType::Text2Image => vec!["Art generation", "Concept visualization", "Design mockups"],
       ModelType::Image2Image => vec!["Style transfer", "Image enhancement", "Format conversion"],
       ModelType::ImageEdit => vec!["Photo editing", "Object removal", "Style modification"],
@@ -163,7 +182,11 @@ impl ModelType {
       ModelType::VideoUnderstand => vec!["Video analysis", "Content moderation", "Scene detection"],
       ModelType::Text2Video => vec!["Animation", "Video content creation", "Demonstrations"],
       ModelType::CodeGen => vec!["Code completion", "Bug fixing", "Code explanation"],
-      ModelType::DocUnderstand => vec!["Document analysis", "Information extraction", "Summarization"],
+      ModelType::DocUnderstand => vec![
+        "Document analysis",
+        "Information extraction",
+        "Summarization",
+      ],
       ModelType::Embedding => vec!["Semantic search", "Similarity matching", "Classification"],
       ModelType::FunctionCalling => vec!["API integration", "Tool usage", "Workflow automation"],
     }
@@ -192,9 +215,19 @@ impl InputType {
     match self {
       InputType::Text => vec!["plain/text", "utf-8"],
       InputType::Image => vec!["image/jpeg", "image/png", "image/webp", "image/gif"],
-      InputType::Audio => vec!["audio/flac", "audio/mp3", "audio/mp4", "audio/mpeg", 
-                               "audio/mpga", "audio/m4a", "audio/ogg", "audio/wav", 
-                               "audio/webm", "audio/aac", "audio/opus"],
+      InputType::Audio => vec![
+        "audio/flac",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/mpga",
+        "audio/m4a",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "audio/aac",
+        "audio/opus",
+      ],
       InputType::Video => vec!["video/mp4", "video/mpeg", "video/quicktime", "video/webm"],
       InputType::Document => vec!["application/pdf", "text/plain", "application/msword"],
     }
@@ -241,7 +274,9 @@ impl OutputType {
   pub fn can_stream(&self) -> bool {
     match self {
       OutputType::Text | OutputType::Audio => true,
-      OutputType::Image | OutputType::Video | OutputType::Vector | OutputType::FunctionCall => false,
+      OutputType::Image | OutputType::Video | OutputType::Vector | OutputType::FunctionCall => {
+        false
+      }
     }
   }
 }
@@ -275,8 +310,12 @@ impl ModelCapabilities {
       requires_streaming: model_type.requires_streaming(),
       supports_tools: model_type.supports_tools(),
       supports_system_messages: match model_type {
-        ModelType::Text | ModelType::ImageUnderstand | ModelType::VideoUnderstand 
-        | ModelType::DocUnderstand | ModelType::CodeGen | ModelType::FunctionCalling => true,
+        ModelType::Text
+        | ModelType::ImageUnderstand
+        | ModelType::VideoUnderstand
+        | ModelType::DocUnderstand
+        | ModelType::CodeGen
+        | ModelType::FunctionCalling => true,
         _ => false,
       },
       max_context_tokens: None,
@@ -302,10 +341,17 @@ impl ModelCapabilities {
   }
 
   /// Validate a request against model capabilities
-  pub fn validate_request(&self, has_text: bool, has_images: bool, has_audio: bool, 
-                         has_video: bool, requires_streaming: bool, uses_tools: bool) -> Result<(), String> {
+  pub fn validate_request(
+    &self,
+    has_text: bool,
+    has_images: bool,
+    has_audio: bool,
+    has_video: bool,
+    requires_streaming: bool,
+    uses_tools: bool,
+  ) -> Result<(), String> {
     let supported_inputs = self.model_type.supported_inputs();
-    
+
     // Check input types
     if has_text && !supported_inputs.contains(&InputType::Text) {
       return Err("Model does not support text input".to_string());
@@ -358,10 +404,13 @@ impl ModelType {
   pub fn to_legacy_string(&self) -> &'static str {
     match self {
       ModelType::Text | ModelType::CodeGen => "text",
-      ModelType::ImageUnderstand | ModelType::ImageEdit | ModelType::VideoUnderstand | ModelType::DocUnderstand => "multimodal",
+      ModelType::ImageUnderstand
+      | ModelType::ImageEdit
+      | ModelType::VideoUnderstand
+      | ModelType::DocUnderstand => "multimodal",
       ModelType::Text2Image | ModelType::Image2Image => "image",
       ModelType::Text2Video => "video",
-      ModelType::Tts => "tts", 
+      ModelType::Tts => "tts",
       ModelType::Asr => "asr",
       ModelType::Embedding => "embedding",
       ModelType::FunctionCalling => "text", // Function calling is still primarily text-based
@@ -398,12 +447,16 @@ mod tests {
   #[test]
   fn test_capabilities_validation() {
     let capabilities = ModelCapabilities::from_model_type(ModelType::ImageUnderstand);
-    
+
     // Should accept text + image
-    assert!(capabilities.validate_request(true, true, false, false, false, false).is_ok());
-    
+    assert!(capabilities
+      .validate_request(true, true, false, false, false, false)
+      .is_ok());
+
     // Should reject audio for image understanding model
-    assert!(capabilities.validate_request(true, false, true, false, false, false).is_err());
+    assert!(capabilities
+      .validate_request(true, false, true, false, false, false)
+      .is_err());
   }
 
   #[test]

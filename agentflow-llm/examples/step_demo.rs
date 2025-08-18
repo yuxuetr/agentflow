@@ -14,7 +14,7 @@ async fn main() -> Result<(), agentflow_llm::LLMError> {
   // We'll just test that the model can be created without executing it
   let step_client = AgentFlow::model("step-2-mini").prompt("Whoooo are you?");
   println!("✅ step-2-mini model client created successfully");
-  
+
   // Check if API key is available before attempting execution
   if std::env::var("STEP_API_KEY").is_ok() {
     println!("🔑 STEP_API_KEY found, executing test request...");

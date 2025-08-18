@@ -53,9 +53,21 @@ impl ConfigValidator {
     }
   }
 
-  fn validate_model(&self, _model_name: &str, model_config: &crate::config::ModelConfig) -> Result<()> {
+  fn validate_model(
+    &self,
+    _model_name: &str,
+    model_config: &crate::config::ModelConfig,
+  ) -> Result<()> {
     // Check vendor is supported
-    let supported_vendors = ["openai", "anthropic", "google", "gemini", "moonshot", "dashscope", "step"];
+    let supported_vendors = [
+      "openai",
+      "anthropic",
+      "google",
+      "gemini",
+      "moonshot",
+      "dashscope",
+      "step",
+    ];
     if !supported_vendors.contains(&model_config.vendor.as_str()) {
       return Err(LLMError::UnsupportedProvider {
         provider: model_config.vendor.clone(),
@@ -87,7 +99,7 @@ impl ConfigValidator {
           message: "max_tokens must be greater than 0".to_string(),
         });
       }
-      
+
       // Provider-specific limits
       match model_config.vendor.as_str() {
         "openai" => {
@@ -120,7 +132,11 @@ impl ConfigValidator {
     Ok(())
   }
 
-  fn validate_provider(&self, provider_name: &str, provider_config: &crate::config::ProviderConfig) -> Result<()> {
+  fn validate_provider(
+    &self,
+    provider_name: &str,
+    provider_config: &crate::config::ProviderConfig,
+  ) -> Result<()> {
     // Check if API key environment variable exists
     if env::var(&provider_config.api_key_env).is_err() {
       return Err(LLMError::MissingApiKey {
@@ -154,7 +170,7 @@ impl ConfigValidator {
 
     // Collect all required environment variables
     let mut required_env_vars = HashSet::new();
-    
+
     for (_, provider_config) in &self.config.providers {
       required_env_vars.insert(provider_config.api_key_env.clone());
     }
@@ -185,7 +201,7 @@ impl ConfigValidator {
 
   fn validate_model_provider_consistency(&self, report: &mut ValidationReport) {
     let provider_names: HashSet<_> = self.config.providers.keys().collect();
-    
+
     for (model_name, model_config) in &self.config.models {
       if !provider_names.contains(&model_config.vendor) {
         // This is not necessarily an error if we have default behavior
@@ -233,7 +249,7 @@ impl ValidationReport {
 
   pub fn summary(&self) -> String {
     let mut summary = String::new();
-    
+
     if !self.errors.is_empty() {
       summary.push_str("ERRORS:\n");
       for error in &self.errors {
@@ -293,7 +309,7 @@ providers:
     let config = LLMConfig::from_yaml(yaml).unwrap();
     let validator = ConfigValidator::new(config);
     let report = validator.validate_all().unwrap();
-    
+
     assert!(!report.has_errors());
     assert!(!report.successes.is_empty());
 
@@ -313,7 +329,7 @@ models:
     let config = LLMConfig::from_yaml(yaml).unwrap();
     let validator = ConfigValidator::new(config);
     let result = validator.validate_all();
-    
+
     assert!(result.is_err());
   }
 }

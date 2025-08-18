@@ -1,9 +1,9 @@
 use anyhow::Result;
-use std::env;
-use tokio::fs;
 use base64::Engine;
 use reqwest;
 use serde_json::{json, Value};
+use std::env;
+use tokio::fs;
 
 pub async fn execute(
   image_path: String,
@@ -27,11 +27,13 @@ pub async fn execute(
   // For StepFun vision models, we need to set up the API key environment
   // but we can't use the general model registry since StepFun models aren't configured there
   println!("🔧 Setting up vision analysis...");
-  
+
   // Get the API key we already validated
   let api_key = env::var("STEPFUN_API_KEY")
     .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set"))?;
+    .map_err(|_| {
+      anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set")
+    })?;
 
   // Check if image file exists
   if !std::path::Path::new(&image_path).exists() {
@@ -42,13 +44,13 @@ pub async fn execute(
   println!("📸 Reading image file...");
   let image_bytes = fs::read(&image_path).await?;
   let image_base64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
-  
+
   // Determine image format
   let image_format = match image_path.to_lowercase().split('.').last() {
     Some("jpg") | Some("jpeg") => "image/jpeg",
     Some("png") => "image/png",
     Some("gif") => "image/gif",
-    Some("webp") => "image/webp", 
+    Some("webp") => "image/webp",
     Some("bmp") => "image/bmp",
     _ => "image/jpeg", // Default fallback
   };
@@ -58,7 +60,7 @@ pub async fn execute(
 
   // Create direct HTTP request to StepFun API
   println!("🔍 Building multimodal analysis request...");
-  
+
   let client = reqwest::Client::new();
   let request_body = json!({
     "model": model,
@@ -86,7 +88,7 @@ pub async fn execute(
   // Perform image analysis
   println!("🚀 Analyzing image...");
   let start_time = std::time::Instant::now();
-  
+
   let response = client
     .post("https://api.stepfun.com/v1/chat/completions")
     .header("Authorization", format!("Bearer {}", api_key))
@@ -98,7 +100,11 @@ pub async fn execute(
   if !response.status().is_success() {
     let status = response.status();
     let error_text = response.text().await?;
-    return Err(anyhow::anyhow!("HTTP request failed: {} - {}", status, error_text));
+    return Err(anyhow::anyhow!(
+      "HTTP request failed: {} - {}",
+      status,
+      error_text
+    ));
   }
 
   let response_json: Value = response.json().await?;
@@ -106,7 +112,7 @@ pub async fn execute(
     .as_str()
     .unwrap_or("No response received")
     .to_string();
-  
+
   let duration = start_time.elapsed();
   println!("✅ Analysis completed in {:?}", duration);
   println!();
@@ -125,7 +131,7 @@ pub async fn execute(
     let output_content = format!("{}**Image:** {}\n", output_content, image_path);
     let output_content = format!("{}**Prompt:** {}\n\n", output_content, prompt);
     let output_content = format!("{}**Analysis:**\n{}\n", output_content, response_text);
-    
+
     fs::write(&output_path, &output_content).await?;
     println!("✅ Results saved successfully");
   }

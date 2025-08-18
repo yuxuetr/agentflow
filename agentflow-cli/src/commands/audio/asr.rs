@@ -1,4 +1,4 @@
-use agentflow_llm::{AgentFlow, ASRRequest};
+use agentflow_llm::{ASRRequest, AgentFlow};
 use anyhow::Result;
 use std::env;
 use tokio::fs;
@@ -15,7 +15,9 @@ pub async fn execute(
   // Get API key from environment
   let api_key = env::var("STEPFUN_API_KEY")
     .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set"))?;
+    .map_err(|_| {
+      anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set")
+    })?;
 
   println!("🎧 AgentFlow Speech-to-Text");
   println!("Model: {}", model);
@@ -64,9 +66,9 @@ pub async fn execute(
   // Transcribe audio
   println!("🚀 Transcribing audio...");
   let start_time = std::time::Instant::now();
-  
+
   let transcription = stepfun_client.speech_to_text(request).await?;
-  
+
   let duration = start_time.elapsed();
   println!("✅ Transcription completed in {:?}", duration);
   println!();
@@ -98,14 +100,14 @@ pub async fn execute(
   // Save to file if specified
   if let Some(output_path) = output {
     println!("💾 Saving transcription to: {}", output_path);
-    
+
     let output_content = match format.as_str() {
       "json" | "srt" | "vtt" => transcription,
       "text" => transcription,
       _ => format!("# Speech Transcription Results\n\n**Model:** {}\n**Audio:** {}\n**Format:** {}\n\n**Transcription:**\n{}\n", 
                    model, audio_path, format, transcription),
     };
-    
+
     fs::write(&output_path, &output_content).await?;
     println!("✅ Transcription saved successfully");
   }

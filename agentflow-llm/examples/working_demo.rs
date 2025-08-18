@@ -1,4 +1,4 @@
-use agentflow_llm::{AgentFlow, LLMError, registry::ModelRegistry};
+use agentflow_llm::{registry::ModelRegistry, AgentFlow, LLMError};
 
 #[tokio::main]
 async fn main() -> Result<(), LLMError> {
@@ -8,7 +8,7 @@ async fn main() -> Result<(), LLMError> {
   std::env::remove_var("OPENAI_API_KEY");
   std::env::remove_var("ANTHROPIC_API_KEY");
   std::env::remove_var("GOOGLE_API_KEY");
-  
+
   dotenvy::from_filename("examples/demo.env").ok();
 
   println!("🔧 Using demo configuration with safe API keys");
@@ -26,7 +26,7 @@ async fn main() -> Result<(), LLMError> {
   let registry = ModelRegistry::global();
   let models = registry.list_models();
   let providers = registry.list_providers();
-  
+
   println!("\n📋 Available models:");
   for model in &models {
     if let Ok(info) = registry.get_model_info(model) {
@@ -40,7 +40,7 @@ async fn main() -> Result<(), LLMError> {
   }
 
   println!("\n🧪 Testing API interface (demonstrating non-streaming vs streaming):");
-  
+
   // Test 1: Non-streaming execution (returns String directly)
   println!("  ✅ Testing NON-STREAMING execution with .execute()...");
   let _non_streaming_client = AgentFlow::model("gpt-4o-mini")
@@ -49,7 +49,7 @@ async fn main() -> Result<(), LLMError> {
     .max_tokens(100)
     .top_p(0.9)
     .frequency_penalty(0.1);
-  
+
   // This would return Result<String> if we had valid API keys
   // let response: String = non_streaming_client.execute().await?;
   println!("    → Built client for .execute() → returns Result<String>");
@@ -61,32 +61,32 @@ async fn main() -> Result<(), LLMError> {
     .prompt("Tell me a story")
     .temperature(0.8)
     .stop(vec!["\n\n".to_string(), "THE END".to_string()]);
-  
+
   // This would return Result<Box<dyn StreamingResponse>> if we had valid API keys
   // let mut stream = streaming_client.execute_streaming().await?;
   // while let Some(chunk) = stream.next_chunk().await? {
   //   print!("{}", chunk.content);
   // }
-  println!("    → Built client for .execute_streaming() → returns Result<Box<dyn StreamingResponse>>");
+  println!(
+    "    → Built client for .execute_streaming() → returns Result<Box<dyn StreamingResponse>>"
+  );
   println!("    → Use case: Process response chunks in real-time");
 
   // Test 3: Client with tools (for future MCP integration)
   println!("  ✅ Testing client with TOOLS for MCP integration...");
-  let tools = vec![
-    serde_json::json!({
-      "type": "function",
-      "function": {
-        "name": "search_web",
-        "description": "Search the web for information",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "query": {"type": "string"}
-          }
+  let tools = vec![serde_json::json!({
+    "type": "function",
+    "function": {
+      "name": "search_web",
+      "description": "Search the web for information",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"}
         }
       }
-    })
-  ];
+    }
+  })];
   let _tools_client = AgentFlow::model("gpt-4o")
     .prompt("Search for Rust programming tutorials")
     .tools(tools)
@@ -103,8 +103,10 @@ async fn main() -> Result<(), LLMError> {
   println!("  ✅ Testing configuration access...");
   for model in &models {
     let config = registry.get_model(model)?;
-    println!("    - {}: vendor={}, temp={:?}, tools={:?}, multimodal={:?}", 
-             model, config.vendor, config.temperature, config.supports_tools, config.supports_multimodal);
+    println!(
+      "    - {}: vendor={}, temp={:?}, tools={:?}, multimodal={:?}",
+      model, config.vendor, config.temperature, config.supports_tools, config.supports_multimodal
+    );
   }
 
   println!("\n🎉 All tests passed!");

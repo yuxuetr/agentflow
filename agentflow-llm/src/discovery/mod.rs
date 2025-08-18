@@ -1,5 +1,5 @@
 //! Model discovery and validation module
-//! 
+//!
 //! This module provides functionality to:
 //! - Fetch available model lists from supported vendors
 //! - Verify if user-specified models exist
@@ -11,13 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
+pub mod config_updater;
 pub mod model_fetcher;
 pub mod model_validator;
-pub mod config_updater;
 
+pub use config_updater::{ConfigUpdater, UpdateResult};
 pub use model_fetcher::ModelFetcher;
 pub use model_validator::ModelValidator;
-pub use config_updater::{ConfigUpdater, UpdateResult};
 
 /// Represents a model from a vendor's API
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,7 +113,8 @@ impl VendorConfig {
       // Google Gemini
       Self {
         name: "google".to_string(),
-        models_endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/models".to_string(),
+        models_endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/models"
+          .to_string(),
         api_key_env: "GEMINI_API_KEY".to_string(),
         auth_header: "Authorization".to_string(),
         additional_headers: HashMap::new(),
@@ -175,11 +176,11 @@ mod tests {
   fn test_vendor_configs() {
     let vendors = VendorConfig::all_vendors();
     assert!(vendors.len() >= 4);
-    
+
     let moonshot = VendorConfig::get_by_name("moonshot").unwrap();
     assert_eq!(moonshot.name, "moonshot");
     assert!(moonshot.supports_model_list);
-    
+
     let openai = VendorConfig::get_by_name("openai").unwrap();
     assert_eq!(openai.name, "openai");
     assert!(!openai.supports_model_list);

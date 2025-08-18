@@ -31,11 +31,11 @@ pub struct TokenUsage {
 pub trait StreamingResponse: Send + Sync {
   /// Get the next chunk from the stream
   async fn next_chunk(&mut self) -> Result<Option<StreamChunk>>;
-  
+
   /// Collect all chunks into a single response
-  async fn collect_all(mut self) -> Result<String> 
-  where 
-    Self: Sized 
+  async fn collect_all(mut self) -> Result<String>
+  where
+    Self: Sized,
   {
     let mut content = String::new();
     while let Some(chunk) = self.next_chunk().await? {
@@ -73,7 +73,7 @@ impl<T: StreamingResponse + Unpin> Stream for StreamingResponseStream<T> {
   ) -> std::task::Poll<Option<Self::Item>> {
     let future = self.response.next_chunk();
     tokio::pin!(future);
-    
+
     match Future::poll(future, cx) {
       std::task::Poll::Ready(Ok(Some(chunk))) => std::task::Poll::Ready(Some(Ok(chunk))),
       std::task::Poll::Ready(Ok(None)) => std::task::Poll::Ready(None),

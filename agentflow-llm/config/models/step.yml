@@ -8,7 +8,7 @@ models:
   # TEXT MODELS (Input: text, Output: text)
   # =============================================================================
   step-1-8k:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -24,7 +24,7 @@ models:
     response_format: null
 
   step-1-32k:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -40,7 +40,7 @@ models:
     response_format: null
 
   step-1-256k:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -56,7 +56,7 @@ models:
     response_format: null
 
   step-2-16k:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -72,7 +72,7 @@ models:
     response_format: null
 
   step-2-mini:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -88,7 +88,7 @@ models:
     response_format: null
 
   step-2-16k-202411:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -104,7 +104,7 @@ models:
     response_format: null
 
   step-2-16k-exp:
-    vendor: step
+    vendor: stepfun
     type: text
     model_id: null
     base_url: null
@@ -123,7 +123,7 @@ models:
   # IMAGE UNDERSTANDING MODELS (Input: text + image, Output: text)
   # =============================================================================
   step-1o-turbo-vision:
-    vendor: step
+    vendor: stepfun
     type: imageunderstand
     model_id: null
     base_url: null
@@ -139,7 +139,7 @@ models:
     response_format: null
 
   step-1o-vision-32k:
-    vendor: step
+    vendor: stepfun
     type: imageunderstand
     model_id: null
     base_url: null
@@ -155,7 +155,7 @@ models:
     response_format: null
 
   step-1v-8k:
-    vendor: step
+    vendor: stepfun
     type: imageunderstand
     model_id: null
     base_url: null
@@ -171,7 +171,7 @@ models:
     response_format: null
 
   step-1v-32k:
-    vendor: step
+    vendor: stepfun
     type: imageunderstand
     model_id: null
     base_url: null
@@ -190,7 +190,7 @@ models:
   # MULTIMODAL MODELS (Input: text + image + audio, Output: text + multimedia)
   # =============================================================================
   step-3:
-    vendor: step
+    vendor: stepfun
     type: multimodal
     model_id: null
     base_url: null
@@ -209,7 +209,7 @@ models:
   # TEXT-TO-SPEECH MODELS (Input: text, Output: audio)
   # =============================================================================
   step-tts-vivid:
-    vendor: step
+    vendor: stepfun
     type: tts
     model_id: null
     base_url: null
@@ -225,7 +225,7 @@ models:
     response_format: null
 
   step-tts-mini:
-    vendor: step
+    vendor: stepfun
     type: tts
     model_id: null
     base_url: null
@@ -244,7 +244,7 @@ models:
   # AUTOMATIC SPEECH RECOGNITION MODELS (Input: audio, Output: text)
   # =============================================================================
   step-asr:
-    vendor: step
+    vendor: stepfun
     type: asr
     model_id: null
     base_url: null
@@ -263,7 +263,7 @@ models:
   # IMAGE GENERATION MODELS (Input: text, Output: image)
   # =============================================================================
   step-2x-large:
-    vendor: step
+    vendor: stepfun
     type: generateimage
     model_id: null
     base_url: null
@@ -279,7 +279,7 @@ models:
     response_format: null
 
   step-1x-medium:
-    vendor: step
+    vendor: stepfun
     type: generateimage
     model_id: null
     base_url: null
@@ -298,7 +298,7 @@ models:
   # IMAGE EDITING MODELS (Input: image + text, Output: image)
   # =============================================================================
   step-1x-edit:
-    vendor: step
+    vendor: stepfun
     type: editimage
     model_id: null
     base_url: null
@@ -319,7 +319,7 @@ models:
   
   # Function Calling Specialized Configuration
   step-1-8k-functions:
-    vendor: step
+    vendor: stepfun
     type: functioncalling
     model_id: "step-1-8k"  # Uses base model with specialized configuration
     base_url: null
@@ -339,7 +339,7 @@ models:
 # =============================================================================
 extended_models:
   step-vision-pro:
-    vendor: step
+    vendor: stepfun
     type: imageunderstand
     model_id: "step-1o-turbo-vision"
     base_url: null

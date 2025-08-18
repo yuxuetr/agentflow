@@ -10,7 +10,7 @@ async fn main() -> Result<(), LLMError> {
   let has_real_keys = std::env::var("OPENAI_API_KEY")
     .map(|key| !key.is_empty() && !key.starts_with("demo-key"))
     .unwrap_or(false);
-  
+
   let config_file = if has_real_keys {
     "examples/models.yml"
   } else {
@@ -33,7 +33,7 @@ async fn main() -> Result<(), LLMError> {
 
   // Basic non-streaming usage
   println!("=== Basic Usage ===");
-  
+
   if !has_real_keys {
     println!("⚠️  Using demo configuration - API calls will fail with real requests");
     println!("💡 To test real API calls:");
@@ -43,7 +43,7 @@ async fn main() -> Result<(), LLMError> {
     println!("\n✨ Demo completed successfully - configuration system is working!");
     return Ok(());
   }
-  
+
   let response = AgentFlow::model("gpt-4o-mini")
     .prompt("What is the capital of France?")
     .temperature(0.7)
@@ -73,7 +73,7 @@ async fn main() -> Result<(), LLMError> {
   // Different models
   println!("\n=== Multiple Models ===");
   let models = ["gpt-4o-mini", "claude-3-haiku"];
-  
+
   for model in &models {
     match AgentFlow::model(model)
       .prompt("Say hello in one word")

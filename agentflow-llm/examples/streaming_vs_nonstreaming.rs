@@ -24,7 +24,7 @@ async fn main() -> Result<(), LLMError> {
   println!("   println!(\"Complete response: {{}}\", response);");
   println!();
 
-  // Example 2: Streaming Request  
+  // Example 2: Streaming Request
   println!("⚡ STREAMING Example:");
   println!("   Purpose: Process response chunks in real-time");
   println!("   Returns: Result<Box<dyn StreamingResponse>>");
@@ -79,6 +79,6 @@ async fn main() -> Result<(), LLMError> {
   println!("   • No .streaming(bool) needed - method choice determines behavior");
   println!("   • YAML config provides defaults, function params override");
   println!("   • Tools ready for agentflow-mcp integration");
-  
+
   Ok(())
 }

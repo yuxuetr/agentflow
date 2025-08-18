@@ -36,7 +36,7 @@ async fn main() -> Result<(), LLMError> {
 
   for (i, &model) in models.iter().enumerate() {
     let prompt = prompts[i % prompts.len()];
-    
+
     println!("\n--- Testing {} ---", model);
     println!("Prompt: {}", prompt);
 
@@ -79,7 +79,7 @@ async fn main() -> Result<(), LLMError> {
 
   // Display collected metrics
   println!("\n=== Collected Metrics ===");
-  
+
   // Print some example metrics
   for model in &models {
     if let Some(requests) = metrics_collector.get_metric(&format!("llm.{}.requests", model)) {

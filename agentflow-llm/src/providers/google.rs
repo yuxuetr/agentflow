@@ -1,6 +1,6 @@
 use crate::{
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
-  providers::{LLMProvider, ProviderRequest, ProviderResponse, ContentType},
+  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   LLMError, Result,
 };
 use async_trait::async_trait;
@@ -26,7 +26,8 @@ impl GoogleProvider {
     }
 
     let client = Client::new();
-    let base_url = base_url.unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
+    let base_url =
+      base_url.unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
 
     Ok(Self {
       client,
@@ -51,9 +52,11 @@ impl GoogleProvider {
         if let (Some(role), Some(content)) = (msg_obj.get("role"), msg_obj.get("content")) {
           match role.as_str() {
             Some("system") => {
-              system_instruction = content.as_str().map(|s| json!({
-                "parts": [{"text": s}]
-              }));
+              system_instruction = content.as_str().map(|s| {
+                json!({
+                  "parts": [{"text": s}]
+                })
+              });
             }
             Some("user") => {
               gemini_contents.push(json!({
@@ -102,8 +105,15 @@ impl GoogleProvider {
   }
 
   fn get_model_endpoint(&self, model: &str, stream: bool) -> String {
-    let method = if stream { "streamGenerateContent" } else { "generateContent" };
-    format!("{}/v1beta/models/{}:{}?key={}", self.base_url, model, method, self.api_key)
+    let method = if stream {
+      "streamGenerateContent"
+    } else {
+      "generateContent"
+    };
+    format!(
+      "{}/v1beta/models/{}:{}?key={}",
+      self.base_url, model, method, self.api_key
+    )
   }
 }
 
@@ -141,7 +151,7 @@ impl LLMProvider for GoogleProvider {
     }
 
     let google_response: GoogleResponse = response.json().await?;
-    
+
     let content_text = google_response
       .candidates
       .first()
@@ -153,11 +163,14 @@ impl LLMProvider for GoogleProvider {
     // Convert to ContentType - Google currently only returns text
     let content = ContentType::Text(content_text);
 
-    let usage = google_response.usage_metadata.clone().map(|u| crate::providers::TokenUsage {
-      prompt_tokens: Some(u.prompt_token_count),
-      completion_tokens: Some(u.candidates_token_count),
-      total_tokens: Some(u.total_token_count),
-    });
+    let usage = google_response
+      .usage_metadata
+      .clone()
+      .map(|u| crate::providers::TokenUsage {
+        prompt_tokens: Some(u.prompt_token_count),
+        completion_tokens: Some(u.candidates_token_count),
+        total_tokens: Some(u.total_token_count),
+      });
 
     Ok(ProviderResponse {
       content,
@@ -166,7 +179,10 @@ impl LLMProvider for GoogleProvider {
     })
   }
 
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>> {
     if !request.stream {
       return Err(LLMError::InternalError {
         message: "Streaming not enabled in request".to_string(),
@@ -199,7 +215,7 @@ impl LLMProvider for GoogleProvider {
   async fn validate_config(&self) -> Result<()> {
     // Test with a simple model list request
     let url = format!("{}/v1beta/models?key={}", self.base_url, self.api_key);
-    
+
     let response = self
       .client
       .get(&url)
@@ -311,7 +327,7 @@ impl GoogleStreamingResponse {
         if let Some(part) = candidate.content.parts.first() {
           if let Some(text) = &part.text {
             let is_final = candidate.finish_reason.is_some();
-            
+
             return Some(StreamChunk {
               content: text.clone(),
               is_final,
@@ -325,7 +341,7 @@ impl GoogleStreamingResponse {
             });
           }
         }
-        
+
         // Check if this is a final chunk without text
         if candidate.finish_reason.is_some() {
           return Some(StreamChunk {
@@ -402,7 +418,7 @@ mod tests {
   #[test]
   fn test_build_request_body() {
     let provider = GoogleProvider::new("test-key", None).unwrap();
-    
+
     let mut params = std::collections::HashMap::new();
     params.insert("temperature".to_string(), json!(0.7));
     params.insert("max_tokens".to_string(), json!(100));
@@ -411,7 +427,7 @@ mod tests {
       model: "gemini-1.5-pro".to_string(),
       messages: vec![
         json!({"role": "system", "content": "You are helpful"}),
-        json!({"role": "user", "content": "test"})
+        json!({"role": "user", "content": "test"}),
       ],
       stream: false,
       parameters: params,
@@ -426,11 +442,11 @@ mod tests {
   #[test]
   fn test_model_endpoint() {
     let provider = GoogleProvider::new("test-key", None).unwrap();
-    
+
     let endpoint = provider.get_model_endpoint("gemini-1.5-pro", false);
     assert!(endpoint.contains("generateContent"));
     assert!(endpoint.contains("test-key"));
-    
+
     let streaming_endpoint = provider.get_model_endpoint("gemini-1.5-pro", true);
     assert!(streaming_endpoint.contains("streamGenerateContent"));
   }

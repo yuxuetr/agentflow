@@ -1,19 +1,11 @@
 //! # StepFun Specialized APIs Demo
-//! 
+//!
 //! This example demonstrates the comprehensive StepFun specialized API support
 //! including text2image, image2image, imageedit, TTS, ASR, and voice cloning.
 
 use agentflow_llm::{
-  AgentFlow, 
-  StepFunSpecializedClient, 
-  Text2ImageBuilder, 
-  TTSBuilder,
-  Text2ImageRequest,
-  Image2ImageRequest,
-  ImageEditRequest,
-  ASRRequest,
-  VoiceCloningRequest,
-  Result,
+  ASRRequest, AgentFlow, Image2ImageRequest, ImageEditRequest, Result, StepFunSpecializedClient,
+  TTSBuilder, Text2ImageBuilder, Text2ImageRequest, VoiceCloningRequest,
 };
 
 #[tokio::main]
@@ -22,8 +14,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
   println!("Demonstrating image generation, TTS, ASR, and voice cloning capabilities\n");
 
   // Get API key from environment
-  let api_key = std::env::var("STEPFUN_API_KEY")
-    .expect("STEPFUN_API_KEY environment variable must be set");
+  let api_key =
+    std::env::var("STEPFUN_API_KEY").expect("STEPFUN_API_KEY environment variable must be set");
 
   // Create StepFun specialized client
   let stepfun_client = AgentFlow::stepfun_client(&api_key).await?;
@@ -70,8 +62,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 async fn demo_text_to_image(client: &StepFunSpecializedClient) -> Result<()> {
   // Basic text-to-image generation
   let basic_request = Text2ImageBuilder::new(
-    "step-1x-medium", 
-    "A majestic mountain landscape at sunset with golden clouds"
+    "step-1x-medium",
+    "A majestic mountain landscape at sunset with golden clouds",
   )
   .size("1024x1024")
   .response_format("b64_json")
@@ -84,7 +76,7 @@ async fn demo_text_to_image(client: &StepFunSpecializedClient) -> Result<()> {
   // Advanced generation with style reference
   let advanced_request = Text2ImageBuilder::new(
     "step-1x-medium",
-    "A futuristic cityscape with neon lights and flying cars"
+    "A futuristic cityscape with neon lights and flying cars",
   )
   .size("1280x800")
   .response_format("b64_json")
@@ -96,7 +88,8 @@ async fn demo_text_to_image(client: &StepFunSpecializedClient) -> Result<()> {
 
   println!("Generating advanced image with style reference...");
   let advanced_response = client.text_to_image(advanced_request).await?;
-  println!("✅ Generated {} styled image(s) with seed {}", 
+  println!(
+    "✅ Generated {} styled image(s) with seed {}",
     advanced_response.data.len(),
     advanced_response.data.first().map(|d| d.seed).unwrap_or(0)
   );
@@ -156,7 +149,7 @@ async fn demo_text_to_speech(client: &StepFunSpecializedClient) -> Result<()> {
   let basic_request = TTSBuilder::new(
     "step-tts-mini",
     "Hello! This is a demonstration of StepFun's text-to-speech capabilities.",
-    "default_voice"
+    "default_voice",
   )
   .response_format("mp3")
   .speed(1.0)
@@ -170,7 +163,7 @@ async fn demo_text_to_speech(client: &StepFunSpecializedClient) -> Result<()> {
   let chinese_request = TTSBuilder::new(
     "step-tts-vivid",
     "你好！欢迎使用AgentFlow的语音合成功能！",
-    "chinese_voice_01"
+    "chinese_voice_01",
   )
   .response_format("wav")
   .speed(1.2)
@@ -183,7 +176,10 @@ async fn demo_text_to_speech(client: &StepFunSpecializedClient) -> Result<()> {
 
   println!("Synthesizing Chinese speech with emotion...");
   let chinese_audio = client.text_to_speech(chinese_request).await?;
-  println!("✅ Generated {} bytes of Chinese WAV audio", chinese_audio.len());
+  println!(
+    "✅ Generated {} bytes of Chinese WAV audio",
+    chinese_audio.len()
+  );
 
   Ok(())
 }
@@ -231,9 +227,12 @@ async fn demo_voice_cloning(client: &StepFunSpecializedClient) -> Result<()> {
   println!("Cloning voice from audio sample...");
   let cloned_voice = client.clone_voice(request).await?;
   println!("✅ Created voice clone with ID: {}", cloned_voice.id);
-  
+
   if let Some(sample_audio) = cloned_voice.sample_audio {
-    println!("   Sample audio: {} characters (base64)", sample_audio.len());
+    println!(
+      "   Sample audio: {} characters (base64)",
+      sample_audio.len()
+    );
   }
 
   if cloned_voice.duplicated.unwrap_or(false) {
@@ -246,20 +245,30 @@ async fn demo_voice_cloning(client: &StepFunSpecializedClient) -> Result<()> {
 /// Demo voice management and listing
 async fn demo_voice_management(client: &StepFunSpecializedClient) -> Result<()> {
   println!("Listing available voices...");
-  let voices = client.list_voices(Some(10), Some("desc".to_string()), None, None).await?;
+  let voices = client
+    .list_voices(Some(10), Some("desc".to_string()), None, None)
+    .await?;
 
-  println!("✅ Found {} voices (has_more: {})", 
-    voices.data.len(), voices.has_more);
+  println!(
+    "✅ Found {} voices (has_more: {})",
+    voices.data.len(),
+    voices.has_more
+  );
 
   for (i, voice) in voices.data.iter().enumerate() {
-    println!("   {}. Voice ID: {} (File ID: {}, Created: {})",
-      i + 1, voice.id, voice.file_id, voice.created_at);
+    println!(
+      "   {}. Voice ID: {} (File ID: {}, Created: {})",
+      i + 1,
+      voice.id,
+      voice.file_id,
+      voice.created_at
+    );
   }
 
   if let Some(first_id) = &voices.first_id {
     println!("   First voice ID: {}", first_id);
   }
-  
+
   if let Some(last_id) = &voices.last_id {
     println!("   Last voice ID: {}", last_id);
   }
@@ -273,7 +282,7 @@ async fn demo_convenience_methods() -> std::result::Result<(), Box<dyn std::erro
   println!("🚀 Demo: AgentFlow Convenience Methods");
 
   let _api_key = std::env::var("STEPFUN_API_KEY")?;
-  
+
   // Use convenience methods from AgentFlow
   let image_request = AgentFlow::text2image("step-1x-medium", "A serene lake at dawn")
     .size("1024x1024")
@@ -288,8 +297,14 @@ async fn demo_convenience_methods() -> std::result::Result<(), Box<dyn std::erro
     .build();
 
   println!("✅ Built requests using AgentFlow convenience methods:");
-  println!("   Image request: {} -> {}", image_request.model, image_request.prompt);
-  println!("   TTS request: {} -> '{}'", tts_request.model, tts_request.input);
+  println!(
+    "   Image request: {} -> {}",
+    image_request.model, image_request.prompt
+  );
+  println!(
+    "   TTS request: {} -> '{}'",
+    tts_request.model, tts_request.input
+  );
 
   Ok(())
 }
@@ -310,7 +325,7 @@ async fn demo_error_handling() -> std::result::Result<(), Box<dyn std::error::Er
     response_format: Some("invalid-format".to_string()),
     n: Some(0), // Invalid: must be 1 for StepFun
     seed: None,
-    steps: Some(200), // Invalid: max is 100
+    steps: Some(200),      // Invalid: max is 100
     cfg_scale: Some(15.0), // Invalid: max is 10
     style_reference: None,
   };

@@ -9,10 +9,11 @@ async fn main() {
   dotenvy::from_filename("examples/.env").ok();
 
   // Try to validate the main config first, fall back to demo
-  let config_file = if std::path::Path::new("examples/models.yml").exists() && 
-                       std::env::var("OPENAI_API_KEY").is_ok() &&
-                       std::env::var("ANTHROPIC_API_KEY").is_ok() &&
-                       std::env::var("GOOGLE_API_KEY").is_ok() {
+  let config_file = if std::path::Path::new("examples/models.yml").exists()
+    && std::env::var("OPENAI_API_KEY").is_ok()
+    && std::env::var("ANTHROPIC_API_KEY").is_ok()
+    && std::env::var("GOOGLE_API_KEY").is_ok()
+  {
     println!("Using production configuration (all API keys present)...");
     "examples/models.yml"
   } else {
@@ -37,12 +38,12 @@ async fn main() {
   // Also demonstrate registry validation
   println!("\n=== Registry Provider Validation ===");
 
-  use agentflow_llm::{AgentFlow, registry::ModelRegistry};
+  use agentflow_llm::{registry::ModelRegistry, AgentFlow};
 
   match AgentFlow::init_with_config(config_file).await {
     Ok(()) => {
       let registry = ModelRegistry::global();
-      
+
       println!("Available models:");
       for model in registry.list_models() {
         println!("  - {}", model);
@@ -52,9 +53,11 @@ async fn main() {
       match registry.validate_all_providers().await {
         Ok(validation_report) => {
           println!("{}", validation_report.summary());
-          
+
           if !validation_report.is_all_valid() {
-            println!("⚠️ Some providers failed validation. Check your API keys and network connectivity.");
+            println!(
+              "⚠️ Some providers failed validation. Check your API keys and network connectivity."
+            );
             std::process::exit(1);
           } else {
             println!("🎉 All providers are working correctly!");

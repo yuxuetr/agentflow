@@ -1,0 +1,196 @@
+# OpenAI Multimodal Processing Chain
+name: "OpenAI Multimodal Analysis Chain"
+version: "1.0.0"
+description: "Multi-step workflow using different OpenAI models for analysis and content generation"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-15T00:00:00Z"
+  tags: ["openai", "multimodal", "analysis", "chain"]
+  category: "advanced"
+
+config:
+  timeout: "10m"
+  max_retries: 3
+  output_format: "markdown"
+  log_level: "info"
+  parallel_limit: 2
+  batch_size: 3
+
+inputs:
+  topic:
+    type: "string"
+    required: true
+    description: "Topic to analyze and generate content about"
+    example: "The impact of AI on creative industries"
+  
+  analysis_depth:
+    type: "string"
+    required: false
+    default: "detailed"
+    enum: ["basic", "detailed", "comprehensive"]
+    description: "Depth of analysis to perform"
+
+  output_style:
+    type: "string"
+    required: false
+    default: "professional"
+    enum: ["casual", "professional", "academic", "creative"]
+    description: "Writing style for the final output"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "sequential"
+  nodes:
+    # Step 1: Initial research and analysis
+    - name: "research_topic"
+      type: "llm"
+      description: "Research the given topic comprehensively"
+      config:
+        model: "gpt-4o"
+        prompt: |
+          Research and analyze the topic: "{{ inputs.topic }}"
+          
+          Please provide:
+          1. Key concepts and current understanding
+          2. Recent developments and trends
+          3. Different perspectives and viewpoints
+          4. Important challenges and opportunities
+          5. Notable examples and case studies
+          
+          Analysis depth: {{ inputs.analysis_depth }}
+          
+          Structure your response with clear sections and be thorough but concise.
+        system: "You are an expert researcher with deep knowledge across multiple domains. Provide accurate, up-to-date, and balanced analysis."
+        temperature: 0.3
+        max_tokens: 2000
+        timeout: "3m"
+      outputs:
+        research_data: "$.response"
+
+    # Step 2: Critical analysis using different model
+    - name: "analyze_insights"
+      type: "llm"
+      depends_on: ["research_topic"]
+      description: "Perform critical analysis of the research findings"
+      config:
+        model: "gpt-4"
+        prompt: |
+          Based on this research about "{{ inputs.topic }}":
+          
+          {{ research_topic_response }}
+          
+          Please provide critical analysis including:
+          1. Strengths and weaknesses of current approaches
+          2. Gaps in knowledge or implementation
+          3. Potential future directions
+          4. Risk assessment and mitigation strategies
+          5. Cross-domain implications and connections
+          
+          Be analytical, objective, and provide actionable insights.
+        system: "You are a critical analyst who examines information from multiple angles, identifies patterns, and provides strategic insights."
+        temperature: 0.4
+        max_tokens: 1500
+        timeout: "3m"
+      outputs:
+        analysis: "$.response"
+
+    # Step 3: Generate creative content based on analysis
+    - name: "create_content"
+      type: "llm"
+      depends_on: ["research_topic", "analyze_insights"]
+      description: "Generate engaging content based on research and analysis"
+      config:
+        model: "gpt-3.5-turbo"
+        prompt: |
+          Create engaging content about "{{ inputs.topic }}" using this research and analysis:
+          
+          RESEARCH:
+          {{ research_topic_response }}
+          
+          ANALYSIS:
+          {{ analyze_insights_response }}
+          
+          Please create content that is:
+          - Written in {{ inputs.output_style }} style
+          - Engaging and accessible to a general audience
+          - Incorporating key insights from the analysis
+          - Including concrete examples and actionable takeaways
+          - Well-structured with clear sections
+          
+          Format as a comprehensive article or report.
+        system: "You are a skilled content creator who transforms research and analysis into engaging, accessible content while maintaining accuracy and depth."
+        temperature: 0.6
+        max_tokens: 2000
+        timeout: "3m"
+      outputs:
+        content: "$.response"
+
+    # Step 4: Create final structured summary
+    - name: "create_summary"
+      type: "template"
+      depends_on: ["research_topic", "analyze_insights", "create_content"]
+      description: "Create a structured summary document"
+      config:
+        template: |
+          # {{ inputs.topic }} - Comprehensive Analysis Report
+          
+          **Generated on:** {{ now() }}
+          **Analysis Depth:** {{ inputs.analysis_depth }}
+          **Output Style:** {{ inputs.output_style }}
+          
+          ## Executive Summary
+          
+          This report provides a comprehensive analysis of {{ inputs.topic }}, including current research, critical insights, and strategic recommendations.
+          
+          ## Research Findings
+          
+          {{ research_topic_response }}
+          
+          ## Critical Analysis
+          
+          {{ analyze_insights_response }}
+          
+          ## Content and Recommendations
+          
+          {{ create_content_response }}
+          
+          ---
+          
+          *Report generated by AgentFlow using OpenAI models*
+          *Models used: gpt-4o (research), gpt-4 (analysis), gpt-3.5-turbo (content)*
+        format: "markdown"
+      outputs:
+        summary: "$.rendered"
+
+outputs:
+  research_report:
+    source: "{{ research_topic_response }}"
+    format: "text"
+    file: "output/research_findings.txt"
+  
+  analysis_report:
+    source: "{{ analyze_insights_response }}"
+    format: "text"
+    file: "output/critical_analysis.txt"
+  
+  content_report:
+    source: "{{ create_content_response }}"
+    format: "text"
+    file: "output/generated_content.txt"
+  
+  final_summary:
+    source: "{{ create_summary_summary }}"
+    format: "markdown"
+    file: "output/{{ inputs.topic | slugify }}_complete_report.md"
+  
+  execution_metrics:
+    source: "$"
+    format: "json"
+    file: "output/execution_metrics.json"
+    include:
+      - total_execution_time
+      - model_usage
+      - token_consumption

@@ -1,8 +1,8 @@
 //! # Multimodal LLM Demo
-//! 
-//! This example demonstrates how to use multimodal LLMs (text + image) 
+//!
+//! This example demonstrates how to use multimodal LLMs (text + image)
 //! with AgentFlow LLM integration, specifically using StepFun's vision model.
-//! 
+//!
 //! Based on the StepFun API example for step-1o-turbo-vision model.
 
 use agentflow_llm::{AgentFlow, MultimodalMessage, Result};
@@ -43,8 +43,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 async fn demo_simple_multimodal() -> Result<String> {
   let response = AgentFlow::model("step-1o-turbo-vision")
     .text_and_image(
-      "Describe this image in elegant language", 
-      "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp"
+      "Describe this image in elegant language",
+      "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp",
     )
     .temperature(0.7)
     .execute()
@@ -65,7 +65,7 @@ async fn demo_complex_multimodal() -> Result<String> {
     .add_text("Describe this image in elegant language")
     .add_image_url_with_detail(
       "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp",
-      "high" // Request high detail analysis
+      "high", // Request high detail analysis
     )
     .build();
 
@@ -99,7 +99,7 @@ async fn demo_multiple_images() -> Result<String> {
 
 /// Demo 4: Using multimodal in agent flows
 async fn demo_agent_flow_multimodal() -> Result<String> {
-  use agentflow_core::{AsyncFlow, AsyncNode, SharedState, AgentFlowError};
+  use agentflow_core::{AgentFlowError, AsyncFlow, AsyncNode, SharedState};
   use async_trait::async_trait;
   use serde_json::Value;
 
@@ -133,14 +133,17 @@ async fn demo_agent_flow_multimodal() -> Result<String> {
         .get("image_url")
         .and_then(|v| v.as_str())
         .unwrap_or("https://www.stepfun.com/assets/section-1-CTe4nZiO.webp");
-      
+
       let user_prompt = shared
         .get("user_prompt")
         .and_then(|v| v.as_str())
         .unwrap_or("Analyze this image");
 
-      println!("🔍 [{}] Preparing multimodal request: {}", self.node_id, user_prompt);
-      
+      println!(
+        "🔍 [{}] Preparing multimodal request: {}",
+        self.node_id, user_prompt
+      );
+
       Ok(serde_json::json!({
         "image_url": image_url,
         "prompt": user_prompt
@@ -188,10 +191,7 @@ async fn demo_agent_flow_multimodal() -> Result<String> {
     ) -> agentflow_core::Result<Option<String>> {
       // Store the response in shared state
       if let Some(response) = exec_result.get("response") {
-        shared.insert(
-          format!("{}_response", self.node_id),
-          response.clone(),
-        );
+        shared.insert(format!("{}_response", self.node_id), response.clone());
         shared.insert("last_multimodal_result".to_string(), exec_result);
       }
 
@@ -217,7 +217,7 @@ async fn demo_agent_flow_multimodal() -> Result<String> {
 
   // Execute the flow
   let result = flow.run_async(&shared).await?;
-  
+
   // Extract the response
   let response = shared
     .get("multimodal_analyzer_response")
@@ -233,7 +233,7 @@ async fn demo_agent_flow_multimodal() -> Result<String> {
 async fn demo_base64_image() -> Result<String> {
   // This would be used for local images converted to base64
   let base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAAAAA..."; // Truncated for example
-  
+
   let message = MultimodalMessage::user()
     .add_text("What do you see in this image?")
     .add_image_data(base64_image, "image/jpeg")
@@ -255,7 +255,7 @@ async fn demo_streaming_multimodal() -> Result<String> {
   let message = MultimodalMessage::text_and_image(
     "user",
     "Provide a detailed analysis of this image",
-    "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp"
+    "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp",
   );
 
   let mut stream = AgentFlow::model("step-1o-turbo-vision")
@@ -270,7 +270,7 @@ async fn demo_streaming_multimodal() -> Result<String> {
   while let Some(chunk) = stream.next_chunk().await? {
     print!("{}", chunk.content);
     full_response.push_str(&chunk.content);
-    
+
     if chunk.is_final {
       break;
     }

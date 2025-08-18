@@ -11,7 +11,7 @@ fn main() {
   // Check all relevant environment variables
   let vars = [
     "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY", 
+    "ANTHROPIC_API_KEY",
     "CLAUDE_API_KEY",
     "GOOGLE_API_KEY",
     "GEMINI_API_KEY",
@@ -23,7 +23,7 @@ fn main() {
     match env::var(var) {
       Ok(value) => {
         let masked = if value.len() > 10 {
-          format!("{}...{}", &value[..5], &value[value.len()-5..])
+          format!("{}...{}", &value[..5], &value[value.len() - 5..])
         } else {
           "***masked***".to_string()
         };

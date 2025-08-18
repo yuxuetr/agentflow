@@ -1,6 +1,6 @@
 use crate::{
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
-  providers::{LLMProvider, ProviderRequest, ProviderResponse, ContentType},
+  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   LLMError, Result,
 };
 use async_trait::async_trait;
@@ -38,7 +38,10 @@ impl OpenAIProvider {
   fn build_headers(&self) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("Authorization", format!("Bearer {}", self.api_key).parse().unwrap());
+    headers.insert(
+      "Authorization",
+      format!("Bearer {}", self.api_key).parse().unwrap(),
+    );
     headers
   }
 
@@ -92,7 +95,7 @@ impl LLMProvider for OpenAIProvider {
     }
 
     let openai_response: OpenAIResponse = response.json().await?;
-    
+
     // Handle both string and array content formats
     let content_text = if let Some(first_choice) = openai_response.choices.first() {
       match &first_choice.message.content {
@@ -100,11 +103,13 @@ impl LLMProvider for OpenAIProvider {
         Some(serde_json::Value::Array(_)) => {
           // For multimodal responses that return structured content,
           // extract text parts or convert to string representation
-          first_choice.message.content
+          first_choice
+            .message
+            .content
             .as_ref()
             .map(|v| v.to_string())
             .unwrap_or_default()
-        },
+        }
         _ => String::new(),
       }
     } else {
@@ -114,11 +119,14 @@ impl LLMProvider for OpenAIProvider {
     // Convert to ContentType - OpenAI currently only returns text
     let content = ContentType::Text(content_text);
 
-    let usage = openai_response.usage.clone().map(|u| crate::providers::TokenUsage {
-      prompt_tokens: Some(u.prompt_tokens),
-      completion_tokens: Some(u.completion_tokens),
-      total_tokens: Some(u.total_tokens),
-    });
+    let usage = openai_response
+      .usage
+      .clone()
+      .map(|u| crate::providers::TokenUsage {
+        prompt_tokens: Some(u.prompt_tokens),
+        completion_tokens: Some(u.completion_tokens),
+        total_tokens: Some(u.total_tokens),
+      });
 
     Ok(ProviderResponse {
       content,
@@ -127,7 +135,10 @@ impl LLMProvider for OpenAIProvider {
     })
   }
 
-  async fn execute_streaming(&self, request: &ProviderRequest) -> Result<Box<dyn StreamingResponse>> {
+  async fn execute_streaming(
+    &self,
+    request: &ProviderRequest,
+  ) -> Result<Box<dyn StreamingResponse>> {
     if !request.stream {
       return Err(LLMError::InternalError {
         message: "Streaming not enabled in request".to_string(),
@@ -160,7 +171,7 @@ impl LLMProvider for OpenAIProvider {
   async fn validate_config(&self) -> Result<()> {
     // Simple health check - try to list models
     let url = format!("{}/models", self.base_url);
-    
+
     let response = self
       .client
       .get(&url)
@@ -301,7 +312,7 @@ impl OpenAIStreamingResponse {
             serde_json::Value::String(text) => text.clone(),
             _ => content.to_string(), // Convert other types to string
           };
-          
+
           return Some(StreamChunk {
             content: content_text,
             is_final: choice.finish_reason.is_some(),
@@ -378,7 +389,7 @@ mod tests {
   #[test]
   fn test_build_request_body() {
     let provider = OpenAIProvider::new("test-key", None).unwrap();
-    
+
     let mut params = std::collections::HashMap::new();
     params.insert("temperature".to_string(), json!(0.7));
     params.insert("max_tokens".to_string(), json!(100));

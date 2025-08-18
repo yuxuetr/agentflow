@@ -8,7 +8,7 @@ async fn main() -> Result<(), LLMError> {
   // Initialize logging
   println!("🔧 Initializing logging system...");
   AgentFlow::init_logging().ok();
-  
+
   // Initialize with built-in config (no API keys required for demo)
   println!("📋 Loading built-in configuration...");
   AgentFlow::init_with_builtin_config().await?;
@@ -18,7 +18,7 @@ async fn main() -> Result<(), LLMError> {
   // Demo 1: Logging Features
   println!("📝 Demo 1: Comprehensive Logging");
   println!("   ✅ Request metadata (model, prompt length, temperature)");
-  println!("   ✅ Response timing and statistics");  
+  println!("   ✅ Response timing and statistics");
   println!("   ✅ JSON validation when using JSON mode");
   println!("   ✅ Error details with context");
   println!("   ✅ Debug-level content logging (with RUST_LOG=debug)");
@@ -102,7 +102,7 @@ async fn main() -> Result<(), LLMError> {
   println!("     .temperature(0.3)  // Lower temp for structured output");
   println!("     .enable_logging(true)");
   println!("     .execute().await?;");
-  println!(); 
+  println!();
   println!("   // Parse the JSON response");
   println!("   let parsed: FeedbackAnalysis = serde_json::from_str(&analysis)?;");
   println!("   ```");

@@ -1,9 +1,9 @@
 //! # Granular Model Types Demo
-//! 
+//!
 //! This example demonstrates the new granular model type system that provides
 //! specific input/output classifications for different model capabilities.
 
-use agentflow_llm::{AgentFlow, ModelType, InputType, OutputType, MultimodalMessage, Result};
+use agentflow_llm::{AgentFlow, InputType, ModelType, MultimodalMessage, OutputType, Result};
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +19,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
   println!();
 
   // Demo 2: Image understanding model
-  println!("🖼️  Demo 2: Image understanding model (step-1o-turbo-vision)"); 
+  println!("🖼️  Demo 2: Image understanding model (step-1o-turbo-vision)");
   demo_image_understanding().await?;
   println!();
 
@@ -50,8 +50,11 @@ async fn demo_text_model() -> Result<String> {
     .execute()
     .await?;
 
-  println!("Text model response: {}", response.chars().take(100).collect::<String>());
-  
+  println!(
+    "Text model response: {}",
+    response.chars().take(100).collect::<String>()
+  );
+
   Ok(response)
 }
 
@@ -61,7 +64,7 @@ async fn demo_image_understanding() -> Result<String> {
   let message = MultimodalMessage::text_and_image(
     "user",
     "What architectural elements can you identify in this image?",
-    "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp"
+    "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp",
   );
 
   let response = AgentFlow::model("step-1o-turbo-vision")
@@ -70,8 +73,11 @@ async fn demo_image_understanding() -> Result<String> {
     .execute()
     .await?;
 
-  println!("Vision model response: {}", response.chars().take(100).collect::<String>());
-  
+  println!(
+    "Vision model response: {}",
+    response.chars().take(100).collect::<String>()
+  );
+
   Ok(response)
 }
 
@@ -93,7 +99,7 @@ async fn demo_capability_inspection() -> std::result::Result<(), Box<dyn std::er
     if let Ok(config) = registry.get_model(model_name) {
       let granular_type = config.granular_type();
       let capabilities = config.get_capabilities();
-      
+
       println!("🤖 {} ({}):", description, model_name);
       println!("   Type: {:?}", granular_type);
       println!("   Description: {}", granular_type.description());
@@ -101,13 +107,14 @@ async fn demo_capability_inspection() -> std::result::Result<(), Box<dyn std::er
       println!("   Supports tools: {}", capabilities.supports_tools);
       println!("   Is multimodal: {}", capabilities.is_multimodal());
       println!("   Primary output: {:?}", capabilities.expected_output());
-      
-      let supported_inputs: Vec<String> = granular_type.supported_inputs()
+
+      let supported_inputs: Vec<String> = granular_type
+        .supported_inputs()
         .iter()
         .map(|input| format!("{:?}", input))
         .collect();
       println!("   Supported inputs: [{}]", supported_inputs.join(", "));
-      
+
       let use_cases = granular_type.use_cases();
       println!("   Use cases: {}", use_cases.join(", "));
       println!();
@@ -152,7 +159,7 @@ async fn demo_request_validation() -> std::result::Result<(), Box<dyn std::error
   // Test 4: Streaming to non-streaming model
   if let Ok(config) = registry.get_model("step-tts-mini") {
     match config.validate_request(true, false, false, false, true, false) {
-      Ok(_) => println!("❌ Streaming to TTS model: VALID (unexpected)"),  
+      Ok(_) => println!("❌ Streaming to TTS model: VALID (unexpected)"),
       Err(e) => println!("✅ Streaming to TTS model: INVALID ({})", e),
     }
   }
@@ -166,7 +173,7 @@ async fn demo_model_comparison() -> std::result::Result<(), Box<dyn std::error::
 
   let types_to_compare = vec![
     ModelType::Text,
-    ModelType::ImageUnderstand, 
+    ModelType::ImageUnderstand,
     ModelType::Text2Image,
     ModelType::Tts,
     ModelType::Asr,
@@ -182,13 +189,15 @@ async fn demo_model_comparison() -> std::result::Result<(), Box<dyn std::error::
     let supports_streaming = model_type.supports_streaming();
     let supports_tools = model_type.supports_tools();
     let primary_output = model_type.primary_output();
-    
-    let input_types: Vec<String> = model_type.supported_inputs()
+
+    let input_types: Vec<String> = model_type
+      .supported_inputs()
       .iter()
       .map(|t| format!("{:?}", t))
       .collect();
 
-    println!("| {:?} | {} | {} | {} | {} | {:?} |", 
+    println!(
+      "| {:?} | {} | {} | {} | {} | {:?} |",
       model_type,
       if is_multimodal { "✅" } else { "❌" },
       if supports_streaming { "✅" } else { "❌" },
@@ -199,7 +208,11 @@ async fn demo_model_comparison() -> std::result::Result<(), Box<dyn std::error::
   }
 
   println!("\nDetailed capabilities:");
-  for model_type in &[ModelType::ImageUnderstand, ModelType::Text2Image, ModelType::Tts] {
+  for model_type in &[
+    ModelType::ImageUnderstand,
+    ModelType::Text2Image,
+    ModelType::Tts,
+  ] {
     println!("\n🎯 {:?}:", model_type);
     println!("   Description: {}", model_type.description());
     println!("   Use cases: {}", model_type.use_cases().join(", "));
@@ -217,7 +230,7 @@ async fn demo_error_handling() -> std::result::Result<(), Box<dyn std::error::Er
   let message = MultimodalMessage::text_and_image(
     "user",
     "Describe this image",
-    "https://example.com/image.jpg"
+    "https://example.com/image.jpg",
   );
 
   match AgentFlow::model("step-1-8k") // Text-only model
