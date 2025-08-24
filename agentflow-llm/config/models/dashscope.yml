@@ -40,7 +40,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 4096
+    max_tokens: 1048576  # 1M tokens context window
     frequency_penalty: null
     stop: null
     n: null
@@ -55,7 +55,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 4096
+    max_tokens: 1048576  # 1M tokens context window
     frequency_penalty: null
     stop: null
     n: null
@@ -835,7 +835,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 4096
+    max_tokens: 1048576  # 1M tokens context window
     frequency_penalty: null
     stop: null
     n: null

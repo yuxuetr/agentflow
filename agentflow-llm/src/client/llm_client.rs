@@ -329,7 +329,7 @@ impl LLMClient {
       );
     }
 
-    if let Some(tokens) = model_config.max_tokens.or(self.max_tokens) {
+    if let Some(tokens) = self.max_tokens.or(model_config.max_tokens) {
       params.insert(
         "max_tokens".to_string(),
         Value::Number(serde_json::Number::from(tokens)),

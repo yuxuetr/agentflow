@@ -1,0 +1,310 @@
+# Complete PDF Research Paper Analysis Workflow
+name: "Complete PDF Research Paper Analysis"
+version: "1.0.0"
+description: "Comprehensive analysis of PDF research papers including parsing, summarization, key insights extraction, and mind map generation"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2025-08-19T00:00:00Z"
+  tags: ["dashscope", "stepfun", "pdf", "research", "analysis", "document-parsing"]
+  category: "research-tools"
+
+config:
+  timeout: "30m"
+  max_retries: 3
+  output_format: "json"
+  log_level: "info"
+
+inputs:
+  pdf_path:
+    type: "string"
+    required: true
+    description: "Path to the PDF research paper to analyze"
+    example: "./research_papers/quantum_computing_2024.pdf"
+
+  analysis_type:
+    type: "string"
+    required: false
+    default: "comprehensive"
+    enum: ["summary_only", "insights_only", "comprehensive", "with_translation"]
+    description: "Type of analysis to perform"
+
+  target_language:
+    type: "string"
+    required: false
+    default: "en"
+    enum: ["en", "zh", "es", "fr", "de", "ja", "ko"]
+    description: "Target language for translation (if requested)"
+
+  model:
+    type: "string"
+    required: false
+    default: "qwen-turbo"
+    enum: ["qwen-turbo", "qwen-turbo-latest", "qwen-plus", "qwen-plus-latest", "qwen-max", "qwen-max-latest", "step-1-256k", "step-2-16k", "step-2-mini", "step-3"]
+    description: "Model to use for analysis (DashScope or StepFun)"
+
+  generate_mind_map:
+    type: "boolean"
+    required: false
+    default: true
+    description: "Whether to generate a mind map visualization"
+
+environment:
+  STEP_API_KEY: "required"
+  DASHSCOPE_API_KEY: "required"
+
+workflow:
+  type: "sequential"
+  nodes:
+    # Step 1: Upload PDF and parse content using StepFun Document Parser
+    - name: "upload_and_parse_pdf"
+      type: "http"
+      description: "Upload PDF to StepFun and extract text content"
+      config:
+        method: "POST"
+        url: "https://api.stepfun.com/v1/files"
+        headers:
+          Authorization: "Bearer {{ env.STEP_API_KEY }}"
+        multipart:
+          file:
+            path: "{{ inputs.pdf_path }}"
+            filename: "research_paper.pdf"
+          purpose: "file-extract"
+        timeout: "5m"
+      outputs:
+        file_id: "$.id"
+        filename: "$.filename"
+        bytes: "$.bytes"
+        status: "$.status"
+
+    # Step 2: Wait for processing and retrieve file content
+    - name: "retrieve_pdf_content"
+      type: "http"
+      description: "Retrieve parsed PDF content from StepFun"
+      depends_on: ["upload_and_parse_pdf"]
+      config:
+        method: "GET"
+        url: "https://api.stepfun.com/v1/files/{{ upload_and_parse_pdf.file_id }}/content"
+        headers:
+          Authorization: "Bearer {{ env.STEP_API_KEY }}"
+        retry:
+          max_attempts: 10
+          delay: "30s"
+          on_status: [202]  # Still processing
+        timeout: "10m"
+      outputs:
+        content: "$.content"
+        token_count: "$.token_count"
+
+    # Step 3: Generate structured summary
+    - name: "generate_summary"
+      type: "llm"
+      description: "Generate comprehensive summary of the research paper"
+      depends_on: ["retrieve_pdf_content"]
+      config:
+        model: "{{ inputs.model }}"
+        temperature: 0.3
+        max_tokens: 2000
+        system: |
+          You are an expert academic researcher. Analyze research papers and create comprehensive, well-structured summaries.
+        prompt: |
+          Please analyze this research paper and provide a comprehensive summary following this structure:
+
+          # Research Paper Summary
+
+          ## Title and Authors
+          [Extract paper title and author information]
+
+          ## Abstract Summary
+          [Summarize the abstract in 2-3 sentences]
+
+          ## Research Problem
+          [What problem does this paper address?]
+
+          ## Methodology
+          [Brief description of research methods used]
+
+          ## Key Findings
+          [Main results and discoveries, numbered list]
+
+          ## Conclusions
+          [Authors' conclusions and implications]
+
+          ## Significance
+          [Why is this research important?]
+
+          ## Limitations
+          [Any limitations mentioned by authors]
+
+          Research Paper Content:
+          {{ retrieve_pdf_content.content }}
+        timeout: "5m"
+      outputs:
+        summary: "$.response"
+
+    # Step 4: Extract key insights and metadata
+    - name: "extract_key_insights"
+      type: "llm"
+      description: "Extract structured insights from the research paper"
+      depends_on: ["retrieve_pdf_content"]
+      config:
+        model: "{{ inputs.model }}"
+        temperature: 0.2
+        max_tokens: 1500
+        system: |
+          You are a research analyst specializing in extracting structured insights from academic papers.
+          Return your response as valid JSON following the specified schema.
+        prompt: |
+          Analyze this research paper and extract key insights in the following JSON format:
+
+          {
+            "title": "exact paper title",
+            "authors": ["list of authors"],
+            "publication_year": "year if available",
+            "field_of_study": "main research domain",
+            "research_type": "theoretical/empirical/experimental/survey/review",
+            "methodology": ["list of methods used"],
+            "key_contributions": ["main contributions"],
+            "novel_concepts": ["new concepts introduced"],
+            "datasets_used": ["datasets mentioned"],
+            "evaluation_metrics": ["metrics used for evaluation"],
+            "future_work": ["suggested future research directions"],
+            "citations_mentioned": number_of_references,
+            "research_gap": "what gap does this fill",
+            "impact_potential": "high/medium/low",
+            "reproducibility": "high/medium/low/unclear"
+          }
+
+          Research Paper Content:
+          {{ retrieve_pdf_content.content }}
+        timeout: "5m"
+      outputs:
+        insights: "$.response"
+
+    # Step 5: Generate mind map (conditional)
+    - name: "generate_mind_map"
+      type: "llm"
+      description: "Generate Mermaid mind map visualization"
+      depends_on: ["extract_key_insights"]
+      condition: "{{ inputs.generate_mind_map }}"
+      config:
+        model: "{{ inputs.model }}"
+        temperature: 0.4
+        max_tokens: 1000
+        system: |
+          You are a visualization expert. Create clear, hierarchical mind maps using Mermaid syntax.
+        prompt: |
+          Create a Mermaid mind map diagram for this research paper based on the extracted insights.
+          Focus on the main concepts, methodology, findings, and relationships.
+
+          Use this structure:
+          ```mermaid
+          mindmap
+            root)Research Paper Title(
+              Problem
+                [specific problem areas]
+              Method  
+                [methodological approaches]
+              Findings
+                [key results]
+              Impact
+                [significance and applications]
+          ```
+
+          Paper Insights:
+          {{ extract_key_insights.insights }}
+        timeout: "3m"
+      outputs:
+        mind_map: "$.response"
+
+    # Step 6: Generate translation (conditional)  
+    - name: "translate_summary"
+      type: "llm"
+      description: "Translate summary to target language"
+      depends_on: ["generate_summary"]
+      condition: "{{ inputs.analysis_type == 'with_translation' and inputs.target_language != 'en' }}"
+      config:
+        model: "{{ inputs.model }}"
+        temperature: 0.1
+        max_tokens: 2500
+        system: |
+          You are a professional academic translator. Maintain technical accuracy and academic tone.
+        prompt: |
+          Please translate this research paper summary to {{ inputs.target_language }}.
+          Maintain all technical terms and academic formatting. If technical terms don't have direct translations, keep them in English with brief explanations.
+
+          Original Summary:
+          {{ generate_summary.summary }}
+        timeout: "5m"
+      outputs:
+        translated_summary: "$.response"
+
+    # Step 7: Create comprehensive analysis report
+    - name: "create_analysis_report"
+      type: "template"
+      description: "Compile complete analysis report with all results"
+      depends_on: ["generate_summary", "extract_key_insights", "generate_mind_map", "translate_summary"]
+      config:
+        template: |
+          {
+            "analysis_metadata": {
+              "pdf_filename": "{{ upload_and_parse_pdf.filename }}",
+              "pdf_size_bytes": {{ upload_and_parse_pdf.bytes }},
+              "token_count": {{ retrieve_pdf_content.token_count }},
+              "analysis_type": "{{ inputs.analysis_type }}",
+              "model_used": "{{ inputs.model }}",
+              "generated_at": "{{ now() }}",
+              "target_language": "{{ inputs.target_language }}"
+            },
+            "summary": {{ generate_summary.summary | tojson }},
+            "key_insights": {{ extract_key_insights.insights | fromjson | tojson }},
+            {% if generate_mind_map %}
+            "mind_map": {{ generate_mind_map.mind_map | tojson }},
+            {% endif %}
+            {% if translate_summary %}
+            "translated_summary": {{ translate_summary.translated_summary | tojson }},
+            {% endif %}
+            "processing_stats": {
+              "total_processing_time": "{{ execution_time }}",
+              "pdf_parsing_successful": true,
+              "summary_generated": true,
+              "insights_extracted": true,
+              "mind_map_created": {{ inputs.generate_mind_map }},
+              "translation_completed": {{ inputs.analysis_type == 'with_translation' }}
+            }
+          }
+      outputs:
+        complete_report: "$.rendered"
+
+outputs:
+  summary:
+    source: "{{ generate_summary.summary }}"
+    format: "markdown"
+    file: "output/summary.md"
+    
+  key_insights:
+    source: "{{ extract_key_insights.insights | fromjson }}"
+    format: "json"
+    file: "output/key_insights.json"
+  
+  mind_map:
+    source: "{{ generate_mind_map.mind_map }}"
+    format: "text" 
+    file: "output/mind_map.mermaid"
+    condition: "{{ inputs.generate_mind_map }}"
+  
+  translated_summary:
+    source: "{{ translate_summary.translated_summary }}"
+    format: "markdown"
+    file: "output/summary_{{ inputs.target_language }}.md"
+    condition: "{{ inputs.analysis_type == 'with_translation' }}"
+  
+  complete_analysis:
+    source: "{{ create_analysis_report.complete_report | fromjson }}"
+    format: "json"
+    file: "output/complete_analysis.json"
+  
+  execution_report:
+    source: "$"
+    format: "json"
+    file: "output/execution_report.json"

@@ -1,5 +1,11 @@
 [workspace]
-members = ["agentflow-core", "agentflow-llm", "agentflow-cli"]
+members = [
+  "agentflow-core", 
+  "agentflow-llm", 
+  "agentflow-cli",
+  "agentflow-agents",
+  "agentflow-agents/agents/paper_research_analyzer"
+]
 resolver = "2"
 
 [package]
@@ -25,6 +31,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [[example]]
 name = "simple_agent_llm_flow"
@@ -37,6 +45,10 @@ path = "examples/multimodal_agent_flow.rs"
 [[example]]
 name = "recipe_finder_real_llm"
 path = "examples/recipe_finder_real_llm.rs"
+
+[[example]]
+name = "pdf_research_analyzer"
+path = "examples/pdf_research_analyzer.rs"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
