@@ -13,7 +13,7 @@ pub struct AnalyzerConfig {
   pub concurrency_limit: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum AnalysisDepth {
   Summary,      // Generate summary only
   Insights,     // Extract key insights only  

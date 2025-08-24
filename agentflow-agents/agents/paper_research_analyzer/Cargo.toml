@@ -15,6 +15,7 @@ path = "src/main.rs"
 agentflow-core = { path = "../../../agentflow-core" }
 agentflow-llm = { path = "../../../agentflow-llm" }
 agentflow-agents = { path = "../.." }
+agentflow-mcp = { path = "../../../agentflow-mcp" }
 
 # Agent-specific dependencies
 async-trait = "0.1"

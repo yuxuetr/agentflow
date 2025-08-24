@@ -3,6 +3,7 @@ members = [
   "agentflow-core", 
   "agentflow-llm", 
   "agentflow-cli",
+  "agentflow-mcp",
   "agentflow-agents",
   "agentflow-agents/agents/paper_research_analyzer"
 ]

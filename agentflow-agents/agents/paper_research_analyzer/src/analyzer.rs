@@ -130,6 +130,12 @@ impl PDFAnalyzer {
     if has_mindmap {
       let mind_mapper = crate::nodes::MindMapNode::new(self.config.model.clone());
       flow.add_node("mind_mapper".to_string(), Box::new(mind_mapper));
+      
+      // Add MarkMap Visualizer Node for visual output
+      let markmap_visualizer = crate::nodes::MarkMapVisualizerNode::new("png".to_string())
+        .with_auto_open(false)
+        .with_output_dir("./analysis_output");
+      flow.add_node("markmap_visualizer".to_string(), Box::new(markmap_visualizer));
     }
 
     // Translation Node (conditional)
@@ -160,10 +166,12 @@ impl PDFAnalyzer {
     );
     let has_translation = matches!(self.config.analysis_depth, AnalysisDepth::WithTranslation) 
       && self.config.target_language != "en";
+    let has_visual_mindmap = has_mindmap; // Enable visual mind map when mind map is enabled
     
     shared_state.insert("has_insights".to_string(), Value::Bool(has_insights));
     shared_state.insert("has_mindmap".to_string(), Value::Bool(has_mindmap));
     shared_state.insert("has_translation".to_string(), Value::Bool(has_translation));
+    shared_state.insert("has_visual_mindmap".to_string(), Value::Bool(has_visual_mindmap));
   }
 
   /// Batch process multiple PDF papers

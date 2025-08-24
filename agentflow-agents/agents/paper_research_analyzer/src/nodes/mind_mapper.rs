@@ -89,8 +89,12 @@ impl AsyncNode for MindMapNode {
     println!("🧠 MindMapNode: Storing mind map in shared state");
     shared.insert("mind_map".to_string(), exec_result);
     
-    // Determine next node
-    if shared.get("has_translation").and_then(|v| v.as_bool()).unwrap_or(false) {
+    // Check if we should generate visual mind map
+    if shared.get("has_visual_mindmap").and_then(|v| v.as_bool()).unwrap_or(false) {
+      Ok(Some("markmap_visualizer".to_string()))
+    }
+    // Determine next node based on translation
+    else if shared.get("has_translation").and_then(|v| v.as_bool()).unwrap_or(false) {
       Ok(Some("translator".to_string()))
     } else {
       Ok(Some("compiler".to_string()))

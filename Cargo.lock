@@ -38,6 +38,7 @@ version = "0.1.0"
 dependencies = [
  "agentflow-core",
  "agentflow-llm",
+ "agentflow-mcp",
  "async-trait",
  "chrono",
  "reqwest",
@@ -47,6 +48,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "uuid",
 ]
 
 [[package]]
@@ -131,6 +133,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
+]
+
+[[package]]
+name = "agentflow-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
  "uuid",
 ]
 
@@ -1650,6 +1668,7 @@ dependencies = [
  "agentflow-agents",
  "agentflow-core",
  "agentflow-llm",
+ "agentflow-mcp",
  "async-trait",
  "chrono",
  "clap",
