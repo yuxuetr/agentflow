@@ -5,176 +5,231 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/)
 
-> **A modern, async-first Rust framework for building intelligent agent workflows with enterprise-grade robustness and observability.**
+> **A modular, Rust-based AI workflow orchestration platform supporting both code-first and configuration-first paradigms with unified LLM integration.**
 
-AgentFlow is a new Rust framework inspired by PocketFlow's concepts, delivering production-ready workflow orchestration with async concurrency, observability, and reliability patterns.
+AgentFlow delivers production-ready workflow orchestration through a clean, layered architecture that separates concerns while providing seamless integration across all components.
 
-## 🎯 Multiple Ways to Use AgentFlow
+## 🏗️ Architecture Overview
 
-AgentFlow offers flexible deployment options to meet different use cases and preferences:
+AgentFlow follows a modular, layered architecture with clear separation of concerns:
 
-### 📚 **As a Library (Programmatic Integration)**
+```
+                    Application Layer
+    ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+    │  agentflow-cli  │    │ agentflow-agents │    │ agentflow-mcp   │
+    │                 │    │                  │    │                 │  
+    │ • workflow run  │    │ • paper_analyzer │    │ • MCP client    │
+    │ • config run    │    │ • batch_utils    │    │ • tool calls    │
+    │ • llm commands  │    │ • agent traits   │    │ • transport     │
+    └─────────┬───────┘    └─────────┬────────┘    └─────────┬───────┘
+              │                      │                       │
+        Orchestration Layer           │                       │
+        ┌────────────────▼────────────▼───────────────────────┘
+        │     agentflow-config            │    
+        │                                 │    
+        │ • YAML/JSON parsing             │   
+        │ • Template engine               │    
+        │ • Node registry                 │    
+        │ • Configuration compiler        │    
+        └─────────────────┬───────────────┘
+                          │
+        ┌─────────────────▼───────────────┐    ┌─────────────────────┐
+        │        agentflow-core           │    │   agentflow-llm     │
+        │                                 │◄───┤                     │
+        │ • AsyncNode trait               │    │ • OpenAI            │
+        │ • AsyncFlow execution           │    │ • Anthropic         │ 
+        │ • SharedState                   │    │ • Google            │
+        │ • Core error types              │    │ • Moonshot          │
+        │ • Built-in nodes                │    │ • StepFun           │
+        └─────────────────────────────────┘    │ • Ollama (planned)  │
+                          ▲                    │ • vLLM (planned)    │
+                          │                    │ • SGLang (planned)  │
+                          │                    │ • Model registry    │
+                          │                    │ • Multimodal        │
+                          └────────────────────┤ • Streaming         │
+                                               └─────────────────────┘
+                    Foundation Layer
+```
 
-Use AgentFlow crates directly in your Rust applications with complete control and customization:
+## 🎯 Two Approaches, One Platform
+
+### 💻 **Code-First Approach**
+For developers who want full programmatic control:
 
 ```rust
-// Use agentflow-core for workflow orchestration
 use agentflow_core::{AsyncFlow, AsyncNode, SharedState};
-
-// Use agentflow-llm for LLM integration
 use agentflow_llm::AgentFlow;
 
-// Crates are independent - use them separately or together
+// Direct LLM integration
 let response = AgentFlow::model("gpt-4o")
     .prompt("Analyze this data")
     .execute().await?;
+
+// Build workflows programmatically
+let mut flow = AsyncFlow::new(Box::new(llm_node));
+flow.add_node("summarizer".to_string(), Box::new(summary_node));
+let result = flow.run_async(&shared_state).await?;
 ```
 
-**Benefits of Library Usage:**
-- 🔧 **Full Control**: Complete customization of workflow execution
-- ⚡ **Performance**: Zero overhead from CLI parsing
-- 🧩 **Modular**: Use only the crates you need
-- 🔗 **Integration**: Seamless integration with existing Rust applications
-- 📦 **Lightweight**: No dependency on CLI components
+### 📋 **Configuration-First Approach**
+For users who prefer declarative workflows:
 
-### 💻 **Via Command Line (agentflow-cli)**
+```yaml
+# workflow.yml
+version: "2.0"
+metadata:
+  name: "Data Analysis Pipeline"
 
-Access all functionality through the unified `agentflow` command for scripts, automation, and interactive use:
+shared:
+  analysis_result:
+    type: string
+    description: "Analysis output"
+
+nodes:
+  - name: analyzer
+    type: llm
+    model: gpt-4o
+    prompt: "Analyze this data: {{input.data}}"
+    outputs:
+      - target: shared.analysis_result
+      
+  - name: summarizer
+    type: llm
+    depends_on: [analyzer]
+    prompt: "Summarize: {{shared.analysis_result}}"
+```
 
 ```bash
-# Direct LLM interaction
-agentflow llm prompt "Explain quantum computing" --model gpt-4o
-
-# Execute complex workflows from YAML configuration
-agentflow run workflow.yml --input topic="AI Safety"
-
-# Interactive chat sessions
-agentflow llm chat --model claude-3-sonnet
-
-# Batch processing with multimodal inputs
-agentflow run image-analysis.yml --input dir="photos/"
+# Execute via CLI
+agentflow config run workflow.yml --input data="sales data here"
 ```
 
-**Benefits of CLI Usage:**
-- 🚀 **No Programming Required**: Use workflows without writing code
-- 🔄 **Rapid Prototyping**: Quickly test ideas and iterate
-- 📋 **YAML Configuration**: Declarative workflow definitions
-- 🤖 **Automation Ready**: Perfect for CI/CD pipelines and scripts
-- 🎨 **Rich Output**: Progress bars, formatted results, and error messages
+## 🛠️ Modular Crate Architecture
 
-### 🏗️ **Hybrid Approach (Best of Both Worlds)**
-
-Combine library and CLI usage for maximum flexibility:
-
-```rust
-// Rust application with CLI integration
-use std::process::Command;
-
-// Use library for core logic
-let analysis = AgentFlow::model("gpt-4o")
-    .prompt("Analyze this data")
-    .execute().await?;
-
-// Use CLI for complex workflows
-let output = Command::new("agentflow")
-    .args(["run", "post-processing.yml"])
-    .arg("--input")
-    .arg(format!("analysis={}", analysis))
-    .output()?;
-```
-
-## 🛠️ **Crate Independence and Flexibility**
-
-AgentFlow's modular architecture ensures maximum flexibility:
-
-### **agentflow-core** - Workflow Engine
-```toml
-[dependencies]
-agentflow-core = "0.1.0"  # Lightweight workflow orchestration
-```
-- Async workflow execution
-- Node-based processing model
-- Enterprise robustness features
-- Comprehensive observability
-
-### **agentflow-llm** - LLM Integration  
-```toml
-[dependencies]
-agentflow-llm = "0.1.0"  # Multi-provider LLM support
-```
-- Multiple LLM providers (OpenAI, Anthropic, Google, Moonshot, StepFun)
-- Streaming and non-streaming support
-- Multimodal capabilities (text, images, audio)
-- Configuration management
-
-### **agentflow-cli** - Command Line Interface
-```bash
-# Installed as binary, no code dependencies required
-cargo install agentflow-cli
-agentflow --help
-```
-- Unified command-line interface
-- YAML-based workflow configuration
-- File I/O and multimodal processing
-- Interactive and batch modes
-
-### **agentflow** - Complete Suite
-```toml
-[dependencies]
-agentflow = "0.1.0"  # All crates together
-```
-- Convenient meta-crate including all components
-- Single dependency for full functionality
-- Consistent versioning across all crates
-
-## 🚀 Key Features
-
-### ⚡ **Async-First Architecture**
-
-- Built on Tokio runtime for high-performance async execution
-- Native support for parallel and batch processing
-- Zero-cost abstractions with Rust's ownership model
-- Send + Sync compliance for safe concurrency
-
-### 🛡️ **Enterprise Robustness**
-
-- **Circuit Breakers**: Automatic failure detection and recovery
-- **Rate Limiting**: Sliding window algorithms for traffic control
-- **Retry Policies**: Exponential backoff with jitter
-- **Timeout Management**: Graceful degradation under load
-- **Resource Pooling**: RAII guards for safe resource management
-- **Load Shedding**: Adaptive capacity management
-
-### 📊 **Comprehensive Observability**
-
-- Real-time metrics collection at flow and node levels
-- Structured event logging with timestamps and durations
-- Performance profiling and bottleneck detection
-- Configurable alerting system
-- Distributed tracing support
-- Integration-ready for monitoring platforms
-
-### 🔄 **Flexible Execution Models**
-
-- **Sequential Flows**: Traditional node-to-node execution
-- **Parallel Execution**: Concurrent node processing with `futures::join_all`
-- **Batch Processing**: Configurable batch sizes with concurrent batch execution
-- **Nested Flows**: Hierarchical workflow composition
-- **Conditional Routing**: Dynamic flow control based on runtime state
-
-## 📦 Installation
-
-Add AgentFlow to your `Cargo.toml`:
-
+### **agentflow-core** - Foundation Layer
+Pure code-first workflow execution engine:
 ```toml
 [dependencies]
 agentflow-core = "0.2.0"
+```
+- `AsyncNode` trait and three-phase execution
+- `AsyncFlow` orchestrator with concurrency support
+- `SharedState` for thread-safe data sharing
+- Built-in robustness and observability features
+
+### **agentflow-llm** - Unified LLM Integration
+Multi-provider LLM abstraction layer:
+```toml
+[dependencies]
+agentflow-llm = "0.2.0"
+```
+- **Current Providers**: OpenAI, Anthropic, Google, StepFun, Moonshot
+- **Planned Providers**: Ollama, vLLM, SGLang, custom deployments
+- Streaming and multimodal capabilities
+- Centralized model registry and configuration
+
+### **agentflow-config** - Configuration-First Support
+Declarative workflow orchestration:
+```toml
+[dependencies]
+agentflow-config = "0.2.0"
+```
+- Enhanced YAML/JSON configuration parsing
+- Handlebars template engine integration
+- Node registry with built-in types
+- Configuration compiler (YAML → Rust code)
+
+### **agentflow-cli** - Command-Line Interface
+Unified command-line access to all features:
+```bash
+cargo install agentflow-cli
+agentflow --help
+```
+- Workflow execution commands
+- Direct LLM interaction
+- Configuration validation and tools
+- Interactive and batch modes
+
+### **agentflow-agents** - Application Layer
+Reusable AI agent applications:
+```toml
+[dependencies]
+agentflow-agents = "0.2.0"
+```
+- Complete agent implementations (PDF analyzer, etc.)
+- Shared utilities and batch processing
+- Agent trait abstractions
+- Real-world workflow examples
+
+### **agentflow-mcp** - MCP Integration
+Model Context Protocol support:
+```toml
+[dependencies]
+agentflow-mcp = "0.2.0"
+```
+- MCP client implementation
+- Tool calling abstractions
+- Transport layer support (stdio, HTTP)
+- Future workflow integration
+
+## 🚀 Key Features
+
+### ⚡ **Dual Paradigm Support**
+- **Code-First**: Full programmatic control with Rust's type safety
+- **Configuration-First**: Declarative YAML workflows for non-programmers
+- **Seamless Integration**: Mix and match approaches as needed
+
+### 🛡️ **Enterprise Robustness**
+- Circuit breakers and retry policies with exponential backoff
+- Rate limiting and timeout management
+- Resource pooling and connection management
+- Graceful error handling and recovery
+
+### 🌐 **Unified LLM Integration**
+- **Current**: OpenAI, Anthropic, Google, StepFun, Moonshot
+- **Planned**: Ollama, vLLM, SGLang, custom deployments
+- Streaming responses and multimodal support
+- Centralized model registry and configuration
+
+### 📊 **Built-in Observability**
+- Real-time metrics collection and performance monitoring
+- Structured event logging with execution tracing
+- Integration-ready for monitoring platforms
+- Comprehensive debugging and profiling tools
+
+### 🔄 **Advanced Execution Models**
+- Sequential, parallel, and nested workflow execution
+- Batch processing with backpressure control
+- Conditional routing and dynamic flow control
+- Three-phase node execution (prep/exec/post)
+
+## 📦 Installation
+
+Choose the components you need for your use case:
+
+### For Code-First Development
+```toml
+[dependencies]
+agentflow-core = "0.2.0"  # Core workflow engine
+agentflow-llm = "0.2.0"   # Multi-provider LLM integration
 tokio = { version = "1.0", features = ["full"] }
 ```
 
-## 🎯 Quick Start
+### For Configuration-First Usage
+```toml
+[dependencies]
+agentflow-config = "0.2.0"  # Includes core + config support
+```
 
-### Basic Sequential Flow
+### For CLI Usage
+```bash
+cargo install agentflow-cli
+agentflow --help
+```
+
+## 🎯 Quick Start Examples
+
+### Code-First: Basic Node Implementation
 
 ```rust
 use agentflow_core::{AsyncFlow, AsyncNode, SharedState, Result};
@@ -218,86 +273,136 @@ async fn main() -> Result<()> {
 }
 ```
 
-### Parallel Execution with Observability
+### Configuration-First: YAML Workflow
+
+```yaml
+# analysis_workflow.yml
+version: "2.0"
+metadata:
+  name: "Document Analysis Pipeline"
+  description: "Analyze and summarize documents with AI"
+
+shared:
+  document_content:
+    type: string
+    description: "Raw document text"
+  analysis_result:
+    type: object
+    description: "Structured analysis output"
+  summary:
+    type: string 
+    description: "Final document summary"
+
+templates:
+  prompts:
+    analyze: |
+      Analyze the following document and extract key insights:
+      
+      {{shared.document_content}}
+      
+      Provide analysis in JSON format with:
+      - main_topics: array of key topics
+      - sentiment: overall sentiment score (-1 to 1)
+      - complexity: reading complexity (1-10)
+      - key_entities: important people, places, organizations
+      
+    summarize: |
+      Based on this analysis: {{shared.analysis_result}}
+      
+      Create a concise 2-3 paragraph summary of the document's
+      main points and conclusions.
+
+nodes:
+  - name: analyzer
+    type: llm
+    model: gpt-4o
+    prompt: "{{templates.prompts.analyze}}"
+    parameters:
+      temperature: 0.3
+      max_tokens: 1000
+    outputs:
+      - target: shared.analysis_result
+        format: json
+        
+  - name: summarizer
+    type: llm
+    model: claude-3-sonnet
+    depends_on: [analyzer]
+    prompt: "{{templates.prompts.summarize}}"
+    parameters:
+      temperature: 0.7
+      max_tokens: 500
+    outputs:
+      - target: shared.summary
+      - target: final_output
+```
+
+### LLM Integration Example
 
 ```rust
-use agentflow_core::{AsyncFlow, MetricsCollector};
-use std::sync::Arc;
+use agentflow_llm::AgentFlow;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Create nodes for parallel execution
-    let nodes = vec![
-        Box::new(ProcessingNode { id: "worker_1".to_string() }),
-        Box::new(ProcessingNode { id: "worker_2".to_string() }),
-        Box::new(ProcessingNode { id: "worker_3".to_string() }),
-    ];
-
-    // Set up observability
-    let metrics = Arc::new(MetricsCollector::new());
-    let mut flow = AsyncFlow::new_parallel(nodes);
-    flow.set_metrics_collector(metrics.clone());
-    flow.set_flow_name("parallel_processing".to_string());
-
-    let shared = SharedState::new();
-    let result = flow.run_async(&shared).await?;
-
-    // Check metrics
-    let execution_count = metrics.get_metric("parallel_processing.execution_count");
-    println!("Executions: {:?}", execution_count);
-
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize the AgentFlow client
+    AgentFlow::init().await?;
+    
+    // Single model call
+    let response = AgentFlow::model("gpt-4o")
+        .prompt("Explain quantum computing in simple terms")
+        .temperature(0.7)
+        .max_tokens(500)
+        .execute()
+        .await?;
+    
+    println!("Response: {}", response.content);
+    
+    // Multi-modal example with image
+    let multimodal_response = AgentFlow::model("gpt-4o")
+        .prompt("Describe this image")
+        .add_image_url("https://example.com/image.jpg")
+        .execute()
+        .await?;
+    
     Ok(())
 }
 ```
 
-### Robust Flow with Circuit Breaker
+## 📋 CLI Usage Examples
 
-```rust
-use agentflow_core::{CircuitBreaker, TimeoutManager};
-use std::time::Duration;
+```bash
+# Execute configuration workflows
+agentflow config run analysis_workflow.yml --input document_content="Document text here"
 
-async fn robust_workflow() -> Result<()> {
-    // Set up robustness patterns
-    let circuit_breaker = CircuitBreaker::new(
-        "api_calls".to_string(),
-        3, // failure threshold
-        Duration::from_secs(30) // recovery timeout
-    );
+# Direct LLM interaction
+agentflow llm prompt "Explain machine learning" --model gpt-4o --temperature 0.8
 
-    let timeout_manager = TimeoutManager::new(
-        "operations".to_string(),
-        Duration::from_secs(10) // default timeout
-    );
+# Interactive chat mode
+agentflow llm chat --model claude-3-sonnet
 
-    // Use in your workflow logic
-    let result = circuit_breaker.call(async {
-        timeout_manager.execute_with_timeout("api_call", async {
-            // Your business logic here
-            Ok("Success")
-        }).await
-    }).await?;
+# Batch processing
+agentflow config run batch_analysis.yml --input dir="/path/to/documents"
 
-    Ok(())
-}
+# Configuration validation
+agentflow config validate workflow.yml
+
+# List available models
+agentflow llm models
 ```
-
-## 🏗️ Architecture
-
-AgentFlow is built on four core pillars:
-
-1. **Execution Model**: AsyncNode trait with prep/exec/post lifecycle
-2. **Concurrency Control**: Parallel, batch, and nested execution patterns
-3. **Robustness Guarantees**: Circuit breakers, retries, timeouts, and resource management
-4. **Observability**: Metrics, events, alerting, and distributed tracing
-
-For detailed architecture information, see [docs/design.md](docs/design.md).
 
 ## 📚 Documentation
 
-- **[System Architecture](docs/agentflow-design.md)** - High-level system design and component diagrams
+### 🏗️ **Architecture & Design**
+- **[Technical Architecture](docs/ARCHITECTURE.md)** - Complete technical architecture overview
+- **[System Design](docs/agentflow-design.md)** - High-level system design and component diagrams
 - **[Core Engine Design](docs/design.md)** - Detailed workflow engine architecture  
+
+### 🔧 **Integration Guides**
 - **[LLM Integration Guide](docs/agentflow-llm-design.md)** - Multi-provider LLM integration details
-- **[CLI Design Document](docs/agentflow-cli-design.md)** - Command-line interface implementation plan
+- **[CLI Usage Guide](docs/agentflow-cli-design.md)** - Command-line interface usage patterns
+- **[Configuration Reference](docs/CONFIGURATION.md)** - YAML workflow configuration guide
+
+### 🎯 **Specialized Topics**
 - **[Multimodal Support](docs/MULTIMODAL_GUIDE.md)** - Text, image, and audio processing capabilities
 - **[Model Types System](docs/GRANULAR_MODEL_TYPES.md)** - Type-safe model capability definitions
 - **[Use Cases](docs/use-cases.md)** - Real-world implementation scenarios
