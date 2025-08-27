@@ -52,6 +52,20 @@ impl AsyncFlow {
     }
   }
 
+  pub fn new_empty() -> Self {
+    Self {
+      id: Uuid::new_v4(),
+      start_node: None,
+      nodes: HashMap::new(),
+      parallel_nodes: Vec::new(),
+      batch_size: None,
+      timeout: None,
+      max_concurrent_batches: None,
+      metrics_collector: None,
+      flow_name: None,
+    }
+  }
+
   pub fn has_start_node(&self) -> bool {
     self.start_node.is_some()
   }
@@ -373,7 +387,7 @@ mod tests {
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::{Duration, Instant};
-  use tokio::time::{sleep, timeout};
+  use tokio::time::sleep;
 
   // Mock async nodes for flow testing
   struct SimpleAsyncNode {
@@ -491,7 +505,7 @@ mod tests {
 
         // Process items in batches
         let mut batch_count = 0;
-        for batch in items.chunks(self.batch_size) {
+        for _batch in items.chunks(self.batch_size) {
           batch_count += 1;
           {
             self

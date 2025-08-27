@@ -1,0 +1,25 @@
+name: "Simple Test"
+version: "1.0.0"
+description: "Simple test with hardcoded values"
+
+inputs:
+  question:
+    type: string
+    required: true
+    description: "Question to ask"
+
+workflow:
+  type: sequential
+  nodes:
+    - name: answer
+      type: llm
+      config:
+        model: "step-2-mini"
+        prompt: "What is 2+2? Answer briefly."
+        temperature: 0.7
+        max_tokens: 50
+
+outputs:
+  result:
+    source: "answer_response"
+    description: "The answer"

@@ -2,7 +2,7 @@
 // This demonstrates the workflow functionality with mock LLM responses
 
 use agentflow_core::{AsyncNode, SharedState};
-use agentflow_core::nodes::LlmNode;
+use agentflow_nodes::LlmNode;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

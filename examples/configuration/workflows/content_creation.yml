@@ -1,0 +1,260 @@
+# Content Creation - Article Writing Workflow
+name: "AI Content Creation Pipeline"
+version: "1.0.0"
+description: "A complete content creation workflow that generates outlines, writes content, and applies styling using OpenAI models"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-15T00:00:00Z"
+  tags: ["openai", "content-creation", "writing", "workflow"]
+  category: "creative"
+
+config:
+  timeout: "15m"
+  max_retries: 3
+  output_format: "markdown"
+  log_level: "info"
+
+inputs:
+  topic:
+    type: "string"
+    required: true
+    description: "The topic to write an article about"
+    example: "The Future of Artificial Intelligence"
+  
+  max_sections:
+    type: "number"
+    required: false
+    default: 3
+    description: "Maximum number of sections in the outline"
+  
+  section_length:
+    type: "number"
+    required: false
+    default: 100
+    description: "Maximum words per section"
+  
+  writing_style:
+    type: "string"
+    required: false
+    default: "conversational"
+    enum: ["conversational", "academic", "casual", "professional", "creative"]
+    description: "The writing style to apply"
+  
+  model:
+    type: "string"
+    required: false
+    default: "gpt-4o"
+    enum: ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"]
+    description: "OpenAI model to use for content generation"
+
+  temperature:
+    type: "number"
+    required: false
+    default: 0.7
+    description: "Temperature for creative content generation"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "sequential"
+  nodes:
+    # Step 1: Generate Article Outline
+    - name: "generate_outline"
+      type: "llm"
+      description: "Create a structured outline for the article"
+      config:
+        model: "{{ inputs.model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 500
+        system: "You are an expert content strategist. Create clear, logical outlines for articles."
+        prompt: |
+          Create a simple outline for an article about {{ inputs.topic }}.
+          Include at most {{ inputs.max_sections }} main sections (no subsections).
+
+          Output the sections in YAML format as shown below:
+
+          ```yaml
+          sections:
+              - |
+                  First section title/description
+              - |
+                  Second section title/description
+              - |
+                  Third section title/description
+          ```
+        timeout: "3m"
+      outputs:
+        outline_response: "$.response"
+
+    # Step 2: Parse Outline Structure
+    - name: "parse_outline"
+      type: "template"
+      description: "Extract and parse the outline structure"
+      depends_on: ["generate_outline"]
+      config:
+        template: |
+          {% set yaml_start = generate_outline.outline_response.find('```yaml') %}
+          {% if yaml_start != -1 %}
+            {% set yaml_content = generate_outline.outline_response[yaml_start + 7:] %}
+            {% set yaml_end = yaml_content.find('```') %}
+            {% if yaml_end != -1 %}
+              {% set yaml_data = yaml_content[:yaml_end].strip() %}
+              {{ yaml_data | from_yaml | tojson }}
+            {% else %}
+              {{ yaml_content.strip() | from_yaml | tojson }}
+            {% endif %}
+          {% else %}
+            {"sections": ["Introduction", "Main Content", "Conclusion"]}
+          {% endif %}
+      outputs:
+        parsed_sections: "$.rendered"
+
+    # Step 3: Write Content for Each Section (Batch Processing)
+    - name: "write_sections"
+      type: "batch"
+      description: "Write content for each section in parallel"
+      batch_input: "{{ parse_outline.parsed_sections | fromjson | json_query('sections') }}"
+      depends_on: ["parse_outline"]
+      config:
+        model: "{{ inputs.model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 300
+        system: "You are a skilled content writer. Write clear, engaging content for each section."
+        prompt: |
+          Write a short paragraph (MAXIMUM {{ inputs.section_length }} WORDS) about this section:
+
+          {{ batch_item }}
+
+          Requirements:
+          - Explain the idea in simple, easy-to-understand terms
+          - Use everyday language, avoiding jargon
+          - Keep it very concise (no more than {{ inputs.section_length }} words)
+          - Include one brief example or analogy
+          - Focus on {{ inputs.topic }}
+        timeout: "4m"
+      outputs:
+        section_title: "{{ batch_item }}"
+        section_content: "$.response"
+
+    # Step 4: Combine Sections into Draft
+    - name: "create_draft"
+      type: "template"
+      description: "Combine all sections into a cohesive draft"
+      depends_on: ["write_sections"]
+      config:
+        template: |
+          # {{ inputs.topic }}
+
+          {% for section in write_sections.results %}
+          ## {{ section.section_title }}
+
+          {{ section.section_content }}
+
+          {% endfor %}
+      outputs:
+        draft_article: "$.rendered"
+
+    # Step 5: Apply Style and Finalize
+    - name: "apply_style"
+      type: "llm"
+      description: "Apply the specified writing style to the draft"
+      depends_on: ["create_draft"]
+      config:
+        model: "{{ inputs.model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 2000
+        system: "You are an expert editor and writer. Apply the requested style while maintaining the content's core message."
+        prompt: |
+          Rewrite the following draft in a {{ inputs.writing_style }} style:
+
+          {{ create_draft.draft_article }}
+
+          Style Guidelines for {{ inputs.writing_style }}:
+          {% if inputs.writing_style == "conversational" %}
+          - Use a warm, friendly tone
+          - Include rhetorical questions that engage the reader
+          - Add analogies and metaphors where appropriate
+          - Include a strong opening and conclusion
+          {% elif inputs.writing_style == "academic" %}
+          - Use formal language and scholarly tone
+          - Include logical flow and evidence-based statements
+          - Avoid contractions and colloquial expressions
+          - Structure with clear thesis and supporting points
+          {% elif inputs.writing_style == "casual" %}
+          - Use relaxed, informal language
+          - Include contractions and everyday expressions
+          - Make it feel like a friendly chat
+          - Use humor where appropriate
+          {% elif inputs.writing_style == "professional" %}
+          - Use clear, direct business language
+          - Focus on practical insights and actionable information
+          - Maintain authoritative but approachable tone
+          - Structure for easy scanning
+          {% elif inputs.writing_style == "creative" %}
+          - Use vivid imagery and creative language
+          - Include storytelling elements
+          - Use varied sentence structure
+          - Make it engaging and memorable
+          {% endif %}
+
+          Keep the same structure and main points, but enhance the style and flow.
+        timeout: "5m"
+      outputs:
+        final_article: "$.response"
+
+    # Step 6: Generate Article Metadata
+    - name: "generate_metadata"
+      type: "template"
+      description: "Create metadata for the final article"
+      depends_on: ["apply_style", "write_sections"]
+      config:
+        template: |
+          {
+            "title": "{{ inputs.topic }}",
+            "sections_count": {{ write_sections.results | length }},
+            "writing_style": "{{ inputs.writing_style }}",
+            "estimated_reading_time": "{{ (apply_style.final_article | length / 1000 * 4) | round(1) }} minutes",
+            "word_count": {{ apply_style.final_article.split() | length }},
+            "model_used": "{{ inputs.model }}",
+            "sections": [
+              {% for section in write_sections.results %}
+              "{{ section.section_title }}"{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ]
+          }
+      outputs:
+        article_metadata: "$.rendered"
+
+outputs:
+  final_article:
+    source: "{{ apply_style.final_article }}"
+    format: "markdown"
+    file: "output/final_article.md"
+  
+  draft_version:
+    source: "{{ create_draft.draft_article }}"
+    format: "markdown"
+    file: "output/draft_article.md"
+  
+  article_outline:
+    source: "{{ parse_outline.parsed_sections | fromjson }}"
+    format: "json"
+    file: "output/article_outline.json"
+  
+  article_metadata:
+    source: "{{ generate_metadata.article_metadata | fromjson }}"
+    format: "json"
+    file: "output/article_metadata.json"
+  
+  execution_report:
+    source: "$"
+    format: "json"
+    file: "output/execution_report.json"
+    include:
+      - execution_time
+      - model_used
+      - writing_style
+      - sections_processed
+      - final_word_count

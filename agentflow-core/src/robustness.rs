@@ -404,10 +404,11 @@ impl AdaptiveTimeout {
 mod tests {
   use super::*;
   use crate::{AgentFlowError, AsyncNode, Result, SharedState};
+  use async_trait::async_trait;
   use serde_json::Value;
   use std::sync::{Arc, Mutex};
   use std::time::{Duration, Instant};
-  use tokio::time::{sleep, timeout};
+  use tokio::time::sleep;
 
   // Mock nodes for robustness testing
   struct UnreliableNode {
@@ -673,7 +674,7 @@ mod tests {
       &self,
       _shared: &SharedState,
       _prep_result: Value,
-      exec_result: Value,
+      _exec_result: Value,
     ) -> Result<Option<String>> {
       Ok(None)
     }

@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "agentflow-core", 
+  "agentflow-nodes",
+  "agentflow-config",
   "agentflow-llm", 
   "agentflow-cli",
   "agentflow-mcp",

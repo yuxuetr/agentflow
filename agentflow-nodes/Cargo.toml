@@ -1,0 +1,51 @@
+[package]
+name = "agentflow-nodes"
+version = "0.1.0"
+edition = "2021"
+authors = ["AgentFlow Contributors"]
+description = "Built-in node implementations for AgentFlow workflows"
+license = "MIT"
+keywords = ["ai", "workflow", "nodes", "llm"]
+categories = ["development-tools"]
+
+[features]
+default = ["llm", "http", "file", "template"]
+llm = ["agentflow-llm"]
+http = ["reqwest"]
+file = []
+template = ["handlebars"]
+batch = []
+conditional = []
+factories = []
+
+[dependencies]
+# Core dependency - all nodes build on top of agentflow-core
+agentflow-core = { path = "../agentflow-core" }
+
+# Optional LLM integration
+agentflow-llm = { path = "../agentflow-llm", optional = true }
+
+# Removed: agentflow-config dependency to break circular dependency
+
+# HTTP client for HTTP node
+reqwest = { version = "0.11", features = ["json"], optional = true }
+
+# Template engine for template node
+handlebars = { version = "4.0", optional = true }
+
+# Core serialization and async support
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

@@ -1,0 +1,198 @@
+# Map-Reduce Resume Processing - Batch Resume Qualification
+name: "Map-Reduce Resume Qualification"
+version: "1.0.0"
+description: "Process multiple resumes in parallel to evaluate candidate qualifications using OpenAI models"
+author: "AgentFlow Team"
+
+metadata:
+  created: "2024-01-15T00:00:00Z"
+  tags: ["openai", "map-reduce", "batch-processing", "resume-evaluation"]
+  category: "batch"
+
+config:
+  timeout: "30m"
+  max_retries: 3
+  output_format: "json"
+  log_level: "info"
+
+inputs:
+  resume_files:
+    type: "object"
+    required: true
+    description: "Object containing resume filenames as keys and content as values"
+    example: {
+      "resume1.txt": "John Smith\nSoftware Engineer\n5 years experience...",
+      "resume2.txt": "Jane Doe\nProject Manager\n3 years experience..."
+    }
+  
+  qualification_criteria:
+    type: "object"
+    required: false
+    default: {
+      "min_degree": "bachelor's degree",
+      "min_experience_years": 3,
+      "technical_skills_required": true
+    }
+    description: "Criteria for candidate qualification"
+  
+  model:
+    type: "string"
+    required: false
+    default: "gpt-4o"
+    enum: ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"]
+    description: "OpenAI model to use for evaluation"
+
+  temperature:
+    type: "number"
+    required: false
+    default: 0.1
+    description: "Temperature for evaluation (low for consistency)"
+
+environment:
+  OPENAI_API_KEY: "required"
+
+workflow:
+  type: "sequential"
+  nodes:
+    # Map Phase: Process each resume individually
+    - name: "evaluate_resumes"
+      type: "batch"
+      description: "Evaluate each resume for qualification (Map phase)"
+      batch_input: "{{ inputs.resume_files | dict2items }}"
+      config:
+        model: "{{ inputs.model }}"
+        temperature: "{{ inputs.temperature }}"
+        max_tokens: 1000
+        system: "You are an expert HR recruiter. Evaluate resumes objectively based on the given criteria."
+        prompt: |
+          Evaluate the following resume and determine if the candidate qualifies for an advanced technical role.
+          
+          Criteria for qualification:
+          - At least {{ inputs.qualification_criteria.min_degree }} in a relevant field
+          - At least {{ inputs.qualification_criteria.min_experience_years }} years of relevant work experience
+          {% if inputs.qualification_criteria.technical_skills_required %}- Strong technical skills relevant to the position{% endif %}
+
+          Resume ({{ batch_item.key }}):
+          {{ batch_item.value }}
+
+          Return your evaluation in YAML format:
+          ```yaml
+          candidate_name: [Name of the candidate]
+          qualifies: [true/false]
+          reasons:
+            - [First reason for qualification/disqualification]
+            - [Second reason, if applicable]
+          experience_years: [Number of years of experience found]
+          education_level: [Highest education level found]
+          technical_skills: [List of technical skills identified]
+          ```
+        timeout: "5m"
+      outputs:
+        evaluation: "$.response"
+        filename: "{{ batch_item.key }}"
+
+    # Parse YAML results from LLM responses
+    - name: "parse_evaluations"
+      type: "template"
+      description: "Parse YAML evaluation results from LLM responses"
+      depends_on: ["evaluate_resumes"]
+      config:
+        template: |
+          {
+            {% for result in evaluate_resumes.results %}
+            "{{ result.filename }}": {% set yaml_start = result.evaluation.find('```yaml') %}{% if yaml_start != -1 %}{% set yaml_content = result.evaluation[yaml_start + 7:] %}{% set yaml_end = yaml_content.find('```') %}{% if yaml_end != -1 %}{{ yaml_content[:yaml_end].strip() | from_yaml | tojson }}{% else %}{{ yaml_content.strip() | from_yaml | tojson }}{% endif %}{% else %}{{ result.evaluation.strip() | from_yaml | tojson }}{% endif %}{% if not loop.last %},{% endif %}
+            {% endfor %}
+          }
+      outputs:
+        parsed_evaluations: "$.rendered"
+
+    # Reduce Phase: Aggregate results and generate summary
+    - name: "aggregate_results"
+      type: "template"
+      description: "Aggregate evaluation results and generate summary (Reduce phase)"
+      depends_on: ["parse_evaluations"]
+      config:
+        template: |
+          {% set evaluations = parse_evaluations.parsed_evaluations | fromjson %}
+          {% set qualified = [] %}
+          {% set total = evaluations | length %}
+          {% for filename, eval in evaluations.items() %}
+            {% if eval.qualifies %}
+              {% set _ = qualified.append(eval.candidate_name or "Unknown") %}
+            {% endif %}
+          {% endfor %}
+          {
+            "total_candidates": {{ total }},
+            "qualified_count": {{ qualified | length }},
+            "qualified_percentage": {{ (qualified | length / total * 100) | round(1) if total > 0 else 0 }},
+            "qualified_names": {{ qualified | tojson }},
+            "detailed_evaluations": {{ evaluations | tojson }}
+          }
+      outputs:
+        summary: "$.rendered"
+
+    # Generate qualification report
+    - name: "generate_report"
+      type: "template"
+      description: "Generate detailed qualification report"
+      depends_on: ["aggregate_results"]
+      config:
+        template: |
+          # Resume Qualification Report
+          
+          ## Summary
+          - **Total Candidates Evaluated**: {{ (aggregate_results.summary | fromjson).total_candidates }}
+          - **Qualified Candidates**: {{ (aggregate_results.summary | fromjson).qualified_count }} ({{ (aggregate_results.summary | fromjson).qualified_percentage }}%)
+          
+          ## Qualified Candidates
+          {% for name in (aggregate_results.summary | fromjson).qualified_names %}
+          - {{ name }}
+          {% endfor %}
+          
+          ## Detailed Evaluations
+          {% for filename, eval in (aggregate_results.summary | fromjson).detailed_evaluations.items() %}
+          
+          ### {{ filename }}
+          - **Candidate**: {{ eval.candidate_name or "Unknown" }}
+          - **Qualifies**: {{ "✅ Yes" if eval.qualifies else "❌ No" }}
+          - **Experience**: {{ eval.experience_years or "Not specified" }} years
+          - **Education**: {{ eval.education_level or "Not specified" }}
+          
+          **Evaluation Reasons**:
+          {% for reason in eval.reasons %}
+          - {{ reason }}
+          {% endfor %}
+          
+          {% if eval.technical_skills %}
+          **Technical Skills**: {{ eval.technical_skills | join(", ") }}
+          {% endif %}
+          {% endfor %}
+      outputs:
+        report: "$.rendered"
+
+outputs:
+  qualification_summary:
+    source: "{{ aggregate_results.summary | fromjson }}"
+    format: "json"
+    file: "output/qualification_summary.json"
+  
+  detailed_report:
+    source: "{{ generate_report.report }}"
+    format: "markdown"
+    file: "output/qualification_report.md"
+  
+  individual_evaluations:
+    source: "{{ (aggregate_results.summary | fromjson).detailed_evaluations }}"
+    format: "json"
+    file: "output/individual_evaluations.json"
+  
+  execution_report:
+    source: "$"
+    format: "json"
+    file: "output/execution_report.json"
+    include:
+      - execution_time
+      - model_used
+      - total_resumes_processed
+      - qualification_rate
+      - batch_processing_time

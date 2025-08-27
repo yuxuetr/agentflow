@@ -103,8 +103,8 @@ mod tests {
   use crate::{AgentFlowError, AsyncFlow, AsyncNode, Result, SharedState};
   use async_trait::async_trait;
   use serde_json::Value;
-  use std::sync::{Arc, Mutex};
-  use std::time::{Duration, Instant};
+  use std::sync::Arc;
+  use std::time::Duration;
   #[cfg(feature = "observability")]
   use tracing::{error, info, span, warn, Level};
   #[cfg(feature = "observability")]

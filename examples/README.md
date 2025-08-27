@@ -1,29 +1,37 @@
 # AgentFlow Examples
 
-This directory contains migrated examples from PocketFlow, demonstrating AgentFlow's capabilities and testing core functionality implementation.
+This directory contains comprehensive examples demonstrating different approaches to using AgentFlow.
 
-## 📊 Migration Progress
+## 📁 Directory Structure
 
-### ✅ Completed Examples
+### 🦀 Code-First Examples (`code_first/`)
+Pure Rust implementations using AgentFlow programmatically:
+- `hello_world.rs` - Basic workflow construction and AsyncNode lifecycle
+- `advanced_code_first_workflow.rs` - Complex multi-step workflows with branching logic
+- `recipe_finder_real_llm.rs` - LLM integration with real API calls
+- `simple_llm_workflow.rs` - Basic LLM node usage patterns
+- `recipe_finder_workflow.rs` - End-to-end recipe generation workflow
 
-- `hello_world.rs` - Basic AsyncNode functionality and SharedState (✅ Core verified)
-- `batch_processing.rs` - Parallel batch processing with concurrency control (✅ BatchNode verified)  
-- `workflow.rs` - Sequential multi-stage workflow with structured data flow (✅ Workflow verified)
-- `chat.rs` - Interactive chat with conversation history and self-looping flows (✅ Chat patterns verified)
-- `structured_output.rs` - YAML/JSON structured data extraction and validation (✅ Data parsing verified)
-- `simple_agent_llm_flow.rs` - LLM integration with AgentFlow using moonshot demo pattern (✅ LLM-Agent flow verified)
+### ⚙️ Configuration-Based Examples (`configuration/workflows/`)
+YAML-driven workflow definitions:
+- `hello_world.yml` - Basic configuration workflow  
+- `recipe_finder.yml` - Recipe generation using YAML config
+- `stepfun_*.yml` - StepFun LLM provider examples
+- `batch_translation.yml` - Parallel translation workflows
+- `rag_system.yml` - Retrieval-augmented generation setup
 
-### 🔄 In Progress
+### 🎓 Tutorials (`tutorials/`)
+Step-by-step learning materials:
+- `01_quick_start.sh` - Get started quickly with AgentFlow
+- `02_image_workflows.sh` - Image processing workflows  
+- `03_audio_workflows.sh` - Audio processing and transcription
 
-- Minor compilation fixes for borrowing issues in some examples
-- Continuing migration with remaining PocketFlow examples
-
-### 📋 Planned (High Priority PocketFlow Examples)
-
-- `agent.rs` - Research agent with web search capabilities
-- `rag.rs` - Retrieval-augmented generation workflow
-- `map_reduce.rs` - Distributed processing pattern
-- `multi_agent.rs` - Multi-agent coordination patterns
+### 🔌 Integration Examples (Root Level)
+Real-world end-to-end examples:
+- `pdf_research_analyzer.rs` - Complete PDF analysis system
+- `test_rust_interview_workflow.rs` - Interview question generator
+- `structured_output.rs` - Structured data generation
+- `multimodal_agent_flow.rs` - Text + image processing workflows
 
 ## 🎯 Example Categories
 
