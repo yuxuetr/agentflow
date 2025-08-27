@@ -56,27 +56,22 @@
 //!
 //! ## Configuration Management
 //!
-//! AgentFlow uses a flexible configuration system with the following priority:
+//! AgentFlow uses a unified configuration system with the following priority:
 //!
-//! 1. **Project-specific**: `./models.yml` (highest priority)
-//! 2. **User-specific**: `~/.agentflow/models.yml` (medium priority)
-//! 3. **Built-in defaults**: Bundled in crate (lowest priority)
+//! 1. **User-specific**: `~/.agentflow/models.yml` (highest priority)
+//! 2. **Built-in defaults**: Bundled in crate (lowest priority)
 //!
 //! ### Generate Configuration Files
 //!
 //! ```rust
-//! // Generate project-specific config
-//! AgentFlow::generate_config("models.yml").await?;
-//!
 //! // Generate user-specific config
-//! AgentFlow::generate_user_config().await?;
+//! AgentFlow::generate_config().await?;
 //! ```
 //!
 //! ### Configuration Options
 //!
 //! - **For developers**: Use built-in defaults for immediate prototyping
-//! - **For projects**: Generate `models.yml` for project-specific settings
-//! - **For users**: Generate `~/.agentflow/models.yml` for global defaults
+//! - **For users**: Generate `~/.agentflow/models.yml` for persistent settings
 //!
 //! ## Supported Providers
 //!
@@ -175,13 +170,17 @@ impl AgentFlow {
   /// Initialize the LLM system with default configuration
   ///
   /// Configuration priority (first found wins):
-  /// 1. ./models.yml (project-specific)
-  /// 2. ~/.agentflow/models.yml (user-specific)
-  /// 3. Built-in defaults (bundled in crate)
+  /// 1. ~/.agentflow/models.yml (user-specific)
+  /// 2. Built-in defaults (bundled in crate)
+  /// 
+  /// Also loads environment variables from ~/.agentflow/.env if available
   pub async fn init() -> Result<()> {
-    // Try project-specific config first
-    if std::path::Path::new("models.yml").exists() {
-      return Self::init_with_config("models.yml").await;
+    // Load environment variables from ~/.agentflow/.env
+    if let Some(home_dir) = dirs::home_dir() {
+      let user_env = home_dir.join(".agentflow").join(".env");
+      if user_env.exists() {
+        dotenvy::from_path(&user_env).ok();
+      }
     }
 
     // Try user-specific config
@@ -203,126 +202,57 @@ impl AgentFlow {
     Ok(())
   }
 
-  /// Generate a default configuration file at the specified path
-  ///
-  /// Examples:
-  /// - `AgentFlow::generate_config("models.yml")` - project config
-  /// - `AgentFlow::generate_user_config()` - user config in ~/.agentflow/
-  pub async fn generate_config<P: AsRef<std::path::Path>>(path: P) -> Result<()> {
+  /// Generate default configuration files in ~/.agentflow/
+  /// Creates both models.yml and .env template files
+  pub async fn generate_config() -> Result<()> {
+    let home_dir = dirs::home_dir().ok_or_else(|| crate::LLMError::ConfigurationError {
+      message: "Could not determine home directory".to_string(),
+    })?;
+
+    let config_dir = home_dir.join(".agentflow");
+    let config_path = config_dir.join("models.yml");
+    let env_path = config_dir.join(".env");
+    
     let config_content = include_str!("../templates/default_models.yml");
+    let env_content = include_str!("../templates/default.env");
 
-    // Create parent directory if it doesn't exist
-    if let Some(parent) = path.as_ref().parent() {
-      tokio::fs::create_dir_all(parent)
-        .await
-        .map_err(|e| crate::LLMError::ConfigurationError {
-          message: format!("Failed to create config directory: {}", e),
-        })?;
-    }
+    // Create directory if it doesn't exist
+    tokio::fs::create_dir_all(&config_dir)
+      .await
+      .map_err(|e| crate::LLMError::ConfigurationError {
+        message: format!("Failed to create config directory: {}", e),
+      })?;
 
-    tokio::fs::write(&path, config_content).await.map_err(|e| {
+    // Write models.yml
+    tokio::fs::write(&config_path, config_content).await.map_err(|e| {
       crate::LLMError::ConfigurationError {
         message: format!("Failed to write config file: {}", e),
       }
     })?;
 
-    println!(
-      "✅ Generated configuration file: {}",
-      path.as_ref().display()
-    );
-    Ok(())
-  }
-
-  /// Generate user-specific configuration in ~/.agentflow/models.yml
-  pub async fn generate_user_config() -> Result<()> {
-    let home_dir = dirs::home_dir().ok_or_else(|| crate::LLMError::ConfigurationError {
-      message: "Could not determine home directory".to_string(),
-    })?;
-
-    let config_path = home_dir.join(".agentflow").join("models.yml");
-    Self::generate_config(config_path).await
-  }
-
-  /// Generate environment file (.env) with API key templates
-  ///
-  /// Creates a .env file with placeholder API keys and helpful comments.
-  /// Also generates a .gitignore template to prevent accidental commits.
-  pub async fn generate_env<P: AsRef<std::path::Path>>(path: P) -> Result<()> {
-    let env_content = include_str!("../templates/default.env");
-    let gitignore_content = include_str!("../templates/example.gitignore");
-
-    // Create parent directory if it doesn't exist
-    if let Some(parent) = path.as_ref().parent() {
-      tokio::fs::create_dir_all(parent)
-        .await
-        .map_err(|e| crate::LLMError::ConfigurationError {
-          message: format!("Failed to create directory: {}", e),
-        })?;
-    }
-
     // Write .env file
-    tokio::fs::write(&path, env_content).await.map_err(|e| {
+    tokio::fs::write(&env_path, env_content).await.map_err(|e| {
       crate::LLMError::ConfigurationError {
         message: format!("Failed to write .env file: {}", e),
       }
     })?;
 
-    // Write .gitignore template if it doesn't exist
-    let gitignore_path = path
-      .as_ref()
-      .parent()
-      .unwrap_or(std::path::Path::new("."))
-      .join(".gitignore");
-    if !gitignore_path.exists() {
-      tokio::fs::write(&gitignore_path, gitignore_content)
-        .await
-        .map_err(|e| crate::LLMError::ConfigurationError {
-          message: format!("Failed to write .gitignore: {}", e),
-        })?;
-      println!("✅ Generated .gitignore file: {}", gitignore_path.display());
-    }
-
-    println!("✅ Generated environment file: {}", path.as_ref().display());
-    println!("⚠️  SECURITY: Add your real API keys and ensure .env is in .gitignore!");
+    println!(
+      "✅ Generated configuration file: {}",
+      config_path.display()
+    );
+    println!(
+      "✅ Generated environment file: {}",
+      env_path.display()
+    );
+    println!("⚠️  Add your API keys to ~/.agentflow/.env");
     Ok(())
   }
 
-  /// Generate .env file in current directory
-  pub async fn generate_project_env() -> Result<()> {
-    Self::generate_env(".env").await
-  }
 
-  /// Generate user-specific .env in ~/.agentflow/.env
-  pub async fn generate_user_env() -> Result<()> {
-    let home_dir = dirs::home_dir().ok_or_else(|| crate::LLMError::ConfigurationError {
-      message: "Could not determine home directory".to_string(),
-    })?;
 
-    let env_path = home_dir.join(".agentflow").join(".env");
-    Self::generate_env(env_path).await
-  }
 
-  /// Initialize with automatic environment loading
-  ///
-  /// Loads environment variables from:
-  /// 1. System environment variables (highest priority)
-  /// 2. ./.env (project-specific)
-  /// 3. ~/.agentflow/.env (user-specific)
-  /// 4. Built-in defaults (if no API keys found)
-  pub async fn init_with_env() -> Result<()> {
-    // Try to load .env files in priority order
-    if std::path::Path::new(".env").exists() {
-      dotenvy::from_filename(".env").ok();
-    } else if let Some(home_dir) = dirs::home_dir() {
-      let user_env = home_dir.join(".agentflow").join(".env");
-      if user_env.exists() {
-        dotenvy::from_path(&user_env).ok();
-      }
-    }
 
-    // Initialize with regular config discovery
-    Self::init().await
-  }
 
   /// Initialize logging for AgentFlow LLM
   ///

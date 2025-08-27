@@ -237,7 +237,6 @@ impl Default for ModelValidator {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::ModelConfig;
 
   #[test]
   fn test_similarity_calculation() {

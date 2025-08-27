@@ -199,7 +199,7 @@ enum LlmCommands {
 
 #[derive(Subcommand)]
 enum ConfigCommands {
-  /// Initialize configuration files
+  /// Initialize configuration files (~/.agentflow/models.yml and .env)
   Init {
     /// Force overwrite existing configuration
     #[arg(short, long)]
