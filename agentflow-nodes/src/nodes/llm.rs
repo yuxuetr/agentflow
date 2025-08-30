@@ -1,4 +1,4 @@
-use crate::{AsyncNode, SharedState, NodeError, NodeResult};
+use crate::{AsyncNode, NodeError, NodeResult, SharedState};
 use agentflow_core::AgentFlowError;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -57,10 +57,21 @@ impl LlmNode {
   }
 
   /// Create LLM configuration from resolved parameters
-  fn create_llm_config(&self, resolved_prompt: &str, resolved_system: Option<&str>, resolved_model: &str) -> Value {
+  fn create_llm_config(
+    &self,
+    resolved_prompt: &str,
+    resolved_system: Option<&str>,
+    resolved_model: &str,
+  ) -> Value {
     let mut config = serde_json::Map::new();
-    config.insert("model".to_string(), Value::String(resolved_model.to_string()));
-    config.insert("prompt".to_string(), Value::String(resolved_prompt.to_string()));
+    config.insert(
+      "model".to_string(),
+      Value::String(resolved_model.to_string()),
+    );
+    config.insert(
+      "prompt".to_string(),
+      Value::String(resolved_prompt.to_string()),
+    );
 
     if let Some(system) = resolved_system {
       config.insert("system".to_string(), Value::String(system.to_string()));
@@ -87,21 +98,21 @@ impl LlmNode {
   #[cfg(feature = "llm")]
   async fn execute_real_llm(&self, config: &serde_json::Map<String, Value>) -> NodeResult<String> {
     use agentflow_llm::{AgentFlow, MultimodalMessage};
-    
+
     let prompt = config.get("prompt").unwrap().as_str().unwrap();
     let model = config.get("model").unwrap().as_str().unwrap();
     let system = config.get("system").map(|s| s.as_str().unwrap_or(""));
-    
+
     // Initialize AgentFlow (this handles configuration loading)
-    AgentFlow::init().await.map_err(|e| {
-      NodeError::ExecutionError {
+    AgentFlow::init()
+      .await
+      .map_err(|e| NodeError::ExecutionError {
         message: format!("Failed to initialize AgentFlow: {}", e),
-      }
-    })?;
+      })?;
 
     // Build request using fluent API
     let mut request = AgentFlow::model(model);
-    
+
     // If system message is provided, use multimodal messages approach
     if let Some(sys) = system {
       if !sys.is_empty() {
@@ -114,21 +125,22 @@ impl LlmNode {
     } else {
       request = request.prompt(prompt);
     }
-    
+
     if let Some(temp) = config.get("temperature").and_then(|t| t.as_f64()) {
       request = request.temperature(temp as f32);
     }
-    
+
     if let Some(tokens) = config.get("max_tokens").and_then(|t| t.as_u64()) {
       request = request.max_tokens(tokens as u32);
     }
 
     // Execute the request
-    let response = request.execute().await.map_err(|e| {
-      NodeError::ExecutionError {
+    let response = request
+      .execute()
+      .await
+      .map_err(|e| NodeError::ExecutionError {
         message: format!("LLM request failed: {}", e),
-      }
-    })?;
+      })?;
 
     Ok(response)
   }
@@ -172,7 +184,11 @@ impl AsyncNode for LlmNode {
       .map(|s| shared.resolve_template_advanced(s));
     let resolved_model = shared.resolve_template_advanced(&self.model);
 
-    let config = self.create_llm_config(&resolved_prompt, resolved_system.as_deref(), &resolved_model);
+    let config = self.create_llm_config(
+      &resolved_prompt,
+      resolved_system.as_deref(),
+      &resolved_model,
+    );
 
     println!("🔧 LLM Node '{}' prepared:", self.name);
     println!("   Model: {}", resolved_model);
@@ -185,7 +201,8 @@ impl AsyncNode for LlmNode {
   }
 
   async fn exec_async(&self, prep_result: Value) -> Result<Value, AgentFlowError> {
-    let config = prep_result.as_object()
+    let config = prep_result
+      .as_object()
       .ok_or_else(|| AgentFlowError::AsyncExecutionError {
         message: "Invalid prep result for LLM node".to_string(),
       })?;
@@ -197,22 +214,30 @@ impl AsyncNode for LlmNode {
           Ok(response) => response,
           Err(_) => {
             println!("⚠️  Real LLM failed, falling back to mock");
-            self.execute_mock_llm(config).await.map_err(|e| AgentFlowError::AsyncExecutionError {
-              message: e.to_string(),
+            self.execute_mock_llm(config).await.map_err(|e| {
+              AgentFlowError::AsyncExecutionError {
+                message: e.to_string(),
+              }
             })?
           }
         }
       } else {
-        self.execute_mock_llm(config).await.map_err(|e| AgentFlowError::AsyncExecutionError {
-          message: e.to_string(),
-        })?
+        self
+          .execute_mock_llm(config)
+          .await
+          .map_err(|e| AgentFlowError::AsyncExecutionError {
+            message: e.to_string(),
+          })?
       }
 
       #[cfg(not(feature = "llm"))]
       {
-        self.execute_mock_llm(config).await.map_err(|e| AgentFlowError::AsyncExecutionError {
-          message: e.to_string(),
-        })?
+        self
+          .execute_mock_llm(config)
+          .await
+          .map_err(|e| AgentFlowError::AsyncExecutionError {
+            message: e.to_string(),
+          })?
       }
     };
 
@@ -266,7 +291,10 @@ mod tests {
       .with_max_tokens(100);
 
     assert_eq!(node.prompt_template, "What is 2+2?");
-    assert_eq!(node.system_template, Some("You are a helpful math assistant".to_string()));
+    assert_eq!(
+      node.system_template,
+      Some("You are a helpful math assistant".to_string())
+    );
     assert_eq!(node.temperature, Some(0.7));
     assert_eq!(node.max_tokens, Some(100));
   }
@@ -285,20 +313,28 @@ mod tests {
     let config_obj = config.as_object().unwrap();
 
     assert_eq!(config_obj.get("model").unwrap().as_str().unwrap(), "gpt-4");
-    assert_eq!(config_obj.get("prompt").unwrap().as_str().unwrap(), "What is 2+2?");
-    assert_eq!(config_obj.get("system").unwrap().as_str().unwrap(), "You are a math assistant");
+    assert_eq!(
+      config_obj.get("prompt").unwrap().as_str().unwrap(),
+      "What is 2+2?"
+    );
+    assert_eq!(
+      config_obj.get("system").unwrap().as_str().unwrap(),
+      "You are a math assistant"
+    );
   }
 
   #[tokio::test]
   async fn test_llm_node_exec_async_mock() {
-    let node = LlmNode::new("math_llm", "gpt-4")
-      .with_prompt("What is 2+2?");
+    let node = LlmNode::new("math_llm", "gpt-4").with_prompt("What is 2+2?");
 
     let shared = SharedState::new();
     let prep_result = node.prep_async(&shared).await.unwrap();
     let exec_result = node.exec_async(prep_result).await.unwrap();
 
-    assert_eq!(exec_result.as_str().unwrap(), "2 + 2 equals 4. This is a basic arithmetic operation.");
+    assert_eq!(
+      exec_result.as_str().unwrap(),
+      "2 + 2 equals 4. This is a basic arithmetic operation."
+    );
   }
 
   #[tokio::test]
@@ -323,11 +359,14 @@ mod tests {
   async fn test_llm_node_post_async() {
     let node = LlmNode::new("test_llm", "gpt-4");
     let shared = SharedState::new();
-    
+
     let response = Value::String("Test response".to_string());
     let prep_result = Value::Object(serde_json::Map::new());
-    
-    let result = node.post_async(&shared, prep_result, response.clone()).await.unwrap();
+
+    let result = node
+      .post_async(&shared, prep_result, response.clone())
+      .await
+      .unwrap();
     assert!(result.is_none());
 
     // Verify shared state was updated
@@ -351,7 +390,7 @@ mod tests {
     // Verify output was stored
     let output = shared.get("full_test_output").unwrap();
     assert_eq!(output.as_str().unwrap(), "The capital of France is Paris.");
-    
+
     let answer = shared.get("answer").unwrap();
     assert_eq!(answer.as_str().unwrap(), "The capital of France is Paris.");
   }
@@ -363,16 +402,31 @@ mod tests {
       .with_system("You are a {{subject}} tutor");
 
     let shared = SharedState::new();
-    shared.insert("model_name".to_string(), Value::String("gpt-3.5-turbo".to_string()));
-    shared.insert("problem".to_string(), Value::String("x + 5 = 10".to_string()));
+    shared.insert(
+      "model_name".to_string(),
+      Value::String("gpt-3.5-turbo".to_string()),
+    );
+    shared.insert(
+      "problem".to_string(),
+      Value::String("x + 5 = 10".to_string()),
+    );
     shared.insert("subject".to_string(), Value::String("math".to_string()));
 
     let config = node.prep_async(&shared).await.unwrap();
     let config_obj = config.as_object().unwrap();
 
-    assert_eq!(config_obj.get("model").unwrap().as_str().unwrap(), "gpt-3.5-turbo");
-    assert_eq!(config_obj.get("prompt").unwrap().as_str().unwrap(), "Solve: x + 5 = 10");
-    assert_eq!(config_obj.get("system").unwrap().as_str().unwrap(), "You are a math tutor");
+    assert_eq!(
+      config_obj.get("model").unwrap().as_str().unwrap(),
+      "gpt-3.5-turbo"
+    );
+    assert_eq!(
+      config_obj.get("prompt").unwrap().as_str().unwrap(),
+      "Solve: x + 5 = 10"
+    );
+    assert_eq!(
+      config_obj.get("system").unwrap().as_str().unwrap(),
+      "You are a math tutor"
+    );
   }
 
   #[tokio::test]
@@ -392,7 +446,11 @@ mod tests {
     let config_obj = config.as_object().unwrap();
 
     let temp = config_obj.get("temperature").unwrap().as_f64().unwrap();
-    assert!((temp - 0.8).abs() < 0.01, "Temperature {} should be approximately 0.8", temp);
+    assert!(
+      (temp - 0.8).abs() < 0.01,
+      "Temperature {} should be approximately 0.8",
+      temp
+    );
     assert_eq!(config_obj.get("max_tokens").unwrap().as_u64().unwrap(), 256);
   }
 
@@ -401,11 +459,11 @@ mod tests {
   async fn test_llm_node_real_llm_fallback() {
     let node = LlmNode::new("real_test", "gpt-4").with_real_llm(true);
     let shared = SharedState::new();
-    
+
     // This should succeed by falling back to mock when real LLM fails
     let result = node.run_async(&shared).await;
     assert!(result.is_ok());
-    
+
     // Should have the fallback message in output
     let output = shared.get("real_test_output").unwrap();
     assert!(output.as_str().unwrap().contains("mock response"));

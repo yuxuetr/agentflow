@@ -13,7 +13,7 @@ pub mod factory_traits;
 pub mod factories;
 
 // Re-export core types for convenience
-pub use agentflow_core::{AsyncNode, SharedState, AgentFlowError, Result};
+pub use agentflow_core::{AgentFlowError, AsyncNode, Result, SharedState};
 
 // Node implementations - feature-gated
 #[cfg(feature = "llm")]
@@ -35,7 +35,7 @@ pub use nodes::batch::BatchNode;
 pub use nodes::conditional::ConditionalNode;
 
 // Factory trait exports
-pub use factory_traits::{NodeFactory, NodeRegistry, NodeConfig, ResolvedNodeConfig};
+pub use factory_traits::{NodeConfig, NodeFactory, NodeRegistry, ResolvedNodeConfig};
 
 // Factory implementations for configuration support
 #[cfg(feature = "factories")]
@@ -47,22 +47,22 @@ pub type NodeResult<T> = std::result::Result<T, NodeError>;
 /// Error types specific to node operations
 #[derive(thiserror::Error, Debug)]
 pub enum NodeError {
-    #[error("Configuration error: {message}")]
-    ConfigurationError { message: String },
-    
-    #[error("Execution error: {message}")]
-    ExecutionError { message: String },
-    
-    #[error("Validation error: {message}")]
-    ValidationError { message: String },
-    
-    #[error("Core workflow error: {0}")]
-    CoreError(#[from] AgentFlowError),
-    
-    #[error("I/O error: {0}")]
-    IoError(#[from] std::io::Error),
-    
-    #[cfg(feature = "http")]
-    #[error("HTTP request error: {0}")]
-    HttpError(#[from] reqwest::Error),
+  #[error("Configuration error: {message}")]
+  ConfigurationError { message: String },
+
+  #[error("Execution error: {message}")]
+  ExecutionError { message: String },
+
+  #[error("Validation error: {message}")]
+  ValidationError { message: String },
+
+  #[error("Core workflow error: {0}")]
+  CoreError(#[from] AgentFlowError),
+
+  #[error("I/O error: {0}")]
+  IoError(#[from] std::io::Error),
+
+  #[cfg(feature = "http")]
+  #[error("HTTP request error: {0}")]
+  HttpError(#[from] reqwest::Error),
 }

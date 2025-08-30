@@ -172,7 +172,7 @@ impl AgentFlow {
   /// Configuration priority (first found wins):
   /// 1. ~/.agentflow/models.yml (user-specific)
   /// 2. Built-in defaults (bundled in crate)
-  /// 
+  ///
   /// Also loads environment variables from ~/.agentflow/.env if available
   pub async fn init() -> Result<()> {
     // Load environment variables from ~/.agentflow/.env
@@ -212,47 +212,36 @@ impl AgentFlow {
     let config_dir = home_dir.join(".agentflow");
     let config_path = config_dir.join("models.yml");
     let env_path = config_dir.join(".env");
-    
+
     let config_content = include_str!("../templates/default_models.yml");
     let env_content = include_str!("../templates/default.env");
 
     // Create directory if it doesn't exist
-    tokio::fs::create_dir_all(&config_dir)
-      .await
-      .map_err(|e| crate::LLMError::ConfigurationError {
+    tokio::fs::create_dir_all(&config_dir).await.map_err(|e| {
+      crate::LLMError::ConfigurationError {
         message: format!("Failed to create config directory: {}", e),
-      })?;
+      }
+    })?;
 
     // Write models.yml
-    tokio::fs::write(&config_path, config_content).await.map_err(|e| {
-      crate::LLMError::ConfigurationError {
+    tokio::fs::write(&config_path, config_content)
+      .await
+      .map_err(|e| crate::LLMError::ConfigurationError {
         message: format!("Failed to write config file: {}", e),
-      }
-    })?;
+      })?;
 
     // Write .env file
-    tokio::fs::write(&env_path, env_content).await.map_err(|e| {
-      crate::LLMError::ConfigurationError {
+    tokio::fs::write(&env_path, env_content)
+      .await
+      .map_err(|e| crate::LLMError::ConfigurationError {
         message: format!("Failed to write .env file: {}", e),
-      }
-    })?;
+      })?;
 
-    println!(
-      "✅ Generated configuration file: {}",
-      config_path.display()
-    );
-    println!(
-      "✅ Generated environment file: {}",
-      env_path.display()
-    );
+    println!("✅ Generated configuration file: {}", config_path.display());
+    println!("✅ Generated environment file: {}", env_path.display());
     println!("⚠️  Add your API keys to ~/.agentflow/.env");
     Ok(())
   }
-
-
-
-
-
 
   /// Initialize logging for AgentFlow LLM
   ///

@@ -5,7 +5,8 @@ pub async fn execute(force: bool) -> Result<()> {
   println!("🚀 Initializing AgentFlow configuration...");
 
   // Check if config directory already exists
-  let home_dir = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+  let home_dir =
+    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
   let config_dir = home_dir.join(".agentflow");
   let config_file = config_dir.join("models.yml");
   let env_file = config_dir.join(".env");
@@ -18,7 +19,7 @@ pub async fn execute(force: bool) -> Result<()> {
         println!("   • models.yml found");
       }
       if env_file.exists() {
-        println!("   • .env found");  
+        println!("   • .env found");
       }
       println!("");
       println!("Use --force to overwrite existing configuration files.");
