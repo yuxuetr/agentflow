@@ -2,12 +2,12 @@
 name = "agentflow-mcp"
 version = "0.1.0"
 edition = "2021"
-authors = ["AgentFlow Contributors"]
+authors = ["yuxuetr"]
 description = "Model Context Protocol (MCP) integration for AgentFlow workflow system"
 license = "MIT"
 keywords = ["mcp", "ai", "agents", "workflow", "llm"]
 categories = ["development-tools"]
-repository = "https://github.com/your-org/agentflow"
+repository = "https://github.com/yuxuetr/agentflow"
 
 [dependencies]
 # Official MCP Rust SDK (commented until available)

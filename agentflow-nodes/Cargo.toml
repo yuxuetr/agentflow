@@ -2,7 +2,7 @@
 name = "agentflow-nodes"
 version = "0.1.0"
 edition = "2021"
-authors = ["AgentFlow Contributors"]
+authors = ["yuxuetr"]
 description = "Built-in node implementations for AgentFlow workflows"
 license = "MIT"
 keywords = ["ai", "workflow", "nodes", "llm"]

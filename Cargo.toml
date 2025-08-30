@@ -2,12 +2,10 @@
 members = [
   "agentflow-core", 
   "agentflow-nodes",
-  "agentflow-config",
+#  "agentflow-config",
   "agentflow-llm", 
   "agentflow-cli",
   "agentflow-mcp",
-  "agentflow-agents",
-  "agentflow-agents/agents/paper_research_analyzer"
 ]
 resolver = "2"
 
@@ -15,9 +13,9 @@ resolver = "2"
 name = "agentflow"
 version = "0.1.0"
 edition = "2021"
-authors = ["AgentFlow Contributors"]
+authors = ["yuxuetr"]
 description = "A high-performance LLM framework inspired by PocketFlow"
-repository = "https://github.com/agentflow/agentflow"
+repository = "https://github.com/yuxuetr/agentflow"
 license = "MIT"
 keywords = ["llm", "ai", "workflow", "agent", "mcp"]
 categories = ["development-tools", "web-programming"]

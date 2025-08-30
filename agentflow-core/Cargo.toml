@@ -2,7 +2,7 @@
 name = "agentflow-core"
 version = "0.1.0"
 edition = "2021"
-authors = ["AgentFlow Contributors"]
+authors = ["yuxuetr"]
 description = "Core traits and execution engine for AgentFlow"
 license = "MIT"
 

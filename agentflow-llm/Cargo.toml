@@ -2,7 +2,7 @@
 name = "agentflow-llm"
 version = "0.1.0"
 edition = "2021"
-authors = ["AgentFlow Contributors"]
+authors = ["yuxuetr"]
 description = "LLM integration crate for AgentFlow - unified interface for multiple LLM providers"
 license = "MIT"
 
