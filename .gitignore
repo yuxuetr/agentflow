@@ -23,5 +23,8 @@ Cargo.lock
 
 .claude
 CLAUDE.md
+WARP.md
+
+commit-docs
 
 .DS_Store
