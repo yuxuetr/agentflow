@@ -573,6 +573,21 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
+  gpt-4:
+    vendor: openai
+    type: multimodal
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 4096
+    frequency_penalty: 0.0
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
   qwen2-1.5b-instruct:
     vendor: dashscope
     type: text
@@ -2884,7 +2899,7 @@ providers:
       tokens_per_minute: 80000
   anthropic:
     api_key_env: ANTHROPIC_API_KEY
-    base_url: https://api.anthropic.com/v1
+    base_url: https://api.anthropic.com
     timeout_seconds: 90
     rate_limit:
       requests_per_minute: 300
