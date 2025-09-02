@@ -153,3 +153,34 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
+  # Additional models from API response - added for testing
+  claude-opus-4-1-20250805:
+    vendor: anthropic
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.6
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  claude-3-7-sonnet-20250219:
+    vendor: anthropic
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.6
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
