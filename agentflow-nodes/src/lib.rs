@@ -15,10 +15,21 @@ pub mod factories;
 // Re-export core types for convenience
 pub use agentflow_core::{AgentFlowError, AsyncNode, Result, SharedState};
 
-// Node implementations - feature-gated
+// Text-based AI model nodes
 #[cfg(feature = "llm")]
 pub use nodes::llm::LlmNode;
 
+// Image AI model nodes - always available
+pub use nodes::text_to_image::TextToImageNode;
+pub use nodes::image_to_image::ImageToImageNode;
+pub use nodes::image_edit::ImageEditNode;
+pub use nodes::image_understand::ImageUnderstandNode;
+
+// Audio AI model nodes - always available
+pub use nodes::tts::TTSNode;
+pub use nodes::asr::ASRNode;
+
+// Utility nodes - feature-gated
 #[cfg(feature = "http")]
 pub use nodes::http::HttpNode;
 
@@ -65,4 +76,7 @@ pub enum NodeError {
   #[cfg(feature = "http")]
   #[error("HTTP request error: {0}")]
   HttpError(#[from] reqwest::Error),
+
+  #[error("Serialization error: {0}")]
+  SerializationError(#[from] serde_json::Error),
 }
