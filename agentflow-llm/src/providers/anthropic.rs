@@ -312,17 +312,17 @@ impl AnthropicStreamingResponse {
 
     let data = &line[6..]; // Remove "data: " prefix
 
-    if let Ok(event) = serde_json::from_str::<AnthropicStreamingEvent>(data) {
-      match event.event_type.as_str() {
-        "content_block_delta" => {
-          if let Some(data) = event.data {
-            if let Some(delta) = data.get("delta") {
+    if let Ok(event) = serde_json::from_str::<Value>(data) {
+      if let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
+        match event_type {
+          "content_block_delta" => {
+            if let Some(delta) = event.get("delta") {
               if let Some(text) = delta.get("text") {
                 if let Some(text_str) = text.as_str() {
                   return Some(StreamChunk {
                     content: text_str.to_string(),
                     is_final: false,
-                    metadata: Some(data),
+                    metadata: Some(event.clone()),
                     usage: None,
                     content_type: Some("text".to_string()),
                   });
@@ -330,22 +330,32 @@ impl AnthropicStreamingResponse {
               }
             }
           }
+          "message_stop" => {
+            return Some(StreamChunk {
+              content: String::new(),
+              is_final: true,
+              metadata: Some(event.clone()),
+              usage: None,
+              content_type: Some("text".to_string()),
+            });
+          }
+          "content_block_stop" => {
+            return Some(StreamChunk {
+              content: String::new(),
+              is_final: true,
+              metadata: Some(event.clone()),
+              usage: None,
+              content_type: Some("text".to_string()),
+            });
+          }
+          _ => {}
         }
-        "message_stop" => {
-          return Some(StreamChunk {
-            content: String::new(),
-            is_final: true,
-            metadata: event.data,
-            usage: None,
-            content_type: Some("text".to_string()),
-          });
-        }
-        _ => {}
       }
     }
 
     None
   }
+
 }
 
 #[async_trait]

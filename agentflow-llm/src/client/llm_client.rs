@@ -617,6 +617,36 @@ impl LLMClientBuilder {
     self
   }
 
+  /// Add a system message to the request
+  /// This creates a multimodal message with system role
+  pub fn system(mut self, system_message: &str) -> Self {
+    let system_msg = crate::multimodal::MultimodalMessage::system()
+      .add_text(system_message)
+      .build();
+    
+    // If we already have multimodal messages, add to them
+    if let Some(ref mut messages) = self.client.multimodal_messages {
+      // Insert system message at the beginning
+      messages.insert(0, system_msg);
+    } else {
+      // Create new multimodal messages with system message
+      let mut messages = vec![system_msg];
+      
+      // If there's a prompt, add it as a user message
+      if !self.client.prompt.is_empty() {
+        let user_msg = crate::multimodal::MultimodalMessage::user()
+          .add_text(&self.client.prompt)
+          .build();
+        messages.push(user_msg);
+        self.client.prompt = String::new(); // Clear the prompt since we're using multimodal now
+      }
+      
+      self.client.multimodal_messages = Some(messages);
+    }
+    
+    self
+  }
+
   pub fn with_metrics(mut self, collector: Arc<MetricsCollector>) -> Self {
     self.client.metrics_collector = Some(collector);
     self
