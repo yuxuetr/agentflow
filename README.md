@@ -13,43 +13,7 @@ AgentFlow delivers production-ready workflow orchestration through a clean, laye
 
 AgentFlow follows a modular, layered architecture with clear separation of concerns:
 
-```
-                    Application Layer
-    ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-    │  agentflow-cli  │    │ agentflow-agents │    │ agentflow-mcp   │
-    │                 │    │                  │    │                 │  
-    │ • workflow run  │    │ • paper_analyzer │    │ • MCP client    │
-    │ • config run    │    │ • batch_utils    │    │ • tool calls    │
-    │ • llm commands  │    │ • agent traits   │    │ • transport     │
-    └─────────┬───────┘    └─────────┬────────┘    └─────────┬───────┘
-              │                      │                       │
-        Orchestration Layer           │                       │
-        ┌────────────────▼────────────▼───────────────────────┘
-        │     agentflow-config            │    
-        │                                 │    
-        │ • YAML/JSON parsing             │   
-        │ • Template engine               │    
-        │ • Node registry                 │    
-        │ • Configuration compiler        │    
-        └─────────────────┬───────────────┘
-                          │
-        ┌─────────────────▼───────────────┐    ┌─────────────────────┐
-        │        agentflow-core           │    │   agentflow-llm     │
-        │                                 │◄───┤                     │
-        │ • AsyncNode trait               │    │ • OpenAI            │
-        │ • AsyncFlow execution           │    │ • Anthropic         │ 
-        │ • SharedState                   │    │ • Google            │
-        │ • Core error types              │    │ • Moonshot          │
-        │ • Built-in nodes                │    │ • StepFun           │
-        └─────────────────────────────────┘    │ • Ollama (planned)  │
-                          ▲                    │ • vLLM (planned)    │
-                          │                    │ • SGLang (planned)  │
-                          │                    │ • Model registry    │
-                          │                    │ • Multimodal        │
-                          └────────────────────┤ • Streaming         │
-                                               └─────────────────────┘
-                    Foundation Layer
-```
+![AgentFlow Architecture](assets/AgentFlow-crates.jpeg)
 
 ## 🎯 Two Approaches, One Platform
 
