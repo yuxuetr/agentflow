@@ -3,6 +3,7 @@
 //! This crate provides ready-to-use node implementations for AgentFlow workflows,
 //! supporting both code-first and configuration-first approaches.
 
+pub mod error;
 pub mod nodes;
 
 // Factory traits for configuration support
@@ -45,6 +46,10 @@ pub use nodes::batch::BatchNode;
 #[cfg(feature = "conditional")]
 pub use nodes::conditional::ConditionalNode;
 
+// Specialized content processing nodes
+pub use nodes::markmap::{MarkMapNode, MarkMapConfig};
+pub use nodes::arxiv::{ArxivNode, ArxivConfig};
+
 // Factory trait exports
 pub use factory_traits::{NodeConfig, NodeFactory, NodeRegistry, ResolvedNodeConfig};
 
@@ -52,31 +57,5 @@ pub use factory_traits::{NodeConfig, NodeFactory, NodeRegistry, ResolvedNodeConf
 #[cfg(feature = "factories")]
 pub use factories::*;
 
-// Node result type
-pub type NodeResult<T> = std::result::Result<T, NodeError>;
-
-/// Error types specific to node operations
-#[derive(thiserror::Error, Debug)]
-pub enum NodeError {
-  #[error("Configuration error: {message}")]
-  ConfigurationError { message: String },
-
-  #[error("Execution error: {message}")]
-  ExecutionError { message: String },
-
-  #[error("Validation error: {message}")]
-  ValidationError { message: String },
-
-  #[error("Core workflow error: {0}")]
-  CoreError(#[from] AgentFlowError),
-
-  #[error("I/O error: {0}")]
-  IoError(#[from] std::io::Error),
-
-  #[cfg(feature = "http")]
-  #[error("HTTP request error: {0}")]
-  HttpError(#[from] reqwest::Error),
-
-  #[error("Serialization error: {0}")]
-  SerializationError(#[from] serde_json::Error),
-}
+// Error types
+pub use error::{NodeError, NodeResult};

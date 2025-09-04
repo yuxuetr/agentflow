@@ -29,3 +29,7 @@ pub mod batch;
 
 #[cfg(feature = "conditional")]
 pub mod conditional;
+
+// Specialized content processing nodes
+pub mod markmap;
+pub mod arxiv;

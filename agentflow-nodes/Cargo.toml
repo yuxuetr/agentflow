@@ -49,6 +49,11 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.21"
 
+# MarkMap and Arxiv node dependencies
+flate2 = "1.0"
+tar = "0.4"
+regex = "1.0"
+
 [dev-dependencies]
 tokio-test = "0.4"
 
@@ -111,3 +116,11 @@ path = "examples/direct_provider_test.rs"
 [[example]]
 name = "claude_comprehensive_test" 
 path = "examples/claude_comprehensive_test.rs"
+
+[[example]]
+name = "markmap_example"
+path = "examples/markmap_example.rs"
+
+[[example]]
+name = "arxiv_example"
+path = "examples/arxiv_example.rs"
