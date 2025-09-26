@@ -616,7 +616,13 @@ impl LlmNode {
       }
     })?;
     
-    println!("✅ LLM Response: {}...", &response[..100.min(response.len())]);
+    // Safely truncate at character boundary for display
+    let display_text = if response.chars().count() > 50 {
+      format!("{}...", response.chars().take(50).collect::<String>())
+    } else {
+      response.clone()
+    };
+    println!("✅ LLM Response: {}", display_text);
     Ok(response)
   }
 

@@ -6,6 +6,8 @@ members = [
   "agentflow-llm", 
   "agentflow-cli",
   "agentflow-mcp",
+  "agentflow-agents",
+  "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"
 
