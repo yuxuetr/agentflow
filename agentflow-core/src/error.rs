@@ -1,64 +1,89 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Serialize, Deserialize)]
 pub enum AgentFlowError {
-  #[error("Node execution failed: {message}")]
-  NodeExecutionFailed { message: String },
+    #[error("Node execution failed: {message}")]
+    NodeExecutionFailed { message: String },
 
-  #[error("Retry attempts exhausted after {attempts} attempts")]
-  RetryExhausted { attempts: u32 },
+    #[error("Node input error: {message}")]
+    NodeInputError { message: String },
 
-  #[error("Flow execution failed: {message}")]
-  FlowExecutionFailed { message: String },
+    #[error("Node was skipped due to a condition.")]
+    NodeSkipped,
 
-  #[error("Circular flow detected")]
-  CircularFlow,
+    #[error("Node '{node_id}' was skipped because its dependency '{dependency_id}' was skipped.")]
+    DependencyNotMet { node_id: String, dependency_id: String },
 
-  #[error("Unknown transition: {action}")]
-  UnknownTransition { action: String },
+    #[error("Retry attempts exhausted after {attempts} attempts")]
+    RetryExhausted { attempts: u32 },
 
-  #[error("Shared state error: {message}")]
-  SharedStateError { message: String },
+    #[error("Flow definition error: {message}")]
+    FlowDefinitionError { message: String },
 
-  #[error("Serialization error: {0}")]
-  SerializationError(#[from] serde_json::Error),
+    #[error("Flow execution failed: {message}")]
+    FlowExecutionFailed { message: String },
 
-  #[error("Generic error: {0}")]
-  Generic(#[from] anyhow::Error),
+    #[error("Circular flow detected")]
+    CircularFlow,
 
-  // Phase 2: Async and robustness errors
-  #[error("Timeout exceeded after {duration_ms}ms")]
-  TimeoutExceeded { duration_ms: u64 },
+    #[error("Persistence error: {message}")]
+    PersistenceError { message: String },
 
-  #[error("Circuit breaker open for node: {node_id}")]
-  CircuitBreakerOpen { node_id: String },
+    #[error("Unknown transition: {action}")]
+    UnknownTransition { action: String },
 
-  #[error("Rate limit exceeded: {limit} requests per {window_ms}ms")]
-  RateLimitExceeded { limit: u32, window_ms: u64 },
+    #[error("Shared state error: {message}")]
+    SharedStateError { message: String },
 
-  #[error("Load shed due to high system load")]
-  LoadShed,
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
 
-  #[error("Resource pool exhausted: {resource_type}")]
-  ResourcePoolExhausted { resource_type: String },
+    #[error("Generic error: {0}")]
+    Generic(String),
 
-  #[error("Task cancelled")]
-  TaskCancelled,
+    #[error("Timeout exceeded after {duration_ms}ms")]
+    TimeoutExceeded { duration_ms: u64 },
 
-  #[error("Async execution error: {message}")]
-  AsyncExecutionError { message: String },
+    #[error("Circuit breaker open for node: {node_id}")]
+    CircuitBreakerOpen { node_id: String },
 
-  #[error("Batch processing failed: {failed_items} of {total_items} items failed")]
-  BatchProcessingFailed {
-    failed_items: usize,
-    total_items: usize,
-  },
+    #[error("Rate limit exceeded: {limit} requests per {window_ms}ms")]
+    RateLimitExceeded { limit: u32, window_ms: u64 },
 
-  #[error("Monitoring error: {message}")]
-  MonitoringError { message: String },
+    #[error("Load shed due to high system load")]
+    LoadShed,
+
+    #[error("Resource pool exhausted: {resource_type}")]
+    ResourcePoolExhausted { resource_type: String },
+
+    #[error("Task cancelled")]
+    TaskCancelled,
+
+    #[error("Async execution error: {message}")]
+    AsyncExecutionError { message: String },
+
+    #[error("Batch processing failed: {failed_items} of {total_items} items failed")]
+    BatchProcessingFailed {
+        failed_items: usize,
+        total_items: usize,
+    },
+
+    #[error("Configuration error: {message}")]
+    ConfigurationError { message: String },
+
+    #[error("Monitoring error: {message}")]
+    MonitoringError { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, AgentFlowError>;
+
+// Conversion from serde_json::Error to keep things clean in other parts of the code.
+impl From<serde_json::Error> for AgentFlowError {
+    fn from(err: serde_json::Error) -> Self {
+        AgentFlowError::SerializationError(err.to_string())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -74,11 +99,10 @@ mod tests {
 
   #[test]
   fn test_error_chaining() {
-    // Create a simple JSON parsing error
     let json_result: std::result::Result<serde_json::Value, serde_json::Error> =
       serde_json::from_str("{invalid");
     let inner_error = json_result.unwrap_err();
-    let error = AgentFlowError::SerializationError(inner_error);
+    let error = AgentFlowError::from(inner_error);
     assert!(error.to_string().contains("Serialization error"));
   }
 

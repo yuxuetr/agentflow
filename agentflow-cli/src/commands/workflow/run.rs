@@ -1,88 +1,52 @@
+use crate::config::v2::FlowDefinitionV2;
+use crate::executor::factory;
 use anyhow::{Context, Result};
-use std::collections::HashMap;
-
-// Use CLI's real WorkflowRunner with LLM integration instead of Core's mock version
-use crate::executor::runner::WorkflowRunner;
-use crate::utils::output::OutputFormatter;
+use agentflow_core::flow::Flow;
+use std::fs;
 
 pub async fn execute(
   workflow_file: String,
-  watch: bool,
-  output: Option<String>,
-  input: Vec<(String, String)>,
-  dry_run: bool,
-  _timeout: String,
-  _max_retries: u32,
+  _watch: bool, // not implemented
+  _output: Option<String>, // not implemented
+  _input: Vec<(String, String)>, // not implemented
+  _dry_run: bool, // not implemented
+  _timeout: String, // not implemented
+  _max_retries: u32, // not implemented
 ) -> Result<()> {
-  if dry_run {
-    println!("🔍 Validating workflow configuration...");
-    let _runner = WorkflowRunner::new(&workflow_file)
-      .await
-      .with_context(|| format!("Failed to create workflow runner for: {}", workflow_file))?;
-    println!("✅ Workflow configuration is valid");
-    return Ok(());
-  }
+    println!("🚀 Starting AgentFlow V2 workflow execution: {}", workflow_file);
 
-  println!("🚀 Starting workflow execution: {}", workflow_file);
-  println!("🔍 Loading workflow file: {}", workflow_file);
+    // 1. Read and parse the V2 workflow file
+    let yaml_content = fs::read_to_string(&workflow_file)
+        .with_context(|| format!("Failed to read workflow file: {}", workflow_file))?;
+    let flow_def: FlowDefinitionV2 = serde_yaml::from_str(&yaml_content)
+        .with_context(|| "Failed to parse V2 workflow YAML.")?;
 
-  // Check file exists and get size
-  let metadata = tokio::fs::metadata(&workflow_file)
-    .await
-    .with_context(|| format!("Failed to read workflow file: {}", workflow_file))?;
-  println!(
-    "✅ File loaded successfully, length: {} bytes",
-    metadata.len()
-  );
+    println!("📄 Workflow '\'{}\'\' loaded.", flow_def.name);
 
-  // Create workflow runner
-  let runner = WorkflowRunner::new(&workflow_file)
-    .await
-    .with_context(|| format!("Failed to create workflow runner for: {}", workflow_file))?;
-
-  // Convert input parameters
-  let input_map: HashMap<String, String> = input.into_iter().collect();
-
-  if !input_map.is_empty() {
-    println!("📝 Input parameters:");
-    for (key, value) in &input_map {
-      println!("  - {}: {}", key, value);
+    // 2. Build the core Flow object from the definition
+    let mut flow = Flow::new();
+    println!("🔨 Building workflow graph with {} nodes...", flow_def.nodes.len());
+    for node_def in &flow_def.nodes {
+        let graph_node = factory::create_graph_node(node_def)
+            .with_context(|| format!("Failed to create graph node for id: {}", node_def.id))?;
+        flow.add_node(graph_node);
+        println!("  - Added node '{}' (type: '{}')", node_def.id, node_def.node_type);
     }
-  }
 
-  // Execute workflow
-  let start_time = std::time::Instant::now();
-  let results = runner
-    .run(input_map)
-    .await
-    .context("Workflow execution failed")?;
-  let duration = start_time.elapsed();
+    // 3. Execute the flow
+    println!("\n▶️  Running flow...");
+    let start_time = std::time::Instant::now();
+    let final_state = flow.run().await.unwrap();
+    let duration = start_time.elapsed();
+    println!("\n✅ Workflow completed in {:.2?}.", duration);
 
-  println!("✅ Workflow completed in {:.2}s", duration.as_secs_f64());
+    // 4. Print the results
+    println!("DEBUG: Final state before returning: {:?}", final_state);
+    println!("\n📊 Final State Pool:");
+    let final_state_json = serde_json::to_string_pretty(&final_state)
+        .context("Failed to serialize final state to JSON.")?;
+    println!("{}", final_state_json);
 
-  // Format and display results
-  if !results.is_empty() {
-    println!("\n📊 Results:");
-    let formatter = OutputFormatter::new();
-    for (key, value) in &results {
-      println!("  - {}: {}", key, formatter.format_value(value));
-    }
-  }
-
-  // Save results to file if specified
-  if let Some(output_file) = output {
-    let output_content =
-      serde_json::to_string_pretty(&results).context("Failed to serialize results")?;
-    tokio::fs::write(&output_file, output_content)
-      .await
-      .with_context(|| format!("Failed to write results to: {}", output_file))?;
-    println!("💾 Results saved to: {}", output_file);
-  }
-
-  // TODO: Implement watch mode
-  if watch {
-    println!("⚠️  Watch mode not yet implemented");
-  }
-
-  Ok(())
+    Ok(())
 }
+

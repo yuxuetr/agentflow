@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # Core dependencies
 agentflow-core = { path = "../agentflow-core" }
+agentflow-nodes = { path = "../agentflow-nodes" }
 agentflow-llm = { path = "../agentflow-llm" }
 
 # CLI framework

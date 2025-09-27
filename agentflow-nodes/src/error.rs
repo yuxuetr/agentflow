@@ -53,7 +53,7 @@ impl From<NodeError> for AgentFlowError {
         }
       }
       NodeError::SerializationError(ser_err) => {
-        AgentFlowError::SerializationError(ser_err)
+        AgentFlowError::SerializationError(ser_err.to_string())
       }
       NodeError::HttpError { message } => {
         AgentFlowError::AsyncExecutionError {

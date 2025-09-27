@@ -1,0 +1,18 @@
+#
+name: v2_test_workflow
+nodes:
+  - id: start_node
+    type: mock
+    parameters:
+      should_run: true
+
+  - id: conditional_node
+    type: mock
+    dependencies: ["start_node"]
+    run_if: "{{ nodes.start_node.outputs.should_run }}"
+
+  - id: skipped_node
+    type: mock
+    dependencies: ["start_node"]
+    run_if: "{{ nodes.start_node.outputs.should_not_run }}"
+#

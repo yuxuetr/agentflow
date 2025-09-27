@@ -161,15 +161,15 @@ impl Drop for MCPClient {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use tokio_test;
+  
 
-  #[tokio_test::test]
+  #[tokio::test]
   async fn test_client_creation() {
     let client = MCPClient::stdio(vec!["echo".to_string(), "test".to_string()]);
     assert!(!client.session_id.is_empty());
   }
 
-  #[tokio_test::test]
+  #[tokio::test]
   async fn test_tool_call_creation() {
     let call = ToolCall::new("test_tool", json!({"param": "value"}));
     assert_eq!(call.name, "test_tool");

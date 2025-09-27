@@ -1,9 +1,9 @@
 //! Node implementations module
 
 // Text-based AI model nodes
-#[cfg(feature = "llm")]
 pub mod llm;
 
+/*
 // Image AI model nodes  
 pub mod text_to_image;
 pub mod image_to_image;
@@ -33,3 +33,4 @@ pub mod conditional;
 // Specialized content processing nodes
 pub mod markmap;
 pub mod arxiv;
+*/

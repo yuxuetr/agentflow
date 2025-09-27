@@ -6,13 +6,13 @@ authors = ["yuxuetr"]
 description = "Core traits and execution engine for AgentFlow"
 license = "MIT"
 
-[[example]]
-name = "hello_world"
-path = "examples/hello_world.rs"
-
-[[example]]
-name = "simple_llm_workflow"
-path = "examples/simple_llm_workflow.rs"
+# [[example]]
+# name = "hello_world"
+# path = "examples/hello_world.rs"
+# 
+# [[example]]
+# name = "simple_llm_workflow"
+# path = "examples/simple_llm_workflow.rs"
 
 
 [features]

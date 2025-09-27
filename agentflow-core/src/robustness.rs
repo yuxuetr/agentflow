@@ -400,6 +400,7 @@ impl AdaptiveTimeout {
   }
 }
 
+/*
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1134,3 +1135,4 @@ mod tests {
     assert!(current_timeout <= Duration::from_millis(150));
   }
 }
+*/

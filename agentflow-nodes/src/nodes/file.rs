@@ -1,180 +1,93 @@
-use crate::{AsyncNode, SharedState};
-use agentflow_core::{AgentFlowError, Result};
+use agentflow_core::{
+    async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+    error::AgentFlowError,
+    value::FlowValue,
+};
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 
-/// File I/O node for reading and writing files
-#[derive(Debug, Clone)]
-pub struct FileNode {
-  pub name: String,
-  pub operation: String, // "read", "write", "append"
-  pub path: String,
-  pub content: Option<String>, // For write/append operations
-  pub encoding: String,
-}
-
-impl FileNode {
-  pub fn new(name: &str, operation: &str, path: &str) -> Self {
-    Self {
-      name: name.to_string(),
-      operation: operation.to_string(),
-      path: path.to_string(),
-      content: None,
-      encoding: "utf-8".to_string(),
-    }
-  }
-
-  pub fn with_content(mut self, content: &str) -> Self {
-    self.content = Some(content.to_string());
-    self
-  }
-
-  pub fn with_encoding(mut self, encoding: &str) -> Self {
-    self.encoding = encoding.to_string();
-    self
-  }
-}
+#[derive(Debug, Clone, Default)]
+pub struct FileNode;
 
 #[async_trait]
 impl AsyncNode for FileNode {
-  async fn prep_async(&self, _shared: &SharedState) -> Result<Value> {
-    // TODO: Resolve template variables in path and content
-    Ok(serde_json::json!({
-        "operation": self.operation,
-        "path": self.path,
-        "content": self.content,
-        "encoding": self.encoding
-    }))
-  }
+    async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let operation = get_string_input(inputs, "operation")?;
+        let path = get_string_input(inputs, "path")?;
 
-  async fn exec_async(&self, prep_result: Value) -> Result<Value> {
-    let operation = prep_result["operation"].as_str().unwrap_or(&self.operation);
-    let path = prep_result["path"].as_str().unwrap_or(&self.path);
-    let encoding = prep_result["encoding"].as_str().unwrap_or(&self.encoding);
-
-    match operation {
-      "read" => {
-        // Read file contents
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-          AgentFlowError::AsyncExecutionError {
-            message: format!("Failed to read file '{}': {}", path, e),
-          }
-        })?;
-
-        Ok(serde_json::json!({
-            "operation": "read",
-            "path": path,
-            "content": content,
-            "size": content.len(),
-            "encoding": encoding
-        }))
-      }
-      "write" => {
-        // Write content to file
-        let content =
-          prep_result["content"]
-            .as_str()
-            .ok_or_else(|| AgentFlowError::AsyncExecutionError {
-              message: "Write operation requires content".to_string(),
-            })?;
-
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(path).parent() {
-          tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            AgentFlowError::AsyncExecutionError {
-              message: format!("Failed to create directory '{}': {}", parent.display(), e),
+        match operation {
+            "read" => {
+                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+                    AgentFlowError::AsyncExecutionError { message: format!("Failed to read file '{}': {}", path, e) }
+                })?;
+                let mut outputs = HashMap::new();
+                outputs.insert("content".to_string(), FlowValue::Json(json!(content)));
+                Ok(outputs)
             }
-          })?;
-        }
-
-        tokio::fs::write(path, content)
-          .await
-          .map_err(|e| AgentFlowError::AsyncExecutionError {
-            message: format!("Failed to write file '{}': {}", path, e),
-          })?;
-
-        Ok(serde_json::json!({
-            "operation": "write",
-            "path": path,
-            "size": content.len(),
-            "encoding": encoding
-        }))
-      }
-      "append" => {
-        // Append content to file
-        let content =
-          prep_result["content"]
-            .as_str()
-            .ok_or_else(|| AgentFlowError::AsyncExecutionError {
-              message: "Append operation requires content".to_string(),
-            })?;
-
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(path).parent() {
-          tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            AgentFlowError::AsyncExecutionError {
-              message: format!("Failed to create directory '{}': {}", parent.display(), e),
+            "write" => {
+                let content = get_string_input(inputs, "content")?;
+                if let Some(parent) = Path::new(path).parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        AgentFlowError::AsyncExecutionError { message: format!("Failed to create directory '{}': {}", parent.display(), e) }
+                    })?;
+                }
+                tokio::fs::write(path, content).await.map_err(|e| {
+                    AgentFlowError::AsyncExecutionError { message: format!("Failed to write file '{}': {}", path, e) }
+                })?;
+                let mut outputs = HashMap::new();
+                outputs.insert("path".to_string(), FlowValue::Json(json!(path)));
+                Ok(outputs)
             }
-          })?;
+            _ => Err(AgentFlowError::NodeInputError { message: format!("Unsupported file operation: {}", operation) })
         }
+    }
+}
 
-        // Read existing content if file exists
-        let mut existing_content = String::new();
-        if Path::new(path).exists() {
-          existing_content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            AgentFlowError::AsyncExecutionError {
-              message: format!("Failed to read existing file '{}': {}", path, e),
-            }
-          })?;
+fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, AgentFlowError> {
+    inputs.get(key)
+        .and_then(|v| match v {
+            FlowValue::Json(serde_json::Value::String(s)) => Some(s.as_str()),
+            _ => None,
+        })
+        .ok_or_else(|| AgentFlowError::NodeInputError { message: format!("Required string input '{}' is missing or has wrong type", key) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_file_node_write_and_read() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        let file_path_str = file_path.to_str().unwrap();
+
+        // Write to file
+        let write_node = FileNode::default();
+        let mut write_inputs = AsyncNodeInputs::new();
+        write_inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
+        write_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
+        write_inputs.insert("content".to_string(), FlowValue::Json(json!("hello world")));
+
+        let write_result = write_node.execute(&write_inputs).await;
+        assert!(write_result.is_ok());
+
+        // Read from file
+        let read_node = FileNode::default();
+        let mut read_inputs = AsyncNodeInputs::new();
+        read_inputs.insert("operation".to_string(), FlowValue::Json(json!("read")));
+        read_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
+
+        let read_result = read_node.execute(&read_inputs).await;
+        assert!(read_result.is_ok());
+
+        let outputs = read_result.unwrap();
+        let content = outputs.get("content").unwrap();
+        if let FlowValue::Json(Value::String(s)) = content {
+            assert_eq!(s, "hello world");
         }
-
-        existing_content.push_str(content);
-
-        tokio::fs::write(path, &existing_content)
-          .await
-          .map_err(|e| AgentFlowError::AsyncExecutionError {
-            message: format!("Failed to append to file '{}': {}", path, e),
-          })?;
-
-        Ok(serde_json::json!({
-            "operation": "append",
-            "path": path,
-            "size": existing_content.len(),
-            "encoding": encoding
-        }))
-      }
-      _ => Err(AgentFlowError::AsyncExecutionError {
-        message: format!("Unsupported file operation: {}", operation),
-      }),
     }
-  }
-
-  async fn post_async(
-    &self,
-    shared: &SharedState,
-    _prep_result: Value,
-    exec_result: Value,
-  ) -> Result<Option<String>> {
-    // Store result in shared state
-    shared.insert(format!("{}_result", self.name), exec_result.clone());
-
-    // Store content if it was a read operation
-    if let Some(content) = exec_result["content"].as_str() {
-      shared.insert(
-        format!("{}_content", self.name),
-        Value::String(content.to_string()),
-      );
-    }
-
-    // Store size
-    if let Some(size) = exec_result["size"].as_u64() {
-      shared.insert(
-        format!("{}_size", self.name),
-        Value::Number(serde_json::Number::from(size)),
-      );
-    }
-
-    Ok(None)
-  }
 }

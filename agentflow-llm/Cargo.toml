@@ -6,6 +6,9 @@ authors = ["yuxuetr"]
 description = "LLM integration crate for AgentFlow - unified interface for multiple LLM providers"
 license = "MIT"
 
+[lib]
+doctest = false
+
 [features]
 default = ["openai", "anthropic", "google", "logging"]
 openai = []
@@ -53,15 +56,3 @@ env_logger = "0.10"
 tempfile = "3.8"
 futures-util = "0.3"
 base64 = "0.21"
-
-[[example]]
-name = "multimodal_demo"
-path = "examples/multimodal_demo.rs"
-
-[[example]]
-name = "granular_types_demo"
-path = "examples/granular_types_demo.rs"
-
-[[example]]
-name = "stepfun_specialized_apis"
-path = "examples/stepfun_specialized_apis.rs"

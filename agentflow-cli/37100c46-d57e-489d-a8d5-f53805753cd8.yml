@@ -1,0 +1,22 @@
+#
+name: v2_test_workflow
+nodes:
+  - id: start_node
+    type: llm
+    parameters:
+      prompt: "Return a JSON with a boolean `should_run` set to true."
+
+  - id: conditional_node
+    type: llm
+    dependencies: ["start_node"]
+    run_if: "{{ nodes.start_node.outputs.should_run }}"
+    parameters:
+      prompt: "This node should run."
+
+  - id: skipped_node
+    type: llm
+    dependencies: ["start_node"]
+    run_if: "{{ nodes.start_node.outputs.should_not_run }}"
+    parameters:
+      prompt: "This node should be skipped."
+#

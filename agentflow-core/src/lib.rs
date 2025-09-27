@@ -1,31 +1,17 @@
-//! AgentFlow Core - Pure Code-First Workflow Engine
+//! AgentFlow Core - V2
 //!
-//! This crate provides the fundamental building blocks for creating
-//! AI workflows programmatically. For configuration-based workflows,
-//! see the `agentflow-config` crate.
+//! This crate provides the fundamental building blocks for the V2 AgentFlow architecture.
 
+pub mod async_node;
 pub mod error;
 pub mod flow;
 pub mod node;
-pub mod shared_state;
-
-// Async workflow engine modules
-pub mod async_flow;
-pub mod async_node;
+pub mod value;
 pub mod observability;
-pub mod robustness;
 
-// Core traits and types - the foundation everything else builds on
+// Core traits and types
 pub use error::{AgentFlowError, Result};
 pub use flow::Flow;
-pub use node::{BaseNode, Node};
-pub use shared_state::SharedState;
-
-// Async workflow exports
-pub use async_flow::AsyncFlow;
-pub use async_node::{AsyncBaseNode, AsyncNode};
-pub use observability::{AlertManager, ExecutionEvent, MetricsCollector};
-pub use robustness::{CircuitBreaker, RateLimiter, TimeoutManager};
-
-// Core result type
-pub type CoreResult<T> = std::result::Result<T, AgentFlowError>;
+pub use node::Node;
+pub use async_node::AsyncNode;
+pub use value::FlowValue;
