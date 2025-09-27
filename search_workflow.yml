@@ -1,0 +1,9 @@
+name: web_search_example
+nodes:
+  - id: perform_search
+    type: mcp_tool
+    parameters:
+      server_command: "./target/release/mcp_server"
+      tool_name: "web_search"
+      tool_params:
+        query: "What is AgentFlow?"
