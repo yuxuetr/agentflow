@@ -36,7 +36,7 @@ pub async fn execute(
     // 3. Execute the flow
     println!("\n▶️  Running flow...");
     let start_time = std::time::Instant::now();
-    let final_state = flow.run().await.unwrap();
+    let final_state = flow.run().await?;
     let duration = start_time.elapsed();
     println!("\n✅ Workflow completed in {:.2?}.", duration);
 

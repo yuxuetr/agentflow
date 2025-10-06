@@ -92,7 +92,9 @@ impl ArxivNode {
             message: format!("Invalid arXiv URL: {}", url),
         })?;
 
-        let paper_id = caps.get(1).unwrap().as_str().to_string();
+        let paper_id = caps.get(1).map(|m| m.as_str().to_string()).ok_or_else(|| AgentFlowError::NodeInputError {
+            message: "Could not parse paper ID from arXiv URL".to_string(),
+        })?;
         let version = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
 
         Ok(ArxivPaper { paper_id, version })

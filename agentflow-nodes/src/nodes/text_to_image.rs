@@ -185,8 +185,10 @@ impl TextToImageNode {
         }
         
         if let Some(cfg_scale) = self.cfg_scale {
-            config.insert("cfg_scale".to_string(), 
-                Value::Number(serde_json::Number::from_f64(cfg_scale as f64).unwrap()));
+            let number = serde_json::Number::from_f64(cfg_scale as f64).ok_or_else(|| AgentFlowError::NodeInputError {
+                message: format!("Invalid value for cfg_scale: {}", cfg_scale)
+            })?;
+            config.insert("cfg_scale".to_string(), Value::Number(number));
         }
         
         if let Some(ref style_ref) = self.style_reference {
