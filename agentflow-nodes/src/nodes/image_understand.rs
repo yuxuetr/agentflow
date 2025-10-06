@@ -94,37 +94,35 @@ mod tests {
     use super::*;
     use tokio::runtime::Runtime;
 
-    const TEST_IMAGE_BASE64: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    #[tokio::test]
+    async fn test_image_understand_node_integration() {
+        if std::env::var("STEP_API_KEY").is_err() {
+            println!("Skipping ImageUnderstand integration test: STEP_API_KEY not set.");
+            return;
+        }
 
-    #[test]
-    fn test_image_understand_node() {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let node = ImageUnderstandNode::new(
-                "test_vision",
-                "step-1o-turbo-vision",
-                "what is in this image?",
-                "image_input"
-            );
+        let node = ImageUnderstandNode::new(
+            "test_vision",
+            "step-1o-turbo-vision", // This model should be available via the StepFun endpoint
+            "What is in this image? A single word answer is fine.",
+            "image.png"
+        );
 
-            let mut inputs = AsyncNodeInputs::new();
-            inputs.insert("image_input".to_string(), FlowValue::Json(Value::String(TEST_IMAGE_BASE64.to_string())));
+        let mut inputs = AsyncNodeInputs::new();
+        let image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACPAi4CAAAABGdBTUEAALGPC/xhBQAAAA1JREFUGFdjYGBgYAAAAAUAAYcA/wAAAABJRU5ErkJggg==";
+        inputs.insert("image.png".to_string(), FlowValue::Json(Value::String(image_data.to_string())));
 
-            if std::env::var("STEPFUN_API_KEY").is_err() {
-                println!("Skipping API call in test mode as STEPFUN_API_KEY is not set.");
-                return;
-            }
-            
-            let result = node.execute(&inputs).await;
-            assert!(result.is_ok());
+        let result = node.execute(&inputs).await;
+        assert!(result.is_ok(), "Node execution failed: {:?}", result.err());
 
-            let outputs = result.unwrap();
-            let output_value = outputs.get("test_vision_output").unwrap();
-            if let FlowValue::Json(Value::String(s)) = output_value {
-                assert!(!s.is_empty());
-            } else {
-                panic!("Output was not a FlowValue::Json(Value::String(...))");
-            }
-        });
+        let outputs = result.unwrap();
+        let output_value = outputs.get("test_vision_output").unwrap();
+        if let FlowValue::Json(Value::String(s)) = output_value {
+            // The image is black, so the answer should be something like "black" or "nothing".
+            println!("Vision model output: {}", s);
+            assert!(!s.is_empty(), "Vision model should have returned a description.");
+        } else {
+            panic!("Output was not a FlowValue::Json(Value::String(...))");
+        }
     }
 }

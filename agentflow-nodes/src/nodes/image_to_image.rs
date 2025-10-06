@@ -117,37 +117,35 @@ mod tests {
     use super::*;
     use tokio::runtime::Runtime;
 
-    const TEST_IMAGE_BASE64: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    #[tokio::test]
+    async fn test_image_to_image_node_integration() {
+        if std::env::var("STEP_API_KEY").is_err() {
+            println!("Skipping ImageToImage integration test: STEP_API_KEY not set.");
+            return;
+        }
 
-    #[test]
-    fn test_migrate_image_to_image_node() {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let node = ImageToImageNode::new(
-                "test_i2i",
-                "step-1x-medium",
-                "a cat in the style of van gogh",
-                "image_input"
-            );
+        let node = ImageToImageNode::new(
+            "test_i2i",
+            "step-1x-medium",
+            "a cat in the style of van gogh",
+            "image.png"
+        );
 
-            let mut inputs = AsyncNodeInputs::new();
-            inputs.insert("image_input".to_string(), FlowValue::Json(Value::String(TEST_IMAGE_BASE64.to_string())));
+        let mut inputs = AsyncNodeInputs::new();
+        let image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACPAi4CAAAABGdBTUEAALGPC/xhBQAAAA1JREFUGFdjYGBgYAAAAAUAAYcA/wAAAABJRU5ErkJggg==";
+        inputs.insert("image.png".to_string(), FlowValue::Json(Value::String(image_data.to_string())));
 
-            if std::env::var("STEPFUN_API_KEY").is_err() {
-                println!("Skipping API call in test mode as STEPFUN_API_KEY is not set.");
-                return;
-            }
-            
-            let result = node.execute(&inputs).await;
-            assert!(result.is_ok());
+        let result = node.execute(&inputs).await;
+        assert!(result.is_ok(), "Node execution failed: {:?}", result.err());
 
-            let outputs = result.unwrap();
-            let output_value = outputs.get("test_i2i_output").unwrap();
-            if let FlowValue::Json(Value::String(data)) = output_value {
-                assert!(data.starts_with("data:image/png;base64,") || data.starts_with("http"));
-            } else {
-                panic!("Output was not a FlowValue::Json(Value::String(...))");
-            }
-        });
+        let outputs = result.unwrap();
+        let output_value = outputs.get("test_i2i_output").unwrap();
+        if let FlowValue::Json(Value::String(data)) = output_value {
+            assert!(data.starts_with("data:image/png;base64,") || data.starts_with("http"));
+            let base64_part = data.split(",").nth(1).unwrap();
+            assert!(!base64_part.is_empty(), "Base64 data should not be empty");
+        } else {
+            panic!("Output was not a FlowValue::Json(Value::String(...))");
+        }
     }
 }
