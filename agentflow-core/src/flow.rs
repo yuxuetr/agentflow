@@ -88,10 +88,9 @@ impl Flow {
             
             inputs.extend(graph_node.initial_inputs.clone());
 
-            // Inject initial inputs for entry nodes
-            if graph_node.dependencies.is_empty() {
-                inputs.extend(initial_inputs.clone());
-            }
+            // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
+            // These provide loop variables and context that should be available to all nodes
+            inputs.extend(initial_inputs.clone());
 
             println!("▶️  Executing node '{}'", node_id);
             let result = match &graph_node.node_type {
@@ -141,12 +140,23 @@ impl Flow {
 
                 let sub_flow = Flow::new(template.to_vec());
                 let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs.clone()).await?;
-                
+
                 let exit_nodes = sub_flow.find_exit_nodes();
+                println!("--- While Loop: Found {} exit nodes: {:?} ---", exit_nodes.len(), exit_nodes);
                 let mut next_loop_inputs = AsyncNodeInputs::new();
-                for node_id in exit_nodes {
-                    if let Some(Ok(outputs)) = sub_flow_state_pool.get(&node_id) {
-                        next_loop_inputs.extend(outputs.clone());
+                for node_id in &exit_nodes {
+                    println!("--- While Loop: Checking exit node '{}' in state pool ---", node_id);
+                    match sub_flow_state_pool.get(node_id) {
+                        Some(Ok(outputs)) => {
+                            println!("--- While Loop: Exit node '{}' has {} outputs ---", node_id, outputs.len());
+                            next_loop_inputs.extend(outputs.clone());
+                        }
+                        Some(Err(e)) => {
+                            println!("--- While Loop: Exit node '{}' failed with error: {:?} ---", node_id, e);
+                        }
+                        None => {
+                            println!("--- While Loop: Exit node '{}' not found in state pool ---", node_id);
+                        }
                     }
                 }
                 println!("--- While Loop End of Iteration: {}, Sub-flow outputs: {:?} ---", iteration_count + 1, next_loop_inputs);
@@ -232,35 +242,84 @@ impl Flow {
     fn gather_inputs(&self, node_id: &str, input_mapping: &HashMap<String, (String, String)>, state_pool: &HashMap<String, AsyncNodeResult>) -> Result<AsyncNodeInputs, AgentFlowError> {
         let mut inputs = AsyncNodeInputs::new();
         for (input_name, (source_node_id, source_output_name)) in input_mapping {
-            let source_result = state_pool.get(source_node_id).ok_or_else(|| AgentFlowError::FlowExecutionFailed {
-                message: format!("Dependency node '{}' has not been executed.", source_node_id),
+            // Check if source node is in dependencies (required) or not (optional)
+            let graph_node = self.nodes.get(node_id).ok_or_else(|| AgentFlowError::FlowExecutionFailed {
+                message: format!("Node '{}' not found in graph", node_id),
             })?;
+            let is_required_dependency = graph_node.dependencies.contains(source_node_id);
 
-            match source_result {
-                Ok(source_outputs) => {
-                    let input_value = source_outputs.get(source_output_name).ok_or_else(|| AgentFlowError::NodeInputError {
-                        message: format!("Output '{}' not found in source node '{}'", source_output_name, source_node_id),
-                    })?;
-                    inputs.insert(input_name.clone(), input_value.clone());
+            match state_pool.get(source_node_id) {
+                Some(Ok(source_outputs)) => {
+                    match source_outputs.get(source_output_name) {
+                        Some(input_value) => {
+                            inputs.insert(input_name.clone(), input_value.clone());
+                        }
+                        None if !is_required_dependency => {
+                            // Optional input, source node exists but output key not found - skip it
+                            continue;
+                        }
+                        None => {
+                            return Err(AgentFlowError::NodeInputError {
+                                message: format!("Output '{}' not found in source node '{}'", source_output_name, source_node_id),
+                            });
+                        }
+                    }
                 }
-                Err(AgentFlowError::NodeSkipped) => {
-                    return Err(AgentFlowError::DependencyNotMet { 
-                        node_id: node_id.to_string(), 
-                        dependency_id: source_node_id.clone() 
+                Some(Err(AgentFlowError::NodeSkipped)) if !is_required_dependency => {
+                    // Optional dependency was skipped - skip this input
+                    continue;
+                }
+                Some(Err(AgentFlowError::NodeSkipped)) => {
+                    // Required dependency was skipped - error
+                    return Err(AgentFlowError::DependencyNotMet {
+                        node_id: node_id.to_string(),
+                        dependency_id: source_node_id.clone()
                     });
                 }
-                Err(e) => return Err(e.clone()),
+                Some(Err(e)) => return Err(e.clone()),
+                None if !is_required_dependency => {
+                    // Optional dependency not executed - skip this input
+                    continue;
+                }
+                None => {
+                    return Err(AgentFlowError::FlowExecutionFailed {
+                        message: format!("Dependency node '{}' has not been executed.", source_node_id),
+                    });
+                }
             }
         }
         Ok(inputs)
     }
 
     fn evaluate_condition(&self, condition: &str, state_pool: &HashMap<String, AsyncNodeResult>) -> Result<bool, AgentFlowError> {
-        let path = condition.trim_start_matches("{{ ").trim_end_matches(" }}");
-        let parts: Vec<&str> = path.split('.').collect();
+        let expr = condition.trim_start_matches("{{ ").trim_end_matches(" }}").trim();
+        println!("🔍 Evaluating condition: '{}'", expr);
 
+        // Check for comparison operators
+        if expr.contains("!=") {
+            let parts: Vec<&str> = expr.split("!=").map(|s| s.trim()).collect();
+            if parts.len() == 2 {
+                let left_val = self.evaluate_condition_value(parts[0], state_pool)?;
+                let right_val = self.evaluate_condition_literal(parts[1])?;
+                let result = left_val != right_val;
+                println!("🔍 Comparison: '{}' != '{}' = {}", left_val, right_val, result);
+                return Ok(result);
+            }
+        } else if expr.contains("==") {
+            let parts: Vec<&str> = expr.split("==").map(|s| s.trim()).collect();
+            if parts.len() == 2 {
+                let left_val = self.evaluate_condition_value(parts[0], state_pool)?;
+                let right_val = self.evaluate_condition_literal(parts[1])?;
+                let result = left_val == right_val;
+                println!("🔍 Comparison: '{}' == '{}' = {}", left_val, right_val, result);
+                return Ok(result);
+            }
+        }
+
+        // Simple path reference (no operators)
+        let parts: Vec<&str> = expr.split('.').collect();
         if parts.len() != 4 || parts[0] != "nodes" || parts[2] != "outputs" {
-            return Err(AgentFlowError::FlowDefinitionError{ message: format!("Invalid run_if path: {}", path) });
+            return Err(AgentFlowError::FlowDefinitionError{ message: format!("Invalid run_if path: {}", expr) });
         }
         let node_id = parts[1];
         let output_name = parts[3];
@@ -283,6 +342,46 @@ impl Flow {
             }
             Err(AgentFlowError::NodeSkipped) => Ok(false),
             Err(e) => Err(e.clone()),
+        }
+    }
+
+    fn evaluate_condition_value(&self, path: &str, state_pool: &HashMap<String, AsyncNodeResult>) -> Result<String, AgentFlowError> {
+        let parts: Vec<&str> = path.split('.').collect();
+        if parts.len() != 4 || parts[0] != "nodes" || parts[2] != "outputs" {
+            return Err(AgentFlowError::FlowDefinitionError{ message: format!("Invalid path in condition: {}", path) });
+        }
+        let node_id = parts[1];
+        let output_name = parts[3];
+
+        let source_result = state_pool.get(node_id).ok_or_else(|| AgentFlowError::FlowDefinitionError {
+            message: format!("Node '{}' referenced in condition not found in state.", node_id)
+        })?;
+
+        match source_result {
+            Ok(outputs) => {
+                let value = outputs.get(output_name).ok_or_else(|| AgentFlowError::FlowDefinitionError {
+                    message: format!("Output '{}' not found in node '{}'", output_name, node_id)
+                })?;
+                match value {
+                    FlowValue::Json(Value::String(s)) => Ok(s.clone()),
+                    FlowValue::Json(Value::Number(n)) => Ok(n.to_string()),
+                    FlowValue::Json(Value::Bool(b)) => Ok(b.to_string()),
+                    FlowValue::Json(v) => Ok(v.to_string()),
+                    _ => Ok(String::new())
+                }
+            }
+            Err(e) => Err(e.clone()),
+        }
+    }
+
+    fn evaluate_condition_literal(&self, literal: &str) -> Result<String, AgentFlowError> {
+        // Remove quotes from string literals
+        let trimmed = literal.trim();
+        if (trimmed.starts_with('"') && trimmed.ends_with('"')) ||
+           (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+            Ok(trimmed[1..trimmed.len()-1].to_string())
+        } else {
+            Ok(trimmed.to_string())
         }
     }
 

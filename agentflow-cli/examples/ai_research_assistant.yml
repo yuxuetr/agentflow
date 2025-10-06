@@ -1,0 +1,96 @@
+name: AI Research Assistant
+
+nodes:
+  - id: search_loop
+    type: while
+    parameters:
+      condition: "{{ paper_content == \"\" and attempt < 3 }}"
+      max_iterations: 3
+      # Initial state for the loop
+      attempt: 0
+      paper_content: ""
+      topics: ["Large Language Models", "Transformer Architecture", "Self-Attention in NLP"]
+      
+      do:
+        # 1. Select a topic based on the current attempt
+        - id: select_topic
+          type: template
+          parameters:
+            template: "{{ topics[attempt] }}"
+            output_key: current_topic
+
+        # 2. Find a paper on arXiv
+        - id: find_paper
+          type: arxiv
+          dependencies: ["select_topic"]
+          input_mapping:
+            current_topic: "{{ nodes.select_topic.outputs.current_topic }}"
+          parameters:
+            url: "{{ current_topic }}"
+            fetch_source: true
+            simplify_latex: true
+
+        # 3. Update the loop state
+        - id: update_loop_state
+          type: template
+          dependencies: ["find_paper"]
+          input_mapping:
+            found_content: "{{ nodes.find_paper.outputs.simple_latex_content }}"
+          parameters:
+            template: |
+              {
+                "attempt": {{ attempt + 1 }},
+                "paper_content": {{ found_content | default(value='') | to_json }}
+              }
+            output_format: json
+
+  - id: summarize_paper
+    type: llm
+    dependencies: ["search_loop"]
+    run_if: "{{ nodes.search_loop.outputs.paper_content != \"\" }}"
+    input_mapping:
+      prompt: "{{ nodes.search_loop.outputs.paper_content }}"
+    parameters:
+      model: "step-2-mini"
+      system: "You are a research paper summarizer. Summarize the following paper content in about 200 words."
+
+  - id: detect_language
+    type: llm
+    dependencies: ["summarize_paper"]
+    input_mapping:
+      summary: "{{ nodes.summarize_paper.outputs.output }}"
+    parameters:
+      model: "step-2-mini"
+      prompt: "Is the following text primarily in English or another language? Respond with only the word 'english' or 'other'.\n\nText: {{ summary }}"
+
+  - id: translate_summary
+    type: llm
+    dependencies: ["detect_language"]
+    run_if: "{{ nodes.detect_language.outputs.output == 'english' }}"
+    input_mapping:
+      summary_to_translate: "{{ nodes.summarize_paper.outputs.output }}"
+    parameters:
+      model: "step-2-mini"
+      prompt: "Translate the following summary into Chinese:\n\n{{ summary_to_translate }}"
+
+  - id: final_summary_selector
+    type: template
+    dependencies: ["summarize_paper"]
+    input_mapping:
+      original_summary: "{{ nodes.summarize_paper.outputs.output }}"
+      translated_summary: "{{ nodes.translate_summary.outputs.output | default(value=null) }}"
+    parameters:
+      template: |
+        {% if translated_summary %}
+          {{ translated_summary }}
+        {% else %}
+          {{ original_summary }}
+        {% endif %}
+
+  - id: create_mindmap
+    type: markmap
+    dependencies: ["final_summary_selector"]
+    input_mapping:
+      markdown: "{{ nodes.final_summary_selector.outputs.output }}"
+    parameters:
+      save_to_file: "research_summary.html"

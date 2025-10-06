@@ -1,0 +1,14 @@
+name: Test Template JSON
+
+nodes:
+  - id: test_json_template
+    type: template
+    parameters:
+      template: |
+        {
+          "attempt": {{ attempt + 1 }},
+          "paper_content": "{{ found_content | default(value="") }}"
+        }
+      output_format: json
+      attempt: 0
+      found_content: "test content"

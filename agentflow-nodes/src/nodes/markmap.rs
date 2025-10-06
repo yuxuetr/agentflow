@@ -64,15 +64,28 @@ impl MarkMapNode {
   }
 
   fn resolve_markdown(&self, inputs: &AsyncNodeInputs) -> Result<String, AgentFlowError> {
+    // If markdown is provided directly as an input, use it
+    if let Some(markdown_input) = inputs.get("markdown") {
+      return Ok(flow_value_to_string(markdown_input));
+    }
+
+    // Otherwise, resolve placeholders in the configured markdown
     let mut resolved = self.markdown.clone();
-    
+
     for (key, value) in inputs {
-      let placeholder = format!("{{{{{}}}}}", key);
-      if resolved.contains(&placeholder) {
-        resolved = resolved.replace(&placeholder, &flow_value_to_string(value));
+      // Support both {{ key }} and {{key}}
+      let placeholder_with_spaces = format!("{{{{ {} }}}}", key);
+      let placeholder_without_spaces = format!("{{{{{}}}}}", key);
+      let value_str = flow_value_to_string(value);
+
+      if resolved.contains(&placeholder_with_spaces) {
+        resolved = resolved.replace(&placeholder_with_spaces, &value_str);
+      }
+      if resolved.contains(&placeholder_without_spaces) {
+        resolved = resolved.replace(&placeholder_without_spaces, &value_str);
       }
     }
-    
+
     Ok(resolved)
   }
 

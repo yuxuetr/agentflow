@@ -91,21 +91,43 @@ impl AsyncNode for TemplateNode {
         };
 
         // Parse result based on output format
-        let result_value = match self.output_format.as_str() {
+        match self.output_format.as_str() {
             "json" => {
+                println!("📝 Attempting to parse rendered template as JSON: {}", &rendered);
                 match serde_json::from_str::<Value>(&rendered) {
-                    Ok(json) => FlowValue::Json(json),
-                    Err(_) => FlowValue::Json(Value::String(rendered)),
+                    Ok(Value::Object(map)) => {
+                        // When output format is JSON and it's an object, unpack fields into separate outputs
+                        println!("✅ Template rendered successfully (JSON object unpacked with {} fields)", map.len());
+                        let mut outputs = HashMap::new();
+                        for (key, value) in map {
+                            outputs.insert(key, FlowValue::Json(value));
+                        }
+                        Ok(outputs)
+                    }
+                    Ok(json) => {
+                        // Non-object JSON, keep as single output
+                        println!("✅ Template rendered successfully (non-object JSON)");
+                        let mut outputs = HashMap::new();
+                        outputs.insert(self.output_key.clone(), FlowValue::Json(json));
+                        Ok(outputs)
+                    }
+                    Err(e) => {
+                        // Invalid JSON, treat as string
+                        println!("⚠️  Template rendered but JSON parsing failed: {}",  e);
+                        println!("    Rendered content: {}", &rendered);
+                        let mut outputs = HashMap::new();
+                        outputs.insert(self.output_key.clone(), FlowValue::Json(Value::String(rendered)));
+                        Ok(outputs)
+                    }
                 }
             }
-            _ => FlowValue::Json(Value::String(rendered)),
-        };
-
-        println!("✅ Template rendered successfully");
-
-        let mut outputs = HashMap::new();
-        outputs.insert("output".to_string(), result_value);
-        Ok(outputs)
+            _ => {
+                println!("✅ Template rendered successfully");
+                let mut outputs = HashMap::new();
+                outputs.insert(self.output_key.clone(), FlowValue::Json(Value::String(rendered)));
+                Ok(outputs)
+            }
+        }
     }
 }
 
