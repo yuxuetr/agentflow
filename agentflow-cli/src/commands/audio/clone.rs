@@ -50,7 +50,7 @@ pub async fn execute(
 
     // Build voice cloning request
     println!("🔍 Building voice cloning request...");
-    let request = VoiceCloningRequest {
+    let _request = VoiceCloningRequest {
       model: model.clone(),
       text: text.clone(),
       file_id: "placeholder".to_string(), // This would come from upload
@@ -59,7 +59,7 @@ pub async fn execute(
 
     // Clone voice
     println!("🚀 Cloning voice...");
-    let start_time = std::time::Instant::now();
+    let _start_time = std::time::Instant::now();
 
     // TODO: Implement voice cloning with proper model-based client
     // let cloning_response = client.clone_voice(request).await?;
@@ -67,8 +67,8 @@ pub async fn execute(
       "Voice cloning implementation needs to be updated to use model-based API approach"
     ));
 
-    let duration = start_time.elapsed();
-    println!("✅ Voice cloning completed in {:?}", duration);
+    let _duration = _start_time.elapsed();
+    println!("✅ Voice cloning completed in {:?}", _duration);
     // println!("🆔 Voice ID: {}", cloning_response.id);
 
     // TODO: Generate speech with the cloned voice

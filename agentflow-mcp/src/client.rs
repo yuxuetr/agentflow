@@ -9,6 +9,7 @@ use uuid::Uuid;
 /// MCP client for calling tools on external servers
 pub struct MCPClient {
   transport: TransportClient,
+  #[allow(dead_code)]
   session_id: String,
 }
 

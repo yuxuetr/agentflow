@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub struct FlowDefinitionV2 {
     pub name: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub inputs: HashMap<String, InputDefinitionV2>,
     pub nodes: Vec<NodeDefinitionV2>,
 }
@@ -13,8 +14,11 @@ pub struct FlowDefinitionV2 {
 /// Defines a required input for the workflow.
 #[derive(Debug, Deserialize)]
 pub struct InputDefinitionV2 {
+    #[allow(dead_code)]
     pub description: Option<String>,
+    #[allow(dead_code)]
     pub required: bool,
+    #[allow(dead_code)]
     pub default: Option<serde_yaml::Value>,
 }
 

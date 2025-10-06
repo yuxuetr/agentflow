@@ -266,6 +266,7 @@ struct AnthropicUsage {
 }
 
 // Streaming response structures
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct AnthropicStreamingEvent {
   #[serde(rename = "type")]
