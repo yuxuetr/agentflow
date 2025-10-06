@@ -149,6 +149,7 @@ dependencies = [
  "chrono",
  "flate2",
  "handlebars",
+ "mime_guess",
  "regex",
  "reqwest",
  "serde",

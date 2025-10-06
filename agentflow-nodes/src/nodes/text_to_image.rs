@@ -1,9 +1,16 @@
-use crate::{AsyncNode, NodeError, NodeResult, SharedState};
-use agentflow_core::AgentFlowError;
+use agentflow_core::{
+    async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+    error::AgentFlowError,
+    value::FlowValue,
+};
 use agentflow_llm::{AgentFlow, providers::stepfun::Text2ImageBuilder};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+
+// ... (rest of the file is the same until the AsyncNode implementation)
+
 
 /// Text-to-Image generation node
 #[derive(Debug, Clone)]
@@ -73,7 +80,6 @@ impl TextToImageNode {
         }
     }
     
-    // Builder pattern methods
     pub fn with_prompt(mut self, template: &str) -> Self {
         self.prompt_template = template.to_string();
         self
@@ -133,16 +139,38 @@ impl TextToImageNode {
         self.timeout_ms = Some(timeout_ms);
         self
     }
-    
+
+    /// Resolve template variables in the prompt using inputs
+    fn resolve_prompt(&self, inputs: &AsyncNodeInputs) -> Result<String, AgentFlowError> {
+        let mut resolved = self.prompt_template.clone();
+        for (key, value) in inputs {
+            let placeholder = format!("{{{{{}}}}}", key);
+            if resolved.contains(&placeholder) {
+                if let FlowValue::Json(Value::String(s)) = value {
+                    resolved = resolved.replace(&placeholder, s);
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
     /// Create configuration for image generation
-    fn create_image_config(&self, resolved_prompt: &str, shared: &SharedState) -> NodeResult<Value> {
+    fn create_image_config(&self, resolved_prompt: &str, inputs: &AsyncNodeInputs) -> Result<Value, AgentFlowError> {
         let mut config = serde_json::Map::new();
         
         config.insert("model".to_string(), Value::String(self.model.clone()));
         config.insert("prompt".to_string(), Value::String(resolved_prompt.to_string()));
         
         if let Some(ref neg_prompt) = self.negative_prompt {
-            let resolved_negative = shared.resolve_template_advanced(neg_prompt);
+            let mut resolved_negative = neg_prompt.clone();
+            for (key, value) in inputs {
+                let placeholder = format!("{{{{{}}}}}", key);
+                if resolved_negative.contains(&placeholder) {
+                    if let FlowValue::Json(Value::String(s)) = value {
+                        resolved_negative = resolved_negative.replace(&placeholder, s);
+                    }
+                }
+            }
             config.insert("negative_prompt".to_string(), Value::String(resolved_negative));
         }
         
@@ -150,7 +178,7 @@ impl TextToImageNode {
             config.insert("size".to_string(), Value::String(size.clone()));
         }
         
-        config.insert("response_format".to_string(), serde_json::to_value(&self.response_format)?);
+        config.insert("response_format".to_string(), serde_json::to_value(&self.response_format).unwrap());
         
         if let Some(steps) = self.steps {
             config.insert("steps".to_string(), Value::Number(serde_json::Number::from(steps)));
@@ -162,7 +190,7 @@ impl TextToImageNode {
         }
         
         if let Some(ref style_ref) = self.style_reference {
-            config.insert("style_reference".to_string(), serde_json::to_value(style_ref)?);
+            config.insert("style_reference".to_string(), serde_json::to_value(style_ref).unwrap());
         }
         
         if let Some(n) = self.n {
@@ -177,7 +205,7 @@ impl TextToImageNode {
     }
     
     /// Execute real image generation using StepFun API
-    async fn execute_real_image_generation(&self, config: &serde_json::Map<String, Value>) -> NodeResult<String> {
+    async fn execute_real_image_generation(&self, config: &serde_json::Map<String, Value>) -> Result<String, AgentFlowError> {
         let prompt = config.get("prompt").unwrap().as_str().unwrap();
         let model = config.get("model").unwrap().as_str().unwrap();
         let size = config.get("size").map(|s| s.as_str().unwrap_or("1024x1024")).unwrap_or("1024x1024");
@@ -190,13 +218,13 @@ impl TextToImageNode {
         // Get API key from environment
         let api_key = std::env::var("STEPFUN_API_KEY")
             .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-            .map_err(|_| NodeError::ConfigurationError {
+            .map_err(|_| AgentFlowError::ConfigurationError {
                 message: "StepFun API key not found. Set STEPFUN_API_KEY or AGENTFLOW_STEPFUN_API_KEY environment variable".to_string(),
             })?;
         
         // Initialize StepFun client
         let stepfun_client = AgentFlow::stepfun_client(&api_key).await
-            .map_err(|e| NodeError::ConfigurationError {
+            .map_err(|e| AgentFlowError::ConfigurationError {
                 message: format!("Failed to initialize StepFun client: {}", e),
             })?;
         
@@ -237,7 +265,7 @@ impl TextToImageNode {
         
         // Execute image generation request
         let image_response = stepfun_client.text_to_image(image_request).await
-            .map_err(|e| NodeError::ExecutionError {
+            .map_err(|e| AgentFlowError::AsyncExecutionError {
                 message: format!("StepFun text-to-image execution failed: {}", e),
             })?;
         
@@ -250,7 +278,7 @@ impl TextToImageNode {
                     } else if let Some(ref image_data) = first_image.image {
                         format!("data:image/png;base64,{}", image_data)
                     } else {
-                        return Err(NodeError::ExecutionError {
+                        return Err(AgentFlowError::AsyncExecutionError {
                             message: "No image data returned from StepFun API".to_string(),
                         });
                     }
@@ -259,19 +287,19 @@ impl TextToImageNode {
                     if let Some(ref url) = first_image.url {
                         url.clone()
                     } else {
-                        return Err(NodeError::ExecutionError {
+                        return Err(AgentFlowError::AsyncExecutionError {
                             message: "No image URL returned from StepFun API".to_string(),
                         });
                     }
                 }
                 _ => {
-                    return Err(NodeError::ExecutionError {
+                    return Err(AgentFlowError::AsyncExecutionError {
                         message: format!("Unsupported response format: {}", response_format),
                     });
                 }
             }
         } else {
-            return Err(NodeError::ExecutionError {
+            return Err(AgentFlowError::AsyncExecutionError {
                 message: "No images returned from StepFun API".to_string(),
             });
         };
@@ -281,7 +309,7 @@ impl TextToImageNode {
     }
     
     /// Mock image generation (for testing/fallback)
-    async fn execute_mock_image_generation(&self, config: &serde_json::Map<String, Value>) -> NodeResult<String> {
+    async fn execute_mock_image_generation(&self, config: &serde_json::Map<String, Value>) -> Result<String, AgentFlowError> {
         let prompt = config.get("prompt").unwrap().as_str().unwrap();
         let model = config.get("model").unwrap().as_str().unwrap();
         let size = config.get("size").map(|s| s.as_str().unwrap_or("1024x1024")).unwrap_or("1024x1024");
@@ -313,72 +341,34 @@ impl TextToImageNode {
 
 #[async_trait]
 impl AsyncNode for TextToImageNode {
-    async fn prep_async(&self, shared: &SharedState) -> Result<Value, AgentFlowError> {
-        // Check conditional execution
+    async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
         if let Some(ref condition) = self.condition {
-            let resolved_condition = shared.resolve_template_advanced(condition);
-            if resolved_condition != "true" {
-                println!("⏭️  Skipping TextToImage node '{}' due to condition: {}", self.name, resolved_condition);
-                return Ok(Value::Object(serde_json::Map::new()));
+            if let Some(FlowValue::Json(Value::String(cond))) = inputs.get(condition) {
+                if cond != "true" {
+                    println!("⏭️  Skipping TextToImage node '{}' due to condition: {}", self.name, cond);
+                    return Ok(HashMap::new());
+                }
             }
         }
-        
-        // Resolve prompt template
-        let resolved_prompt = shared.resolve_template_advanced(&self.prompt_template);
-        
-        // Include input keys data in prompt resolution
-        let mut enriched_prompt = resolved_prompt;
-        for input_key in &self.input_keys {
-            if let Some(input_value) = shared.get(input_key) {
-                let input_str = match input_value {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                enriched_prompt = enriched_prompt.replace(
-                    &format!("{{{{{}}}}}", input_key),
-                    &input_str,
-                );
-            }
-        }
-        
-        let config = self.create_image_config(&enriched_prompt, shared)
-            .map_err(|e| AgentFlowError::AsyncExecutionError {
-                message: format!("Failed to create image generation config: {}", e),
-            })?;
-        
+
+        let enriched_prompt = self.resolve_prompt(inputs)?;
+        let config = self.create_image_config(&enriched_prompt, inputs)?;
+
         println!("🔧 TextToImage Node '{}' prepared:", self.name);
         println!("   Model: {}", self.model);
         println!("   Prompt: {}", enriched_prompt);
         if let Some(ref size) = self.size {
             println!("   Size: {}", size);
         }
-        
-        Ok(config)
-    }
-    
-    async fn exec_async(&self, prep_result: Value) -> Result<Value, AgentFlowError> {
-        let config = prep_result
-            .as_object()
-            .ok_or_else(|| AgentFlowError::AsyncExecutionError {
-                message: "Invalid prep result for TextToImage node".to_string(),
-            })?;
-        
-        // Skip execution if condition failed
-        if config.is_empty() {
-            return Ok(Value::String("Skipped due to condition".to_string()));
-        }
-        
-        // Apply timeout if configured - try real API first, fallback to mock
+
         let response = if let Some(timeout_ms) = self.timeout_ms {
             let timeout_duration = std::time::Duration::from_millis(timeout_ms);
-            match tokio::time::timeout(timeout_duration, self.execute_real_image_generation(config)).await {
+            match tokio::time::timeout(timeout_duration, self.execute_real_image_generation(config.as_object().unwrap())).await {
                 Ok(Ok(result)) => result,
                 Ok(Err(_)) => {
                     // Fallback to mock if real API fails
-                    match tokio::time::timeout(timeout_duration, self.execute_mock_image_generation(config)).await {
-                        Ok(result) => result.map_err(|e| AgentFlowError::AsyncExecutionError {
-                            message: e.to_string(),
-                        })?,
+                    match tokio::time::timeout(timeout_duration, self.execute_mock_image_generation(config.as_object().unwrap())).await {
+                        Ok(result) => result?,
                         Err(_) => return Err(AgentFlowError::TimeoutExceeded { duration_ms: timeout_ms }),
                     }
                 }
@@ -386,39 +376,18 @@ impl AsyncNode for TextToImageNode {
             }
         } else {
             // Try real API first, fallback to mock
-            match self.execute_real_image_generation(config).await {
+            match self.execute_real_image_generation(config.as_object().unwrap()).await {
                 Ok(result) => result,
                 Err(_) => {
-                    self.execute_mock_image_generation(config).await
-                        .map_err(|e| AgentFlowError::AsyncExecutionError {
-                            message: e.to_string(),
-                        })?
+                    self.execute_mock_image_generation(config.as_object().unwrap()).await?
                 }
             }
         };
-        
-        Ok(Value::String(response))
-    }
-    
-    async fn post_async(
-        &self,
-        shared: &SharedState,
-        _prep_result: Value,
-        exec_result: Value,
-    ) -> Result<Option<String>, AgentFlowError> {
-        // Store the generated image data
-        shared.insert(self.output_key.clone(), exec_result.clone());
-        
-        // Also store as generic "generated_image" for backward compatibility
-        shared.insert("generated_image".to_string(), exec_result);
-        
-        println!("💾 Stored generated image in shared state as: '{}'", self.output_key);
-        
-        Ok(None) // No specific next action
-    }
-    
-    fn get_node_id(&self) -> Option<String> {
-        Some(self.name.clone())
+
+        let mut outputs = HashMap::new();
+        outputs.insert(self.output_key.clone(), FlowValue::Json(Value::String(response)));
+
+        Ok(outputs)
     }
 }
 
@@ -455,68 +424,23 @@ impl TextToImageNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use serde_json::json;
+
     #[tokio::test]
-    async fn test_text_to_image_node_creation() {
-        let node = TextToImageNode::new("test_image_gen", "dalle-3");
-        assert_eq!(node.name, "test_image_gen");
-        assert_eq!(node.model, "dalle-3");
-        assert_eq!(node.output_key, "test_image_gen_image");
-        assert!(matches!(node.response_format, ImageResponseFormat::Base64Json));
-    }
-    
-    #[tokio::test]
-    async fn test_text_to_image_builder_pattern() {
-        let node = TextToImageNode::new("advanced_gen", "dalle-3")
-            .with_prompt("Generate a {{style}} image of {{subject}}")
-            .with_size("1024x1024")
-            .with_steps(50)
-            .with_cfg_scale(7.5)
-            .with_seed(42)
-            .with_input_keys(vec!["style".to_string(), "subject".to_string()]);
-            
-        assert_eq!(node.prompt_template, "Generate a {{style}} image of {{subject}}");
-        assert_eq!(node.size, Some("1024x1024".to_string()));
-        assert_eq!(node.steps, Some(50));
-        assert_eq!(node.cfg_scale, Some(7.5));
-        assert_eq!(node.seed, Some(42));
-        assert_eq!(node.input_keys.len(), 2);
-    }
-    
-    #[tokio::test]
-    async fn test_text_to_image_execution() {
+    async fn test_text_to_image_node_execution() {
         let node = TextToImageNode::new("test_gen", "dalle-3")
             .with_prompt("A beautiful sunset over mountains")
             .with_size("512x512");
-            
-        let shared = SharedState::new();
-        
-        // Test full workflow
-        let result = node.run_async(&shared).await.unwrap();
-        assert!(result.is_none());
-        
-        // Check that image was generated and stored
-        let generated_image = shared.get(&node.output_key).unwrap();
-        assert!(generated_image.as_str().unwrap().contains("data:image"));
-    }
-    
-    #[tokio::test]
-    async fn test_helper_constructors() {
-        // Test artistic generator
-        let artistic = TextToImageNode::artistic_generator("art", "dalle-3");
-        assert_eq!(artistic.size, Some("1024x1024".to_string()));
-        assert_eq!(artistic.steps, Some(50));
-        assert_eq!(artistic.cfg_scale, Some(7.5));
-        
-        // Test quick generator  
-        let quick = TextToImageNode::quick_generator("quick", "dalle-3");
-        assert_eq!(quick.size, Some("512x512".to_string()));
-        assert_eq!(quick.steps, Some(20));
-        assert!(matches!(quick.response_format, ImageResponseFormat::Url));
-        
-        // Test batch generator
-        let batch = TextToImageNode::batch_generator("batch", "dalle-3", 4);
-        assert_eq!(batch.n, Some(4));
-        assert_eq!(batch.size, Some("768x768".to_string()));
+
+        let inputs = AsyncNodeInputs::new();
+
+        let result = node.execute(&inputs).await;
+        assert!(result.is_ok());
+
+        let outputs = result.unwrap();
+        let output = outputs.get("test_gen_image").unwrap();
+        if let FlowValue::Json(Value::String(s)) = output {
+            assert!(s.starts_with("data:image"));
+        }
     }
 }

@@ -1,7 +1,11 @@
-use crate::{AsyncNode, NodeError, SharedState};
-use agentflow_core::{AgentFlowError, Result};
+use agentflow_core::{
+    async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+    error::AgentFlowError,
+    value::FlowValue,
+};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Conditional node for flow control based on conditions
 #[derive(Debug, Clone)]
@@ -71,157 +75,150 @@ impl ConditionalNode {
     Self::new(name, variable).with_condition_type(ConditionType::Contains(substring.to_string()))
   }
 
-  /// Evaluate the condition against shared state
-  fn evaluate_condition(&self, shared: &SharedState) -> Result<bool, NodeError> {
-    // Resolve condition variable name (could be a template)
-    let var_name = shared.resolve_template_advanced(&self.condition);
+  /// Evaluate the condition against inputs
+  fn evaluate_condition(&self, inputs: &AsyncNodeInputs) -> Result<bool, AgentFlowError> {
+    let var_name = self.condition.as_str();
 
     match &self.condition_type {
-      ConditionType::Exists => Ok(shared.get(&var_name).is_some()),
-      ConditionType::Equals(expected) => {
-        if let Some(value) = shared.get(&var_name) {
-          let actual = match value {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            Value::Bool(b) => b.to_string(),
-            _ => serde_json::to_string(value).unwrap_or_default(),
-          };
-          Ok(actual == *expected)
-        } else {
-          Ok(false)
+        ConditionType::Exists => Ok(inputs.contains_key(var_name)),
+        ConditionType::Equals(expected) => {
+            if let Some(value) = inputs.get(var_name) {
+                let actual = match value {
+                    FlowValue::Json(Value::String(s)) => s.clone(),
+                    FlowValue::Json(v) => v.to_string(),
+                    FlowValue::String(s) => s.clone(),
+                    _ => "".to_string(),
+                };
+                Ok(actual == *expected)
+            } else {
+                Ok(false)
+            }
         }
-      }
-      ConditionType::GreaterThan(threshold) => {
-        if let Some(value) = shared.get(&var_name) {
-          if let Some(number) = value.as_f64() {
-            Ok(number > *threshold)
-          } else {
-            Ok(false)
-          }
-        } else {
-          Ok(false)
+        ConditionType::GreaterThan(threshold) => {
+            if let Some(value) = inputs.get(var_name) {
+                if let Some(number) = value.as_f64() {
+                    Ok(number > *threshold)
+                } else {
+                    Ok(false)
+                }
+            } else {
+                Ok(false)
+            }
         }
-      }
-      ConditionType::LessThan(threshold) => {
-        if let Some(value) = shared.get(&var_name) {
-          if let Some(number) = value.as_f64() {
-            Ok(number < *threshold)
-          } else {
-            Ok(false)
-          }
-        } else {
-          Ok(false)
+        ConditionType::LessThan(threshold) => {
+            if let Some(value) = inputs.get(var_name) {
+                if let Some(number) = value.as_f64() {
+                    Ok(number < *threshold)
+                } else {
+                    Ok(false)
+                }
+            } else {
+                Ok(false)
+            }
         }
-      }
-      ConditionType::Contains(substring) => {
-        if let Some(value) = shared.get(&var_name) {
-          match value {
-            Value::String(s) => Ok(s.contains(substring)),
-            Value::Array(arr) => Ok(arr.iter().any(|item| {
-              if let Value::String(s) = item {
-                s == substring
-              } else {
-                false
-              }
-            })),
-            _ => Ok(false),
-          }
-        } else {
-          Ok(false)
+        ConditionType::Contains(substring) => {
+            if let Some(value) = inputs.get(var_name) {
+                match value {
+                    FlowValue::String(s) => Ok(s.contains(substring)),
+                    FlowValue::Json(Value::String(s)) => Ok(s.contains(substring)),
+                    FlowValue::Json(Value::Array(arr)) => Ok(arr.iter().any(|item| {
+                        if let Value::String(s) = item {
+                            s == substring
+                        } else {
+                            false
+                        }
+                    })),
+                    _ => Ok(false),
+                }
+            } else {
+                Ok(false)
+            }
         }
-      }
-      ConditionType::Expression => {
-        // For now, just check if the condition string evaluates to true
-        // Future: could implement proper expression parsing
-        Ok(!var_name.is_empty() && var_name != "false" && var_name != "0")
-      }
+        ConditionType::Expression => {
+            // For now, just check if the condition string evaluates to true
+            // Future: could implement proper expression parsing
+            if let Some(FlowValue::Json(Value::Bool(b))) = inputs.get(var_name) {
+                Ok(*b)
+            } else {
+                Ok(false)
+            }
+        }
     }
   }
 }
 
 #[async_trait]
 impl AsyncNode for ConditionalNode {
-  async fn prep_async(&self, shared: &SharedState) -> Result<Value, AgentFlowError> {
-    let condition_result =
-      self
-        .evaluate_condition(shared)
-        .map_err(|e| AgentFlowError::AsyncExecutionError {
-          message: format!("Condition evaluation failed: {}", e),
-        })?;
+    async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let condition_result = self.evaluate_condition(inputs)?;
 
-    println!("🔧 Conditional Node '{}' prepared:", self.name);
-    println!("   Condition: {}", self.condition);
-    println!("   Type: {:?}", self.condition_type);
-    println!("   Result: {}", condition_result);
+        println!("🔧 Conditional Node '{}' prepared:", self.name);
+        println!("   Condition: {}", self.condition);
+        println!("   Type: {:?}", self.condition_type);
+        println!("   Result: {}", condition_result);
 
-    Ok(serde_json::json!({
-        "condition": self.condition,
-        "condition_type": format!("{:?}", self.condition_type),
-        "condition_result": condition_result,
-        "true_value": self.true_value,
-        "false_value": self.false_value
-    }))
-  }
+        let result = if condition_result {
+            self.true_value.clone().unwrap_or(Value::Bool(true))
+        } else {
+            self.false_value.clone().unwrap_or(Value::Bool(false))
+        };
 
-  async fn exec_async(&self, prep_result: Value) -> Result<Value, AgentFlowError> {
-    let condition_result = prep_result["condition_result"].as_bool().ok_or_else(|| {
-      AgentFlowError::AsyncExecutionError {
-        message: "Invalid condition result".to_string(),
-      }
-    })?;
+        println!("✅ Conditional result: {}", result);
 
-    println!("🔀 Conditional execution: {}", condition_result);
+        let mut outputs = HashMap::new();
+        outputs.insert("output".to_string(), FlowValue::Json(result));
+        outputs.insert("branch".to_string(), FlowValue::String(if condition_result { "true".to_string() } else { "false".to_string() }));
 
-    let result = if condition_result {
-      self.true_value.clone().unwrap_or(Value::Bool(true))
-    } else {
-      self.false_value.clone().unwrap_or(Value::Bool(false))
-    };
+        Ok(outputs)
+    }
+}
 
-    println!("✅ Conditional result: {}", result);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-    Ok(serde_json::json!({
-        "condition_result": condition_result,
-        "selected_value": result,
-        "branch": if condition_result { "true" } else { "false" }
-    }))
-  }
+    #[tokio::test]
+    async fn test_conditional_node_exists() {
+        let node = ConditionalNode::exists("test", "my_var");
+        let mut inputs = AsyncNodeInputs::new();
+        inputs.insert("my_var".to_string(), FlowValue::String("some_value".to_string()));
 
-  async fn post_async(
-    &self,
-    shared: &SharedState,
-    _prep_result: Value,
-    exec_result: Value,
-  ) -> Result<Option<String>, AgentFlowError> {
-    // Store the conditional result
-    let output_key = format!("{}_result", self.name);
-    shared.insert(output_key.clone(), exec_result["selected_value"].clone());
+        let result = node.execute(&inputs).await.unwrap();
+        let output = result.get("output").unwrap();
+        assert_eq!(output, &FlowValue::Json(json!(true)));
+    }
 
-    // Store metadata about the condition
-    let metadata_key = format!("{}_metadata", self.name);
-    shared.insert(
-      metadata_key,
-      serde_json::json!({
-          "condition_result": exec_result["condition_result"],
-          "branch_taken": exec_result["branch"]
-      }),
-    );
+    #[tokio::test]
+    async fn test_conditional_node_equals() {
+        let node = ConditionalNode::equals("test", "my_var", "expected_value");
+        let mut inputs = AsyncNodeInputs::new();
+        inputs.insert("my_var".to_string(), FlowValue::String("expected_value".to_string()));
 
-    println!(
-      "💾 Stored conditional result in shared state as: {}",
-      output_key
-    );
+        let result = node.execute(&inputs).await.unwrap();
+        let output = result.get("output").unwrap();
+        assert_eq!(output, &FlowValue::Json(json!(true)));
+    }
 
-    // Return the branch taken for potential flow control
-    Ok(Some(
-      exec_result["branch"]
-        .as_str()
-        .unwrap_or("false")
-        .to_string(),
-    ))
-  }
+    #[tokio::test]
+    async fn test_conditional_node_greater_than() {
+        let node = ConditionalNode::greater_than("test", "my_var", 10.0);
+        let mut inputs = AsyncNodeInputs::new();
+        inputs.insert("my_var".to_string(), FlowValue::Json(json!(15.0)));
 
-  fn get_node_id(&self) -> Option<String> {
-    Some(self.name.clone())
-  }
+        let result = node.execute(&inputs).await.unwrap();
+        let output = result.get("output").unwrap();
+        assert_eq!(output, &FlowValue::Json(json!(true)));
+    }
+
+    #[tokio::test]
+    async fn test_conditional_node_contains() {
+        let node = ConditionalNode::contains("test", "my_var", "sub");
+        let mut inputs = AsyncNodeInputs::new();
+        inputs.insert("my_var".to_string(), FlowValue::String("substring".to_string()));
+
+        let result = node.execute(&inputs).await.unwrap();
+        let output = result.get("output").unwrap();
+        assert_eq!(output, &FlowValue::Json(json!(true)));
+    }
 }

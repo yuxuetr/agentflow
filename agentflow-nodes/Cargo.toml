@@ -48,6 +48,7 @@ anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.21"
+mime_guess = "2.0"
 
 # MarkMap and Arxiv node dependencies
 flate2 = "1.0"
