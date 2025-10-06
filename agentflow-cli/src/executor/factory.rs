@@ -1,8 +1,5 @@
 use crate::config::v2::NodeDefinitionV2;
-use agentflow_core::{
-    flow::{GraphNode, NodeType},
-    value::FlowValue,
-};
+use agentflow_core::flow::{GraphNode, NodeType};
 use agentflow_nodes::nodes::{
     arxiv::ArxivNode,
     asr::ASRNode,
@@ -26,10 +23,6 @@ fn get_string_param(params: &HashMap<String, serde_yaml::Value>, key: &str) -> R
     params.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()).context(format!("Missing or invalid string parameter '{}'", key))
 }
 
-// Helper to get an optional string parameter
-fn get_optional_string_param(params: &HashMap<String, serde_yaml::Value>, key: &str) -> Option<String> {
-    params.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
-}
 
 pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     let node_type = match node_def.node_type.as_str() {
@@ -43,7 +36,7 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
         },
         "arxiv" => {
             let url = get_string_param(&node_def.parameters, "url")?;
-            let mut node = ArxivNode { name: node_def.id.clone(), url, fetch_source: None, simplify_latex: None };
+            let node = ArxivNode { name: node_def.id.clone(), url, fetch_source: None, simplify_latex: None };
             // Note: optional params for ArxivNode not yet handled from YAML
             Ok(NodeType::Standard(Arc::new(node)))
         },
