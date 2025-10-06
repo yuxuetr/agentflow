@@ -134,7 +134,7 @@ impl Flow {
                 }
 
                 let sub_flow = Flow::new(template.to_vec());
-                let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs).await?;
+                let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs.clone()).await?;
                 
                 let exit_nodes = sub_flow.find_exit_nodes();
                 let mut next_loop_inputs = AsyncNodeInputs::new();
@@ -143,7 +143,7 @@ impl Flow {
                         next_loop_inputs.extend(outputs.clone());
                     }
                 }
-                loop_inputs = next_loop_inputs;
+                loop_inputs.extend(next_loop_inputs);
 
                 iteration_count += 1;
             }
@@ -270,6 +270,7 @@ impl Flow {
                 };
                 match value {
                     FlowValue::Json(Value::Bool(b)) => Ok(*b),
+                    FlowValue::Json(Value::String(s)) => Ok(s.to_lowercase() == "true"),
                     _ => Ok(false)
                 }
             }
