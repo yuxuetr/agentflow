@@ -11,7 +11,6 @@ use regex::Regex;
 use flate2::read::GzDecoder;
 use std::io::Read;
 use tar::Archive;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArxivNode {

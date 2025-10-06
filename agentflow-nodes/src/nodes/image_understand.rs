@@ -5,7 +5,7 @@ use agentflow_core::{
     error::AgentFlowError,
     value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, multimodal::{MultimodalMessage, MessageContent}};
+use agentflow_llm::{AgentFlow, multimodal::MultimodalMessage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
