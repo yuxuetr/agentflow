@@ -57,6 +57,7 @@ regex = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+wiremock = "0.5"
 
 # Examples demonstrating real LLM model calling
 

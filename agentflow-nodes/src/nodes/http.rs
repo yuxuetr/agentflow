@@ -89,20 +89,42 @@ fn get_optional_map_input(inputs: &AsyncNodeInputs, key: &str) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        MockServer,
+        Mock,
+        ResponseTemplate,
+        matchers::{method, path},
+    };
 
     #[tokio::test]
-    async fn test_http_get_node() {
+    async fn test_http_get_node_with_mock_server() {
+        // Arrange
+        let server = MockServer::start().await;
+        let response_body = json!({ "success": true, "data": "it works" });
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&server)
+            .await;
+
         let node = HttpNode::default();
         let mut inputs = AsyncNodeInputs::new();
-        inputs.insert("url".to_string(), FlowValue::Json(json!("https://httpbin.org/get")));
+        let url = format!("{}/test", server.uri());
+        inputs.insert("url".to_string(), FlowValue::Json(json!(url)));
 
+        // Act
         let result = node.execute(&inputs).await;
-        assert!(result.is_ok());
 
+        // Assert
+        assert!(result.is_ok());
         let outputs = result.unwrap();
+
         let status = outputs.get("status").unwrap();
-        if let FlowValue::Json(Value::Number(n)) = status {
-            assert_eq!(n.as_u64().unwrap(), 200);
-        }
+        assert_eq!(status, &FlowValue::Json(json!(200)));
+
+        let body = outputs.get("body").unwrap();
+        let expected_body = FlowValue::Json(json!(response_body.to_string()));
+        assert_eq!(body, &expected_body);
     }
 }
