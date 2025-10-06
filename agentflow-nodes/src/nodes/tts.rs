@@ -128,39 +128,31 @@ mod tests {
     use super::*;
     use tokio::runtime::Runtime;
 
-    #[test]
-    fn test_tts_node() {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let node = TTSNode {
-                name: "test_tts".to_string(),
-                model: "step-tts-mini".to_string(),
-                voice: "default_voice".to_string(),
-                input_template: "Hello {{name}}!".to_string(),
-                response_format: AudioResponseFormat::Mp3,
-                speed: Some(1.2),
-                output_key: "audio_output".to_string(),
-                input_keys: vec!["name".to_string()],
-            };
+    #[tokio::test]
+    async fn test_tts_node_integration() {
+        let node = TTSNode {
+            name: "test_tts".to_string(),
+            model: "step-tts-mini".to_string(),
+                            voice: "cixingnansheng".to_string(),            input_template: "Hello world!".to_string(),
+            response_format: AudioResponseFormat::Mp3,
+            speed: Some(1.0),
+            output_key: "audio_output".to_string(),
+            input_keys: vec![],
+        };
 
-            let mut inputs = AsyncNodeInputs::new();
-            inputs.insert("name".to_string(), FlowValue::Json(Value::String("world".to_string())));
+        let inputs = AsyncNodeInputs::new();
 
-            if std::env::var("STEPFUN_API_KEY").is_err() {
-                println!("Skipping API call in test mode as STEPFUN_API_KEY is not set.");
-                return;
-            }
-            
-            let result = node.execute(&inputs).await;
-            assert!(result.is_ok());
+        let result = node.execute(&inputs).await;
+        assert!(result.is_ok(), "Node execution failed: {:?}", result.err());
 
-            let outputs = result.unwrap();
-            let output_value = outputs.get("audio_output").unwrap();
-            if let FlowValue::Json(Value::String(data)) = output_value {
-                assert!(data.starts_with("data:audio/mpeg;base64,"));
-            } else {
-                panic!("Output was not a FlowValue::Json(Value::String(...))");
-            }
-        });
+        let outputs = result.unwrap();
+        let output_value = outputs.get("audio_output").unwrap();
+        if let FlowValue::Json(Value::String(data)) = output_value {
+            assert!(data.starts_with("data:audio/mpeg;base64,"));
+            let base64_part = data.split(",").nth(1).unwrap();
+            assert!(!base64_part.is_empty(), "Base64 data should not be empty");
+        } else {
+            panic!("Output was not a FlowValue::Json(Value::String(...))");
+        }
     }
 }

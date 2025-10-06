@@ -133,7 +133,7 @@ mod tests {
             let output_value = outputs.get("transcript_output").unwrap();
             if let FlowValue::Json(Value::String(s)) = output_value {
                 // Can't assert content without a real API call, but can check it's a string
-                assert!(s.is_string());
+                assert!(!s.is_empty());
             } else {
                 panic!("Output was not a FlowValue::Json(Value::String(...))");
             }
