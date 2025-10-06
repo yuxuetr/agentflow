@@ -6,6 +6,8 @@ use crate::{
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque, HashSet};
 use std::fs;
+use std::future::Future;
+use std::pin::Pin;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -13,7 +15,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub enum NodeType {
     Standard(Arc<dyn AsyncNode>),
-    Map { template: Vec<GraphNode> },
+    Map { template: Vec<GraphNode>, parallel: bool },
     While {
         condition: String,
         max_iterations: u32,
@@ -89,8 +91,14 @@ impl Flow {
             println!("▶️  Executing node '{}'", node_id);
             let result = match &graph_node.node_type {
                 NodeType::Standard(node) => node.execute(&inputs).await,
-                NodeType::Map { template } => Box::pin(self.execute_map_node_sequential(&inputs, template)).await,
-                NodeType::While { condition, max_iterations, template } => Box::pin(self.execute_while_node(&inputs, condition, *max_iterations, template)).await,
+                NodeType::Map { template, parallel } => {
+                    if *parallel {
+                        self.execute_map_node_parallel(&inputs, template).await
+                    } else {
+                        self.execute_map_node_sequential(&inputs, template).await
+                    }
+                }
+                NodeType::While { condition, max_iterations, template } => self.execute_while_node(&inputs, condition, *max_iterations, template).await,
             };
 
             self.persist_step_result(&run_dir, &node_id, &result)?;
@@ -100,68 +108,111 @@ impl Flow {
         Ok(state_pool)
     }
 
-    async fn execute_while_node(&self, inputs: &AsyncNodeInputs, condition_template: &str, max_iterations: u32, template: &[GraphNode]) -> AsyncNodeResult {
-        let mut loop_inputs = inputs.clone();
-        let mut iteration_count = 0u32;
+    fn execute_while_node<'a>(&'a self, inputs: &'a AsyncNodeInputs, condition_template: &'a str, max_iterations: u32, template: &'a [GraphNode]) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
+        Box::pin(async move {
+            let mut loop_inputs = inputs.clone();
+            let mut iteration_count = 0u32;
 
-        while iteration_count < max_iterations {
-            let mut resolved_condition = condition_template.to_string();
-            for (key, value) in &loop_inputs {
-                let placeholder = format!("{{{{{}}}}}", key);
-                if resolved_condition.contains(&placeholder) {
-                    let replacement = match value {
-                        FlowValue::Json(Value::String(s)) => s.clone(),
-                        FlowValue::Json(Value::Bool(b)) => b.to_string(),
-                        FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-                        _ => "".to_string(),
-                    };
-                    resolved_condition = resolved_condition.replace(&placeholder, &replacement);
+            while iteration_count < max_iterations {
+                let mut resolved_condition = condition_template.to_string();
+                for (key, value) in &loop_inputs {
+                    let placeholder = format!("{{{{{}}}}}", key);
+                    if resolved_condition.contains(&placeholder) {
+                        let replacement = match value {
+                            FlowValue::Json(Value::String(s)) => s.clone(),
+                            FlowValue::Json(Value::Bool(b)) => b.to_string(),
+                            FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
+                            _ => "".to_string(),
+                        };
+                        resolved_condition = resolved_condition.replace(&placeholder, &replacement);
+                    }
                 }
-            }
-            let condition_value = !resolved_condition.is_empty() && resolved_condition.to_lowercase() != "false" && resolved_condition.to_lowercase() != "0";
+                let condition_value = !resolved_condition.is_empty() && resolved_condition.to_lowercase() != "false" && resolved_condition.to_lowercase() != "0";
 
-            if !condition_value {
-                break;
-            }
-
-            let sub_flow = Flow::new(template.to_vec());
-            let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs).await?;
-            
-            let exit_nodes = sub_flow.find_exit_nodes();
-            let mut next_loop_inputs = AsyncNodeInputs::new();
-            for node_id in exit_nodes {
-                if let Some(Ok(outputs)) = sub_flow_state_pool.get(&node_id) {
-                    next_loop_inputs.extend(outputs.clone());
+                if !condition_value {
+                    break;
                 }
+
+                let sub_flow = Flow::new(template.to_vec());
+                let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs).await?;
+                
+                let exit_nodes = sub_flow.find_exit_nodes();
+                let mut next_loop_inputs = AsyncNodeInputs::new();
+                for node_id in exit_nodes {
+                    if let Some(Ok(outputs)) = sub_flow_state_pool.get(&node_id) {
+                        next_loop_inputs.extend(outputs.clone());
+                    }
+                }
+                loop_inputs = next_loop_inputs;
+
+                iteration_count += 1;
             }
-            loop_inputs = next_loop_inputs;
 
-            iteration_count += 1;
-        }
-
-        Ok(loop_inputs)
+            Ok(loop_inputs)
+        })
     }
 
-    async fn execute_map_node_sequential(&self, inputs: &AsyncNodeInputs, template: &[GraphNode]) -> AsyncNodeResult {
-        let input_list = match inputs.get("input_list") {
-            Some(FlowValue::Json(Value::Array(arr))) => arr,
-            _ => return Err(AgentFlowError::NodeInputError { message: "Input 'input_list' must be a JSON array for a Map node".to_string() }),
-        };
+    fn execute_map_node_sequential<'a>(&'a self, inputs: &'a AsyncNodeInputs, template: &'a [GraphNode]) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
+        Box::pin(async move {
+            let input_list = match inputs.get("input_list") {
+                Some(FlowValue::Json(Value::Array(arr))) => arr,
+                _ => return Err(AgentFlowError::NodeInputError { message: "Input 'input_list' must be a JSON array for a Map node".to_string() }),
+            };
 
-        let mut all_results = Vec::new();
-        for item in input_list {
-            let sub_flow = Flow::new(template.to_vec());
-            let mut initial_inputs = HashMap::new();
-            initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
+            let mut all_results = Vec::new();
+            for item in input_list {
+                let sub_flow = Flow::new(template.to_vec());
+                let mut initial_inputs = HashMap::new();
+                initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
-            let sub_flow_result = sub_flow.execute_from_inputs(initial_inputs).await?;
-            let json_state = serde_json::to_value(sub_flow_result)?;
-            all_results.push(json_state);
-        }
+                let sub_flow_result = sub_flow.execute_from_inputs(initial_inputs).await?;
+                let json_state = serde_json::to_value(sub_flow_result)?;
+                all_results.push(json_state);
+            }
 
-        let mut outputs = HashMap::new();
-        outputs.insert("results".to_string(), FlowValue::Json(Value::Array(all_results)));
-        Ok(outputs)
+            let mut outputs = HashMap::new();
+            outputs.insert("results".to_string(), FlowValue::Json(Value::Array(all_results)));
+            Ok(outputs)
+        })
+    }
+
+    fn execute_map_node_parallel<'a>(&'a self, inputs: &'a AsyncNodeInputs, template: &'a [GraphNode]) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
+        Box::pin(async move {
+            let input_list = match inputs.get("input_list") {
+                Some(FlowValue::Json(Value::Array(arr))) => arr.clone(),
+                _ => return Err(AgentFlowError::NodeInputError { message: "Input 'input_list' must be a JSON array for a Map node".to_string() }),
+            };
+
+            let mut handles = Vec::new();
+            for item in input_list {
+                let sub_flow = Flow::new(template.to_vec());
+                let mut initial_inputs = HashMap::new();
+                initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
+
+                let handle = tokio::spawn(async move {
+                    sub_flow.execute_from_inputs(initial_inputs).await
+                });
+                handles.push(handle);
+            }
+
+            let results = futures::future::join_all(handles).await;
+
+            let mut all_results = Vec::new();
+            for result in results {
+                match result {
+                    Ok(Ok(sub_flow_result)) => {
+                        let json_state = serde_json::to_value(sub_flow_result)?;
+                        all_results.push(json_state);
+                    }
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(AgentFlowError::FlowExecutionFailed{ message: e.to_string() }),
+                }
+            }
+
+            let mut outputs = HashMap::new();
+            outputs.insert("results".to_string(), FlowValue::Json(Value::Array(all_results)));
+            Ok(outputs)
+        })
     }
 
     fn persist_step_result(&self, run_dir: &PathBuf, node_id: &str, result: &AsyncNodeResult) -> Result<(), AgentFlowError> {

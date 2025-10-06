@@ -35,9 +35,10 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
             let template_nodes_yaml = node_def.parameters.get("template").context("Map node requires a 'template' block")?;
             let template_nodes_def: Vec<NodeDefinitionV2> = serde_yaml::from_value(template_nodes_yaml.clone())?;
 
+            let parallel = node_def.parameters.get("parallel").and_then(|v| v.as_bool()).unwrap_or(false);
             let template: Vec<GraphNode> = template_nodes_def.iter().map(create_graph_node).collect::<Result<_>>()?;
 
-            Ok(NodeType::Map { template })
+            Ok(NodeType::Map { template, parallel })
         }
         _ => Err(anyhow!("Unknown node type: {}", node_def.node_type)),
     }?; 
