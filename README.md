@@ -23,31 +23,56 @@ For developers who need maximum power and type-safety.
 
 ```rust
 use agentflow_core::{
-    flow::{Flow, GraphNode},
-    node::{Node, NodeInputs, NodeResult},
+    flow::{Flow, GraphNode, NodeType},
+    async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     value::FlowValue,
 };
+use agentflow_nodes::nodes::llm::LlmNode;
+use agentflow_nodes::nodes::template::TemplateNode;
 use std::collections::HashMap;
+use std::sync::Arc;
+use serde_json::json;
 
-// 1. Define a custom node
-struct AddNode;
-impl Node for AddNode {
-    fn execute(&self, inputs: &NodeInputs) -> NodeResult {
-        let a = inputs.get("a").unwrap().as_i64().unwrap();
-        let b = inputs.get("b").unwrap().as_i64().unwrap();
-        let mut outputs = HashMap::new();
-        outputs.insert("sum".to_string(), FlowValue::from(a + b));
-        Ok(outputs)
+#[tokio::main]
+asyn fn main() {
+    // 1. Define the nodes in the workflow
+    let template_node = GraphNode {
+        id: "get_topic".to_string(),
+        node_type: NodeType::Standard(Arc::new(TemplateNode::new("get_topic", "A short poem about {{topic}}."))),
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: {
+            let mut map = HashMap::new();
+            map.insert("topic".to_string(), FlowValue::Json(json!("the moon")));
+            map
+        },
+    };
+
+    let llm_node = GraphNode {
+        id: "generate_poem".to_string(),
+        node_type: NodeType::Standard(Arc::new(LlmNode::default())),
+        dependencies: vec!["get_topic".to_string()],
+        input_mapping: Some({
+            let mut map = HashMap::new();
+            map.insert("prompt".to_string(), ("get_topic".to_string(), "output".to_string()));
+            map
+        }),
+        run_if: None,
+        initial_inputs: HashMap::new(),
+    };
+
+    // 2. Create and run the flow
+    let flow = Flow::new(vec![template_node, llm_node]);
+    let final_state = flow.run().await.expect("Flow execution failed");
+
+    // 3. Safely access the result
+    if let Some(Ok(llm_outputs)) = final_state.get("generate_poem") {
+        if let Some(FlowValue::Json(serde_json::Value::String(poem))) = llm_outputs.get("output") {
+            println!("Generated poem: {}", poem);
+        }
     }
 }
-
-// 2. Build the flow
-let mut flow = Flow::new();
-flow.add_node(GraphNode { id: "add_1", node: Box::new(AddNode), .. });
-flow.add_node(GraphNode { id: "add_2", node: Box::new(AddNode), dependencies: vec!["add_1"], .. });
-
-// 3. Run the flow
-let final_state = flow.run()?;
 ```
 
 ### 📋 **Configuration-First Approach (CLI)**
@@ -58,8 +83,9 @@ For users who prefer declarative, dynamic workflows.
 name: "Calculation Pipeline"
 nodes:
   - id: initial_values
-    type: start # A special node that provides initial values
+    type: template
     parameters:
+      template: "{{a}} + {{b}}"
       a: 10
       b: 5
 
@@ -67,7 +93,7 @@ nodes:
     type: llm
     dependencies: ["initial_values"]
     input_mapping:
-      prompt: "Calculate {{ nodes.initial_values.outputs.a }} + {{ nodes.initial_values.outputs.b }}"
+      prompt: "Calculate {{ nodes.initial_values.outputs.output }}"
 
   - id: step_2
     type: llm
@@ -88,7 +114,7 @@ agentflow workflow run workflow_v2.yml
 - **Stateless Nodes**: Nodes are self-contained and receive all data via an `inputs` map.
 - **DAG Execution Engine**: Workflows are defined with explicit `dependencies` for clear, traceable execution.
 - **Explicit Input Mapping**: The `input_mapping` field provides full control over data flow between nodes.
-- **Structured Control Flow**: Native support for conditional execution (`run_if`) and loops (`map` nodes).
+- **Powerful Control Flow**: Native support for conditional execution (`run_if`), `while` loops, and `map` iteration (with parallel execution support).
 - **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing.
 
 ## 📚 Documentation
@@ -102,6 +128,7 @@ agentflow workflow run workflow_v2.yml
 ```toml
 [dependencies]
 agentflow-core = { path = "agentflow-core" }
+agentflow-nodes = { path = "agentflow-nodes" }
 ```
 
 ### For CLI Usage
@@ -112,4 +139,4 @@ agentflow --help
 
 ## 🛣️ Development Plan
 
-See our progress and upcoming tasks in the [TODOs.md](TODOs.md) file.
+See our progress and upcoming tasks in the [TODOs.md](TODOs.md) file (note: this file is in `.gitignore`).

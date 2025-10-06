@@ -1,164 +1,120 @@
 # AgentFlow CLI
 
-Command-line interface for AgentFlow workflow orchestration and LLM interaction.
+This crate provides a powerful command-line interface (CLI) to interact with the AgentFlow V2 engine.
 
 ## Installation
 
-Build from source:
+Build and install the CLI using Cargo:
+
 ```bash
-cargo build --package agentflow-cli --release
+cargo install --path agentflow-cli
 ```
 
-The binary will be available at `$HOME/.target/release/agentflow`.
+## Usage
 
-## Quick Start
-
-### LLM Commands
+The CLI is structured around a series of commands and subcommands.
 
 ```bash
-# Send a prompt to an LLM
-agentflow llm prompt "Write a haiku about programming" --model gpt-4o
+agentflow [COMMAND]
+```
 
-# List available models
+You can get help for any command or subcommand by using the `--help` flag.
+
+```bash
+agentflow --help
+agentflow audio --help
+agentflow audio tts --help
+```
+
+## Commands
+
+Here is an overview of the main commands available.
+
+### `workflow`
+
+Orchestrate and execute complex, multi-node workflows defined in YAML files.
+
+**Usage:**
+
+```bash
+# Run a workflow file
+agentflow workflow run path/to/your/workflow.yml
+```
+
+### `audio`
+
+Perform audio-related tasks like transcription and speech synthesis.
+
+**Subcommands:**
+
+-   `asr`: Transcribe an audio file to text.
+-   `tts`: Synthesize speech from text.
+-   `clone`: Clone a voice (not fully implemented).
+
+**Usage Examples:**
+
+```bash
+# Transcribe an audio file
+agentflow audio asr path/to/your/audio.mp3
+
+# Synthesize a sentence and save it to an mp3 file
+agentflow audio tts --voice nova --output hello.mp3 "Hello, world! This is AgentFlow."
+```
+
+### `image`
+
+Perform image generation and understanding tasks.
+
+**Subcommands:**
+
+-   `generate`: Create an image from a text prompt.
+-   `understand`: Analyze an image with a text prompt.
+
+**Usage Examples:**
+
+```bash
+# Generate an image and save it
+agentflow image generate --prompt "A photorealistic cat wearing a wizard hat" --output wizard_cat.png
+
+# Ask a question about an image
+agentflow image understand --image path/to/your/image.jpg --text "What is the main subject of this image?"
+```
+
+### `llm`
+
+Directly interact with language models.
+
+**Subcommands:**
+
+-   `chat`: Start an interactive chat session (implementation pending).
+-   `models`: List available models.
+
+**Usage Examples:**
+
+```bash
+# List all available models
 agentflow llm models
 
-# Show detailed model information
-agentflow llm models --detailed
-
-# Filter models by provider
+# List models from a specific provider
 agentflow llm models --provider openai
 ```
 
-### Workflow Commands (Coming Soon)
+### `config`
+
+Manage the AgentFlow configuration.
+
+**Subcommands:**
+
+-   `init`: Create a default configuration file.
+-   `show`: Display the current configuration.
+-   `validate`: Validate the configuration files.
+
+**Usage Examples:**
 
 ```bash
-# Run a workflow from file
-agentflow run workflow.yml --input topic="AI Ethics"
-
-# Validate workflow configuration
-agentflow validate workflow.yml
-
-# List available templates
-agentflow list workflows
-```
-
-## Configuration
-
-AgentFlow CLI uses the same configuration system as the AgentFlow LLM library:
-
-1. **Project-specific**: `./models.yml` (highest priority)
-2. **User-specific**: `~/.agentflow/models.yml` (medium priority)
-3. **Built-in defaults**: Bundled in crate (lowest priority)
-
-### Initialize Configuration
-
-```bash
-# Initialize configuration files
+# Create a new config file if one doesn't exist
 agentflow config init
 
-# Show current configuration
+# Show the current configuration
 agentflow config show
-
-# Validate configuration
-agentflow config validate
 ```
-
-## Workflow Templates
-
-The CLI includes several workflow templates in the `templates/` directory:
-
-- `simple.yml`: Basic text generation workflow
-- `llm-chain.yml`: Multi-step LLM processing chain
-- `parallel.yml`: Parallel processing example (planned)
-- `conditional.yml`: Conditional branching example (planned)
-
-## Development Status
-
-### Phase 1: CLI Foundation ✅
-- [x] CLI argument parsing with clap
-- [x] LLM commands (`prompt`, `models`)
-- [x] Basic project structure
-- [x] Workspace integration
-
-### Phase 2: Workflow Engine (In Progress)
-- [ ] YAML workflow parser
-- [ ] Core node types (LLM, template, file, HTTP)
-- [ ] Sequential workflow execution
-- [ ] Workflow validation
-
-### Phase 3: Advanced Features (Planned)
-- [ ] Parallel workflow execution
-- [ ] Conditional branching
-- [ ] Loop workflows
-- [ ] Batch processing
-- [ ] Interactive chat mode
-- [ ] Streaming output
-
-### Phase 4: Integration and Polish (Planned)
-- [ ] MCP client integration
-- [ ] Rich error messages
-- [ ] Progress indicators
-- [ ] Performance optimization
-
-## Examples
-
-### Simple Text Generation
-
-```bash
-agentflow llm prompt "Explain quantum computing in simple terms" \
-  --model gpt-4o \
-  --temperature 0.7 \
-  --max-tokens 300 \
-  --output explanation.txt
-```
-
-### File Input
-
-```bash
-agentflow llm prompt "Analyze this code" \
-  --file src/main.rs \
-  --model claude-3-sonnet
-```
-
-### Workflow Execution (Coming Soon)
-
-```bash
-# Run simple text generation workflow
-agentflow run templates/simple.yml \
-  --input prompt="Write a technical blog post about Rust" \
-  --input model="gpt-4o" \
-  --output blog_post.txt
-
-# Run LLM chain workflow  
-agentflow run templates/llm-chain.yml \
-  --input topic="Quantum Computing Applications" \
-  --input depth="comprehensive"
-```
-
-## Global Options
-
-- `--log-level <LEVEL>`: Set logging level (error, warn, info, debug, trace)
-- `--output-format <FORMAT>`: Output format (json, yaml, text)
-- `--no-color`: Disable colored output
-- `--verbose`: Enable verbose output
-
-## Architecture
-
-The CLI is built on top of:
-- **agentflow-core**: Core workflow execution engine
-- **agentflow-llm**: Unified LLM interface
-- **clap**: Command-line argument parsing
-- **tokio**: Async runtime
-- **serde**: Configuration serialization
-- **tera**: Template rendering
-
-## Contributing
-
-1. Implement new workflow node types in `src/executor/nodes/`
-2. Add new commands in `src/commands/`
-3. Extend workflow configuration schema in `src/config/`
-4. Add workflow templates in `templates/`
-
-## License
-
-MIT License - see the main AgentFlow repository for details.
