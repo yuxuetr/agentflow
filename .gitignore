@@ -30,3 +30,6 @@ GEMINI.md
 commit-docs
 
 .DS_Store
+
+# Workflow run artifacts
+**/runs/

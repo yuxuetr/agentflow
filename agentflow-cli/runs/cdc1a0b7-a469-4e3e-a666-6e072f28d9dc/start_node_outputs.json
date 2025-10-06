@@ -1,7 +1,0 @@
-{
-  "Err": {
-    "NodeInputError": {
-      "message": "Required string input 'prompt' is missing or has wrong type"
-    }
-  }
-}

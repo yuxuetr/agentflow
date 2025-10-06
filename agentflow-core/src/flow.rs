@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
+use dirs;
 
 #[derive(Clone)]
 pub enum NodeType {
@@ -54,7 +55,11 @@ impl Flow {
 
     pub async fn execute_from_inputs(&self, initial_inputs: AsyncNodeInputs) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
         let run_id = Uuid::new_v4().to_string();
-        let run_dir = PathBuf::from("runs").join(&run_id);
+        let base_dir = dirs::home_dir()
+            .ok_or_else(|| AgentFlowError::ConfigurationError { message: "Could not find home directory".to_string() })?
+            .join(".agentflow")
+            .join("runs");
+        let run_dir = base_dir.join(&run_id);
         fs::create_dir_all(&run_dir).map_err(|e| AgentFlowError::PersistenceError { message: e.to_string() })?;
 
         let sorted_nodes = self.topological_sort()?;

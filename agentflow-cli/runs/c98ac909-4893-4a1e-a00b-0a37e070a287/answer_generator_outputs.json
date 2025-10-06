@@ -1,7 +1,0 @@
-{
-  "Err": {
-    "AsyncExecutionError": {
-      "message": "LLM execution failed: Internal LLM error: Model 'step-1x-medium' requires specialized API. Use StepFunSpecializedClient instead."
-    }
-  }
-}
