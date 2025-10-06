@@ -24,7 +24,7 @@ pub async fn execute(
     println!("📄 Workflow '\'{}\'\' loaded.", flow_def.name);
 
     // 2. Build the core Flow object from the definition
-    let mut flow = Flow::new();
+    let mut flow = Flow::default();
     println!("🔨 Building workflow graph with {} nodes...", flow_def.nodes.len());
     for node_def in &flow_def.nodes {
         let graph_node = factory::create_graph_node(node_def)

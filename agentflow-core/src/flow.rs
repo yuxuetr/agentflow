@@ -4,7 +4,7 @@ use crate::{
     value::FlowValue,
 };
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +14,11 @@ use uuid::Uuid;
 pub enum NodeType {
     Standard(Arc<dyn AsyncNode>),
     Map { template: Vec<GraphNode> },
+    While {
+        condition: String,
+        max_iterations: u32,
+        template: Vec<GraphNode>
+    },
 }
 
 #[derive(Clone)]
@@ -32,8 +37,9 @@ pub struct Flow {
 }
 
 impl Flow {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(nodes: Vec<GraphNode>) -> Self {
+        let nodes_map = nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+        Self { nodes: nodes_map }
     }
 
     pub fn add_node(&mut self, node: GraphNode) {
@@ -41,16 +47,19 @@ impl Flow {
     }
 
     pub async fn run(&self) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+        self.execute_from_inputs(HashMap::new()).await
+    }
+
+    pub async fn execute_from_inputs(&self, initial_inputs: AsyncNodeInputs) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
         let run_id = Uuid::new_v4().to_string();
         let run_dir = PathBuf::from("runs").join(&run_id);
         fs::create_dir_all(&run_dir).map_err(|e| AgentFlowError::PersistenceError { message: e.to_string() })?;
-        println!("💾 Run artifacts will be saved to: {}", run_dir.display());
 
         let sorted_nodes = self.topological_sort()?;
         let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
 
-        for node_id in sorted_nodes {
-            let graph_node = self.nodes.get(&node_id).unwrap();
+        for node_id in &sorted_nodes {
+            let graph_node = self.nodes.get(node_id).unwrap();
 
             let should_run = match &graph_node.run_if {
                 Some(condition) => self.evaluate_condition(condition, &state_pool)?,
@@ -66,17 +75,22 @@ impl Flow {
             }
 
             let mut inputs = match &graph_node.input_mapping {
-                Some(mapping) => self.gather_inputs(&node_id, mapping, &state_pool)?,
+                Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool)?,
                 None => HashMap::new(),
             };
-            for (k, v) in &graph_node.initial_inputs {
-                inputs.insert(k.clone(), v.clone());
+            
+            inputs.extend(graph_node.initial_inputs.clone());
+
+            // Inject initial inputs for entry nodes
+            if graph_node.dependencies.is_empty() {
+                inputs.extend(initial_inputs.clone());
             }
 
             println!("▶️  Executing node '{}'", node_id);
             let result = match &graph_node.node_type {
                 NodeType::Standard(node) => node.execute(&inputs).await,
-                NodeType::Map { template } => self.execute_map_node_sequential(&inputs, template).await,
+                NodeType::Map { template } => Box::pin(self.execute_map_node_sequential(&inputs, template)).await,
+                NodeType::While { condition, max_iterations, template } => Box::pin(self.execute_while_node(&inputs, condition, *max_iterations, template)).await,
             };
 
             self.persist_step_result(&run_dir, &node_id, &result)?;
@@ -84,6 +98,48 @@ impl Flow {
         }
 
         Ok(state_pool)
+    }
+
+    async fn execute_while_node(&self, inputs: &AsyncNodeInputs, condition_template: &str, max_iterations: u32, template: &[GraphNode]) -> AsyncNodeResult {
+        let mut loop_inputs = inputs.clone();
+        let mut iteration_count = 0u32;
+
+        while iteration_count < max_iterations {
+            let mut resolved_condition = condition_template.to_string();
+            for (key, value) in &loop_inputs {
+                let placeholder = format!("{{{{{}}}}}", key);
+                if resolved_condition.contains(&placeholder) {
+                    let replacement = match value {
+                        FlowValue::Json(Value::String(s)) => s.clone(),
+                        FlowValue::Json(Value::Bool(b)) => b.to_string(),
+                        FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
+                        _ => "".to_string(),
+                    };
+                    resolved_condition = resolved_condition.replace(&placeholder, &replacement);
+                }
+            }
+            let condition_value = !resolved_condition.is_empty() && resolved_condition.to_lowercase() != "false" && resolved_condition.to_lowercase() != "0";
+
+            if !condition_value {
+                break;
+            }
+
+            let sub_flow = Flow::new(template.to_vec());
+            let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs).await?;
+            
+            let exit_nodes = sub_flow.find_exit_nodes();
+            let mut next_loop_inputs = AsyncNodeInputs::new();
+            for node_id in exit_nodes {
+                if let Some(Ok(outputs)) = sub_flow_state_pool.get(&node_id) {
+                    next_loop_inputs.extend(outputs.clone());
+                }
+            }
+            loop_inputs = next_loop_inputs;
+
+            iteration_count += 1;
+        }
+
+        Ok(loop_inputs)
     }
 
     async fn execute_map_node_sequential(&self, inputs: &AsyncNodeInputs, template: &[GraphNode]) -> AsyncNodeResult {
@@ -94,21 +150,11 @@ impl Flow {
 
         let mut all_results = Vec::new();
         for item in input_list {
-            let mut sub_flow = Flow::new();
-            for node_template in template {
-                sub_flow.add_node(node_template.clone());
-            }
-
+            let sub_flow = Flow::new(template.to_vec());
             let mut initial_inputs = HashMap::new();
             initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
-            if let Some(first_node_id) = sub_flow.topological_sort()?.first().map(|s| (*s).clone()) {
-                if let Some(node) = sub_flow.nodes.get_mut(&first_node_id) {
-                    node.initial_inputs.extend(initial_inputs);
-                }
-            }
-
-            let sub_flow_result = Box::pin(sub_flow.run()).await?;
+            let sub_flow_result = sub_flow.execute_from_inputs(initial_inputs).await?;
             let json_state = serde_json::to_value(sub_flow_result)?;
             all_results.push(json_state);
         }
@@ -181,6 +227,19 @@ impl Flow {
         }
     }
 
+    fn find_exit_nodes(&self) -> Vec<String> {
+        let mut all_deps = HashSet::new();
+        for node in self.nodes.values() {
+            for dep in &node.dependencies {
+                all_deps.insert(dep.as_str());
+            }
+        }
+        self.nodes.keys()
+            .filter(|id| !all_deps.contains(id.as_str()))
+            .cloned()
+            .collect()
+    }
+
     fn topological_sort(&self) -> Result<Vec<String>, AgentFlowError> {
         let mut in_degree: HashMap<String, usize> = self.nodes.keys().cloned().map(|id| (id, 0)).collect();
         let mut adj: HashMap<String, Vec<String>> = self.nodes.keys().cloned().map(|id| (id, vec![])).collect();
@@ -246,7 +305,6 @@ mod tests {
             }
         }
 
-        let mut flow = Flow::new();
         let sub_flow_node = GraphNode {
             id: "multiply".to_string(),
             node_type: NodeType::Standard(Arc::new(MultiplyNode)),
@@ -269,7 +327,7 @@ mod tests {
             },
         };
 
-        flow.add_node(map_node);
+        let flow = Flow::new(vec![map_node]);
 
         let final_state = flow.run().await.unwrap();
         let map_result = final_state.get("map_node").unwrap().as_ref().unwrap();
