@@ -1,3 +1,4 @@
+use crate::common::utils::flow_value_to_string;
 use agentflow_core::{
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     error::AgentFlowError,
@@ -68,13 +69,7 @@ impl MarkMapNode {
     for (key, value) in inputs {
       let placeholder = format!("{{{{{}}}}}", key);
       if resolved.contains(&placeholder) {
-        let replacement = match value {
-          FlowValue::Json(Value::String(s)) => s.clone(),
-          FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-          FlowValue::File { path, .. } => path.to_string_lossy().to_string(),
-          FlowValue::Url { url, .. } => url.clone(),
-        };
-        resolved = resolved.replace(&placeholder, &replacement);
+        resolved = resolved.replace(&placeholder, &flow_value_to_string(value));
       }
     }
     

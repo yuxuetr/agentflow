@@ -15,6 +15,8 @@ pub struct TemplateNode {
   pub variables: HashMap<String, String>,
 }
 
+use crate::common::utils::flow_value_to_string;
+
 impl TemplateNode {
   pub fn new(name: &str, template: &str) -> Self {
     Self {
@@ -39,50 +41,28 @@ impl TemplateNode {
     self.variables.insert(key.to_string(), value.to_string());
     self
   }
-
-  fn render_template(
-    &self,
-    template: &str,
-    context: &HashMap<String, FlowValue>,
-  ) -> Result<String, AgentFlowError> {
-    let mut result = template.to_string();
-
-    for (key, value) in context {
-      let pattern = format!("{{{{{}}}}}", key);
-      let replacement = match value {
-        FlowValue::Json(Value::String(s)) => s.clone(),
-        FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-        FlowValue::File { path, .. } => path.to_string_lossy().to_string(),
-        FlowValue::Url { url, .. } => url.clone(),
-      };
-      result = result.replace(&pattern, &replacement);
-    }
-
-    for (key, value) in &self.variables {
-      let pattern = format!("{{{{{}}}}}", key);
-      result = result.replace(&pattern, value);
-    }
-
-    Ok(result)
-  }
 }
 
 #[async_trait]
 impl AsyncNode for TemplateNode {
     async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-        let mut context = inputs.clone();
+        let mut rendered = self.template.clone();
+
+        // First, replace with node-defined variables
         for (key, value) in &self.variables {
-            context.insert(key.clone(), FlowValue::Json(Value::String(value.clone())));
+            let pattern = format!("{{{{{}}}}}", key);
+            rendered = rendered.replace(&pattern, value);
         }
 
-        let template = self.template.clone();
-        let output_format = self.output_format.clone();
+        // Then, replace with inputs from the flow, which can override variables
+        for (key, value) in inputs {
+            let pattern = format!("{{{{{}}}}}", key);
+            rendered = rendered.replace(&pattern, &flow_value_to_string(value));
+        }
 
         println!("📝 Rendering template for node '{}'", self.name);
 
-        let rendered = self.render_template(&template, &context)?;
-
-        let result_value = match output_format.as_str() {
+        let result_value = match self.output_format.as_str() {
             "json" => {
                 match serde_json::from_str::<Value>(&rendered) {
                     Ok(json) => FlowValue::Json(json),

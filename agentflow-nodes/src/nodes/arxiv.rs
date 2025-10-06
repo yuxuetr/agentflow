@@ -1,3 +1,4 @@
+use crate::common::utils::flow_value_to_string;
 use agentflow_core::{
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     error::AgentFlowError,
@@ -74,13 +75,7 @@ impl ArxivNode {
         for (key, value) in inputs {
             let placeholder = format!("{{{{{}}}}}", key);
             if url.contains(&placeholder) {
-                let replacement = match value {
-                    FlowValue::Json(Value::String(s)) => s.clone(),
-                    FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-                    FlowValue::File { path, .. } => path.to_string_lossy().to_string(),
-                    FlowValue::Url { url, .. } => url.clone(),
-                };
-                url = url.replace(&placeholder, &replacement);
+                url = url.replace(&placeholder, &flow_value_to_string(value));
             }
         }
         Ok(url)

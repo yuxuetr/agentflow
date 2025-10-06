@@ -1,5 +1,6 @@
 //! ImageUnderstand Node - Specialized node for multimodal image understanding using vision models
 
+use crate::common::utils::{flow_value_to_string, load_data_uri_from_source};
 use agentflow_core::{
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     error::AgentFlowError,
@@ -10,7 +11,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageUnderstandNode {
@@ -39,44 +39,6 @@ impl ImageUnderstandNode {
             input_keys: vec![],
         }
     }
-
-    fn flow_value_to_string(value: &FlowValue) -> String {
-        match value {
-            FlowValue::Json(Value::String(s)) => s.clone(),
-            FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-            FlowValue::File { path, .. } => path.to_string_lossy().to_string(),
-            FlowValue::Url { url, .. } => url.clone(),
-        }
-    }
-
-    async fn load_image_as_base64(&self, source: &str, inputs: &AsyncNodeInputs) -> Result<String, AgentFlowError> {
-        if let Some(value) = inputs.get(source) {
-            return match value {
-                FlowValue::Json(Value::String(s)) => Ok(s.clone()),
-                FlowValue::File { path, .. } => {
-                    let data = tokio::fs::read(path).await.map_err(|e| AgentFlowError::NodeInputError {
-                        message: format!("Failed to read image file at {:?}: {}", path, e),
-                    })?;
-                    let mime_type = mime_guess::from_path(path).first_or_octet_stream();
-                    Ok(format!("data:{};base64,{}", mime_type, STANDARD.encode(data)))
-                },
-                FlowValue::Url { url, .. } => Ok(url.clone()),
-                _ => Err(AgentFlowError::NodeInputError { 
-                    message: format!("Unsupported FlowValue type for image source '{}'", source) 
-                }),
-            }
-        }
-
-        if source.starts_with("http") || source.starts_with("data:") {
-            return Ok(source.to_string());
-        }
-
-        let data = tokio::fs::read(source).await.map_err(|e| AgentFlowError::NodeInputError {
-            message: format!("Failed to read image file at {}: {}", source, e),
-        })?;
-        let mime_type = mime_guess::from_path(source).first_or_octet_stream();
-        Ok(format!("data:{};base64,{}", mime_type, STANDARD.encode(data)))
-    }
 }
 
 #[async_trait]
@@ -92,11 +54,11 @@ impl AsyncNode for ImageUnderstandNode {
         for key in &self.input_keys {
             if let Some(value) = inputs.get(key) {
                 let placeholder = format!("{{{{{}}}}}", key);
-                resolved_prompt = resolved_prompt.replace(&placeholder, &Self::flow_value_to_string(value));
+                resolved_prompt = resolved_prompt.replace(&placeholder, &flow_value_to_string(value));
             }
         }
 
-        let image_data_uri = self.load_image_as_base64(&self.image_source, inputs).await?;
+        let image_data_uri = load_data_uri_from_source(&self.image_source, inputs).await?;
 
         let message = MultimodalMessage::user()
             .add_text(resolved_prompt)

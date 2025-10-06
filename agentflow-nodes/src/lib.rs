@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod nodes;
+pub mod common;
 
 // Factory traits for configuration support
 pub mod factory_traits;
