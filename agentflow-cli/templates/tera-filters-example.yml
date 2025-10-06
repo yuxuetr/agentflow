@@ -1,0 +1,38 @@
+# Tera Template - Filters Example
+name: "Tera Filters Example"
+
+nodes:
+  - id: "data_formatting"
+    type: "template"
+    parameters:
+      template: |
+        # Data Formatting Examples
+
+        ## String Filters
+        - Original: {{ name }}
+        - Uppercase: {{ name | upper }}
+        - Lowercase: {{ name | lower }}
+        - Title Case: {{ name | title }}
+        - Truncated: {{ description | truncate(length=50) }}
+
+        ## Number Filters
+        - Price: ${{ price | round(precision=2) }}
+        - Quantity: {{ quantity }}
+        - Total: ${{ price * quantity | round(precision=2) }}
+
+        ## Array Filters
+        - Tags: {{ tags | join(sep=", ") }}
+        - Tag Count: {{ tags | length }}
+        - First Tag: {{ tags | first }}
+        - Last Tag: {{ tags | last }}
+
+        ## Default Filter
+        - Optional Field: {{ optional_field | default(value="Not provided") }}
+
+        ## Date/Time
+        - Generated: {{ now() }}
+      name: "agentflow system"
+      description: "This is a very long description that will be truncated to show only the first 50 characters of the text."
+      price: 99.99
+      quantity: 3
+      tags: ["ai", "workflow", "automation", "rust"]

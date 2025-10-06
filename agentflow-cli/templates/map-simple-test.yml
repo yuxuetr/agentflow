@@ -1,0 +1,14 @@
+# Simplified Map Node Test
+name: "Map Node Simple Test"
+
+nodes:
+  - id: "test_map"
+    type: "map"
+    parameters:
+      input_list: [10, 20, 30]
+      parallel: false
+      template:
+        - id: "echo_item"
+          type: "template"
+          parameters:
+            template: "Value: {{ item }}"

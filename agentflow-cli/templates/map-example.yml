@@ -1,0 +1,31 @@
+# Map Node Example - Sequential Processing
+# Demonstrates how to use the map node to process a list of items sequentially
+name: "Map Node Sequential Example"
+
+nodes:
+  # Map node that processes each item in the list
+  - id: "process_numbers"
+    type: "map"
+    dependencies: []
+    parameters:
+      # List to process
+      input_list: [1, 2, 3, 4, 5]
+      # Whether to process items in parallel (false = sequential)
+      parallel: false
+      # Template defines the sub-workflow to run for each item
+      template:
+        - id: "multiply"
+          type: "template"
+          dependencies: []
+          parameters:
+            # {{ item }} refers to the current item from input_list
+            template: "Item: {{ item }}, Doubled: {{ item * 2 }}"
+
+  # Use the results from map node
+  - id: "summarize"
+    type: "template"
+    dependencies: ["process_numbers"]
+    input_mapping:
+      results: "{{ nodes.process_numbers.outputs.results }}"
+    parameters:
+      template: "Processed {{ results | length }} items successfully!"

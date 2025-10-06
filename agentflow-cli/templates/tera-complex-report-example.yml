@@ -1,0 +1,137 @@
+# Tera Template - Complex Report Example
+name: "Tera Complex Report Example"
+
+nodes:
+  - id: "project_report"
+    type: "template"
+    parameters:
+      template: |
+        # {{ project.name | upper }} - Project Report
+
+        **Project ID**: {{ project.id }}
+        **Status**: {{ project.status | title }}
+        **Created**: {{ project.created_date }}
+        **Owner**: {{ project.owner }}
+
+        ---
+
+        ## Team Members ({{ project.team | length }})
+        {% for member in project.team %}
+        - **{{ member.name }}** ({{ member.role | title }})
+          - Email: {{ member.email }}
+          - Tasks: {{ member.tasks | length }}
+        {% endfor %}
+
+        ---
+
+        ## Tasks Overview
+
+        {% set total_tasks = project.tasks | length %}
+        {% set completed_tasks = project.tasks | filter(attribute="status", value="completed") | length %}
+        {% set in_progress_tasks = project.tasks | filter(attribute="status", value="in_progress") | length %}
+        {% set pending_tasks = project.tasks | filter(attribute="status", value="pending") | length %}
+
+        - **Total**: {{ total_tasks }}
+        - **Completed**: {{ completed_tasks }} ({{ completed_tasks * 100 / total_tasks | round }}%)
+        - **In Progress**: {{ in_progress_tasks }} ({{ in_progress_tasks * 100 / total_tasks | round }}%)
+        - **Pending**: {{ pending_tasks }} ({{ pending_tasks * 100 / total_tasks | round }}%)
+
+        ### Task Details
+        {% for task in project.tasks %}
+        #### {{ loop.index }}. {{ task.title }}
+        - **Status**: {{ task.status | upper }}
+        - **Priority**: {{ task.priority | title }}
+        - **Assigned to**: {{ task.assignee | default(value="Unassigned") }}
+        {% if task.due_date %}- **Due Date**: {{ task.due_date }}{% endif %}
+        {% if task.description %}- **Description**: {{ task.description | truncate(length=100) }}{% endif %}
+
+        {% endfor %}
+
+        ---
+
+        ## Recent Activity
+        {% if project.activity %}
+        {% for activity in project.activity | slice(end=5) %}
+        - [{{ activity.timestamp }}] {{ activity.user }}: {{ activity.action }}
+        {% endfor %}
+        {% else %}
+        _No recent activity_
+        {% endif %}
+
+        ---
+
+        **Report Generated**: {{ now() }}
+        **Report ID**: {{ uuid() }}
+      project:
+        id: "PROJ-2025-001"
+        name: "agentflow development"
+        status: "active"
+        created_date: "2025-01-01"
+        owner: "Development Team"
+        team:
+          - name: "Alice"
+            role: "lead developer"
+            email: "alice@example.com"
+            tasks: 5
+          - name: "Bob"
+            role: "backend developer"
+            email: "bob@example.com"
+            tasks: 3
+          - name: "Charlie"
+            role: "frontend developer"
+            email: "charlie@example.com"
+            tasks: 4
+        tasks:
+          - title: "Setup project infrastructure"
+            status: "completed"
+            priority: "high"
+            assignee: "Alice"
+            due_date: "2025-01-05"
+            description: "Initialize repository, setup CI/CD pipeline, and configure development environment"
+          - title: "Implement core workflow engine"
+            status: "completed"
+            priority: "high"
+            assignee: "Alice"
+            due_date: "2025-01-10"
+            description: "Build the foundation for workflow execution with support for async nodes"
+          - title: "Add LLM integration"
+            status: "in_progress"
+            priority: "high"
+            assignee: "Bob"
+            due_date: "2025-01-15"
+            description: "Integrate multiple LLM providers including OpenAI, Anthropic, and Google"
+          - title: "Implement Tera templates"
+            status: "completed"
+            priority: "medium"
+            assignee: "Alice"
+            due_date: "2025-01-12"
+          - title: "Build CLI interface"
+            status: "in_progress"
+            priority: "medium"
+            assignee: "Charlie"
+            due_date: "2025-01-18"
+          - title: "Write documentation"
+            status: "pending"
+            priority: "medium"
+            assignee: "Charlie"
+            due_date: "2025-01-20"
+          - title: "Create example workflows"
+            status: "in_progress"
+            priority: "low"
+            due_date: "2025-01-22"
+        activity:
+          - timestamp: "2025-01-06 14:30"
+            user: "Alice"
+            action: "Completed Tera template integration"
+          - timestamp: "2025-01-06 11:20"
+            user: "Bob"
+            action: "Started LLM integration work"
+          - timestamp: "2025-01-05 16:45"
+            user: "Charlie"
+            action: "Pushed CLI updates"
+          - timestamp: "2025-01-05 10:15"
+            user: "Alice"
+            action: "Reviewed pull request #42"
+          - timestamp: "2025-01-04 14:00"
+            user: "Bob"
+            action: "Fixed bug in workflow runner"

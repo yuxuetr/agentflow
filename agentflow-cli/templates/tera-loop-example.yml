@@ -1,0 +1,40 @@
+# Tera Template - Loop Example
+name: "Tera Loop Example"
+
+nodes:
+  - id: "task_list"
+    type: "template"
+    parameters:
+      template: |
+        # Project Tasks
+
+        ## Task List ({{ tasks | length }} total)
+        {% for task in tasks %}
+        {{ loop.index }}. [{% if task.completed %}✓{% else %} {% endif %}] {{ task.title }}
+           Priority: {{ task.priority | upper }}
+           {% if task.assignee %}Assigned to: {{ task.assignee }}{% endif %}
+           {% if task.due_date %}Due: {{ task.due_date }}{% endif %}
+        {% endfor %}
+
+        ## Summary
+        - Total Tasks: {{ tasks | length }}
+        - Completed: {{ tasks | filter(attribute="completed", value=true) | length }}
+        - Pending: {{ tasks | filter(attribute="completed", value=false) | length }}
+      tasks:
+        - title: "Setup project structure"
+          completed: true
+          priority: "high"
+          assignee: "Alice"
+          due_date: "2025-01-10"
+        - title: "Implement authentication"
+          completed: false
+          priority: "high"
+          assignee: "Bob"
+          due_date: "2025-01-15"
+        - title: "Write documentation"
+          completed: false
+          priority: "medium"
+          assignee: "Charlie"
+        - title: "Deploy to production"
+          completed: false
+          priority: "low"

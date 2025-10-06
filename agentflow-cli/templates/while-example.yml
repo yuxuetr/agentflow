@@ -1,0 +1,46 @@
+# While Loop Example
+# Demonstrates how to use the while node for iterative processing
+name: "While Loop Example"
+
+nodes:
+  # While loop that counts up to 5
+  - id: "counter_loop"
+    type: "while"
+    dependencies: []
+    parameters:
+      # Loop continues while this condition evaluates to true
+      condition: "{{ continue_loop }}"
+      # Maximum iterations to prevent infinite loops
+      max_iterations: 10
+      # Initial state
+      counter: 0
+      continue_loop: true
+      # Sub-workflow to execute on each iteration
+      do:
+        - id: "increment"
+          type: "template"
+          dependencies: []
+          parameters:
+            # Access loop variables with {{ variable_name }}
+            template: "Count: {{ counter }}"
+
+        # This node updates the loop state
+        - id: "update_state"
+          type: "template"
+          dependencies: ["increment"]
+          parameters:
+            # The template outputs will be merged back into loop state
+            template: |
+              {
+                "counter": {{ counter + 1 }},
+                "continue_loop": {{ counter + 1 < 5 }}
+              }
+
+  # Process the final result
+  - id: "final_report"
+    type: "template"
+    dependencies: ["counter_loop"]
+    input_mapping:
+      final_counter: "{{ nodes.counter_loop.outputs.counter }}"
+    parameters:
+      template: "Loop completed! Final count: {{ final_counter }}"

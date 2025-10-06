@@ -1,0 +1,56 @@
+# Advanced While Loop Example
+# Demonstrates a more complex while loop with LLM integration
+name: "While Loop with LLM"
+
+nodes:
+  # While loop that generates a story iteratively
+  - id: "story_builder"
+    type: "while"
+    dependencies: []
+    parameters:
+      condition: "{{ should_continue }}"
+      max_iterations: 5
+      # Initial state
+      story: "Once upon a time"
+      chapter_count: 0
+      should_continue: true
+      do:
+        # Generate next chapter using LLM
+        - id: "generate_chapter"
+          type: "llm"
+          dependencies: []
+          parameters:
+            model: "step-2-mini"
+            prompt: |
+              Current story so far:
+              {{ story }}
+
+              Write the next short chapter (2-3 sentences only).
+              This is chapter {{ chapter_count + 1 }}.
+
+        # Update story state
+        - id: "update_story"
+          type: "template"
+          dependencies: ["generate_chapter"]
+          input_mapping:
+            new_chapter: "{{ nodes.generate_chapter.outputs.output }}"
+          parameters:
+            template: |
+              {
+                "story": "{{ story }}\n\nChapter {{ chapter_count + 1 }}:\n{{ new_chapter }}",
+                "chapter_count": {{ chapter_count + 1 }},
+                "should_continue": {{ chapter_count + 1 < 3 }}
+              }
+
+  # Display final story
+  - id: "display_story"
+    type: "template"
+    dependencies: ["story_builder"]
+    input_mapping:
+      final_story: "{{ nodes.story_builder.outputs.story }}"
+      chapters: "{{ nodes.story_builder.outputs.chapter_count }}"
+    parameters:
+      template: |
+        === Final Story ({{ chapters }} chapters) ===
+
+        {{ final_story }}

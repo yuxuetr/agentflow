@@ -1,0 +1,26 @@
+# Map Node Example - Parallel Processing
+# Demonstrates how to use the map node to process items in parallel
+name: "Map Node Parallel Example"
+
+nodes:
+  # Map node with parallel processing
+  - id: "parallel_process"
+    type: "map"
+    dependencies: []
+    parameters:
+      input_list: ["apple", "banana", "cherry", "date", "elderberry"]
+      parallel: true  # Process all items concurrently
+      template:
+        - id: "process_fruit"
+          type: "template"
+          dependencies: []
+          parameters:
+            template: "Processing fruit: {{ item }}"
+
+  - id: "report"
+    type: "template"
+    dependencies: ["parallel_process"]
+    input_mapping:
+      results: "{{ nodes.parallel_process.outputs.results }}"
+    parameters:
+      template: "Parallel processing completed for {{ results | length }} fruits"

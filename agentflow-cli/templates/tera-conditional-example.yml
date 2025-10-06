@@ -1,0 +1,20 @@
+# Tera Template - Conditional Logic Example
+name: "Tera Conditional Example"
+
+nodes:
+  - id: "conditional_greeting"
+    type: "template"
+    parameters:
+      template: |
+        {% if user_type == "admin" %}
+        🔑 Welcome, Administrator {{ name }}!
+        You have full system access.
+        {% elif user_type == "member" %}
+        👤 Hello, {{ name | title }}!
+        You have member access.
+        {% else %}
+        👋 Welcome, Guest!
+        Please sign up to access more features.
+        {% endif %}
+      user_type: "member"
+      name: "alice"

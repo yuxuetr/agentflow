@@ -144,13 +144,12 @@ async fn test_conditional_workflow_skips() {
 async fn test_parallel_map_workflow() {
     if check_api_key() { return; }
 
-    // Define the sub-workflow template
     let sub_flow_template = vec![
         GraphNode {
             id: "poem_prompt".to_string(),
             node_type: NodeType::Standard(Arc::new(TemplateNode::new("poem_prompt", "Write a four-line poem about {{item}}."))),
             dependencies: vec![],
-            input_mapping: None, // `item` is injected by the map node
+            input_mapping: None,
             run_if: None,
             initial_inputs: HashMap::new(),
         },
@@ -168,12 +167,11 @@ async fn test_parallel_map_workflow() {
         },
     ];
 
-    // Define the map node that will execute the sub-workflow in parallel
     let map_node = GraphNode {
         id: "parallel_poem_map".to_string(),
         node_type: NodeType::Map { 
             template: sub_flow_template,
-            parallel: true, // Enable parallel execution
+            parallel: true,
         },
         dependencies: vec![],
         input_mapping: None,
@@ -189,7 +187,6 @@ async fn test_parallel_map_workflow() {
     let flow = Flow::new(vec![map_node]);
     let final_state = flow.run().await.expect("Flow execution failed");
 
-    // Assert that the map node ran successfully and produced 3 results
     let map_result = final_state.get("parallel_poem_map").expect("Map node not in final state").as_ref().expect("Map node result was an error");
     let results_array = match map_result.get("results") {
         Some(FlowValue::Json(Value::Array(arr))) => arr,
@@ -198,4 +195,67 @@ async fn test_parallel_map_workflow() {
 
     assert_eq!(results_array.len(), 3, "Should have produced 3 results for 3 inputs");
     println!("Parallel map execution successful with 3 results.");
+}
+
+#[tokio::test]
+async fn test_stateful_while_loop_workflow() {
+    if check_api_key() { return; }
+
+    let sub_flow_template = vec![
+        GraphNode {
+            id: "decrementer_prompt".to_string(),
+            node_type: NodeType::Standard(Arc::new(TemplateNode::new("decrementer_prompt", "Calculate {{counter}} - 1. Respond with only the resulting number."))),
+            dependencies: vec![],
+            input_mapping: None, 
+            run_if: None,
+            initial_inputs: HashMap::new(),
+        },
+        GraphNode {
+            id: "decrementer_llm".to_string(),
+            node_type: NodeType::Standard(Arc::new(LlmNode::default())),
+            dependencies: vec!["decrementer_prompt".to_string()],
+            input_mapping: Some([("prompt".to_string(), ("decrementer_prompt".to_string(), "output".to_string()))].into()),
+            run_if: None,
+            initial_inputs: {
+                let mut map = HashMap::new();
+                map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+                map
+            },
+        },
+        GraphNode {
+            id: "state_updater".to_string(),
+            node_type: NodeType::Standard(Arc::new(
+                TemplateNode::new("state_updater", "{{output}}").with_output_key("counter")
+            )),
+            dependencies: vec!["decrementer_llm".to_string()],
+            input_mapping: Some([("output".to_string(), ("decrementer_llm".to_string(), "output".to_string()))].into()),
+            run_if: None,
+            initial_inputs: HashMap::new(),
+        },
+    ];
+
+    let while_node = GraphNode {
+        id: "counter_loop".to_string(),
+        node_type: NodeType::While {
+            condition: "{{counter}}".to_string(),
+            max_iterations: 5,
+            template: sub_flow_template,
+        },
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: {
+            let mut map = HashMap::new();
+            map.insert("counter".to_string(), FlowValue::Json(json!("2"))); // Start with a string
+            map
+        },
+    };
+
+    let flow = Flow::new(vec![while_node]);
+    let final_state = flow.run().await.expect("Flow execution failed");
+
+    let loop_result = final_state.get("counter_loop").expect("Loop node not in final state").as_ref().expect("Loop node result was an error");
+    let final_count = loop_result.get("counter").expect("Final count not found");
+
+    assert_eq!(final_count, &FlowValue::Json(json!("0")));
 }

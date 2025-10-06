@@ -119,6 +119,7 @@ impl Flow {
             let mut iteration_count = 0u32;
 
             while iteration_count < max_iterations {
+                println!("--- While Loop Iteration: {}, State: {:?} ---", iteration_count + 1, loop_inputs);
                 let mut resolved_condition = condition_template.to_string();
                 for (key, value) in &loop_inputs {
                     let placeholder = format!("{{{{{}}}}}", key);
@@ -148,6 +149,7 @@ impl Flow {
                         next_loop_inputs.extend(outputs.clone());
                     }
                 }
+                println!("--- While Loop End of Iteration: {}, Sub-flow outputs: {:?} ---", iteration_count + 1, next_loop_inputs);
                 loop_inputs.extend(next_loop_inputs);
 
                 iteration_count += 1;
@@ -373,7 +375,7 @@ mod tests {
 
         let map_node = GraphNode {
             id: "map_node".to_string(),
-            node_type: NodeType::Map { template: vec![sub_flow_node] },
+            node_type: NodeType::Map { template: vec![sub_flow_node], parallel: false },
             dependencies: vec![],
             input_mapping: None,
             run_if: None,
@@ -394,5 +396,178 @@ mod tests {
         };
 
         assert_eq!(results_array.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_map_node_parallel_execution() {
+        struct MultiplyNode;
+        #[async_trait]
+        impl AsyncNode for MultiplyNode {
+            async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+                let val = match inputs.get("item").unwrap() {
+                    FlowValue::Json(Value::Number(n)) => n.as_i64().unwrap(),
+                    _ => 0,
+                };
+                let mut outputs = HashMap::new();
+                outputs.insert("result".to_string(), FlowValue::Json(json!(val * 2)));
+                Ok(outputs)
+            }
+        }
+
+        let sub_flow_node = GraphNode {
+            id: "multiply".to_string(),
+            node_type: NodeType::Standard(Arc::new(MultiplyNode)),
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: HashMap::new(),
+        };
+
+        let map_node = GraphNode {
+            id: "map_node".to_string(),
+            node_type: NodeType::Map { template: vec![sub_flow_node], parallel: true },
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: {
+                let mut inputs = HashMap::new();
+                inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3, 4, 5])));
+                inputs
+            },
+        };
+
+        let flow = Flow::new(vec![map_node]);
+
+        let final_state = flow.run().await.unwrap();
+        let map_result = final_state.get("map_node").unwrap().as_ref().unwrap();
+        let results_array = match map_result.get("results").unwrap() {
+            FlowValue::Json(Value::Array(arr)) => arr,
+            _ => panic!("Not an array"),
+        };
+
+        assert_eq!(results_array.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_while_node_basic_loop() {
+        struct IncrementNode;
+        #[async_trait]
+        impl AsyncNode for IncrementNode {
+            async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+                let counter = match inputs.get("counter") {
+                    Some(FlowValue::Json(Value::Number(n))) => n.as_i64().unwrap(),
+                    _ => 1,
+                };
+                let mut outputs = HashMap::new();
+                outputs.insert("counter".to_string(), FlowValue::Json(json!(counter + 1)));
+                outputs.insert("continue_loop".to_string(), FlowValue::Json(json!(counter < 4)));
+                Ok(outputs)
+            }
+        }
+
+        let increment_node = GraphNode {
+            id: "increment".to_string(),
+            node_type: NodeType::Standard(Arc::new(IncrementNode)),
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: HashMap::new(),
+        };
+
+        let while_node = GraphNode {
+            id: "while_loop".to_string(),
+            node_type: NodeType::While {
+                condition: "{{continue_loop}}".to_string(),
+                max_iterations: 10,
+                template: vec![increment_node],
+            },
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: {
+                let mut inputs = HashMap::new();
+                inputs.insert("counter".to_string(), FlowValue::Json(json!(1)));
+                inputs.insert("continue_loop".to_string(), FlowValue::Json(json!(true)));
+                inputs
+            },
+        };
+
+        let flow = Flow::new(vec![while_node]);
+        let final_state = flow.run().await.unwrap();
+        let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
+
+        let counter = match while_result.get("counter").unwrap() {
+            FlowValue::Json(Value::Number(n)) => n.as_i64().unwrap(),
+            _ => panic!("Counter should be a number"),
+        };
+
+        // Loop runs while continue_loop=true
+        // Iteration 1: counter=1, sets counter=2, continue_loop=true (1 < 4 = true)
+        // Iteration 2: counter=2, sets counter=3, continue_loop=true (2 < 4 = true)
+        // Iteration 3: counter=3, sets counter=4, continue_loop=true (3 < 4 = true)
+        // Iteration 4: counter=4, sets counter=5, continue_loop=false (4 < 4 = false)
+        // Next iteration checks: continue_loop=false, loop exits
+        assert_eq!(counter, 5);
+    }
+
+    #[tokio::test]
+    async fn test_while_node_condition_check() {
+        struct CheckNode;
+        #[async_trait]
+        impl AsyncNode for CheckNode {
+            async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+                let count = match inputs.get("count") {
+                    Some(FlowValue::Json(Value::Number(n))) => n.as_i64().unwrap(),
+                    _ => 0,
+                };
+                let mut outputs = HashMap::new();
+                outputs.insert("count".to_string(), FlowValue::Json(json!(count + 1)));
+                outputs.insert("continue".to_string(), FlowValue::Json(json!(count < 2)));
+                Ok(outputs)
+            }
+        }
+
+        let check_node = GraphNode {
+            id: "check".to_string(),
+            node_type: NodeType::Standard(Arc::new(CheckNode)),
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: HashMap::new(),
+        };
+
+        let while_node = GraphNode {
+            id: "while_loop".to_string(),
+            node_type: NodeType::While {
+                condition: "{{continue}}".to_string(),
+                max_iterations: 10,
+                template: vec![check_node],
+            },
+            dependencies: vec![],
+            input_mapping: None,
+            run_if: None,
+            initial_inputs: {
+                let mut inputs = HashMap::new();
+                inputs.insert("count".to_string(), FlowValue::Json(json!(0)));
+                inputs.insert("continue".to_string(), FlowValue::Json(json!(true)));
+                inputs
+            },
+        };
+
+        let flow = Flow::new(vec![while_node]);
+        let final_state = flow.run().await.unwrap();
+        let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
+
+        let count = match while_result.get("count").unwrap() {
+            FlowValue::Json(Value::Number(n)) => n.as_i64().unwrap(),
+            _ => panic!("Count should be a number"),
+        };
+
+        // Loop runs while continue=true
+        // Iteration 1: count=0, sets count=1, continue=true (0 < 2 = true)
+        // Iteration 2: count=1, sets count=2, continue=true (1 < 2 = true)
+        // Iteration 3: count=2, sets count=3, continue=false (2 < 2 = false)
+        // Next iteration checks: continue=false, loop exits
+        assert_eq!(count, 3);
     }
 }
