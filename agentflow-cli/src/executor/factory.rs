@@ -1,8 +1,5 @@
 use crate::config::v2::NodeDefinitionV2;
-use agentflow_core::{
-    flow::{GraphNode, NodeType},
-    value::FlowValue,
-};
+use agentflow_core::flow::{GraphNode, NodeType};
 use agentflow_nodes::nodes::llm::LlmNode;
 use agentflow_nodes::nodes::template::TemplateNode;
 use anyhow::{anyhow, Context, Result};
