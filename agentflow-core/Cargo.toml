@@ -37,6 +37,10 @@ pin-project-lite = "0.2"
 
 # Time and date handling for observability
 chrono = { version = "0.4", features = ["serde"] }
+humantime-serde = "1.1"
+
+# Random number generation for retry jitter
+rand = "0.8"
 
 # Regular expressions for text processing
 regex = "1.0"
