@@ -55,6 +55,28 @@ enum WorkflowCommands {
         #[arg(long, default_value_t = 0)]
         max_retries: u32,
     },
+    /// Debug and inspect workflow structure
+    Debug {
+        workflow_file: String,
+        /// Visualize the workflow DAG
+        #[arg(long)]
+        visualize: bool,
+        /// Perform dry run without execution
+        #[arg(long)]
+        dry_run: bool,
+        /// Analyze workflow structure and dependencies
+        #[arg(long)]
+        analyze: bool,
+        /// Validate workflow configuration
+        #[arg(long)]
+        validate: bool,
+        /// Show execution plan
+        #[arg(long)]
+        plan: bool,
+        /// Enable verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -176,6 +198,9 @@ async fn main() {
             WorkflowCommands::Run { workflow_file, watch, output, input, dry_run, timeout, max_retries } => {
                 let input_pairs = input.chunks_exact(2).map(|chunk| (chunk[0].clone(), chunk[1].clone())).collect();
                 workflow::run::execute(workflow_file, watch, output, input_pairs, dry_run, timeout, max_retries).await
+            }
+            WorkflowCommands::Debug { workflow_file, visualize, dry_run, analyze, validate, plan, verbose } => {
+                workflow::debug::execute(workflow_file, visualize, dry_run, analyze, validate, plan, verbose).await
             }
         },
         Commands::Audio(args) => match args.command {
