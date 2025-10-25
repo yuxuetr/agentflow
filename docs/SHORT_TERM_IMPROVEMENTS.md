@@ -204,7 +204,7 @@ println!("{}", context.detailed_report());
 ## 2. Workflow Debugging Tools ✅ COMPLETED
 
 **Completion Date**: 2025-10-26
-**Commit**: TBD - feat(cli): comprehensive workflow debugging tools
+**Commit**: `7af8d65` - feat(cli): comprehensive workflow debugging tools
 
 ### 2.1 Debug Command ✅
 
