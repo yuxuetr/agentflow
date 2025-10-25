@@ -6,12 +6,14 @@ use std::collections::HashMap;
 
 pub mod anthropic;
 pub mod google;
+pub mod mock;
 pub mod moonshot;
 pub mod openai;
 pub mod stepfun;
 
 pub use anthropic::AnthropicProvider;
 pub use google::GoogleProvider;
+pub use mock::MockProvider;
 pub use moonshot::MoonshotProvider;
 pub use openai::OpenAIProvider;
 pub use stepfun::StepFunProvider;
@@ -172,6 +174,7 @@ pub fn create_provider(
   base_url: Option<String>,
 ) -> Result<Box<dyn LLMProvider>> {
   match provider_name.to_lowercase().as_str() {
+    "mock" => Ok(Box::new(MockProvider::new(api_key, base_url)?)), // Mock provider for testing
     "openai" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)),
     "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key, base_url)?)),
     "google" | "gemini" => Ok(Box::new(GoogleProvider::new(api_key, base_url)?)),

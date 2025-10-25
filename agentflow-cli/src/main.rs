@@ -70,6 +70,8 @@ enum AudioCommands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Voice cloning (experimental - not yet implemented)
+    #[command(hide = true)]
     Clone {
         text: String,
         file_id: String,
