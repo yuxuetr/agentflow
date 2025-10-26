@@ -35,7 +35,7 @@ use std::time::Instant;
 /// ```
 pub async fn execute_with_retry<F, Fut, T>(
     policy: &RetryPolicy,
-    operation_name: &str,
+    _operation_name: &str,
     mut operation: F,
 ) -> Result<T, AgentFlowError>
 where
@@ -43,7 +43,7 @@ where
     Fut: Future<Output = Result<T, AgentFlowError>>,
 {
     let mut context = RetryContext::new();
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
 
     loop {
         match operation().await {
