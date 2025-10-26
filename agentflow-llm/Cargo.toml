@@ -1,6 +1,6 @@
 [package]
 name = "agentflow-llm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["yuxuetr"]
 description = "LLM integration crate for AgentFlow - unified interface for multiple LLM providers"

@@ -1,8 +1,8 @@
 # Release Notes: AgentFlow v0.2.0
 
-**Release Date**: TBD
+**Release Date**: 2025-10-26
 **Codename**: "Stability & Observability"
-**Status**: Phase 1 Complete ✅
+**Status**: Released ✅
 
 ## 🎉 Overview
 
@@ -333,7 +333,7 @@ Special thanks to the Rust community for excellent libraries (tokio, serde, this
 - **2025-10-26**: Week 2 completed (Debugging Tools)
 - **2025-10-26**: Week 3 completed (Resource Management)
 - **2025-10-26**: Week 4 completed (Integration & Documentation)
-- **TBD**: v0.2.0 release
+- **2025-10-26**: v0.2.0 released
 
 ## 🎊 Conclusion
 

@@ -1,6 +1,6 @@
 # Migration Guide: v0.1.0 → v0.2.0
 
-**Release Date**: TBD
+**Release Date**: 2025-10-26
 **Migration Effort**: Low (No breaking changes)
 **Recommended**: Yes (Significant stability improvements)
 
