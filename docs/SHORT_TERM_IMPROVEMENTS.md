@@ -386,7 +386,7 @@ agentflow workflow debug <file> [--visualize|--validate|--analyze|--plan|--dry-r
 ## 3. Resource Management ✅ COMPLETED
 
 **Completion Date**: 2025-10-26
-**Commit**: [To be added] - feat(core): resource management and state monitoring
+**Commit**: `d9a5225` - feat(core): comprehensive resource management system
 
 ### 3.1 Memory Limits ✅
 
