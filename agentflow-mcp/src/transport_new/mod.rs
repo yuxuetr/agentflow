@@ -26,9 +26,11 @@
 //! # }
 //! ```
 
+pub mod mock;
 pub mod stdio;
 pub mod traits;
 
 // Re-export commonly used types
+pub use mock::MockTransport;
 pub use stdio::StdioTransport;
 pub use traits::{Transport, TransportConfig, TransportType};

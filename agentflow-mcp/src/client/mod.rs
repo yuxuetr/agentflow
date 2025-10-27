@@ -66,7 +66,7 @@
 mod builder;
 mod prompts;
 mod resources;
-mod retry;
+pub mod retry; // Public for direct access to retry utilities
 mod session;
 mod tools;
 
