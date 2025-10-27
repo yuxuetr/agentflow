@@ -1,6 +1,6 @@
 //! MCP server implementation for exposing AgentFlow capabilities
 
-use crate::error::{MCPError, MCPResult};
+use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -88,8 +88,11 @@ impl MCPServer {
   async fn handle_request(&self, request: Value) -> MCPResult<Option<Value>> {
     let method = request["method"]
       .as_str()
-      .ok_or_else(|| MCPError::Protocol {
-        message: "Missing method in request".to_string(),
+      .ok_or_else(|| {
+        MCPError::protocol(
+          "Missing method in request".to_string(),
+          JsonRpcErrorCode::InvalidRequest,
+        )
       })?;
 
     let id = request.get("id");
@@ -214,8 +217,11 @@ impl MCPServerHandler for AgentFlowServerHandler {
         // This would integrate with the actual AgentFlow workflow runner
         let workflow_path = tool_call.parameters["workflow_path"]
           .as_str()
-          .ok_or_else(|| MCPError::ToolExecution {
-            message: "Missing workflow_path parameter".to_string(),
+          .ok_or_else(|| {
+            MCPError::tool(
+              "Missing workflow_path parameter".to_string(),
+              Some("run_workflow".to_string()),
+            )
           })?;
 
         // Placeholder implementation
@@ -225,9 +231,10 @@ impl MCPServerHandler for AgentFlowServerHandler {
 
         Ok(result)
       }
-      _ => Err(MCPError::ToolExecution {
-        message: format!("Unknown tool: {}", tool_call.name),
-      }),
+      _ => Err(MCPError::tool(
+        format!("Unknown tool: {}", tool_call.name),
+        Some(tool_call.name.clone()),
+      )),
     }
   }
 }
