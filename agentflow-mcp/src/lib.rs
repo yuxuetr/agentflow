@@ -28,6 +28,7 @@ pub mod protocol;
 pub mod server;
 pub mod tools;
 pub mod transport;
+pub mod transport_new; // New refactored transport layer
 
 pub use client::*;
 pub use error::*;
@@ -35,3 +36,6 @@ pub use protocol::*;
 pub use server::*;
 pub use tools::*;
 pub use transport::*;
+
+// Note: transport_new is not re-exported at top level to avoid conflicts
+// Use `transport_new::StdioTransport` explicitly until migration is complete
