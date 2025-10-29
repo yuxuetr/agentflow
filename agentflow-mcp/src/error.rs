@@ -453,4 +453,163 @@ mod tests {
     let err = MCPError::resource("not found", Some("file:///test.txt".to_string()));
     assert!(err.to_string().contains("Resource error"));
   }
+
+  // ============================================================================
+  // Property-Based Tests
+  // ============================================================================
+
+  mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+      /// Property: Transient errors remain transient after context
+      #[test]
+      fn prop_transient_preserved_after_context(
+        message in "[a-zA-Z0-9 ]{1,50}",
+        context in "[a-zA-Z0-9 ]{1,50}"
+      ) {
+        let err = MCPError::timeout(message, Some(1000));
+        prop_assert!(err.is_transient());
+
+        let err_with_context = err.context(context);
+        prop_assert!(err_with_context.is_transient());
+      }
+
+      /// Property: Non-transient errors remain non-transient after context
+      #[test]
+      fn prop_non_transient_preserved_after_context(
+        message in "[a-zA-Z0-9 ]{1,50}",
+        context in "[a-zA-Z0-9 ]{1,50}"
+      ) {
+        let err = MCPError::validation(message, None);
+        prop_assert!(!err.is_transient());
+
+        let err_with_context = err.context(context);
+        prop_assert!(!err_with_context.is_transient());
+      }
+
+      /// Property: Context is visible in error message
+      #[test]
+      fn prop_context_appears_in_message(
+        message in "[a-zA-Z0-9 ]{5,20}",
+        context in "[a-zA-Z0-9 ]{5,20}"
+      ) {
+        prop_assume!(message != context); // Must be different to test
+
+        let err = MCPError::transport(message.clone());
+        let err_with_context = err.context(context.clone());
+
+        let error_string = err_with_context.to_string();
+        prop_assert!(error_string.contains(&message));
+        prop_assert!(error_string.contains(&context));
+      }
+
+      /// Property: Multiple contexts stack properly
+      #[test]
+      fn prop_multiple_contexts_stack(
+        message in "[a-zA-Z0-9]{5,10}",
+        context1 in "[a-zA-Z0-9]{5,10}",
+        context2 in "[a-zA-Z0-9]{5,10}"
+      ) {
+        let err = MCPError::transport(message.clone());
+        let err = err.context(context1.clone());
+        let err = err.context(context2.clone());
+
+        let error_string = err.to_string();
+        prop_assert!(error_string.contains(&message));
+        prop_assert!(error_string.contains(&context1));
+        prop_assert!(error_string.contains(&context2));
+      }
+
+      /// Property: Timeout errors have correct timeout value
+      #[test]
+      fn prop_timeout_value_preserved(
+        message in "[a-zA-Z0-9 ]{1,50}",
+        timeout_ms in 1u64..60_000u64
+      ) {
+        let err = MCPError::timeout(message, Some(timeout_ms));
+
+        match err {
+          MCPError::Timeout { timeout_ms: saved_timeout, .. } => {
+            prop_assert_eq!(saved_timeout, Some(timeout_ms));
+          }
+          _ => prop_assert!(false, "Expected Timeout variant"),
+        }
+      }
+
+      /// Property: Tool errors preserve tool name
+      #[test]
+      fn prop_tool_error_preserves_name(
+        message in "[a-zA-Z0-9 ]{1,50}",
+        tool_name in "[a-z_]{1,30}"
+      ) {
+        let err = MCPError::tool(message, Some(tool_name.clone()));
+
+        match err {
+          MCPError::ToolError { tool_name: saved_tool_name, .. } => {
+            prop_assert_eq!(saved_tool_name, Some(tool_name));
+          }
+          _ => prop_assert!(false, "Expected ToolError variant"),
+        }
+      }
+
+      /// Property: Resource errors preserve URI
+      #[test]
+      fn prop_resource_error_preserves_uri(
+        message in "[a-zA-Z0-9 ]{1,50}",
+        uri in "[a-z]+://[a-z/]{1,30}"
+      ) {
+        let err = MCPError::resource(message, Some(uri.clone()));
+
+        match err {
+          MCPError::ResourceError { resource_uri, .. } => {
+            prop_assert_eq!(resource_uri, Some(uri));
+          }
+          _ => prop_assert!(false, "Expected ResourceError variant"),
+        }
+      }
+
+      /// Property: Protocol errors have JSON-RPC code
+      #[test]
+      fn prop_protocol_error_has_code(
+        message in "[a-zA-Z0-9 ]{1,50}"
+      ) {
+        let err = MCPError::protocol(message, JsonRpcErrorCode::InvalidRequest);
+        prop_assert!(err.json_rpc_code().is_some());
+        prop_assert_eq!(err.json_rpc_code(), Some(-32600));
+      }
+
+      /// Property: Error messages are never empty
+      #[test]
+      fn prop_error_messages_not_empty(
+        message in "[a-zA-Z0-9 ]{1,50}"
+      ) {
+        let errors = vec![
+          MCPError::transport(message.clone()),
+          MCPError::connection(message.clone()),
+          MCPError::timeout(message.clone(), Some(1000)),
+          MCPError::validation(message.clone(), None),
+        ];
+
+        for err in errors {
+          prop_assert!(!err.to_string().is_empty());
+        }
+      }
+
+      /// Property: ResultExt context works for any error
+      #[test]
+      fn prop_result_ext_context_works(
+        message in "[a-zA-Z0-9 ]{5,20}",
+        context in "[a-zA-Z0-9 ]{5,20}"
+      ) {
+        let result: MCPResult<()> = Err(MCPError::transport(message.clone()));
+        let result_with_context = result.context(context.clone());
+
+        prop_assert!(result_with_context.is_err());
+        let error_string = result_with_context.unwrap_err().to_string();
+        prop_assert!(error_string.contains(&context));
+      }
+    }
+  }
 }

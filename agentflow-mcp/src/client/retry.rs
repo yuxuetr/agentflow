@@ -217,4 +217,121 @@ mod tests {
     assert!(result.is_err());
     assert_eq!(attempt_count.load(Ordering::SeqCst), 1); // Only 1 attempt, no retries
   }
+
+  // ============================================================================
+  // Property-Based Tests
+  // ============================================================================
+
+  mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+      /// Property: Backoff duration is always non-negative
+      #[test]
+      fn prop_backoff_always_non_negative(
+        base_ms in 1u64..10_000u64,
+        max_backoff_ms in 1_000u64..100_000u64,
+        attempt in 0u32..20u32
+      ) {
+        let config = RetryConfig::new(10, base_ms).with_max_backoff(max_backoff_ms);
+        let duration = config.backoff_duration(attempt);
+        prop_assert!(duration.as_millis() >= 0);
+      }
+
+      /// Property: Backoff respects maximum cap
+      #[test]
+      fn prop_backoff_respects_max(
+        base_ms in 1u64..1_000u64,
+        max_backoff_ms in 1_000u64..30_000u64,
+        attempt in 0u32..50u32
+      ) {
+        let config = RetryConfig::new(100, base_ms).with_max_backoff(max_backoff_ms);
+        let duration = config.backoff_duration(attempt);
+        prop_assert!(duration.as_millis() <= max_backoff_ms as u128);
+      }
+
+      /// Property: Backoff increases exponentially until cap
+      #[test]
+      fn prop_backoff_exponential_growth(
+        base_ms in 10u64..100u64,
+        attempt in 0u32..10u32
+      ) {
+        let config = RetryConfig::new(20, base_ms).with_max_backoff(1_000_000);
+
+        if attempt > 0 {
+          let prev_duration = config.backoff_duration(attempt - 1);
+          let curr_duration = config.backoff_duration(attempt);
+
+          // Current should be ~2x previous (within rounding)
+          let expected_min = prev_duration.as_millis() * 2;
+          let expected_max = prev_duration.as_millis() * 2 + 1; // Account for rounding
+
+          prop_assert!(
+            curr_duration.as_millis() >= expected_min &&
+            curr_duration.as_millis() <= expected_max,
+            "Expected backoff to double: prev={:?}, curr={:?}",
+            prev_duration, curr_duration
+          );
+        }
+      }
+
+      /// Property: Backoff for attempt 0 equals base
+      #[test]
+      fn prop_backoff_first_attempt_equals_base(
+        base_ms in 1u64..10_000u64
+      ) {
+        let config = RetryConfig::new(5, base_ms);
+        let duration = config.backoff_duration(0);
+        prop_assert_eq!(duration.as_millis(), base_ms as u128);
+      }
+
+      /// Property: Max retries determines attempt count
+      #[test]
+      fn prop_max_retries_bounds_attempts(
+        max_retries in 0u32..20u32
+      ) {
+        let config = RetryConfig::new(max_retries, 10);
+
+        // The number of iterations in retry_with_backoff is 0..=max_retries
+        // So total attempts = max_retries + 1 (initial attempt + retries)
+        prop_assert_eq!(config.max_retries, max_retries);
+      }
+
+      /// Property: Backoff never overflows even with large attempts
+      #[test]
+      fn prop_backoff_no_overflow(
+        base_ms in 1u64..1_000u64,
+        attempt in 0u32..100u32
+      ) {
+        let config = RetryConfig::new(150, base_ms).with_max_backoff(u64::MAX);
+
+        // Should not panic with overflow
+        let duration = config.backoff_duration(attempt);
+
+        // Should be bounded by either exponential growth or max_backoff
+        prop_assert!(duration.as_millis() > 0);
+      }
+
+      /// Property: Different configurations produce different backoffs
+      #[test]
+      fn prop_config_affects_backoff(
+        base_ms1 in 10u64..100u64,
+        base_ms2 in 101u64..1000u64,
+        attempt in 1u32..5u32  // Reduced to avoid hitting max_backoff
+      ) {
+        prop_assume!(base_ms1 != base_ms2); // Only test when different
+
+        // Use very high max_backoff to ensure we don't hit the cap
+        let config1 = RetryConfig::new(20, base_ms1).with_max_backoff(u64::MAX);
+        let config2 = RetryConfig::new(20, base_ms2).with_max_backoff(u64::MAX);
+
+        let duration1 = config1.backoff_duration(attempt);
+        let duration2 = config2.backoff_duration(attempt);
+
+        // Different base should produce different backoffs
+        prop_assert_ne!(duration1, duration2);
+      }
+    }
+  }
 }

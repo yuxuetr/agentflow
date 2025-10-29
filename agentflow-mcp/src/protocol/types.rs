@@ -545,4 +545,131 @@ mod tests {
     assert_eq!(custom.name, "custom-client");
     assert_eq!(custom.version, "1.0.0");
   }
+
+  // ============================================================================
+  // Property-Based Tests
+  // ============================================================================
+
+  mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+      /// Property: RequestId Number round-trips through JSON
+      #[test]
+      fn prop_request_id_number_roundtrip(id in any::<i64>()) {
+        let req_id = RequestId::Number(id);
+        let json = serde_json::to_value(&req_id).unwrap();
+        let decoded: RequestId = serde_json::from_value(json).unwrap();
+        prop_assert_eq!(req_id, decoded);
+      }
+
+      /// Property: RequestId String round-trips through JSON
+      #[test]
+      fn prop_request_id_string_roundtrip(id in "[a-zA-Z0-9-_]{1,50}") {
+        let req_id = RequestId::String(id.clone());
+        let json = serde_json::to_value(&req_id).unwrap();
+        let decoded: RequestId = serde_json::from_value(json).unwrap();
+        prop_assert_eq!(req_id, decoded);
+      }
+
+      /// Property: JSON-RPC request always has version "2.0"
+      #[test]
+      fn prop_request_has_jsonrpc_version(
+        id in any::<i64>(),
+        method in "[a-z/]{1,30}"
+      ) {
+        let request = JsonRpcRequest::new(RequestId::Number(id), method, None);
+        prop_assert_eq!(request.jsonrpc, "2.0");
+      }
+
+      /// Property: Notifications have no ID
+      #[test]
+      fn prop_notification_has_no_id(method in "[a-z/]{1,30}") {
+        let notification = JsonRpcRequest::notification(method, None);
+        prop_assert!(notification.is_notification());
+        prop_assert!(notification.id.is_none());
+      }
+
+      /// Property: Requests with ID are not notifications
+      #[test]
+      fn prop_request_with_id_not_notification(
+        id in any::<i64>(),
+        method in "[a-z/]{1,30}"
+      ) {
+        let request = JsonRpcRequest::new(RequestId::Number(id), method, None);
+        prop_assert!(!request.is_notification());
+        prop_assert!(request.id.is_some());
+      }
+
+      /// Property: Success responses have result, no error
+      #[test]
+      fn prop_success_response_properties(id in any::<i64>()) {
+        let response = JsonRpcResponse::success(
+          RequestId::Number(id),
+          json!({"test": "value"})
+        );
+
+        prop_assert!(!response.is_error());
+        prop_assert!(response.result.is_some());
+        prop_assert!(response.error.is_none());
+        prop_assert_eq!(response.jsonrpc, "2.0");
+      }
+
+      /// Property: Error responses have error, no result
+      #[test]
+      fn prop_error_response_properties(
+        id in any::<i64>(),
+        code in any::<i32>(),
+        message in "[a-zA-Z0-9 ]{1,100}"
+      ) {
+        let error = JsonRpcError::new(code, message);
+        let response = JsonRpcResponse::error(Some(RequestId::Number(id)), error);
+
+        prop_assert!(response.is_error());
+        prop_assert!(response.result.is_none());
+        prop_assert!(response.error.is_some());
+        prop_assert_eq!(response.jsonrpc, "2.0");
+      }
+
+      /// Property: JsonRpcRequest round-trips through JSON
+      #[test]
+      fn prop_request_roundtrip(
+        id in any::<i64>(),
+        method in "[a-z/]{1,30}"
+      ) {
+        let request = JsonRpcRequest::new(RequestId::Number(id), method, None);
+        let json = serde_json::to_value(&request).unwrap();
+        let decoded: JsonRpcRequest = serde_json::from_value(json).unwrap();
+        prop_assert_eq!(request, decoded);
+      }
+
+      /// Property: JsonRpcResponse round-trips through JSON
+      #[test]
+      fn prop_response_roundtrip(id in any::<i64>()) {
+        let response = JsonRpcResponse::success(
+          RequestId::Number(id),
+          json!({"test": 123})
+        );
+        let json = serde_json::to_value(&response).unwrap();
+        let decoded: JsonRpcResponse = serde_json::from_value(json).unwrap();
+        prop_assert_eq!(response, decoded);
+      }
+
+      /// Property: Method names are preserved exactly
+      #[test]
+      fn prop_method_name_preserved(
+        id in any::<i64>(),
+        method in "[a-zA-Z0-9/_.-]{1,50}"
+      ) {
+        let request = JsonRpcRequest::new(RequestId::Number(id), method.clone(), None);
+        prop_assert_eq!(&request.method, &method);
+
+        // Round-trip through JSON
+        let json = serde_json::to_value(&request).unwrap();
+        let decoded: JsonRpcRequest = serde_json::from_value(json).unwrap();
+        prop_assert_eq!(&decoded.method, &method);
+      }
+    }
+  }
 }

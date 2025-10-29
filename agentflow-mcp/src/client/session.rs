@@ -5,9 +5,11 @@
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult, ResultExt};
 use crate::protocol::types::{
-  ClientCapabilities, Implementation, InitializeParams, InitializeResult, JsonRpcRequest,
+  Implementation, InitializeParams, InitializeResult, JsonRpcRequest,
   JsonRpcResponse, RequestId,
 };
+#[cfg(test)]
+use crate::protocol::types::ClientCapabilities;
 use crate::transport_new::Transport;
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -131,19 +133,29 @@ impl MCPClient {
       return Ok(());
     }
 
-    // Connect transport
-    self
-      .transport
-      .lock()
-      .await
-      .connect()
-      .await
-      .context("Failed to connect transport")?;
+    // Connect transport with timeout
+    let timeout = self.config.timeout;
+    let connect_result = tokio::time::timeout(
+      timeout,
+      self.transport.lock().await.connect()
+    )
+    .await;
 
-    // Update connection state
-    *self.connected.lock().await = true;
+    match connect_result {
+      Ok(Ok(())) => {
+        // Update connection state
+        *self.connected.lock().await = true;
+      }
+      Ok(Err(e)) => return Err(e.context("Failed to connect transport")),
+      Err(_) => {
+        return Err(MCPError::timeout(
+          format!("Connection timeout after {:?}", timeout),
+          Some(timeout.as_millis() as u64),
+        ))
+      }
+    }
 
-    // Initialize session
+    // Initialize session (already has retry + timeout via send_request)
     self.initialize().await.context("Failed to initialize MCP session")?;
 
     Ok(())
@@ -293,35 +305,88 @@ impl MCPClient {
   }
 
   /// Send a JSON-RPC request and wait for response
+  ///
+  /// This method applies:
+  /// - Retry logic with exponential backoff (for transient errors)
+  /// - Timeout enforcement from client configuration
   pub(super) async fn send_request(&mut self, request: JsonRpcRequest) -> MCPResult<Value> {
+    use crate::client::retry::{retry_with_backoff, RetryConfig};
+
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
-    let response = self
-      .transport
-      .lock()
-      .await
-      .send_message(request_value)
-      .await
-      .context("Failed to send message")?;
+    // Create retry config from client config
+    let retry_config = RetryConfig::new(
+      self.config.max_retries,
+      self.config.retry_backoff_ms,
+    );
+
+    // Clone what we need for the retry closure
+    let transport = self.transport.clone();
+    let timeout = self.config.timeout;
+
+    // Apply retry + timeout wrapper
+    let response = retry_with_backoff(&retry_config, || {
+      let transport = transport.clone();
+      let request_value = request_value.clone();
+
+      async move {
+        // Apply timeout to the transport operation
+        let result = tokio::time::timeout(
+          timeout,
+          async {
+            transport
+              .lock()
+              .await
+              .send_message(request_value)
+              .await
+          }
+        )
+        .await;
+
+        match result {
+          Ok(Ok(response)) => Ok(response),
+          Ok(Err(e)) => Err(e.context("Failed to send message")),
+          Err(_) => Err(MCPError::timeout(
+            format!("Request timeout after {:?}", timeout),
+            Some(timeout.as_millis() as u64),
+          )),
+        }
+      }
+    })
+    .await?;
 
     Ok(response)
   }
 
   /// Send a JSON-RPC notification (no response expected)
+  ///
+  /// This method applies timeout enforcement from client configuration.
+  /// Notifications typically don't get retried as they don't expect responses.
   pub(super) async fn send_notification(&mut self, notification: JsonRpcRequest) -> MCPResult<()> {
     let notification_value = serde_json::to_value(&notification)
       .map_err(|e| MCPError::from(e).context("Failed to serialize notification"))?;
 
-    self
-      .transport
-      .lock()
-      .await
-      .send_notification(notification_value)
-      .await
-      .context("Failed to send notification")?;
+    // Apply timeout to notification
+    let timeout = self.config.timeout;
+    let result = tokio::time::timeout(
+      timeout,
+      self
+        .transport
+        .lock()
+        .await
+        .send_notification(notification_value)
+    )
+    .await;
 
-    Ok(())
+    match result {
+      Ok(Ok(())) => Ok(()),
+      Ok(Err(e)) => Err(e.context("Failed to send notification")),
+      Err(_) => Err(MCPError::timeout(
+        format!("Notification timeout after {:?}", timeout),
+        Some(timeout.as_millis() as u64),
+      )),
+    }
   }
 
   /// Generate next request ID
