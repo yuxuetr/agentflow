@@ -21,9 +21,16 @@ pub async fn execute(
   println!("Output: {}", output);
   println!();
 
-  // For now, we need to implement file upload to get file_id
-  // TODO: Implement file upload API in the StepFun client
-  return Err(anyhow::anyhow!("Voice cloning is not yet fully implemented. The StepFun API requires uploading the reference audio file first to get a file_id, but the file upload functionality is not yet implemented in the agentflow-llm crate. \n\nTo implement this feature, we need to:\n1. Add file upload method to StepFunSpecializedClient\n2. Upload the reference audio file to get a file_id\n3. Use the file_id in VoiceCloningRequest\n\nFor now, you can use the existing shell script examples for voice cloning."));
+  // Voice cloning is not yet implemented
+  return Err(anyhow::anyhow!(
+    "❌ Voice cloning is not yet implemented.\n\n\
+     This feature requires:\n\
+     1. File upload API in agentflow-llm crate\n\
+     2. StepFun API integration for voice cloning\n\
+     3. Voice synthesis with cloned voice ID\n\n\
+     Status: Planned for future release\n\
+     Track progress: https://github.com/agentflow/agentflow/issues"
+  ));
 
   #[allow(unreachable_code)]
   {

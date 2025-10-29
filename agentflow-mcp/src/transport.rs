@@ -47,9 +47,7 @@ impl TransportClient {
     match &self.transport {
       Transport::Stdio { command } => {
         if command.is_empty() {
-          return Err(MCPError::Transport {
-            message: "Empty command for stdio transport".to_string(),
-          });
+          return Err(MCPError::transport("Empty command for stdio transport"));
         }
 
         let mut cmd = TokioCommand::new(&command[0]);
@@ -62,9 +60,7 @@ impl TransportClient {
           .stdout(std::process::Stdio::piped())
           .stderr(std::process::Stdio::piped())
           .spawn()
-          .map_err(|e| MCPError::Connection {
-            message: format!("Failed to spawn MCP server process: {}", e),
-          })?;
+          .map_err(|e| MCPError::connection(format!("Failed to spawn MCP server process: {}", e)))?;
 
         self.process = Some(child);
         Ok(())
@@ -88,12 +84,11 @@ impl TransportClient {
           stdin
             .write_all(message_bytes.as_bytes())
             .await
-            .map_err(|e| MCPError::Transport {
-              message: format!("Failed to write to MCP server: {}", e),
-            })?;
-          stdin.flush().await.map_err(|e| MCPError::Transport {
-            message: format!("Failed to flush MCP server stdin: {}", e),
-          })?;
+            .map_err(|e| MCPError::transport(format!("Failed to write to MCP server: {}", e)))?;
+          stdin
+            .flush()
+            .await
+            .map_err(|e| MCPError::transport(format!("Failed to flush MCP server stdin: {}", e)))?;
         }
 
         // Read response from stdout
@@ -111,37 +106,31 @@ impl TransportClient {
                 buffer.push(byte[0]);
               }
               Err(e) => {
-                return Err(MCPError::Transport {
-                  message: format!("Failed to read from MCP server: {}", e),
-                });
+                return Err(MCPError::transport(format!("Failed to read from MCP server: {}", e)));
               }
             }
           }
 
-          let response_str = String::from_utf8(buffer).map_err(|e| MCPError::Transport {
-            message: format!("Invalid UTF-8 response from MCP server: {}", e),
-          })?;
+          let response_str = String::from_utf8(buffer)
+            .map_err(|e| MCPError::transport(format!("Invalid UTF-8 response from MCP server: {}", e)))?;
 
           let response: Value = serde_json::from_str(&response_str)?;
           Ok(response)
         } else {
-          Err(MCPError::Transport {
-            message: "No stdout available from MCP server".to_string(),
-          })
+          Err(MCPError::transport("No stdout available from MCP server"))
         }
       }
-      None => Err(MCPError::Connection {
-        message: "Not connected to MCP server".to_string(),
-      }),
+      None => Err(MCPError::connection("Not connected to MCP server")),
     }
   }
 
   /// Disconnect from the server
   pub async fn disconnect(&mut self) -> MCPResult<()> {
     if let Some(mut child) = self.process.take() {
-      child.kill().await.map_err(|e| MCPError::Connection {
-        message: format!("Failed to terminate MCP server process: {}", e),
-      })?;
+      child
+        .kill()
+        .await
+        .map_err(|e| MCPError::connection(format!("Failed to terminate MCP server process: {}", e)))?;
     }
     Ok(())
   }

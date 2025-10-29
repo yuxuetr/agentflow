@@ -1,6 +1,6 @@
 //! MCP client implementation for AgentFlow
 
-use crate::error::{MCPError, MCPResult};
+use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use crate::transport::{Transport, TransportClient};
 use serde_json::{json, Value};
@@ -60,9 +60,10 @@ impl MCPClient {
     let response = self.transport.send_message(init_request).await?;
 
     if response.get("error").is_some() {
-      return Err(MCPError::Protocol {
-        message: format!("Initialization failed: {:?}", response["error"]),
-      });
+      return Err(MCPError::protocol(
+        format!("Initialization failed: {:?}", response["error"]),
+        JsonRpcErrorCode::InternalError,
+      ));
     }
 
     // Send initialized notification
@@ -89,15 +90,19 @@ impl MCPClient {
     let response = self.transport.send_message(request).await?;
 
     if let Some(error) = response.get("error") {
-      return Err(MCPError::Protocol {
-        message: format!("Failed to list tools: {:?}", error),
-      });
+      return Err(MCPError::protocol(
+        format!("Failed to list tools: {:?}", error),
+        JsonRpcErrorCode::InternalError,
+      ));
     }
 
     let tools = response["result"]["tools"]
       .as_array()
-      .ok_or_else(|| MCPError::Protocol {
-        message: "Invalid tools list response".to_string(),
+      .ok_or_else(|| {
+        MCPError::protocol(
+          "Invalid tools list response".to_string(),
+          JsonRpcErrorCode::InternalError,
+        )
       })?;
 
     let mut tool_definitions = Vec::new();
@@ -124,9 +129,10 @@ impl MCPClient {
     let response = self.transport.send_message(request).await?;
 
     if let Some(error) = response.get("error") {
-      return Err(MCPError::ToolExecution {
-        message: format!("Tool call failed: {:?}", error),
-      });
+      return Err(MCPError::tool(
+        format!("Tool call failed: {:?}", error),
+        Some(tool_call.name.clone()),
+      ));
     }
 
     let result: ToolResult = serde_json::from_value(response["result"].clone())?;
