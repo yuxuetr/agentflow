@@ -1,0 +1,17 @@
+# Simple MCP Example
+# Minimal MCP integration example
+#
+# Run with: agentflow workflow run examples/workflows/mcp_simple.yml
+
+name: "MCP Simple Example"
+description: "Minimal MCP workflow for testing"
+
+nodes:
+  # Single MCP node that lists directory contents
+  - id: list_tmp
+    type: mcp
+    parameters:
+      server_command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      tool_name: list_directory
+      tool_params:
+        path: "/tmp"

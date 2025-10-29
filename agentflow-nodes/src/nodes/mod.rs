@@ -32,3 +32,7 @@ pub mod conditional;
 // Specialized content processing nodes
 pub mod markmap;
 pub mod arxiv;
+
+// Integration nodes
+#[cfg(feature = "mcp")]
+pub mod mcp;

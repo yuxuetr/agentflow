@@ -17,6 +17,7 @@ template = ["handlebars"]
 batch = []
 conditional = []
 factories = []
+mcp = ["agentflow-mcp"]
 
 [dependencies]
 # Core dependency - all nodes build on top of agentflow-core
@@ -24,6 +25,9 @@ agentflow-core = { path = "../agentflow-core" }
 
 # LLM integration - required for real model execution
 agentflow-llm = { path = "../agentflow-llm" }
+
+# MCP integration - optional for MCP tool calling
+agentflow-mcp = { path = "../agentflow-mcp", optional = true }
 
 # Removed: agentflow-config dependency to break circular dependency
 

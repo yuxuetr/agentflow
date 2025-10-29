@@ -1,0 +1,49 @@
+# MCP Filesystem Integration Example
+# This workflow demonstrates using MCP to interact with the filesystem
+#
+# Prerequisites:
+# - Install the MCP filesystem server: npx -y @modelcontextprotocol/server-filesystem
+# - Run with: agentflow workflow run examples/workflows/mcp_filesystem_example.yml
+#
+# This example reads a file using the MCP filesystem server
+
+name: "MCP Filesystem Example"
+description: "Demonstrates MCP integration with filesystem tools"
+
+nodes:
+  # Step 1: List directory contents using MCP
+  - id: list_directory
+    type: mcp
+    parameters:
+      server_command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      tool_name: list_directory
+      tool_params:
+        path: "/tmp"
+      timeout_ms: 30000
+      max_retries: 3
+
+  # Step 2: Read a specific file using MCP
+  # This node depends on list_directory to demonstrate sequential execution
+  - id: read_file
+    type: mcp
+    dependencies: ["list_directory"]
+    parameters:
+      server_command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      tool_name: read_file
+      tool_params:
+        path: "/tmp/test.txt"
+      timeout_ms: 30000
+      max_retries: 3
+
+  # Step 3: Use LLM to summarize the file content
+  - id: summarize_content
+    type: llm
+    dependencies: ["read_file"]
+    input_mapping:
+      prompt: "{{ nodes.read_file.outputs.output }}"
+    parameters:
+      model: "gpt-4"
+      system: "You are a helpful assistant that summarizes file contents."
+      prompt: "Please summarize the following file content:\n\n{{ nodes.read_file.outputs.output }}"
+      temperature: 0.7
+      max_tokens: 500

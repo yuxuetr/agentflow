@@ -14,6 +14,9 @@ use agentflow_nodes::nodes::{
     text_to_image::TextToImageNode,
     tts::TTSNode,
 };
+
+#[cfg(feature = "mcp")]
+use agentflow_nodes::nodes::mcp::MCPNode;
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -121,6 +124,45 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
             let parallel = node_def.parameters.get("parallel").and_then(|v| v.as_bool()).unwrap_or(false);
             let template: Vec<GraphNode> = template_nodes_def.iter().map(create_graph_node).collect::<Result<_>>()?;
             Ok(NodeType::Map { template, parallel })
+        },
+        #[cfg(feature = "mcp")]
+        "mcp" => {
+            // Extract server_command (required)
+            let server_command = node_def.parameters.get("server_command")
+                .and_then(|v| match v {
+                    serde_yaml::Value::Sequence(seq) => {
+                        seq.iter().map(|s| s.as_str().map(|s| s.to_string())).collect()
+                    }
+                    _ => None,
+                })
+                .context("MCP node requires 'server_command' as an array of strings")?;
+
+            // Extract tool_name (required)
+            let tool_name = get_string_param_optional(&node_def.parameters, "tool_name");
+            if tool_name.is_empty() {
+                return Err(anyhow!("MCP node requires 'tool_name' parameter"));
+            }
+
+            // Extract tool_params (optional, default to empty object)
+            let tool_params = node_def.parameters.get("tool_params")
+                .map(|v| serde_yaml::from_value(v.clone()))
+                .transpose()?
+                .unwrap_or(serde_json::json!({}));
+
+            // Create MCPNode
+            let mut node = MCPNode::new(server_command, tool_name).with_params(tool_params);
+
+            // Optional timeout_ms
+            if let Some(timeout) = node_def.parameters.get("timeout_ms").and_then(|v| v.as_u64()) {
+                node = node.with_timeout_ms(timeout);
+            }
+
+            // Optional max_retries
+            if let Some(retries) = node_def.parameters.get("max_retries").and_then(|v| v.as_u64()) {
+                node = node.with_max_retries(retries as u32);
+            }
+
+            Ok(NodeType::Standard(Arc::new(node)))
         }
         _ => Err(anyhow!("Unknown node type: {}", node_def.node_type)),
     }?; 
