@@ -1,11 +1,12 @@
 [workspace]
 members = [
-  "agentflow-core", 
+  "agentflow-core",
   "agentflow-nodes",
 #  "agentflow-config",
-  "agentflow-llm", 
+  "agentflow-llm",
   "agentflow-cli",
   "agentflow-mcp",
+  "agentflow-rag",
   "agentflow-agents",
 #   "agentflow-agents/agents/paper_assistant",
 ]

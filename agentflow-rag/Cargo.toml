@@ -1,0 +1,59 @@
+[package]
+name = "agentflow-rag"
+version = "0.3.0-alpha"
+edition = "2021"
+authors = ["AgentFlow Contributors"]
+description = "Retrieval-Augmented Generation (RAG) system for AgentFlow"
+repository = "https://github.com/agentflow/agentflow"
+license = "MIT"
+keywords = ["rag", "vector-database", "embeddings", "semantic-search", "ai"]
+categories = ["algorithms", "database", "text-processing"]
+
+[features]
+default = ["qdrant"]
+qdrant = ["dep:qdrant-client"]
+local-embeddings = ["dep:onnxruntime", "dep:ndarray"]
+pdf = ["dep:pdf-extract"]
+html = ["dep:scraper"]
+
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+
+# HTTP client for API-based embeddings
+reqwest = { version = "0.11", features = ["json"] }
+
+# Vector databases
+qdrant-client = { version = "1.11", optional = true }
+
+# Text processing
+unicode-segmentation = "1.11"
+regex = "1.10"
+
+# Document processing
+pdf-extract = { version = "0.7", optional = true }
+scraper = { version = "0.19", optional = true }
+csv = "1.3"
+
+# Local embeddings (optional)
+onnxruntime = { version = "0.0.14", optional = true }
+ndarray = { version = "0.15", optional = true }
+
+# Utilities
+futures = "0.3"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+proptest = "1.4"
+tokio-test = "0.4"
+
+# Benchmarks will be added in future releases
+# criterion = "0.5"
