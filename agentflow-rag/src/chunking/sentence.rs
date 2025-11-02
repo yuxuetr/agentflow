@@ -1,7 +1,6 @@
 //! Sentence-based chunking strategy
 
 use crate::{chunking::ChunkingStrategy, error::Result, types::TextChunk};
-use std::collections::HashMap;
 
 pub struct SentenceChunker {
   chunk_size: usize,

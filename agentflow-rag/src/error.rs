@@ -1,7 +1,5 @@
 //! Error types for the RAG system
 
-use std::fmt;
-
 /// Result type alias for RAG operations
 pub type Result<T> = std::result::Result<T, RAGError>;
 
