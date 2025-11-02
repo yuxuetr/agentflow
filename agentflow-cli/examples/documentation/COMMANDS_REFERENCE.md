@@ -272,6 +272,104 @@ These options work with all commands:
 | `--help`, `-h` | Show help |
 | `--version`, `-V` | Show version |
 
+## 🔌 MCP (Model Context Protocol) Commands
+
+### `agentflow mcp list-tools`
+
+List available tools from an MCP server to discover what operations are supported.
+
+#### Syntax
+```bash
+agentflow mcp list-tools <SERVER_COMMAND> [OPTIONS]
+```
+
+#### Required Parameters
+- `<SERVER_COMMAND>`: Space-separated command to execute the MCP server
+  - Example: `npx -y @modelcontextprotocol/server-filesystem /tmp`
+
+#### Optional Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--timeout-ms` | `30000` | Request timeout in milliseconds |
+| `--max-retries` | `3` | Maximum number of retry attempts |
+
+#### Examples
+```bash
+# List filesystem server tools
+agentflow mcp list-tools npx -y @modelcontextprotocol/server-filesystem /tmp
+
+# List with custom timeout
+agentflow mcp list-tools npx -y @modelcontextprotocol/server-database \
+  --timeout-ms 60000
+```
+
+---
+
+### `agentflow mcp call-tool`
+
+Execute a specific tool on an MCP server with parameters.
+
+#### Syntax
+```bash
+agentflow mcp call-tool <SERVER_COMMAND> --tool <TOOL_NAME> [OPTIONS]
+```
+
+#### Required Parameters
+- `<SERVER_COMMAND>`: Command to execute the MCP server
+- `--tool`, `-t`: Tool name to call
+
+#### Optional Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--params`, `-p` | `{}` | Tool parameters as JSON string |
+| `--timeout-ms` | `30000` | Request timeout in milliseconds |
+| `--max-retries` | `3` | Maximum number of retry attempts |
+| `--output`, `-o` | - | Save result to file (JSON format) |
+
+#### Examples
+```bash
+# Read a file
+agentflow mcp call-tool npx -y @modelcontextprotocol/server-filesystem /tmp \
+  --tool read_file \
+  --params '{"path": "/tmp/config.json"}'
+
+# List directory with output save
+agentflow mcp call-tool npx -y @modelcontextprotocol/server-filesystem /tmp \
+  --tool list_directory \
+  --params '{"path": "/tmp"}' \
+  --output directory_list.json
+```
+
+---
+
+### `agentflow mcp list-resources`
+
+List available resources (data sources) from an MCP server.
+
+#### Syntax
+```bash
+agentflow mcp list-resources <SERVER_COMMAND> [OPTIONS]
+```
+
+#### Required Parameters
+- `<SERVER_COMMAND>`: Command to execute the MCP server
+
+#### Optional Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--timeout-ms` | `30000` | Request timeout in milliseconds |
+| `--max-retries` | `3` | Maximum number of retry attempts |
+
+#### Examples
+```bash
+# List filesystem resources
+agentflow mcp list-resources npx -y @modelcontextprotocol/server-filesystem /data
+```
+
+**See Also**: For comprehensive MCP integration guide, see [MCP_GUIDE.md](MCP_GUIDE.md)
+
+---
+
 ## 🔍 Command Aliases
 
 For faster usage, many commands have shorter aliases:

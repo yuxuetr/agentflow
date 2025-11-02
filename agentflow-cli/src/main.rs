@@ -4,7 +4,7 @@ mod commands;
 mod config;
 mod executor;
 
-use commands::{audio, config as config_cmd, image, llm, workflow};
+use commands::{audio, config as config_cmd, image, llm, mcp, workflow};
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -25,6 +25,8 @@ enum Commands {
     Image(ImageArgs),
     /// LLM interaction commands
     Llm(LlmArgs),
+    /// Model Context Protocol (MCP) commands
+    Mcp(McpArgs),
 }
 
 #[derive(Args)]
@@ -37,6 +39,8 @@ struct ConfigArgs { #[command(subcommand)] command: ConfigCommands, }
 struct ImageArgs { #[command(subcommand)] command: ImageCommands, }
 #[derive(Args)]
 struct LlmArgs { #[command(subcommand)] command: LlmCommands, }
+#[derive(Args)]
+struct McpArgs { #[command(subcommand)] command: McpCommands, }
 
 #[derive(Subcommand)]
 enum WorkflowCommands {
@@ -189,6 +193,46 @@ enum LlmCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum McpCommands {
+    /// List available tools from an MCP server
+    ListTools {
+        /// Server command to execute (e.g., "npx -y @modelcontextprotocol/server-filesystem /tmp")
+        server_command: Vec<String>,
+        #[arg(long, default_value_t = 30000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 3)]
+        max_retries: u32,
+    },
+    /// Call a tool on an MCP server
+    CallTool {
+        /// Server command to execute
+        server_command: Vec<String>,
+        /// Tool name to call
+        #[arg(short, long)]
+        tool: String,
+        /// Tool parameters as JSON string
+        #[arg(short, long)]
+        params: Option<String>,
+        #[arg(long, default_value_t = 30000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 3)]
+        max_retries: u32,
+        /// Output file path to save the result
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// List available resources from an MCP server
+    ListResources {
+        /// Server command to execute
+        server_command: Vec<String>,
+        #[arg(long, default_value_t = 30000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 3)]
+        max_retries: u32,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -239,6 +283,17 @@ async fn main() {
             }
             LlmCommands::Chat { model, system, save, load } => {
                 llm::chat::execute(model, system, save, load).await
+            }
+        },
+        Commands::Mcp(args) => match args.command {
+            McpCommands::ListTools { server_command, timeout_ms, max_retries } => {
+                mcp::list_tools::execute(server_command, Some(timeout_ms), Some(max_retries)).await
+            }
+            McpCommands::CallTool { server_command, tool, params, timeout_ms, max_retries, output } => {
+                mcp::call_tool::execute(server_command, tool, params, Some(timeout_ms), Some(max_retries), output).await
+            }
+            McpCommands::ListResources { server_command, timeout_ms, max_retries } => {
+                mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await
             }
         },
     };

@@ -23,6 +23,9 @@ use crate::nodes::batch::BatchNode;
 #[cfg(feature = "conditional")]
 use crate::nodes::conditional::{ConditionType, ConditionalNode};
 
+#[cfg(feature = "mcp")]
+use crate::nodes::mcp::MCPNode;
+
 // Factory implementations
 #[cfg(all(feature = "factories", feature = "llm"))]
 pub struct LlmNodeFactory;
@@ -41,6 +44,9 @@ pub struct BatchNodeFactory;
 
 #[cfg(all(feature = "factories", feature = "conditional"))]
 pub struct ConditionalNodeFactory;
+
+#[cfg(all(feature = "factories", feature = "mcp"))]
+pub struct MCPNodeFactory;
 
 // Factory trait implementations
 #[cfg(all(feature = "factories", feature = "llm"))]
@@ -355,6 +361,9 @@ pub fn register_builtin_factories(registry: &mut crate::NodeRegistry) {
 
   #[cfg(feature = "conditional")]
   registry.register("conditional", Box::new(ConditionalNodeFactory));
+
+  #[cfg(feature = "mcp")]
+  registry.register("mcp", Box::new(MCPNodeFactory));
 }
 
 // Batch factory implementation (simplified - doesn't support child nodes from config yet)
@@ -490,6 +499,127 @@ impl NodeFactory for ConditionalNodeFactory {
             "condition_result": {"type": "boolean"},
             "selected_value": {"description": "The selected true or false value"},
             "branch": {"type": "string", "enum": ["true", "false"]}
+        }
+    })
+  }
+}
+
+// MCP factory implementation
+#[cfg(all(feature = "factories", feature = "mcp"))]
+impl NodeFactory for MCPNodeFactory {
+  fn create_node(&self, config: ResolvedNodeConfig) -> NodeResult<Box<dyn AsyncNode>> {
+    let server_command = config
+      .parameters
+      .get("server_command")
+      .and_then(|v| v.as_array())
+      .ok_or_else(|| NodeError::ValidationError {
+        message: "MCP node requires 'server_command' parameter as array".to_string(),
+      })?
+      .iter()
+      .filter_map(|v| v.as_str().map(|s| s.to_string()))
+      .collect::<Vec<String>>();
+
+    let tool_name = config
+      .parameters
+      .get("tool_name")
+      .and_then(|v| v.as_str())
+      .ok_or_else(|| NodeError::ValidationError {
+        message: "MCP node requires 'tool_name' parameter".to_string(),
+      })?
+      .to_string();
+
+    let mut node = MCPNode::new(server_command, tool_name);
+
+    // Set tool parameters if provided
+    if let Some(tool_params) = config.parameters.get("tool_params") {
+      node = node.with_params(tool_params.clone());
+    }
+
+    // Set timeout if provided
+    if let Some(timeout_ms) = config.parameters.get("timeout_ms").and_then(|v| v.as_u64()) {
+      node = node.with_timeout_ms(timeout_ms);
+    }
+
+    // Set max retries if provided
+    if let Some(max_retries) = config.parameters.get("max_retries").and_then(|v| v.as_u64()) {
+      node = node.with_max_retries(max_retries as u32);
+    }
+
+    Ok(Box::new(node))
+  }
+
+  fn validate_config(&self, config: &NodeConfig) -> NodeResult<()> {
+    // Validate server_command is provided and is an array
+    if config
+      .parameters
+      .as_ref()
+      .and_then(|p| p.get("server_command"))
+      .and_then(|v| v.as_array())
+      .is_none()
+    {
+      return Err(NodeError::ValidationError {
+        message: "MCP node requires 'server_command' parameter as array".to_string(),
+      });
+    }
+
+    // Validate tool_name is provided
+    if config
+      .parameters
+      .as_ref()
+      .and_then(|p| p.get("tool_name"))
+      .and_then(|v| v.as_str())
+      .is_none()
+    {
+      return Err(NodeError::ValidationError {
+        message: "MCP node requires 'tool_name' parameter".to_string(),
+      });
+    }
+
+    Ok(())
+  }
+
+  fn get_input_schema(&self) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "server_command": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Command to execute the MCP server (e.g., [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"])"
+            },
+            "tool_name": {
+                "type": "string",
+                "description": "Name of the tool to call on the MCP server"
+            },
+            "tool_params": {
+                "type": "object",
+                "description": "Parameters to pass to the tool (JSON object)",
+                "default": {}
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "default": 30000,
+                "minimum": 1000,
+                "description": "Timeout in milliseconds"
+            },
+            "max_retries": {
+                "type": "integer",
+                "default": 3,
+                "minimum": 0,
+                "description": "Maximum number of retry attempts"
+            }
+        },
+        "required": ["server_command", "tool_name"]
+    })
+  }
+
+  fn get_output_schema(&self) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "output": {
+                "description": "Tool execution result from MCP server"
+            }
         }
     })
   }

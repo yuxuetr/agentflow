@@ -42,6 +42,7 @@ version = "0.2.0"
 dependencies = [
  "agentflow-core",
  "agentflow-llm",
+ "agentflow-mcp",
  "agentflow-nodes",
  "anyhow",
  "assert_cmd",
@@ -147,6 +148,7 @@ version = "0.2.0"
 dependencies = [
  "agentflow-core",
  "agentflow-llm",
+ "agentflow-mcp",
  "anyhow",
  "async-trait",
  "base64 0.21.7",

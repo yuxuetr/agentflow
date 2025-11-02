@@ -17,7 +17,8 @@ pub use agentflow_core::{AsyncNode, AgentFlowError};
 pub use agentflow_llm::AgentFlow;
 
 // Re-export MCP utilities
-pub use agentflow_mcp::{MCPClient, ToolCall, ToolRegistry};
+pub use agentflow_mcp::client::MCPClient;
+pub use agentflow_mcp::tools::{ToolCall, ToolRegistry};
 
 // Common result type for agents
 pub type AgentResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
