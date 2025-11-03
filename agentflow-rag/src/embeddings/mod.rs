@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 pub mod openai;
 
-pub use openai::OpenAIEmbedding;
+pub use openai::{CostTracker, OpenAIEmbedding, OpenAIEmbeddingBuilder};
 
 /// Embedding provider trait for generating text embeddings
 #[async_trait]

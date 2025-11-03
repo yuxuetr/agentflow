@@ -50,6 +50,13 @@ futures = "0.3"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# Rate limiting
+governor = "0.6"
+nonzero_ext = "0.3"
+
+# Retry logic
+tokio-retry = "0.3"
+
 [dev-dependencies]
 tempfile = "3.8"
 proptest = "1.4"

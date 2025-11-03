@@ -10,7 +10,7 @@ use async_trait::async_trait;
 pub mod qdrant;
 
 #[cfg(feature = "qdrant")]
-pub use qdrant::QdrantStore;
+pub use qdrant::{QdrantStore, QdrantStoreBuilder};
 
 /// Vector store trait for semantic search operations
 #[async_trait]

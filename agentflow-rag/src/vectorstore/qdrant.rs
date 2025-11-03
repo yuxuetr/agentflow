@@ -1,6 +1,7 @@
 //! Qdrant vector store implementation
 
 use crate::{
+  embeddings::EmbeddingProvider,
   error::{RAGError, Result},
   types::{CollectionConfig, DistanceMetric, Document, Filter, MetadataValue, SearchResult},
   vectorstore::{CollectionStats, VectorStore},
@@ -15,23 +16,37 @@ use qdrant_client::{
   Qdrant,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
-/// Qdrant vector store implementation
+/// Qdrant vector store implementation with optional embedding support
 pub struct QdrantStore {
   client: Qdrant,
+  embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 impl QdrantStore {
-  /// Create a new Qdrant store
+  /// Create a new Qdrant store without embedding provider
+  ///
+  /// For text-based similarity search, use `builder()` or `with_embedding_provider()`
   pub async fn new(url: impl Into<String>) -> Result<Self> {
-    let url = url.into();
-    tracing::info!("Connecting to Qdrant at: {}", url);
+    Self::builder(url).build().await
+  }
 
-    let client = Qdrant::from_url(&url)
-      .build()
-      .map_err(|e| RAGError::connection(format!("Failed to connect to Qdrant: {}", e)))?;
+  /// Create a Qdrant store with an embedding provider
+  ///
+  /// # Arguments
+  /// * `url` - Qdrant server URL
+  /// * `provider` - Embedding provider for text-based search
+  pub async fn with_embedding_provider(
+    url: impl Into<String>,
+    provider: Arc<dyn EmbeddingProvider>,
+  ) -> Result<Self> {
+    Self::builder(url).embedding_provider(provider).build().await
+  }
 
-    Ok(Self { client })
+  /// Create a builder for more configuration options
+  pub fn builder(url: impl Into<String>) -> QdrantStoreBuilder {
+    QdrantStoreBuilder::new(url)
   }
 
   /// Convert our DistanceMetric to Qdrant Distance
@@ -74,15 +89,116 @@ impl QdrantStore {
     ))
   }
 
-  /// Convert Filter to Qdrant Filter
-  ///
-  /// Note: This is a simplified implementation for Phase 2.
-  /// Full filter support with the new Qdrant 1.15 API will be added in a future phase.
-  fn convert_filter(_filter: &Filter) -> Result<qdrant_client::qdrant::Filter> {
-    // TODO: Implement filter conversion using the new Qdrant 1.15 filters API
-    // For now, return empty filter
-    tracing::warn!("Filter conversion not yet implemented for Qdrant 1.15 API");
-    Ok(qdrant_client::qdrant::Filter::default())
+  /// Convert Filter to Qdrant Filter (Qdrant 1.15+ API)
+  fn convert_filter(filter: &Filter) -> Result<qdrant_client::qdrant::Filter> {
+    use qdrant_client::qdrant::Filter as QFilter;
+
+    let mut qdrant_filter = QFilter::default();
+
+    // Convert must conditions (AND)
+    if let Some(must) = &filter.must {
+      qdrant_filter.must = must
+        .iter()
+        .map(Self::convert_condition)
+        .collect::<Result<Vec<_>>>()?;
+    }
+
+    // Convert should conditions (OR)
+    if let Some(should) = &filter.should {
+      qdrant_filter.should = should
+        .iter()
+        .map(Self::convert_condition)
+        .collect::<Result<Vec<_>>>()?;
+    }
+
+    // Convert must_not conditions (NOT)
+    if let Some(must_not) = &filter.must_not {
+      qdrant_filter.must_not = must_not
+        .iter()
+        .map(Self::convert_condition)
+        .collect::<Result<Vec<_>>>()?;
+    }
+
+    tracing::debug!("Converted filter with {} must, {} should, {} must_not conditions",
+      qdrant_filter.must.len(),
+      qdrant_filter.should.len(),
+      qdrant_filter.must_not.len()
+    );
+
+    Ok(qdrant_filter)
+  }
+
+  /// Convert a single Condition to Qdrant Condition
+  fn convert_condition(condition: &crate::types::Condition) -> Result<qdrant_client::qdrant::Condition> {
+    use qdrant_client::qdrant::{
+      condition::ConditionOneOf, r#match::MatchValue, Condition as QCondition,
+      FieldCondition, Match, Range,
+    };
+
+    match condition {
+      crate::types::Condition::Match { field, value } => {
+        // Convert metadata value to Qdrant match value
+        let match_value = match value {
+          MetadataValue::String(s) => MatchValue::Keyword(s.clone()),
+          MetadataValue::Integer(i) => MatchValue::Integer(*i),
+          MetadataValue::Boolean(b) => MatchValue::Boolean(*b),
+          MetadataValue::Float(_) => {
+            return Err(RAGError::invalid_input(
+              "Float values not supported in Match conditions. Use Range instead.",
+            ))
+          }
+          MetadataValue::Array(_) => {
+            return Err(RAGError::invalid_input(
+              "Array values not supported in Match conditions. Use Contains instead.",
+            ))
+          }
+        };
+
+        Ok(QCondition {
+          condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+            key: field.clone(),
+            r#match: Some(Match {
+              match_value: Some(match_value),
+            }),
+            ..Default::default()
+          })),
+        })
+      }
+
+      crate::types::Condition::Range { field, gte, lte } => {
+        let mut range = Range::default();
+
+        if let Some(gte_val) = gte {
+          range.gte = Some(*gte_val);
+        }
+
+        if let Some(lte_val) = lte {
+          range.lte = Some(*lte_val);
+        }
+
+        Ok(QCondition {
+          condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+            key: field.clone(),
+            range: Some(range),
+            ..Default::default()
+          })),
+        })
+      }
+
+      crate::types::Condition::Contains { field, value } => {
+        // For contains, we use Match with the keyword
+        // This works for checking if an array field contains a value
+        Ok(QCondition {
+          condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+            key: field.clone(),
+            r#match: Some(Match {
+              match_value: Some(MatchValue::Keyword(value.clone())),
+            }),
+            ..Default::default()
+          })),
+        })
+      }
+    }
   }
 }
 
@@ -213,17 +329,31 @@ impl VectorStore for QdrantStore {
 
   async fn similarity_search(
     &self,
-    _collection: &str,
-    _query: &str,
-    _top_k: usize,
-    _filter: Option<Filter>,
+    collection: &str,
+    query: &str,
+    top_k: usize,
+    filter: Option<Filter>,
   ) -> Result<Vec<SearchResult>> {
-    // For now, return an error as we need an embedding provider
-    // This will be implemented in Phase 3 when we have embeddings
-    tracing::warn!("similarity_search requires embedding provider (Phase 3)");
-    Err(RAGError::retrieval(
-      "Similarity search requires embedding provider. Use similarity_search_by_vector instead.",
-    ))
+    // Check if embedding provider is configured
+    let provider = self.embedding_provider.as_ref().ok_or_else(|| {
+      RAGError::configuration(
+        "Embedding provider not configured. Use QdrantStore::with_embedding_provider() or builder()",
+      )
+    })?;
+
+    tracing::debug!(
+      "Performing text-based similarity search on collection '{}' with query: '{}'",
+      collection,
+      query
+    );
+
+    // Generate embedding for query text
+    let embedding = provider.embed_text(query).await?;
+
+    // Delegate to vector-based search
+    self
+      .similarity_search_by_vector(collection, embedding, top_k, filter)
+      .await
   }
 
   async fn similarity_search_by_vector(
@@ -362,6 +492,48 @@ impl VectorStore for QdrantStore {
   }
 }
 
+/// Builder for QdrantStore with optional embedding provider
+pub struct QdrantStoreBuilder {
+  url: String,
+  embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+}
+
+impl QdrantStoreBuilder {
+  /// Create a new builder
+  pub fn new(url: impl Into<String>) -> Self {
+    Self {
+      url: url.into(),
+      embedding_provider: None,
+    }
+  }
+
+  /// Set embedding provider for text-based search
+  pub fn embedding_provider(mut self, provider: Arc<dyn EmbeddingProvider>) -> Self {
+    self.embedding_provider = Some(provider);
+    self
+  }
+
+  /// Build the QdrantStore
+  pub async fn build(self) -> Result<QdrantStore> {
+    tracing::info!("Connecting to Qdrant at: {}", self.url);
+
+    let client = Qdrant::from_url(&self.url)
+      .build()
+      .map_err(|e| RAGError::connection(format!("Failed to connect to Qdrant: {}", e)))?;
+
+    if self.embedding_provider.is_some() {
+      tracing::info!("QdrantStore created with embedding provider");
+    } else {
+      tracing::info!("QdrantStore created without embedding provider (text search disabled)");
+    }
+
+    Ok(QdrantStore {
+      client,
+      embedding_provider: self.embedding_provider,
+    })
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -403,6 +575,79 @@ mod tests {
     let doc = Document::new("test content");
     let result = QdrantStore::document_to_point(&doc);
     assert!(result.is_err());
+  }
+
+  #[test]
+  fn test_filter_conversion_match() {
+    use crate::types::{Condition, Filter};
+
+    let filter = Filter {
+      must: Some(vec![Condition::Match {
+        field: "category".to_string(),
+        value: MetadataValue::String("technology".to_string()),
+      }]),
+      should: None,
+      must_not: None,
+    };
+
+    let result = QdrantStore::convert_filter(&filter);
+    assert!(result.is_ok());
+    let qdrant_filter = result.unwrap();
+    assert_eq!(qdrant_filter.must.len(), 1);
+  }
+
+  #[test]
+  fn test_filter_conversion_range() {
+    use crate::types::{Condition, Filter};
+
+    let filter = Filter {
+      must: Some(vec![Condition::Range {
+        field: "score".to_string(),
+        gte: Some(0.5),
+        lte: Some(1.0),
+      }]),
+      should: None,
+      must_not: None,
+    };
+
+    let result = QdrantStore::convert_filter(&filter);
+    assert!(result.is_ok());
+    let qdrant_filter = result.unwrap();
+    assert_eq!(qdrant_filter.must.len(), 1);
+  }
+
+  #[test]
+  fn test_filter_conversion_complex() {
+    use crate::types::{Condition, Filter};
+
+    let filter = Filter {
+      must: Some(vec![
+        Condition::Match {
+          field: "category".to_string(),
+          value: MetadataValue::String("technology".to_string()),
+        },
+        Condition::Range {
+          field: "score".to_string(),
+          gte: Some(0.5),
+          lte: None,
+        },
+      ]),
+      should: Some(vec![Condition::Contains {
+        field: "tags".to_string(),
+        value: "AI".to_string(),
+      }]),
+      must_not: Some(vec![Condition::Match {
+        field: "status".to_string(),
+        value: MetadataValue::String("archived".to_string()),
+      }]),
+    };
+
+    let result = QdrantStore::convert_filter(&filter);
+    assert!(result.is_ok());
+    let qdrant_filter = result.unwrap();
+    assert_eq!(qdrant_filter.must.len(), 2);
+    assert_eq!(qdrant_filter.should.len(), 1);
+    assert_eq!(qdrant_filter.must_not.len(), 1);
   }
 
   // Integration tests require running Qdrant server
