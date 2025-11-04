@@ -3,6 +3,7 @@
 use crate::{error::Result, types::Document};
 use std::path::Path;
 
+pub mod csv;
 pub mod text;
 
 #[cfg(feature = "pdf")]

@@ -70,6 +70,10 @@ pub enum RAGError {
   #[error("HTTP error: {0}")]
   HttpError(#[from] reqwest::Error),
 
+  /// CSV parsing errors
+  #[error("CSV error: {0}")]
+  CsvError(#[from] csv::Error),
+
   /// Generic error for catch-all cases
   #[error("RAG error: {0}")]
   GenericError(String),
