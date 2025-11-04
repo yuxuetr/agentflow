@@ -4,7 +4,7 @@ mod commands;
 mod config;
 mod executor;
 
-use commands::{audio, config as config_cmd, image, llm, mcp, workflow};
+use commands::{audio, config as config_cmd, image, llm, mcp, rag, workflow};
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -27,6 +27,8 @@ enum Commands {
     Llm(LlmArgs),
     /// Model Context Protocol (MCP) commands
     Mcp(McpArgs),
+    /// RAG (Retrieval-Augmented Generation) commands
+    Rag(RagArgs),
 }
 
 #[derive(Args)]
@@ -41,6 +43,8 @@ struct ImageArgs { #[command(subcommand)] command: ImageCommands, }
 struct LlmArgs { #[command(subcommand)] command: LlmCommands, }
 #[derive(Args)]
 struct McpArgs { #[command(subcommand)] command: McpCommands, }
+#[derive(Args)]
+struct RagArgs { #[command(subcommand)] command: RagCommands, }
 
 #[derive(Subcommand)]
 enum WorkflowCommands {
@@ -233,6 +237,77 @@ enum McpCommands {
     },
 }
 
+#[cfg(feature = "rag")]
+#[derive(Subcommand)]
+enum RagCommands {
+    /// Search documents in a RAG collection
+    Search {
+        /// Qdrant URL
+        #[arg(long, default_value = "http://localhost:6334")]
+        qdrant_url: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Search query
+        #[arg(short, long)]
+        query: String,
+        /// Number of results to return
+        #[arg(short = 'k', long, default_value_t = 5)]
+        top_k: usize,
+        /// Search type: semantic, hybrid, or keyword
+        #[arg(short = 't', long, default_value = "semantic")]
+        search_type: String,
+        /// Alpha for hybrid search (0.0=keyword, 1.0=semantic)
+        #[arg(short, long, default_value_t = 0.5)]
+        alpha: f32,
+        /// Enable MMR re-ranking for diversity
+        #[arg(long)]
+        rerank: bool,
+        /// Lambda for MMR (0.0=diversity, 1.0=relevance)
+        #[arg(short, long, default_value_t = 0.5)]
+        lambda: f32,
+        /// OpenAI embedding model
+        #[arg(short = 'm', long, default_value = "text-embedding-3-small")]
+        embedding_model: String,
+        /// Output file path to save results as JSON
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Index documents into a RAG collection
+    Index {
+        /// Qdrant URL
+        #[arg(long, default_value = "http://localhost:6334")]
+        qdrant_url: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Documents as JSON array: [{"content": "...", "metadata": {...}}]
+        #[arg(short, long)]
+        documents: String,
+        /// OpenAI embedding model
+        #[arg(short = 'm', long, default_value = "text-embedding-3-small")]
+        embedding_model: String,
+    },
+    /// Manage RAG collections (create, delete, list, stats)
+    Collections {
+        /// Qdrant URL
+        #[arg(long, default_value = "http://localhost:6334")]
+        qdrant_url: String,
+        /// Operation: create, delete, list, stats
+        #[arg(short, long)]
+        operation: String,
+        /// Collection name (required for create, delete, stats)
+        #[arg(short, long)]
+        collection: Option<String>,
+        /// Vector size (for create operation)
+        #[arg(short = 's', long)]
+        vector_size: Option<usize>,
+        /// Distance metric: cosine, euclidean, dot (for create operation)
+        #[arg(short, long)]
+        distance: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -294,6 +369,18 @@ async fn main() {
             }
             McpCommands::ListResources { server_command, timeout_ms, max_retries } => {
                 mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await
+            }
+        },
+        #[cfg(feature = "rag")]
+        Commands::Rag(args) => match args.command {
+            RagCommands::Search { qdrant_url, collection, query, top_k, search_type, alpha, rerank, lambda, embedding_model, output } => {
+                rag::search::execute(qdrant_url, collection, query, top_k, search_type, alpha, rerank, lambda, embedding_model, output).await
+            }
+            RagCommands::Index { qdrant_url, collection, documents, embedding_model } => {
+                rag::index::execute(qdrant_url, collection, documents, embedding_model).await
+            }
+            RagCommands::Collections { qdrant_url, operation, collection, vector_size, distance } => {
+                rag::collections::execute(qdrant_url, operation, collection, vector_size, distance).await
             }
         },
     };

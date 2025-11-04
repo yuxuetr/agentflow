@@ -17,6 +17,10 @@ use agentflow_nodes::nodes::{
 
 #[cfg(feature = "mcp")]
 use agentflow_nodes::nodes::mcp::MCPNode;
+
+#[cfg(feature = "rag")]
+use agentflow_nodes::nodes::rag::RAGNode;
+
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -160,6 +164,37 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
             // Optional max_retries
             if let Some(retries) = node_def.parameters.get("max_retries").and_then(|v| v.as_u64()) {
                 node = node.with_max_retries(retries as u32);
+            }
+
+            Ok(NodeType::Standard(Arc::new(node)))
+        }
+        #[cfg(feature = "rag")]
+        "rag" => {
+            // Extract operation (required)
+            let operation = get_string_param_optional(&node_def.parameters, "operation");
+            if operation.is_empty() {
+                return Err(anyhow!("RAG node requires 'operation' parameter (search, index, create_collection, delete_collection, stats)"));
+            }
+
+            // Extract collection (required)
+            let collection = get_string_param_optional(&node_def.parameters, "collection");
+            if collection.is_empty() {
+                return Err(anyhow!("RAG node requires 'collection' parameter"));
+            }
+
+            // Create RAGNode with builder pattern
+            let mut node = RAGNode::new(operation, collection);
+
+            // Optional qdrant_url
+            let qdrant_url = get_string_param_optional(&node_def.parameters, "qdrant_url");
+            if !qdrant_url.is_empty() {
+                node = node.with_qdrant_url(qdrant_url);
+            }
+
+            // Optional embedding_model
+            let embedding_model = get_string_param_optional(&node_def.parameters, "embedding_model");
+            if !embedding_model.is_empty() {
+                node = node.with_embedding_model(embedding_model);
             }
 
             Ok(NodeType::Standard(Arc::new(node)))

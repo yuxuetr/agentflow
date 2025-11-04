@@ -1,0 +1,24 @@
+# Simple RAG Search Example
+# Minimal RAG workflow for testing
+#
+# Prerequisites:
+# 1. Qdrant running: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+# 2. OpenAI API key set: export OPENAI_API_KEY=sk-...
+#
+# Run with: agentflow workflow run examples/workflows/rag_simple_search.yml --features rag
+
+name: "Simple RAG Search"
+description: "Minimal RAG workflow demonstrating search"
+
+nodes:
+  # Perform a simple semantic search
+  - id: search_docs
+    type: rag
+    parameters:
+      operation: search
+      qdrant_url: "http://localhost:6334"
+      collection: "my_knowledge_base"
+      query: "machine learning basics"
+      top_k: 5
+      search_type: semantic
+      embedding_model: "text-embedding-3-small"

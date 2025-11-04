@@ -1,0 +1,108 @@
+# RAG Knowledge Assistant Example
+# Demonstrates AgentFlow RAG capabilities
+#
+# Prerequisites:
+# 1. Qdrant running: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+# 2. OpenAI API key set: export OPENAI_API_KEY=sk-...
+#
+# Run with: agentflow workflow run examples/workflows/rag_knowledge_assistant.yml --features rag
+
+name: "RAG Knowledge Assistant"
+description: "Demonstrates RAG operations: indexing, search, and LLM integration"
+
+nodes:
+  # Step 1: Create a knowledge base collection
+  - id: create_kb
+    type: rag
+    parameters:
+      operation: create_collection
+      qdrant_url: "http://localhost:6334"
+      collection: "rust_knowledge"
+      embedding_model: "text-embedding-3-small"
+
+  # Step 2: Index sample documents about Rust programming
+  - id: index_docs
+    type: rag
+    dependencies: [create_kb]
+    parameters:
+      operation: index
+      qdrant_url: "http://localhost:6334"
+      collection: "rust_knowledge"
+      embedding_model: "text-embedding-3-small"
+      documents:
+        - content: "Rust is a systems programming language focused on safety, speed, and concurrency. It achieves memory safety without garbage collection."
+          metadata:
+            source: "rust_overview"
+            category: "basics"
+        - content: "The Rust ownership system ensures memory safety at compile time. Each value has a single owner, and ownership can be transferred or borrowed."
+          metadata:
+            source: "ownership_guide"
+            category: "memory_management"
+        - content: "Cargo is Rust's build system and package manager. It handles building code, downloading dependencies, and running tests."
+          metadata:
+            source: "cargo_docs"
+            category: "tooling"
+        - content: "Rust's async/await syntax enables writing asynchronous code. The tokio runtime is the most popular async executor."
+          metadata:
+            source: "async_guide"
+            category: "concurrency"
+        - content: "Pattern matching in Rust is powerful and exhaustive. The match expression handles all possible cases at compile time."
+          metadata:
+            source: "patterns_guide"
+            category: "language_features"
+
+  # Step 3: Perform semantic search for a user query
+  - id: search_semantic
+    type: rag
+    dependencies: [index_docs]
+    parameters:
+      operation: search
+      qdrant_url: "http://localhost:6334"
+      collection: "rust_knowledge"
+      query: "How does Rust ensure memory safety?"
+      top_k: 3
+      search_type: semantic
+      embedding_model: "text-embedding-3-small"
+
+  # Step 4: Perform hybrid search (semantic + keyword)
+  - id: search_hybrid
+    type: rag
+    dependencies: [index_docs]
+    parameters:
+      operation: search
+      qdrant_url: "http://localhost:6334"
+      collection: "rust_knowledge"
+      query: "async programming tokio"
+      top_k: 3
+      search_type: hybrid
+      alpha: 0.7  # 70% semantic, 30% keyword
+      embedding_model: "text-embedding-3-small"
+
+  # Step 5: Use search results with LLM for answer generation
+  - id: generate_answer
+    type: llm
+    dependencies: [search_semantic]
+    input_mapping:
+      context: "{{ nodes.search_semantic.outputs.results }}"
+    parameters:
+      model: "gpt-4o-mini"
+      prompt: |
+        Based on the following context from our knowledge base, answer the question.
+
+        Context:
+        {{ context }}
+
+        Question: How does Rust ensure memory safety?
+
+        Provide a clear, concise answer based on the context provided.
+      temperature: 0.3
+      max_tokens: 200
+
+  # Step 6: Get collection statistics
+  - id: get_stats
+    type: rag
+    dependencies: [index_docs]
+    parameters:
+      operation: stats
+      qdrant_url: "http://localhost:6334"
+      collection: "rust_knowledge"

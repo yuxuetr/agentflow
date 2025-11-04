@@ -36,3 +36,6 @@ pub mod arxiv;
 // Integration nodes
 #[cfg(feature = "mcp")]
 pub mod mcp;
+
+#[cfg(feature = "rag")]
+pub mod rag;

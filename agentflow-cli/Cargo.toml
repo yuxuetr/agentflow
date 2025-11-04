@@ -17,6 +17,7 @@ path = "src/main.rs"
 [features]
 default = []
 mcp = ["agentflow-nodes/mcp"]
+rag = ["agentflow-nodes/rag", "agentflow-rag"]
 
 [dependencies]
 # Core dependencies
@@ -24,6 +25,7 @@ agentflow-core = { path = "../agentflow-core" }
 agentflow-nodes = { path = "../agentflow-nodes" }
 agentflow-llm = { path = "../agentflow-llm" }
 agentflow-mcp = { path = "../agentflow-mcp" }
+agentflow-rag = { path = "../agentflow-rag", optional = true }
 
 # CLI framework
 clap = { version = "4.4", features = ["derive", "color", "suggestions"] }

@@ -18,6 +18,7 @@ batch = []
 conditional = []
 factories = []
 mcp = ["agentflow-mcp"]
+rag = ["agentflow-rag"]
 
 [dependencies]
 # Core dependency - all nodes build on top of agentflow-core
@@ -28,6 +29,9 @@ agentflow-llm = { path = "../agentflow-llm" }
 
 # MCP integration - optional for MCP tool calling
 agentflow-mcp = { path = "../agentflow-mcp", optional = true }
+
+# RAG integration - optional for RAG operations
+agentflow-rag = { path = "../agentflow-rag", optional = true }
 
 # Removed: agentflow-config dependency to break circular dependency
 
