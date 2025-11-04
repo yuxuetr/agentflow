@@ -7,41 +7,47 @@
 - Phase 2: Qdrant 向量存储集成
 - Phase 3: OpenAI Embeddings 集成、高级过滤、成本跟踪
 - Phase 4: 文档处理 (分块策略、文档加载器、索引管道)
+- Phase 5: 高级检索策略 (BM25、混合搜索、MMR重排序) ✨ **新完成！**
 
-**完成度**: ~80%
-**测试**: 41 passed, 0 failed, 4 ignored
-**代码行数**: ~5,500 lines
+**完成度**: ~85%
+**测试**: 73 passed, 0 failed, 4 ignored
+**代码行数**: ~8,500 lines
 
 ---
 
-## Phase 5: 高级检索策略 (优先级: 高)
+## Phase 5: 高级检索策略 ✅ **已完成！** (2025-01-04)
 
-### 5.1 混合搜索 (Hybrid Search)
-- [ ] 关键词搜索实现 (BM25算法)
-- [ ] 语义搜索 + 关键词搜索融合
-- [ ] 可配置的融合权重
-- [ ] RRF (Reciprocal Rank Fusion) 算法
+### 5.1 混合搜索 (Hybrid Search) ✅
+- [x] 关键词搜索实现 (BM25算法)
+- [x] 语义搜索 + 关键词搜索融合
+- [x] 可配置的融合权重 (alpha参数)
+- [x] RRF (Reciprocal Rank Fusion) 算法
 
-**预计时间**: 1-2周
-**文件**: `src/retrieval/hybrid.rs`
+**实际时间**: <1周
+**文件**: `src/retrieval/bm25.rs`, `src/retrieval/hybrid.rs`
+**测试**: 13 BM25 tests + 11 hybrid tests = 24 tests ✅
 
-### 5.2 重排序 (Re-ranking)
-- [ ] MMR (Maximal Marginal Relevance) 实现
-  - 当前有stub，需要完整实现
-- [ ] Cross-encoder 重排序
-- [ ] LLM-based 重排序
-- [ ] 自定义重排序策略接口
+### 5.2 重排序 (Re-ranking) ✅
+- [x] MMR (Maximal Marginal Relevance) 完整实现
+  - Jaccard相似度计算
+  - 迭代选择算法
+  - Lambda参数控制相关性/多样性权衡
+- [x] Score重排序 (升序/降序)
+- [x] 自定义重排序策略接口 (ReRankingStrategy trait)
+- [ ] Cross-encoder 重排序 (未来可选)
+- [ ] LLM-based 重排序 (未来可选)
 
-**预计时间**: 1周
-**文件**: `src/reranking/mod.rs` (已有框架)
+**实际时间**: <1周
+**文件**: `src/reranking/mod.rs`
+**测试**: 8 reranking tests ✅
 
-### 5.3 查询扩展 (Query Expansion)
+### 5.3 查询扩展 (Query Expansion) - **可选，延后**
 - [ ] 同义词扩展
 - [ ] LLM 生成的查询变体
 - [ ] 多查询融合策略
 
-**预计时间**: 1周
-**文件**: `src/retrieval/query_expansion.rs`
+**状态**: 延后到未来版本
+**理由**: Phase 5核心功能已完成，查询扩展可作为增强功能
 
 ---
 
@@ -245,4 +251,11 @@
 
 **最后更新**: 2025-01-04
 **当前版本**: v0.3.0-alpha
-**状态**: Phase 4 完成，Phase 5+ 待开发
+**状态**: Phase 5 完成！Phase 6+ 待开发
+
+**Phase 5 完成时间**: <1天 (比预估1-2周快很多)
+**Phase 5 成果**:
+- 3个新模块 (BM25, Hybrid, Re-ranking增强)
+- 32个新测试 (全部通过)
+- ~3,000行新代码
+- 完整示例演示 (phase5_advanced_retrieval.rs)

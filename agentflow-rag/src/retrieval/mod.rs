@@ -1,4 +1,7 @@
-//! Retrieval strategies for semantic search
+//! Retrieval strategies for semantic and keyword search
+
+pub mod bm25;
+pub mod hybrid;
 
 use crate::{
   error::Result,
