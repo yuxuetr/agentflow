@@ -5,7 +5,13 @@ use async_trait::async_trait;
 
 pub mod openai;
 
+#[cfg(feature = "local-embeddings")]
+pub mod onnx;
+
 pub use openai::{CostTracker, OpenAIEmbedding, OpenAIEmbeddingBuilder};
+
+#[cfg(feature = "local-embeddings")]
+pub use onnx::{ONNXEmbedding, ONNXEmbeddingBuilder};
 
 /// Embedding provider trait for generating text embeddings
 #[async_trait]
