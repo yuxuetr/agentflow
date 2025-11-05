@@ -5,10 +5,12 @@ use crate::{error::Result, types::TextChunk};
 pub mod fixed_size;
 pub mod recursive;
 pub mod sentence;
+pub mod semantic;
 
 pub use fixed_size::FixedSizeChunker;
 pub use recursive::RecursiveChunker;
 pub use sentence::SentenceChunker;
+pub use semantic::{SemanticChunker, SemanticChunkerBuilder};
 
 /// Chunking strategy trait
 pub trait ChunkingStrategy: Send + Sync {

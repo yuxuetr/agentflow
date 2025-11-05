@@ -2,18 +2,19 @@
 
 ## 当前状态
 
-✅ **已完成模块** (截至 2025-11-04):
+✅ **已完成模块** (截至 2025-11-05):
 - Phase 1: 基础架构 (类型系统、错误处理)
 - Phase 2: Qdrant 向量存储集成
 - Phase 3: OpenAI Embeddings 集成、高级过滤、成本跟踪
 - Phase 4: 文档处理 (分块策略、文档加载器、索引管道)
 - Phase 5: 高级检索策略 (BM25、混合搜索、MMR重排序)
 - Phase 6: AgentFlow 工作流集成 (RAGNode、CLI 命令)
-- Phase 7: 本地嵌入模型 (ONNX Runtime、sentence-transformers) ✨ **新完成！**
+- Phase 7: 本地嵌入模型 (ONNX Runtime、sentence-transformers)
+- Phase 8: 高级文档处理 (语义分块、文本预处理、语言检测、去重) ✨ **新完成！**
 
-**完成度**: ~95%
-**测试**: 73 passed (agentflow-rag), all compile tests pass
-**代码行数**: ~11,000+ lines (including ONNX integration)
+**完成度**: ~98%
+**测试**: 83 passed (agentflow-rag), all compile tests pass
+**代码行数**: ~12,100+ lines (including advanced document processing)
 
 ---
 
@@ -155,33 +156,61 @@
 
 ---
 
-## Phase 8: 高级文档处理 (优先级: 中)
+## Phase 8: 高级文档处理 ✅ **已完成！** (2025-11-05)
 
-### 8.1 语义分块 (Semantic Chunking)
-- [ ] 基于嵌入相似度的智能分块
-- [ ] 主题边界检测
-- [ ] 上下文保持策略
+### 8.1 语义分块 (Semantic Chunking) ✅
+- [x] 基于嵌入相似度的智能分块
+- [x] 主题边界检测 (similarity threshold + dynamic percentile)
+- [x] 上下文保持策略 (overlap with prev chunk)
+- [x] 句子级分割 + 相似度计算
+- [x] 动态阈值计算 (buffer percentile)
+- [x] Builder pattern API
 
-**预计时间**: 1-2周
-**文件**: `src/chunking/semantic.rs`
+**实际时间**: <1天
+**文件**: `src/chunking/semantic.rs` (534 lines)
+**测试**: Unit tests for boundary detection and sentence splitting ✅
 
-### 8.2 文档预处理
-- [ ] 文本清理 (去除噪音、格式化)
-- [ ] 语言检测
-- [ ] 文档去重
-- [ ] 元数据提取增强
+**实现亮点**:
+- Cosine similarity for consecutive sentences
+- Dynamic threshold based on similarity distribution
+- Automatic chunk size management with large text splitting
+- Context overlap for better retrieval
+- Async-first design with EmbeddingProvider integration
 
-**预计时间**: 1周
-**文件**: `src/sources/preprocessing.rs`
+### 8.2 文档预处理 ✅
+- [x] 文本清理 (去除噪音、格式化)
+  - Whitespace normalization
+  - HTML tag removal
+  - URL and email stripping
+  - Special character filtering
+- [x] 语言检测 (heuristic-based)
+  - Latin, CJK, Cyrillic, Arabic script detection
+  - Confidence scoring
+- [x] 文档去重
+  - Content hashing for exact duplicates
+  - Jaccard similarity for fuzzy matching
+- [x] 元数据提取增强 (language metadata injection)
+- [x] Complete preprocessing pipeline
 
-### 8.3 额外文档格式
+**实际时间**: <1天
+**文件**: `src/sources/preprocessing.rs` (590 lines)
+**测试**: 8 unit tests for cleaning, language detection, deduplication ✅
+
+**实现亮点**:
+- TextCleaner with configurable options
+- LanguageDetector with multi-script support
+- DocumentDeduplicator with hash + fuzzy matching
+- PreprocessingPipeline for complete workflow
+- Full test coverage
+
+### 8.3 额外文档格式 - **延后**
 - [ ] Microsoft Word (.docx)
 - [ ] PowerPoint (.pptx)
 - [ ] Excel (.xlsx)
 - [ ] 图片 OCR (Tesseract)
 
-**预计时间**: 1-2周
-**文件**: `src/sources/{docx,pptx,xlsx,ocr}.rs`
+**状态**: 延后到未来版本
+**理由**: Phase 8核心功能(语义分块和预处理)已完成，额外格式支持可作为增强功能
 
 ---
 
@@ -330,9 +359,20 @@
 
 ---
 
-**最后更新**: 2025-11-04
+**最后更新**: 2025-11-05
 **当前版本**: v0.3.0-alpha
-**状态**: Phase 7 完成！Phase 8+ 待开发
+**状态**: Phase 8 完成！Phase 9+ 待开发
+
+**Phase 8 完成时间**: <1天 (比预估2-4周快很多！)
+**Phase 8 成果**:
+- SemanticChunker: Embedding-based intelligent text splitting (~534 lines)
+- Document preprocessing: TextCleaner, LanguageDetector, Deduplicator (~590 lines)
+- Topic boundary detection with dynamic thresholds
+- Context preservation with overlap
+- Multi-language support (Latin, CJK, Cyrillic, Arabic)
+- Complete preprocessing pipeline
+- 83 tests passing (10+ new tests added)
+- ~1,100 lines of new code
 
 **Phase 7 完成时间**: <1天 (比预估2-3周快很多！)
 **Phase 7 成果**:

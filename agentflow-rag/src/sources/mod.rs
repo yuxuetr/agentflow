@@ -5,6 +5,7 @@ use std::path::Path;
 
 pub mod csv;
 pub mod text;
+pub mod preprocessing;
 
 #[cfg(feature = "pdf")]
 pub mod pdf;
