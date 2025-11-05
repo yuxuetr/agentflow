@@ -45,6 +45,9 @@ rand = "0.8"
 # Regular expressions for text processing
 regex = "1.0"
 
+# CPU core count for concurrency defaults
+num_cpus = "1.16"
+
 # Removed: HTTP client moved to agentflow-nodes
 
 # Optional observability support
