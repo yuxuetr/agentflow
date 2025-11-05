@@ -258,21 +258,33 @@ impl ErrorPattern {
             Self::ErrorType { name } => {
                 let error_type = match error {
                     AgentFlowError::ConfigurationError { .. } => "ConfigurationError",
+                    AgentFlowError::ValidationError { .. } => "ValidationError",
                     AgentFlowError::NodeExecutionFailed { .. } => "NodeExecutionFailed",
                     AgentFlowError::NodeInputError { .. } => "NodeInputError",
+                    AgentFlowError::NodeSkipped => "NodeSkipped",
                     AgentFlowError::AsyncExecutionError { .. } => "AsyncExecutionError",
                     AgentFlowError::FlowExecutionFailed { .. } => "FlowExecutionFailed",
                     AgentFlowError::FlowDefinitionError { .. } => "FlowDefinitionError",
+                    AgentFlowError::CircularFlow => "CircularFlow",
+                    AgentFlowError::UnknownTransition { .. } => "UnknownTransition",
+                    AgentFlowError::NetworkError { .. } => "NetworkError",
+                    AgentFlowError::IoError { .. } => "IoError",
                     AgentFlowError::SerializationError(_) => "SerializationError",
+                    AgentFlowError::PersistenceError { .. } => "PersistenceError",
                     AgentFlowError::TimeoutExceeded { .. } => "TimeoutExceeded",
+                    AgentFlowError::RetryExhausted { .. } => "RetryExhausted",
                     AgentFlowError::CircuitBreakerOpen { .. } => "CircuitBreakerOpen",
                     AgentFlowError::RateLimitExceeded { .. } => "RateLimitExceeded",
+                    AgentFlowError::LoadShed => "LoadShed",
+                    AgentFlowError::ResourcePoolExhausted { .. } => "ResourcePoolExhausted",
+                    AgentFlowError::MemoryLimitExceeded { .. } => "MemoryLimitExceeded",
+                    AgentFlowError::ConcurrencyLimitExceeded { .. } => "ConcurrencyLimitExceeded",
                     AgentFlowError::DependencyNotMet { .. } => "DependencyNotMet",
                     AgentFlowError::SharedStateError { .. } => "SharedStateError",
-                    AgentFlowError::PersistenceError { .. } => "PersistenceError",
+                    AgentFlowError::TaskCancelled => "TaskCancelled",
                     AgentFlowError::BatchProcessingFailed { .. } => "BatchProcessingFailed",
                     AgentFlowError::MonitoringError { .. } => "MonitoringError",
-                    _ => "Unknown",
+                    AgentFlowError::Generic(_) => "Generic",
                 };
                 error_type.contains(name)
             }
@@ -282,34 +294,42 @@ impl ErrorPattern {
                 message.contains(text)
             }
 
-            Self::NetworkError => matches!(
-                error,
-                AgentFlowError::AsyncExecutionError { message }
-                    if message.to_lowercase().contains("network")
-                        || message.to_lowercase().contains("connection")
-            ),
+            Self::NetworkError => match error {
+                AgentFlowError::NetworkError { .. } | AgentFlowError::IoError { .. } => true,
+                AgentFlowError::AsyncExecutionError { message } => {
+                    let msg_lower = message.to_lowercase();
+                    msg_lower.contains("network") || msg_lower.contains("connection")
+                }
+                _ => false,
+            },
 
-            Self::TimeoutError => matches!(
-                error,
-                AgentFlowError::AsyncExecutionError { message }
-                    if message.to_lowercase().contains("timeout")
-                        || message.to_lowercase().contains("timed out")
-            ),
+            Self::TimeoutError => match error {
+                AgentFlowError::TimeoutExceeded { .. } => true,
+                AgentFlowError::AsyncExecutionError { message } => {
+                    let msg_lower = message.to_lowercase();
+                    msg_lower.contains("timeout") || msg_lower.contains("timed out")
+                }
+                _ => false,
+            },
 
-            Self::RateLimitError => matches!(
-                error,
-                AgentFlowError::AsyncExecutionError { message }
-                    if message.to_lowercase().contains("rate limit")
-                        || message.to_lowercase().contains("too many requests")
+            Self::RateLimitError => match error {
+                AgentFlowError::RateLimitExceeded { .. } => true,
+                AgentFlowError::AsyncExecutionError { message } => {
+                    let msg_lower = message.to_lowercase();
+                    msg_lower.contains("rate limit")
+                        || msg_lower.contains("too many requests")
                         || message.contains("429")
-            ),
+                }
+                _ => false,
+            },
 
-            Self::ServiceUnavailable => matches!(
-                error,
-                AgentFlowError::AsyncExecutionError { message }
-                    if message.contains("503")
-                        || message.to_lowercase().contains("unavailable")
-            ),
+            Self::ServiceUnavailable => match error {
+                AgentFlowError::LoadShed | AgentFlowError::ResourcePoolExhausted { .. } => true,
+                AgentFlowError::AsyncExecutionError { message } => {
+                    message.contains("503") || message.to_lowercase().contains("unavailable")
+                }
+                _ => false,
+            },
         }
     }
 }
