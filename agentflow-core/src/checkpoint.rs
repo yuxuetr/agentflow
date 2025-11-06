@@ -38,7 +38,6 @@
 //! ```
 
 use crate::error::{AgentFlowError, Result};
-use crate::logging::prelude::*;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -208,20 +207,7 @@ impl CheckpointManager {
     /// Save a checkpoint structure
     pub async fn save_checkpoint_struct(&self, checkpoint: &Checkpoint) -> Result<()> {
         let workflow_dir = self.get_workflow_dir(&checkpoint.workflow_id);
-
-        debug!(
-            workflow_id = %checkpoint.workflow_id,
-            node = %checkpoint.last_completed_node,
-            status = ?checkpoint.status,
-            "Saving checkpoint"
-        );
-
         fs::create_dir_all(&workflow_dir).await.map_err(|e| {
-            error!(
-                workflow_id = %checkpoint.workflow_id,
-                error = %e,
-                "Failed to create workflow directory"
-            );
             AgentFlowError::PersistenceError {
                 message: format!("Failed to create workflow directory: {}", e),
             }
@@ -235,44 +221,23 @@ impl CheckpointManager {
 
         // Serialize checkpoint
         let json = serde_json::to_string_pretty(&checkpoint).map_err(|e| {
-            error!(
-                workflow_id = %checkpoint.workflow_id,
-                error = %e,
-                "Failed to serialize checkpoint"
-            );
             AgentFlowError::SerializationError(format!("Failed to serialize checkpoint: {}", e))
         })?;
 
         // Write to temporary file (atomic operation)
         let mut file = fs::File::create(&temp_path).await.map_err(|e| {
-            error!(
-                workflow_id = %checkpoint.workflow_id,
-                temp_path = ?temp_path,
-                error = %e,
-                "Failed to create temp checkpoint file"
-            );
             AgentFlowError::PersistenceError {
                 message: format!("Failed to create temp checkpoint file: {}", e),
             }
         })?;
 
         file.write_all(json.as_bytes()).await.map_err(|e| {
-            error!(
-                workflow_id = %checkpoint.workflow_id,
-                error = %e,
-                "Failed to write checkpoint"
-            );
             AgentFlowError::PersistenceError {
                 message: format!("Failed to write checkpoint: {}", e),
             }
         })?;
 
         file.sync_all().await.map_err(|e| {
-            error!(
-                workflow_id = %checkpoint.workflow_id,
-                error = %e,
-                "Failed to sync checkpoint"
-            );
             AgentFlowError::PersistenceError {
                 message: format!("Failed to sync checkpoint: {}", e),
             }
@@ -283,75 +248,32 @@ impl CheckpointManager {
         // Atomically rename temp file to final name
         fs::rename(&temp_path, &checkpoint_path)
             .await
-            .map_err(|e| {
-                error!(
-                    workflow_id = %checkpoint.workflow_id,
-                    error = %e,
-                    "Failed to rename checkpoint file"
-                );
-                AgentFlowError::PersistenceError {
-                    message: format!("Failed to rename checkpoint file: {}", e),
-                }
+            .map_err(|e| AgentFlowError::PersistenceError {
+                message: format!("Failed to rename checkpoint file: {}", e),
             })?;
 
         // Also save as "latest" for quick access
         let latest_path = workflow_dir.join("checkpoint_latest.json");
         fs::copy(&checkpoint_path, &latest_path)
             .await
-            .map_err(|e| {
-                error!(
-                    workflow_id = %checkpoint.workflow_id,
-                    error = %e,
-                    "Failed to save latest checkpoint"
-                );
-                AgentFlowError::PersistenceError {
-                    message: format!("Failed to save latest checkpoint: {}", e),
-                }
+            .map_err(|e| AgentFlowError::PersistenceError {
+                message: format!("Failed to save latest checkpoint: {}", e),
             })?;
-
-        info!(
-            workflow_id = %checkpoint.workflow_id,
-            node = %checkpoint.last_completed_node,
-            status = ?checkpoint.status,
-            checkpoint_path = ?checkpoint_path,
-            "Checkpoint saved successfully"
-        );
 
         Ok(())
     }
 
     /// Load the latest checkpoint for a workflow
     pub async fn load_latest_checkpoint(&self, workflow_id: &str) -> Result<Option<Checkpoint>> {
-        debug!(workflow_id = %workflow_id, "Loading latest checkpoint");
-
         let latest_path = self
             .get_workflow_dir(workflow_id)
             .join("checkpoint_latest.json");
 
         if !latest_path.exists() {
-            debug!(workflow_id = %workflow_id, "No checkpoint found");
             return Ok(None);
         }
 
-        match self.load_checkpoint_from_path(&latest_path).await {
-            Ok(checkpoint) => {
-                info!(
-                    workflow_id = %workflow_id,
-                    node = %checkpoint.last_completed_node,
-                    status = ?checkpoint.status,
-                    "Checkpoint loaded successfully"
-                );
-                Ok(Some(checkpoint))
-            }
-            Err(e) => {
-                error!(
-                    workflow_id = %workflow_id,
-                    error = %e,
-                    "Failed to load checkpoint"
-                );
-                Err(e)
-            }
-        }
+        self.load_checkpoint_from_path(&latest_path).await.map(Some)
     }
 
     /// Load all checkpoints for a workflow (sorted by timestamp, newest first)
@@ -401,17 +323,13 @@ impl CheckpointManager {
 
     /// Load checkpoint from file path
     async fn load_checkpoint_from_path(&self, path: &Path) -> Result<Checkpoint> {
-        trace!(path = ?path, "Reading checkpoint file");
-
         let contents = fs::read_to_string(path).await.map_err(|e| {
-            error!(path = ?path, error = %e, "Failed to read checkpoint file");
             AgentFlowError::PersistenceError {
                 message: format!("Failed to read checkpoint file: {}", e),
             }
         })?;
 
         serde_json::from_str(&contents).map_err(|e| {
-            error!(path = ?path, error = %e, "Failed to deserialize checkpoint");
             AgentFlowError::SerializationError(format!("Failed to deserialize checkpoint: {}", e))
         })
     }

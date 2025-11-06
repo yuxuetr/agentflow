@@ -72,6 +72,7 @@
 #[cfg(feature = "observability")]
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
+#[cfg(feature = "observability")]
 use std::io;
 
 /// Log output format.
@@ -112,6 +113,7 @@ impl Default for LogLevel {
   }
 }
 
+#[cfg(feature = "observability")]
 impl From<LogLevel> for tracing::Level {
   fn from(level: LogLevel) -> Self {
     match level {
