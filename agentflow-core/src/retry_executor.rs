@@ -35,7 +35,7 @@ use std::time::Instant;
 /// ```
 pub async fn execute_with_retry<F, Fut, T>(
     policy: &RetryPolicy,
-    _operation_name: &str,
+    operation_name: &str,
     mut operation: F,
 ) -> Result<T, AgentFlowError>
 where

@@ -35,6 +35,7 @@
 
 use crate::concurrency::{ConcurrencyConfig, ConcurrencyLimiter, ConcurrencyStats, ScopedPermit};
 use crate::error::Result;
+use crate::logging::prelude::*;
 use crate::resource_limits::ResourceLimits;
 use crate::state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
 use serde::{Deserialize, Serialize};
@@ -191,7 +192,23 @@ impl ResourceManager {
   ///
   /// Returns `true` if allocation was successful, `false` if limits would be exceeded.
   pub fn record_allocation(&self, key: &str, size: usize) -> bool {
-    self.state_monitor.record_allocation(key, size)
+    let result = self.state_monitor.record_allocation(key, size);
+    if !result {
+      warn!(
+        key = %key,
+        size = %size,
+        current_usage = %self.state_monitor.current_size(),
+        "Memory allocation rejected - would exceed limits"
+      );
+    } else {
+      trace!(
+        key = %key,
+        size = %size,
+        current_usage = %self.state_monitor.current_size(),
+        "Memory allocated"
+      );
+    }
+    result
   }
 
   /// Record a memory deallocation for a key.
@@ -228,15 +245,45 @@ impl ResourceManager {
   ///
   /// Returns (bytes_freed, entries_removed).
   pub async fn cleanup(&self, target_percentage: f64) -> Result<(usize, usize)> {
-    self
+    let before_usage = self.state_monitor.current_size();
+    let before_count = self.state_monitor.value_count();
+
+    info!(
+      before_usage = %before_usage,
+      before_count = %before_count,
+      target_percentage = %target_percentage,
+      "Starting cleanup operation"
+    );
+
+    let result = self
       .state_monitor
       .cleanup(target_percentage)
-      .map_err(|e| crate::error::AgentFlowError::MonitoringError { message: e })
+      .map_err(|e| crate::error::AgentFlowError::MonitoringError { message: e })?;
+
+    info!(
+      bytes_freed = %result.0,
+      entries_removed = %result.1,
+      after_usage = %self.state_monitor.current_size(),
+      after_count = %self.state_monitor.value_count(),
+      "Cleanup operation completed"
+    );
+
+    Ok(result)
   }
 
   /// Get all resource alerts.
   pub fn get_alerts(&self) -> Vec<ResourceAlert> {
-    self.state_monitor.get_alerts()
+    let alerts = self.state_monitor.get_alerts();
+    if !alerts.is_empty() {
+      warn!(
+        alert_count = %alerts.len(),
+        "Resource alerts detected"
+      );
+      for alert in &alerts {
+        warn!(alert = %format!("{:?}", alert), "Resource alert");
+      }
+    }
+    alerts
   }
 
   /// Clear all resource alerts.

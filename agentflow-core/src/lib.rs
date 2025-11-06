@@ -16,6 +16,7 @@ pub mod state_monitor;
 pub mod checkpoint;
 pub mod concurrency;
 pub mod resource_manager;
+pub mod logging;
 
 // Core traits and types
 pub use error::{AgentFlowError, Result};

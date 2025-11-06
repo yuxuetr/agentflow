@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-#[cfg(feature = "observability")]
-use tracing::{error, info, span, warn, Level};
+// Tracing imports - currently unused as observability tests are commented out
+// #[cfg(feature = "observability")]
+// use tracing::{error, info, span, warn, Level};
 
 // Core observability types
 #[derive(Debug, Clone)]

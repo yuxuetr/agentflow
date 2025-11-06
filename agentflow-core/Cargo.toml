@@ -17,7 +17,7 @@ license = "MIT"
 
 [features]
 default = []
-observability = ["tracing"]
+observability = ["tracing", "tracing-subscriber"]
 
 [dependencies]
 # Core serialization and JSON support (for SharedState and node communication)
@@ -52,6 +52,7 @@ num_cpus = "1.16"
 
 # Optional observability support
 tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"], optional = true }
 dirs = "5.0"
 
 [dev-dependencies]
