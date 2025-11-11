@@ -18,6 +18,8 @@ pub mod concurrency;
 pub mod resource_manager;
 pub mod logging;
 pub mod metrics;
+pub mod timeout;
+pub mod health;
 
 // Core traits and types
 pub use error::{AgentFlowError, Result};
