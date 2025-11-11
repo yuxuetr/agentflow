@@ -104,6 +104,7 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[tokio::test]
+    #[ignore] // Requires STEPFUN_API_KEY environment variable
     async fn test_asr_node_integration() {
         // This test requires a valid STEP_API_KEY to be set in the environment.
         if std::env::var("STEP_API_KEY").is_err() {

@@ -169,8 +169,10 @@ mod tests {
         inputs.insert("name".to_string(), FlowValue::Json(json!("World")));
 
         let result = node.execute(&inputs).await.unwrap();
-        let output = result.get("output").unwrap();
-        assert_eq!(output, &FlowValue::Json(json!({ "message": "Hello World" })));
+        // When format is "json" and result is an object, fields are unpacked
+        // So we should have a "message" key, not "output"
+        let message = result.get("message").unwrap();
+        assert_eq!(message, &FlowValue::Json(json!("Hello World")));
     }
 
     // New Tera-specific tests

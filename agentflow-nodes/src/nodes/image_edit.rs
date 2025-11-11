@@ -113,6 +113,7 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[tokio::test]
+    #[ignore] // Requires STEPFUN_API_KEY environment variable
     async fn test_image_edit_node_integration() {
         if std::env::var("STEP_API_KEY").is_err() {
             println!("Skipping ImageEdit integration test: STEP_API_KEY not set.");
