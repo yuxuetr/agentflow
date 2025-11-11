@@ -1,5 +1,6 @@
 use crate::{
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+    checkpoint::{CheckpointManager, CheckpointConfig, Checkpoint, WorkflowStatus},
     error::AgentFlowError,
     value::FlowValue,
 };
@@ -37,12 +38,31 @@ pub struct GraphNode {
 #[derive(Default, Clone)]
 pub struct Flow {
     nodes: HashMap<String, GraphNode>,
+    checkpoint_enabled: bool,
+    checkpoint_manager: Option<Arc<CheckpointManager>>,
 }
 
 impl Flow {
     pub fn new(nodes: Vec<GraphNode>) -> Self {
         let nodes_map = nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
-        Self { nodes: nodes_map }
+        Self {
+            nodes: nodes_map,
+            checkpoint_enabled: false,
+            checkpoint_manager: None,
+        }
+    }
+
+    /// Enable checkpointing with custom configuration
+    pub fn with_checkpointing(mut self, config: CheckpointConfig) -> Result<Self, AgentFlowError> {
+        let manager = CheckpointManager::new(config)?;
+        self.checkpoint_enabled = true;
+        self.checkpoint_manager = Some(Arc::new(manager));
+        Ok(self)
+    }
+
+    /// Enable checkpointing with default configuration
+    pub fn with_default_checkpointing(self) -> Result<Self, AgentFlowError> {
+        self.with_checkpointing(CheckpointConfig::default())
     }
 
     pub fn add_node(&mut self, node: GraphNode) {
@@ -53,8 +73,36 @@ impl Flow {
         self.execute_from_inputs(HashMap::new()).await
     }
 
+    /// Resume workflow from the latest checkpoint for a given workflow ID
+    pub async fn resume(&self, workflow_id: &str) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+        if !self.checkpoint_enabled {
+            return Err(AgentFlowError::ConfigurationError {
+                message: "Checkpointing is not enabled. Call with_checkpointing() first.".to_string(),
+            });
+        }
+
+        let manager = self.checkpoint_manager.as_ref().unwrap();
+        let checkpoint = manager.load_latest_checkpoint(workflow_id).await?
+            .ok_or_else(|| AgentFlowError::ConfigurationError {
+                message: format!("No checkpoint found for workflow '{}'", workflow_id),
+            })?;
+
+        println!("📥 Resuming workflow '{}' from checkpoint at node '{}'", workflow_id, checkpoint.last_completed_node);
+        self.execute_from_checkpoint(workflow_id, checkpoint).await
+    }
+
     pub async fn execute_from_inputs(&self, initial_inputs: AsyncNodeInputs) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
-        let run_id = Uuid::new_v4().to_string();
+        self.execute_with_workflow_id(None, initial_inputs, None).await
+    }
+
+    /// Execute workflow with optional checkpoint recovery
+    async fn execute_with_workflow_id(
+        &self,
+        workflow_id: Option<String>,
+        initial_inputs: AsyncNodeInputs,
+        skip_until: Option<String>,
+    ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+        let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let base_dir = dirs::home_dir()
             .ok_or_else(|| AgentFlowError::ConfigurationError { message: "Could not find home directory".to_string() })?
             .join(".agentflow")
@@ -65,7 +113,25 @@ impl Flow {
         let sorted_nodes = self.topological_sort()?;
         let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
 
+        // Flag to skip nodes until we reach the checkpoint resume point
+        let mut should_skip = skip_until.is_some();
+
         for node_id in &sorted_nodes {
+            // Check if we should resume from this node
+            if should_skip {
+                if let Some(ref resume_node) = skip_until {
+                    if node_id == resume_node {
+                        should_skip = false;
+                        println!("▶️  Resuming execution from node '{}'", node_id);
+                    } else {
+                        println!("⏭️  Skipping node '{}' (already completed in checkpoint)", node_id);
+                        // For skipped nodes, we don't execute but mark them as complete
+                        // Their outputs should be restored from checkpoint
+                        continue;
+                    }
+                }
+            }
+
             let graph_node = self.nodes.get(node_id).unwrap();
 
             let should_run = match &graph_node.run_if {
@@ -85,7 +151,7 @@ impl Flow {
                 Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool)?,
                 None => HashMap::new(),
             };
-            
+
             inputs.extend(graph_node.initial_inputs.clone());
 
             // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
@@ -106,10 +172,111 @@ impl Flow {
             };
 
             self.persist_step_result(&run_dir, &node_id, &result)?;
+
+            // Save checkpoint if enabled
+            if self.checkpoint_enabled && result.is_ok() {
+                if let Some(ref manager) = self.checkpoint_manager {
+                    let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+                    if let Err(e) = manager.save_checkpoint(&run_id, node_id, &checkpoint_state).await {
+                        eprintln!("⚠️  Warning: Failed to save checkpoint after node '{}': {}", node_id, e);
+                    } else {
+                        println!("💾 Checkpoint saved after node '{}'", node_id);
+                    }
+                }
+            }
+
             state_pool.insert(node_id.to_string(), result);
         }
 
+        // Mark workflow as completed or failed
+        if self.checkpoint_enabled {
+            if let Some(ref manager) = self.checkpoint_manager {
+                let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+                let status = if state_pool.values().all(|r| r.is_ok()) {
+                    WorkflowStatus::Completed
+                } else {
+                    WorkflowStatus::Failed
+                };
+
+                if let Err(e) = manager.save_checkpoint_with_status(
+                    &run_id,
+                    sorted_nodes.last().unwrap_or(&"".to_string()),
+                    &checkpoint_state,
+                    status,
+                ).await {
+                    eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
+                }
+            }
+        }
+
         Ok(state_pool)
+    }
+
+    /// Execute workflow from a checkpoint
+    async fn execute_from_checkpoint(
+        &self,
+        workflow_id: &str,
+        checkpoint: Checkpoint,
+    ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+        // Restore state pool from checkpoint
+        let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+        for (node_id, value) in &checkpoint.state {
+            let result = Ok(vec![("result".to_string(), FlowValue::Json(value.clone()))]
+                .into_iter()
+                .collect());
+            state_pool.insert(node_id.clone(), result);
+        }
+
+        // Find the next node to execute after the checkpoint
+        let sorted_nodes = self.topological_sort()?;
+        let resume_from = checkpoint.last_completed_node.clone();
+
+        // Find the next node in the execution order
+        let mut next_node_idx = None;
+        for (idx, node_id) in sorted_nodes.iter().enumerate() {
+            if node_id == &resume_from {
+                next_node_idx = Some(idx + 1);
+                break;
+            }
+        }
+
+        let next_node = next_node_idx
+            .and_then(|idx| sorted_nodes.get(idx))
+            .map(|s| s.to_string());
+
+        if let Some(next_node_id) = next_node {
+            // Continue execution from next node
+            self.execute_with_workflow_id(
+                Some(workflow_id.to_string()),
+                HashMap::new(),
+                Some(next_node_id),
+            ).await
+        } else {
+            println!("✅ Workflow '{}' was already completed", workflow_id);
+            Ok(state_pool)
+        }
+    }
+
+    /// Convert state pool to checkpoint-compatible format
+    fn state_pool_to_checkpoint_state(&self, state_pool: &HashMap<String, AsyncNodeResult>) -> HashMap<String, serde_json::Value> {
+        state_pool
+            .iter()
+            .filter_map(|(node_id, result)| {
+                if let Ok(outputs) = result {
+                    // Convert outputs to JSON value
+                    let json_outputs: HashMap<String, serde_json::Value> = outputs
+                        .iter()
+                        .map(|(k, v)| (k.clone(), match v {
+                            FlowValue::Json(json) => json.clone(),
+                            _ => serde_json::json!(null),
+                        }))
+                        .collect();
+                    Some((node_id.clone(), serde_json::to_value(json_outputs).ok()?))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn execute_while_node<'a>(&'a self, inputs: &'a AsyncNodeInputs, condition_template: &'a str, max_iterations: u32, template: &'a [GraphNode]) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
