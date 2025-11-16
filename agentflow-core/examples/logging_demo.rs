@@ -20,10 +20,13 @@
 
 use agentflow_core::{
     checkpoint::{CheckpointConfig, CheckpointManager},
-    logging::{self, prelude::{debug, info, instrument, warn}},
+    logging::{self, prelude::{debug, info, warn}},
     resource_manager::{ResourceManager, ResourceManagerConfig},
 };
 use std::collections::HashMap;
+
+#[cfg(feature = "observability")]
+use tracing::instrument;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
