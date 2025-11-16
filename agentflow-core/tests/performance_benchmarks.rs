@@ -9,8 +9,10 @@ use agentflow_core::{
   execute_with_retry, execute_with_retry_and_context, AgentFlowError, ErrorContext,
   ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor,
 };
+use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use agentflow_core::health::{HealthChecker, HealthStatus};
+use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
 
 const NUM_ITERATIONS: usize = 1000;
 
@@ -466,6 +468,217 @@ async fn benchmark_combined_overhead() {
 }
 
 #[tokio::test]
+async fn benchmark_timeout_control() {
+  println!("\n⏱️  Timeout Control Benchmarks");
+  println!("{}", "=".repeat(80));
+
+  let config = TimeoutConfig::default();
+
+  // Benchmark: Successful operation with timeout (measure overhead only)
+  // Use immediate return to measure pure timeout wrapper overhead
+  let avg = measure_async(
+    "Operation with timeout (immediate success)",
+    NUM_ITERATIONS,
+    || async {
+      with_timeout(
+        async {
+          Ok::<_, AgentFlowError>(42)
+        },
+        config.default_timeout,
+      )
+      .await
+    },
+  )
+  .await;
+
+  // Target: < 100μs overhead for timeout wrapping
+  assert!(
+    avg < Duration::from_micros(100),
+    "Timeout overhead: {:?} > 100μs",
+    avg
+  );
+
+  // Benchmark: Timeout detection
+  let start = Instant::now();
+  let result = with_timeout(
+    async {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      Ok::<_, AgentFlowError>(42)
+    },
+    Duration::from_millis(10),
+  )
+  .await;
+  let duration = start.elapsed();
+
+  assert!(result.is_err());
+  println!("  Timeout detection time: {:?}", duration);
+
+  // Should timeout quickly (around 10ms, not 100ms)
+  assert!(
+    duration < Duration::from_millis(20),
+    "Timeout detection too slow: {:?}",
+    duration
+  );
+
+  println!("  ✅ Timeout control meets performance targets");
+}
+
+#[tokio::test]
+async fn benchmark_health_checks() {
+  println!("\n🏥 Health Check Benchmarks");
+  println!("{}", "=".repeat(80));
+
+  let checker = HealthChecker::new();
+
+  // Add a fast check
+  checker.add_check(
+    "fast_check",
+    || {
+      Box::pin(async { Ok(HealthStatus::Healthy) })
+    },
+  ).await;
+
+  // Benchmark: Single health check
+  let avg = measure_async(
+    "Single health check",
+    100, // Fewer iterations due to async overhead
+    || async {
+      checker.check_health().await
+    },
+  )
+  .await;
+
+  // Target: < 1ms for single check
+  assert!(
+    avg < Duration::from_millis(1),
+    "Health check overhead: {:?} > 1ms",
+    avg
+  );
+
+  // Add multiple checks
+  for i in 0..10 {
+    checker.add_check(
+      &format!("check_{}", i),
+      || {
+        Box::pin(async { Ok(HealthStatus::Healthy) })
+      },
+    ).await;
+  }
+
+  // Benchmark: Multiple health checks
+  let avg = measure_async(
+    "Multiple health checks (11 checks)",
+    100,
+    || async {
+      checker.check_health().await
+    },
+  )
+  .await;
+
+  // Target: < 10ms for 11 checks
+  assert!(
+    avg < Duration::from_millis(10),
+    "Multiple health checks: {:?} > 10ms",
+    avg
+  );
+
+  println!("  ✅ Health checks meet performance targets");
+}
+
+#[tokio::test]
+async fn benchmark_checkpoint_operations() {
+  println!("\n💾 Checkpoint Operations Benchmarks");
+  println!("{}", "=".repeat(80));
+
+  // Create temporary checkpoint directory
+  let temp_dir = std::env::temp_dir().join("agentflow_bench_checkpoints");
+  let _ = std::fs::remove_dir_all(&temp_dir); // Clean up from previous runs
+
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(&temp_dir)
+    .with_auto_cleanup(false);
+
+  let manager = CheckpointManager::new(config).expect("Failed to create checkpoint manager");
+
+  // Benchmark: Save checkpoint (small state)
+  let mut state = std::collections::HashMap::new();
+  state.insert("node1".to_string(), serde_json::json!({"status": "completed"}));
+
+  // Single save for timing
+  let start = Instant::now();
+  for i in 0..50 {
+    manager
+      .save_checkpoint(&format!("workflow_bench_{}", i), "node1", &state)
+      .await
+      .expect("Save failed");
+  }
+  let duration = start.elapsed();
+  let avg = duration / 50;
+
+  println!("  Save checkpoint (small state ~100 bytes) - Avg: {:?} (50 iterations, total: {:?})", avg, duration);
+
+  // Target: < 10ms for small checkpoint save
+  assert!(
+    avg < Duration::from_millis(10),
+    "Checkpoint save (small): {:?} > 10ms",
+    avg
+  );
+
+  // Benchmark: Save checkpoint (large state)
+  let mut large_state = std::collections::HashMap::new();
+  for i in 0..100 {
+    large_state.insert(
+      format!("node_{}", i),
+      serde_json::json!({
+        "status": "completed",
+        "data": vec![0u8; 1024], // 1KB per entry
+      }),
+    );
+  }
+
+  let start = Instant::now();
+  for i in 0..20 {
+    manager
+      .save_checkpoint(&format!("workflow_bench_large_{}", i), "node100", &large_state)
+      .await
+      .expect("Save failed");
+  }
+  let duration = start.elapsed();
+  let avg = duration / 20;
+
+  println!("  Save checkpoint (large state ~100KB) - Avg: {:?} (20 iterations, total: {:?})", avg, duration);
+
+  // Target: < 50ms for large checkpoint save
+  assert!(
+    avg < Duration::from_millis(50),
+    "Checkpoint save (large): {:?} > 50ms",
+    avg
+  );
+
+  // Benchmark: Load checkpoint
+  let start = Instant::now();
+  for i in 0..100 {
+    let _ = manager.load_latest_checkpoint(&format!("workflow_bench_{}", i % 50)).await;
+  }
+  let duration = start.elapsed();
+  let avg = duration / 100;
+
+  println!("  Load latest checkpoint - Avg: {:?} (100 iterations, total: {:?})", avg, duration);
+
+  // Target: < 10ms for checkpoint load
+  assert!(
+    avg < Duration::from_millis(10),
+    "Checkpoint load: {:?} > 10ms",
+    avg
+  );
+
+  // Clean up
+  let _ = std::fs::remove_dir_all(&temp_dir);
+
+  println!("  ✅ Checkpoint operations meet performance targets");
+}
+
+#[tokio::test]
 async fn benchmark_summary() {
   println!("\n{}", "=".repeat(80));
   println!("📊 Performance Benchmark Summary");
@@ -479,6 +692,10 @@ async fn benchmark_summary() {
   println!("  ✓ State monitor operations: < 10μs per operation");
   println!("  ✓ Cleanup operations: < 10ms for 50 entries");
   println!("  ✓ Combined overhead: < 1ms");
+  println!("  ✓ Timeout control: < 100μs overhead");
+  println!("  ✓ Health checks: < 1ms single check, < 10ms multiple checks");
+  println!("  ✓ Checkpoint save: < 10ms small, < 50ms large");
+  println!("  ✓ Checkpoint load: < 10ms");
 
   println!("\n{}", "=".repeat(80));
 }
