@@ -294,7 +294,12 @@ where
   let embedder = OpenAIEmbedding::new("text-embedding-3-small")?;
 
   // Create indexing pipeline
-  let pipeline = IndexingPipeline::new(Box::new(chunker), Box::new(embedder), Box::new(store.clone()));
+  // Note: We create a new store instance for the pipeline since QdrantStore doesn't implement Clone
+  let pipeline_store = QdrantStore::builder("http://localhost:6334")
+    .embedding_provider(Arc::new(OpenAIEmbedding::new("text-embedding-3-small")?))
+    .build()
+    .await?;
+  let pipeline = IndexingPipeline::new(Box::new(chunker), Box::new(embedder), Box::new(pipeline_store));
 
   // Index all documents
   let stats = pipeline

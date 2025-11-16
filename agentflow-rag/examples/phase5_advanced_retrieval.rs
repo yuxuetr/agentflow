@@ -135,7 +135,7 @@ fn demo_hybrid_search(documents: &[(&str, &str)]) {
   }
 }
 
-fn demo_mmr_reranking(documents: &[(&str, &str)]) {
+fn demo_mmr_reranking(_documents: &[(&str, &str)]) {
   // Create test results with redundant content
   let results = vec![
     create_result("doc1", "Machine learning is a subset of AI", 0.95),

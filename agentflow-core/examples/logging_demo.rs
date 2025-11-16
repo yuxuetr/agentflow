@@ -20,7 +20,7 @@
 
 use agentflow_core::{
     checkpoint::{CheckpointConfig, CheckpointManager},
-    logging::{self, prelude::*},
+    logging::{self, prelude::{debug, info, instrument, warn}},
     resource_manager::{ResourceManager, ResourceManagerConfig},
 };
 use std::collections::HashMap;
