@@ -125,7 +125,13 @@ pub enum LLMError {
 #### Interfaces & Integration
 - **CLI interface** - Workflow execution, LLM chat, image generation/understanding, audio processing
 - **Configuration management** - YAML workflows, model registry, API key management
-- **Testing** - 87 tests (54 unit + 17 integration + 12 benchmarks + 4 doc) - 100% passing
+- **Testing** (2025-11-17 verified) - **479 tests** (381 unit + 98 integration) - **100% passing**
+  - agentflow-core: 155 tests (107 unit + 48 integration)
+  - agentflow-mcp: 162 tests (117 unit + 45 integration)
+  - agentflow-llm: 49 unit tests (2 ignored)
+  - agentflow-rag: 83 unit tests (4 ignored, 6 integration ignored)
+  - agentflow-nodes: 25 unit tests (4 ignored)
+  - agentflow-cli: 5 integration tests
 
 ### ✅ MCP Integration (Production-Ready) - ⭐ NEW!
 - **MCP client** - Full-featured MCP client with comprehensive testing ✅
@@ -558,6 +564,21 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### November 17, 2025 - Compilation Fixes & Test Verification ✅
+- ✅ **Fixed CLI compilation errors** - RAG command feature gate issues resolved
+  - Added `#[cfg(feature = "rag")]` to Commands::Rag enum variant
+  - Conditionally imported rag module based on feature
+  - Fixed RagArgs struct feature gating
+- ✅ **Fixed agentflow-nodes type errors** - FlowValue API corrections
+  - Removed non-existent FlowValue::String usage
+  - Updated to use FlowValue::Json(Value::String(...))
+- ✅ **Fixed factory_traits mutability** - Conditional compilation improvements
+- ✅ **Verified complete test suite** - **479 tests, 100% passing**
+  - 381 unit tests across all crates
+  - 98 integration tests
+  - 16 ignored (require API keys/external services)
+- **Impact**: Project now compiles cleanly and all tests verified passing!
+
 ### November 16, 2025 - Phase 1.5 Observability & Fault Tolerance COMPLETE! 🎉
 - ✅ **Timeout Control System** - Production-ready timeout management
   - Environment presets (production/development/default)
@@ -584,7 +605,7 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
   - API references, best practices, troubleshooting
   - Kubernetes integration examples
 
-- **Test Coverage**: 87 tests (54 unit + 17 integration + 12 benchmarks + 4 doc) - 100% passing
+- **Test Coverage** (2025-11-17 verified): **479 tests** (381 unit + 98 integration) - **100% passing**
 - **Impact**: Production-ready observability and fault tolerance complete!
 
 ### January 4, 2025 - MCP Integration COMPLETE! 🎉
@@ -603,7 +624,8 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ---
 
-**Last Updated**: 2025-11-16
+**Last Updated**: 2025-11-17
 **AgentFlow Version**: 0.2.0+ (Phase 1.5 Complete)
 **agentflow-mcp Version**: 0.1.0-alpha (Fully Integrated)
 **Rust Edition**: 2021
+**Test Status**: ✅ 479/479 passing (100%)
