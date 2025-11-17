@@ -4,7 +4,9 @@ mod commands;
 mod config;
 mod executor;
 
-use commands::{audio, config as config_cmd, image, llm, mcp, rag, workflow};
+use commands::{audio, config as config_cmd, image, llm, mcp, workflow};
+#[cfg(feature = "rag")]
+use commands::rag;
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -27,6 +29,7 @@ enum Commands {
     Llm(LlmArgs),
     /// Model Context Protocol (MCP) commands
     Mcp(McpArgs),
+    #[cfg(feature = "rag")]
     /// RAG (Retrieval-Augmented Generation) commands
     Rag(RagArgs),
 }
@@ -43,6 +46,7 @@ struct ImageArgs { #[command(subcommand)] command: ImageCommands, }
 struct LlmArgs { #[command(subcommand)] command: LlmCommands, }
 #[derive(Args)]
 struct McpArgs { #[command(subcommand)] command: McpCommands, }
+#[cfg(feature = "rag")]
 #[derive(Args)]
 struct RagArgs { #[command(subcommand)] command: RagCommands, }
 

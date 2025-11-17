@@ -87,9 +87,15 @@ impl NodeRegistry {
 
 impl Default for NodeRegistry {
   fn default() -> Self {
-    let registry = Self::new();
     #[cfg(feature = "factories")]
-    crate::factories::register_builtin_factories(&mut registry);
-    registry
+    {
+      let mut registry = Self::new();
+      crate::factories::register_builtin_factories(&mut registry);
+      registry
+    }
+    #[cfg(not(feature = "factories"))]
+    {
+      Self::new()
+    }
   }
 }

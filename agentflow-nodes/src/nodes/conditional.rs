@@ -119,7 +119,6 @@ impl ConditionalNode {
         ConditionType::Contains(substring) => {
             if let Some(value) = inputs.get(var_name) {
                 match value {
-                    FlowValue::String(s) => Ok(s.contains(substring)),
                     FlowValue::Json(Value::String(s)) => Ok(s.contains(substring)),
                     FlowValue::Json(Value::Array(arr)) => Ok(arr.iter().any(|item| {
                         if let Value::String(s) = item {
@@ -167,7 +166,7 @@ impl AsyncNode for ConditionalNode {
 
         let mut outputs = HashMap::new();
         outputs.insert("output".to_string(), FlowValue::Json(result));
-        outputs.insert("branch".to_string(), FlowValue::String(if condition_result { "true".to_string() } else { "false".to_string() }));
+        outputs.insert("branch".to_string(), FlowValue::Json(Value::String(if condition_result { "true".to_string() } else { "false".to_string() })));
 
         Ok(outputs)
     }
