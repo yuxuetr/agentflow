@@ -2,10 +2,21 @@
 
 // use async_trait::async_trait;
 // use serde_json::Value;
+use crate::{AgentFlowError, Result};
 #[warn(unused_imports)]
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// Helper function to safely acquire a Mutex lock for observability operations
+fn lock_mutex_obs<'a, T>(mutex: &'a Mutex<T>, location: &str) -> Result<std::sync::MutexGuard<'a, T>> {
+  mutex.lock().map_err(|_| {
+    AgentFlowError::LockPoisoned {
+      lock_type: "Mutex".to_string(),
+      location: format!("Observability::{}", location),
+    }
+  })
+}
 
 // Tracing imports - currently unused as observability tests are commented out
 // #[cfg(feature = "observability")]
@@ -36,20 +47,27 @@ impl MetricsCollector {
   }
 
   pub fn increment_counter(&self, name: &str, value: f64) {
-    let mut metrics = self.metrics.lock().unwrap();
-    *metrics.entry(name.to_string()).or_insert(0.0) += value;
+    if let Ok(mut metrics) = lock_mutex_obs(&self.metrics, "increment_counter::metrics") {
+      *metrics.entry(name.to_string()).or_insert(0.0) += value;
+    }
   }
 
   pub fn record_event(&self, event: ExecutionEvent) {
-    self.events.lock().unwrap().push(event);
+    if let Ok(mut events) = lock_mutex_obs(&self.events, "record_event::events") {
+      events.push(event);
+    }
   }
 
   pub fn get_metric(&self, name: &str) -> Option<f64> {
-    self.metrics.lock().unwrap().get(name).copied()
+    lock_mutex_obs(&self.metrics, "get_metric::metrics")
+      .ok()
+      .and_then(|metrics| metrics.get(name).copied())
   }
 
   pub fn get_events(&self) -> Vec<ExecutionEvent> {
-    self.events.lock().unwrap().clone()
+    lock_mutex_obs(&self.events, "get_events::events")
+      .map(|events| events.clone())
+      .unwrap_or_else(|_| Vec::new())
   }
 }
 
@@ -83,18 +101,18 @@ impl AlertManager {
     for rule in &self.rules {
       if let Some(value) = metrics.get_metric(&rule.condition) {
         if value > rule.threshold {
-          self
-            .triggered_alerts
-            .lock()
-            .unwrap()
-            .push(rule.name.clone());
+          if let Ok(mut alerts) = lock_mutex_obs(&self.triggered_alerts, "check_alerts::triggered_alerts") {
+            alerts.push(rule.name.clone());
+          }
         }
       }
     }
   }
 
   pub fn get_triggered_alerts(&self) -> Vec<String> {
-    self.triggered_alerts.lock().unwrap().clone()
+    lock_mutex_obs(&self.triggered_alerts, "get_triggered_alerts::triggered_alerts")
+      .map(|alerts| alerts.clone())
+      .unwrap_or_else(|_| Vec::new())
   }
 }
 

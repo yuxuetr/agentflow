@@ -81,7 +81,10 @@ impl Flow {
             });
         }
 
-        let manager = self.checkpoint_manager.as_ref().unwrap();
+        let manager = self.checkpoint_manager.as_ref()
+            .ok_or_else(|| AgentFlowError::ConfigurationError {
+                message: "Checkpoint manager not initialized despite checkpointing being enabled".to_string(),
+            })?;
         let checkpoint = manager.load_latest_checkpoint(workflow_id).await?
             .ok_or_else(|| AgentFlowError::ConfigurationError {
                 message: format!("No checkpoint found for workflow '{}'", workflow_id),
@@ -132,7 +135,10 @@ impl Flow {
                 }
             }
 
-            let graph_node = self.nodes.get(node_id).unwrap();
+            let graph_node = self.nodes.get(node_id)
+                .ok_or_else(|| AgentFlowError::FlowDefinitionError {
+                    message: format!("Node '{}' not found in flow definition", node_id),
+                })?;
 
             let should_run = match &graph_node.run_if {
                 Some(condition) => self.evaluate_condition(condition, &state_pool)?,
@@ -593,7 +599,7 @@ impl Flow {
             if let Some(neighbors) = adj.get(&u) {
                 for v in neighbors {
                     in_degree.entry(v.clone()).and_modify(|d| *d -= 1);
-                    if *in_degree.get(v).unwrap() == 0 {
+                    if *in_degree.get(v).unwrap_or(&1) == 0 {
                         queue.push_back(v.clone());
                     }
                 }

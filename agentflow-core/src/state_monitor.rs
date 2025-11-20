@@ -28,11 +28,22 @@
 //! ```
 
 use crate::resource_limits::ResourceLimits;
+use crate::{AgentFlowError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Helper function to safely acquire a Mutex lock for state monitor operations
+fn lock_mutex_monitor<'a, T>(mutex: &'a Mutex<T>, location: &str) -> Result<std::sync::MutexGuard<'a, T>> {
+  mutex.lock().map_err(|_| {
+    AgentFlowError::LockPoisoned {
+      lock_type: "Mutex".to_string(),
+      location: format!("StateMonitor::{}", location),
+    }
+  })
+}
 
 /// Real-time resource usage monitor for workflow execution.
 ///
@@ -212,7 +223,14 @@ impl StateMonitor {
 
     // Check if we need to update existing allocation
     let size_delta = if self.detailed_tracking {
-      let mut allocations = self.allocations.lock().unwrap();
+      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_allocation::allocations") {
+        Ok(guard) => guard,
+        Err(_) => {
+          // If lock is poisoned, fall back to non-detailed tracking
+          eprintln!("Warning: Lock poisoned in record_allocation, falling back to non-detailed tracking");
+          return false;
+        }
+      };
       let old_size = allocations.get(key).copied().unwrap_or(0);
       let delta = size as i64 - old_size as i64;
 
@@ -249,7 +267,9 @@ impl StateMonitor {
             .current_size
             .fetch_sub(size_delta as usize, Ordering::Relaxed);
           if self.detailed_tracking {
-            self.allocations.lock().unwrap().remove(key);
+            if let Ok(mut allocations) = lock_mutex_monitor(&self.allocations, "record_allocation::rollback") {
+              allocations.remove(key);
+            }
           }
           return false;
         }
@@ -273,7 +293,13 @@ impl StateMonitor {
 
     // Update value count
     if self.detailed_tracking {
-      let mut allocations = self.allocations.lock().unwrap();
+      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_allocation::value_count") {
+        Ok(guard) => guard,
+        Err(_) => {
+          eprintln!("Warning: Lock poisoned when updating value count");
+          return false;
+        }
+      };
       let new_count = allocations.len();
 
       self.value_count.store(new_count, Ordering::Relaxed);
@@ -299,11 +325,9 @@ impl StateMonitor {
     // Update access time for LRU tracking
     if self.detailed_tracking {
       let access_time = self.access_counter.fetch_add(1, Ordering::Relaxed);
-      self
-        .access_times
-        .lock()
-        .unwrap()
-        .insert(key.to_string(), access_time as u64);
+      if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_allocation::access_times") {
+        access_times.insert(key.to_string(), access_time as u64);
+      }
     }
 
     true
@@ -317,19 +341,26 @@ impl StateMonitor {
     }
 
     let size = {
-      let mut allocations = self.allocations.lock().unwrap();
+      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_deallocation::allocations") {
+        Ok(guard) => guard,
+        Err(_) => {
+          eprintln!("Warning: Lock poisoned in record_deallocation");
+          return;
+        }
+      };
       allocations.remove(key).unwrap_or(0)
     };
 
     if size > 0 {
       self.current_size.fetch_sub(size, Ordering::Relaxed);
-      self.value_count.store(
-        self.allocations.lock().unwrap().len(),
-        Ordering::Relaxed,
-      );
+      if let Ok(allocations) = lock_mutex_monitor(&self.allocations, "record_deallocation::value_count") {
+        self.value_count.store(allocations.len(), Ordering::Relaxed);
+      }
     }
 
-    self.access_times.lock().unwrap().remove(key);
+    if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_deallocation::access_times") {
+      access_times.remove(key);
+    }
   }
 
   /// Record an access to a key (for LRU tracking).
@@ -339,11 +370,9 @@ impl StateMonitor {
     }
 
     let access_time = self.access_counter.fetch_add(1, Ordering::Relaxed);
-    self
-      .access_times
-      .lock()
-      .unwrap()
-      .insert(key.to_string(), access_time as u64);
+    if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_access::access_times") {
+      access_times.insert(key.to_string(), access_time as u64);
+    }
   }
 
   /// Get the least recently used keys.
@@ -354,7 +383,10 @@ impl StateMonitor {
       return Vec::new();
     }
 
-    let access_times = self.access_times.lock().unwrap();
+    let access_times = match lock_mutex_monitor(&self.access_times, "get_lru_keys::access_times") {
+      Ok(guard) => guard,
+      Err(_) => return Vec::new(),
+    };
     let mut entries: Vec<_> = access_times.iter().collect();
 
     // Sort by access time (ascending = oldest first)
@@ -373,7 +405,9 @@ impl StateMonitor {
       return HashMap::new();
     }
 
-    self.allocations.lock().unwrap().clone()
+    lock_mutex_monitor(&self.allocations, "get_allocations::allocations")
+      .map(|guard| guard.clone())
+      .unwrap_or_else(|_| HashMap::new())
   }
 
   /// Get resource usage statistics.
@@ -398,7 +432,7 @@ impl StateMonitor {
   /// Perform automatic cleanup by removing least recently used values.
   ///
   /// Returns the number of bytes freed and entries removed, or an error if cleanup fails.
-  pub fn cleanup(&self, target_percentage: f64) -> Result<(usize, usize), String> {
+  pub fn cleanup(&self, target_percentage: f64) -> std::result::Result<(usize, usize), String> {
     if !self.detailed_tracking {
       return Err("Detailed tracking disabled, cannot perform cleanup".to_string());
     }
@@ -415,7 +449,10 @@ impl StateMonitor {
     let mut removed = 0;
 
     // Get LRU keys to remove
-    let allocations = self.allocations.lock().unwrap().clone();
+    let allocations = match lock_mutex_monitor(&self.allocations, "cleanup::allocations") {
+      Ok(guard) => guard.clone(),
+      Err(_) => return Err("Failed to acquire lock for cleanup".to_string()),
+    };
     let lru_keys = self.get_lru_keys(allocations.len());
 
     for key in lru_keys {
@@ -442,23 +479,30 @@ impl StateMonitor {
 
   /// Add an alert to the alert history.
   fn add_alert(&self, alert: ResourceAlert) {
-    self.alerts.lock().unwrap().push(alert);
+    if let Ok(mut alerts) = lock_mutex_monitor(&self.alerts, "add_alert::alerts") {
+      alerts.push(alert);
+    }
   }
 
   /// Get all alerts and clear the alert history.
   pub fn get_alerts(&self) -> Vec<ResourceAlert> {
-    let mut alerts = self.alerts.lock().unwrap();
-    std::mem::take(&mut *alerts)
+    lock_mutex_monitor(&self.alerts, "get_alerts::alerts")
+      .map(|mut alerts| std::mem::take(&mut *alerts))
+      .unwrap_or_else(|_| Vec::new())
   }
 
   /// Get all alerts without clearing.
   pub fn peek_alerts(&self) -> Vec<ResourceAlert> {
-    self.alerts.lock().unwrap().clone()
+    lock_mutex_monitor(&self.alerts, "peek_alerts::alerts")
+      .map(|alerts| alerts.clone())
+      .unwrap_or_else(|_| Vec::new())
   }
 
   /// Clear all alerts.
   pub fn clear_alerts(&self) {
-    self.alerts.lock().unwrap().clear();
+    if let Ok(mut alerts) = lock_mutex_monitor(&self.alerts, "clear_alerts::alerts") {
+      alerts.clear();
+    }
   }
 
   /// Reset all monitoring state.
@@ -467,10 +511,16 @@ impl StateMonitor {
     self.value_count.store(0, Ordering::Relaxed);
     self.access_counter.store(0, Ordering::Relaxed);
     if self.detailed_tracking {
-      self.allocations.lock().unwrap().clear();
-      self.access_times.lock().unwrap().clear();
+      if let Ok(mut allocations) = lock_mutex_monitor(&self.allocations, "reset::allocations") {
+        allocations.clear();
+      }
+      if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "reset::access_times") {
+        access_times.clear();
+      }
     }
-    self.alerts.lock().unwrap().clear();
+    if let Ok(mut alerts) = lock_mutex_monitor(&self.alerts, "reset::alerts") {
+      alerts.clear();
+    }
   }
 }
 

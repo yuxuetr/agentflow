@@ -4,10 +4,40 @@ use crate::{AgentFlowError, AsyncNode, Result, SharedState};
 // use async_trait::async_trait;
 // use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, PoisonError};
 use std::time::{Duration, Instant};
 // use tokio::time::{sleep, timeout};
 // use uuid::Uuid;
+
+/// Helper function to safely acquire a Mutex lock
+fn lock_mutex<T>(mutex: &Mutex<T>, location: &str) -> Result<std::sync::MutexGuard<T>> {
+  mutex.lock().map_err(|e| {
+    AgentFlowError::LockPoisoned {
+      lock_type: "Mutex".to_string(),
+      location: location.to_string(),
+    }
+  })
+}
+
+/// Helper function to safely acquire a RwLock read lock
+fn read_lock<T>(rwlock: &RwLock<T>, location: &str) -> Result<std::sync::RwLockReadGuard<T>> {
+  rwlock.read().map_err(|e| {
+    AgentFlowError::LockPoisoned {
+      lock_type: "RwLock::read".to_string(),
+      location: location.to_string(),
+    }
+  })
+}
+
+/// Helper function to safely acquire a RwLock write lock
+fn write_lock<T>(rwlock: &RwLock<T>, location: &str) -> Result<std::sync::RwLockWriteGuard<T>> {
+  rwlock.write().map_err(|e| {
+    AgentFlowError::LockPoisoned {
+      lock_type: "RwLock::write".to_string(),
+      location: location.to_string(),
+    }
+  })
+}
 
 /// Circuit breaker implementation for fault tolerance
 #[derive(Debug)]
@@ -39,8 +69,8 @@ impl CircuitBreaker {
     }
   }
 
-  pub fn get_state(&self) -> CircuitBreakerState {
-    self.state.read().unwrap().clone()
+  pub fn get_state(&self) -> Result<CircuitBreakerState> {
+    read_lock(&self.state, "CircuitBreaker::get_state").map(|guard| guard.clone())
   }
 
   pub async fn call<F, T>(&self, operation: F) -> Result<T>
@@ -48,7 +78,7 @@ impl CircuitBreaker {
     F: futures::Future<Output = Result<T>>,
   {
     // Check if circuit breaker should allow the call
-    if !self.should_allow_request().await {
+    if !self.should_allow_request().await? {
       return Err(AgentFlowError::CircuitBreakerOpen {
         node_id: self.id.clone(),
       });
@@ -57,51 +87,56 @@ impl CircuitBreaker {
     // Execute the operation
     match operation.await {
       Ok(result) => {
-        self.on_success().await;
+        self.on_success().await?;
         Ok(result)
       }
       Err(error) => {
-        self.on_failure().await;
+        self.on_failure().await?;
         Err(error)
       }
     }
   }
 
-  async fn should_allow_request(&self) -> bool {
-    let state = self.get_state();
+  async fn should_allow_request(&self) -> Result<bool> {
+    let state = self.get_state()?;
     match state {
-      CircuitBreakerState::Closed => true,
+      CircuitBreakerState::Closed => Ok(true),
       CircuitBreakerState::Open => {
         // Check if recovery timeout has passed
-        if let Some(last_failure) = *self.last_failure_time.lock().unwrap() {
+        let last_failure = lock_mutex(&self.last_failure_time, "CircuitBreaker::should_allow_request::last_failure_time")?;
+        if let Some(last_failure) = *last_failure {
           if last_failure.elapsed() >= self.recovery_timeout {
             // Transition to half-open
-            *self.state.write().unwrap() = CircuitBreakerState::HalfOpen;
-            true
+            drop(last_failure); // Release lock before acquiring write lock
+            *write_lock(&self.state, "CircuitBreaker::should_allow_request::state")? = CircuitBreakerState::HalfOpen;
+            Ok(true)
           } else {
-            false
+            Ok(false)
           }
         } else {
-          false
+          Ok(false)
         }
       }
-      CircuitBreakerState::HalfOpen => true,
+      CircuitBreakerState::HalfOpen => Ok(true),
     }
   }
 
-  async fn on_success(&self) {
-    *self.current_failures.lock().unwrap() = 0;
-    *self.state.write().unwrap() = CircuitBreakerState::Closed;
+  async fn on_success(&self) -> Result<()> {
+    *lock_mutex(&self.current_failures, "CircuitBreaker::on_success::current_failures")? = 0;
+    *write_lock(&self.state, "CircuitBreaker::on_success::state")? = CircuitBreakerState::Closed;
+    Ok(())
   }
 
-  async fn on_failure(&self) {
-    let mut failures = self.current_failures.lock().unwrap();
+  async fn on_failure(&self) -> Result<()> {
+    let mut failures = lock_mutex(&self.current_failures, "CircuitBreaker::on_failure::current_failures")?;
     *failures += 1;
-    *self.last_failure_time.lock().unwrap() = Some(Instant::now());
+    *lock_mutex(&self.last_failure_time, "CircuitBreaker::on_failure::last_failure_time")? = Some(Instant::now());
 
     if *failures >= self.failure_threshold {
-      *self.state.write().unwrap() = CircuitBreakerState::Open;
+      drop(failures); // Release lock before acquiring write lock
+      *write_lock(&self.state, "CircuitBreaker::on_failure::state")? = CircuitBreakerState::Open;
     }
+    Ok(())
   }
 }
 
@@ -126,7 +161,7 @@ impl RateLimiter {
 
   pub async fn acquire(&self) -> Result<()> {
     let now = Instant::now();
-    let mut requests = self.requests.lock().unwrap();
+    let mut requests = lock_mutex(&self.requests, "RateLimiter::acquire::requests")?;
 
     // Clean up old requests outside the window
     requests.retain(|&timestamp| now.duration_since(timestamp) < self.window_duration);
@@ -162,29 +197,24 @@ impl TimeoutManager {
     }
   }
 
-  pub fn set_timeout(&self, operation: String, timeout_duration: Duration) {
-    self
-      .operation_timeouts
-      .write()
-      .unwrap()
+  pub fn set_timeout(&self, operation: String, timeout_duration: Duration) -> Result<()> {
+    write_lock(&self.operation_timeouts, "TimeoutManager::set_timeout::operation_timeouts")?
       .insert(operation, timeout_duration);
+    Ok(())
   }
 
-  pub fn get_timeout(&self, operation: &str) -> Duration {
-    self
-      .operation_timeouts
-      .read()
-      .unwrap()
+  pub fn get_timeout(&self, operation: &str) -> Result<Duration> {
+    Ok(read_lock(&self.operation_timeouts, "TimeoutManager::get_timeout::operation_timeouts")?
       .get(operation)
       .copied()
-      .unwrap_or(self.default_timeout)
+      .unwrap_or(self.default_timeout))
   }
 
   pub async fn execute_with_timeout<F, T>(&self, operation: &str, future: F) -> Result<T>
   where
     F: futures::Future<Output = Result<T>>,
   {
-    let timeout_duration = self.get_timeout(operation);
+    let timeout_duration = self.get_timeout(operation)?;
     match tokio::time::timeout(timeout_duration, future).await {
       Ok(result) => result,
       Err(_) => Err(AgentFlowError::TimeoutExceeded {
@@ -213,7 +243,7 @@ impl ResourcePool {
   }
 
   pub async fn acquire(&self) -> Result<ResourceGuard> {
-    let mut available = self.available_resources.lock().unwrap();
+    let mut available = lock_mutex(&self.available_resources, "ResourcePool::acquire::available_resources")?;
     if *available == 0 {
       return Err(AgentFlowError::ResourcePoolExhausted {
         resource_type: self.id.clone(),
@@ -233,8 +263,13 @@ pub struct ResourceGuard {
 
 impl Drop for ResourceGuard {
   fn drop(&mut self) {
-    let mut available = self.pool.lock().unwrap();
-    *available += 1;
+    // In Drop, we cannot return errors, so we log and ignore poisoned locks
+    if let Ok(mut available) = self.pool.lock() {
+      *available += 1;
+    } else {
+      // Log the error in production code
+      eprintln!("Warning: Failed to release resource due to poisoned lock");
+    }
   }
 }
 
@@ -373,12 +408,12 @@ impl AdaptiveTimeout {
     }
   }
 
-  pub fn current_timeout(&self) -> Duration {
-    *self.current_timeout.lock().unwrap()
+  pub fn current_timeout(&self) -> Result<Duration> {
+    lock_mutex(&self.current_timeout, "AdaptiveTimeout::current_timeout").map(|guard| *guard)
   }
 
-  pub fn record_execution_time(&mut self, duration: Duration) {
-    let mut history = self.history.lock().unwrap();
+  pub fn record_execution_time(&mut self, duration: Duration) -> Result<()> {
+    let mut history = lock_mutex(&self.history, "AdaptiveTimeout::record_execution_time::history")?;
     history.push(duration);
 
     if history.len() > self.max_history {
@@ -395,8 +430,10 @@ impl AdaptiveTimeout {
       let p95 = sorted_history.get(index).copied().unwrap_or(duration);
 
       let new_timeout = Duration::from_millis((p95.as_millis() as f64 * 1.5) as u64);
-      *self.current_timeout.lock().unwrap() = new_timeout;
+      drop(history); // Release lock before acquiring another
+      *lock_mutex(&self.current_timeout, "AdaptiveTimeout::record_execution_time::current_timeout")? = new_timeout;
     }
+    Ok(())
   }
 }
 

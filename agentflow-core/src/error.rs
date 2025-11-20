@@ -200,6 +200,13 @@ pub enum AgentFlowError {
     #[error("Monitoring error: {message}")]
     MonitoringError { message: String },
 
+    // ===== Lock Poisoning Errors =====
+    #[error("Lock poisoned: {lock_type} in {location}")]
+    LockPoisoned {
+        lock_type: String,
+        location: String,
+    },
+
     #[error("Generic error: {0}")]
     Generic(String),
 }

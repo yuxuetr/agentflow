@@ -284,6 +284,7 @@ impl ErrorPattern {
                     AgentFlowError::TaskCancelled => "TaskCancelled",
                     AgentFlowError::BatchProcessingFailed { .. } => "BatchProcessingFailed",
                     AgentFlowError::MonitoringError { .. } => "MonitoringError",
+                    AgentFlowError::LockPoisoned { .. } => "LockPoisoned",
                     AgentFlowError::Generic(_) => "Generic",
                 };
                 error_type.contains(name)
