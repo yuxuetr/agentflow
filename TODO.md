@@ -50,6 +50,14 @@
 
 ### ⚠️ 需要完善（剩余生产级差距）
 
+- 🔴 **错误处理**: 517 个 unwrap/expect 在生产代码中 - **CRITICAL** (2025-11-17 审计)
+  - agentflow-core: 162 个 (Mutex/Lock, 文件 I/O)
+  - agentflow-rag: 106 个 (文件读取, 解析)
+  - agentflow-nodes: 89 个 (JSON, 模板)
+  - agentflow-llm: 81 个 (HTTP, API)
+  - agentflow-mcp: 70 个 (协议, I/O)
+  - **风险**: 服务崩溃, 级联故障, 数据丢失
+  - **优先级**: P0 - 阻塞生产部署
 - ⚠️ **OpenTelemetry 追踪**: 分布式追踪集成待完善
 - ⚠️ **高级性能优化**: 缓存层、批处理优化
 - ⚠️ **插件系统**: 动态节点加载
@@ -129,9 +137,327 @@
 
 ---
 
+## 📅 Phase 0: 错误处理修复 (3-4周) 🔴 **新增 - URGENT**
+
+**目标**: 消除生产代码中的所有 unwrap/expect，确保健壮的错误处理
+**发现时间**: 2025-11-17
+**优先级**: 🔴 P0 - **阻塞生产部署**
+**状态**: 📋 Planning
+
+### 背景
+
+2025-11-17 代码审计发现:
+- **517 个 unwrap/expect** 在生产代码中 (src/)
+- **750 个总计** (含测试和示例)
+- **关键风险**: Mutex 毒化级联、文件 I/O panic、网络错误崩溃
+
+### Week 1: 关键路径修复 (P0) 🔴 CRITICAL
+
+#### 0.1 修复 Mutex/RwLock unwrap (agentflow-core)
+**优先级**: 🔴 P0 - CRITICAL
+**工作量**: 3-4天
+**负责人**: Backend Team
+
+**问题文件**:
+- [ ] `robustness.rs` - 34 个 lock unwrap (电路熔断器)
+  - 风险: 任何线程 panic → 整个服务不可恢复
+  - 修复: 使用 `.map_err()` 或 `unwrap_or_else()` 恢复数据
+- [ ] `flow.rs` - 23 个 lock unwrap (工作流状态)
+  - 风险: 状态管理崩溃 → 工作流无法执行
+  - 修复: 添加 `LockPoisoned` 错误类型
+- [ ] `metrics.rs` - 18 个 lock unwrap (指标收集)
+  - 风险: 指标收集失败 → 可观测性丧失
+  - 修复: 优雅降级，记录警告但继续运行
+- [ ] `state_monitor.rs` - 19 个 lock unwrap
+- [ ] `concurrency.rs` - 16 个 lock unwrap
+
+**验收标准**:
+```bash
+# 验证修复
+grep -r "\.lock()\.unwrap()\|\.read()\.unwrap()\|\.write()\.unwrap()" \
+  agentflow-core/src/*.rs
+# 期望: 0 结果
+
+# 测试通过
+cargo test --package agentflow-core --lib
+```
+
+**预期产出**:
+- agentflow-core 中 ~110 个 lock unwrap 修复
+- 新增 `AgentFlowError::LockPoisoned` 错误变体
+- 锁毒化恢复策略文档
+
+---
+
+#### 0.2 修复 Checkpoint 系统 (agentflow-core)
+**优先级**: 🔴 P0 - CRITICAL
+**工作量**: 1天
+**负责人**: Backend Team
+
+**问题**: checkpoint.rs 有 22 个 unwrap（大部分在测试中）
+- [ ] 审计生产代码中的文件 I/O
+- [ ] 确保所有 `fs::write/read` 返回 `Result`
+- [ ] 添加 `FileReadError`/`FileWriteError` 错误类型
+- [ ] 测试代码中使用 `.expect("descriptive message")`
+
+**风险**: 故障恢复机制本身失败 → 违背容错设计
+**修复**: 所有文件操作必须妥善处理错误
+
+**验收标准**:
+```bash
+# 生产代码中无 unwrap
+grep -r "\.unwrap()" agentflow-core/src/checkpoint.rs | \
+  grep -v "#\[cfg(test)\]" -A5
+# 期望: 仅在测试代码中
+
+cargo test checkpoint
+```
+
+---
+
+#### 0.3 修复文件 I/O 操作 (agentflow-rag)
+**优先级**: 🔴 P0 - CRITICAL
+**工作量**: 2天
+**负责人**: Backend Team
+
+**问题文件**:
+- [ ] `sources/text.rs` - 17 个文件读取 unwrap
+  - 风险: 文件不存在 → panic
+  - 修复: 返回 `FileReadError`
+- [ ] `sources/html.rs` - 16 个解析 unwrap
+  - 风险: HTML 格式错误 → panic
+  - 修复: 返回 `ParseError`
+- [ ] `sources/csv.rs` - 12 个 CSV 解析 unwrap
+  - 风险: CSV 格式错误 → panic
+  - 修复: 返回详细的格式错误
+
+**验收标准**:
+```bash
+# 无文件 I/O unwrap
+grep -r "fs::read\|fs::write\|File::open" agentflow-rag/src | \
+  grep "\.unwrap()"
+# 期望: 0 结果
+
+cargo test --package agentflow-rag sources
+```
+
+---
+
+### Week 2: 网络与序列化修复 (P1) 🟠 HIGH
+
+#### 0.4 修复网络操作 (agentflow-llm, agentflow-nodes)
+**优先级**: 🟠 P1 - HIGH
+**工作量**: 3天
+**负责人**: Backend Team
+
+**问题文件**:
+- [ ] `llm/providers/stepfun.rs` - 12 个 HTTP unwrap
+- [ ] `llm/providers/openai.rs` - 9 个 API unwrap
+- [ ] `nodes/text_to_image.rs` - 12 个 API unwrap
+- [ ] `rag/embeddings/openai.rs` - 9 个 HTTP unwrap
+
+**风险**: API 不可用/超时 → 整个工作流崩溃
+**修复**:
+- 添加 `HttpRequestError`/`HttpResponseParseError`
+- 实现重试逻辑
+- 返回详细的错误信息（URL, 状态码, 响应体）
+
+**验收标准**:
+```bash
+# 无 HTTP unwrap
+grep -r "\.send()\.await\.unwrap()\|\.json()\.await\.unwrap()" \
+  agentflow-llm/src agentflow-nodes/src
+# 期望: 0 结果
+
+cargo test http --all-features
+```
+
+---
+
+#### 0.5 修复 JSON/Serde 操作
+**优先级**: 🟠 P1 - HIGH
+**工作量**: 2天
+**负责人**: Backend Team
+
+**问题文件**:
+- [ ] `nodes/template.rs` - 27 个 JSON unwrap
+- [ ] `mcp/protocol/types.rs` - 16 个 Serde unwrap
+- [ ] 其他各处的 JSON 序列化/反序列化
+
+**风险**:
+- 恶意输入 → panic (安全漏洞, DoS)
+- 无效模板 → 工作流失败
+
+**修复**:
+- 添加 `SerializationError`/`DeserializationError`
+- 输入验证
+- 返回详细错误（类型名、输入内容、错误位置）
+
+**验收标准**:
+```bash
+# 无 serde unwrap
+grep -r "serde_json::.*\.unwrap()\|\.as_str()\.unwrap()" \
+  */src --include="*.rs"
+# 期望: 显著减少
+
+cargo test serde --all-features
+```
+
+---
+
+### Week 3: 清理与审计 (P2) 🟡 MEDIUM
+
+#### 0.6 Option unwrap 审计与修复
+**优先级**: 🟡 P2 - MEDIUM
+**工作量**: 3天
+**负责人**: Backend Team
+
+**任务**:
+- [ ] 审计所有 `map.get().unwrap()` 模式
+- [ ] 使用 `.ok_or_else()` 或提供默认值
+- [ ] 添加 `MissingParameter`/`MissingKey` 错误类型
+- [ ] 记录哪些 unwrap 是安全的（如果有）
+
+**预期**: 减少 ~100 个 Option unwrap
+
+---
+
+#### 0.7 添加 Clippy 规则强制执行
+**优先级**: 🟡 P2 - MEDIUM
+**工作量**: 1天
+**负责人**: DevOps Team
+
+**任务**:
+- [ ] 创建 `clippy.toml`:
+  ```toml
+  # 生产代码禁止 unwrap
+  unwrap-used = "deny"
+  expect-used = "warn"
+
+  # 测试代码允许
+  [[lints]]
+  path = "**/tests/**"
+  unwrap-used = "allow"
+  ```
+- [ ] 更新 CI/CD 检查
+- [ ] 添加 pre-commit hook
+
+**验收标准**:
+```bash
+cargo clippy --all-targets --all-features -- -D clippy::unwrap_used
+# 期望: 构建成功, 无 unwrap_used 警告
+```
+
+---
+
+### Week 4: 文档与测试 (P2) 🟡 MEDIUM
+
+#### 0.8 错误处理文档与测试
+**优先级**: 🟡 P2 - MEDIUM
+**工作量**: 2天
+**负责人**: Backend Team + Tech Writer
+
+**任务**:
+- [ ] 添加错误处理最佳实践到 `CONTRIBUTING.md`
+- [ ] 为新错误类型添加文档注释
+- [ ] 创建错误处理示例
+- [ ] 添加错误路径测试
+  ```rust
+  #[test]
+  fn test_lock_poisoning_recovery() { ... }
+
+  #[test]
+  fn test_file_read_error_handling() { ... }
+
+  #[test]
+  fn test_network_error_retry() { ... }
+  ```
+
+**预期产出**:
+- `docs/ERROR_HANDLING.md` - 错误处理指南
+- 每个新错误类型至少 1 个测试
+- 错误恢复示例工作流
+
+---
+
+## 📊 Phase 0 验收标准
+
+### 代码质量指标
+- [ ] **生产代码 unwrap 数量**: 517 → **< 10** (98% 减少)
+- [ ] **关键路径 unwrap**: 200+ → **0** (Mutex/Lock, File I/O)
+- [ ] **Clippy unwrap_used**: **通过** (零违规)
+- [ ] **测试覆盖**: 所有错误路径有测试
+- [ ] **文档完整**: 每个错误类型有文档
+
+### 功能验证
+- [ ] 所有现有测试通过
+- [ ] 新增错误处理测试通过
+- [ ] 集成测试通过
+- [ ] 压力测试无 panic
+
+### 文档验证
+- [ ] 错误处理指南完成
+- [ ] API 文档更新
+- [ ] 示例代码验证
+
+---
+
+## 🎯 Phase 0 里程碑
+
+**M0.1 (Week 1)**: 关键路径修复完成
+- ✅ Mutex/Lock unwrap 修复 (110+ fixes)
+- ✅ Checkpoint 系统加固
+- ✅ 文件 I/O 错误处理
+
+**M0.2 (Week 2)**: 网络与序列化加固
+- ✅ HTTP 操作错误处理
+- ✅ JSON 操作安全加固
+- ✅ API 重试机制
+
+**M0.3 (Week 3)**: 清理与执行
+- ✅ Option unwrap 审计
+- ✅ Clippy 规则启用
+- ✅ CI/CD 集成
+
+**M0.4 (Week 4)**: 文档与发布
+- ✅ 错误处理文档
+- ✅ 测试完整
+- ✅ Phase 0 完成 🎉
+
+---
+
+## 🚨 关键风险与缓解措施
+
+### 风险 1: 破坏现有功能
+**概率**: 中
+**影响**: 高
+**缓解**:
+- 每次修复后运行完整测试套件
+- 增量修复，每个文件独立测试
+- Code review 强制要求
+
+### 风险 2: 时间超期
+**概率**: 中
+**影响**: 中
+**缓解**:
+- 优先修复 P0 文件
+- 可延后 P2 任务
+- 预留 1 周缓冲时间
+
+### 风险 3: 引入新 bug
+**概率**: 低
+**影响**: 高
+**缓解**:
+- 充分的单元测试
+- 错误注入测试
+- Beta 测试验证
+
+---
+
 ## 📅 Phase 1: 稳定性和可靠性增强 (4-5周)
 
 **目标**: 确保核心功能稳定可靠，适合生产环境
+**前置条件**: ✅ Phase 0 完成
 
 ### Week 1-2: 错误处理和恢复 (P0) ✅ COMPLETED
 
