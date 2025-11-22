@@ -4,9 +4,33 @@
 
 use crate::{error::Result, sources::DocumentLoader, types::Document};
 use async_trait::async_trait;
+use regex::Regex;
 use scraper::{Html, Selector};
 use std::path::Path;
+use std::sync::OnceLock;
 use tokio::fs;
+
+/// Regex pattern for removing script tags
+static SCRIPT_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Regex pattern for removing style tags
+static STYLE_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Get or initialize the script removal regex
+fn script_regex() -> &'static Regex {
+  SCRIPT_REGEX.get_or_init(|| {
+    Regex::new(r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>")
+      .expect("SCRIPT_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
+
+/// Get or initialize the style removal regex
+fn style_regex() -> &'static Regex {
+  STYLE_REGEX.get_or_init(|| {
+    Regex::new(r"<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>")
+      .expect("STYLE_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
 
 /// HTML document loader
 ///
@@ -72,8 +96,7 @@ impl HtmlLoader {
         let scripts: Vec<_> = document.select(&script_selector).collect();
         for _ in scripts {
           // Note: scraper doesn't provide element removal, so we use regex as fallback
-          html = regex::Regex::new(r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>")
-            .unwrap()
+          html = script_regex()
             .replace_all(&html, "")
             .to_string();
         }
@@ -83,8 +106,7 @@ impl HtmlLoader {
       if let Ok(style_selector) = Selector::parse("style") {
         let styles: Vec<_> = document.select(&style_selector).collect();
         for _ in styles {
-          html = regex::Regex::new(r"<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>")
-            .unwrap()
+          html = style_regex()
             .replace_all(&html, "")
             .to_string();
         }

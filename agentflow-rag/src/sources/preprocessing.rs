@@ -30,6 +30,51 @@ use crate::{error::Result, sources::Document};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
+
+/// Regex pattern for stripping HTML tags
+static HTML_TAG_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Regex pattern for stripping URLs
+static URL_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Regex pattern for stripping email addresses
+static EMAIL_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Regex pattern for collapsing whitespace
+static WHITESPACE_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Get or initialize the HTML tag removal regex
+fn html_tag_regex() -> &'static Regex {
+  HTML_TAG_REGEX.get_or_init(|| {
+    Regex::new(r"<[^>]+>")
+      .expect("HTML_TAG_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
+
+/// Get or initialize the URL removal regex
+fn url_regex() -> &'static Regex {
+  URL_REGEX.get_or_init(|| {
+    Regex::new(r"https?://\S+")
+      .expect("URL_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
+
+/// Get or initialize the email removal regex
+fn email_regex() -> &'static Regex {
+  EMAIL_REGEX.get_or_init(|| {
+    Regex::new(r"\S+@\S+\.\S+")
+      .expect("EMAIL_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
+
+/// Get or initialize the whitespace collapse regex
+fn whitespace_regex() -> &'static Regex {
+  WHITESPACE_REGEX.get_or_init(|| {
+    Regex::new(r"\s+")
+      .expect("WHITESPACE_REGEX pattern is invalid - this is a bug in agentflow-rag")
+  })
+}
 
 /// Text cleaning configuration and operations
 #[derive(Debug, Clone)]
@@ -177,20 +222,17 @@ impl TextCleaner {
 
   /// Strip HTML tags
   fn strip_html(&self, text: &str) -> String {
-    let re = Regex::new(r"<[^>]+>").unwrap();
-    re.replace_all(text, " ").to_string()
+    html_tag_regex().replace_all(text, " ").to_string()
   }
 
   /// Strip URLs
   fn strip_urls(&self, text: &str) -> String {
-    let re = Regex::new(r"https?://\S+").unwrap();
-    re.replace_all(text, " ").to_string()
+    url_regex().replace_all(text, " ").to_string()
   }
 
   /// Strip email addresses
   fn strip_emails(&self, text: &str) -> String {
-    let re = Regex::new(r"\S+@\S+\.\S+").unwrap();
-    re.replace_all(text, " ").to_string()
+    email_regex().replace_all(text, " ").to_string()
   }
 
   /// Normalize Unicode (simple NFC normalization)
@@ -210,8 +252,7 @@ impl TextCleaner {
 
   /// Collapse multiple whitespace characters into single space
   fn collapse_whitespace(&self, text: &str) -> String {
-    let re = Regex::new(r"\s+").unwrap();
-    re.replace_all(text, " ").to_string()
+    whitespace_regex().replace_all(text, " ").to_string()
   }
 }
 

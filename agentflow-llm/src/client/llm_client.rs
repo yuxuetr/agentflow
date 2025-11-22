@@ -1,6 +1,6 @@
 use crate::{
   config::ModelConfig, multimodal::MultimodalMessage, providers::ProviderRequest,
-  registry::ModelRegistry, Result, StreamingResponse,
+  registry::ModelRegistry, LLMError, Result, StreamingResponse,
 };
 use agentflow_core::observability::{ExecutionEvent, MetricsCollector};
 use serde::{Deserialize, Serialize};
@@ -323,10 +323,10 @@ impl LLMClient {
 
     // Apply model defaults
     if let Some(temp) = model_config.temperature.or(self.temperature) {
-      params.insert(
-        "temperature".to_string(),
-        Value::Number(serde_json::Number::from_f64(temp as f64).unwrap()),
-      );
+      let num = serde_json::Number::from_f64(temp as f64).ok_or_else(|| LLMError::ConfigurationError {
+        message: format!("Invalid temperature value: {}", temp),
+      })?;
+      params.insert("temperature".to_string(), Value::Number(num));
     }
 
     if let Some(tokens) = self.max_tokens.or(model_config.max_tokens) {
@@ -337,22 +337,24 @@ impl LLMClient {
     }
 
     if let Some(top_p) = model_config.top_p.or(self.top_p) {
-      params.insert(
-        "top_p".to_string(),
-        Value::Number(serde_json::Number::from_f64(top_p as f64).unwrap()),
-      );
+      let num = serde_json::Number::from_f64(top_p as f64).ok_or_else(|| LLMError::ConfigurationError {
+        message: format!("Invalid top_p value: {}", top_p),
+      })?;
+      params.insert("top_p".to_string(), Value::Number(num));
     }
 
     if let Some(freq_penalty) = self.frequency_penalty {
-      params.insert(
-        "frequency_penalty".to_string(),
-        Value::Number(serde_json::Number::from_f64(freq_penalty as f64).unwrap()),
-      );
+      let num = serde_json::Number::from_f64(freq_penalty as f64).ok_or_else(|| LLMError::ConfigurationError {
+        message: format!("Invalid frequency_penalty value: {}", freq_penalty),
+      })?;
+      params.insert("frequency_penalty".to_string(), Value::Number(num));
     }
 
     if let Some(stop_sequences) = &self.stop {
       if stop_sequences.len() == 1 {
-        params.insert("stop".to_string(), Value::String(stop_sequences[0].clone()));
+        if let Some(first) = stop_sequences.first() {
+          params.insert("stop".to_string(), Value::String(first.clone()));
+        }
       } else {
         params.insert(
           "stop".to_string(),

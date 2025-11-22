@@ -36,11 +36,15 @@ impl MoonshotProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    // Note: API key is validated in new(), so this should always succeed
     headers.insert(
-      "Authorization",
-      format!("Bearer {}", self.api_key).parse().unwrap(),
+      AUTHORIZATION,
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+        .expect("API key contains invalid characters"),
     );
     headers
   }

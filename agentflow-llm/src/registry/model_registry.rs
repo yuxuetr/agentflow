@@ -39,7 +39,9 @@ impl ModelRegistry {
 
     // Store the config
     {
-      let mut config_guard = self.config.write().unwrap();
+      let mut config_guard = self.config.write().map_err(|e| LLMError::InternalError {
+        message: format!("Configuration lock poisoned: {}", e),
+      })?;
       *config_guard = Some(config);
     }
 
@@ -64,7 +66,9 @@ impl ModelRegistry {
 
     // Store the config
     {
-      let mut config_guard = self.config.write().unwrap();
+      let mut config_guard = self.config.write().map_err(|e| LLMError::InternalError {
+        message: format!("Configuration lock poisoned: {}", e),
+      })?;
       *config_guard = Some(config);
     }
 
@@ -73,7 +77,9 @@ impl ModelRegistry {
 
   /// Get a model configuration by name
   pub fn get_model(&self, model_name: &str) -> Result<ModelConfig> {
-    let config_guard = self.config.read().unwrap();
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
     let config = config_guard
       .as_ref()
       .ok_or_else(|| LLMError::ConfigurationError {
@@ -90,7 +96,9 @@ impl ModelRegistry {
 
   /// Get a provider instance by name
   pub fn get_provider(&self, provider_name: &str) -> Result<Arc<dyn LLMProvider>> {
-    let providers_guard = self.providers.read().unwrap();
+    let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
+      message: format!("Providers lock poisoned: {}", e),
+    })?;
     providers_guard
       .get(provider_name)
       .cloned()
@@ -101,7 +109,11 @@ impl ModelRegistry {
 
   /// List all available model names
   pub fn list_models(&self) -> Vec<String> {
-    let config_guard = self.config.read().unwrap();
+    // Note: Returns empty vec if lock is poisoned to maintain backward compatibility
+    let config_guard = match self.config.read() {
+      Ok(guard) => guard,
+      Err(_) => return Vec::new(),
+    };
     if let Some(config) = config_guard.as_ref() {
       config.models.keys().cloned().collect()
     } else {
@@ -111,13 +123,21 @@ impl ModelRegistry {
 
   /// List all available provider names
   pub fn list_providers(&self) -> Vec<String> {
-    let providers_guard = self.providers.read().unwrap();
+    // Note: Returns empty vec if lock is poisoned to maintain backward compatibility
+    let providers_guard = match self.providers.read() {
+      Ok(guard) => guard,
+      Err(_) => return Vec::new(),
+    };
     providers_guard.keys().cloned().collect()
   }
 
   /// Check if a model is available
   pub fn has_model(&self, model_name: &str) -> bool {
-    let config_guard = self.config.read().unwrap();
+    // Note: Returns false if lock is poisoned to maintain backward compatibility
+    let config_guard = match self.config.read() {
+      Ok(guard) => guard,
+      Err(_) => return false,
+    };
     if let Some(config) = config_guard.as_ref() {
       config.models.contains_key(model_name)
     } else {
@@ -127,7 +147,9 @@ impl ModelRegistry {
 
   /// Get the current configuration
   pub async fn get_config(&self) -> Result<LLMConfig> {
-    let config_guard = self.config.read().unwrap();
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
     config_guard
       .as_ref()
       .cloned()
@@ -163,7 +185,9 @@ impl ModelRegistry {
       invalid_providers: Vec::new(),
     };
 
-    let providers_guard = self.providers.read().unwrap();
+    let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
+      message: format!("Providers lock poisoned: {}", e),
+    })?;
 
     for (provider_name, provider) in providers_guard.iter() {
       match provider.validate_config().await {
@@ -200,7 +224,9 @@ impl ModelRegistry {
 
     // Store providers
     {
-      let mut providers_guard = self.providers.write().unwrap();
+      let mut providers_guard = self.providers.write().map_err(|e| LLMError::InternalError {
+        message: format!("Providers lock poisoned: {}", e),
+      })?;
       *providers_guard = providers;
     }
 

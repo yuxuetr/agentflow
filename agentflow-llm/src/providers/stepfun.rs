@@ -59,11 +59,15 @@ impl StepFunProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    // Note: API key is validated in new(), so this should always succeed
     headers.insert(
-      "Authorization",
-      format!("Bearer {}", self.api_key).parse().unwrap(),
+      AUTHORIZATION,
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+        .expect("API key contains invalid characters"),
     );
     headers
   }
@@ -706,20 +710,26 @@ impl StepFunSpecializedClient {
   }
 
   fn build_auth_headers(&self) -> reqwest::header::HeaderMap {
-    let mut headers = reqwest::header::HeaderMap::new();
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    let mut headers = HeaderMap::new();
+    // Note: API key is validated in new(), so this should always succeed
     headers.insert(
-      "Authorization",
-      format!("Bearer {}", self.api_key).parse().unwrap(),
+      AUTHORIZATION,
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+        .expect("API key contains invalid characters"),
     );
     headers
   }
 
   /// Generate image from text prompt
   pub async fn text_to_image(&self, request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
+    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+
     let url = format!("{}/images/generations", self.base_url);
 
     let mut headers = self.build_auth_headers();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
       .client
@@ -747,10 +757,12 @@ impl StepFunSpecializedClient {
     &self,
     request: Image2ImageRequest,
   ) -> Result<ImageGenerationResponse> {
+    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+
     let url = format!("{}/images/image2image", self.base_url);
 
     let mut headers = self.build_auth_headers();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
       .client
@@ -840,10 +852,12 @@ impl StepFunSpecializedClient {
 
   /// Convert text to speech
   pub async fn text_to_speech(&self, request: TTSRequest) -> Result<Vec<u8>> {
+    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+
     let url = format!("{}/audio/speech", self.base_url);
 
     let mut headers = self.build_auth_headers();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
       .client
@@ -868,10 +882,12 @@ impl StepFunSpecializedClient {
 
   /// Create voice clone from audio sample
   pub async fn clone_voice(&self, request: VoiceCloningRequest) -> Result<VoiceCloningResponse> {
+    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+
     let url = format!("{}/audio/voices", self.base_url);
 
     let mut headers = self.build_auth_headers();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
       .client

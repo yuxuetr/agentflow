@@ -37,8 +37,10 @@ impl GoogleProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
+    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers
   }
 
