@@ -108,8 +108,12 @@ pub async fn execute(
   }
 
   let response_json: Value = response.json().await?;
-  let response_text = response_json["choices"][0]["message"]["content"]
-    .as_str()
+  let response_text = response_json
+    .get("choices")
+    .and_then(|choices| choices.get(0))
+    .and_then(|choice| choice.get("message"))
+    .and_then(|msg| msg.get("content"))
+    .and_then(|content| content.as_str())
     .unwrap_or("No response received")
     .to_string();
 

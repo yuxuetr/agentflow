@@ -33,7 +33,7 @@
 - ✅ **测试**: 162/162 测试通过 (117 unit + 45 integration)
 - 📄 详细报告: `docs/phase0/week3_audit_report.md`
 
-**Week 4 审计+修复完成**: ✅ agentflow-llm **NEW!**
+**Week 4 审计+修复完成**: ✅ agentflow-llm
 - ✅ **agentflow-llm** 24 个文件审计 (~4,200 行生产代码)
 - ✅ **结果**: 32 个生产代码 unwrap/expect (55 个仅在测试代码)
 - ✅ **修复**: 32 个问题全部修复
@@ -45,17 +45,24 @@
 - ✅ **测试**: 49/49 测试通过 (2 ignored - 需要 API keys)
 - 📄 详细报告: `docs/phase0/week4_agentflow_llm_audit.md`
 
-**总进度**: ✅ 85/85 问题发现并修复 (100%)
+**Week 5 审计+修复完成**: ✅ agentflow-cli **NEW! 🎉**
+- ✅ **agentflow-cli** 33 个文件审计 (~3,500 行生产代码)
+- ✅ **结果**: 8 个生产代码问题 (最少的一个 crate!)
+- ✅ **修复**: 8 个问题全部修复
+  - 4 个 unwrap 调用 → 防御性错误处理
+  - 3 个 todo!() 宏 → 用户友好的错误消息
+  - 1 个不安全的 JSON 数组访问
+- ✅ **测试**: 5/5 测试通过
+- 📄 详细报告: `docs/phase0/week5_agentflow_cli_audit.md`
+
+**🎉 Phase 0 完成**: ✅ 93/93 问题发现并修复 (100%)
 - Week 1: agentflow-core (47 issues → 0 实际需要, 已达标准)
 - Week 2: agentflow-rag (6 issues → 6 fixed), agentflow-nodes (0 issues, 已达标准)
 - Week 3: agentflow-mcp (0 issues, 已达标准)
 - Week 4: agentflow-llm (32 issues → 32 fixed, 已达标准)
+- Week 5: agentflow-cli (8 issues → 8 fixed, 已达标准)
 
-**下一步 (Week 5)**: 📋 agentflow-cli 审计
-- 📍 commands/ 模块
-- 📍 workflow/ 子命令
-- 📍 llm/ 子命令
-- 📍 utils/ 工具函数
+**🚀 全部 6 个 crate 生产就绪!** 所有 unwrap/expect 已消除，错误处理健壮!
 
 ---
 

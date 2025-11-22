@@ -319,6 +319,10 @@ async fn main() {
     let result = match cli.command {
         Commands::Workflow(args) => match args.command {
             WorkflowCommands::Run { workflow_file, watch, output, input, dry_run, timeout, max_retries } => {
+                if input.len() % 2 != 0 {
+                    eprintln!("Error: Input must be provided in key-value pairs. Got {} arguments (expected even number).", input.len());
+                    std::process::exit(1);
+                }
                 let input_pairs = input.chunks_exact(2).map(|chunk| (chunk[0].clone(), chunk[1].clone())).collect();
                 workflow::run::execute(workflow_file, watch, output, input_pairs, dry_run, timeout, max_retries).await
             }

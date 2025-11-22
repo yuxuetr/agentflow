@@ -105,7 +105,9 @@ impl WorkflowRunner {
         }
 
         // Create sequential flow with first node as start
-        let start_node = nodes.into_iter().next().unwrap().1;
+        let start_node = nodes.into_iter().next()
+          .ok_or_else(|| anyhow::anyhow!("No nodes available after empty check"))?
+          .1;
         let async_flow = AsyncFlow::new(start_node);
 
         // Add remaining nodes (this needs to be updated when we implement the nodes)
@@ -119,11 +121,15 @@ impl WorkflowRunner {
       }
       WorkflowType::Conditional => {
         // Implement conditional logic based on first node's condition
-        todo!("Conditional workflows not yet implemented")
+        Err(anyhow::anyhow!(
+          "Conditional workflows are not yet implemented. Please use Sequential or Parallel types."
+        ))
       }
       WorkflowType::Mixed => {
         // Complex mixed workflow logic
-        todo!("Mixed workflows not yet implemented")
+        Err(anyhow::anyhow!(
+          "Mixed workflows are not yet implemented. Please use Sequential or Parallel types."
+        ))
       }
     }
   }
@@ -170,7 +176,7 @@ impl WorkflowRunner {
         Ok(Box::new(batch_node))
       }
       NodeType::Conditional => {
-        todo!("Conditional nodes not yet implemented")
+        Err(anyhow::anyhow!("Conditional nodes are not yet implemented"))
       }
     }
   }
@@ -225,7 +231,11 @@ impl WorkflowRunner {
               let num: f64 = value
                 .parse()
                 .with_context(|| format!("Invalid number for input '{}': {}", key, value))?;
-              serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap())
+              let json_num = serde_json::Number::from_f64(num)
+                .ok_or_else(|| anyhow::anyhow!(
+                  "Input '{}' contains invalid number (NaN or Infinity): {}", key, value
+                ))?;
+              serde_json::Value::Number(json_num)
             }
             "boolean" => {
               let bool_val: bool = value

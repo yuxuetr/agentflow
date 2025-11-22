@@ -288,7 +288,9 @@ fn show_execution_plan(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()>
     );
 
     for node_id in nodes {
-      let node = flow_def.nodes.iter().find(|n| &n.id == node_id).unwrap();
+      let node = flow_def.nodes.iter()
+        .find(|n| &n.id == node_id)
+        .ok_or_else(|| anyhow::anyhow!("Node '{}' not found in workflow definition", node_id))?;
 
       if verbose {
         let deps_str = if node.dependencies.is_empty() {
@@ -321,7 +323,9 @@ fn dry_run_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> {
     println!("📍 Level {} - Executing {} node(s)", level, nodes.len());
 
     for node_id in nodes {
-      let node = flow_def.nodes.iter().find(|n| &n.id == node_id).unwrap();
+      let node = flow_def.nodes.iter()
+        .find(|n| &n.id == node_id)
+        .ok_or_else(|| anyhow::anyhow!("Node '{}' not found in workflow definition", node_id))?;
 
       if verbose {
         println!("  ▶️  Node: {}", node.id);
