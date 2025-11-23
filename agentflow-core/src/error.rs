@@ -178,8 +178,8 @@ pub enum AgentFlowError {
     #[error("Configuration error: {message}")]
     ConfigurationError { message: String },
 
-    #[error("Validation error: {message}")]
-    ValidationError { message: String },
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 
     // ===== System Errors =====
     #[error("Shared state error: {message}")]
@@ -234,9 +234,9 @@ impl AgentFlowError {
             | Self::MemoryLimitExceeded { .. }
             | Self::ConcurrencyLimitExceeded { .. } => ErrorCategory::Resource,
 
-            Self::ConfigurationError { .. } | Self::ValidationError { .. } => {
-                ErrorCategory::Configuration
-            }
+            Self::ConfigurationError { .. } => ErrorCategory::Configuration,
+
+            Self::ValidationError(_) => ErrorCategory::Configuration,
 
             _ => ErrorCategory::Internal,
         }
@@ -391,10 +391,7 @@ mod tests {
             message: "test".into()
         }
         .is_retryable());
-        assert!(!AgentFlowError::ValidationError {
-            message: "test".into()
-        }
-        .is_retryable());
+        assert!(!AgentFlowError::ValidationError("test".into()).is_retryable());
     }
 
     #[test]
@@ -405,10 +402,7 @@ mod tests {
             window_ms: 1000
         }
         .is_transient());
-        assert!(!AgentFlowError::ValidationError {
-            message: "test".into()
-        }
-        .is_transient());
+        assert!(!AgentFlowError::ValidationError("test".into()).is_transient());
     }
 
     #[test]

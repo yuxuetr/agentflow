@@ -2,24 +2,28 @@
 //!
 //! This crate provides the fundamental building blocks for the V2 AgentFlow architecture.
 
+// Core abstractions
 pub mod async_node;
 pub mod error;
 pub mod error_context;
 pub mod flow;
 pub mod node;
 pub mod value;
-pub mod observability;
+
+// Execution engine
 pub mod retry;
 pub mod retry_executor;
-pub mod resource_limits;
-pub mod state_monitor;
-pub mod checkpoint;
 pub mod concurrency;
-pub mod resource_manager;
-pub mod logging;
-pub mod metrics;
 pub mod timeout;
-pub mod health;
+
+// Reliability
+pub mod checkpoint;
+pub mod resource_limits;
+pub mod resource_manager;
+pub mod state_monitor;
+
+// Observability (lightweight events only)
+pub mod events;
 
 // Core traits and types
 pub use error::{AgentFlowError, Result};
@@ -35,3 +39,4 @@ pub use state_monitor::{StateMonitor, ResourceAlert, ResourceStats};
 pub use checkpoint::{CheckpointManager, CheckpointConfig, Checkpoint, WorkflowStatus};
 pub use concurrency::{ConcurrencyLimiter, ConcurrencyConfig, ConcurrencyStats};
 pub use resource_manager::{ResourceManager, ResourceManagerConfig, CombinedResourceStats};
+pub use events::{WorkflowEvent, EventListener, NoOpListener, ConsoleListener, MultiListener};
