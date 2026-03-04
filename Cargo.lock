@@ -33,6 +33,9 @@ dependencies = [
  "agentflow-core",
  "agentflow-llm",
  "agentflow-mcp",
+ "agentflow-memory",
+ "agentflow-tools",
+ "anyhow",
  "async-trait",
  "chrono",
  "reqwest 0.11.27",
@@ -42,6 +45,8 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -156,6 +161,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentflow-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "agentflow-nodes"
 version = "0.2.0"
 dependencies = [
@@ -217,6 +238,21 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "uuid",
+]
+
+[[package]]
+name = "agentflow-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4285,6 +4321,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots 0.25.4",
 ]
 
@@ -4367,6 +4404,7 @@ dependencies = [
  "stringprep",
  "thiserror 1.0.69",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4406,6 +4444,7 @@ dependencies = [
  "stringprep",
  "thiserror 1.0.69",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4431,6 +4470,7 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]

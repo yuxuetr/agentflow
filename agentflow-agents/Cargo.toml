@@ -12,6 +12,8 @@ categories = ["development-tools"]
 agentflow-core = { path = "../agentflow-core" }
 agentflow-llm = { path = "../agentflow-llm" }
 agentflow-mcp = { path = "../agentflow-mcp" }
+agentflow-tools = { path = "../agentflow-tools" }
+agentflow-memory = { path = "../agentflow-memory" }
 
 # Common dependencies for agents
 async-trait = "0.1"
@@ -23,9 +25,12 @@ reqwest = { version = "0.11", features = ["json", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+anyhow = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []
