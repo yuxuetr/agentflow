@@ -87,9 +87,9 @@ impl ModelConfig {
 }
 
 /// Declares a tool the skill is authorised to use, with optional constraints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolConfig {
-    /// Tool name — one of `"shell"`, `"file"`, `"http"`.
+    /// Tool name — one of `"shell"`, `"file"`, `"http"`, `"script"`.
     pub name: String,
 
     // ── shell constraints ────────────────────────────────────────────────────

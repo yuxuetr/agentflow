@@ -1,26 +1,44 @@
 use std::path::{Path, PathBuf};
 
-use crate::{error::SkillError, manifest::SkillManifest};
+use crate::{error::SkillError, manifest::SkillManifest, skill_md::SkillMd};
 
 const MANIFEST_FILE: &str = "skill.toml";
-const KNOWN_TOOLS: &[&str] = &["shell", "file", "http"];
+const SKILL_MD_FILE: &str = "SKILL.md";
+const KNOWN_TOOLS: &[&str] = &["shell", "file", "http", "script"];
 const KNOWN_MEMORY_TYPES: &[&str] = &["session", "sqlite", "none"];
 
-/// Loads and validates `skill.toml` from a skill directory.
+/// Loads and validates a skill manifest from a skill directory.
+///
+/// Supported manifest formats (tried in order):
+/// 1. `skill.toml` — full agentflow-native format (model, memory, sandbox config)
+/// 2. `SKILL.md` — [Agent Skills open standard](https://agentskills.io) (standard compatibility)
 pub struct SkillLoader;
 
 impl SkillLoader {
-    /// Load a `SkillManifest` from `skill_dir/skill.toml`.
+    /// Load a [`SkillManifest`] from `skill_dir`.
+    ///
+    /// Tries `skill.toml` first; falls back to `SKILL.md` if not found.
     pub fn load(skill_dir: &Path) -> Result<SkillManifest, SkillError> {
-        let manifest_path = skill_dir.join(MANIFEST_FILE);
-        if !manifest_path.exists() {
-            return Err(SkillError::ManifestNotFound {
-                path: manifest_path.display().to_string(),
-            });
+        let toml_path = skill_dir.join(MANIFEST_FILE);
+        if toml_path.exists() {
+            let content = std::fs::read_to_string(&toml_path)?;
+            let manifest: SkillManifest = toml::from_str(&content)?;
+            return Ok(manifest);
         }
-        let content = std::fs::read_to_string(&manifest_path)?;
-        let manifest: SkillManifest = toml::from_str(&content)?;
-        Ok(manifest)
+
+        let md_path = skill_dir.join(SKILL_MD_FILE);
+        if md_path.exists() {
+            let content = std::fs::read_to_string(&md_path)?;
+            let skill_md = SkillMd::parse(&content)?;
+            return Ok(skill_md.into_manifest());
+        }
+
+        Err(SkillError::ManifestNotFound {
+            path: format!(
+                "{} (tried skill.toml and SKILL.md)",
+                skill_dir.display()
+            ),
+        })
     }
 
     /// Validate a loaded manifest and return a list of warnings.
@@ -58,6 +76,18 @@ impl SkillLoader {
                 return Err(SkillError::UnknownTool {
                     name: tool.name.clone(),
                 });
+            }
+            // "script" tool requires a scripts/ directory to exist.
+            if name_lc == "script" {
+                let scripts_dir = skill_dir.join("scripts");
+                if !scripts_dir.is_dir() {
+                    return Err(SkillError::ValidationError {
+                        message: format!(
+                            "Tool 'script' declared but scripts/ directory not found at {}",
+                            scripts_dir.display()
+                        ),
+                    });
+                }
             }
         }
 

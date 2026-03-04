@@ -40,6 +40,11 @@ allowed_commands = ["cargo", "rustc", "clippy", "rustfmt", "cargo-audit", "cat",
 name          = "file"
 allowed_paths = ["/tmp", "~/.cargo"]
 
+[[tools]]
+name = "script"
+# Allowed interpreters for scripts/ directory
+allowed_commands = ["python3", "bash"]
+
 [[knowledge]]
 path        = "./knowledge/rust-guidelines.md"
 description = "Rust coding guidelines and best practices"

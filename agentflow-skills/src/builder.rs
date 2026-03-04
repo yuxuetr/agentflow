@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
-use agentflow_tools::builtin::{FileTool, HttpTool, ShellTool};
+use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
 use agentflow_tools::{SandboxPolicy, ToolRegistry};
 use tracing::info;
 
@@ -42,7 +42,7 @@ impl SkillBuilder {
             .with_budget_tokens(manifest.model.resolved_budget_tokens());
 
         // 3. Build ToolRegistry
-        let registry = build_tool_registry(&manifest.tools);
+        let registry = build_tool_registry(&manifest.tools, skill_dir);
 
         // 4. Build MemoryStore
         let memory =
@@ -65,7 +65,7 @@ fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, S
         parts.push(format!("\nPlease respond in: {}", lang));
     }
 
-    // Knowledge files injected into context
+// Knowledge files injected into context (skill.toml `[[knowledge]]` entries)
     if !manifest.knowledge.is_empty() {
         parts.push("\n\n## Knowledge Context".to_string());
         for kc in &manifest.knowledge {
@@ -89,12 +89,49 @@ fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, S
         }
     }
 
+    // references/ directory: Agent Skills standard — load all .md / .txt files.
+    let references_dir = skill_dir.join("references");
+    if references_dir.is_dir() {
+        let mut ref_files: Vec<PathBuf> = std::fs::read_dir(&references_dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .and_then(|x| x.to_str())
+                                .map(|x| matches!(x, "md" | "txt"))
+                                .unwrap_or(false)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        ref_files.sort(); // deterministic ordering
+        if !ref_files.is_empty() {
+            parts.push("\n\n## Reference Documents".to_string());
+            for path in &ref_files {
+                let label = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                let content = std::fs::read_to_string(path).map_err(|e| {
+                    SkillError::IoError(format!(
+                        "Cannot read reference file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                parts.push(format!("\n### {}\n\n{}", label, content.trim()));
+            }
+        }
+    }
+
     Ok(parts.join("\n"))
 }
 
-// ── ToolRegistry builder ─────────────────────────────────────────────────────
+// ── ToolRegistry builder ────────────────────────────────────────────────────────
 
-fn build_tool_registry(tool_configs: &[ToolConfig]) -> ToolRegistry {
+fn build_tool_registry(tool_configs: &[ToolConfig], skill_dir: &Path) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     if tool_configs.is_empty() {
@@ -116,6 +153,10 @@ fn build_tool_registry(tool_configs: &[ToolConfig]) -> ToolRegistry {
             }
             "http" => {
                 registry.register(Arc::new(HttpTool::new(policy.clone())));
+            }
+            "script" => {
+                let scripts_dir = skill_dir.join("scripts");
+                registry.register(Arc::new(ScriptTool::new(scripts_dir, policy.clone())));
             }
             other => {
                 // Already validated by SkillLoader; log and skip unknown tools.

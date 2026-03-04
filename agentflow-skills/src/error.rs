@@ -9,12 +9,16 @@ pub enum SkillError {
     ReadError(#[from] std::io::Error),
 
     #[error("Failed to parse skill.toml: {0}")]
-    ParseError(#[from] toml::de::Error),
+    TomlError(#[from] toml::de::Error),
+
+    /// General parse error (used for SKILL.md frontmatter / validation).
+    #[error("Parse error: {message}")]
+    ParseError { message: String },
 
     #[error("Invalid skill configuration: {message}")]
     ValidationError { message: String },
 
-    #[error("Unknown tool '{name}' — available: shell, file, http")]
+    #[error("Unknown tool '{name}' — available: shell, file, http, script")]
     UnknownTool { name: String },
 
     #[error("Knowledge file not found: {path}")]

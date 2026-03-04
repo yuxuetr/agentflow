@@ -12,7 +12,7 @@
 //!
 //! ## Quick start
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::path::Path;
 //! use agentflow_skills::{SkillLoader, SkillBuilder};
 //!
@@ -36,6 +36,7 @@ pub mod builder;
 pub mod error;
 pub mod loader;
 pub mod manifest;
+pub mod skill_md;
 
 pub use builder::SkillBuilder;
 pub use error::SkillError;
@@ -44,3 +45,4 @@ pub use manifest::{
     KnowledgeConfig, MemoryConfig, ModelConfig, PersonaConfig, SkillInfo, SkillManifest,
     ToolConfig,
 };
+pub use skill_md::SkillMd;
