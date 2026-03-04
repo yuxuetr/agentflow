@@ -4,7 +4,7 @@ mod commands;
 mod config;
 mod executor;
 
-use commands::{audio, config as config_cmd, image, llm, mcp, workflow};
+use commands::{audio, config as config_cmd, image, llm, mcp, skill, workflow};
 #[cfg(feature = "rag")]
 use commands::rag;
 
@@ -29,6 +29,8 @@ enum Commands {
     Llm(LlmArgs),
     /// Model Context Protocol (MCP) commands
     Mcp(McpArgs),
+    /// Skill management commands
+    Skill(SkillArgs),
     #[cfg(feature = "rag")]
     /// RAG (Retrieval-Augmented Generation) commands
     Rag(RagArgs),
@@ -46,6 +48,8 @@ struct ImageArgs { #[command(subcommand)] command: ImageCommands, }
 struct LlmArgs { #[command(subcommand)] command: LlmCommands, }
 #[derive(Args)]
 struct McpArgs { #[command(subcommand)] command: McpCommands, }
+#[derive(Args)]
+struct SkillArgs { #[command(subcommand)] command: SkillCommands, }
 #[cfg(feature = "rag")]
 #[derive(Args)]
 struct RagArgs { #[command(subcommand)] command: RagCommands, }
@@ -241,6 +245,32 @@ enum McpCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum SkillCommands {
+    /// Validate a skill.toml and print its configuration
+    Validate {
+        /// Path to the skill directory (must contain skill.toml)
+        skill_dir: String,
+    },
+    /// Run a skill with a single message
+    Run {
+        /// Path to the skill directory
+        skill_dir: String,
+        /// The message to send to the agent
+        #[arg(short, long)]
+        message: String,
+        /// Reuse an existing session ID for multi-turn conversations
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List available skills in the skills directory
+    List {
+        /// Skills directory (default: ~/.agentflow/skills)
+        #[arg(short, long)]
+        dir: Option<String>,
+    },
+}
+
 #[cfg(feature = "rag")]
 #[derive(Subcommand)]
 enum RagCommands {
@@ -377,6 +407,17 @@ async fn main() {
             }
             McpCommands::ListResources { server_command, timeout_ms, max_retries } => {
                 mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await
+            }
+        },
+        Commands::Skill(args) => match args.command {
+            SkillCommands::Validate { skill_dir } => {
+                skill::validate::execute(skill_dir).await
+            }
+            SkillCommands::Run { skill_dir, message, session } => {
+                skill::run::execute(skill_dir, message, session).await
+            }
+            SkillCommands::List { dir } => {
+                skill::list::execute(dir).await
             }
         },
         #[cfg(feature = "rag")]

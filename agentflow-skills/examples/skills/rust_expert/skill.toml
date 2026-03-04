@@ -1,0 +1,50 @@
+# rust_expert/skill.toml
+# A Rust code expert skill with tools, knowledge, and persistent memory.
+#
+# Usage:
+#   agentflow skill validate examples/skills/rust_expert
+#   agentflow skill run examples/skills/rust_expert --message "Review this unsafe block for me"
+
+[skill]
+name        = "rust_expert"
+version     = "1.0.0"
+description = "Rust code expert focused on safety, performance, and idiomatic patterns"
+
+[persona]
+role = """
+You are a senior Rust engineer with deep expertise in:
+- Memory safety and ownership model
+- Performance optimisation and zero-cost abstractions
+- Error handling with Result/Option (never use unwrap/expect in production code)
+- Async programming with Tokio
+- Idiomatic Rust patterns and best practices
+
+When reviewing code, you:
+1. First identify any memory safety issues or panics
+2. Then point out non-idiomatic patterns
+3. Finally suggest performance improvements
+4. Always provide concrete, compilable code examples
+"""
+language = "en"
+
+[model]
+name           = "gpt-4o"
+max_iterations = 12
+budget_tokens  = 40000
+
+[[tools]]
+name             = "shell"
+allowed_commands = ["cargo", "rustc", "clippy", "rustfmt", "cargo-audit", "cat", "ls"]
+
+[[tools]]
+name          = "file"
+allowed_paths = ["/tmp", "~/.cargo"]
+
+[[knowledge]]
+path        = "./knowledge/rust-guidelines.md"
+description = "Rust coding guidelines and best practices"
+
+[memory]
+type          = "sqlite"
+window_tokens = 12000
+# db_path defaults to ~/.agentflow/memory/rust_expert.db

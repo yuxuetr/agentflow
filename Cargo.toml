@@ -12,6 +12,7 @@ members = [
   "agentflow-viz",
   "agentflow-tools",
   "agentflow-memory",
+  "agentflow-skills",
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"

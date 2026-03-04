@@ -4,4 +4,5 @@ pub mod image;
 pub mod llm;
 pub mod mcp;
 pub mod rag;
+pub mod skill;
 pub mod workflow;
