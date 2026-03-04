@@ -3,7 +3,7 @@
 //! Stores execution traces as JSON files in a directory.
 //! Suitable for development and small-scale deployments.
 
-use super::{TraceQuery, TraceStorage, TimeRange};
+use super::{TraceQuery, TraceStorage};
 use crate::types::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

@@ -26,9 +26,9 @@
 //! assert_eq!(cleaned, "Multiple spaces and tabs");
 //! ```
 
-use crate::{error::Result, sources::Document};
+use crate::sources::Document;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 

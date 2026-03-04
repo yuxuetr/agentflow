@@ -17,6 +17,7 @@ license = "MIT"
 
 [features]
 default = []
+observability = []
 
 [dependencies]
 # Core serialization and JSON support (for SharedState and node communication)

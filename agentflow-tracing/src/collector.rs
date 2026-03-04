@@ -347,6 +347,7 @@ impl TraceCollector {
   }
 
   /// Sanitize value to remove sensitive data and limit size
+  #[allow(dead_code)]
   fn sanitize_value(
     value: &mut serde_json::Value,
     max_size: usize,

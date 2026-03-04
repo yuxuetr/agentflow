@@ -7,7 +7,9 @@ members = [
   "agentflow-cli",
   "agentflow-mcp",
   "agentflow-rag",
-  "agentflow-agents", "agentflow-tracing",
+  "agentflow-agents",
+  "agentflow-tracing",
+  "agentflow-viz",
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"

@@ -2,11 +2,9 @@ use crate::{
   config::ModelConfig, multimodal::MultimodalMessage, providers::ProviderRequest,
   registry::ModelRegistry, LLMError, Result, StreamingResponse,
 };
-use agentflow_core::observability::{ExecutionEvent, MetricsCollector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "logging")]
@@ -44,7 +42,6 @@ pub struct LLMClient {
   pub response_format: Option<ResponseFormat>,
   pub enable_logging: bool,
   pub additional_params: HashMap<String, Value>,
-  pub metrics_collector: Option<Arc<MetricsCollector>>,
 }
 
 impl LLMClient {
@@ -63,7 +60,6 @@ impl LLMClient {
       response_format: None,
       enable_logging: true,
       additional_params: HashMap::new(),
-      metrics_collector: None,
     }
   }
 
@@ -73,24 +69,6 @@ impl LLMClient {
 
     if self.enable_logging {
       self.log_request_start();
-    }
-
-    // Record start event
-    if let Some(ref collector) = self.metrics_collector {
-      let event = ExecutionEvent {
-        node_id: format!("llm.{}", self.model_name),
-        event_type: "llm_request_start".to_string(),
-        timestamp: start_time,
-        duration_ms: None,
-        metadata: {
-          let mut meta = HashMap::new();
-          meta.insert("model".to_string(), self.model_name.clone());
-          meta.insert("prompt_length".to_string(), self.prompt.len().to_string());
-          meta
-        },
-      };
-      collector.record_event(event);
-      collector.increment_counter(&format!("llm.{}.requests", self.model_name), 1.0);
     }
 
     let registry = ModelRegistry::global();
@@ -116,69 +94,6 @@ impl LLMClient {
     let request = self.build_request(&model_config, false)?;
     let result = provider.execute(&request).await;
     let duration = start_time.elapsed();
-
-    // Record completion event
-    if let Some(ref collector) = self.metrics_collector {
-      let (event_type, is_success) = match &result {
-        Ok(_) => ("llm_request_success", true),
-        Err(_) => ("llm_request_error", false),
-      };
-
-      let event = ExecutionEvent {
-        node_id: format!("llm.{}", self.model_name),
-        event_type: event_type.to_string(),
-        timestamp: start_time,
-        duration_ms: Some(duration.as_millis() as u64),
-        metadata: {
-          let mut meta = HashMap::new();
-          meta.insert("model".to_string(), self.model_name.clone());
-          meta.insert("duration_ms".to_string(), duration.as_millis().to_string());
-          if let Ok(ref response) = result {
-            meta.insert(
-              "response_length".to_string(),
-              response.content.len().to_string(),
-            );
-            if let Some(ref usage) = response.usage {
-              if let Some(prompt_tokens) = usage.prompt_tokens {
-                meta.insert("prompt_tokens".to_string(), prompt_tokens.to_string());
-              }
-              if let Some(completion_tokens) = usage.completion_tokens {
-                meta.insert(
-                  "completion_tokens".to_string(),
-                  completion_tokens.to_string(),
-                );
-              }
-              if let Some(total_tokens) = usage.total_tokens {
-                meta.insert("total_tokens".to_string(), total_tokens.to_string());
-              }
-            }
-          }
-          meta
-        },
-      };
-      collector.record_event(event);
-
-      if is_success {
-        collector.increment_counter(&format!("llm.{}.success", self.model_name), 1.0);
-        collector.increment_counter(
-          &format!("llm.{}.duration_ms", self.model_name),
-          duration.as_millis() as f64,
-        );
-
-        if let Ok(ref response) = result {
-          if let Some(ref usage) = response.usage {
-            if let Some(tokens) = usage.total_tokens {
-              collector.increment_counter(
-                &format!("llm.{}.total_tokens", self.model_name),
-                tokens as f64,
-              );
-            }
-          }
-        }
-      } else {
-        collector.increment_counter(&format!("llm.{}.errors", self.model_name), 1.0);
-      }
-    }
 
     let final_result = result.map(|response| response.content.to_string());
 
@@ -646,11 +561,6 @@ impl LLMClientBuilder {
       self.client.multimodal_messages = Some(messages);
     }
     
-    self
-  }
-
-  pub fn with_metrics(mut self, collector: Arc<MetricsCollector>) -> Self {
-    self.client.metrics_collector = Some(collector);
     self
   }
 

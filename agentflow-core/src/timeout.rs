@@ -226,9 +226,9 @@ where
 pub async fn with_timeout_context<F, T>(
     future: F,
     duration: Duration,
-    operation: &str,
-    node_id: Option<&str>,
-    workflow_id: Option<&str>,
+    _operation: &str,
+    _node_id: Option<&str>,
+    _workflow_id: Option<&str>,
 ) -> Result<T>
 where
     F: Future<Output = Result<T>>,
@@ -236,7 +236,7 @@ where
     match timeout(duration, future).await {
         Ok(result) => result,
         Err(_) => {
-            let mut error = AgentFlowError::TimeoutExceeded {
+            let error = AgentFlowError::TimeoutExceeded {
                 duration_ms: duration.as_millis() as u64,
             };
 
