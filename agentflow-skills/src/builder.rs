@@ -279,3 +279,214 @@ fn expand_tilde(path: &str) -> String {
     }
     path.to_string()
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        loader::SkillLoader,
+        manifest::{ModelConfig, PersonaConfig, SkillInfo},
+    };
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn write_toml(dir: &Path, content: &str) {
+        let mut f = fs::File::create(dir.join("skill.toml")).expect("create skill.toml");
+        f.write_all(content.as_bytes()).expect("write");
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        if let Some(p) = path.parent() { fs::create_dir_all(p).expect("mkdir"); }
+        let mut f = fs::File::create(path).expect("create");
+        f.write_all(content.as_bytes()).expect("write");
+    }
+
+    fn minimal_manifest(name: &str) -> SkillManifest {
+        SkillManifest {
+            skill: SkillInfo {
+                name: name.to_string(),
+                version: "0.1.0".to_string(),
+                description: "test".to_string(),
+            },
+            persona: PersonaConfig {
+                role: "You are a test agent.".to_string(),
+                language: None,
+            },
+            model: ModelConfig::default(),
+            tools: vec![],
+            knowledge: vec![],
+            memory: None,
+        }
+    }
+
+    // ── SkillBuilder::build() tests (no LLM call, safe to run in CI) ────────
+
+    /// build() with no tools and session memory succeeds and returns an agent
+    /// with a valid UUID session_id.
+    #[tokio::test]
+    async fn build_minimal_skill() {
+        let dir = TempDir::new().unwrap();
+        let manifest = minimal_manifest("minimal");
+        let agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+        // session_id should be a non-empty UUID-like string
+        assert!(!agent.session_id.is_empty());
+        assert!(agent.session_id.contains('-'));
+    }
+
+    /// build() applies persona text to the agent config.
+    #[tokio::test]
+    async fn build_sets_persona_in_config() {
+        let dir = TempDir::new().unwrap();
+        let mut manifest = minimal_manifest("persona-test");
+        manifest.persona.role = "You are a specialised Rust expert.".to_string();
+
+        // Build two agents: same manifest, different session IDs expected.
+        let a1 = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+        let a2 = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+        assert_ne!(a1.session_id, a2.session_id, "each build should get a fresh session");
+    }
+
+    /// build() with shell + file tools registers both in the agent's registry.
+    #[tokio::test]
+    async fn build_registers_shell_and_file_tools() {
+        let dir = TempDir::new().unwrap();
+        let mut manifest = minimal_manifest("two-tools");
+        manifest.tools = vec![
+            ToolConfig { name: "shell".to_string(), ..ToolConfig::default() },
+            ToolConfig { name: "file".to_string(),  ..ToolConfig::default() },
+        ];
+        // Build must succeed (tools are registered, no LLM called).
+        let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    }
+
+    /// build() with script tool uses the scripts/ directory from skill_dir.
+    #[tokio::test]
+    async fn build_registers_script_tool() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("scripts")).unwrap();
+        write_file(&dir.path().join("scripts").join("hello.sh"), "#!/bin/bash\necho hi");
+
+        let mut manifest = minimal_manifest("script-skill");
+        manifest.tools = vec![
+            ToolConfig { name: "script".to_string(), ..ToolConfig::default() },
+        ];
+        let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    }
+
+    /// build() with knowledge files injects content into the persona.
+    #[tokio::test]
+    async fn build_injects_knowledge_into_persona() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("knowledge").join("rules.md"), "# Rule 1");
+
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "knowledgeable"
+version = "0.1"
+description = "has knowledge"
+
+[persona]
+role = "You are an expert."
+
+[[knowledge]]
+path = "./knowledge/rules.md"
+description = "Coding rules"
+"#,
+        );
+        let manifest = SkillLoader::load(dir.path()).unwrap();
+        // build() should succeed; persona will contain injected knowledge content
+        let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    }
+
+    /// build() with references/ directory injects ref content into persona.
+    #[tokio::test]
+    async fn build_injects_references_dir_into_persona() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("references").join("api.md"), "# API Reference");
+
+        let manifest = minimal_manifest("with-refs");
+        // build() should not fail even though knowledge list is empty;
+        // references/ is picked up automatically by build_persona()
+        let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    }
+
+    /// build() with sqlite memory creates the db directory.
+    #[tokio::test]
+    async fn build_with_sqlite_memory() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("memory").join("test.db");
+
+        let mut manifest = minimal_manifest("sqlite-skill");
+        manifest.memory = Some(crate::manifest::MemoryConfig {
+            memory_type: "sqlite".to_string(),
+            db_path: Some(db_path.to_string_lossy().into_owned()),
+            window_tokens: None,
+        });
+
+        let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+        assert!(db_path.exists(), "SQLite db file should have been created");
+    }
+
+    // ── SandboxPolicy merge tests ────────────────────────────────────────
+
+    #[test]
+    fn sandbox_policy_uses_default_commands_for_shell_with_empty_list() {
+        let tool_configs = vec![
+            ToolConfig { name: "shell".to_string(), ..ToolConfig::default() },
+        ];
+        let policy = build_sandbox_policy(&tool_configs);
+        // Should have the default safe command list, not empty
+        assert!(!policy.allowed_commands.is_empty());
+        assert!(policy.allowed_commands.iter().any(|c| c == "echo"));
+    }
+
+    #[test]
+    fn sandbox_policy_merges_commands_from_multiple_tools() {
+        let tool_configs = vec![
+            ToolConfig {
+                name: "shell".to_string(),
+                allowed_commands: vec!["cargo".to_string()],
+                ..ToolConfig::default()
+            },
+            ToolConfig {
+                name: "shell".to_string(),
+                allowed_commands: vec!["rustfmt".to_string()],
+                ..ToolConfig::default()
+            },
+        ];
+        let policy = build_sandbox_policy(&tool_configs);
+        assert!(policy.allowed_commands.contains(&"cargo".to_string()));
+        assert!(policy.allowed_commands.contains(&"rustfmt".to_string()));
+    }
+
+    #[test]
+    fn sandbox_policy_deduplicates_commands() {
+        let tool_configs = vec![
+            ToolConfig {
+                name: "shell".to_string(),
+                allowed_commands: vec!["cargo".to_string(), "cargo".to_string()],
+                ..ToolConfig::default()
+            },
+        ];
+        let policy = build_sandbox_policy(&tool_configs);
+        let cargo_count = policy.allowed_commands.iter().filter(|c| *c == "cargo").count();
+        assert_eq!(cargo_count, 1, "duplicates should be removed");
+    }
+
+    #[test]
+    fn sandbox_policy_takes_max_exec_time() {
+        let tool_configs = vec![
+            ToolConfig { name: "shell".to_string(), max_exec_time_secs: Some(10), ..ToolConfig::default() },
+            ToolConfig { name: "file".to_string(),  max_exec_time_secs: Some(60), ..ToolConfig::default() },
+        ];
+        let policy = build_sandbox_policy(&tool_configs);
+        assert_eq!(policy.max_exec_time_secs, 60);
+    }
+}

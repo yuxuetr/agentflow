@@ -134,4 +134,112 @@ mod tests {
             other => panic!("Expected Answer, got {:?}", other),
         }
     }
+
+    /// An action JSON with a missing "tool" field falls through to Malformed.
+    #[test]
+    fn action_missing_tool_name_becomes_malformed() {
+        let raw = r#"{"thought": "hmm", "action": {"params": {"command": "ls"}}}"#;
+        assert!(
+            matches!(AgentResponse::parse(raw), AgentResponse::Malformed(_)),
+            "action without 'tool' should be Malformed"
+        );
+    }
+
+    /// An action with an empty string for "tool" falls through to Malformed.
+    #[test]
+    fn action_empty_tool_name_becomes_malformed() {
+        let raw = r#"{"thought": "hmm", "action": {"tool": "", "params": {}}}"#;
+        assert!(
+            matches!(AgentResponse::parse(raw), AgentResponse::Malformed(_)),
+            "action with empty 'tool' should be Malformed"
+        );
+    }
+
+    /// An action with deeply nested params is parsed correctly.
+    #[test]
+    fn action_with_nested_params() {
+        let raw = r#"{
+            "thought": "searching",
+            "action": {
+                "tool": "file",
+                "params": {"path": "/tmp/x", "options": {"encoding": "utf-8", "mode": "r"}}
+            }
+        }"#;
+        match AgentResponse::parse(raw) {
+            AgentResponse::Action { tool, params, .. } => {
+                assert_eq!(tool, "file");
+                assert_eq!(params["path"], "/tmp/x");
+                assert_eq!(params["options"]["encoding"], "utf-8");
+            }
+            other => panic!("Expected Action, got {:?}", other),
+        }
+    }
+
+    /// Plain text (no JSON) becomes Malformed.
+    #[test]
+    fn plain_text_becomes_malformed() {
+        let raw = "I don't know how to answer that.";
+        assert!(
+            matches!(AgentResponse::parse(raw), AgentResponse::Malformed(_)),
+            "plain text should be Malformed"
+        );
+    }
+
+    /// JSON with neither "action" nor "answer" key becomes Malformed.
+    #[test]
+    fn json_without_action_or_answer_is_malformed() {
+        let raw = r#"{"thought": "just thinking", "note": "nothing actionable"}"#;
+        assert!(
+            matches!(AgentResponse::parse(raw), AgentResponse::Malformed(_)),
+            "JSON without action or answer should be Malformed"
+        );
+    }
+
+    /// is_terminal() returns false for Action.
+    #[test]
+    fn is_terminal_false_for_action() {
+        let r = AgentResponse::Action {
+            thought: "t".into(),
+            tool: "shell".into(),
+            params: serde_json::Value::Null,
+        };
+        assert!(!r.is_terminal());
+    }
+
+    /// is_terminal() returns true for Answer.
+    #[test]
+    fn is_terminal_true_for_answer() {
+        let r = AgentResponse::Answer {
+            thought: "t".into(),
+            answer: "42".into(),
+        };
+        assert!(r.is_terminal());
+    }
+
+    /// is_terminal() returns true for Malformed.
+    #[test]
+    fn is_terminal_true_for_malformed() {
+        let r = AgentResponse::Malformed("garbage".into());
+        assert!(r.is_terminal());
+    }
+
+    /// JSON wrapped in plain ``` fences (no language tag) is also extracted.
+    #[test]
+    fn parses_json_in_plain_code_fence() {
+        let raw = "Result:\n```\n{\"thought\": \"ok\", \"answer\": \"done\"}\n```";
+        match AgentResponse::parse(raw) {
+            AgentResponse::Answer { answer, .. } => assert_eq!(answer, "done"),
+            other => panic!("Expected Answer, got {:?}", other),
+        }
+    }
+
+    /// answer value that is not a string is coerced to its JSON representation.
+    #[test]
+    fn answer_non_string_coerced_to_string() {
+        let raw = r#"{"thought": "counting", "answer": 42}"#;
+        match AgentResponse::parse(raw) {
+            AgentResponse::Answer { answer, .. } => assert_eq!(answer, "42"),
+            other => panic!("Expected Answer, got {:?}", other),
+        }
+    }
 }

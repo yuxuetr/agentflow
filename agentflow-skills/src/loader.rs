@@ -153,21 +153,31 @@ pub fn resolve_knowledge_path(pattern: &str, skill_dir: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
     use tempfile::TempDir;
 
-    fn write_manifest(dir: &Path, content: &str) {
-        let mut f = std::fs::File::create(dir.join(MANIFEST_FILE))
-            .expect("create manifest");
-        f.write_all(content.as_bytes()).expect("write manifest");
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn write_toml(dir: &Path, content: &str) {
+        let mut f = fs::File::create(dir.join(MANIFEST_FILE)).expect("create skill.toml");
+        f.write_all(content.as_bytes()).expect("write skill.toml");
     }
 
-    #[test]
-    fn loads_minimal_manifest() {
-        let dir = TempDir::new().unwrap();
-        write_manifest(
-            dir.path(),
-            r#"
+    fn write_skill_md(dir: &Path, content: &str) {
+        let mut f = fs::File::create(dir.join(SKILL_MD_FILE)).expect("create SKILL.md");
+        f.write_all(content.as_bytes()).expect("write SKILL.md");
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        let mut f = fs::File::create(path).expect("create file");
+        f.write_all(content.as_bytes()).expect("write file");
+    }
+
+    const MINIMAL_TOML: &str = r#"
 [skill]
 name = "test"
 version = "0.1"
@@ -175,8 +185,14 @@ description = "test skill"
 
 [persona]
 role = "You are a helpful assistant."
-"#,
-        );
+"#;
+
+    // ── skill.toml tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn loads_minimal_toml_manifest() {
+        let dir = TempDir::new().unwrap();
+        write_toml(dir.path(), MINIMAL_TOML);
         let m = SkillLoader::load(dir.path()).unwrap();
         assert_eq!(m.skill.name, "test");
         assert!(m.tools.is_empty());
@@ -185,9 +201,22 @@ role = "You are a helpful assistant."
     }
 
     #[test]
+    fn toml_preferred_over_skill_md_when_both_present() {
+        let dir = TempDir::new().unwrap();
+        write_toml(dir.path(), MINIMAL_TOML);
+        write_skill_md(
+            dir.path(),
+            "---\nname: md-skill\ndescription: From SKILL.md.\n---\nBody.\n",
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        // skill.toml wins
+        assert_eq!(m.skill.name, "test");
+    }
+
+    #[test]
     fn rejects_unknown_tool() {
         let dir = TempDir::new().unwrap();
-        write_manifest(
+        write_toml(
             dir.path(),
             r#"
 [skill]
@@ -205,5 +234,230 @@ name = "laser_cannon"
         let m = SkillLoader::load(dir.path()).unwrap();
         let result = SkillLoader::validate(&m, dir.path());
         assert!(matches!(result, Err(SkillError::UnknownTool { .. })));
+    }
+
+    #[test]
+    fn rejects_missing_persona_role() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "no-persona"
+version = "0.1"
+description = "test"
+
+[persona]
+role = "   "
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let result = SkillLoader::validate(&m, dir.path());
+        assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+    }
+
+    #[test]
+    fn warns_on_empty_description() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "sparse"
+version = "0.1"
+description = ""
+
+[persona]
+role = "test"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("description")));
+    }
+
+    // ── knowledge tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn validates_existing_knowledge_file() {
+        let dir = TempDir::new().unwrap();
+        let kb_path = dir.path().join("knowledge").join("guide.md");
+        write_file(&kb_path, "# Guide");
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "knows"
+version = "0.1"
+description = "has knowledge"
+
+[persona]
+role = "expert"
+
+[[knowledge]]
+path = "./knowledge/guide.md"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_missing_knowledge_file() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "broken"
+version = "0.1"
+description = "missing knowledge"
+
+[persona]
+role = "expert"
+
+[[knowledge]]
+path = "./knowledge/missing.md"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let result = SkillLoader::validate(&m, dir.path());
+        assert!(matches!(result, Err(SkillError::KnowledgeFileNotFound { .. })));
+    }
+
+    #[test]
+    fn knowledge_glob_matches_multiple_files() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir.path().join("knowledge").join("a.md"), "A");
+        write_file(&dir.path().join("knowledge").join("b.md"), "B");
+        let paths = resolve_knowledge_path("./knowledge/*.md", dir.path());
+        assert_eq!(paths.len(), 2);
+    }
+
+    // ── script tool tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn validates_script_tool_with_scripts_dir() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("scripts")).unwrap();
+        write_file(&dir.path().join("scripts").join("run.sh"), "#!/bin/bash\necho ok");
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "scripter"
+version = "0.1"
+description = "has scripts"
+
+[persona]
+role = "expert"
+
+[[tools]]
+name = "script"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_script_tool_without_scripts_dir() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "no-scripts"
+version = "0.1"
+description = "missing scripts dir"
+
+[persona]
+role = "expert"
+
+[[tools]]
+name = "script"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let result = SkillLoader::validate(&m, dir.path());
+        assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+    }
+
+    // ── SKILL.md loading tests ────────────────────────────────────────────────
+
+    #[test]
+    fn loads_skill_md_when_no_toml() {
+        let dir = TempDir::new().unwrap();
+        write_skill_md(
+            dir.path(),
+            "---\nname: my-skill\ndescription: A test skill loaded from SKILL.md.\n---\n\nInstructions here.\n",
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        assert_eq!(m.skill.name, "my-skill");
+        assert!(m.persona.role.contains("Instructions here."));
+    }
+
+    #[test]
+    fn skill_md_with_allowed_tools_and_scripts_dir_validates() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("scripts")).unwrap();
+        write_file(&dir.path().join("scripts").join("run.py"), "print('ok')");
+        write_skill_md(
+            dir.path(),
+            "---\nname: scripted\ndescription: Has a script tool.\nallowed-tools: script\n---\n\nUse the script tool to run things.\n",
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        assert_eq!(m.tools.len(), 1);
+        assert_eq!(m.tools[0].name, "script");
+        let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn skill_md_with_script_tool_but_no_scripts_dir_fails_validation() {
+        let dir = TempDir::new().unwrap();
+        write_skill_md(
+            dir.path(),
+            "---\nname: broken\ndescription: Declares script tool without scripts dir.\nallowed-tools: script\n---\n\nBody.\n",
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let result = SkillLoader::validate(&m, dir.path());
+        assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+    }
+
+    // ── fallback / not-found tests ────────────────────────────────────────────
+
+    #[test]
+    fn returns_manifest_not_found_when_neither_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let result = SkillLoader::load(dir.path());
+        assert!(matches!(result, Err(SkillError::ManifestNotFound { .. })));
+    }
+
+    // ── memory validation ─────────────────────────────────────────────────────
+
+    #[test]
+    fn rejects_unknown_memory_type() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            dir.path(),
+            r#"
+[skill]
+name = "memtest"
+version = "0.1"
+description = "test"
+
+[persona]
+role = "agent"
+
+[memory]
+type = "redis"
+"#,
+        );
+        let m = SkillLoader::load(dir.path()).unwrap();
+        let result = SkillLoader::validate(&m, dir.path());
+        assert!(matches!(result, Err(SkillError::ValidationError { .. })));
     }
 }

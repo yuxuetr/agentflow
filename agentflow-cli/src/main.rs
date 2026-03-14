@@ -247,12 +247,12 @@ enum McpCommands {
 
 #[derive(Subcommand)]
 enum SkillCommands {
-    /// Validate a skill.toml and print its configuration
+    /// Validate a skill manifest and print its configuration
     Validate {
-        /// Path to the skill directory (must contain skill.toml)
+        /// Path to the skill directory (must contain skill.toml or SKILL.md)
         skill_dir: String,
     },
-    /// Run a skill with a single message
+    /// Run a skill with a single message and exit
     Run {
         /// Path to the skill directory
         skill_dir: String,
@@ -263,7 +263,15 @@ enum SkillCommands {
         #[arg(long)]
         session: Option<String>,
     },
-    /// List available skills in the skills directory
+    /// Start an interactive multi-turn chat session with a skill
+    Chat {
+        /// Path to the skill directory
+        skill_dir: String,
+        /// Resume an existing session by ID (optional)
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List available skills in a directory
     List {
         /// Skills directory (default: ~/.agentflow/skills)
         #[arg(short, long)]
@@ -415,6 +423,9 @@ async fn main() {
             }
             SkillCommands::Run { skill_dir, message, session } => {
                 skill::run::execute(skill_dir, message, session).await
+            }
+            SkillCommands::Chat { skill_dir, session } => {
+                skill::chat::execute(skill_dir, session).await
             }
             SkillCommands::List { dir } => {
                 skill::list::execute(dir).await
