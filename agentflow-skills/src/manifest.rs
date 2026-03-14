@@ -126,7 +126,8 @@ pub struct KnowledgeConfig {
 /// Configures the memory backend for the agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
-    /// `"session"` (in-memory, lost on exit) | `"sqlite"` (persistent) | `"none"`.
+    /// `"session"` (in-memory, lost on exit) | `"sqlite"` (persistent) |
+    /// `"semantic"` (SQLite + embedding vectors) | `"none"`.
     #[serde(rename = "type")]
     pub memory_type: String,
     /// Path to the SQLite database file. Supports `~` expansion.
@@ -134,10 +135,20 @@ pub struct MemoryConfig {
     pub db_path: Option<String>,
     /// Maximum tokens to keep in the sliding window. Defaults to 8 000.
     pub window_tokens: Option<u32>,
+    /// OpenAI embedding model used by `"semantic"` memory.
+    /// Supported: `"text-embedding-3-small"` (default), `"text-embedding-3-large"`,
+    /// `"text-embedding-ada-002"`.
+    pub embedding_model: Option<String>,
 }
 
 impl MemoryConfig {
     pub fn resolved_window_tokens(&self) -> u32 {
         self.window_tokens.unwrap_or(8_000)
+    }
+
+    pub fn resolved_embedding_model(&self) -> &str {
+        self.embedding_model
+            .as_deref()
+            .unwrap_or("text-embedding-3-small")
     }
 }

@@ -158,6 +158,7 @@ impl SkillMd {
                 memory_type: "session".to_string(),
                 db_path: None,
                 window_tokens: None,
+                embedding_model: None,
             }),
         }
     }

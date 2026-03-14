@@ -10,6 +10,11 @@ pub enum MemoryError {
 
     #[error("Session not found: {session_id}")]
     SessionNotFound { session_id: String },
+
+    /// Embedding operation failed. Returned when semantic memory cannot
+    /// initialise its embedding backend (e.g. missing API key).
+    #[error("Embedding error: {0}")]
+    EmbeddingError(String),
 }
 
 impl From<sqlx::Error> for MemoryError {

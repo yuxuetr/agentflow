@@ -50,6 +50,13 @@ path        = "./knowledge/rust-guidelines.md"
 description = "Rust coding guidelines and best practices"
 
 [memory]
-type          = "sqlite"
-window_tokens = 12000
+# Options: "session" (in-process), "sqlite" (persistent), "semantic" (persistent + embedding search)
+type            = "sqlite"
+window_tokens   = 12000
 # db_path defaults to ~/.agentflow/memory/rust_expert.db
+
+# To enable cross-session semantic recall, switch to:
+# type            = "semantic"
+# embedding_model = "text-embedding-3-small"   # or text-embedding-3-large / text-embedding-ada-002
+# window_tokens   = 12000
+# Requires: OPENAI_API_KEY set in environment

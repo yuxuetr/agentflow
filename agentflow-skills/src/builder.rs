@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
+use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
+use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
 use agentflow_tools::{SandboxPolicy, ToolRegistry};
 use tracing::info;
@@ -247,6 +248,33 @@ async fn build_memory(
             let store = SqliteMemory::open(&db_path).await?;
             Ok(Box::new(store))
         }
+        Some(mem) if mem.memory_type == "semantic" => {
+            // Build the embedding provider from environment / manifest config
+            let model = mem.resolved_embedding_model().to_string();
+            let embedder = OpenAIEmbedding::builder(&model)
+                .build()
+                .map_err(|e| SkillError::ValidationError {
+                    message: format!(
+                        "Cannot initialise semantic memory (model '{}'): {}. \
+                         Make sure OPENAI_API_KEY is set.",
+                        model, e
+                    ),
+                })?;
+            let db_path = resolve_db_path(mem.db_path.as_deref(), skill_name);
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    SkillError::IoError(format!(
+                        "Cannot create memory directory {}: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
+            let window = mem.resolved_window_tokens();
+            let store =
+                SemanticMemory::open(&db_path, Arc::new(embedder), window).await?;
+            Ok(Box::new(store))
+        }
         _ => {
             // "session" or anything unrecognised — use in-memory.
             let window = config
@@ -428,6 +456,7 @@ description = "Coding rules"
             memory_type: "sqlite".to_string(),
             db_path: Some(db_path.to_string_lossy().into_owned()),
             window_tokens: None,
+            embedding_model: None,
         });
 
         let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();

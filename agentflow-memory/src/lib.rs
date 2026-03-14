@@ -9,12 +9,14 @@
 //! Both implement the [`MemoryStore`] trait so they are interchangeable.
 
 pub mod error;
+pub mod semantic;
 pub mod session;
 pub mod sqlite;
 pub mod store;
 pub mod types;
 
 pub use error::MemoryError;
+pub use semantic::SemanticMemory;
 pub use session::SessionMemory;
 pub use sqlite::SqliteMemory;
 pub use store::MemoryStore;
