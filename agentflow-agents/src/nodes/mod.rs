@@ -1,5 +1,5 @@
-//! Node implementations for common agent patterns
+//! Node implementations for common agent patterns.
 
-// pub mod mcp_tool_node;
+pub mod agent_node;
 
-// pub use mcp_tool_node::*;
+pub use agent_node::AgentNode;
