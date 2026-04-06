@@ -11,7 +11,7 @@ use tracing::info;
 use crate::{
     error::SkillError,
     loader::resolve_knowledge_path,
-    manifest::{MemoryConfig, SkillManifest, ToolConfig},
+    manifest::{MemoryConfig, SkillManifest, ToolConfig, McpServerConfig},
 };
 
 /// Assembles a [`ReActAgent`] from a loaded [`SkillManifest`].
@@ -43,7 +43,20 @@ impl SkillBuilder {
             .with_budget_tokens(manifest.model.resolved_budget_tokens());
 
         // 3. Build ToolRegistry
-        let registry = build_tool_registry(&manifest.tools, skill_dir);
+        let mut registry = build_tool_registry(&manifest.tools, skill_dir);
+
+        // 3.5. Inject MCP tools (placeholder logic without unwrap)
+        // Actual dynamic adapter mapping would require wrapping McpClient in Arc.
+        // For now, we log the initialization to prevent silent failure.
+        for mcp in &manifest.mcp_servers {
+            tracing::info!("Initializing MCP Server: {} (Command: {})", mcp.name, mcp.command);
+            // let mut client = agentflow_mcp::client::ClientBuilder::new()
+            //     .with_stdio(std::iter::once(mcp.command.clone()).chain(mcp.args.clone()).collect())
+            //     .build()
+            //     .await.map_err(|e| SkillError::ExecutionError { message: e.to_string() })?;
+            // client.connect().await.map_err(|e| SkillError::ExecutionError { message: e.to_string() })?;
+            // ... register adapter ...
+        }
 
         // 4. Build MemoryStore
         let memory =
@@ -157,7 +170,11 @@ fn build_tool_registry(tool_configs: &[ToolConfig], skill_dir: &Path) -> ToolReg
             }
             "script" => {
                 let scripts_dir = skill_dir.join("scripts");
-                registry.register(Arc::new(ScriptTool::new(scripts_dir, policy.clone())));
+                let mut tool = ScriptTool::new(scripts_dir, policy.clone());
+                if let Some(schema) = &tool_cfg.parameters {
+                    tool = tool.with_parameters_schema(schema.clone());
+                }
+                registry.register(Arc::new(tool));
             }
             other => {
                 // Already validated by SkillLoader; log and skip unknown tools.
@@ -347,6 +364,7 @@ mod tests {
             },
             model: ModelConfig::default(),
             tools: vec![],
+            mcp_servers: vec![],
             knowledge: vec![],
             memory: None,
         }

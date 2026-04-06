@@ -42,6 +42,8 @@ pub struct SkillManifest {
     #[serde(default)]
     pub tools: Vec<ToolConfig>,
     #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
     pub knowledge: Vec<KnowledgeConfig>,
     pub memory: Option<MemoryConfig>,
 }
@@ -86,6 +88,17 @@ impl ModelConfig {
     }
 }
 
+/// Declares an MCP server the skill connects to.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
 /// Declares a tool the skill is authorised to use, with optional constraints.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolConfig {
@@ -106,6 +119,10 @@ pub struct ToolConfig {
     /// Allowed host suffixes for HTTP requests. Empty = all domains allowed.
     #[serde(default)]
     pub allowed_domains: Vec<String>,
+
+    /// JSON schema for validating input parameters to the tool
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
 
     /// Override the sandbox exec-time limit (seconds).
     pub max_exec_time_secs: Option<u64>,

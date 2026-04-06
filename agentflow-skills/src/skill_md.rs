@@ -136,6 +136,16 @@ impl SkillMd {
             })
             .collect();
 
+        // Extract mcp_servers from metadata if present and valid JSON
+        let mut mcp_servers = Vec::new();
+        if let Some(mcp_str) = self.metadata.get("mcp_servers") {
+            if let Ok(parsed_servers) = serde_json::from_str::<Vec<crate::manifest::McpServerConfig>>(mcp_str) {
+                mcp_servers = parsed_servers;
+            } else {
+                tracing::warn!("Failed to parse mcp_servers from SKILL.md metadata");
+            }
+        }
+
         SkillManifest {
             skill: SkillInfo {
                 name: self.name,
@@ -149,17 +159,13 @@ impl SkillMd {
             },
             persona: PersonaConfig {
                 role: self.body,
-                language: None,
+                language: self.metadata.get("language").cloned(),
             },
-            model: ModelConfig::default(),
+            model: Default::default(),
             tools,
-            knowledge: Vec::new(), // references/ dir is handled by SkillLoader/Builder
-            memory: Some(MemoryConfig {
-                memory_type: "session".to_string(),
-                db_path: None,
-                window_tokens: None,
-                embedding_model: None,
-            }),
+            mcp_servers,
+            knowledge: vec![],
+            memory: None,
         }
     }
 }

@@ -2142,3 +2142,12 @@ tar -xzf agentflow-v1.0.0-linux-x86_64.tar.gz
 **当前版本**: v0.2.0 (Phase 0, Phase 1.5 & Week 6 Complete)
 **目标版本**: v1.0.0 (预计 2025-12-13)
 **状态**: ✅ Week 6 追踪系统完成 → 🔄 Phase 2 Planning (92% → 100%)
+
+## 🚀 Skills MCP 集成与 Schema 校验强化 (In Progress)
+- [ ] 编写 `docs/MCP_SKILLS_INTEGRATION.md` 设计文档
+- [ ] 修改 `agentflow-skills/Cargo.toml` 引入 `agentflow-mcp`
+- [ ] 更新 `agentflow-skills/src/manifest.rs` 支持 `mcp_servers` 及 Tool Parameters Schema
+- [ ] 更新 `agentflow-skills/src/skill_md.rs` 解析 `metadata` 中的 `mcp_servers`
+- [ ] 修改 `agentflow-skills/src/builder.rs` 初始化 `McpClient` 并挂载 MCP Tools
+- [ ] 优化 `agentflow-tools/src/builtin/script.rs` 增加对 JSON Schema 的强校验 (使用 serde_json/jsonschema)
+- [ ] 确保无 unwrap/expect，通过 `cargo check` 和 `cargo test`

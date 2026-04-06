@@ -26,16 +26,28 @@ pub struct ScriptTool {
     /// Absolute path to the `scripts/` directory for the current skill.
     scripts_dir: PathBuf,
     policy: Arc<SandboxPolicy>,
+    /// Optional JSON schema for validating input parameters.
+    parameters_schema: Option<Value>,
 }
 
 impl ScriptTool {
     pub fn new(scripts_dir: PathBuf, policy: Arc<SandboxPolicy>) -> Self {
-        Self { scripts_dir, policy }
+        Self { 
+            scripts_dir, 
+            policy,
+            parameters_schema: None,
+        }
     }
 
     /// Convenience constructor with the default (restrictive) sandbox policy.
     pub fn with_default_policy(scripts_dir: PathBuf) -> Self {
         Self::new(scripts_dir, Arc::new(SandboxPolicy::default()))
+    }
+
+    /// Sets the parameters schema for validation.
+    pub fn with_parameters_schema(mut self, schema: Value) -> Self {
+        self.parameters_schema = Some(schema);
+        self
     }
 }
 
@@ -69,6 +81,23 @@ impl Tool for ScriptTool {
     }
 
     async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
+        // ── Schema validation ────────────────────────────────────────────────
+        if let Some(schema) = &self.parameters_schema {
+            if let Ok(compiled_schema) = jsonschema::JSONSchema::options().compile(schema) {
+                if let Err(errors) = compiled_schema.validate(&params) {
+                    let mut error_messages = Vec::new();
+                    for error in errors {
+                        error_messages.push(error.to_string());
+                    }
+                    return Err(ToolError::InvalidParams {
+                        message: format!("Parameters failed schema validation: {}", error_messages.join(", ")),
+                    });
+                }
+            } else {
+                tracing::warn!("Failed to compile JSON schema for script tool");
+            }
+        }
+
         // ── Parameter extraction ─────────────────────────────────────────────
         let script_name = params["script"]
             .as_str()

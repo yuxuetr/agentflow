@@ -13,6 +13,7 @@ agentflow-agents  = { path = "../agentflow-agents" }
 agentflow-tools   = { path = "../agentflow-tools" }
 agentflow-memory  = { path = "../agentflow-memory" }
 agentflow-rag     = { path = "../agentflow-rag", default-features = false }
+agentflow-mcp     = { path = "../agentflow-mcp" }
 
 async-trait = "0.1"
 serde       = { version = "1.0", features = ["derive"] }
