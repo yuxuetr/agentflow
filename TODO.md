@@ -2151,3 +2151,12 @@ tar -xzf agentflow-v1.0.0-linux-x86_64.tar.gz
 - [ ] 修改 `agentflow-skills/src/builder.rs` 初始化 `McpClient` 并挂载 MCP Tools
 - [ ] 优化 `agentflow-tools/src/builtin/script.rs` 增加对 JSON Schema 的强校验 (使用 serde_json/jsonschema)
 - [ ] 确保无 unwrap/expect，通过 `cargo check` 和 `cargo test`
+
+## 🌐 Backend Gateway - Phase 1: Database & Server Scaffolding (In Progress)
+- [x] Create `agentflow-db` workspace member (sqlx, postgres)
+- [x] Create `agentflow-server` workspace member (axum, tower)
+- [x] Configure workspace `Cargo.toml` with Edition 2024
+- [x] Setup `Database` connection pool and error models (No unwrap)
+- [x] Setup `AppState` and `axum::Router` entry point
+- [ ] Design and apply `sqlx` database migrations
+- [ ] Move `agentflow-core` and `agentflow-skills` states into DB entity models

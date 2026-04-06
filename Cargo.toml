@@ -13,6 +13,8 @@ members = [
   "agentflow-tools",
   "agentflow-memory",
   "agentflow-skills",
+  "agentflow-db",
+  "agentflow-server",
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"

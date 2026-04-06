@@ -1,0 +1,24 @@
+[package]
+name = "agentflow-server"
+version = "0.1.0"
+edition = "2024"
+authors = ["AgentFlow Contributors"]
+description = "Axum-based Gateway server for AgentFlow"
+license = "MIT"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1.0", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+
+# Workspace dependencies
+agentflow-db = { path = "../agentflow-db" }
+agentflow-core = { path = "../agentflow-core" }
+agentflow-skills = { path = "../agentflow-skills" }
