@@ -32,7 +32,10 @@ impl SentenceChunker {
   /// * `chunk_size` - Target maximum size for each chunk (in characters)
   /// * `overlap` - Number of characters to overlap between chunks
   pub fn new(chunk_size: usize, overlap: usize) -> Self {
-    Self { chunk_size, overlap }
+    Self {
+      chunk_size,
+      overlap,
+    }
   }
 
   /// Split text into sentences using Unicode sentence boundary rules
@@ -51,7 +54,11 @@ impl SentenceChunker {
   }
 
   /// Find sentences that should be included in overlap
-  fn find_overlap_sentences(&self, sentences: &[(usize, usize, String)], _chunk_end_idx: usize) -> Vec<usize> {
+  fn find_overlap_sentences(
+    &self,
+    sentences: &[(usize, usize, String)],
+    _chunk_end_idx: usize,
+  ) -> Vec<usize> {
     let mut overlap_sentences = Vec::new();
     let mut overlap_chars = 0;
 
@@ -89,7 +96,8 @@ impl ChunkingStrategy for SentenceChunker {
       let sentence_len = sentence.len();
 
       // Check if adding this sentence would exceed chunk_size
-      if !current_chunk_sentences.is_empty() && current_chunk_size + sentence_len > self.chunk_size {
+      if !current_chunk_sentences.is_empty() && current_chunk_size + sentence_len > self.chunk_size
+      {
         // Create chunk from accumulated sentences
         let start_idx = sentences[current_chunk_sentences[0]].0;
         let end_idx = sentences[*current_chunk_sentences.last().unwrap()].1;
@@ -178,7 +186,10 @@ mod tests {
     for chunk in &chunks {
       // Count periods (sentence endings)
       let period_count = chunk.content.matches('.').count();
-      assert!(period_count > 0, "Each chunk should contain at least one complete sentence");
+      assert!(
+        period_count > 0,
+        "Each chunk should contain at least one complete sentence"
+      );
     }
   }
 
@@ -220,9 +231,7 @@ mod tests {
         let current_sentences: Vec<&str> = current.unicode_sentences().collect();
         let next_sentences: Vec<&str> = next.unicode_sentences().collect();
 
-        let _has_overlap = current_sentences
-          .iter()
-          .any(|s| next_sentences.contains(s));
+        let _has_overlap = current_sentences.iter().any(|s| next_sentences.contains(s));
 
         // Some chunks might not have overlap if sentences are too long
         // Just verify the structure is correct

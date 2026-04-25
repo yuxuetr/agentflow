@@ -36,12 +36,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Helper function to safely acquire a Mutex lock for state monitor operations
-fn lock_mutex_monitor<'a, T>(mutex: &'a Mutex<T>, location: &str) -> Result<std::sync::MutexGuard<'a, T>> {
-  mutex.lock().map_err(|_| {
-    AgentFlowError::LockPoisoned {
-      lock_type: "Mutex".to_string(),
-      location: format!("StateMonitor::{}", location),
-    }
+fn lock_mutex_monitor<'a, T>(
+  mutex: &'a Mutex<T>,
+  location: &str,
+) -> Result<std::sync::MutexGuard<'a, T>> {
+  mutex.lock().map_err(|_| AgentFlowError::LockPoisoned {
+    lock_type: "Mutex".to_string(),
+    location: format!("StateMonitor::{}", location),
   })
 }
 
@@ -223,14 +224,17 @@ impl StateMonitor {
 
     // Check if we need to update existing allocation
     let size_delta = if self.detailed_tracking {
-      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_allocation::allocations") {
-        Ok(guard) => guard,
-        Err(_) => {
-          // If lock is poisoned, fall back to non-detailed tracking
-          eprintln!("Warning: Lock poisoned in record_allocation, falling back to non-detailed tracking");
-          return false;
-        }
-      };
+      let mut allocations =
+        match lock_mutex_monitor(&self.allocations, "record_allocation::allocations") {
+          Ok(guard) => guard,
+          Err(_) => {
+            // If lock is poisoned, fall back to non-detailed tracking
+            eprintln!(
+              "Warning: Lock poisoned in record_allocation, falling back to non-detailed tracking"
+            );
+            return false;
+          }
+        };
       let old_size = allocations.get(key).copied().unwrap_or(0);
       let delta = size as i64 - old_size as i64;
 
@@ -267,7 +271,9 @@ impl StateMonitor {
             .current_size
             .fetch_sub(size_delta as usize, Ordering::Relaxed);
           if self.detailed_tracking {
-            if let Ok(mut allocations) = lock_mutex_monitor(&self.allocations, "record_allocation::rollback") {
+            if let Ok(mut allocations) =
+              lock_mutex_monitor(&self.allocations, "record_allocation::rollback")
+            {
               allocations.remove(key);
             }
           }
@@ -293,13 +299,14 @@ impl StateMonitor {
 
     // Update value count
     if self.detailed_tracking {
-      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_allocation::value_count") {
-        Ok(guard) => guard,
-        Err(_) => {
-          eprintln!("Warning: Lock poisoned when updating value count");
-          return false;
-        }
-      };
+      let mut allocations =
+        match lock_mutex_monitor(&self.allocations, "record_allocation::value_count") {
+          Ok(guard) => guard,
+          Err(_) => {
+            eprintln!("Warning: Lock poisoned when updating value count");
+            return false;
+          }
+        };
       let new_count = allocations.len();
 
       self.value_count.store(new_count, Ordering::Relaxed);
@@ -325,7 +332,9 @@ impl StateMonitor {
     // Update access time for LRU tracking
     if self.detailed_tracking {
       let access_time = self.access_counter.fetch_add(1, Ordering::Relaxed);
-      if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_allocation::access_times") {
+      if let Ok(mut access_times) =
+        lock_mutex_monitor(&self.access_times, "record_allocation::access_times")
+      {
         access_times.insert(key.to_string(), access_time as u64);
       }
     }
@@ -341,24 +350,29 @@ impl StateMonitor {
     }
 
     let size = {
-      let mut allocations = match lock_mutex_monitor(&self.allocations, "record_deallocation::allocations") {
-        Ok(guard) => guard,
-        Err(_) => {
-          eprintln!("Warning: Lock poisoned in record_deallocation");
-          return;
-        }
-      };
+      let mut allocations =
+        match lock_mutex_monitor(&self.allocations, "record_deallocation::allocations") {
+          Ok(guard) => guard,
+          Err(_) => {
+            eprintln!("Warning: Lock poisoned in record_deallocation");
+            return;
+          }
+        };
       allocations.remove(key).unwrap_or(0)
     };
 
     if size > 0 {
       self.current_size.fetch_sub(size, Ordering::Relaxed);
-      if let Ok(allocations) = lock_mutex_monitor(&self.allocations, "record_deallocation::value_count") {
+      if let Ok(allocations) =
+        lock_mutex_monitor(&self.allocations, "record_deallocation::value_count")
+      {
         self.value_count.store(allocations.len(), Ordering::Relaxed);
       }
     }
 
-    if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_deallocation::access_times") {
+    if let Ok(mut access_times) =
+      lock_mutex_monitor(&self.access_times, "record_deallocation::access_times")
+    {
       access_times.remove(key);
     }
   }
@@ -370,7 +384,9 @@ impl StateMonitor {
     }
 
     let access_time = self.access_counter.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut access_times) = lock_mutex_monitor(&self.access_times, "record_access::access_times") {
+    if let Ok(mut access_times) =
+      lock_mutex_monitor(&self.access_times, "record_access::access_times")
+    {
       access_times.insert(key.to_string(), access_time as u64);
     }
   }
@@ -618,9 +634,7 @@ mod tests {
 
   #[test]
   fn test_value_size_limit() {
-    let limits = ResourceLimits::builder()
-      .max_value_size(1024)
-      .build();
+    let limits = ResourceLimits::builder().max_value_size(1024).build();
     let monitor = StateMonitor::new(limits);
 
     assert!(!monitor.record_allocation("too_large", 2048));

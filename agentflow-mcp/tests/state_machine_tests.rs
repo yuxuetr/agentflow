@@ -33,10 +33,7 @@ async fn test_initial_state_is_disconnected() {
     .unwrap();
 
   assert!(!client.is_connected().await);
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Disconnected
-  );
+  assert_eq!(client.session_state().await, SessionState::Disconnected);
 }
 
 #[tokio::test]
@@ -51,20 +48,14 @@ async fn test_state_transition_to_ready() {
     .unwrap();
 
   // Initially disconnected
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Disconnected
-  );
+  assert_eq!(client.session_state().await, SessionState::Disconnected);
 
   // Connect and initialize
   client.connect().await.unwrap();
 
   // Should be ready after successful initialization
   assert!(client.is_connected().await);
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Ready
-  );
+  assert_eq!(client.session_state().await, SessionState::Ready);
 }
 
 #[tokio::test]
@@ -80,17 +71,11 @@ async fn test_state_transition_after_disconnect() {
 
   // Connect
   client.connect().await.unwrap();
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Ready
-  );
+  assert_eq!(client.session_state().await, SessionState::Ready);
 
   // Disconnect
   client.disconnect().await.unwrap();
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Disconnected
-  );
+  assert_eq!(client.session_state().await, SessionState::Disconnected);
   assert!(!client.is_connected().await);
 }
 
@@ -445,10 +430,7 @@ async fn test_failed_initialization_keeps_disconnected_state() {
   // Client should not be in connected state after failed init
   // Note: The current implementation may have connected=true even if init fails
   // This test documents the current behavior
-  assert_eq!(
-    client.session_state().await,
-    SessionState::Connected
-  ); // Has transport connection but no server capabilities
+  assert_eq!(client.session_state().await, SessionState::Connected); // Has transport connection but no server capabilities
 }
 
 // ============================================================================

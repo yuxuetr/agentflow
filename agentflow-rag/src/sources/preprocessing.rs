@@ -246,7 +246,11 @@ impl TextCleaner {
   fn strip_special_chars(&self, text: &str) -> String {
     text
       .chars()
-      .filter(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '.' | ',' | '!' | '?' | '-' | '\'' | '"'))
+      .filter(|c| {
+        c.is_alphanumeric()
+          || c.is_whitespace()
+          || matches!(c, '.' | ',' | '!' | '?' | '-' | '\'' | '"')
+      })
       .collect()
   }
 
@@ -303,7 +307,9 @@ impl LanguageDetector {
 
         match c {
           'a'..='z' | 'A'..='Z' => latin_count += 1,
-          '\u{4E00}'..='\u{9FFF}' | '\u{3040}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' => cjk_count += 1,
+          '\u{4E00}'..='\u{9FFF}' | '\u{3040}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' => {
+            cjk_count += 1
+          }
           '\u{0400}'..='\u{04FF}' => cyrillic_count += 1,
           '\u{0600}'..='\u{06FF}' => arabic_count += 1,
           _ => {}
@@ -527,9 +533,10 @@ impl PreprocessingPipeline {
         .map(|mut doc| {
           let (lang, confidence) = self.language_detector.detect(&doc.content);
           doc.metadata.insert("language".to_string(), lang.into());
-          doc
-            .metadata
-            .insert("language_confidence".to_string(), confidence.to_string().into());
+          doc.metadata.insert(
+            "language_confidence".to_string(),
+            confidence.to_string().into(),
+          );
           doc
         })
         .collect();

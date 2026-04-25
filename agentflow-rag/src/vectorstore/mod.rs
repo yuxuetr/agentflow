@@ -63,7 +63,9 @@ pub trait VectorStore: Send + Sync {
   ) -> Result<Vec<SearchResult>> {
     // Default implementation: fall back to semantic search
     tracing::warn!("Hybrid search not implemented, falling back to semantic search");
-    self.similarity_search(collection, query, top_k, filter).await
+    self
+      .similarity_search(collection, query, top_k, filter)
+      .await
   }
 
   /// Get collection statistics

@@ -17,7 +17,7 @@ impl BatchProcessor {
   pub async fn process_concurrent<T, R, F, Fut>(
     &self,
     items: Vec<T>,
-    processor: F
+    processor: F,
   ) -> Vec<(T, crate::AgentResult<R>)>
   where
     T: Clone + Send + 'static,
@@ -39,7 +39,7 @@ impl BatchProcessor {
         let result = proc(item_clone.clone()).await;
         (item_clone, result)
       });
-      
+
       handles.push(handle);
     }
 
@@ -64,7 +64,7 @@ impl BatchProcessor {
     &self,
     items: Vec<T>,
     processor: F,
-    progress_callback: impl Fn(usize, usize) + Send + Sync + 'static
+    progress_callback: impl Fn(usize, usize) + Send + Sync + 'static,
   ) -> Vec<(T, crate::AgentResult<R>)>
   where
     T: Clone + Send + 'static,
@@ -88,13 +88,13 @@ impl BatchProcessor {
       let handle = tokio::spawn(async move {
         let _permit = sem.acquire().await.unwrap();
         let result = proc(item.clone()).await;
-        
+
         let current = comp.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         prog(current, total);
-        
+
         (item, result)
       });
-      
+
       handles.push(handle);
     }
 

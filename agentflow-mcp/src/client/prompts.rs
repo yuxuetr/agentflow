@@ -99,9 +99,7 @@ impl PromptMessage {
   pub fn user_text(text: impl Into<String>) -> Self {
     Self {
       role: PromptMessageRole::User,
-      content: PromptMessageContent::Text {
-        text: text.into(),
-      },
+      content: PromptMessageContent::Text { text: text.into() },
     }
   }
 
@@ -109,9 +107,7 @@ impl PromptMessage {
   pub fn assistant_text(text: impl Into<String>) -> Self {
     Self {
       role: PromptMessageRole::Assistant,
-      content: PromptMessageContent::Text {
-        text: text.into(),
-      },
+      content: PromptMessageContent::Text { text: text.into() },
     }
   }
 
@@ -138,11 +134,7 @@ pub struct GetPromptResult {
 impl GetPromptResult {
   /// Get all text messages
   pub fn text_messages(&self) -> Vec<&str> {
-    self
-      .messages
-      .iter()
-      .filter_map(|m| m.as_text())
-      .collect()
+    self.messages.iter().filter_map(|m| m.as_text()).collect()
   }
 
   /// Get first text message
@@ -305,7 +297,10 @@ impl MCPClient {
 
     // Parse response
     let response: JsonRpcResponse = serde_json::from_value(response).map_err(|e| {
-      MCPError::from(e).context(format!("Failed to parse prompts/get response for '{}'", name))
+      MCPError::from(e).context(format!(
+        "Failed to parse prompts/get response for '{}'",
+        name
+      ))
     })?;
 
     // Check for errors

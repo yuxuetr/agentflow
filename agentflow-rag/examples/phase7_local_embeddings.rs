@@ -103,8 +103,15 @@ async fn main() -> anyhow::Result<()> {
   let vectors = embedding.embed_batch(texts.clone()).await?;
   let duration = start.elapsed();
 
-  println!("✅ Generated {} embeddings in {:?}", vectors.len(), duration);
-  println!("   Average time per text: {:?}", duration / texts.len() as u32);
+  println!(
+    "✅ Generated {} embeddings in {:?}",
+    vectors.len(),
+    duration
+  );
+  println!(
+    "   Average time per text: {:?}",
+    duration / texts.len() as u32
+  );
   println!();
 
   // Demo 3: Similarity calculation
@@ -127,9 +134,7 @@ async fn main() -> anyhow::Result<()> {
   println!("4️⃣  Performance Metrics");
   println!("{}", "=".repeat(60));
 
-  let test_texts: Vec<&str> = (0..10)
-    .map(|i| texts[i % texts.len()])
-    .collect();
+  let test_texts: Vec<&str> = (0..10).map(|i| texts[i % texts.len()]).collect();
 
   let start = std::time::Instant::now();
   let _ = embedding.embed_batch(test_texts.clone()).await?;
@@ -142,8 +147,14 @@ async fn main() -> anyhow::Result<()> {
   let sequential_duration = start.elapsed();
 
   println!("Batch processing (10 texts): {:?}", batch_duration);
-  println!("Sequential processing (10 texts): {:?}", sequential_duration);
-  println!("Speedup: {:.2}x", sequential_duration.as_secs_f64() / batch_duration.as_secs_f64());
+  println!(
+    "Sequential processing (10 texts): {:?}",
+    sequential_duration
+  );
+  println!(
+    "Speedup: {:.2}x",
+    sequential_duration.as_secs_f64() / batch_duration.as_secs_f64()
+  );
   println!();
 
   println!("✨ Phase 7 demonstration complete!\n");

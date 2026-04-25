@@ -117,12 +117,15 @@ async fn test_call_tool_error() {
   // Setup mock transport with error response
   let mut transport = MockTransport::new();
   transport.add_response(MockTransport::standard_initialize_response());
-  transport.add_response(MockTransport::tool_call_response(vec![json!({
-    "type": "text",
-    "text": "Error: invalid arguments"
-  })]).tap_mut(|v| {
-    v["result"]["isError"] = json!(true);
-  }));
+  transport.add_response(
+    MockTransport::tool_call_response(vec![json!({
+      "type": "text",
+      "text": "Error: invalid arguments"
+    })])
+    .tap_mut(|v| {
+      v["result"]["isError"] = json!(true);
+    }),
+  );
 
   // Build and connect client
   let mut client = ClientBuilder::new()
@@ -213,24 +216,22 @@ async fn test_list_prompts() {
   // Setup mock transport
   let mut transport = MockTransport::new();
   transport.add_response(MockTransport::standard_initialize_response());
-  transport.add_response(MockTransport::prompts_list_response(vec![
-    json!({
-      "name": "code_review",
-      "description": "Review code for best practices",
-      "arguments": [
-        {
-          "name": "code",
-          "description": "The code to review",
-          "required": true
-        },
-        {
-          "name": "language",
-          "description": "Programming language",
-          "required": false
-        }
-      ]
-    }),
-  ]));
+  transport.add_response(MockTransport::prompts_list_response(vec![json!({
+    "name": "code_review",
+    "description": "Review code for best practices",
+    "arguments": [
+      {
+        "name": "code",
+        "description": "The code to review",
+        "required": true
+      },
+      {
+        "name": "language",
+        "description": "Programming language",
+        "required": false
+      }
+    ]
+  })]));
 
   // Build and connect client
   let mut client = ClientBuilder::new()

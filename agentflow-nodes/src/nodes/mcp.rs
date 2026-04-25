@@ -119,36 +119,45 @@ impl AsyncNode for MCPNode {
     // 2. Build MCP client with configuration
     let mut client_builder = ClientBuilder::new().with_stdio(server_command);
 
-    if let Some(timeout_ms) = self.timeout_ms.or_else(|| {
-      get_optional_u64_input(inputs, "timeout_ms").ok().flatten()
-    }) {
+    if let Some(timeout_ms) = self
+      .timeout_ms
+      .or_else(|| get_optional_u64_input(inputs, "timeout_ms").ok().flatten())
+    {
       client_builder = client_builder.with_timeout(Duration::from_millis(timeout_ms));
     }
 
     if let Some(max_retries) = self.max_retries.or_else(|| {
-      get_optional_u64_input(inputs, "max_retries").ok().flatten().map(|v| v as u32)
+      get_optional_u64_input(inputs, "max_retries")
+        .ok()
+        .flatten()
+        .map(|v| v as u32)
     }) {
       client_builder = client_builder.with_max_retries(max_retries);
     }
 
-    let mut client = client_builder
-      .build()
-      .await
-      .map_err(|e| AgentFlowError::ConfigurationError {
-        message: format!("Failed to build MCP client: {}", e),
-      })?;
+    let mut client =
+      client_builder
+        .build()
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!("Failed to build MCP client: {}", e),
+        })?;
 
     // 3. Connect and initialize
-    client.connect().await.map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
+    client
+      .connect()
+      .await
+      .map_err(|e| AgentFlowError::AsyncExecutionError {
         message: format!("Failed to connect to MCP server: {}", e),
-      }
-    })?;
+      })?;
 
     println!("✅ Connected to MCP server");
 
     // 4. Call the tool
-    println!("🔧 Calling tool: {} with params: {}", tool_name, tool_params);
+    println!(
+      "🔧 Calling tool: {} with params: {}",
+      tool_name, tool_params
+    );
 
     let result = client
       .call_tool(&tool_name, tool_params)
@@ -160,16 +169,19 @@ impl AsyncNode for MCPNode {
     println!("✅ Tool call completed");
 
     // 5. Disconnect gracefully
-    client.disconnect().await.map_err(|e| {
-      eprintln!("⚠️  Warning: Failed to disconnect MCP client: {}", e);
-    }).ok();
+    client
+      .disconnect()
+      .await
+      .map_err(|e| {
+        eprintln!("⚠️  Warning: Failed to disconnect MCP client: {}", e);
+      })
+      .ok();
 
     // 6. Convert result to JSON
-    let result_json = serde_json::to_value(&result).map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
+    let result_json =
+      serde_json::to_value(&result).map_err(|e| AgentFlowError::AsyncExecutionError {
         message: format!("Failed to serialize MCP result: {}", e),
-      }
-    })?;
+      })?;
 
     // 7. Return result
     let mut outputs = HashMap::new();
@@ -181,10 +193,7 @@ impl AsyncNode for MCPNode {
 
 // Helper functions for extracting inputs
 
-fn get_string_input<'a>(
-  inputs: &'a AsyncNodeInputs,
-  key: &str,
-) -> Result<&'a str, AgentFlowError> {
+fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, AgentFlowError> {
   inputs
     .get(key)
     .and_then(|v| match v {
@@ -192,7 +201,10 @@ fn get_string_input<'a>(
       _ => None,
     })
     .ok_or_else(|| AgentFlowError::NodeInputError {
-      message: format!("Required string input '{}' is missing or has wrong type", key),
+      message: format!(
+        "Required string input '{}' is missing or has wrong type",
+        key
+      ),
     })
 }
 
@@ -203,11 +215,10 @@ fn get_vec_string_input(
   inputs
     .get(key)
     .and_then(|v| match v {
-      FlowValue::Json(Value::Array(arr)) => {
-        arr.iter()
-          .map(|v| v.as_str().map(|s| s.to_string()))
-          .collect::<Option<Vec<String>>>()
-      }
+      FlowValue::Json(Value::Array(arr)) => arr
+        .iter()
+        .map(|v| v.as_str().map(|s| s.to_string()))
+        .collect::<Option<Vec<String>>>(),
       _ => None,
     })
     .ok_or_else(|| AgentFlowError::NodeInputError {
@@ -253,13 +264,10 @@ mod tests {
 
   #[test]
   fn test_mcp_node_builder_pattern() {
-    let node = MCPNode::new(
-      vec!["test".to_string()],
-      "tool".to_string(),
-    )
-    .with_params(json!({"key": "value"}))
-    .with_timeout_ms(60_000)
-    .with_max_retries(5);
+    let node = MCPNode::new(vec!["test".to_string()], "tool".to_string())
+      .with_params(json!({"key": "value"}))
+      .with_timeout_ms(60_000)
+      .with_max_retries(5);
 
     assert_eq!(node.timeout_ms, Some(60_000));
     assert_eq!(node.max_retries, Some(5));
@@ -278,10 +286,7 @@ mod tests {
   #[test]
   fn test_helper_get_vec_string_input() {
     let mut inputs = AsyncNodeInputs::new();
-    inputs.insert(
-      "test".to_string(),
-      FlowValue::Json(json!(["a", "b", "c"])),
-    );
+    inputs.insert("test".to_string(), FlowValue::Json(json!(["a", "b", "c"])));
 
     let result = get_vec_string_input(&inputs, "test");
     assert_eq!(result.unwrap(), vec!["a", "b", "c"]);

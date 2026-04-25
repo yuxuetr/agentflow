@@ -57,9 +57,7 @@ pub enum Content {
 impl Content {
   /// Create text content
   pub fn text(text: impl Into<String>) -> Self {
-    Self::Text {
-      text: text.into(),
-    }
+    Self::Text { text: text.into() }
   }
 
   /// Create image content
@@ -183,15 +181,23 @@ impl MCPClient {
     }
 
     // Parse result
-    let result = response
-      .result
-      .ok_or_else(|| MCPError::protocol("Missing result in tools/list response", JsonRpcErrorCode::InvalidRequest))?;
+    let result = response.result.ok_or_else(|| {
+      MCPError::protocol(
+        "Missing result in tools/list response",
+        JsonRpcErrorCode::InvalidRequest,
+      )
+    })?;
 
     // Extract tools array
     let tools_array = result
       .get("tools")
       .and_then(|v| v.as_array())
-      .ok_or_else(|| MCPError::protocol("Missing or invalid 'tools' field in response", JsonRpcErrorCode::InvalidRequest))?;
+      .ok_or_else(|| {
+        MCPError::protocol(
+          "Missing or invalid 'tools' field in response",
+          JsonRpcErrorCode::InvalidRequest,
+        )
+      })?;
 
     // Parse tools
     let tools: Vec<Tool> = tools_array
@@ -270,13 +276,19 @@ impl MCPClient {
 
     // Parse response
     let response: JsonRpcResponse = serde_json::from_value(response).map_err(|e| {
-      MCPError::from(e).context(format!("Failed to parse tools/call response for '{}'", name))
+      MCPError::from(e).context(format!(
+        "Failed to parse tools/call response for '{}'",
+        name
+      ))
     })?;
 
     // Check for errors
     if let Some(error) = response.error {
       return Err(MCPError::tool(
-        format!("Tool '{}' execution failed: {} - {}", name, error.code, error.message),
+        format!(
+          "Tool '{}' execution failed: {} - {}",
+          name, error.code, error.message
+        ),
         Some(name),
       ));
     }

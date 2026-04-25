@@ -3,15 +3,15 @@
 // Text-based AI model nodes
 pub mod llm;
 
-// Image AI model nodes  
-pub mod text_to_image;
-pub mod image_to_image;
+// Image AI model nodes
 pub mod image_edit;
+pub mod image_to_image;
 pub mod image_understand;
+pub mod text_to_image;
 
 // Audio AI model nodes
-pub mod tts;
 pub mod asr;
+pub mod tts;
 
 // Utility nodes
 #[cfg(feature = "http")]
@@ -30,8 +30,8 @@ pub mod batch;
 pub mod conditional;
 
 // Specialized content processing nodes
-pub mod markmap;
 pub mod arxiv;
+pub mod markmap;
 
 // Integration nodes
 #[cfg(feature = "mcp")]

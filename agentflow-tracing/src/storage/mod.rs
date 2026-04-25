@@ -15,22 +15,13 @@ pub trait TraceStorage: Send + Sync {
   async fn save_trace(&self, trace: &ExecutionTrace) -> Result<(), anyhow::Error>;
 
   /// Get a trace by workflow ID
-  async fn get_trace(
-    &self,
-    workflow_id: &str,
-  ) -> Result<Option<ExecutionTrace>, anyhow::Error>;
+  async fn get_trace(&self, workflow_id: &str) -> Result<Option<ExecutionTrace>, anyhow::Error>;
 
   /// Query traces with filters
-  async fn query_traces(
-    &self,
-    query: TraceQuery,
-  ) -> Result<Vec<ExecutionTrace>, anyhow::Error>;
+  async fn query_traces(&self, query: TraceQuery) -> Result<Vec<ExecutionTrace>, anyhow::Error>;
 
   /// Delete old traces (cleanup)
-  async fn delete_old_traces(
-    &self,
-    older_than: DateTime<Utc>,
-  ) -> Result<usize, anyhow::Error>;
+  async fn delete_old_traces(&self, older_than: DateTime<Utc>) -> Result<usize, anyhow::Error>;
 }
 
 /// Query parameters for trace search

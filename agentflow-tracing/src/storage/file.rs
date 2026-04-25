@@ -57,10 +57,7 @@ impl FileTraceStorage {
 
     // Filter by tags (any match)
     if let Some(ref tags) = query.tags {
-      if !tags
-        .iter()
-        .any(|t| trace.metadata.tags.contains(t))
-      {
+      if !tags.iter().any(|t| trace.metadata.tags.contains(t)) {
         return false;
       }
     }
@@ -85,10 +82,7 @@ impl TraceStorage for FileTraceStorage {
     Ok(())
   }
 
-  async fn get_trace(
-    &self,
-    workflow_id: &str,
-  ) -> Result<Option<ExecutionTrace>, anyhow::Error> {
+  async fn get_trace(&self, workflow_id: &str) -> Result<Option<ExecutionTrace>, anyhow::Error> {
     let path = self.trace_path(workflow_id);
 
     if !path.exists() {
@@ -100,10 +94,7 @@ impl TraceStorage for FileTraceStorage {
     Ok(Some(trace))
   }
 
-  async fn query_traces(
-    &self,
-    query: TraceQuery,
-  ) -> Result<Vec<ExecutionTrace>, anyhow::Error> {
+  async fn query_traces(&self, query: TraceQuery) -> Result<Vec<ExecutionTrace>, anyhow::Error> {
     let mut traces = Vec::new();
     let mut entries = fs::read_dir(&self.base_path).await?;
 
@@ -142,10 +133,7 @@ impl TraceStorage for FileTraceStorage {
     Ok(traces)
   }
 
-  async fn delete_old_traces(
-    &self,
-    older_than: DateTime<Utc>,
-  ) -> Result<usize, anyhow::Error> {
+  async fn delete_old_traces(&self, older_than: DateTime<Utc>) -> Result<usize, anyhow::Error> {
     let mut count = 0;
     let mut entries = fs::read_dir(&self.base_path).await?;
 
@@ -211,10 +199,7 @@ mod tests {
     }
 
     // Query all
-    let all = storage
-      .query_traces(TraceQuery::default())
-      .await
-      .unwrap();
+    let all = storage.query_traces(TraceQuery::default()).await.unwrap();
     assert_eq!(all.len(), 5);
 
     // Query with tag filter

@@ -69,11 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Step 4: Connect to Qdrant
   println!("4️⃣  Connecting to Qdrant vector store...");
-  let store = QdrantStore::with_embedding_provider(
-    "http://localhost:6334",
-    embedding_provider.clone(),
-  )
-  .await?;
+  let store =
+    QdrantStore::with_embedding_provider("http://localhost:6334", embedding_provider.clone())
+      .await?;
   println!("   ✅ Connected to Qdrant\n");
 
   // Step 5: Demonstrate different chunking strategies
@@ -128,7 +126,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n   📋 Results from '{}' collection:", collection);
     for (i, result) in results.iter().enumerate() {
       println!("      {}. Score: {:.4}", i + 1, result.score);
-      println!("         {}", result.content.chars().take(100).collect::<String>());
+      println!(
+        "         {}",
+        result.content.chars().take(100).collect::<String>()
+      );
       if result.content.len() > 100 {
         println!("         ...");
       }
@@ -299,16 +300,26 @@ where
     .embedding_provider(Arc::new(OpenAIEmbedding::new("text-embedding-3-small")?))
     .build()
     .await?;
-  let pipeline = IndexingPipeline::new(Box::new(chunker), Box::new(embedder), Box::new(pipeline_store));
+  let pipeline = IndexingPipeline::new(
+    Box::new(chunker),
+    Box::new(embedder),
+    Box::new(pipeline_store),
+  );
 
   // Index all documents
   let stats = pipeline
     .index_documents(collection_name, documents.to_vec())
     .await?;
 
-  println!("      ✅ Documents processed: {}", stats.documents_processed);
+  println!(
+    "      ✅ Documents processed: {}",
+    stats.documents_processed
+  );
   println!("      ✅ Chunks created: {}", stats.chunks_created);
-  println!("      ✅ Embeddings generated: {}", stats.embeddings_generated);
+  println!(
+    "      ✅ Embeddings generated: {}",
+    stats.embeddings_generated
+  );
   println!("      ✅ Processing time: {}ms", stats.processing_time_ms);
   if stats.errors > 0 {
     println!("      ⚠️  Errors: {}", stats.errors);

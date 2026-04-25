@@ -2,23 +2,23 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum MemoryError {
-    #[error("Storage error: {0}")]
-    StorageError(String),
+  #[error("Storage error: {0}")]
+  StorageError(String),
 
-    #[error("Serialization error: {0}")]
-    SerdeError(#[from] serde_json::Error),
+  #[error("Serialization error: {0}")]
+  SerdeError(#[from] serde_json::Error),
 
-    #[error("Session not found: {session_id}")]
-    SessionNotFound { session_id: String },
+  #[error("Session not found: {session_id}")]
+  SessionNotFound { session_id: String },
 
-    /// Embedding operation failed. Returned when semantic memory cannot
-    /// initialise its embedding backend (e.g. missing API key).
-    #[error("Embedding error: {0}")]
-    EmbeddingError(String),
+  /// Embedding operation failed. Returned when semantic memory cannot
+  /// initialise its embedding backend (e.g. missing API key).
+  #[error("Embedding error: {0}")]
+  EmbeddingError(String),
 }
 
 impl From<sqlx::Error> for MemoryError {
-    fn from(e: sqlx::Error) -> Self {
-        MemoryError::StorageError(e.to_string())
-    }
+  fn from(e: sqlx::Error) -> Self {
+    MemoryError::StorageError(e.to_string())
+  }
 }

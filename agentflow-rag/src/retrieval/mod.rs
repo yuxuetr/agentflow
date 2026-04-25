@@ -36,6 +36,8 @@ impl RetrievalStrategy for SimilarityRetrieval {
     top_k: usize,
     filter: Option<Filter>,
   ) -> Result<Vec<SearchResult>> {
-    store.similarity_search(collection, query, top_k, filter).await
+    store
+      .similarity_search(collection, query, top_k, filter)
+      .await
   }
 }

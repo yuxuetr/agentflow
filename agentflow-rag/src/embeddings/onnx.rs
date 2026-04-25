@@ -27,7 +27,10 @@
 //! # }
 //! ```
 
-use crate::{embeddings::EmbeddingProvider, error::{RAGError, Result}};
+use crate::{
+  embeddings::EmbeddingProvider,
+  error::{RAGError, Result},
+};
 use async_trait::async_trait;
 use ndarray::{Array1, Array2, Axis};
 use std::path::{Path, PathBuf};
@@ -93,7 +96,11 @@ impl ONNXEmbedding {
     let mask_expanded = mask
       .clone()
       .insert_axis(Axis(2))
-      .broadcast((token_embeddings.shape()[0], token_embeddings.shape()[1], token_embeddings.shape()[2]))
+      .broadcast((
+        token_embeddings.shape()[0],
+        token_embeddings.shape()[1],
+        token_embeddings.shape()[2],
+      ))
       .ok_or_else(|| RAGError::embedding("Failed to broadcast attention mask"))?
       .to_owned();
 
@@ -163,7 +170,11 @@ impl EmbeddingProvider for ONNXEmbedding {
 
     // Run inference and extract tensor data (must be done while holding the session lock)
     let (shape_dims, token_data) = {
-      let mut session = self.inner.session.lock().map_err(|e| RAGError::embedding(format!("Failed to lock session: {}", e)))?;
+      let mut session = self
+        .inner
+        .session
+        .lock()
+        .map_err(|e| RAGError::embedding(format!("Failed to lock session: {}", e)))?;
 
       let outputs = session.run(inputs![
         "input_ids" => Value::from_array((input_ids_shape.as_slice(), input_ids_vec.into_boxed_slice())).map_err(|e| RAGError::embedding(format!("Failed to create input value: {}", e)))?,
@@ -185,11 +196,9 @@ impl EmbeddingProvider for ONNXEmbedding {
     }; // Session lock dropped here
 
     // Convert to ndarray
-    let token_embeddings = Array2::from_shape_vec(
-      (shape_dims[0], shape_dims[1] * shape_dims[2]),
-      token_data,
-    )
-    .map_err(|e| RAGError::embedding(format!("Failed to reshape output: {}", e)))?;
+    let token_embeddings =
+      Array2::from_shape_vec((shape_dims[0], shape_dims[1] * shape_dims[2]), token_data)
+        .map_err(|e| RAGError::embedding(format!("Failed to reshape output: {}", e)))?;
 
     // Reshape to (batch, seq_len, hidden_size)
     let token_embeddings = token_embeddings
@@ -197,8 +206,13 @@ impl EmbeddingProvider for ONNXEmbedding {
       .map_err(|e| RAGError::embedding(format!("Failed to reshape to 3D: {}", e)))?;
 
     // Apply mean pooling
-    let attention_mask_i64 = Array2::from_shape_vec((1, seq_len), attention_mask_vec)
-      .map_err(|e| RAGError::embedding(format!("Failed to create attention mask for pooling: {}", e)))?;
+    let attention_mask_i64 =
+      Array2::from_shape_vec((1, seq_len), attention_mask_vec).map_err(|e| {
+        RAGError::embedding(format!(
+          "Failed to create attention mask for pooling: {}",
+          e
+        ))
+      })?;
 
     let mut embedding = Self::mean_pooling(&token_embeddings, &attention_mask_i64)?;
 
@@ -313,9 +327,13 @@ impl ONNXEmbeddingBuilder {
       .commit_from_file(&model_path)
       .map_err(|e| RAGError::embedding(format!("Failed to load ONNX model: {}", e)))?;
 
-    let model_name = self
-      .model_name
-      .unwrap_or_else(|| model_path.file_stem().unwrap().to_string_lossy().to_string());
+    let model_name = self.model_name.unwrap_or_else(|| {
+      model_path
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string()
+    });
 
     let dimension = self.dimension.unwrap_or(384); // Default for MiniLM
     let max_length = self.max_length.unwrap_or(512);
@@ -391,11 +409,8 @@ mod tests {
     use ndarray::Array3;
 
     // Simple test data - shape (batch=1, seq_len=2, hidden_size=3)
-    let token_embeddings = Array3::from_shape_vec(
-      (1, 2, 3),
-      vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    )
-    .unwrap();
+    let token_embeddings =
+      Array3::from_shape_vec((1, 2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
     let attention_mask = Array2::from_shape_vec((1, 2), vec![1, 1]).unwrap();
 

@@ -287,9 +287,7 @@ mod tests {
     let init_resp = MockTransport::standard_initialize_response();
     assert_eq!(init_resp["result"]["protocolVersion"], "2024-11-05");
 
-    let tools_resp = MockTransport::tools_list_response(vec![
-      json!({"name": "test_tool"}),
-    ]);
+    let tools_resp = MockTransport::tools_list_response(vec![json!({"name": "test_tool"})]);
     assert_eq!(tools_resp["result"]["tools"][0]["name"], "test_tool");
   }
 }

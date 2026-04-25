@@ -67,43 +67,24 @@
 //! - `Failed`: Failed with error
 //! - `Skipped`: Skipped due to condition
 
-pub mod graph;
 pub mod converter;
+pub mod graph;
 pub mod renderers;
 
 // Re-export main types for convenience
 pub use graph::{
-    EdgeType,
-    GraphMetadata,
-    NodeStatus,
-    NodeStyle,
-    Position,
-    VisualEdge,
-    VisualGraph,
-    VisualNode,
-    VisualNodeType,
+  EdgeType, GraphMetadata, NodeStatus, NodeStyle, Position, VisualEdge, VisualGraph, VisualNode,
+  VisualNodeType,
 };
 
 pub use converter::{
-    ConversionError,
-    NodeDefinition,
-    VisualGraphBuilder,
-    WorkflowConverter,
-    WorkflowDefinition,
-    from_json,
-    from_yaml,
+  from_json, from_yaml, ConversionError, NodeDefinition, VisualGraphBuilder, WorkflowConverter,
+  WorkflowDefinition,
 };
 
 pub use renderers::{
-    GraphDirection,
-    GraphRenderer,
-    OutputFormat,
-    RenderConfig,
-    RenderError,
-    create_renderer,
-    create_renderer_with_config,
-    render,
-    render_with_config,
+  create_renderer, create_renderer_with_config, render, render_with_config, GraphDirection,
+  GraphRenderer, OutputFormat, RenderConfig, RenderError,
 };
 
 /// Crate version
@@ -111,40 +92,44 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_full_workflow() {
-        // Create a workflow graph
-        let graph = VisualGraphBuilder::new("test", "Integration Test")
-            .add_node("start", "Start")
-            .add_typed_node("llm", "LLM Process", VisualNodeType::Llm)
-            .add_typed_node("loop", "While", VisualNodeType::While { max_iterations: 10 })
-            .add_node("end", "End")
-            .add_edge("start", "llm")
-            .add_edge("llm", "loop")
-            .add_edge("loop", "end")
-            .build();
+  #[test]
+  fn test_full_workflow() {
+    // Create a workflow graph
+    let graph = VisualGraphBuilder::new("test", "Integration Test")
+      .add_node("start", "Start")
+      .add_typed_node("llm", "LLM Process", VisualNodeType::Llm)
+      .add_typed_node(
+        "loop",
+        "While",
+        VisualNodeType::While { max_iterations: 10 },
+      )
+      .add_node("end", "End")
+      .add_edge("start", "llm")
+      .add_edge("llm", "loop")
+      .add_edge("loop", "end")
+      .build();
 
-        // Test Mermaid rendering
-        let mermaid = render(&graph, OutputFormat::Mermaid).unwrap();
-        assert!(mermaid.contains("graph TD"));
-        assert!(mermaid.contains("start[Start]"));
+    // Test Mermaid rendering
+    let mermaid = render(&graph, OutputFormat::Mermaid).unwrap();
+    assert!(mermaid.contains("graph TD"));
+    assert!(mermaid.contains("start[Start]"));
 
-        // Test DOT rendering
-        let dot = render(&graph, OutputFormat::Dot).unwrap();
-        assert!(dot.contains("digraph workflow"));
-        assert!(dot.contains("start ->"));
+    // Test DOT rendering
+    let dot = render(&graph, OutputFormat::Dot).unwrap();
+    assert!(dot.contains("digraph workflow"));
+    assert!(dot.contains("start ->"));
 
-        // Test JSON rendering
-        let json = render(&graph, OutputFormat::Json).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["name"], "Integration Test");
-    }
+    // Test JSON rendering
+    let json = render(&graph, OutputFormat::Json).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["name"], "Integration Test");
+  }
 
-    #[test]
-    fn test_yaml_to_mermaid() {
-        let yaml = r#"
+  #[test]
+  fn test_yaml_to_mermaid() {
+    let yaml = r#"
 name: Test Pipeline
 nodes:
   - id: input
@@ -157,12 +142,12 @@ nodes:
     dependencies: [process]
 "#;
 
-        let graph = from_yaml(yaml).unwrap();
-        let mermaid = render(&graph, OutputFormat::Mermaid).unwrap();
+    let graph = from_yaml(yaml).unwrap();
+    let mermaid = render(&graph, OutputFormat::Mermaid).unwrap();
 
-        assert!(mermaid.contains("input"));
-        assert!(mermaid.contains("process"));
-        assert!(mermaid.contains("output"));
-        assert!(mermaid.contains("-->"));
-    }
+    assert!(mermaid.contains("input"));
+    assert!(mermaid.contains("process"));
+    assert!(mermaid.contains("output"));
+    assert!(mermaid.contains("-->"));
+  }
 }

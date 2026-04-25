@@ -4,12 +4,11 @@
 //! connection state tracking, and message correlation.
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult, ResultExt};
-use crate::protocol::types::{
-  Implementation, InitializeParams, InitializeResult, JsonRpcRequest,
-  JsonRpcResponse, RequestId,
-};
 #[cfg(test)]
 use crate::protocol::types::ClientCapabilities;
+use crate::protocol::types::{
+  Implementation, InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, RequestId,
+};
 use crate::transport_new::Transport;
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,11 +134,7 @@ impl MCPClient {
 
     // Connect transport with timeout
     let timeout = self.config.timeout;
-    let connect_result = tokio::time::timeout(
-      timeout,
-      self.transport.lock().await.connect()
-    )
-    .await;
+    let connect_result = tokio::time::timeout(timeout, self.transport.lock().await.connect()).await;
 
     match connect_result {
       Ok(Ok(())) => {
@@ -156,7 +151,10 @@ impl MCPClient {
     }
 
     // Initialize session (already has retry + timeout via send_request)
-    self.initialize().await.context("Failed to initialize MCP session")?;
+    self
+      .initialize()
+      .await
+      .context("Failed to initialize MCP session")?;
 
     Ok(())
   }
@@ -172,9 +170,10 @@ impl MCPClient {
     let request = JsonRpcRequest::new(
       self.next_request_id(),
       "initialize",
-      Some(serde_json::to_value(&params).map_err(|e| {
-        MCPError::from(e).context("Failed to serialize initialize params")
-      })?),
+      Some(
+        serde_json::to_value(&params)
+          .map_err(|e| MCPError::from(e).context("Failed to serialize initialize params"))?,
+      ),
     );
 
     // Send request
@@ -207,8 +206,10 @@ impl MCPClient {
       .map_err(|e| MCPError::from(e).context("Failed to parse initialize result"))?;
 
     // Store server info and capabilities
-    *self.server_capabilities.lock().await = Some(serde_json::to_value(&init_result.capabilities)
-      .map_err(|e| MCPError::from(e).context("Failed to serialize server capabilities"))?);
+    *self.server_capabilities.lock().await = Some(
+      serde_json::to_value(&init_result.capabilities)
+        .map_err(|e| MCPError::from(e).context("Failed to serialize server capabilities"))?,
+    );
     *self.server_info.lock().await = Some(init_result.server_info);
 
     // Send initialized notification
@@ -316,10 +317,7 @@ impl MCPClient {
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
     // Create retry config from client config
-    let retry_config = RetryConfig::new(
-      self.config.max_retries,
-      self.config.retry_backoff_ms,
-    );
+    let retry_config = RetryConfig::new(self.config.max_retries, self.config.retry_backoff_ms);
 
     // Clone what we need for the retry closure
     let transport = self.transport.clone();
@@ -332,16 +330,9 @@ impl MCPClient {
 
       async move {
         // Apply timeout to the transport operation
-        let result = tokio::time::timeout(
-          timeout,
-          async {
-            transport
-              .lock()
-              .await
-              .send_message(request_value)
-              .await
-          }
-        )
+        let result = tokio::time::timeout(timeout, async {
+          transport.lock().await.send_message(request_value).await
+        })
         .await;
 
         match result {
@@ -375,7 +366,7 @@ impl MCPClient {
         .transport
         .lock()
         .await
-        .send_notification(notification_value)
+        .send_notification(notification_value),
     )
     .await;
 

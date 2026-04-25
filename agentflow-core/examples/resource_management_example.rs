@@ -8,10 +8,7 @@
 //! cargo run --example resource_management_example
 //! ```
 
-use agentflow_core::{
-  resource_limits::ResourceLimits,
-  state_monitor::StateMonitor,
-};
+use agentflow_core::{resource_limits::ResourceLimits, state_monitor::StateMonitor};
 
 fn main() {
   println!("🔧 AgentFlow Resource Management Examples\n");
@@ -57,8 +54,8 @@ fn example_1_basic_limits() {
 
   // Check if various sizes exceed limits
   let test_sizes = vec![
-    ("Small value", 1024),           // 1 KB
-    ("Medium value", 5 * 1024 * 1024),  // 5 MB
+    ("Small value", 1024),             // 1 KB
+    ("Medium value", 5 * 1024 * 1024), // 5 MB
     ("Large value", 15 * 1024 * 1024), // 15 MB (exceeds 10MB limit)
     ("Huge state", 150 * 1024 * 1024), // 150 MB (exceeds 100MB limit)
   ];
@@ -83,7 +80,7 @@ fn example_2_state_monitoring() {
 
   let limits = ResourceLimits::builder()
     .max_state_size(10 * 1024 * 1024) // 10 MB
-    .max_value_size(2 * 1024 * 1024)  // 2 MB
+    .max_value_size(2 * 1024 * 1024) // 2 MB
     .max_cache_entries(100)
     .build();
 
@@ -94,7 +91,7 @@ fn example_2_state_monitoring() {
   // Simulate allocations
   println!("\n💾 Simulating memory allocations...");
   let allocations = vec![
-    ("config", 1024),          // 1 KB
+    ("config", 1024),           // 1 KB
     ("user_data", 512 * 1024),  // 512 KB
     ("response", 1024 * 1024),  // 1 MB
     ("cache", 2 * 1024 * 1024), // 2 MB
@@ -128,13 +125,14 @@ fn example_3_automatic_cleanup() {
 
   let limits = ResourceLimits::builder()
     .max_state_size(5 * 1024 * 1024) // 5 MB
-    .cleanup_threshold(0.8)           // 80%
+    .cleanup_threshold(0.8) // 80%
     .auto_cleanup(true)
     .build();
 
   let monitor = StateMonitor::new(limits);
 
-  println!("Limits: max={:.2} MB, cleanup_threshold={:.1}%",
+  println!(
+    "Limits: max={:.2} MB, cleanup_threshold={:.1}%",
     monitor.limits().max_state_size as f64 / (1024.0 * 1024.0),
     monitor.limits().cleanup_threshold * 100.0
   );
@@ -152,7 +150,11 @@ fn example_3_automatic_cleanup() {
       key,
       stats.current_size as f64 / (1024.0 * 1024.0),
       stats.usage_percentage * 100.0,
-      if stats.should_cleanup { "⚠️  YES" } else { "✅ NO" }
+      if stats.should_cleanup {
+        "⚠️  YES"
+      } else {
+        "✅ NO"
+      }
     );
 
     if stats.should_cleanup {
@@ -211,8 +213,8 @@ fn example_5_resource_alerts() {
 
   let limits = ResourceLimits::builder()
     .max_state_size(10 * 1024 * 1024) // 10 MB
-    .max_value_size(2 * 1024 * 1024)  // 2 MB
-    .cleanup_threshold(0.7)            // 70%
+    .max_value_size(2 * 1024 * 1024) // 2 MB
+    .cleanup_threshold(0.7) // 70%
     .auto_cleanup(true)
     .build();
 
@@ -258,13 +260,13 @@ fn example_6_custom_configuration() {
 
   // Conservative limits for memory-constrained environments
   let conservative = ResourceLimits::builder()
-    .max_state_size(50 * 1024 * 1024)   // 50 MB
-    .max_value_size(5 * 1024 * 1024)    // 5 MB
+    .max_state_size(50 * 1024 * 1024) // 50 MB
+    .max_value_size(5 * 1024 * 1024) // 5 MB
     .max_cache_entries(500)
-    .cleanup_threshold(0.75)             // 75%
+    .cleanup_threshold(0.75) // 75%
     .auto_cleanup(true)
-    .enable_streaming(true)              // Enable streaming for large data
-    .stream_chunk_size(512 * 1024)       // 512 KB chunks
+    .enable_streaming(true) // Enable streaming for large data
+    .stream_chunk_size(512 * 1024) // 512 KB chunks
     .build();
 
   println!("Conservative configuration:");
@@ -273,11 +275,11 @@ fn example_6_custom_configuration() {
 
   // Aggressive limits for high-throughput workflows
   let aggressive = ResourceLimits::builder()
-    .max_state_size(500 * 1024 * 1024)  // 500 MB
-    .max_value_size(50 * 1024 * 1024)   // 50 MB
+    .max_state_size(500 * 1024 * 1024) // 500 MB
+    .max_value_size(50 * 1024 * 1024) // 50 MB
     .max_cache_entries(5000)
-    .cleanup_threshold(0.9)              // 90%
-    .auto_cleanup(false)                 // Fail fast instead of cleanup
+    .cleanup_threshold(0.9) // 90%
+    .auto_cleanup(false) // Fail fast instead of cleanup
     .build();
 
   println!("\nAggressive configuration:");
@@ -286,13 +288,16 @@ fn example_6_custom_configuration() {
 
   // Streaming-optimized for large data processing
   let streaming = ResourceLimits::builder()
-    .max_state_size(100 * 1024 * 1024)  // 100 MB
-    .max_value_size(10 * 1024 * 1024)   // 10 MB
+    .max_state_size(100 * 1024 * 1024) // 100 MB
+    .max_value_size(10 * 1024 * 1024) // 10 MB
     .enable_streaming(true)
     .stream_chunk_size(2 * 1024 * 1024) // 2 MB chunks
     .build();
 
   println!("\nStreaming-optimized configuration:");
   println!("  {}", streaming);
-  println!("  Chunk size: {:.2} MB", streaming.stream_chunk_size as f64 / (1024.0 * 1024.0));
+  println!(
+    "  Chunk size: {:.2} MB",
+    streaming.stream_chunk_size as f64 / (1024.0 * 1024.0)
+  );
 }

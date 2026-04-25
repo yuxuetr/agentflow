@@ -541,7 +541,11 @@ impl NodeFactory for MCPNodeFactory {
     }
 
     // Set max retries if provided
-    if let Some(max_retries) = config.parameters.get("max_retries").and_then(|v| v.as_u64()) {
+    if let Some(max_retries) = config
+      .parameters
+      .get("max_retries")
+      .and_then(|v| v.as_u64())
+    {
       node = node.with_max_retries(max_retries as u32);
     }
 

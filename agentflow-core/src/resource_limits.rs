@@ -89,13 +89,13 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
   fn default() -> Self {
     Self {
-      max_state_size: 100 * 1024 * 1024,    // 100 MB
-      max_value_size: 10 * 1024 * 1024,     // 10 MB
+      max_state_size: 100 * 1024 * 1024, // 100 MB
+      max_value_size: 10 * 1024 * 1024,  // 10 MB
       max_cache_entries: 1000,
-      cleanup_threshold: 0.8,                // 80%
+      cleanup_threshold: 0.8, // 80%
       auto_cleanup: true,
       enable_streaming: false,
-      stream_chunk_size: 1024 * 1024,       // 1 MB
+      stream_chunk_size: 1024 * 1024, // 1 MB
     }
   }
 }
@@ -375,17 +375,13 @@ mod tests {
 
   #[test]
   fn test_validate_zero_state_size() {
-    let limits = ResourceLimits::builder()
-      .max_state_size(0)
-      .build();
+    let limits = ResourceLimits::builder().max_state_size(0).build();
     assert!(limits.validate().is_err());
   }
 
   #[test]
   fn test_validate_zero_value_size() {
-    let limits = ResourceLimits::builder()
-      .max_value_size(0)
-      .build();
+    let limits = ResourceLimits::builder().max_value_size(0).build();
     assert!(limits.validate().is_err());
   }
 
@@ -400,14 +396,10 @@ mod tests {
 
   #[test]
   fn test_validate_invalid_threshold() {
-    let limits = ResourceLimits::builder()
-      .cleanup_threshold(1.5)
-      .build();
+    let limits = ResourceLimits::builder().cleanup_threshold(1.5).build();
     assert!(limits.validate().is_err());
 
-    let limits = ResourceLimits::builder()
-      .cleanup_threshold(-0.1)
-      .build();
+    let limits = ResourceLimits::builder().cleanup_threshold(-0.1).build();
     assert!(limits.validate().is_err());
   }
 

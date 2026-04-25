@@ -22,13 +22,34 @@ fn main() {
 
   // Sample documents about AI/ML topics
   let documents = vec![
-    ("doc1", "Machine learning is a subset of artificial intelligence focused on data-driven predictions"),
-    ("doc2", "Deep learning uses neural networks with multiple layers for complex pattern recognition"),
-    ("doc3", "Machine learning algorithms can be supervised, unsupervised, or reinforcement-based"),
-    ("doc4", "Neural networks are inspired by biological neurons and process information in layers"),
-    ("doc5", "Artificial intelligence encompasses machine learning, deep learning, and expert systems"),
-    ("doc6", "Machine learning applications include recommendation systems and predictive analytics"),
-    ("doc7", "Deep learning has revolutionized computer vision and natural language processing"),
+    (
+      "doc1",
+      "Machine learning is a subset of artificial intelligence focused on data-driven predictions",
+    ),
+    (
+      "doc2",
+      "Deep learning uses neural networks with multiple layers for complex pattern recognition",
+    ),
+    (
+      "doc3",
+      "Machine learning algorithms can be supervised, unsupervised, or reinforcement-based",
+    ),
+    (
+      "doc4",
+      "Neural networks are inspired by biological neurons and process information in layers",
+    ),
+    (
+      "doc5",
+      "Artificial intelligence encompasses machine learning, deep learning, and expert systems",
+    ),
+    (
+      "doc6",
+      "Machine learning applications include recommendation systems and predictive analytics",
+    ),
+    (
+      "doc7",
+      "Deep learning has revolutionized computer vision and natural language processing",
+    ),
   ];
 
   // Demo 1: BM25 Keyword Search
@@ -141,13 +162,22 @@ fn demo_mmr_reranking(_documents: &[(&str, &str)]) {
     create_result("doc1", "Machine learning is a subset of AI", 0.95),
     create_result("doc2", "Machine learning is used in AI systems", 0.92), // Similar to doc1
     create_result("doc3", "Deep learning is a type of machine learning", 0.90),
-    create_result("doc4", "Machine learning enables predictive analytics", 0.88), // Similar to doc1
+    create_result(
+      "doc4",
+      "Machine learning enables predictive analytics",
+      0.88,
+    ), // Similar to doc1
     create_result("doc5", "Neural networks power deep learning", 0.85),
   ];
 
   println!("📋 Original results (by relevance score):");
   for (i, result) in results.iter().enumerate() {
-    println!("   {}. [Score: {:.2}] {}", i + 1, result.score, result.content);
+    println!(
+      "   {}. [Score: {:.2}] {}",
+      i + 1,
+      result.score,
+      result.content
+    );
   }
   println!();
 

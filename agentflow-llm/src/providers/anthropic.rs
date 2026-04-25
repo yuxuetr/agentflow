@@ -45,10 +45,7 @@ impl AnthropicProvider {
       "x-api-key",
       HeaderValue::from_str(&self.api_key).expect("API key contains invalid characters"),
     );
-    headers.insert(
-      "anthropic-version",
-      HeaderValue::from_static("2023-06-01"),
-    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     headers
   }
 
@@ -365,7 +362,6 @@ impl AnthropicStreamingResponse {
 
     None
   }
-
 }
 
 #[async_trait]

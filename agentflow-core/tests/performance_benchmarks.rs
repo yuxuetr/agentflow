@@ -5,13 +5,13 @@
 //! - Resource limit enforcement < 100μs per operation
 //! - Error context creation < 1ms
 
-use agentflow_core::{
-  execute_with_retry, execute_with_retry_and_context, AgentFlowError, ErrorContext,
-  ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor,
-};
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use agentflow_core::health::{HealthChecker, HealthStatus};
-use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
+use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use agentflow_core::{
+  execute_with_retry, execute_with_retry_and_context, AgentFlowError, ErrorContext, ResourceLimits,
+  RetryPolicy, RetryStrategy, StateMonitor,
+};
 use std::time::{Duration, Instant};
 
 const NUM_ITERATIONS: usize = 1000;
@@ -145,13 +145,9 @@ async fn benchmark_retry_with_error_context() {
     "Successful operation with error context",
     NUM_ITERATIONS,
     || async {
-      execute_with_retry_and_context(
-        &policy,
-        "run_id",
-        "node_name",
-        Some("test"),
-        || async { Ok::<_, AgentFlowError>(42) },
-      )
+      execute_with_retry_and_context(&policy, "run_id", "node_name", Some("test"), || async {
+        Ok::<_, AgentFlowError>(42)
+      })
       .await
     },
   )
@@ -176,17 +172,13 @@ async fn benchmark_error_context_creation() {
     message: "Test error".to_string(),
   };
 
-  let avg = measure_sync(
-    "Error context builder",
-    NUM_ITERATIONS,
-    || {
-      ErrorContext::builder("run_id", "node_name")
-        .node_type("test")
-        .duration(Duration::from_millis(100))
-        .error(&error)
-        .build()
-    },
-  );
+  let avg = measure_sync("Error context builder", NUM_ITERATIONS, || {
+    ErrorContext::builder("run_id", "node_name")
+      .node_type("test")
+      .duration(Duration::from_millis(100))
+      .error(&error)
+      .build()
+  });
 
   // Target: < 1ms for context creation
   assert!(
@@ -202,11 +194,9 @@ async fn benchmark_error_context_creation() {
     .error(&error)
     .build();
 
-  let avg = measure_sync(
-    "Detailed report generation",
-    NUM_ITERATIONS,
-    || context.detailed_report(),
-  );
+  let avg = measure_sync("Detailed report generation", NUM_ITERATIONS, || {
+    context.detailed_report()
+  });
 
   // Target: < 1ms for report generation
   assert!(
@@ -226,15 +216,11 @@ async fn benchmark_resource_limits() {
   let limits = ResourceLimits::default();
 
   // Benchmark: Limit checking
-  let avg = measure_sync(
-    "Resource limit checking",
-    NUM_ITERATIONS,
-    || {
-      limits.exceeds_state_limit(50 * 1024 * 1024);
-      limits.exceeds_value_limit(5 * 1024 * 1024);
-      limits.exceeds_cache_limit(500);
-    },
-  );
+  let avg = measure_sync("Resource limit checking", NUM_ITERATIONS, || {
+    limits.exceeds_state_limit(50 * 1024 * 1024);
+    limits.exceeds_value_limit(5 * 1024 * 1024);
+    limits.exceeds_cache_limit(500);
+  });
 
   // Target: < 100μs for limit checks
   assert!(
@@ -244,11 +230,9 @@ async fn benchmark_resource_limits() {
   );
 
   // Benchmark: Validation
-  let avg = measure_sync(
-    "Resource limits validation",
-    NUM_ITERATIONS,
-    || limits.validate(),
-  );
+  let avg = measure_sync("Resource limits validation", NUM_ITERATIONS, || {
+    limits.validate()
+  });
 
   // Target: < 100μs
   assert!(
@@ -269,13 +253,9 @@ async fn benchmark_state_monitor_basic() {
   let monitor = StateMonitor::new(limits);
 
   // Benchmark: Record allocation
-  let avg = measure_sync(
-    "Record allocation (detailed mode)",
-    NUM_ITERATIONS,
-    || {
-      monitor.record_allocation("key", 1024);
-    },
-  );
+  let avg = measure_sync("Record allocation (detailed mode)", NUM_ITERATIONS, || {
+    monitor.record_allocation("key", 1024);
+  });
 
   // Target: < 10μs per allocation
   assert!(
@@ -285,13 +265,9 @@ async fn benchmark_state_monitor_basic() {
   );
 
   // Benchmark: Record access (LRU update)
-  let avg = measure_sync(
-    "Record access (LRU tracking)",
-    NUM_ITERATIONS,
-    || {
-      monitor.record_access("key");
-    },
-  );
+  let avg = measure_sync("Record access (LRU tracking)", NUM_ITERATIONS, || {
+    monitor.record_access("key");
+  });
 
   // Target: < 10μs per access
   assert!(
@@ -306,11 +282,7 @@ async fn benchmark_state_monitor_basic() {
   });
 
   // Target: < 1μs for stats
-  assert!(
-    avg < Duration::from_micros(1),
-    "Get stats: {:?} > 1μs",
-    avg
-  );
+  assert!(avg < Duration::from_micros(1), "Get stats: {:?} > 1μs", avg);
 
   // Benchmark: Check should_cleanup
   let avg = measure_sync("Should cleanup check", NUM_ITERATIONS, || {
@@ -337,13 +309,9 @@ async fn benchmark_state_monitor_fast_mode() {
   let monitor_fast = StateMonitor::new_fast(limits);
 
   // Benchmark: Detailed mode allocation
-  let detailed_avg = measure_sync(
-    "Allocation (detailed mode)",
-    NUM_ITERATIONS,
-    || {
-      monitor_detailed.record_allocation("key", 1024);
-    },
-  );
+  let detailed_avg = measure_sync("Allocation (detailed mode)", NUM_ITERATIONS, || {
+    monitor_detailed.record_allocation("key", 1024);
+  });
 
   // Benchmark: Fast mode allocation
   let fast_avg = measure_sync("Allocation (fast mode)", NUM_ITERATIONS, || {
@@ -426,35 +394,31 @@ async fn benchmark_combined_overhead() {
   let limits = ResourceLimits::default();
   let monitor = StateMonitor::new(limits);
 
-  let avg = measure_async(
-    "Workflow node with retry + monitoring",
-    100,
-    || async {
-      // Record resource allocation
-      monitor.record_allocation("input", 1024);
+  let avg = measure_async("Workflow node with retry + monitoring", 100, || async {
+    // Record resource allocation
+    monitor.record_allocation("input", 1024);
 
-      // Execute with retry and error context
-      let result = execute_with_retry_and_context(
-        &retry_policy,
-        "run_123",
-        "process_node",
-        Some("processor"),
-        || async {
-          // Immediate success to measure pure overhead
-          Ok::<_, AgentFlowError>(42)
-        },
-      )
-      .await;
+    // Execute with retry and error context
+    let result = execute_with_retry_and_context(
+      &retry_policy,
+      "run_123",
+      "process_node",
+      Some("processor"),
+      || async {
+        // Immediate success to measure pure overhead
+        Ok::<_, AgentFlowError>(42)
+      },
+    )
+    .await;
 
-      // Record output
-      monitor.record_allocation("output", 2048);
+    // Record output
+    monitor.record_allocation("output", 2048);
 
-      // Cleanup
-      monitor.record_deallocation("input");
+    // Cleanup
+    monitor.record_deallocation("input");
 
-      result
-    },
-  )
+    result
+  })
   .await;
 
   // Target: < 1ms total overhead (excluding the 10μs sleep)
@@ -481,9 +445,7 @@ async fn benchmark_timeout_control() {
     NUM_ITERATIONS,
     || async {
       with_timeout(
-        async {
-          Ok::<_, AgentFlowError>(42)
-        },
+        async { Ok::<_, AgentFlowError>(42) },
         config.default_timeout,
       )
       .await
@@ -531,20 +493,17 @@ async fn benchmark_health_checks() {
   let checker = HealthChecker::new();
 
   // Add a fast check
-  checker.add_check(
-    "fast_check",
-    || {
+  checker
+    .add_check("fast_check", || {
       Box::pin(async { Ok(HealthStatus::Healthy) })
-    },
-  ).await;
+    })
+    .await;
 
   // Benchmark: Single health check
   let avg = measure_async(
     "Single health check",
     100, // Fewer iterations due to async overhead
-    || async {
-      checker.check_health().await
-    },
+    || async { checker.check_health().await },
   )
   .await;
 
@@ -557,22 +516,17 @@ async fn benchmark_health_checks() {
 
   // Add multiple checks
   for i in 0..10 {
-    checker.add_check(
-      &format!("check_{}", i),
-      || {
+    checker
+      .add_check(&format!("check_{}", i), || {
         Box::pin(async { Ok(HealthStatus::Healthy) })
-      },
-    ).await;
+      })
+      .await;
   }
 
   // Benchmark: Multiple health checks
-  let avg = measure_async(
-    "Multiple health checks (11 checks)",
-    100,
-    || async {
-      checker.check_health().await
-    },
-  )
+  let avg = measure_async("Multiple health checks (11 checks)", 100, || async {
+    checker.check_health().await
+  })
   .await;
 
   // Target: < 10ms for 11 checks
@@ -602,7 +556,10 @@ async fn benchmark_checkpoint_operations() {
 
   // Benchmark: Save checkpoint (small state)
   let mut state = std::collections::HashMap::new();
-  state.insert("node1".to_string(), serde_json::json!({"status": "completed"}));
+  state.insert(
+    "node1".to_string(),
+    serde_json::json!({"status": "completed"}),
+  );
 
   // Single save for timing
   let start = Instant::now();
@@ -615,7 +572,10 @@ async fn benchmark_checkpoint_operations() {
   let duration = start.elapsed();
   let avg = duration / 50;
 
-  println!("  Save checkpoint (small state ~100 bytes) - Avg: {:?} (50 iterations, total: {:?})", avg, duration);
+  println!(
+    "  Save checkpoint (small state ~100 bytes) - Avg: {:?} (50 iterations, total: {:?})",
+    avg, duration
+  );
 
   // Target: < 10ms for small checkpoint save
   assert!(
@@ -639,14 +599,21 @@ async fn benchmark_checkpoint_operations() {
   let start = Instant::now();
   for i in 0..20 {
     manager
-      .save_checkpoint(&format!("workflow_bench_large_{}", i), "node100", &large_state)
+      .save_checkpoint(
+        &format!("workflow_bench_large_{}", i),
+        "node100",
+        &large_state,
+      )
       .await
       .expect("Save failed");
   }
   let duration = start.elapsed();
   let avg = duration / 20;
 
-  println!("  Save checkpoint (large state ~100KB) - Avg: {:?} (20 iterations, total: {:?})", avg, duration);
+  println!(
+    "  Save checkpoint (large state ~100KB) - Avg: {:?} (20 iterations, total: {:?})",
+    avg, duration
+  );
 
   // Target: < 50ms for large checkpoint save
   assert!(
@@ -658,12 +625,17 @@ async fn benchmark_checkpoint_operations() {
   // Benchmark: Load checkpoint
   let start = Instant::now();
   for i in 0..100 {
-    let _ = manager.load_latest_checkpoint(&format!("workflow_bench_{}", i % 50)).await;
+    let _ = manager
+      .load_latest_checkpoint(&format!("workflow_bench_{}", i % 50))
+      .await;
   }
   let duration = start.elapsed();
   let avg = duration / 100;
 
-  println!("  Load latest checkpoint - Avg: {:?} (100 iterations, total: {:?})", avg, duration);
+  println!(
+    "  Load latest checkpoint - Avg: {:?} (100 iterations, total: {:?})",
+    avg, duration
+  );
 
   // Target: < 10ms for checkpoint load
   assert!(

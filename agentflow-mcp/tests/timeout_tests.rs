@@ -60,8 +60,8 @@ async fn test_very_short_timeout() {
 #[tokio::test]
 async fn test_stdio_read_timeout() {
   // Start cat process which won't send anything
-  let mut transport = StdioTransport::new(vec!["cat".to_string()])
-    .with_timeout(Duration::from_millis(100));
+  let mut transport =
+    StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(100));
 
   transport.connect().await.unwrap();
 
@@ -75,8 +75,8 @@ async fn test_stdio_read_timeout() {
 
 #[tokio::test]
 async fn test_stdio_timeout_configuration() {
-  let transport = StdioTransport::new(vec!["echo".to_string()])
-    .with_timeout(Duration::from_millis(500));
+  let transport =
+    StdioTransport::new(vec!["echo".to_string()]).with_timeout(Duration::from_millis(500));
 
   // Verify timeout is set
   use agentflow_mcp::transport_new::TransportConfig;
@@ -379,8 +379,8 @@ async fn test_multiple_operations_with_different_timeouts() {
 
 #[tokio::test]
 async fn test_timeout_error_contains_duration() {
-  let mut transport = StdioTransport::new(vec!["cat".to_string()])
-    .with_timeout(Duration::from_millis(100));
+  let mut transport =
+    StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(100));
 
   transport.connect().await.unwrap();
 
@@ -441,8 +441,8 @@ async fn test_timeout_does_not_corrupt_state() {
 #[cfg(unix)]
 async fn test_real_process_read_timeout() {
   // Use 'cat' which waits for input - will timeout on read
-  let mut transport = StdioTransport::new(vec!["cat".to_string()])
-    .with_timeout(Duration::from_millis(200));
+  let mut transport =
+    StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(200));
 
   transport.connect().await.unwrap();
 

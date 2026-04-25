@@ -9,17 +9,15 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --example retry_example
+//! cargo run --example mcp_retry_example
 //! ```
 
 use agentflow_mcp::client::retry::{retry_with_backoff, RetryConfig};
 use agentflow_mcp::client::ClientBuilder;
 use agentflow_mcp::error::{MCPError, MCPResult};
 use agentflow_mcp::transport_new::MockTransport;
-use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,8 +48,10 @@ async fn example_default_retry() -> Result<(), Box<dyn std::error::Error>> {
 
   let config = RetryConfig::default(); // 3 retries, 100ms base backoff
 
-  println!("Retry config: max_retries={}, backoff_base={}ms",
-    config.max_retries, config.backoff_base_ms);
+  println!(
+    "Retry config: max_retries={}, backoff_base={}ms",
+    config.max_retries, config.backoff_base_ms
+  );
 
   let result = retry_with_backoff(&config, || {
     let count = attempt_count_clone.clone();
@@ -71,7 +71,11 @@ async fn example_default_retry() -> Result<(), Box<dyn std::error::Error>> {
   .await;
 
   match result {
-    Ok(value) => println!("✓ Success after {} attempts: {}", attempt_count.load(Ordering::SeqCst), value),
+    Ok(value) => println!(
+      "✓ Success after {} attempts: {}",
+      attempt_count.load(Ordering::SeqCst),
+      value
+    ),
     Err(e) => println!("✗ Failed: {}", e),
   }
 
@@ -85,8 +89,10 @@ async fn example_custom_retry() -> Result<(), Box<dyn std::error::Error>> {
   // Custom configuration: 5 retries, 50ms base, 2 seconds max backoff
   let config = RetryConfig::new(5, 50).with_max_backoff(2000);
 
-  println!("Custom retry config: max_retries={}, backoff_base={}ms, max_backoff={}ms",
-    config.max_retries, config.backoff_base_ms, config.max_backoff_ms);
+  println!(
+    "Custom retry config: max_retries={}, backoff_base={}ms, max_backoff={}ms",
+    config.max_retries, config.backoff_base_ms, config.max_backoff_ms
+  );
 
   // Show backoff progression
   println!("Backoff progression:");
@@ -136,7 +142,10 @@ async fn example_error_classification() -> Result<(), Box<dyn std::error::Error>
   .await;
 
   println!("  Attempts: {}", attempt_count.load(Ordering::SeqCst));
-  println!("  Result: {} (expected: 4 attempts - initial + 3 retries)", if result.is_err() { "Failed" } else { "Success" });
+  println!(
+    "  Result: {} (expected: 4 attempts - initial + 3 retries)",
+    if result.is_err() { "Failed" } else { "Success" }
+  );
 
   // Test 2: Non-transient error (will NOT retry)
   println!("\nTest 2: Non-transient error (Protocol)");
@@ -157,7 +166,10 @@ async fn example_error_classification() -> Result<(), Box<dyn std::error::Error>
   .await;
 
   println!("  Attempts: {}", attempt_count.load(Ordering::SeqCst));
-  println!("  Result: {} (expected: 1 attempt - no retries for protocol errors)", if result.is_err() { "Failed" } else { "Success" });
+  println!(
+    "  Result: {} (expected: 1 attempt - no retries for protocol errors)",
+    if result.is_err() { "Failed" } else { "Success" }
+  );
 
   Ok(())
 }
@@ -191,7 +203,7 @@ async fn example_client_retry() -> Result<(), Box<dyn std::error::Error>> {
   let mut client_clone = client; // Move client into closure
 
   let result = retry_with_backoff(&config, || {
-    let mut client = &mut client_clone;
+    let _client = &mut client_clone;
     async move {
       println!("  Attempting to call tool...");
 

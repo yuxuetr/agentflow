@@ -213,8 +213,8 @@ impl BM25Retriever {
       if tf > 0.0 {
         // Calculate BM25 component for this term
         let numerator = tf * (self.k1 + 1.0);
-        let denominator = tf
-          + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / self.avg_doc_length);
+        let denominator =
+          tf + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / self.avg_doc_length);
 
         score += idf * (numerator / denominator);
       }

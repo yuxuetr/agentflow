@@ -334,13 +334,15 @@ async fn test_batch_embedding_splitting() {
   provider.reset_cost_tracker().await;
 
   // Create a large batch that should be split
-  let texts: Vec<&str> = (0..100).map(|i| {
-    if i % 2 == 0 {
-      "Short text"
-    } else {
-      "Another short text"
-    }
-  }).collect();
+  let texts: Vec<&str> = (0..100)
+    .map(|i| {
+      if i % 2 == 0 {
+        "Short text"
+      } else {
+        "Another short text"
+      }
+    })
+    .collect();
 
   let result = provider.embed_batch(texts).await;
   assert!(result.is_ok());

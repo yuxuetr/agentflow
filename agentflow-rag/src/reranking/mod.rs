@@ -115,7 +115,11 @@ impl ReRankingStrategy for MMRReRanking {
     }
 
     // Sort by score descending initially
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+      b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Implement MMR iterative selection
     let mut selected: Vec<SearchResult> = Vec::new();
@@ -178,9 +182,17 @@ impl ScoreReRanking {
 impl ReRankingStrategy for ScoreReRanking {
   fn rerank(&self, _query: &str, mut results: Vec<SearchResult>) -> Result<Vec<SearchResult>> {
     if self.descending {
-      results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+      results.sort_by(|a, b| {
+        b.score
+          .partial_cmp(&a.score)
+          .unwrap_or(std::cmp::Ordering::Equal)
+      });
     } else {
-      results.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+      results.sort_by(|a, b| {
+        a.score
+          .partial_cmp(&b.score)
+          .unwrap_or(std::cmp::Ordering::Equal)
+      });
     }
     Ok(results)
   }
@@ -248,7 +260,7 @@ mod tests {
     let results = vec![
       create_test_result("1", "machine learning algorithms", 0.9),
       create_test_result("2", "machine learning algorithms", 0.85), // Very similar
-      create_test_result("3", "deep neural networks", 0.8), // Different content
+      create_test_result("3", "deep neural networks", 0.8),         // Different content
     ];
 
     let reranked = mmr.rerank("query", results).unwrap();

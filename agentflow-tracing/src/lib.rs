@@ -51,8 +51,7 @@ pub mod types;
 // Re-exports for convenience
 pub use collector::{StorageErrorPolicy, TraceCollector, TraceConfig};
 pub use format::{
-  export_trace_json, export_trace_json_compact, format_trace_human_readable,
-  format_trace_summary,
+  export_trace_json, export_trace_json_compact, format_trace_human_readable, format_trace_summary,
 };
-pub use storage::{TraceQuery, TraceStorage, TimeRange};
+pub use storage::{TimeRange, TraceQuery, TraceStorage};
 pub use types::*;

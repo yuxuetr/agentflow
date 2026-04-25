@@ -10,10 +10,7 @@ pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
   output.push_str("═══════════════════════════════════════════════════════════\n");
   output.push_str(&format!(
     "Workflow: {}\n",
-    trace
-      .workflow_name
-      .as_deref()
-      .unwrap_or(&trace.workflow_id)
+    trace.workflow_name.as_deref().unwrap_or(&trace.workflow_id)
   ));
   output.push_str(&format!("ID: {}\n", trace.workflow_id));
   output.push_str("═══════════════════════════════════════════════════════════\n\n");
@@ -46,7 +43,12 @@ pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
   output.push_str("───────────────────────────────────────────────────────────\n\n");
 
   for (i, node) in trace.nodes.iter().enumerate() {
-    output.push_str(&format!("[{}] {} ({})\n", i + 1, node.node_id, node.node_type));
+    output.push_str(&format!(
+      "[{}] {} ({})\n",
+      i + 1,
+      node.node_id,
+      node.node_type
+    ));
     output.push_str(&format!("    Status: {:?}\n", node.status));
 
     if let Some(duration_ms) = node.duration_ms {
@@ -90,12 +92,18 @@ pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
     // Input/Output (truncated)
     if let Some(ref input) = node.input {
       let input_str = serde_json::to_string(input).unwrap_or_default();
-      output.push_str(&format!("    Input: {}\n", truncate_string(&input_str, 100)));
+      output.push_str(&format!(
+        "    Input: {}\n",
+        truncate_string(&input_str, 100)
+      ));
     }
 
     if let Some(ref output_val) = node.output {
       let output_str = serde_json::to_string(output_val).unwrap_or_default();
-      output.push_str(&format!("    Output: {}\n", truncate_string(&output_str, 100)));
+      output.push_str(&format!(
+        "    Output: {}\n",
+        truncate_string(&output_str, 100)
+      ));
     }
 
     // Error
@@ -187,7 +195,10 @@ mod tests {
   #[test]
   fn test_truncate_string() {
     assert_eq!(truncate_string("hello", 10), "hello");
-    assert_eq!(truncate_string("hello world this is long", 10), "hello w...");
+    assert_eq!(
+      truncate_string("hello world this is long", 10),
+      "hello w..."
+    );
   }
 
   #[test]

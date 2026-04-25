@@ -8,6 +8,7 @@ use crate::error::{MCPError, MCPResult};
 use crate::transport_new::traits::{Transport, TransportConfig, TransportType};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -36,6 +37,8 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 pub struct StdioTransport {
   /// Command and arguments to spawn
   command: Vec<String>,
+  /// Environment variables to set on the spawned process
+  env: HashMap<String, String>,
   /// Spawned child process
   process: Option<Child>,
   /// Buffered stdin writer
@@ -76,6 +79,7 @@ impl StdioTransport {
   pub fn new(command: Vec<String>) -> Self {
     Self {
       command,
+      env: HashMap::new(),
       process: None,
       stdin: None,
       stdout: None,
@@ -83,6 +87,12 @@ impl StdioTransport {
       timeout: Duration::from_millis(Self::DEFAULT_TIMEOUT_MS),
       max_message_size: Self::DEFAULT_MAX_MESSAGE_SIZE,
     }
+  }
+
+  /// Set environment variables for the spawned MCP server process.
+  pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
+    self.env = env;
+    self
   }
 
   /// Set the I/O timeout
@@ -215,15 +225,16 @@ impl Transport for StdioTransport {
     if self.command.len() > 1 {
       cmd.args(&self.command[1..]);
     }
+    if !self.env.is_empty() {
+      cmd.envs(&self.env);
+    }
 
     let mut child = cmd
       .stdin(std::process::Stdio::piped())
       .stdout(std::process::Stdio::piped())
       .stderr(std::process::Stdio::piped())
       .spawn()
-      .map_err(|e| {
-        MCPError::connection(format!("Failed to spawn MCP server process: {}", e))
-      })?;
+      .map_err(|e| MCPError::connection(format!("Failed to spawn MCP server process: {}", e)))?;
 
     // Capture stdin
     let stdin = child
@@ -248,9 +259,9 @@ impl Transport for StdioTransport {
 
   async fn send_message(&mut self, request: Value) -> MCPResult<Value> {
     // Check process health before sending
-    self.check_process_health().map_err(|e| {
-      e.context("Process health check failed before sending message")
-    })?;
+    self
+      .check_process_health()
+      .map_err(|e| e.context("Process health check failed before sending message"))?;
 
     // Serialize and send request
     let request_str = serde_json::to_string(&request)
@@ -275,9 +286,9 @@ impl Transport for StdioTransport {
 
   async fn send_notification(&mut self, notification: Value) -> MCPResult<()> {
     // Check process health before sending
-    self.check_process_health().map_err(|e| {
-      e.context("Process health check failed before sending notification")
-    })?;
+    self
+      .check_process_health()
+      .map_err(|e| e.context("Process health check failed before sending notification"))?;
 
     // Serialize and send notification
     let notification_str = serde_json::to_string(&notification)
@@ -293,9 +304,9 @@ impl Transport for StdioTransport {
 
   async fn receive_message(&mut self) -> MCPResult<Option<Value>> {
     // Check process health
-    self.check_process_health().map_err(|e| {
-      e.context("Process health check failed before receiving message")
-    })?;
+    self
+      .check_process_health()
+      .map_err(|e| e.context("Process health check failed before receiving message"))?;
 
     // Try to read a message (with timeout)
     match self.read_line_with_timeout().await {
@@ -401,15 +412,14 @@ mod tests {
 
   #[test]
   fn test_stdio_transport_with_timeout() {
-    let transport = StdioTransport::new(vec!["test".to_string()])
-      .with_timeout(Duration::from_secs(60));
+    let transport =
+      StdioTransport::new(vec!["test".to_string()]).with_timeout(Duration::from_secs(60));
     assert_eq!(transport.timeout_ms(), Some(60_000));
   }
 
   #[test]
   fn test_stdio_transport_with_max_message_size() {
-    let transport =
-      StdioTransport::new(vec!["test".to_string()]).with_max_message_size(1024);
+    let transport = StdioTransport::new(vec!["test".to_string()]).with_max_message_size(1024);
     assert_eq!(transport.max_message_size(), Some(1024));
   }
 
@@ -443,13 +453,15 @@ mod tests {
     let mut transport = StdioTransport::new(vec![]);
     let result = transport.connect().await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), MCPError::Configuration { .. }));
+    assert!(matches!(
+      result.unwrap_err(),
+      MCPError::Configuration { .. }
+    ));
   }
 
   #[tokio::test]
   async fn test_connect_invalid_command() {
-    let mut transport =
-      StdioTransport::new(vec!["nonexistent_command_xyz123".to_string()]);
+    let mut transport = StdioTransport::new(vec!["nonexistent_command_xyz123".to_string()]);
     let result = transport.connect().await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), MCPError::Connection { .. }));
@@ -458,8 +470,8 @@ mod tests {
   #[tokio::test]
   async fn test_connect_already_connected() {
     // Use 'cat' which will wait for input (works on Unix-like systems)
-    let mut transport = StdioTransport::new(vec!["cat".to_string()])
-      .with_timeout(Duration::from_millis(100));
+    let mut transport =
+      StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(100));
 
     transport.connect().await.unwrap();
     assert!(transport.is_connected());
@@ -586,8 +598,8 @@ mod tests {
   #[tokio::test]
   async fn test_read_timeout() {
     // Start cat process which won't send anything
-    let mut transport = StdioTransport::new(vec!["cat".to_string()])
-      .with_timeout(Duration::from_millis(100));
+    let mut transport =
+      StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(100));
 
     transport.connect().await.unwrap();
 
@@ -601,8 +613,8 @@ mod tests {
 
   #[tokio::test]
   async fn test_receive_message_timeout_returns_none() {
-    let mut transport = StdioTransport::new(vec!["cat".to_string()])
-      .with_timeout(Duration::from_millis(100));
+    let mut transport =
+      StdioTransport::new(vec!["cat".to_string()]).with_timeout(Duration::from_millis(100));
 
     transport.connect().await.unwrap();
 
@@ -696,8 +708,8 @@ mod tests {
   #[tokio::test]
   async fn test_process_exit_during_operation() {
     // Use 'true' which exits immediately
-    let mut transport = StdioTransport::new(vec!["true".to_string()])
-      .with_timeout(Duration::from_millis(500));
+    let mut transport =
+      StdioTransport::new(vec!["true".to_string()]).with_timeout(Duration::from_millis(500));
 
     transport.connect().await.unwrap();
 

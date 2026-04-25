@@ -20,7 +20,7 @@
 //! impl EventListener for MyListener {
 //!     fn on_event(&self, event: &WorkflowEvent) {
 //!         match event {
-//!             WorkflowEvent::NodeCompleted { node_id, duration } => {
+//!             WorkflowEvent::NodeCompleted { node_id, duration, .. } => {
 //!                 println!("Node {} completed in {:?}", node_id, duration);
 //!             }
 //!             _ => {}
@@ -227,11 +227,7 @@ impl fmt::Display for WorkflowEvent {
         duration,
         ..
       } => {
-        write!(
-          f,
-          "Workflow '{}' completed in {:?}",
-          workflow_id, duration
-        )
+        write!(f, "Workflow '{}' completed in {:?}", workflow_id, duration)
       }
       Self::WorkflowFailed {
         workflow_id, error, ..
@@ -249,7 +245,9 @@ impl fmt::Display for WorkflowEvent {
       Self::NodeFailed { node_id, error, .. } => {
         write!(f, "Node '{}' failed: {}", node_id, error)
       }
-      Self::NodeSkipped { node_id, reason, .. } => {
+      Self::NodeSkipped {
+        node_id, reason, ..
+      } => {
         write!(f, "Node '{}' skipped: {}", node_id, reason)
       }
       Self::CheckpointSaved { checkpoint_id, .. } => {
@@ -369,11 +367,14 @@ impl EventListener for NoOpListener {
 /// ## Example
 ///
 /// ```rust
-/// use agentflow_core::events::ConsoleListener;
-/// use agentflow_core::flow::Flow;
+/// use agentflow_core::events::{ConsoleListener, EventListener, WorkflowEvent};
+/// use std::time::Instant;
 ///
-/// let flow = Flow::new()
-///     .with_listener(Box::new(ConsoleListener));
+/// let listener = ConsoleListener;
+/// listener.on_event(&WorkflowEvent::WorkflowStarted {
+///     workflow_id: "demo".to_string(),
+///     timestamp: Instant::now(),
+/// });
 /// ```
 pub struct ConsoleListener;
 
@@ -464,10 +465,7 @@ mod tests {
 
   #[test]
   fn test_multi_listener() {
-    let listener = MultiListener::new(vec![
-      Box::new(NoOpListener),
-      Box::new(ConsoleListener),
-    ]);
+    let listener = MultiListener::new(vec![Box::new(NoOpListener), Box::new(ConsoleListener)]);
 
     let event = WorkflowEvent::NodeStarted {
       workflow_id: "wf".into(),

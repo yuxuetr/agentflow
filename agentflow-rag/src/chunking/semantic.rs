@@ -215,14 +215,21 @@ impl SemanticChunker {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let index = (sorted.len() as f32 * self.buffer_percentile) as usize;
-    let percentile_value = sorted.get(index).copied().unwrap_or(self.similarity_threshold);
+    let percentile_value = sorted
+      .get(index)
+      .copied()
+      .unwrap_or(self.similarity_threshold);
 
     // Use the lower of percentile value and fixed threshold
     percentile_value.min(self.similarity_threshold)
   }
 
   /// Group sentences into chunks based on boundaries
-  fn group_into_chunks(&self, sentences: &[String], boundaries: &[usize]) -> Result<Vec<TextChunk>> {
+  fn group_into_chunks(
+    &self,
+    sentences: &[String],
+    boundaries: &[usize],
+  ) -> Result<Vec<TextChunk>> {
     let mut chunks = Vec::new();
     let mut char_offset = 0;
 
@@ -434,9 +441,9 @@ impl SemanticChunkerBuilder {
 
   /// Build the semantic chunker
   pub fn build(self) -> Result<SemanticChunker> {
-    let embedding_provider = self
-      .embedding_provider
-      .ok_or_else(|| RAGError::configuration("Embedding provider is required for semantic chunking"))?;
+    let embedding_provider = self.embedding_provider.ok_or_else(|| {
+      RAGError::configuration("Embedding provider is required for semantic chunking")
+    })?;
 
     Ok(SemanticChunker {
       embedding_provider,
@@ -487,10 +494,12 @@ mod tests {
 
   #[test]
   fn test_split_into_sentences() {
-    let embedding = Arc::new(crate::embeddings::openai::OpenAIEmbedding::builder("text-embedding-3-small")
-      .api_key("test")
-      .build()
-      .unwrap());
+    let embedding = Arc::new(
+      crate::embeddings::openai::OpenAIEmbedding::builder("text-embedding-3-small")
+        .api_key("test")
+        .build()
+        .unwrap(),
+    );
 
     let chunker = SemanticChunker {
       embedding_provider: embedding,
@@ -508,10 +517,12 @@ mod tests {
 
   #[test]
   fn test_detect_boundaries() {
-    let embedding = Arc::new(crate::embeddings::openai::OpenAIEmbedding::builder("text-embedding-3-small")
-      .api_key("test")
-      .build()
-      .unwrap());
+    let embedding = Arc::new(
+      crate::embeddings::openai::OpenAIEmbedding::builder("text-embedding-3-small")
+        .api_key("test")
+        .build()
+        .unwrap(),
+    );
 
     let chunker = SemanticChunker {
       embedding_provider: embedding,

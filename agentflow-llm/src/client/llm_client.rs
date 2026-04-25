@@ -238,9 +238,10 @@ impl LLMClient {
 
     // Apply model defaults
     if let Some(temp) = model_config.temperature.or(self.temperature) {
-      let num = serde_json::Number::from_f64(temp as f64).ok_or_else(|| LLMError::ConfigurationError {
-        message: format!("Invalid temperature value: {}", temp),
-      })?;
+      let num =
+        serde_json::Number::from_f64(temp as f64).ok_or_else(|| LLMError::ConfigurationError {
+          message: format!("Invalid temperature value: {}", temp),
+        })?;
       params.insert("temperature".to_string(), Value::Number(num));
     }
 
@@ -252,15 +253,18 @@ impl LLMClient {
     }
 
     if let Some(top_p) = model_config.top_p.or(self.top_p) {
-      let num = serde_json::Number::from_f64(top_p as f64).ok_or_else(|| LLMError::ConfigurationError {
-        message: format!("Invalid top_p value: {}", top_p),
-      })?;
+      let num =
+        serde_json::Number::from_f64(top_p as f64).ok_or_else(|| LLMError::ConfigurationError {
+          message: format!("Invalid top_p value: {}", top_p),
+        })?;
       params.insert("top_p".to_string(), Value::Number(num));
     }
 
     if let Some(freq_penalty) = self.frequency_penalty {
-      let num = serde_json::Number::from_f64(freq_penalty as f64).ok_or_else(|| LLMError::ConfigurationError {
-        message: format!("Invalid frequency_penalty value: {}", freq_penalty),
+      let num = serde_json::Number::from_f64(freq_penalty as f64).ok_or_else(|| {
+        LLMError::ConfigurationError {
+          message: format!("Invalid frequency_penalty value: {}", freq_penalty),
+        }
       })?;
       params.insert("frequency_penalty".to_string(), Value::Number(num));
     }
@@ -540,7 +544,7 @@ impl LLMClientBuilder {
     let system_msg = crate::multimodal::MultimodalMessage::system()
       .add_text(system_message)
       .build();
-    
+
     // If we already have multimodal messages, add to them
     if let Some(ref mut messages) = self.client.multimodal_messages {
       // Insert system message at the beginning
@@ -548,7 +552,7 @@ impl LLMClientBuilder {
     } else {
       // Create new multimodal messages with system message
       let mut messages = vec![system_msg];
-      
+
       // If there's a prompt, add it as a user message
       if !self.client.prompt.is_empty() {
         let user_msg = crate::multimodal::MultimodalMessage::user()
@@ -557,10 +561,10 @@ impl LLMClientBuilder {
         messages.push(user_msg);
         self.client.prompt = String::new(); // Clear the prompt since we're using multimodal now
       }
-      
+
       self.client.multimodal_messages = Some(messages);
     }
-    
+
     self
   }
 

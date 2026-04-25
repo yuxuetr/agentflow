@@ -227,8 +227,7 @@ impl EmbeddingProvider for OpenAIEmbedding {
       if tokens > self.max_tokens {
         return Err(RAGError::invalid_input(format!(
           "Text exceeds token limit: estimated {} tokens, max {}",
-          tokens,
-          self.max_tokens
+          tokens, self.max_tokens
         )));
       }
 

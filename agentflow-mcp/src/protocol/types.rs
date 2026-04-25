@@ -496,10 +496,7 @@ mod tests {
 
   #[test]
   fn test_initialize_params() {
-    let params = InitializeParams::new(
-      ClientCapabilities::default(),
-      Implementation::agentflow(),
-    );
+    let params = InitializeParams::new(ClientCapabilities::default(), Implementation::agentflow());
 
     assert_eq!(params.protocol_version, MCP_PROTOCOL_VERSION);
     assert_eq!(params.client_info.name, "agentflow-mcp");
@@ -514,7 +511,9 @@ mod tests {
     assert!(caps.supports_tools());
     assert!(!caps.supports_resources());
 
-    caps.resources = Some(ResourcesCapability { subscribe: Some(true) });
+    caps.resources = Some(ResourcesCapability {
+      subscribe: Some(true),
+    });
     assert!(caps.supports_resources());
   }
 

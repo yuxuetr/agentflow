@@ -24,8 +24,8 @@ pub async fn execute(
   let yaml_content = fs::read_to_string(&workflow_file)
     .with_context(|| format!("Failed to read workflow file: {}", workflow_file))?;
 
-  let flow_def: FlowDefinitionV2 = serde_yaml::from_str(&yaml_content)
-    .with_context(|| "Failed to parse workflow YAML")?;
+  let flow_def: FlowDefinitionV2 =
+    serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse workflow YAML")?;
 
   // Workflow validation
   if validate || show_all {
@@ -182,7 +182,14 @@ fn visualize_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> 
   // Print tree structure
   let mut visited = HashSet::new();
   for root in &roots {
-    print_node_tree(root.id.as_str(), flow_def, &dep_graph, &mut visited, 0, verbose);
+    print_node_tree(
+      root.id.as_str(),
+      flow_def,
+      &dep_graph,
+      &mut visited,
+      0,
+      verbose,
+    );
   }
 
   // Print dependency summary
@@ -252,7 +259,11 @@ fn analyze_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> {
     println!("Parallelism opportunities:");
     for (level, nodes) in parallel_levels.iter().enumerate() {
       if nodes.len() > 1 {
-        println!("  Level {}: {} nodes can run in parallel", level, nodes.len());
+        println!(
+          "  Level {}: {} nodes can run in parallel",
+          level,
+          nodes.len()
+        );
         println!("    {:?}", nodes);
       }
     }
@@ -281,14 +292,17 @@ fn show_execution_plan(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()>
   println!("(Nodes at the same level can execute in parallel)\n");
 
   for (level, nodes) in levels.iter().enumerate() {
-    println!("Level {} ({} node{}):",
+    println!(
+      "Level {} ({} node{}):",
       level,
       nodes.len(),
       if nodes.len() == 1 { "" } else { "s" }
     );
 
     for node_id in nodes {
-      let node = flow_def.nodes.iter()
+      let node = flow_def
+        .nodes
+        .iter()
         .find(|n| &n.id == node_id)
         .ok_or_else(|| anyhow::anyhow!("Node '{}' not found in workflow definition", node_id))?;
 
@@ -307,7 +321,10 @@ fn show_execution_plan(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()>
   }
 
   println!("Total execution levels: {}", levels.len());
-  println!("Maximum parallelism: {}", levels.iter().map(|l| l.len()).max().unwrap_or(0));
+  println!(
+    "Maximum parallelism: {}",
+    levels.iter().map(|l| l.len()).max().unwrap_or(0)
+  );
 
   Ok(())
 }
@@ -323,7 +340,9 @@ fn dry_run_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> {
     println!("📍 Level {} - Executing {} node(s)", level, nodes.len());
 
     for node_id in nodes {
-      let node = flow_def.nodes.iter()
+      let node = flow_def
+        .nodes
+        .iter()
         .find(|n| &n.id == node_id)
         .ok_or_else(|| anyhow::anyhow!("Node '{}' not found in workflow definition", node_id))?;
 
@@ -359,7 +378,8 @@ fn build_dependency_graph(flow_def: &FlowDefinitionV2) -> HashMap<String, Vec<St
   for node in &flow_def.nodes {
     graph.entry(node.id.clone()).or_insert_with(Vec::new);
     for dep in &node.dependencies {
-      graph.entry(dep.clone())
+      graph
+        .entry(dep.clone())
         .or_insert_with(Vec::new)
         .push(node.id.clone());
     }
@@ -454,11 +474,7 @@ fn find_reachable_nodes(flow_def: &FlowDefinitionV2) -> HashSet<String> {
 
   let dep_graph = build_dependency_graph(flow_def);
 
-  fn dfs(
-    node_id: &str,
-    dep_graph: &HashMap<String, Vec<String>>,
-    reachable: &mut HashSet<String>,
-  ) {
+  fn dfs(node_id: &str, dep_graph: &HashMap<String, Vec<String>>, reachable: &mut HashSet<String>) {
     reachable.insert(node_id.to_string());
     if let Some(dependents) = dep_graph.get(node_id) {
       for dependent in dependents {

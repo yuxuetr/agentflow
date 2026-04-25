@@ -60,7 +60,10 @@ pub async fn execute(
   }
 
   println!();
-  println!("{}", format!("Available Tools ({}):", tools.len()).bold().green());
+  println!(
+    "{}",
+    format!("Available Tools ({}):", tools.len()).bold().green()
+  );
   println!();
 
   for tool in &tools {
@@ -71,7 +74,11 @@ pub async fn execute(
     }
 
     // Display input schema if available
-    if let Some(properties) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+    if let Some(properties) = tool
+      .input_schema
+      .get("properties")
+      .and_then(|p| p.as_object())
+    {
       if !properties.is_empty() {
         println!("    {}:", "Parameters:".italic());
         for (param_name, param_schema) in properties {

@@ -6,6 +6,7 @@
 use crate::error::{MCPError, MCPResult};
 use crate::protocol::types::{ClientCapabilities, Implementation};
 use crate::transport_new::{StdioTransport, Transport};
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Builder for creating MCP clients with custom configuration
@@ -112,6 +113,12 @@ impl ClientBuilder {
     self
   }
 
+  /// Configure stdio transport with environment variables.
+  pub fn with_stdio_env(mut self, command: Vec<String>, env: HashMap<String, String>) -> Self {
+    self.transport = Some(Box::new(StdioTransport::new(command).with_env(env)));
+    self
+  }
+
   /// Set client capabilities
   ///
   /// # Arguments
@@ -124,7 +131,7 @@ impl ClientBuilder {
   /// use agentflow_mcp::client::ClientBuilder;
   /// use agentflow_mcp::protocol::types::ClientCapabilities;
   ///
-  /// let caps = ClientCapabilities::default().with_sampling();
+  /// let caps = ClientCapabilities::with_sampling();
   /// let builder = ClientBuilder::new()
   ///   .with_capabilities(caps);
   /// ```
@@ -282,15 +289,20 @@ mod tests {
   #[test]
   fn test_builder_default() {
     let builder = ClientBuilder::new();
-    assert_eq!(builder.timeout, Duration::from_secs(ClientBuilder::DEFAULT_TIMEOUT_SECS));
+    assert_eq!(
+      builder.timeout,
+      Duration::from_secs(ClientBuilder::DEFAULT_TIMEOUT_SECS)
+    );
     assert_eq!(builder.max_retries, ClientBuilder::DEFAULT_MAX_RETRIES);
-    assert_eq!(builder.retry_backoff_ms, ClientBuilder::DEFAULT_RETRY_BACKOFF_MS);
+    assert_eq!(
+      builder.retry_backoff_ms,
+      ClientBuilder::DEFAULT_RETRY_BACKOFF_MS
+    );
   }
 
   #[test]
   fn test_builder_with_timeout() {
-    let builder = ClientBuilder::new()
-      .with_timeout(Duration::from_secs(60));
+    let builder = ClientBuilder::new().with_timeout(Duration::from_secs(60));
     assert_eq!(builder.timeout, Duration::from_secs(60));
   }
 
@@ -305,8 +317,7 @@ mod tests {
 
   #[test]
   fn test_builder_with_client_info() {
-    let builder = ClientBuilder::new()
-      .with_client_info("test-client", "2.0.0");
+    let builder = ClientBuilder::new().with_client_info("test-client", "2.0.0");
     assert_eq!(builder.client_info.name, "test-client");
     assert_eq!(builder.client_info.version, "2.0.0");
   }
@@ -315,19 +326,25 @@ mod tests {
   async fn test_builder_without_transport() {
     let result = ClientBuilder::new().build().await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), MCPError::Configuration { .. }));
+    assert!(matches!(
+      result.unwrap_err(),
+      MCPError::Configuration { .. }
+    ));
   }
 
   #[test]
   fn test_builder_with_stdio() {
-    let builder = ClientBuilder::new()
-      .with_stdio(vec!["node".to_string(), "server.js".to_string()]);
+    let builder =
+      ClientBuilder::new().with_stdio(vec!["node".to_string(), "server.js".to_string()]);
     assert!(builder.transport.is_some());
   }
 
   #[test]
   fn test_builder_default_trait() {
     let builder = ClientBuilder::default();
-    assert_eq!(builder.timeout, Duration::from_secs(ClientBuilder::DEFAULT_TIMEOUT_SECS));
+    assert_eq!(
+      builder.timeout,
+      Duration::from_secs(ClientBuilder::DEFAULT_TIMEOUT_SECS)
+    );
   }
 }

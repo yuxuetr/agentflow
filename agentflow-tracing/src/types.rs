@@ -49,11 +49,9 @@ impl ExecutionTrace {
 
   /// Calculate total execution duration
   pub fn duration(&self) -> Option<Duration> {
-    self.completed_at.map(|completed| {
-      (completed - self.started_at)
-        .to_std()
-        .unwrap_or_default()
-    })
+    self
+      .completed_at
+      .map(|completed| (completed - self.started_at).to_std().unwrap_or_default())
   }
 
   /// Get duration in milliseconds
@@ -335,8 +333,7 @@ mod tests {
   fn test_trace_serialization() {
     let trace = ExecutionTrace::new("wf-test".to_string());
     let json = serde_json::to_string(&trace).expect("Failed to serialize");
-    let deserialized: ExecutionTrace =
-      serde_json::from_str(&json).expect("Failed to deserialize");
+    let deserialized: ExecutionTrace = serde_json::from_str(&json).expect("Failed to deserialize");
     assert_eq!(deserialized.workflow_id, "wf-test");
   }
 }

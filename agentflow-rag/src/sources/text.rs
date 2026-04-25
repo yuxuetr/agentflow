@@ -153,10 +153,18 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
 
     // Create test files
-    fs::write(temp_dir.path().join("file1.txt"), "Content 1").await.unwrap();
-    fs::write(temp_dir.path().join("file2.txt"), "Content 2").await.unwrap();
-    fs::write(temp_dir.path().join("file3.md"), "# Markdown").await.unwrap();
-    fs::write(temp_dir.path().join("ignored.rs"), "code").await.unwrap();
+    fs::write(temp_dir.path().join("file1.txt"), "Content 1")
+      .await
+      .unwrap();
+    fs::write(temp_dir.path().join("file2.txt"), "Content 2")
+      .await
+      .unwrap();
+    fs::write(temp_dir.path().join("file3.md"), "# Markdown")
+      .await
+      .unwrap();
+    fs::write(temp_dir.path().join("ignored.rs"), "code")
+      .await
+      .unwrap();
 
     let loader = TextLoader::new();
     let docs = loader.load_directory(temp_dir.path(), false).await.unwrap();
@@ -173,7 +181,9 @@ mod tests {
     fs::create_dir(&subdir).await.unwrap();
 
     // Create files in root and subdirectory
-    fs::write(temp_dir.path().join("root.txt"), "Root").await.unwrap();
+    fs::write(temp_dir.path().join("root.txt"), "Root")
+      .await
+      .unwrap();
     fs::write(subdir.join("sub.txt"), "Sub").await.unwrap();
 
     let loader = TextLoader::new();

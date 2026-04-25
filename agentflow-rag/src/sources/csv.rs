@@ -81,7 +81,9 @@ impl CsvLoader {
       // Add all fields as metadata
       for (i, header) in headers.iter().enumerate() {
         if let Some(value) = record.get(i) {
-          doc.metadata.insert(header.to_string(), value.to_string().into());
+          doc
+            .metadata
+            .insert(header.to_string(), value.to_string().into());
         }
       }
 
@@ -90,8 +92,12 @@ impl CsvLoader {
         "source".to_string(),
         path.to_string_lossy().to_string().into(),
       );
-      doc.metadata.insert("file_type".to_string(), "csv".to_string().into());
-      doc.metadata.insert("row_index".to_string(), (row_idx as i64).into());
+      doc
+        .metadata
+        .insert("file_type".to_string(), "csv".to_string().into());
+      doc
+        .metadata
+        .insert("row_index".to_string(), (row_idx as i64).into());
 
       documents.push(doc);
     }
@@ -142,10 +148,14 @@ impl CsvLoader {
 
     // Determine content
     let content = if let Some(ref field_name) = self.content_field {
-      obj.get(field_name).map(|v| v.to_string()).unwrap_or_default()
+      obj
+        .get(field_name)
+        .map(|v| v.to_string())
+        .unwrap_or_default()
     } else {
       // Use first field value or serialize the whole object
-      obj.values()
+      obj
+        .values()
         .next()
         .map(|v| v.to_string())
         .unwrap_or_else(|| serde_json::to_string(obj).unwrap_or_default())
@@ -182,10 +192,14 @@ impl CsvLoader {
       "source".to_string(),
       path.to_string_lossy().to_string().into(),
     );
-    doc.metadata.insert("file_type".to_string(), "json".to_string().into());
+    doc
+      .metadata
+      .insert("file_type".to_string(), "json".to_string().into());
 
     if let Some(idx) = index {
-      doc.metadata.insert("array_index".to_string(), (idx as i64).into());
+      doc
+        .metadata
+        .insert("array_index".to_string(), (idx as i64).into());
     }
 
     Some(doc)
@@ -206,9 +220,11 @@ impl DocumentLoader for CsvLoader {
       match ext.to_string_lossy().as_ref() {
         "csv" => self.load_csv(path).await?,
         "json" => self.load_json(path).await?,
-        _ => return Err(crate::error::RAGError::DocumentError {
-          message: format!("Unsupported file extension: {:?}", ext),
-        }),
+        _ => {
+          return Err(crate::error::RAGError::DocumentError {
+            message: format!("Unsupported file extension: {:?}", ext),
+          })
+        }
       }
     } else {
       return Err(crate::error::RAGError::DocumentError {
@@ -216,11 +232,12 @@ impl DocumentLoader for CsvLoader {
       });
     };
 
-    docs.into_iter().next().ok_or_else(|| {
-      crate::error::RAGError::DocumentError {
+    docs
+      .into_iter()
+      .next()
+      .ok_or_else(|| crate::error::RAGError::DocumentError {
         message: "No documents loaded from file".to_string(),
-      }
-    })
+      })
   }
 
   async fn load_directory(&self, dir: &Path, recursive: bool) -> Result<Vec<Document>> {

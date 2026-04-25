@@ -129,7 +129,9 @@ impl ConcurrencyConfigBuilder {
       } else {
         self.node_type_limits
       },
-      acquire_timeout_ms: self.acquire_timeout_ms.unwrap_or(defaults.acquire_timeout_ms),
+      acquire_timeout_ms: self
+        .acquire_timeout_ms
+        .unwrap_or(defaults.acquire_timeout_ms),
       enable_stats: self.enable_stats.unwrap_or(defaults.enable_stats),
     }
   }
@@ -260,7 +262,10 @@ impl ConcurrencyLimiter {
     // Get limit for this node type
     let limit = self.config.get_node_type_limit(node_type).ok_or_else(|| {
       AgentFlowError::ConfigurationError {
-        message: format!("No concurrency limit configured for node type: {}", node_type),
+        message: format!(
+          "No concurrency limit configured for node type: {}",
+          node_type
+        ),
       }
     })?;
 
@@ -322,7 +327,12 @@ impl ConcurrencyLimiter {
     self.workflow_semaphores.write().await.remove(workflow_id);
 
     if self.config.enable_stats {
-      self.stats.write().await.current_workflow_active.remove(workflow_id);
+      self
+        .stats
+        .write()
+        .await
+        .current_workflow_active
+        .remove(workflow_id);
     }
   }
 }

@@ -116,14 +116,11 @@ impl AsyncNode for RAGNode {
   #[cfg(feature = "rag")]
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     // Extract parameters
-    let operation = get_optional_string_input(inputs, "operation")?
-      .unwrap_or(&self.operation);
+    let operation = get_optional_string_input(inputs, "operation")?.unwrap_or(&self.operation);
 
-    let qdrant_url = get_optional_string_input(inputs, "qdrant_url")?
-      .unwrap_or(&self.qdrant_url);
+    let qdrant_url = get_optional_string_input(inputs, "qdrant_url")?.unwrap_or(&self.qdrant_url);
 
-    let collection = get_optional_string_input(inputs, "collection")?
-      .unwrap_or(&self.collection);
+    let collection = get_optional_string_input(inputs, "collection")?.unwrap_or(&self.collection);
 
     if collection.is_empty() {
       return Err(AgentFlowError::NodeInputError {
@@ -131,13 +128,24 @@ impl AsyncNode for RAGNode {
       });
     }
 
-    println!("🔍 RAG Operation: {} on collection '{}'", operation, collection);
+    println!(
+      "🔍 RAG Operation: {} on collection '{}'",
+      operation, collection
+    );
 
     match operation {
       "search" => self.execute_search(inputs, qdrant_url, collection).await,
       "index" => self.execute_index(inputs, qdrant_url, collection).await,
-      "create_collection" => self.execute_create_collection(inputs, qdrant_url, collection).await,
-      "delete_collection" => self.execute_delete_collection(inputs, qdrant_url, collection).await,
+      "create_collection" => {
+        self
+          .execute_create_collection(inputs, qdrant_url, collection)
+          .await
+      }
+      "delete_collection" => {
+        self
+          .execute_delete_collection(inputs, qdrant_url, collection)
+          .await
+      }
       "stats" => self.execute_stats(inputs, qdrant_url, collection).await,
       _ => Err(AgentFlowError::NodeInputError {
         message: format!("Unknown RAG operation: {}", operation),
@@ -165,16 +173,14 @@ impl RAGNode {
     let search_type = get_optional_string_input(inputs, "search_type")?.unwrap_or("semantic");
 
     // Create embedding provider
-    let embedding_model = get_optional_string_input(inputs, "embedding_model")?
-      .unwrap_or(&self.embedding_model);
+    let embedding_model =
+      get_optional_string_input(inputs, "embedding_model")?.unwrap_or(&self.embedding_model);
 
-    let embedder = Arc::new(
-      OpenAIEmbedding::new(embedding_model).map_err(|e| {
-        AgentFlowError::ConfigurationError {
-          message: format!("Failed to create embedding provider: {}", e),
-        }
-      })?,
-    );
+    let embedder = Arc::new(OpenAIEmbedding::new(embedding_model).map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!("Failed to create embedding provider: {}", e),
+      }
+    })?);
 
     // Connect to Qdrant
     let store = QdrantStore::with_embedding_provider(qdrant_url, embedder)
@@ -187,14 +193,12 @@ impl RAGNode {
 
     // Perform search based on type
     let results = match search_type {
-      "semantic" => {
-        store
-          .similarity_search(collection, query, top_k, None)
-          .await
-          .map_err(|e| AgentFlowError::AsyncExecutionError {
-            message: format!("Semantic search failed: {}", e),
-          })?
-      }
+      "semantic" => store
+        .similarity_search(collection, query, top_k, None)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("Semantic search failed: {}", e),
+        })?,
       "hybrid" => {
         // For hybrid search, we need both semantic and keyword results
         let semantic_results = store
@@ -243,11 +247,10 @@ impl RAGNode {
     println!("   ✅ Found {} results", results.len());
 
     // Convert results to JSON
-    let results_json = serde_json::to_value(&results).map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
+    let results_json =
+      serde_json::to_value(&results).map_err(|e| AgentFlowError::AsyncExecutionError {
         message: format!("Failed to serialize results: {}", e),
-      }
-    })?;
+      })?;
 
     let mut outputs = HashMap::new();
     outputs.insert("results".to_string(), FlowValue::Json(results_json.clone()));
@@ -294,16 +297,14 @@ impl RAGNode {
     println!("   📝 Indexing {} documents...", documents.len());
 
     // Create embedding provider
-    let embedding_model = get_optional_string_input(inputs, "embedding_model")?
-      .unwrap_or(&self.embedding_model);
+    let embedding_model =
+      get_optional_string_input(inputs, "embedding_model")?.unwrap_or(&self.embedding_model);
 
-    let embedder = Arc::new(
-      OpenAIEmbedding::new(embedding_model).map_err(|e| {
-        AgentFlowError::ConfigurationError {
-          message: format!("Failed to create embedding provider: {}", e),
-        }
-      })?,
-    );
+    let embedder = Arc::new(OpenAIEmbedding::new(embedding_model).map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!("Failed to create embedding provider: {}", e),
+      }
+    })?);
 
     // Connect to Qdrant
     let store = QdrantStore::with_embedding_provider(qdrant_url, embedder)
@@ -359,16 +360,14 @@ impl RAGNode {
     };
 
     // Create embedding provider (needed for QdrantStore)
-    let embedding_model = get_optional_string_input(inputs, "embedding_model")?
-      .unwrap_or(&self.embedding_model);
+    let embedding_model =
+      get_optional_string_input(inputs, "embedding_model")?.unwrap_or(&self.embedding_model);
 
-    let embedder = Arc::new(
-      OpenAIEmbedding::new(embedding_model).map_err(|e| {
-        AgentFlowError::ConfigurationError {
-          message: format!("Failed to create embedding provider: {}", e),
-        }
-      })?,
-    );
+    let embedder = Arc::new(OpenAIEmbedding::new(embedding_model).map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!("Failed to create embedding provider: {}", e),
+      }
+    })?);
 
     let store = QdrantStore::with_embedding_provider(qdrant_url, embedder)
       .await
@@ -410,13 +409,11 @@ impl RAGNode {
     println!("   🗑️  Deleting collection '{}'...", collection);
 
     // Create a minimal embedder just for connection
-    let embedder = Arc::new(
-      OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
-        AgentFlowError::ConfigurationError {
-          message: format!("Failed to create embedding provider: {}", e),
-        }
-      })?,
-    );
+    let embedder = Arc::new(OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!("Failed to create embedding provider: {}", e),
+      }
+    })?);
 
     let store = QdrantStore::with_embedding_provider(qdrant_url, embedder)
       .await
@@ -450,13 +447,11 @@ impl RAGNode {
 
     println!("   📊 Getting stats for collection '{}'...", collection);
 
-    let embedder = Arc::new(
-      OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
-        AgentFlowError::ConfigurationError {
-          message: format!("Failed to create embedding provider: {}", e),
-        }
-      })?,
-    );
+    let embedder = Arc::new(OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!("Failed to create embedding provider: {}", e),
+      }
+    })?);
 
     let store = QdrantStore::with_embedding_provider(qdrant_url, embedder)
       .await
@@ -464,12 +459,11 @@ impl RAGNode {
         message: format!("Failed to connect to Qdrant: {}", e),
       })?;
 
-    let stats = store
-      .get_collection_stats(collection)
-      .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
+    let stats = store.get_collection_stats(collection).await.map_err(|e| {
+      AgentFlowError::AsyncExecutionError {
         message: format!("Failed to get stats: {}", e),
-      })?;
+      }
+    })?;
 
     println!(
       "   ✅ Collection has {} documents, dimension {}",
@@ -496,10 +490,7 @@ impl RAGNode {
 
 // Helper functions for input extraction
 
-fn get_string_input<'a>(
-  inputs: &'a AsyncNodeInputs,
-  key: &str,
-) -> Result<&'a str, AgentFlowError> {
+fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, AgentFlowError> {
   inputs
     .get(key)
     .and_then(|v| match v {
@@ -507,7 +498,10 @@ fn get_string_input<'a>(
       _ => None,
     })
     .ok_or_else(|| AgentFlowError::NodeInputError {
-      message: format!("Required string input '{}' is missing or has wrong type", key),
+      message: format!(
+        "Required string input '{}' is missing or has wrong type",
+        key
+      ),
     })
 }
 
@@ -556,10 +550,7 @@ fn get_optional_f64_input(
   }
 }
 
-fn get_json_input<'a>(
-  inputs: &'a AsyncNodeInputs,
-  key: &str,
-) -> Result<&'a Value, AgentFlowError> {
+fn get_json_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a Value, AgentFlowError> {
   inputs
     .get(key)
     .and_then(|v| match v {

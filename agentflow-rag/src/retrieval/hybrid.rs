@@ -151,10 +151,7 @@ impl HybridRetriever {
       let semantic_score = semantic_rrf.get(&result.id).copied().unwrap_or(0.0);
       let combined_score = alpha * semantic_score;
 
-      combined_scores.insert(
-        result.id.clone(),
-        (combined_score, result),
-      );
+      combined_scores.insert(result.id.clone(), (combined_score, result));
     }
 
     // Add/update with keyword results
@@ -169,9 +166,7 @@ impl HybridRetriever {
     }
 
     // Sort by combined score and take top-k
-    let mut results: Vec<(f32, SearchResult)> = combined_scores
-      .into_values()
-      .collect();
+    let mut results: Vec<(f32, SearchResult)> = combined_scores.into_values().collect();
 
     results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 

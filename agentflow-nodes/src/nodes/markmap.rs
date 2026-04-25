@@ -1,8 +1,8 @@
 use crate::common::utils::flow_value_to_string;
 use agentflow_core::{
-    async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
-    error::AgentFlowError,
-    value::FlowValue,
+  async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+  error::AgentFlowError,
+  value::FlowValue,
 };
 use async_trait::async_trait;
 use reqwest::Client;
@@ -92,7 +92,7 @@ impl MarkMapNode {
   fn build_request_payload(&self, markdown: &str) -> Value {
     let default_config = MarkMapConfig::default();
     let config = self.config.as_ref().unwrap_or(&default_config);
-    
+
     let mut payload = json!({
       "markdown": markdown,
     });
@@ -118,11 +118,11 @@ impl MarkMapNode {
 
   async fn save_html_to_file(&self, html: &str) -> Result<(), AgentFlowError> {
     if let Some(file_path) = &self.save_to_file {
-      tokio::fs::write(file_path, html).await.map_err(|e| {
-        AgentFlowError::AsyncExecutionError {
+      tokio::fs::write(file_path, html)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
           message: format!("Failed to save HTML to file {}: {}", file_path, e),
-        }
-      })?;
+        })?;
     }
     Ok(())
   }
@@ -130,70 +130,76 @@ impl MarkMapNode {
 
 #[async_trait]
 impl AsyncNode for MarkMapNode {
-    async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-        let resolved_markdown = self.resolve_markdown(inputs)?;
-        let payload = self.build_request_payload(&resolved_markdown);
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let resolved_markdown = self.resolve_markdown(inputs)?;
+    let payload = self.build_request_payload(&resolved_markdown);
 
-        let default_config = MarkMapConfig::default();
-        let config = self.config.as_ref().unwrap_or(&default_config);
-        let api_url = config.api_url.as_ref()
-            .ok_or_else(|| AgentFlowError::ConfigurationError {
-                message: "API URL not configured".to_string(),
-            })?;
+    let default_config = MarkMapConfig::default();
+    let config = self.config.as_ref().unwrap_or(&default_config);
+    let api_url = config
+      .api_url
+      .as_ref()
+      .ok_or_else(|| AgentFlowError::ConfigurationError {
+        message: "API URL not configured".to_string(),
+      })?;
 
-        let timeout_duration = std::time::Duration::from_secs(
-            config.timeout_seconds.unwrap_or(30)
-        );
-        let client = Client::builder()
-            .timeout(timeout_duration)
-            .build()
-            .map_err(|e| AgentFlowError::ConfigurationError {
-                message: format!("Failed to create HTTP client: {}", e),
-            })?;
+    let timeout_duration = std::time::Duration::from_secs(config.timeout_seconds.unwrap_or(30));
+    let client = Client::builder()
+      .timeout(timeout_duration)
+      .build()
+      .map_err(|e| AgentFlowError::ConfigurationError {
+        message: format!("Failed to create HTTP client: {}", e),
+      })?;
 
-        let response = client
-            .post(format!("{}/api/render", api_url))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| AgentFlowError::AsyncExecutionError {
-                message: format!("Failed to call markmap API: {}", e),
-            })?;
+    let response = client
+      .post(format!("{}/api/render", api_url))
+      .header("Content-Type", "application/json")
+      .json(&payload)
+      .send()
+      .await
+      .map_err(|e| AgentFlowError::AsyncExecutionError {
+        message: format!("Failed to call markmap API: {}", e),
+      })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AgentFlowError::AsyncExecutionError {
-                message: format!("API request failed with status {}: {}", status, error_text),
-            });
-        }
-
-        let response_text = response.text().await.map_err(|e| AgentFlowError::AsyncExecutionError {
-            message: format!("Failed to read response body: {}", e),
-        })?;
-
-        self.save_html_to_file(&response_text).await?;
-
-        let mut outputs = HashMap::new();
-        outputs.insert("html".to_string(), FlowValue::Json(Value::String(response_text)));
-
-        Ok(outputs)
+    if !response.status().is_success() {
+      let status = response.status();
+      let error_text = response.text().await.unwrap_or_default();
+      return Err(AgentFlowError::AsyncExecutionError {
+        message: format!("API request failed with status {}: {}", status, error_text),
+      });
     }
+
+    let response_text = response
+      .text()
+      .await
+      .map_err(|e| AgentFlowError::AsyncExecutionError {
+        message: format!("Failed to read response body: {}", e),
+      })?;
+
+    self.save_html_to_file(&response_text).await?;
+
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "html".to_string(),
+      FlowValue::Json(Value::String(response_text)),
+    );
+
+    Ok(outputs)
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+  use super::*;
+  use serde_json::json;
 
-    #[tokio::test]
-    async fn test_markmap_node_execution() {
-        let node = MarkMapNode::new("test_map", "# {{title}}\n## Item 1\n## Item 2");
-        let mut inputs = AsyncNodeInputs::new();
-        inputs.insert("title".to_string(), FlowValue::Json(json!("My Test Map")));
+  #[tokio::test]
+  async fn test_markmap_node_execution() {
+    let node = MarkMapNode::new("test_map", "# {{title}}\n## Item 1\n## Item 2");
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("title".to_string(), FlowValue::Json(json!("My Test Map")));
 
-        let result = node.execute(&inputs).await;
-        assert!(result.is_ok());
-    }
+    let result = node.execute(&inputs).await;
+    assert!(result.is_ok());
+  }
 }

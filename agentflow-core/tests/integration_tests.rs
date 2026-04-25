@@ -45,16 +45,11 @@ async fn test_retry_with_error_context_integration() {
   let attempts = Arc::new(AtomicUsize::new(0));
   let attempts_clone = attempts.clone();
 
-  let result = execute_with_retry_and_context(
-    &policy,
-    "test_run",
-    "flaky_node",
-    Some("test"),
-    || async {
+  let result =
+    execute_with_retry_and_context(&policy, "test_run", "flaky_node", Some("test"), || async {
       flaky_operation(attempts_clone.clone(), 2).await
-    },
-  )
-  .await;
+    })
+    .await;
 
   assert!(result.is_ok());
   assert_eq!(result.unwrap(), "Success");
@@ -88,7 +83,7 @@ async fn test_retry_max_attempts_with_error_context() {
   assert_eq!(attempts.load(Ordering::SeqCst), 4);
 
   // Verify error is returned
-  let (error, context) = result.unwrap_err();
+  let (_error, context) = result.unwrap_err();
 
   // After retry exhaustion, we may get RetryExhausted
   // The original error should be in the context's error chain
@@ -101,7 +96,7 @@ async fn test_retry_max_attempts_with_error_context() {
 async fn test_resource_monitoring_integration() {
   let limits = ResourceLimits::builder()
     .max_state_size(10 * 1024 * 1024) // 10 MB
-    .max_value_size(2 * 1024 * 1024)  // 2 MB
+    .max_value_size(2 * 1024 * 1024) // 2 MB
     .cleanup_threshold(0.8)
     .auto_cleanup(true)
     .build();
@@ -130,8 +125,8 @@ async fn test_resource_monitoring_integration() {
 #[tokio::test]
 async fn test_resource_limit_enforcement() {
   let limits = ResourceLimits::builder()
-    .max_state_size(5 * 1024 * 1024)  // 5 MB
-    .max_value_size(2 * 1024 * 1024)  // 2 MB
+    .max_state_size(5 * 1024 * 1024) // 5 MB
+    .max_value_size(2 * 1024 * 1024) // 2 MB
     .auto_cleanup(false) // Fail instead of cleanup
     .build();
 
@@ -158,7 +153,7 @@ async fn test_resource_limit_enforcement() {
 async fn test_automatic_cleanup_integration() {
   let limits = ResourceLimits::builder()
     .max_state_size(10 * 1024 * 1024) // 10 MB
-    .cleanup_threshold(0.8)            // 80%
+    .cleanup_threshold(0.8) // 80%
     .auto_cleanup(true)
     .build();
 
@@ -296,10 +291,7 @@ async fn test_error_context_builder_integration() {
     "data".to_string(),
     FlowValue::Json(serde_json::json!("test_value")),
   );
-  inputs.insert(
-    "count".to_string(),
-    FlowValue::Json(serde_json::json!(42)),
-  );
+  inputs.insert("count".to_string(), FlowValue::Json(serde_json::json!(42)));
 
   let context = ErrorContext::builder("run123", "node_xyz")
     .node_type("processor")
@@ -360,7 +352,10 @@ async fn test_resource_alerts_integration() {
 
   // Should have an ApproachingLimit alert
   let has_approaching_alert = alerts.iter().any(|alert| {
-    matches!(alert, agentflow_core::ResourceAlert::ApproachingLimit { .. })
+    matches!(
+      alert,
+      agentflow_core::ResourceAlert::ApproachingLimit { .. }
+    )
   });
   assert!(has_approaching_alert);
 }
@@ -404,14 +399,10 @@ async fn test_resource_limits_validation() {
   assert!(limits.validate().is_err());
 
   // Invalid: zero state size
-  let limits = ResourceLimits::builder()
-    .max_state_size(0)
-    .build();
+  let limits = ResourceLimits::builder().max_state_size(0).build();
   assert!(limits.validate().is_err());
 
   // Invalid: cleanup threshold out of range
-  let limits = ResourceLimits::builder()
-    .cleanup_threshold(1.5)
-    .build();
+  let limits = ResourceLimits::builder().cleanup_threshold(1.5).build();
   assert!(limits.validate().is_err());
 }

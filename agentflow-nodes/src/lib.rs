@@ -3,9 +3,9 @@
 //! This crate provides ready-to-use node implementations for AgentFlow workflows,
 //! supporting both code-first and configuration-first approaches.
 
+pub mod common;
 pub mod error;
 pub mod nodes;
-pub mod common;
 
 // Factory traits for configuration support
 pub mod factory_traits;

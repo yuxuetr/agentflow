@@ -79,11 +79,7 @@ impl ReadResourceResult {
 
   /// Get all text contents
   pub fn text_contents(&self) -> Vec<&str> {
-    self
-      .contents
-      .iter()
-      .filter_map(|c| c.as_text())
-      .collect()
+    self.contents.iter().filter_map(|c| c.as_text()).collect()
   }
 }
 
@@ -145,16 +141,22 @@ impl MCPClient {
     }
 
     // Parse result
-    let result = response
-      .result
-      .ok_or_else(|| MCPError::protocol("Missing result in resources/list response", JsonRpcErrorCode::InvalidRequest))?;
+    let result = response.result.ok_or_else(|| {
+      MCPError::protocol(
+        "Missing result in resources/list response",
+        JsonRpcErrorCode::InvalidRequest,
+      )
+    })?;
 
     // Extract resources array
     let resources_array = result
       .get("resources")
       .and_then(|v| v.as_array())
       .ok_or_else(|| {
-        MCPError::protocol("Missing or invalid 'resources' field in response", JsonRpcErrorCode::InvalidRequest)
+        MCPError::protocol(
+          "Missing or invalid 'resources' field in response",
+          JsonRpcErrorCode::InvalidRequest,
+        )
       })?;
 
     // Parse resources
@@ -218,14 +220,17 @@ impl MCPClient {
     let request = JsonRpcRequest::new(self.next_request_id(), "resources/read", Some(params));
 
     // Send request
-    let response = self
-      .send_request(request)
-      .await
-      .context(format!("Failed to send resources/read request for '{}'", uri))?;
+    let response = self.send_request(request).await.context(format!(
+      "Failed to send resources/read request for '{}'",
+      uri
+    ))?;
 
     // Parse response
     let response: JsonRpcResponse = serde_json::from_value(response).map_err(|e| {
-      MCPError::from(e).context(format!("Failed to parse resources/read response for '{}'", uri))
+      MCPError::from(e).context(format!(
+        "Failed to parse resources/read response for '{}'",
+        uri
+      ))
     })?;
 
     // Check for errors
@@ -295,20 +300,13 @@ impl MCPClient {
     });
 
     // Build request
-    let request = JsonRpcRequest::new(
-      self.next_request_id(),
-      "resources/subscribe",
-      Some(params),
-    );
+    let request = JsonRpcRequest::new(self.next_request_id(), "resources/subscribe", Some(params));
 
     // Send request
-    let response = self
-      .send_request(request)
-      .await
-      .context(format!(
-        "Failed to send resources/subscribe request for '{}'",
-        uri
-      ))?;
+    let response = self.send_request(request).await.context(format!(
+      "Failed to send resources/subscribe request for '{}'",
+      uri
+    ))?;
 
     // Parse response
     let response: JsonRpcResponse = serde_json::from_value(response).map_err(|e| {
@@ -378,13 +376,10 @@ impl MCPClient {
     );
 
     // Send request
-    let response = self
-      .send_request(request)
-      .await
-      .context(format!(
-        "Failed to send resources/unsubscribe request for '{}'",
-        uri
-      ))?;
+    let response = self.send_request(request).await.context(format!(
+      "Failed to send resources/unsubscribe request for '{}'",
+      uri
+    ))?;
 
     // Parse response
     let response: JsonRpcResponse = serde_json::from_value(response).map_err(|e| {

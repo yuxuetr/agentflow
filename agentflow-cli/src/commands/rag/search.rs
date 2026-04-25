@@ -22,9 +22,12 @@ pub async fn execute(
 ) -> Result<()> {
   println!(
     "{}",
-    format!("🔍 Searching collection '{}' for: \"{}\"", collection, query)
-      .bold()
-      .blue()
+    format!(
+      "🔍 Searching collection '{}' for: \"{}\"",
+      collection, query
+    )
+    .bold()
+    .blue()
   );
   println!(
     "{}",
@@ -51,7 +54,13 @@ pub async fn execute(
       // Hybrid search: semantic + keyword (BM25)
       println!(
         "{}",
-        format!("   Alpha: {} ({}% semantic, {}% keyword)", alpha, (alpha * 100.0) as i32, ((1.0 - alpha) * 100.0) as i32).dimmed()
+        format!(
+          "   Alpha: {} ({}% semantic, {}% keyword)",
+          alpha,
+          (alpha * 100.0) as i32,
+          ((1.0 - alpha) * 100.0) as i32
+        )
+        .dimmed()
       );
 
       // Get semantic results
@@ -131,16 +140,8 @@ pub async fn execute(
 
   for (i, result) in final_results.iter().enumerate() {
     println!("{}", format!("{}. ", i + 1).bold());
-    println!(
-      "   {}: {}",
-      "ID".cyan(),
-      result.id
-    );
-    println!(
-      "   {}: {:.4}",
-      "Score".yellow(),
-      result.score
-    );
+    println!("   {}: {}", "ID".cyan(), result.id);
+    println!("   {}: {:.4}", "Score".yellow(), result.score);
 
     // Display content (truncate if too long)
     let content = if result.content.len() > 200 {

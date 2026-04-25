@@ -6,8 +6,8 @@ use agentflow_core::{
   checkpoint::{CheckpointConfig, CheckpointManager},
   concurrency::{ConcurrencyConfig, ConcurrencyLimiter},
   error::{AgentFlowError, ErrorCategory, ErrorContext},
-  resource_manager::{ResourceManager, ResourceManagerConfig},
   resource_limits::ResourceLimits,
+  resource_manager::{ResourceManager, ResourceManagerConfig},
   retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy},
   retry_executor::execute_with_retry,
   state_monitor::StateMonitor,
@@ -87,20 +87,14 @@ async fn test_retryable_error_classification() {
   ];
 
   let non_retryable = vec![
-    AgentFlowError::ValidationError {
-      message: "invalid input".into(),
-    },
+    AgentFlowError::ValidationError("invalid input".into()),
     AgentFlowError::ConfigurationError {
       message: "missing config".into(),
     },
   ];
 
   for error in retryable {
-    assert!(
-      error.is_retryable(),
-      "Expected {} to be retryable",
-      error
-    );
+    assert!(error.is_retryable(), "Expected {} to be retryable", error);
   }
 
   for error in non_retryable {
@@ -122,23 +116,19 @@ async fn test_retry_with_exponential_backoff() {
   let attempt_counter = Arc::new(AtomicUsize::new(0));
   let counter_clone = attempt_counter.clone();
 
-  let result = execute_with_retry(
-    &policy,
-    "test_operation",
-    || {
-      let counter = counter_clone.clone();
-      async move {
-        let attempt = counter.fetch_add(1, Ordering::SeqCst);
-        if attempt < 2 {
-          Err(AgentFlowError::NetworkError {
-            message: "temporary failure".into(),
-          })
-        } else {
-          Ok("success".to_string())
-        }
+  let result = execute_with_retry(&policy, "test_operation", || {
+    let counter = counter_clone.clone();
+    async move {
+      let attempt = counter.fetch_add(1, Ordering::SeqCst);
+      if attempt < 2 {
+        Err(AgentFlowError::NetworkError {
+          message: "temporary failure".into(),
+        })
+      } else {
+        Ok("success".to_string())
       }
-    },
-  )
+    }
+  })
   .await;
 
   assert!(result.is_ok());
@@ -153,21 +143,21 @@ async fn test_retry_exhaustion() {
     .strategy(RetryStrategy::fixed(10))
     .build();
 
-  let result = execute_with_retry(
-    &policy,
-    "test_operation",
-    || async {
-      Err::<String, _>(AgentFlowError::NetworkError {
-        message: "persistent failure".into(),
-      })
-    },
-  )
+  let result = execute_with_retry(&policy, "test_operation", || async {
+    Err::<String, _>(AgentFlowError::NetworkError {
+      message: "persistent failure".into(),
+    })
+  })
   .await;
 
   assert!(result.is_err());
   // With max_attempts=2, expect either 2 or 3 actual attempts (depends on how retry counting works)
   if let Err(AgentFlowError::RetryExhausted { attempts }) = result {
-    assert!(attempts == 2 || attempts == 3, "Expected 2 or 3 attempts, got {}", attempts);
+    assert!(
+      attempts == 2 || attempts == 3,
+      "Expected 2 or 3 attempts, got {}",
+      attempts
+    );
   } else {
     panic!("Expected RetryExhausted error");
   }
@@ -239,10 +229,9 @@ async fn test_checkpoint_cleanup_policy() {
   assert_eq!(checkpoints.len(), 1);
 
   // Cleanup should remove old successful checkpoints
-  let cleaned = manager.cleanup_old_checkpoints().await.unwrap();
+  let _cleaned = manager.cleanup_old_checkpoints().await.unwrap();
   // Note: In real scenario, would need to wait for TTL to expire
   // This test just verifies the cleanup mechanism runs without error
-  assert!(cleaned >= 0);
 }
 
 #[tokio::test]
@@ -430,27 +419,26 @@ async fn test_workflow_with_retries_and_checkpoints() {
 
   // Node 2: Fails twice then succeeds (tests retry)
   let counter = attempt_counter.clone();
-  let node2_result = execute_with_retry(
-    &retry_policy,
-    "node2",
-    || {
-      let counter = counter.clone();
-      async move {
-        let attempt = counter.fetch_add(1, Ordering::SeqCst);
-        if attempt < 2 {
-          Err(AgentFlowError::NetworkError {
-            message: "transient error".into(),
-          })
-        } else {
-          Ok("node2_success")
-        }
+  let node2_result = execute_with_retry(&retry_policy, "node2", || {
+    let counter = counter.clone();
+    async move {
+      let attempt = counter.fetch_add(1, Ordering::SeqCst);
+      if attempt < 2 {
+        Err(AgentFlowError::NetworkError {
+          message: "transient error".into(),
+        })
+      } else {
+        Ok("node2_success")
       }
-    },
-  )
+    }
+  })
   .await;
 
   assert!(node2_result.is_ok());
-  state.insert("node2".to_string(), serde_json::json!(node2_result.unwrap()));
+  state.insert(
+    "node2".to_string(),
+    serde_json::json!(node2_result.unwrap()),
+  );
   checkpoint_manager
     .save_checkpoint(workflow_id, "node2", &state)
     .await
@@ -483,11 +471,7 @@ async fn test_concurrent_workflows_with_resource_limits() {
         .enable_stats(true)
         .build(),
     )
-    .memory_limits(
-      ResourceLimits::builder()
-        .max_state_size(50000)
-        .build(),
-    )
+    .memory_limits(ResourceLimits::builder().max_state_size(50000).build())
     .build();
 
   let manager = Arc::new(ResourceManager::new(config));
@@ -614,9 +598,7 @@ async fn test_checkpoint_with_empty_state() {
   let manager = CheckpointManager::new(config).unwrap();
 
   let state = HashMap::new();
-  let result = manager
-    .save_checkpoint("workflow", "node1", &state)
-    .await;
+  let result = manager.save_checkpoint("workflow", "node1", &state).await;
 
   assert!(result.is_ok());
 
@@ -635,19 +617,13 @@ async fn test_retry_with_non_retryable_error() {
   let attempt_counter = Arc::new(AtomicUsize::new(0));
   let counter = attempt_counter.clone();
 
-  let result = execute_with_retry(
-    &policy,
-    "test_operation",
-    || {
-      let counter = counter.clone();
-      async move {
-        counter.fetch_add(1, Ordering::SeqCst);
-        Err::<String, _>(AgentFlowError::ValidationError {
-          message: "invalid input".into(),
-        })
-      }
-    },
-  )
+  let result = execute_with_retry(&policy, "test_operation", || {
+    let counter = counter.clone();
+    async move {
+      counter.fetch_add(1, Ordering::SeqCst);
+      Err::<String, _>(AgentFlowError::ValidationError("invalid input".into()))
+    }
+  })
   .await;
 
   // Should fail immediately without retries (non-retryable error)

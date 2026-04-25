@@ -29,7 +29,10 @@ pub async fn execute(
         "cosine" => DistanceMetric::Cosine,
         "euclidean" => DistanceMetric::Euclidean,
         "dot" => DistanceMetric::Dot,
-        other => anyhow::bail!("Invalid distance metric: {}. Must be: cosine, euclidean, or dot", other),
+        other => anyhow::bail!(
+          "Invalid distance metric: {}. Must be: cosine, euclidean, or dot",
+          other
+        ),
       };
 
       println!(
@@ -138,11 +141,24 @@ pub async fn execute(
 
       if collections.contains(&collection_name) {
         println!();
-        println!("{}", format!("✅ Collection '{}' exists", collection_name).bold().green());
-        println!("{}", "Note: Detailed stats coming in future version".dimmed());
+        println!(
+          "{}",
+          format!("✅ Collection '{}' exists", collection_name)
+            .bold()
+            .green()
+        );
+        println!(
+          "{}",
+          "Note: Detailed stats coming in future version".dimmed()
+        );
       } else {
         println!();
-        println!("{}", format!("❌ Collection '{}' not found", collection_name).bold().red());
+        println!(
+          "{}",
+          format!("❌ Collection '{}' not found", collection_name)
+            .bold()
+            .red()
+        );
       }
     }
 

@@ -227,16 +227,19 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-      /// Property: Backoff duration is always non-negative
+      /// Property: Backoff duration matches the capped exponential formula
       #[test]
-      fn prop_backoff_always_non_negative(
+      fn prop_backoff_matches_capped_formula(
         base_ms in 1u64..10_000u64,
         max_backoff_ms in 1_000u64..100_000u64,
         attempt in 0u32..20u32
       ) {
         let config = RetryConfig::new(10, base_ms).with_max_backoff(max_backoff_ms);
         let duration = config.backoff_duration(attempt);
-        prop_assert!(duration.as_millis() >= 0);
+        let expected = base_ms
+          .saturating_mul(2_u64.saturating_pow(attempt))
+          .min(max_backoff_ms);
+        prop_assert_eq!(duration.as_millis(), expected as u128);
       }
 
       /// Property: Backoff respects maximum cap

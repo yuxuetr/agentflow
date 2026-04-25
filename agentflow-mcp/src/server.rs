@@ -86,14 +86,12 @@ impl MCPServer {
 
   /// Handle an MCP request
   async fn handle_request(&self, request: Value) -> MCPResult<Option<Value>> {
-    let method = request["method"]
-      .as_str()
-      .ok_or_else(|| {
-        MCPError::protocol(
-          "Missing method in request".to_string(),
-          JsonRpcErrorCode::InvalidRequest,
-        )
-      })?;
+    let method = request["method"].as_str().ok_or_else(|| {
+      MCPError::protocol(
+        "Missing method in request".to_string(),
+        JsonRpcErrorCode::InvalidRequest,
+      )
+    })?;
 
     let id = request.get("id");
 

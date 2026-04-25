@@ -224,9 +224,12 @@ impl ModelRegistry {
 
     // Store providers
     {
-      let mut providers_guard = self.providers.write().map_err(|e| LLMError::InternalError {
-        message: format!("Providers lock poisoned: {}", e),
-      })?;
+      let mut providers_guard = self
+        .providers
+        .write()
+        .map_err(|e| LLMError::InternalError {
+          message: format!("Providers lock poisoned: {}", e),
+        })?;
       *providers_guard = providers;
     }
 

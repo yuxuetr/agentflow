@@ -65,7 +65,7 @@ impl Default for ResourceManagerConfig {
       concurrency_limits: ConcurrencyConfig::default(),
       enable_detailed_tracking: true,
       workflow_memory_limit: Some(2 * 1024 * 1024 * 1024), // 2 GB default
-      node_memory_limit: Some(100 * 1024 * 1024),         // 100 MB default
+      node_memory_limit: Some(100 * 1024 * 1024),          // 100 MB default
     }
   }
 }
@@ -117,11 +117,15 @@ impl ResourceManagerConfigBuilder {
     let defaults = ResourceManagerConfig::default();
     ResourceManagerConfig {
       memory_limits: self.memory_limits.unwrap_or(defaults.memory_limits),
-      concurrency_limits: self.concurrency_limits.unwrap_or(defaults.concurrency_limits),
+      concurrency_limits: self
+        .concurrency_limits
+        .unwrap_or(defaults.concurrency_limits),
       enable_detailed_tracking: self
         .enable_detailed_tracking
         .unwrap_or(defaults.enable_detailed_tracking),
-      workflow_memory_limit: self.workflow_memory_limit.or(defaults.workflow_memory_limit),
+      workflow_memory_limit: self
+        .workflow_memory_limit
+        .or(defaults.workflow_memory_limit),
       node_memory_limit: self.node_memory_limit.or(defaults.node_memory_limit),
     }
   }
@@ -434,7 +438,7 @@ mod tests {
   fn test_config_builder() {
     let config = ResourceManagerConfig::builder()
       .workflow_memory_limit(1024 * 1024 * 1024) // 1 GB
-      .node_memory_limit(50 * 1024 * 1024)       // 50 MB
+      .node_memory_limit(50 * 1024 * 1024) // 50 MB
       .enable_detailed_tracking(false)
       .build();
 

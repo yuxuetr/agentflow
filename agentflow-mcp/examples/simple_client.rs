@@ -36,9 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command: Vec<String> = args.iter().skip(1).map(|s| s.clone()).collect();
 
     if command.is_empty() {
-      eprintln!("Usage: {} <command> [args...] or {} --mock", args[0], args[0]);
+      eprintln!(
+        "Usage: {} <command> [args...] or {} --mock",
+        args[0], args[0]
+      );
       eprintln!("\nExample:");
-      eprintln!("  {} npx -y @modelcontextprotocol/server-everything", args[0]);
+      eprintln!(
+        "  {} npx -y @modelcontextprotocol/server-everything",
+        args[0]
+      );
       std::process::exit(1);
     }
 
@@ -121,9 +127,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(result) => {
               if let Some(content) = result.first_content() {
                 if let Some(text) = content.as_text() {
-                  println!("Content (first 200 chars): {}...", &text.chars().take(200).collect::<String>());
+                  println!(
+                    "Content (first 200 chars): {}...",
+                    &text.chars().take(200).collect::<String>()
+                  );
                 } else {
-                  println!("Binary content: {} bytes", content.as_blob().map(|b| b.len()).unwrap_or(0));
+                  println!(
+                    "Binary content: {} bytes",
+                    content.as_blob().map(|b| b.len()).unwrap_or(0)
+                  );
                 }
               }
             }
@@ -170,7 +182,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
               println!("Messages: {} total", result.messages.len());
               for (i, message) in result.messages.iter().enumerate() {
                 if let Some(text) = message.as_text() {
-                  println!("  Message {}: {:?} - {}", i + 1, message.role, &text.chars().take(100).collect::<String>());
+                  println!(
+                    "  Message {}: {:?} - {}",
+                    i + 1,
+                    message.role,
+                    &text.chars().take(100).collect::<String>()
+                  );
                 }
               }
             }
@@ -191,7 +208,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Build a mock client for testing
-async fn build_mock_client() -> Result<agentflow_mcp::client::MCPClient, Box<dyn std::error::Error>> {
+async fn build_mock_client() -> Result<agentflow_mcp::client::MCPClient, Box<dyn std::error::Error>>
+{
   let mut transport = MockTransport::new();
 
   // Add responses

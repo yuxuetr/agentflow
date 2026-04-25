@@ -56,11 +56,10 @@ impl DocumentLoader for PdfLoader {
     let bytes = fs::read(path).await?;
 
     // Extract text from PDF
-    let text = extract_text_from_mem(&bytes).map_err(|e| {
-      crate::error::RAGError::DocumentError {
+    let text =
+      extract_text_from_mem(&bytes).map_err(|e| crate::error::RAGError::DocumentError {
         message: format!("Failed to extract text from PDF: {}", e),
-      }
-    })?;
+      })?;
 
     let mut doc = Document::new(text);
 
@@ -69,7 +68,9 @@ impl DocumentLoader for PdfLoader {
       "source".to_string(),
       path.to_string_lossy().to_string().into(),
     );
-    doc.metadata.insert("file_type".to_string(), "pdf".to_string().into());
+    doc
+      .metadata
+      .insert("file_type".to_string(), "pdf".to_string().into());
 
     if let Some(file_name) = path.file_name() {
       doc.metadata.insert(

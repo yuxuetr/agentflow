@@ -58,12 +58,12 @@ impl RecursiveChunker {
   /// Get default separators in order of preference
   fn default_separators() -> Vec<String> {
     vec![
-      "\n\n".to_string(),  // Paragraphs
-      "\n".to_string(),    // Lines
-      ". ".to_string(),    // Sentences
-      ", ".to_string(),    // Clauses
-      " ".to_string(),     // Words
-      "".to_string(),      // Characters
+      "\n\n".to_string(), // Paragraphs
+      "\n".to_string(),   // Lines
+      ". ".to_string(),   // Sentences
+      ", ".to_string(),   // Clauses
+      " ".to_string(),    // Words
+      "".to_string(),     // Characters
     ]
   }
 
@@ -193,11 +193,7 @@ impl ChunkingStrategy for RecursiveChunker {
     for (i, chunk_text) in merged_chunks.iter().enumerate() {
       // Find the actual position in the original text
       // This is approximate due to overlap handling
-      let start_idx = if i == 0 {
-        0
-      } else {
-        current_pos
-      };
+      let start_idx = if i == 0 { 0 } else { current_pos };
 
       let end_idx = start_idx + chunk_text.len();
       current_pos = if self.overlap > 0 && chunk_text.len() > self.overlap {
@@ -343,10 +339,10 @@ mod tests {
     let separators = RecursiveChunker::default_separators();
     assert_eq!(separators.len(), 6);
     assert_eq!(separators[0], "\n\n"); // Paragraphs
-    assert_eq!(separators[1], "\n");   // Lines
-    assert_eq!(separators[2], ". ");   // Sentences
-    assert_eq!(separators[3], ", ");   // Clauses
-    assert_eq!(separators[4], " ");    // Words
-    assert_eq!(separators[5], "");     // Characters
+    assert_eq!(separators[1], "\n"); // Lines
+    assert_eq!(separators[2], ". "); // Sentences
+    assert_eq!(separators[3], ", "); // Clauses
+    assert_eq!(separators[4], " "); // Words
+    assert_eq!(separators[5], ""); // Characters
   }
 }

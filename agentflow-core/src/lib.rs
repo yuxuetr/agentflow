@@ -11,9 +11,10 @@ pub mod node;
 pub mod value;
 
 // Execution engine
+pub mod concurrency;
+pub mod health;
 pub mod retry;
 pub mod retry_executor;
-pub mod concurrency;
 pub mod timeout;
 
 // Reliability
@@ -26,17 +27,18 @@ pub mod state_monitor;
 pub mod events;
 
 // Core traits and types
+pub use async_node::AsyncNode;
+pub use checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus};
+pub use concurrency::{ConcurrencyConfig, ConcurrencyLimiter, ConcurrencyStats};
 pub use error::{AgentFlowError, Result};
 pub use error_context::{ErrorContext, ErrorInfo};
+pub use events::{ConsoleListener, EventListener, MultiListener, NoOpListener, WorkflowEvent};
 pub use flow::Flow;
+pub use health::{HealthChecker, HealthReport, HealthStatus};
 pub use node::Node;
-pub use async_node::AsyncNode;
-pub use value::FlowValue;
-pub use retry::{RetryPolicy, RetryStrategy, RetryContext, ErrorPattern};
-pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
 pub use resource_limits::ResourceLimits;
-pub use state_monitor::{StateMonitor, ResourceAlert, ResourceStats};
-pub use checkpoint::{CheckpointManager, CheckpointConfig, Checkpoint, WorkflowStatus};
-pub use concurrency::{ConcurrencyLimiter, ConcurrencyConfig, ConcurrencyStats};
-pub use resource_manager::{ResourceManager, ResourceManagerConfig, CombinedResourceStats};
-pub use events::{WorkflowEvent, EventListener, NoOpListener, ConsoleListener, MultiListener};
+pub use resource_manager::{CombinedResourceStats, ResourceManager, ResourceManagerConfig};
+pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
+pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
+pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
+pub use value::FlowValue;

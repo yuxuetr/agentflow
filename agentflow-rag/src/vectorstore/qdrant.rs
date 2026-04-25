@@ -9,9 +9,9 @@ use crate::{
 use async_trait::async_trait;
 use qdrant_client::{
   qdrant::{
-    vectors_config::Config, Distance, PointId, PointStruct,
-    Value as QdrantValue, VectorParams, VectorsConfig, SearchPointsBuilder, CreateCollectionBuilder,
-    UpsertPointsBuilder, DeletePointsBuilder,
+    vectors_config::Config, CreateCollectionBuilder, DeletePointsBuilder, Distance, PointId,
+    PointStruct, SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue, VectorParams,
+    VectorsConfig,
   },
   Qdrant,
 };
@@ -41,7 +41,10 @@ impl QdrantStore {
     url: impl Into<String>,
     provider: Arc<dyn EmbeddingProvider>,
   ) -> Result<Self> {
-    Self::builder(url).embedding_provider(provider).build().await
+    Self::builder(url)
+      .embedding_provider(provider)
+      .build()
+      .await
   }
 
   /// Create a builder for more configuration options
@@ -67,7 +70,10 @@ impl QdrantStore {
 
     // Convert metadata to Qdrant payload
     let mut payload = HashMap::new();
-    payload.insert("content".to_string(), QdrantValue::from(doc.content.clone()));
+    payload.insert(
+      "content".to_string(),
+      QdrantValue::from(doc.content.clone()),
+    );
 
     for (key, value) in &doc.metadata {
       let qdrant_value = match value {
@@ -75,18 +81,12 @@ impl QdrantStore {
         MetadataValue::Integer(i) => QdrantValue::from(*i),
         MetadataValue::Float(f) => QdrantValue::from(*f),
         MetadataValue::Boolean(b) => QdrantValue::from(*b),
-        MetadataValue::Array(arr) => {
-          QdrantValue::from(arr.clone())
-        }
+        MetadataValue::Array(arr) => QdrantValue::from(arr.clone()),
       };
       payload.insert(key.clone(), qdrant_value);
     }
 
-    Ok(PointStruct::new(
-      doc.id.clone(),
-      embedding.clone(),
-      payload,
-    ))
+    Ok(PointStruct::new(doc.id.clone(), embedding.clone(), payload))
   }
 
   /// Convert Filter to Qdrant Filter (Qdrant 1.15+ API)
@@ -119,7 +119,8 @@ impl QdrantStore {
         .collect::<Result<Vec<_>>>()?;
     }
 
-    tracing::debug!("Converted filter with {} must, {} should, {} must_not conditions",
+    tracing::debug!(
+      "Converted filter with {} must, {} should, {} must_not conditions",
       qdrant_filter.must.len(),
       qdrant_filter.should.len(),
       qdrant_filter.must_not.len()
@@ -129,10 +130,12 @@ impl QdrantStore {
   }
 
   /// Convert a single Condition to Qdrant Condition
-  fn convert_condition(condition: &crate::types::Condition) -> Result<qdrant_client::qdrant::Condition> {
+  fn convert_condition(
+    condition: &crate::types::Condition,
+  ) -> Result<qdrant_client::qdrant::Condition> {
     use qdrant_client::qdrant::{
-      condition::ConditionOneOf, r#match::MatchValue, Condition as QCondition,
-      FieldCondition, Match, Range,
+      condition::ConditionOneOf, r#match::MatchValue, Condition as QCondition, FieldCondition,
+      Match, Range,
     };
 
     match condition {
@@ -216,13 +219,13 @@ impl VectorStore for QdrantStore {
         size: config.dimension as u64,
         distance: Self::convert_distance(config.distance).into(),
         hnsw_config: config.index_config.as_ref().and_then(|ic| {
-          ic.hnsw.as_ref().map(|hnsw| {
-            qdrant_client::qdrant::HnswConfigDiff {
+          ic.hnsw
+            .as_ref()
+            .map(|hnsw| qdrant_client::qdrant::HnswConfigDiff {
               m: Some(hnsw.m as u64),
               ef_construct: Some(hnsw.ef_construct as u64),
               ..Default::default()
-            }
-          })
+            })
         }),
         ..Default::default()
       })),
@@ -230,10 +233,7 @@ impl VectorStore for QdrantStore {
 
     self
       .client
-      .create_collection(
-        CreateCollectionBuilder::new(name)
-          .vectors_config(vectors_config)
-      )
+      .create_collection(CreateCollectionBuilder::new(name).vectors_config(vectors_config))
       .await
       .map_err(|e| RAGError::vector_store(format!("Failed to create collection: {}", e)))?;
 
@@ -255,20 +255,21 @@ impl VectorStore for QdrantStore {
   }
 
   async fn collection_exists(&self, name: &str) -> Result<bool> {
-    let collections = self.client.list_collections().await.map_err(|e| {
-      RAGError::vector_store(format!("Failed to list collections: {}", e))
-    })?;
+    let collections = self
+      .client
+      .list_collections()
+      .await
+      .map_err(|e| RAGError::vector_store(format!("Failed to list collections: {}", e)))?;
 
-    Ok(collections
-      .collections
-      .iter()
-      .any(|c| c.name == name))
+    Ok(collections.collections.iter().any(|c| c.name == name))
   }
 
   async fn list_collections(&self) -> Result<Vec<String>> {
-    let collections = self.client.list_collections().await.map_err(|e| {
-      RAGError::vector_store(format!("Failed to list collections: {}", e))
-    })?;
+    let collections = self
+      .client
+      .list_collections()
+      .await
+      .map_err(|e| RAGError::vector_store(format!("Failed to list collections: {}", e)))?;
 
     Ok(
       collections
@@ -284,7 +285,11 @@ impl VectorStore for QdrantStore {
       return Ok(Vec::new());
     }
 
-    tracing::info!("Adding {} documents to collection '{}'", docs.len(), collection);
+    tracing::info!(
+      "Adding {} documents to collection '{}'",
+      docs.len(),
+      collection
+    );
 
     // Convert documents to points
     let points: Vec<PointStruct> = docs
@@ -310,12 +315,13 @@ impl VectorStore for QdrantStore {
       return Ok(());
     }
 
-    tracing::info!("Deleting {} documents from collection '{}'", ids.len(), collection);
+    tracing::info!(
+      "Deleting {} documents from collection '{}'",
+      ids.len(),
+      collection
+    );
 
-    let point_ids: Vec<PointId> = ids
-      .into_iter()
-      .map(|id| PointId::from(id))
-      .collect();
+    let point_ids: Vec<PointId> = ids.into_iter().map(|id| PointId::from(id)).collect();
 
     self
       .client
@@ -369,8 +375,8 @@ impl VectorStore for QdrantStore {
       top_k
     );
 
-    let mut search_builder = SearchPointsBuilder::new(collection, vector, top_k as u64)
-      .with_payload(true);
+    let mut search_builder =
+      SearchPointsBuilder::new(collection, vector, top_k as u64).with_payload(true);
 
     if let Some(f) = filter {
       let qdrant_filter = Self::convert_filter(&f)?;
@@ -389,7 +395,9 @@ impl VectorStore for QdrantStore {
       .into_iter()
       .map(|point| {
         let id = match point.id {
-          Some(PointId { point_id_options: Some(options) }) => match options {
+          Some(PointId {
+            point_id_options: Some(options),
+          }) => match options {
             qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid) => uuid,
             qdrant_client::qdrant::point_id::PointIdOptions::Num(num) => num.to_string(),
           },
@@ -410,25 +418,16 @@ impl VectorStore for QdrantStore {
             // Convert Qdrant value to our MetadataValue
             if let Some(kind) = value.kind {
               let meta_value = match kind {
-                qdrant_client::qdrant::value::Kind::StringValue(s) => {
-                  MetadataValue::String(s)
-                }
-                qdrant_client::qdrant::value::Kind::IntegerValue(i) => {
-                  MetadataValue::Integer(i)
-                }
-                qdrant_client::qdrant::value::Kind::DoubleValue(f) => {
-                  MetadataValue::Float(f)
-                }
-                qdrant_client::qdrant::value::Kind::BoolValue(b) => {
-                  MetadataValue::Boolean(b)
-                }
+                qdrant_client::qdrant::value::Kind::StringValue(s) => MetadataValue::String(s),
+                qdrant_client::qdrant::value::Kind::IntegerValue(i) => MetadataValue::Integer(i),
+                qdrant_client::qdrant::value::Kind::DoubleValue(f) => MetadataValue::Float(f),
+                qdrant_client::qdrant::value::Kind::BoolValue(b) => MetadataValue::Boolean(b),
                 qdrant_client::qdrant::value::Kind::ListValue(list) => {
                   let strings: Vec<String> = list
                     .values
                     .into_iter()
                     .filter_map(|v| {
-                      if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = v.kind
-                      {
+                      if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = v.kind {
                         Some(s)
                       } else {
                         None
@@ -464,7 +463,11 @@ impl VectorStore for QdrantStore {
       .await
       .map_err(|e| RAGError::vector_store(format!("Failed to get collection info: {}", e)))?;
 
-    let points_count = info.result.as_ref().and_then(|r| r.points_count).unwrap_or(0);
+    let points_count = info
+      .result
+      .as_ref()
+      .and_then(|r| r.points_count)
+      .unwrap_or(0);
 
     let config = info
       .result

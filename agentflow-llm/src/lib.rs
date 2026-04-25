@@ -187,9 +187,12 @@ impl AgentFlow {
     if let Some(home_dir) = dirs::home_dir() {
       let user_config = home_dir.join(".agentflow").join("models.yml");
       if user_config.exists() {
-        let config_path = user_config.to_str().ok_or_else(|| crate::LLMError::ConfigurationError {
-          message: format!("Config path contains invalid UTF-8: {:?}", user_config),
-        })?;
+        let config_path =
+          user_config
+            .to_str()
+            .ok_or_else(|| crate::LLMError::ConfigurationError {
+              message: format!("Config path contains invalid UTF-8: {:?}", user_config),
+            })?;
         return Self::init_with_config(config_path).await;
       }
     }

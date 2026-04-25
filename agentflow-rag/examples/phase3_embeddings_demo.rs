@@ -44,11 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Step 2: Connect to Qdrant with embedding provider
   println!("2️⃣  Connecting to Qdrant with embedding provider...");
-  let store = QdrantStore::with_embedding_provider(
-    "http://localhost:6334",
-    Arc::new(embedding_provider),
-  )
-  .await?;
+  let store =
+    QdrantStore::with_embedding_provider("http://localhost:6334", Arc::new(embedding_provider))
+      .await?;
   println!("   ✅ Connected to Qdrant\n");
 
   // Step 3: Create collection

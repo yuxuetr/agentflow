@@ -146,8 +146,8 @@ impl TraceCollector {
         timestamp: _,
       } => {
         let mut trace = ExecutionTrace::new(workflow_id.clone());
-        trace.metadata.environment = std::env::var("AGENTFLOW_ENV")
-          .unwrap_or_else(|_| "development".to_string());
+        trace.metadata.environment =
+          std::env::var("AGENTFLOW_ENV").unwrap_or_else(|_| "development".to_string());
 
         traces.write().await.insert(workflow_id, trace);
       }
@@ -160,11 +160,7 @@ impl TraceCollector {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id) {
           // Extract node_type from node_id (format: "type:id" or just "id")
-          let node_type = node_id
-            .split(':')
-            .next()
-            .unwrap_or("Unknown")
-            .to_string();
+          let node_type = node_id.split(':').next().unwrap_or("Unknown").to_string();
 
           let node_trace = NodeTrace::new(node_id, node_type);
           trace.nodes.push(node_trace);
@@ -179,8 +175,7 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
-          {
+          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
             node.complete();
             node.duration_ms = Some(duration.as_millis() as u64);
           }
@@ -196,8 +191,7 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
-          {
+          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
             node.fail(error);
             node.duration_ms = Some(duration.as_millis() as u64);
           }
@@ -212,8 +206,7 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
-          {
+          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
             node.status = NodeStatus::Skipped;
             node.error = Some(format!("Skipped: {}", reason));
           }
@@ -240,7 +233,7 @@ impl TraceCollector {
           response: String::new(), // Will be filled later
           temperature,
           max_tokens,
-          usage: None, // Will be filled later
+          usage: None,   // Will be filled later
           latency_ms: 0, // Will be calculated later
         };
 
@@ -280,9 +273,7 @@ impl TraceCollector {
           // Attach to node trace
           let mut traces_guard = traces.write().await;
           if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-            if let Some(node) =
-              trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
-            {
+            if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
               node.llm_details = Some(llm_trace);
             }
           }
@@ -348,10 +339,7 @@ impl TraceCollector {
 
   /// Sanitize value to remove sensitive data and limit size
   #[allow(dead_code)]
-  fn sanitize_value(
-    value: &mut serde_json::Value,
-    max_size: usize,
-  ) -> Result<(), anyhow::Error> {
+  fn sanitize_value(value: &mut serde_json::Value, max_size: usize) -> Result<(), anyhow::Error> {
     // Remove sensitive keys
     if let serde_json::Value::Object(map) = value {
       let sensitive_keys = ["api_key", "password", "token", "secret", "credential"];
@@ -368,10 +356,7 @@ impl TraceCollector {
     // Limit size
     let json_str = serde_json::to_string(value)?;
     if json_str.len() > max_size {
-      *value = serde_json::Value::String(format!(
-        "[TRUNCATED: {} bytes]",
-        json_str.len()
-      ));
+      *value = serde_json::Value::String(format!("[TRUNCATED: {} bytes]", json_str.len()));
     }
 
     Ok(())

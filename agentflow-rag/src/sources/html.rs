@@ -96,9 +96,7 @@ impl HtmlLoader {
         let scripts: Vec<_> = document.select(&script_selector).collect();
         for _ in scripts {
           // Note: scraper doesn't provide element removal, so we use regex as fallback
-          html = script_regex()
-            .replace_all(&html, "")
-            .to_string();
+          html = script_regex().replace_all(&html, "").to_string();
         }
       }
 
@@ -106,9 +104,7 @@ impl HtmlLoader {
       if let Ok(style_selector) = Selector::parse("style") {
         let styles: Vec<_> = document.select(&style_selector).collect();
         for _ in styles {
-          html = style_regex()
-            .replace_all(&html, "")
-            .to_string();
+          html = style_regex().replace_all(&html, "").to_string();
         }
       }
 
@@ -119,11 +115,10 @@ impl HtmlLoader {
 
     // Extract text based on selector
     let text = if let Some(ref selector_str) = self.content_selector {
-      let selector = Selector::parse(selector_str).map_err(|e| {
-        crate::error::RAGError::DocumentError {
+      let selector =
+        Selector::parse(selector_str).map_err(|e| crate::error::RAGError::DocumentError {
           message: format!("Invalid CSS selector '{}': {:?}", selector_str, e),
-        }
-      })?;
+        })?;
 
       let texts: Vec<String> = cleaned_html
         .select(&selector)
@@ -171,7 +166,9 @@ impl DocumentLoader for HtmlLoader {
       "source".to_string(),
       path.to_string_lossy().to_string().into(),
     );
-    doc.metadata.insert("file_type".to_string(), "html".to_string().into());
+    doc
+      .metadata
+      .insert("file_type".to_string(), "html".to_string().into());
 
     if let Some(file_name) = path.file_name() {
       doc.metadata.insert(
@@ -186,7 +183,9 @@ impl DocumentLoader for HtmlLoader {
       if let Some(title_el) = document.select(&title_selector).next() {
         let title: String = title_el.text().collect();
         if !title.trim().is_empty() {
-          doc.metadata.insert("title".to_string(), title.trim().to_string().into());
+          doc
+            .metadata
+            .insert("title".to_string(), title.trim().to_string().into());
         }
       }
     }
@@ -266,7 +265,10 @@ mod tests {
 
     assert!(doc.content.contains("Hello"));
     assert!(doc.content.contains("World"));
-    assert_eq!(doc.metadata.get("file_type").unwrap().to_string(), "\"html\"");
+    assert_eq!(
+      doc.metadata.get("file_type").unwrap().to_string(),
+      "\"html\""
+    );
   }
 
   #[tokio::test]
@@ -335,7 +337,10 @@ mod tests {
     let loader = HtmlLoader::new();
     let doc = loader.load(&file_path).await.unwrap();
 
-    assert_eq!(doc.metadata.get("title").unwrap().to_string(), "\"Page Title\"");
+    assert_eq!(
+      doc.metadata.get("title").unwrap().to_string(),
+      "\"Page Title\""
+    );
   }
 
   #[test]

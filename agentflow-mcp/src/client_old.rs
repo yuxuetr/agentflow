@@ -96,14 +96,12 @@ impl MCPClient {
       ));
     }
 
-    let tools = response["result"]["tools"]
-      .as_array()
-      .ok_or_else(|| {
-        MCPError::protocol(
-          "Invalid tools list response".to_string(),
-          JsonRpcErrorCode::InternalError,
-        )
-      })?;
+    let tools = response["result"]["tools"].as_array().ok_or_else(|| {
+      MCPError::protocol(
+        "Invalid tools list response".to_string(),
+        JsonRpcErrorCode::InternalError,
+      )
+    })?;
 
     let mut tool_definitions = Vec::new();
     for tool in tools {
@@ -168,7 +166,6 @@ impl Drop for MCPClient {
 #[cfg(test)]
 mod tests {
   use super::*;
-  
 
   #[tokio::test]
   async fn test_client_creation() {

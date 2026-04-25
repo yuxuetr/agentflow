@@ -1,6 +1,6 @@
 //! Test MarkMap MCP integration
 
-use agentflow_mcp::{MCPClient, ToolCall};
+use agentflow_mcp::client::ClientBuilder;
 use serde_json::json;
 
 #[tokio::main]
@@ -14,7 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     "@jinzcdev/markmap-mcp-server".to_string(),
   ];
 
-  let mut client = MCPClient::stdio(server_command);
+  let mut client = ClientBuilder::new()
+    .with_stdio(server_command)
+    .build()
+    .await?;
 
   println!("🔗 Connecting to MarkMap MCP server...");
   match client.connect().await {
@@ -30,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(tools) => {
       println!("✅ Available tools:");
       for tool in &tools {
-        println!("  - {}: {}", tool.name, tool.description);
+        println!("  - {}: {:?}", tool.name, tool.description);
       }
     }
     Err(e) => {
@@ -57,18 +60,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Ethical AI"#;
 
   println!("🎨 Creating mind map from markdown...");
-  let tool_call = ToolCall::new(
-    "markdown-to-mindmap",
-    json!({
-        "markdown": test_markdown,
-        "open": false
-    }),
-  );
+  let tool_args = json!({
+      "markdown": test_markdown,
+      "open": false
+  });
 
-  match client.call_tool(tool_call).await {
+  match client.call_tool("markdown-to-mindmap", tool_args).await {
     Ok(result) => {
       println!("✅ Mind map generated successfully!");
-      if let Some(text) = result.get_text() {
+      if let Some(text) = result.first_text() {
         println!("📄 Output path: {}", text);
       }
     }

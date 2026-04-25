@@ -19,8 +19,7 @@ pub async fn execute(
 
   // Parse tool parameters from JSON string
   let params: Value = if let Some(params_str) = tool_params {
-    serde_json::from_str(&params_str)
-      .context("Failed to parse tool parameters as JSON")?
+    serde_json::from_str(&params_str).context("Failed to parse tool parameters as JSON")?
   } else {
     serde_json::json!({})
   };
@@ -80,12 +79,11 @@ pub async fn execute(
   println!("{}", "Result:".bold().yellow());
   println!();
 
-  let result_json = serde_json::to_value(&result)
-    .context("Failed to serialize tool result")?;
+  let result_json = serde_json::to_value(&result).context("Failed to serialize tool result")?;
 
   // Pretty print the result
-  let pretty_result = serde_json::to_string_pretty(&result_json)
-    .context("Failed to format result as JSON")?;
+  let pretty_result =
+    serde_json::to_string_pretty(&result_json).context("Failed to format result as JSON")?;
 
   println!("{}", pretty_result);
 
