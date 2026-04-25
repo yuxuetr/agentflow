@@ -9,15 +9,19 @@ const KNOWN_MEMORY_TYPES: &[&str] = &["session", "sqlite", "none"];
 
 /// Loads and validates a skill manifest from a skill directory.
 ///
-/// Supported manifest formats (tried in order):
-/// 1. `skill.toml` — full agentflow-native format (model, memory, sandbox config)
-/// 2. `SKILL.md` — [Agent Skills open standard](https://agentskills.io) (standard compatibility)
+/// Supported manifest formats:
+/// - `SKILL.md` is the recommended human-facing skill format.
+/// - `skill.toml` is retained for compatibility and structured runtime config.
+///
+/// If both files exist in the same directory, `skill.toml` is loaded. This
+/// preserves existing AgentFlow behavior and lets a structured manifest override
+/// the portable `SKILL.md` entrypoint when needed.
 pub struct SkillLoader;
 
 impl SkillLoader {
   /// Load a [`SkillManifest`] from `skill_dir`.
   ///
-  /// Tries `skill.toml` first; falls back to `SKILL.md` if not found.
+  /// Loads `skill.toml` first when present; falls back to `SKILL.md`.
   pub fn load(skill_dir: &Path) -> Result<SkillManifest, SkillError> {
     let toml_path = skill_dir.join(MANIFEST_FILE);
     if toml_path.exists() {

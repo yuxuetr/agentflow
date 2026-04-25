@@ -10,6 +10,11 @@
 
 ## 2. 数据结构设计 (Manifest Schema)
 
+### 2.0 Skill 格式优先级
+`SKILL.md` 是推荐的标准入口，用 YAML frontmatter 表达结构化元数据，用 Markdown 表达技能说明。`skill.toml` 保留为兼容和更强结构化的 runtime manifest。
+
+同一目录同时存在 `SKILL.md` 和 `skill.toml` 时，当前加载规则保持为 `skill.toml` 优先，以兼容已有 AgentFlow 技能并允许部署侧覆盖 portable `SKILL.md`。
+
 ### 2.1 MCP Server 配置
 在 `agentflow-skills/src/manifest.rs` 中增加：
 ```rust path=null start=null
@@ -26,7 +31,16 @@ pub struct McpServerConfig {
 并在 `SkillManifest` 顶层增加 `#[serde(default)] pub mcp_servers: Vec<McpServerConfig>`。
 
 ### 2.2 SKILL.md 支持
-对于标准的 `SKILL.md`，利用其现有的 `metadata` 字典，通过约定的 JSON 字符串形式（例如 `metadata.mcp_servers = "[{\"name\": \"github\", \"command\": \"npx\", ...}]"`）解析注入 MCP 服务。
+对于标准的 `SKILL.md`，优先使用结构化 frontmatter 字段：
+
+```yaml
+mcp_servers:
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+```
+
+旧版 `metadata.mcp_servers = "[{\"name\": \"github\", \"command\": \"npx\", ...}]"` JSON 字符串形式仍保留为兼容 fallback。
 
 ### 2.3 工具参数校验 (Tool Schema)
 修改 `manifest.rs` 中的 `ToolConfig`，为其增加：

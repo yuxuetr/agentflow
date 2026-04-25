@@ -9,7 +9,7 @@ pub async fn execute(skills_dir: Option<String>) -> Result<()> {
   if !dir.exists() {
     println!("📂 Skills directory not found: {}", dir.display());
     println!(
-      "   Create a skill with: mkdir -p {}/my_skill && touch {}/my_skill/skill.toml",
+      "   Create a skill with: mkdir -p {}/my_skill && touch {}/my_skill/SKILL.md",
       dir.display(),
       dir.display()
     );
@@ -35,7 +35,13 @@ pub async fn execute(skills_dir: Option<String>) -> Result<()> {
     if !has_toml && !has_skill_md {
       continue;
     }
-    let format_tag = if has_toml { "skill.toml" } else { "SKILL.md" };
+    let format_tag = if has_toml && has_skill_md {
+      "skill.toml (overrides SKILL.md)"
+    } else if has_toml {
+      "skill.toml"
+    } else {
+      "SKILL.md"
+    };
 
     match SkillLoader::load(&path) {
       Ok(manifest) => {

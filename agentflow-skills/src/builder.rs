@@ -17,9 +17,8 @@ use crate::{
 
 /// Assembles a [`ReActAgent`] from a loaded [`SkillManifest`].
 ///
-/// `skill_dir` is the directory containing `skill.toml`; it is used as the
-/// base for resolving relative knowledge file paths and the default SQLite db
-/// path.
+/// `skill_dir` is the loaded skill directory; it is used as the base for
+/// resolving relative knowledge file paths and the default SQLite db path.
 pub struct SkillBuilder;
 
 impl SkillBuilder {
@@ -76,7 +75,7 @@ fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, S
     parts.push(format!("\nPlease respond in: {}", lang));
   }
 
-  // Knowledge files injected into context (skill.toml `[[knowledge]]` entries)
+  // Knowledge files injected into context (`skill.toml` `[[knowledge]]` entries).
   if !manifest.knowledge.is_empty() {
     parts.push("\n\n## Knowledge Context".to_string());
     for kc in &manifest.knowledge {

@@ -25,7 +25,7 @@ use serde::Deserialize;
 
 use crate::{
   error::SkillError,
-  manifest::{PersonaConfig, SkillInfo, SkillManifest, ToolConfig},
+  manifest::{McpServerConfig, PersonaConfig, SkillInfo, SkillManifest, ToolConfig},
 };
 
 /// Filename expected for the Agent Skills standard manifest.
@@ -49,6 +49,8 @@ struct SkillMdFrontmatter {
   pub compatibility: Option<String>,
   /// Optional: arbitrary key-value metadata map.
   pub metadata: Option<HashMap<String, String>>,
+  /// Optional AgentFlow extension: MCP servers exposed to this skill.
+  pub mcp_servers: Option<Vec<McpServerConfig>>,
   /// Optional (experimental): space-delimited list of pre-approved tools.
   /// e.g. `"shell file script"`
   #[serde(rename = "allowed-tools")]
@@ -68,6 +70,8 @@ pub struct SkillMd {
   pub license: Option<String>,
   pub compatibility: Option<String>,
   pub metadata: HashMap<String, String>,
+  /// AgentFlow extension for declarative MCP server attachment.
+  pub mcp_servers: Vec<McpServerConfig>,
   /// Space-delimited tool names recognised by agentflow
   /// (`shell`, `file`, `http`, `script`).
   pub allowed_tools: Vec<String>,
@@ -117,6 +121,7 @@ impl SkillMd {
       license: fm.license,
       compatibility: fm.compatibility,
       metadata: fm.metadata.unwrap_or_default(),
+      mcp_servers: fm.mcp_servers.unwrap_or_default(),
       allowed_tools,
       body: body.trim().to_string(),
     })
@@ -135,15 +140,18 @@ impl SkillMd {
       })
       .collect();
 
-    // Extract mcp_servers from metadata if present and valid JSON
-    let mut mcp_servers = Vec::new();
-    if let Some(mcp_str) = self.metadata.get("mcp_servers") {
-      if let Ok(parsed_servers) =
-        serde_json::from_str::<Vec<crate::manifest::McpServerConfig>>(mcp_str)
-      {
-        mcp_servers = parsed_servers;
-      } else {
-        tracing::warn!("Failed to parse mcp_servers from SKILL.md metadata");
+    // Prefer structured SKILL.md frontmatter. Keep metadata.mcp_servers as a
+    // compatibility fallback for older skills that stored JSON in metadata.
+    let mut mcp_servers = self.mcp_servers;
+    if mcp_servers.is_empty() {
+      if let Some(mcp_str) = self.metadata.get("mcp_servers") {
+        if let Ok(parsed_servers) =
+          serde_json::from_str::<Vec<crate::manifest::McpServerConfig>>(mcp_str)
+        {
+          mcp_servers = parsed_servers;
+        } else {
+          tracing::warn!("Failed to parse mcp_servers from SKILL.md metadata");
+        }
       }
     }
 
@@ -288,6 +296,58 @@ Body.
     );
     let manifest = skill.into_manifest();
     assert_eq!(manifest.skill.version, "2.1");
+  }
+
+  #[test]
+  fn parses_structured_mcp_servers() {
+    let content = r#"---
+name: mcp-skill
+description: Has MCP servers.
+mcp_servers:
+  - name: local-fixture
+    command: python3
+    args:
+      - server.py
+    env:
+      TEST_MODE: "1"
+---
+
+Body.
+"#;
+    let skill = SkillMd::parse(content).unwrap();
+    assert_eq!(skill.mcp_servers.len(), 1);
+    assert_eq!(skill.mcp_servers[0].name, "local-fixture");
+
+    let manifest = skill.into_manifest();
+    assert_eq!(manifest.mcp_servers.len(), 1);
+    assert_eq!(manifest.mcp_servers[0].command, "python3");
+    assert_eq!(manifest.mcp_servers[0].args, vec!["server.py"]);
+    assert_eq!(
+      manifest.mcp_servers[0]
+        .env
+        .get("TEST_MODE")
+        .map(String::as_str),
+      Some("1")
+    );
+  }
+
+  #[test]
+  fn structured_mcp_servers_take_precedence_over_metadata_json() {
+    let content = r#"---
+name: mcp-precedence
+description: Uses structured MCP servers first.
+metadata:
+  mcp_servers: '[{"name":"metadata","command":"ignored"}]'
+mcp_servers:
+  - name: structured
+    command: python3
+---
+
+Body.
+"#;
+    let manifest = SkillMd::parse(content).unwrap().into_manifest();
+    assert_eq!(manifest.mcp_servers.len(), 1);
+    assert_eq!(manifest.mcp_servers[0].name, "structured");
   }
 
   #[test]

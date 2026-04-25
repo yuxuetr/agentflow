@@ -2,7 +2,12 @@
 //!
 //! Declarative skill system for AgentFlow.
 //!
-//! A **Skill** is defined by a `skill.toml` manifest that describes:
+//! A **Skill** is preferably defined by a portable `SKILL.md` file with YAML
+//! frontmatter and Markdown instructions. AgentFlow also supports `skill.toml`
+//! as a structured compatibility manifest. When both files exist in one skill
+//! directory, `skill.toml` is loaded as the active manifest.
+//!
+//! A `skill.toml` manifest can describe:
 //! - `[skill]` — name, version, description
 //! - `[persona]` — LLM role / instruction text (becomes the system prompt)
 //! - `[model]` — model name + runtime constraints (optional)

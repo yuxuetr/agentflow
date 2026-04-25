@@ -7,9 +7,13 @@ pub async fn execute(skill_dir: String) -> Result<()> {
   let dir = Path::new(&skill_dir);
 
   // Detect which manifest format is present
-  let format_tag = if dir.join("skill.toml").exists() {
+  let has_toml = dir.join("skill.toml").exists();
+  let has_skill_md = dir.join("SKILL.md").exists();
+  let format_tag = if has_toml && has_skill_md {
+    "skill.toml (overrides SKILL.md)"
+  } else if has_toml {
     "skill.toml"
-  } else if dir.join("SKILL.md").exists() {
+  } else if has_skill_md {
     "SKILL.md"
   } else {
     "unknown"
