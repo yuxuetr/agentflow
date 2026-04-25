@@ -40,6 +40,18 @@ impl McpClientPool {
       .map_err(|e| SkillError::McpError(format!("{}: {}", self.config.name, e)))
   }
 
+  pub async fn disconnect(&self) -> Result<(), SkillError> {
+    let mut guard = self.client.lock().await;
+    if let Some(client) = guard.as_mut() {
+      client
+        .disconnect()
+        .await
+        .map_err(|e| SkillError::McpError(format!("{}: {}", self.config.name, e)))?;
+    }
+    *guard = None;
+    Ok(())
+  }
+
   async fn call_tool(&self, tool_name: &str, params: Value) -> Result<ToolOutput, ToolError> {
     let mut guard = self.client.lock().await;
     let client = ensure_client_for_tool(&self.config, &mut guard).await?;

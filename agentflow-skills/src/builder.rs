@@ -41,13 +41,25 @@ impl SkillBuilder {
       .with_budget_tokens(manifest.model.resolved_budget_tokens());
 
     // 3. Build ToolRegistry
-    let mut registry = build_tool_registry(&manifest.tools, skill_dir);
-    register_mcp_tools(&mut registry, manifest).await?;
+    let registry = Self::build_registry(manifest, skill_dir).await?;
 
     // 4. Build MemoryStore
     let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
 
     Ok(ReActAgent::new(config, memory, Arc::new(registry)))
+  }
+
+  /// Build the tool registry for a skill without constructing an agent.
+  ///
+  /// This is useful for validation, CLI tool listing, and integration tests that
+  /// need to exercise built-in and MCP tools directly.
+  pub async fn build_registry(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+  ) -> Result<ToolRegistry, SkillError> {
+    let mut registry = build_tool_registry(&manifest.tools, skill_dir);
+    register_mcp_tools(&mut registry, manifest).await?;
+    Ok(registry)
   }
 }
 
@@ -176,6 +188,7 @@ async fn register_mcp_tools(
   registry: &mut ToolRegistry,
   manifest: &SkillManifest,
 ) -> Result<(), SkillError> {
+  let mut active_pools: Vec<Arc<McpClientPool>> = Vec::new();
   for mcp in &manifest.mcp_servers {
     if mcp.name.trim().is_empty() {
       return Err(SkillError::ValidationError {
@@ -195,10 +208,30 @@ async fn register_mcp_tools(
     );
 
     let pool = Arc::new(McpClientPool::new(mcp.clone()));
-    let tools = pool.list_tools().await?;
+    let tools = match pool.list_tools().await {
+      Ok(tools) => tools,
+      Err(err) => {
+        for active_pool in &active_pools {
+          let _ = active_pool.disconnect().await;
+        }
+        return Err(err);
+      }
+    };
     for tool in tools {
       let adapter = McpToolAdapter::new(pool.clone(), tool);
       let tool_name = agentflow_tools::Tool::name(&adapter).to_string();
+      if registry.get(&tool_name).is_some() {
+        let _ = pool.disconnect().await;
+        for active_pool in &active_pools {
+          let _ = active_pool.disconnect().await;
+        }
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "Duplicate tool name '{}' while registering MCP server '{}'",
+            tool_name, mcp.name
+          ),
+        });
+      }
       tracing::info!(
           server = %mcp.name,
           tool = %tool_name,
@@ -206,6 +239,7 @@ async fn register_mcp_tools(
       );
       registry.register(Arc::new(adapter));
     }
+    active_pools.push(pool);
   }
 
   Ok(())
