@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 use crate::{error::SkillError, manifest::McpServerConfig};
 
@@ -30,12 +31,29 @@ impl McpClientPool {
   }
 
   pub async fn list_tools(&self) -> Result<Vec<McpTool>, SkillError> {
+    info!(
+      event = "mcp_tools_list_started",
+      server = %self.config.name,
+      "Listing MCP tools"
+    );
     let mut guard = self.client.lock().await;
     let client = ensure_client(&self.config, &mut guard).await?;
-    client
-      .list_tools()
-      .await
-      .map_err(|e| SkillError::McpError(format!("{}: {}", self.config.name, e)))
+    let tools = client.list_tools().await.map_err(|e| {
+      warn!(
+        event = "mcp_tools_list_failed",
+        server = %self.config.name,
+        error = %e,
+        "Failed to list MCP tools"
+      );
+      SkillError::McpError(format!("{}: {}", self.config.name, e))
+    })?;
+    info!(
+      event = "mcp_tools_list_succeeded",
+      server = %self.config.name,
+      tool_count = tools.len(),
+      "Listed MCP tools"
+    );
+    Ok(tools)
   }
 
   pub async fn disconnect(&self) -> Result<(), SkillError> {
@@ -54,18 +72,40 @@ impl McpClientPool {
     let mut guard = self.client.lock().await;
     let client = ensure_client_for_tool(&self.config, &mut guard).await?;
     let timeout = self.config.resolved_timeout();
+    info!(
+      event = "mcp_tool_call_started",
+      server = %self.config.name,
+      tool = %tool_name,
+      timeout_ms = timeout.as_millis() as u64,
+      "Calling MCP tool"
+    );
     let result = match tokio::time::timeout(timeout, client.call_tool(tool_name, params)).await {
-      Ok(result) => result.map_err(|e| ToolError::ExecutionFailed {
-        message: format!(
+      Ok(result) => result.map_err(|e| {
+        let message = format!(
           "MCP server '{}' tool '{}' failed: {}",
           self.config.name, tool_name, e
-        ),
+        );
+        warn!(
+          event = "mcp_tool_call_failed",
+          server = %self.config.name,
+          tool = %tool_name,
+          error = %e,
+          "MCP tool call failed"
+        );
+        ToolError::ExecutionFailed { message }
       })?,
       Err(_) => {
         if let Some(client) = guard.as_mut() {
           let _ = client.disconnect().await;
         }
         *guard = None;
+        warn!(
+          event = "mcp_tool_call_timeout",
+          server = %self.config.name,
+          tool = %tool_name,
+          timeout_ms = timeout.as_millis() as u64,
+          "MCP tool call timed out"
+        );
         return Err(ToolError::ExecutionFailed {
           message: format!(
             "MCP server '{}' tool '{}' timed out after {:?}",
@@ -77,8 +117,20 @@ impl McpClientPool {
 
     let content = format_mcp_result_content(&result.content);
     if result.is_error() {
+      warn!(
+        event = "mcp_tool_call_result_error",
+        server = %self.config.name,
+        tool = %tool_name,
+        "MCP tool returned an error result"
+      );
       Ok(ToolOutput::error(content))
     } else {
+      info!(
+        event = "mcp_tool_call_succeeded",
+        server = %self.config.name,
+        tool = %tool_name,
+        "MCP tool call succeeded"
+      );
       Ok(ToolOutput::success(content))
     }
   }
@@ -163,18 +215,42 @@ async fn ensure_client<'a>(
   slot: &'a mut Option<MCPClient>,
 ) -> Result<&'a mut MCPClient, SkillError> {
   if slot.is_none() {
+    info!(
+      event = "mcp_server_connect_started",
+      server = %config.name,
+      command = %config.command,
+      timeout_ms = config.resolved_timeout().as_millis() as u64,
+      "Connecting MCP server"
+    );
     let mut client = build_client(config).await.map_err(|e| {
+      warn!(
+        event = "mcp_server_client_build_failed",
+        server = %config.name,
+        error = %e,
+        "Failed to build MCP client"
+      );
       SkillError::McpError(format!(
         "Failed to build MCP client '{}': {}",
         config.name, e
       ))
     })?;
     client.connect().await.map_err(|e| {
+      warn!(
+        event = "mcp_server_connect_failed",
+        server = %config.name,
+        error = %e,
+        "Failed to connect MCP server"
+      );
       SkillError::McpError(format!(
         "Failed to connect MCP server '{}': {}",
         config.name, e
       ))
     })?;
+    info!(
+      event = "mcp_server_connected",
+      server = %config.name,
+      "Connected MCP server"
+    );
     *slot = Some(client);
   }
 
