@@ -299,6 +299,10 @@ impl LLMConfig {
 
   /// Get API key for a provider from environment variables
   pub fn get_api_key(&self, provider_name: &str) -> Result<String> {
+    if provider_name.eq_ignore_ascii_case("mock") {
+      return Ok("mock".to_string());
+    }
+
     // First try provider-specific config
     if let Some(provider_config) = self.get_provider(provider_name) {
       if let Ok(api_key) = env::var(&provider_config.api_key_env) {
@@ -339,6 +343,7 @@ impl LLMConfig {
         "moonshot",
         "dashscope",
         "step",
+        "mock",
       ]
       .contains(&model_config.vendor.as_str())
       {
@@ -484,5 +489,19 @@ providers:
     assert_eq!(api_key, "test-key");
 
     env::remove_var("TEST_OPENAI_KEY");
+  }
+
+  #[test]
+  fn test_mock_provider_needs_no_api_key() {
+    let yaml = r#"
+models:
+  mock-model:
+    vendor: mock
+    type: text
+"#;
+
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    assert_eq!(config.get_api_key("mock").unwrap(), "mock");
+    assert!(config.validate().is_ok());
   }
 }

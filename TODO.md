@@ -17,7 +17,7 @@
 - [x] 为 MCP client pool 增加显式 shutdown/disconnect。
 - [x] 打通 CLI: `skill validate` 校验 MCP server 配置。
 - [x] 打通 CLI: `skill list-tools` 展示内置工具、脚本工具、MCP 工具。
-- [ ] 打通 CLI: `skill run/chat` 真实调用 MCP 工具。
+- [x] 打通 CLI: `skill run/chat` 真实调用 MCP 工具。
 - [x] 增加 `examples/skills/mcp-basic` 示例。
 - [x] 明确 `SKILL.md` 为主标准入口，并保留 `skill.toml` 兼容策略。
 
@@ -41,9 +41,9 @@
 
 ## 建议立即执行顺序
 
-1. CLI `skill run/chat` MCP 工具调用验证
-2. MCP Tool adapter 超时、typed content、tracing
-3. MCP server command/env 参数传递测试
+1. MCP Tool adapter 超时、typed content、tracing
+2. MCP server command/env 参数传递测试
+3. CLI 错误信息补充 MCP server name、tool name 和失败原因
 4. Phase 2 Agent Runtime 类型设计
 
 ---

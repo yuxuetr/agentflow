@@ -11,12 +11,16 @@ use super::{ContentType, LLMProvider, ProviderRequest, ProviderResponse, TokenUs
 use crate::client::streaming::{StreamChunk, StreamingResponse};
 use crate::{LLMError, Result};
 use async_trait::async_trait;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 /// Mock LLM provider for testing
 #[derive(Debug, Clone)]
 pub struct MockProvider {
   /// Pre-configured response text
   response_text: Option<String>,
+  /// Optional response queue consumed one item per request.
+  response_queue: Arc<Mutex<VecDeque<String>>>,
   /// Response delay in milliseconds (simulates network latency)
   delay_ms: u64,
   /// Whether to simulate an error
@@ -27,7 +31,8 @@ impl MockProvider {
   /// Create a new mock provider with default settings
   pub fn new(_api_key: &str, _base_url: Option<String>) -> Result<Self> {
     Ok(Self {
-      response_text: None,
+      response_text: std::env::var("AGENTFLOW_MOCK_RESPONSE").ok(),
+      response_queue: Arc::new(Mutex::new(load_response_queue_from_env())),
       delay_ms: 0,
       simulate_error: false,
     })
@@ -65,6 +70,30 @@ impl MockProvider {
       &first_message.chars().take(50).collect::<String>(),
       request.model
     )
+  }
+
+  fn next_response(&self, request: &ProviderRequest) -> String {
+    if let Ok(mut queue) = self.response_queue.lock() {
+      if let Some(response) = queue.pop_front() {
+        return response;
+      }
+    }
+
+    self
+      .response_text
+      .clone()
+      .unwrap_or_else(|| self.generate_default_response(request))
+  }
+}
+
+fn load_response_queue_from_env() -> VecDeque<String> {
+  let Ok(raw) = std::env::var("AGENTFLOW_MOCK_RESPONSES") else {
+    return VecDeque::new();
+  };
+
+  match serde_json::from_str::<Vec<String>>(&raw) {
+    Ok(responses) => responses.into(),
+    Err(_) => VecDeque::new(),
   }
 }
 
@@ -121,10 +150,7 @@ impl LLMProvider for MockProvider {
     }
 
     // Generate response
-    let content_text = self
-      .response_text
-      .clone()
-      .unwrap_or_else(|| self.generate_default_response(request));
+    let content_text = self.next_response(request);
 
     let word_count = content_text.split_whitespace().count() as u32;
 
@@ -158,10 +184,7 @@ impl LLMProvider for MockProvider {
       });
     }
 
-    let content = self
-      .response_text
-      .clone()
-      .unwrap_or_else(|| self.generate_default_response(request));
+    let content = self.next_response(request);
 
     Ok(Box::new(MockStreamingResponse::new(content)))
   }
