@@ -26,7 +26,7 @@
 
 ## P1: Agent Runtime MVP
 
-- [ ] 定义 `AgentRuntime`、`AgentContext`、`AgentStep`、`AgentEvent`、`AgentStopReason`。
+- [x] 定义 `AgentRuntime`、`AgentContext`、`AgentStep`、`AgentEvent`、`AgentStopReason`。
 - [ ] 实现最小 ReAct loop: observe -> plan -> act -> observe。
 - [ ] Tool 调用统一走 ToolRegistry。
 - [ ] 接入 Skills、MCP tools、Memory、Tracing。
@@ -44,7 +44,8 @@
 
 ## 建议立即执行顺序
 
-1. Phase 2 Agent Runtime 类型设计
+1. 将现有 ReAct loop 接入 AgentRuntime/AgentStep/AgentEvent。
+2. Tool 调用统一走 ToolRegistry，并记录 step/event。
 
 ---
 
