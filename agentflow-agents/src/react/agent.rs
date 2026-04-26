@@ -170,6 +170,13 @@ impl ReActAgent {
     Self::answer_from_result(result)
   }
 
+  /// Run the agent on a new user message and return structured runtime output.
+  pub async fn run_with_trace(&mut self, user_input: &str) -> Result<AgentRunResult, ReActError> {
+    self
+      .run_with_context(self.context_for_input(user_input))
+      .await
+  }
+
   /// Run the agent and return structured runtime steps and events.
   pub async fn run_with_context(
     &mut self,

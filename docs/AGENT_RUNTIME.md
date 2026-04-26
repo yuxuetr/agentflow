@@ -60,6 +60,9 @@ and stop conditions.
 back to workflow state. Checkpoints should store `AgentRunResult.steps` or a
 compact summary, not the runtime implementation itself.
 
+Current `AgentNode` output includes `response`, `session_id`, `stop_reason`, and
+`agent_result`, so DAG workflows can persist or inspect agent step history.
+
 `WorkflowTool` should wrap a `Flow` as a `Tool`, exposing a JSON schema and
 returning a `ToolOutput`. From an agent perspective, workflows are just tools.
 

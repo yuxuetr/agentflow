@@ -37,7 +37,7 @@
 
 ## P2: DAG + Agent 混合执行
 
-- [ ] 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
+- [x] 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
 - [ ] 标准化 `WorkflowTool`，让 agent 可以调用 workflow。
 - [ ] checkpoint 覆盖 AgentNode 状态和 agent step history。
 - [ ] trace 串联 workflow、agent、tool、MCP 调用。
@@ -46,7 +46,7 @@
 ## 建议立即执行顺序
 
 1. 接入 Skills、MCP tools、Memory、Tracing。
-2. 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
+2. 标准化 `WorkflowTool`，让 agent 可以调用 workflow。
 
 ---
 

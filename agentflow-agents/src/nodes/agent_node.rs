@@ -11,6 +11,8 @@
 //! |--------------|-------------------------|
 //! | `response`   | `FlowValue::Json(String)` |
 //! | `session_id` | `FlowValue::Json(String)` |
+//! | `stop_reason` | `FlowValue::Json(Object)` |
+//! | `agent_result` | `FlowValue::Json(Object)` |
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,17 +112,44 @@ impl AsyncNode for AgentNode {
     let mut agent = self.agent.lock().await;
     let session_id = agent.session_id.clone();
 
-    let response = agent
-      .run(&message)
-      .await
-      .map_err(|e| AgentFlowError::NodeExecutionFailed {
-        message: format!("AgentNode '{}': {}", self.name, e),
+    let result =
+      agent
+        .run_with_trace(&message)
+        .await
+        .map_err(|e| AgentFlowError::NodeExecutionFailed {
+          message: format!("AgentNode '{}': {}", self.name, e),
+        })?;
+    if !result.stop_reason.is_success() {
+      return Err(AgentFlowError::NodeExecutionFailed {
+        message: format!(
+          "AgentNode '{}': agent stopped before final answer: {:?}",
+          self.name, result.stop_reason
+        ),
+      });
+    }
+    let response = result.answer.clone().unwrap_or_default();
+    let stop_reason = serde_json::to_value(&result.stop_reason).map_err(|e| {
+      AgentFlowError::NodeExecutionFailed {
+        message: format!(
+          "AgentNode '{}': failed to serialize stop reason: {}",
+          self.name, e
+        ),
+      }
+    })?;
+    let agent_result =
+      serde_json::to_value(&result).map_err(|e| AgentFlowError::NodeExecutionFailed {
+        message: format!(
+          "AgentNode '{}': failed to serialize runtime result: {}",
+          self.name, e
+        ),
       })?;
 
     // ── Build outputs ─────────────────────────────────────────────────
     let mut outputs = HashMap::new();
     outputs.insert("response".to_string(), FlowValue::Json(json!(response)));
     outputs.insert("session_id".to_string(), FlowValue::Json(json!(session_id)));
+    outputs.insert("stop_reason".to_string(), FlowValue::Json(stop_reason));
+    outputs.insert("agent_result".to_string(), FlowValue::Json(agent_result));
     Ok(outputs)
   }
 }

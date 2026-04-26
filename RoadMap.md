@@ -113,7 +113,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 
 核心任务:
 
-- 标准化 `AgentNode`。
+- 标准化 `AgentNode`。✅
 - 标准化 `WorkflowTool`。
 - 统一状态序列化和恢复。
 - 增强 trace，能跨 workflow/agent/tool 串联一次完整执行。
@@ -193,7 +193,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 
 ### M3: DAG + Agent 混合
 
-- DAG 可调用 agent。
+- DAG 可调用 agent。✅
 - Agent 可调用 workflow。
 - checkpoint/trace 能覆盖混合执行。
 
