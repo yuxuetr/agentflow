@@ -11,7 +11,7 @@ use tracing::info;
 use crate::{
   error::SkillError,
   loader::resolve_knowledge_path,
-  manifest::{MemoryConfig, SkillManifest, ToolConfig},
+  manifest::{McpServerConfig, MemoryConfig, SkillManifest, ToolConfig},
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
 
@@ -57,7 +57,7 @@ impl SkillBuilder {
     skill_dir: &Path,
   ) -> Result<ToolRegistry, SkillError> {
     let mut registry = build_tool_registry(&manifest.tools, skill_dir);
-    register_mcp_tools(&mut registry, manifest).await?;
+    register_mcp_tools(&mut registry, manifest, skill_dir).await?;
     Ok(registry)
   }
 }
@@ -186,6 +186,7 @@ fn build_tool_registry(tool_configs: &[ToolConfig], skill_dir: &Path) -> ToolReg
 async fn register_mcp_tools(
   registry: &mut ToolRegistry,
   manifest: &SkillManifest,
+  skill_dir: &Path,
 ) -> Result<(), SkillError> {
   let mut active_pools: Vec<Arc<McpClientPool>> = Vec::new();
   for mcp in &manifest.mcp_servers {
@@ -206,7 +207,8 @@ async fn register_mcp_tools(
         "Discovering MCP tools for skill"
     );
 
-    let pool = Arc::new(McpClientPool::new(mcp.clone()));
+    let resolved_mcp = resolve_mcp_server_config(mcp, skill_dir);
+    let pool = Arc::new(McpClientPool::new(resolved_mcp));
     let tools = match pool.list_tools().await {
       Ok(tools) => tools,
       Err(err) => {
@@ -242,6 +244,25 @@ async fn register_mcp_tools(
   }
 
   Ok(())
+}
+
+fn resolve_mcp_server_config(config: &McpServerConfig, skill_dir: &Path) -> McpServerConfig {
+  let mut resolved = config.clone();
+  resolved.command = resolve_skill_relative_command_part(&resolved.command, skill_dir);
+  resolved.args = resolved
+    .args
+    .iter()
+    .map(|arg| resolve_skill_relative_command_part(arg, skill_dir))
+    .collect();
+  resolved
+}
+
+fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String {
+  if value.starts_with("./") || value.starts_with("../") {
+    skill_dir.join(value).to_string_lossy().into_owned()
+  } else {
+    value.to_string()
+  }
 }
 
 /// Merge all tool constraints into a unified `SandboxPolicy`.

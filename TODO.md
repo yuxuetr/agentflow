@@ -1,3 +1,53 @@
+# AgentFlow 智能体框架近期执行计划
+
+最后更新: 2026-04-25
+
+说明:
+
+- 完整长期路线图见 `RoadMap.md`。
+- 更细的任务清单已写入本地 `TODOs.md`，但该文件当前被 `.gitignore` 忽略。
+- 本节作为仓库可跟踪的近期执行入口，保留下面原有生产级计划内容不变。
+
+## P0: Phase 1 收尾
+
+- [x] 增加 Skills + MCP mock server 端到端集成测试。
+- [x] 测试 `SKILL.md/skill.toml -> mcp_servers -> ToolRegistry -> call_tool` 全链路。
+- [x] 将 MCP tool `description` 和 `inputSchema` 暴露到 Tool metadata。
+- [ ] 完善 MCP tool adapter 的超时、错误映射和 content 类型转换。
+- [x] 为 MCP client pool 增加显式 shutdown/disconnect。
+- [x] 打通 CLI: `skill validate` 校验 MCP server 配置。
+- [x] 打通 CLI: `skill list-tools` 展示内置工具、脚本工具、MCP 工具。
+- [ ] 打通 CLI: `skill run/chat` 真实调用 MCP 工具。
+- [x] 增加 `examples/skills/mcp-basic` 示例。
+- [x] 明确 `SKILL.md` 为主标准入口，并保留 `skill.toml` 兼容策略。
+
+## P1: Agent Runtime MVP
+
+- [ ] 定义 `AgentRuntime`、`AgentContext`、`AgentStep`、`AgentEvent`、`AgentStopReason`。
+- [ ] 实现最小 ReAct loop: observe -> plan -> act -> observe。
+- [ ] Tool 调用统一走 ToolRegistry。
+- [ ] 接入 Skills、MCP tools、Memory、Tracing。
+- [ ] 增加 step limit、tool call limit、timeout、stop condition。
+- [ ] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
+- [ ] 使用 mock LLM 增加 agent runtime 单元测试。
+
+## P2: DAG + Agent 混合执行
+
+- [ ] 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
+- [ ] 标准化 `WorkflowTool`，让 agent 可以调用 workflow。
+- [ ] checkpoint 覆盖 AgentNode 状态和 agent step history。
+- [ ] trace 串联 workflow、agent、tool、MCP 调用。
+- [ ] 增加 DAG + Agent 混合端到端示例。
+
+## 建议立即执行顺序
+
+1. CLI `skill run/chat` MCP 工具调用验证
+2. MCP Tool adapter 超时、typed content、tracing
+3. MCP server command/env 参数传递测试
+4. Phase 2 Agent Runtime 类型设计
+
+---
+
 # AgentFlow 生产级实现计划
 
 **目标**: 将 AgentFlow 打造成生产级、支持异步/并行、处理复杂工作流的企业级智能体编排平台

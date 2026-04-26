@@ -301,6 +301,11 @@ enum SkillCommands {
     #[arg(short, long)]
     dir: Option<String>,
   },
+  /// List built-in, script, and MCP tools exposed by a skill
+  ListTools {
+    /// Path to the skill directory
+    skill_dir: String,
+  },
 }
 
 #[cfg(feature = "rag")]
@@ -546,6 +551,7 @@ async fn main() {
       } => skill::run::execute(skill_dir, message, session).await,
       SkillCommands::Chat { skill_dir, session } => skill::chat::execute(skill_dir, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
+      SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
     },
     #[cfg(feature = "rag")]
     Commands::Rag(args) => match args.command {

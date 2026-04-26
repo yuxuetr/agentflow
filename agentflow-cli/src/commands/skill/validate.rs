@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use agentflow_skills::SkillLoader;
+use agentflow_skills::{SkillBuilder, SkillLoader};
 
 pub async fn execute(skill_dir: String) -> Result<()> {
   let dir = Path::new(&skill_dir);
@@ -122,6 +122,24 @@ pub async fn execute(skill_dir: String) -> Result<()> {
 
   // Run full validation
   let warnings = SkillLoader::validate(&manifest, dir).with_context(|| "Validation failed")?;
+
+  if manifest.mcp_servers.is_empty() {
+    println!("🔌 MCP Servers: none");
+  } else {
+    println!("🔌 MCP Servers ({}):", manifest.mcp_servers.len());
+    for server in &manifest.mcp_servers {
+      println!("   - {}: {} {:?}", server.name, server.command, server.args);
+    }
+    let registry = SkillBuilder::build_registry(&manifest, dir)
+      .await
+      .with_context(|| "MCP server validation failed")?;
+    let mcp_tool_count = registry
+      .list()
+      .iter()
+      .filter(|tool| tool.name().starts_with("mcp_"))
+      .count();
+    println!("   discovered MCP tools: {}", mcp_tool_count);
+  }
 
   if warnings.is_empty() {
     println!("\n✅ Skill is valid!");
