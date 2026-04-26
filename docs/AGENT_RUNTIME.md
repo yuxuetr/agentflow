@@ -66,6 +66,11 @@ Current `AgentNode` output includes `response`, `session_id`, `stop_reason`, and
 `WorkflowTool` should wrap a `Flow` as a `Tool`, exposing a JSON schema and
 returning a `ToolOutput`. From an agent perspective, workflows are just tools.
 
+Current `WorkflowTool` maps tool JSON parameters into workflow initial inputs
+and serializes workflow node results back to a JSON `ToolOutput`. Node failures
+are returned as `ToolOutput::error`, so the agent can continue reasoning with
+the failed workflow observation.
+
 This keeps the dependency direction stable:
 
 `Flow -> AgentNode -> AgentRuntime -> ToolRegistry -> Tool/MCP/WorkflowTool`

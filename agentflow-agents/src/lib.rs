@@ -42,7 +42,7 @@ pub use runtime::{
   AgentStepKind, AgentStopReason, RuntimeLimits,
 };
 pub use supervisor::{Supervisor, SupervisorBuilder};
-pub use tools::AgentTool;
+pub use tools::{AgentTool, WorkflowTool};
 
 // Common result type for agents
 pub type AgentResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
