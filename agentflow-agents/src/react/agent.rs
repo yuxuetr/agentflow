@@ -806,3 +806,121 @@ fn remaining_timeout(started_at: Instant, timeout_ms: Option<u64>) -> Option<Dur
     .map(Duration::from_millis)
     .map(|timeout| timeout.saturating_sub(started_at.elapsed()))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use agentflow_memory::SessionMemory;
+  use agentflow_tools::{Tool, ToolError, ToolOutput};
+  use async_trait::async_trait;
+  use serde_json::{json, Value};
+  use std::fs;
+
+  struct EchoTool;
+
+  #[async_trait]
+  impl Tool for EchoTool {
+    fn name(&self) -> &str {
+      "echo"
+    }
+
+    fn description(&self) -> &str {
+      "Echo test input"
+    }
+
+    fn parameters_schema(&self) -> Value {
+      json!({
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"}
+        },
+        "required": ["text"]
+      })
+    }
+
+    async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
+      Ok(ToolOutput::success(format!(
+        "echo: {}",
+        params["text"].as_str().unwrap_or_default()
+      )))
+    }
+  }
+
+  async fn init_mock_model(model: &str) {
+    let config_path = std::env::temp_dir().join(format!(
+      "agentflow-agents-mock-{}.yml",
+      uuid::Uuid::new_v4()
+    ));
+    fs::write(
+      &config_path,
+      format!(
+        r#"
+models:
+  {model}:
+    vendor: mock
+    type: text
+    model_id: {model}
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#
+      ),
+    )
+    .unwrap();
+
+    AgentFlow::init_with_config(config_path.to_str().unwrap())
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn run_with_context_records_steps_events_and_reflection_with_mock_llm() {
+    let model = format!("mock-runtime-{}", uuid::Uuid::new_v4());
+    std::env::set_var(
+      "AGENTFLOW_MOCK_RESPONSES",
+      serde_json::to_string(&vec![
+        r#"{"thought":"use tool","action":{"tool":"echo","params":{"text":"hi"}}}"#,
+        r#"{"thought":"done","answer":"final: echo: hi"}"#,
+      ])
+      .unwrap(),
+    );
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-1", "say hi", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("final: echo: hi"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert!(result
+      .steps
+      .iter()
+      .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. })));
+    assert!(result
+      .steps
+      .iter()
+      .any(|step| matches!(step.kind, AgentStepKind::ToolResult { .. })));
+    assert!(result
+      .steps
+      .iter()
+      .any(|step| matches!(step.kind, AgentStepKind::Reflect { .. })));
+    assert!(result
+      .events
+      .iter()
+      .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. })));
+    assert!(result
+      .events
+      .iter()
+      .any(|event| matches!(event, AgentEvent::ReflectionAdded { .. })));
+  }
+}
