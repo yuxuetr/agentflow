@@ -57,6 +57,11 @@ and stop conditions.
 Skill execution, including tool calls to MCP-backed tools and the resulting
 AgentRuntime steps/events.
 
+`agentflow-agents/tests/agent_runtime_golden.rs` locks the serialized
+`AgentRunResult` contract with a golden JSON fixture. The test runs a mock ReAct
+loop through observe, plan, tool call, tool result, final answer, and reflection;
+dynamic timestamps and tool durations are normalized before comparison.
+
 Workflow tracing can now attach an event listener to `Flow`. The trace collector
 captures workflow/node lifecycle events, node outputs, and nested
 `agent_result` payloads. Agent step history and tool calls are stored under the

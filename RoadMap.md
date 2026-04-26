@@ -193,6 +193,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - 最小 ReAct agent 可运行。
 - 支持 ToolRegistry、Memory、Tracing。
 - 支持 reflection 策略。
+- Agent runtime trace 有 golden fixture 覆盖。✅
 
 ### M3: DAG + Agent 混合
 

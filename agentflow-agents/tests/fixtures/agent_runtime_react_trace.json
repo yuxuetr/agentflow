@@ -1,0 +1,118 @@
+{
+  "session_id": "golden-session",
+  "answer": "final: echo: hi",
+  "stop_reason": {
+    "reason": "final_answer"
+  },
+  "steps": [
+    {
+      "index": 0,
+      "kind": {
+        "type": "observe",
+        "input": "say hi"
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 1,
+      "kind": {
+        "type": "plan",
+        "thought": "use tool"
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 2,
+      "kind": {
+        "type": "tool_call",
+        "tool": "echo",
+        "params": {
+          "text": "hi"
+        }
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 3,
+      "kind": {
+        "type": "tool_result",
+        "tool": "echo",
+        "content": "echo: hi",
+        "is_error": false
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 4,
+      "kind": {
+        "type": "plan",
+        "thought": "done"
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 5,
+      "kind": {
+        "type": "final_answer",
+        "answer": "final: echo: hi"
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    },
+    {
+      "index": 6,
+      "kind": {
+        "type": "reflect",
+        "content": "Final answer produced at step 6: final: echo: hi"
+      },
+      "timestamp": "<timestamp>",
+      "duration_ms": null
+    }
+  ],
+  "events": [
+    {
+      "event": "run_started",
+      "session_id": "golden-session",
+      "model": "mock-golden-runtime",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "tool_call_started",
+      "session_id": "golden-session",
+      "step_index": 2,
+      "tool": "echo",
+      "params": {
+        "text": "hi"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "tool_call_completed",
+      "session_id": "golden-session",
+      "step_index": 2,
+      "tool": "echo",
+      "is_error": false,
+      "duration_ms": 0,
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "reflection_added",
+      "session_id": "golden-session",
+      "step_index": 6,
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "run_stopped",
+      "session_id": "golden-session",
+      "reason": {
+        "reason": "final_answer"
+      },
+      "timestamp": "<timestamp>"
+    }
+  ]
+}

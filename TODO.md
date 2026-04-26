@@ -34,6 +34,7 @@
 - [x] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
 - [x] 将 reflection 事件写入 AgentRuntime trace。
 - [x] 使用 mock LLM 增加 agent runtime 单元测试。
+- [x] 增加 agent runtime golden tests。
 
 ## P2: DAG + Agent 混合执行
 
@@ -47,7 +48,7 @@
 
 ## 建议立即执行顺序
 
-1. 增加 agent runtime golden tests。
+1. 建立 release 前检查清单。
 
 ---
 
