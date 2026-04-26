@@ -1,10 +1,8 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use agentflow_mcp::client::{ClientBuilder, Content, MCPClient, Tool as McpTool};
 use agentflow_tools::{Tool, ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{error::SkillError, manifest::McpServerConfig};
@@ -55,16 +53,27 @@ impl McpClientPool {
   async fn call_tool(&self, tool_name: &str, params: Value) -> Result<ToolOutput, ToolError> {
     let mut guard = self.client.lock().await;
     let client = ensure_client_for_tool(&self.config, &mut guard).await?;
-    let result =
-      client
-        .call_tool(tool_name, params)
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
+    let timeout = self.config.resolved_timeout();
+    let result = match tokio::time::timeout(timeout, client.call_tool(tool_name, params)).await {
+      Ok(result) => result.map_err(|e| ToolError::ExecutionFailed {
+        message: format!(
+          "MCP server '{}' tool '{}' failed: {}",
+          self.config.name, tool_name, e
+        ),
+      })?,
+      Err(_) => {
+        if let Some(client) = guard.as_mut() {
+          let _ = client.disconnect().await;
+        }
+        *guard = None;
+        return Err(ToolError::ExecutionFailed {
           message: format!(
-            "MCP server '{}' tool '{}' failed: {}",
-            self.config.name, tool_name, e
+            "MCP server '{}' tool '{}' timed out after {:?}",
+            self.config.name, tool_name, timeout
           ),
-        })?;
+        });
+      }
+    };
 
     let content = format_mcp_result_content(&result.content);
     if result.is_error() {
@@ -199,7 +208,10 @@ async fn build_client(config: &McpServerConfig) -> agentflow_mcp::MCPResult<MCPC
     ClientBuilder::new().with_stdio_env(command, config.env.clone())
   };
 
-  builder.with_timeout(Duration::from_secs(30)).build().await
+  builder
+    .with_timeout(config.resolved_timeout())
+    .build()
+    .await
 }
 
 fn format_mcp_result_content(content: &[Content]) -> String {

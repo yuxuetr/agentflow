@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
+import time
 
 
 def respond(message, result=None, error=None):
@@ -26,6 +28,26 @@ def tools():
             "name": "echo",
             "description": "Echo a message through the mock MCP server",
             "inputSchema": schema,
+        },
+        {
+            "name": "env_echo",
+            "description": "Return an environment variable from the MCP server process",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "slow",
+            "description": "Sleep before returning a response",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"seconds": {"type": "number"}},
+                "required": ["seconds"],
+                "additionalProperties": False,
+            },
         },
         {
             "name": "tool_error",
@@ -91,6 +113,25 @@ def main():
                         ],
                         "isError": True,
                     },
+                )
+            elif name == "env_echo":
+                env_name = str(arguments.get("name", ""))
+                respond(
+                    message,
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": env_name + "=" + os.environ.get(env_name, ""),
+                            }
+                        ]
+                    },
+                )
+            elif name == "slow":
+                time.sleep(float(arguments.get("seconds", 0)))
+                respond(
+                    message,
+                    {"content": [{"type": "text", "text": "slow response"}]},
                 )
             elif name == "rpc_error":
                 respond(

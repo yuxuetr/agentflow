@@ -35,6 +35,7 @@ mcp_servers:
       - -y
       - "@modelcontextprotocol/server-filesystem"
       - /tmp
+    timeout_secs: 30
     env:
       LOG_LEVEL: info
 ```

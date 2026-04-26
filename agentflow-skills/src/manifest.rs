@@ -97,6 +97,15 @@ pub struct McpServerConfig {
   pub args: Vec<String>,
   #[serde(default)]
   pub env: std::collections::HashMap<String, String>,
+  /// Timeout for MCP connect, discovery, and tool calls in seconds.
+  /// Defaults to 30 seconds.
+  pub timeout_secs: Option<u64>,
+}
+
+impl McpServerConfig {
+  pub fn resolved_timeout(&self) -> std::time::Duration {
+    std::time::Duration::from_secs(self.timeout_secs.unwrap_or(30).max(1))
+  }
 }
 
 /// Declares a tool the skill is authorised to use, with optional constraints.

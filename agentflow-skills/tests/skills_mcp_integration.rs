@@ -41,6 +41,22 @@ args = [{args}]
   )
 }
 
+fn toml_skill_with_mcp_config(name: &str, mcp_config: &str) -> String {
+  format!(
+    r#"
+[skill]
+name = "{name}"
+version = "0.1.0"
+description = "MCP integration test skill"
+
+[persona]
+role = "Use the configured tools."
+
+{mcp_config}
+"#
+  )
+}
+
 #[tokio::test]
 async fn skill_toml_loads_mcp_tools_and_calls_through_registry() {
   let dir = TempDir::new().unwrap();
@@ -207,6 +223,77 @@ async fn mcp_tool_result_error_maps_to_tool_output_error() {
     .unwrap();
   assert!(output.is_error);
   assert!(output.content.contains("mock tool reported a domain error"));
+}
+
+#[tokio::test]
+async fn mcp_server_env_is_passed_to_process() {
+  let dir = TempDir::new().unwrap();
+  let server = fixture_server().to_string_lossy().into_owned();
+  write_file(
+    &dir.path().join("skill.toml"),
+    &toml_skill_with_mcp_config(
+      "env-mcp",
+      &format!(
+        r#"
+[[mcp_servers]]
+name = "fixture"
+command = "python3"
+args = [{server:?}]
+
+[mcp_servers.env]
+AGENTFLOW_MCP_TEST_VALUE = "from-env"
+"#
+      ),
+    ),
+  );
+
+  let manifest = SkillLoader::load(dir.path()).unwrap();
+  let registry = SkillBuilder::build_registry(&manifest, dir.path())
+    .await
+    .unwrap();
+  let output = registry
+    .execute(
+      "mcp_fixture_env_echo",
+      json!({"name": "AGENTFLOW_MCP_TEST_VALUE"}),
+    )
+    .await
+    .unwrap();
+
+  assert!(!output.is_error);
+  assert_eq!(output.content, "AGENTFLOW_MCP_TEST_VALUE=from-env");
+}
+
+#[tokio::test]
+async fn mcp_tool_call_respects_configured_timeout() {
+  let dir = TempDir::new().unwrap();
+  let server = fixture_server().to_string_lossy().into_owned();
+  write_file(
+    &dir.path().join("skill.toml"),
+    &toml_skill_with_mcp_config(
+      "timeout-mcp",
+      &format!(
+        r#"
+[[mcp_servers]]
+name = "fixture"
+command = "python3"
+args = [{server:?}]
+timeout_secs = 1
+"#
+      ),
+    ),
+  );
+
+  let manifest = SkillLoader::load(dir.path()).unwrap();
+  let registry = SkillBuilder::build_registry(&manifest, dir.path())
+    .await
+    .unwrap();
+  let err = registry
+    .execute("mcp_fixture_slow", json!({"seconds": 3}))
+    .await
+    .unwrap_err();
+  let message = err.to_string();
+
+  assert!(message.contains("MCP server 'fixture' tool 'slow' timed out"));
 }
 
 #[tokio::test]

@@ -38,6 +38,7 @@ mcp_servers:
   - name: github
     command: npx
     args: ["-y", "@modelcontextprotocol/server-github"]
+    timeout_secs: 30
 ```
 
 旧版 `metadata.mcp_servers = "[{\"name\": \"github\", \"command\": \"npx\", ...}]"` JSON 字符串形式仍保留为兼容 fallback。
