@@ -46,7 +46,7 @@
 ## 建议立即执行顺序
 
 1. 接入 Skills、MCP tools、Memory、Tracing。
-2. 明确 Runtime 与现有 `Flow` 的边界。
+2. 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
 
 ---
 
