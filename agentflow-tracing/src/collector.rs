@@ -182,6 +182,33 @@ impl TraceCollector {
         }
       }
 
+      WorkflowEvent::NodeOutputCaptured {
+        workflow_id,
+        node_id,
+        mut output,
+        timestamp: _,
+      } => {
+        if config.capture_io {
+          if let Err(e) = Self::sanitize_value(&mut output, config.max_io_size_bytes) {
+            Self::handle_storage_error(&config, e);
+          }
+        }
+
+        let agent_details = output
+          .get("agent_result")
+          .and_then(AgentTrace::from_agent_result);
+
+        let mut traces_guard = traces.write().await;
+        if let Some(trace) = traces_guard.get_mut(&workflow_id) {
+          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
+            if config.capture_io {
+              node.output = Some(output);
+            }
+            node.agent_details = agent_details;
+          }
+        }
+      }
+
       WorkflowEvent::NodeFailed {
         workflow_id,
         node_id,
@@ -477,5 +504,75 @@ mod tests {
     assert_eq!(trace.nodes.len(), 1);
     assert_eq!(trace.nodes[0].node_id, node_id);
     assert_eq!(trace.nodes[0].status, NodeStatus::Completed);
+  }
+
+  #[tokio::test]
+  async fn test_trace_collector_links_agent_tool_and_mcp_output() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let collector = TraceCollector::new(storage, TraceConfig::development());
+
+    let workflow_id = "test-wf-agent".to_string();
+    let node_id = "agent_node".to_string();
+
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: workflow_id.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: workflow_id.clone(),
+      node_id: node_id.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::NodeOutputCaptured {
+      workflow_id: workflow_id.clone(),
+      node_id: node_id.clone(),
+      output: serde_json::json!({
+        "response": "done",
+        "agent_result": {
+          "session_id": "session-1",
+          "answer": "done",
+          "stop_reason": {"reason": "final_answer"},
+          "steps": [
+            {
+              "index": 0,
+              "kind": {
+                "type": "tool_call",
+                "tool": "mcp_fixture_echo",
+                "params": {"message": "hello"}
+              }
+            }
+          ],
+          "events": [
+            {
+              "event": "tool_call_completed",
+              "tool": "mcp_fixture_echo",
+              "is_error": false,
+              "duration_ms": 12
+            }
+          ]
+        }
+      }),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::NodeCompleted {
+      workflow_id: workflow_id.clone(),
+      node_id: node_id.clone(),
+      duration: StdDuration::from_millis(20),
+      timestamp: std::time::Instant::now(),
+    });
+
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+
+    let trace = collector.get_trace(&workflow_id).await.unwrap().unwrap();
+    let node = &trace.nodes[0];
+    let agent = node.agent_details.as_ref().expect("agent trace");
+    assert_eq!(agent.session_id, "session-1");
+    assert_eq!(agent.tool_calls.len(), 1);
+    assert_eq!(agent.tool_calls[0].tool, "mcp_fixture_echo");
+    assert!(agent.tool_calls[0].is_mcp);
+    assert_eq!(agent.tool_calls[0].is_error, Some(false));
+    assert_eq!(agent.tool_calls[0].duration_ms, Some(12));
+    assert!(node.output.is_some());
   }
 }

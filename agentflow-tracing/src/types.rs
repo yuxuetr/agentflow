@@ -125,6 +125,10 @@ pub struct NodeTrace {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub llm_details: Option<LLMTrace>,
 
+  /// Agent runtime details (if this node executed an agent)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub agent_details: Option<AgentTrace>,
+
   /// Error message (if failed)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub error: Option<String>,
@@ -143,6 +147,7 @@ impl NodeTrace {
       input: None,
       output: None,
       llm_details: None,
+      agent_details: None,
       error: None,
     }
   }
@@ -171,6 +176,105 @@ impl NodeTrace {
     self.status = NodeStatus::Failed;
     self.error = Some(error);
   }
+}
+
+/// Agent runtime details attached to an agent-capable workflow node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTrace {
+  pub session_id: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub answer: Option<String>,
+  pub stop_reason: serde_json::Value,
+  #[serde(default)]
+  pub steps: Vec<serde_json::Value>,
+  #[serde(default)]
+  pub events: Vec<serde_json::Value>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub tool_calls: Vec<ToolCallTrace>,
+}
+
+/// Tool call observed inside an agent runtime trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallTrace {
+  pub tool: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub params: Option<serde_json::Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub is_error: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub duration_ms: Option<u64>,
+  pub is_mcp: bool,
+}
+
+impl AgentTrace {
+  pub fn from_agent_result(value: &serde_json::Value) -> Option<Self> {
+    let session_id = value.get("session_id")?.as_str()?.to_string();
+    let answer = value
+      .get("answer")
+      .and_then(|value| value.as_str())
+      .map(ToString::to_string);
+    let stop_reason = value.get("stop_reason").cloned().unwrap_or_default();
+    let steps = value
+      .get("steps")
+      .and_then(|value| value.as_array())
+      .cloned()
+      .unwrap_or_default();
+    let events = value
+      .get("events")
+      .and_then(|value| value.as_array())
+      .cloned()
+      .unwrap_or_default();
+    let tool_calls = collect_tool_calls(&steps, &events);
+
+    Some(Self {
+      session_id,
+      answer,
+      stop_reason,
+      steps,
+      events,
+      tool_calls,
+    })
+  }
+}
+
+fn collect_tool_calls(
+  steps: &[serde_json::Value],
+  events: &[serde_json::Value],
+) -> Vec<ToolCallTrace> {
+  let mut calls = Vec::new();
+  for step in steps {
+    let Some(kind) = step.get("kind") else {
+      continue;
+    };
+    if kind.get("type").and_then(|value| value.as_str()) != Some("tool_call") {
+      continue;
+    }
+    let Some(tool) = kind.get("tool").and_then(|value| value.as_str()) else {
+      continue;
+    };
+    calls.push(ToolCallTrace {
+      tool: tool.to_string(),
+      params: kind.get("params").cloned(),
+      is_error: None,
+      duration_ms: None,
+      is_mcp: tool.starts_with("mcp_"),
+    });
+  }
+
+  for event in events {
+    if event.get("event").and_then(|value| value.as_str()) != Some("tool_call_completed") {
+      continue;
+    }
+    let Some(tool) = event.get("tool").and_then(|value| value.as_str()) else {
+      continue;
+    };
+    if let Some(call) = calls.iter_mut().rev().find(|call| call.tool == tool) {
+      call.is_error = event.get("is_error").and_then(|value| value.as_bool());
+      call.duration_ms = event.get("duration_ms").and_then(|value| value.as_u64());
+    }
+  }
+
+  calls
 }
 
 /// Node execution status

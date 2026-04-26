@@ -75,6 +75,14 @@ pub enum WorkflowEvent {
     timestamp: Instant,
   },
 
+  /// Node output captured after successful execution
+  NodeOutputCaptured {
+    workflow_id: String,
+    node_id: String,
+    output: serde_json::Value,
+    timestamp: Instant,
+  },
+
   /// Node execution failed
   NodeFailed {
     workflow_id: String,
@@ -166,6 +174,7 @@ impl WorkflowEvent {
       | Self::WorkflowFailed { workflow_id, .. }
       | Self::NodeStarted { workflow_id, .. }
       | Self::NodeCompleted { workflow_id, .. }
+      | Self::NodeOutputCaptured { workflow_id, .. }
       | Self::NodeFailed { workflow_id, .. }
       | Self::NodeSkipped { workflow_id, .. }
       | Self::CheckpointSaved { workflow_id, .. }
@@ -185,6 +194,7 @@ impl WorkflowEvent {
       | Self::WorkflowFailed { timestamp, .. }
       | Self::NodeStarted { timestamp, .. }
       | Self::NodeCompleted { timestamp, .. }
+      | Self::NodeOutputCaptured { timestamp, .. }
       | Self::NodeFailed { timestamp, .. }
       | Self::NodeSkipped { timestamp, .. }
       | Self::CheckpointSaved { timestamp, .. }
@@ -204,6 +214,7 @@ impl WorkflowEvent {
       Self::WorkflowFailed { .. } => "workflow.failed",
       Self::NodeStarted { .. } => "node.started",
       Self::NodeCompleted { .. } => "node.completed",
+      Self::NodeOutputCaptured { .. } => "node.output.captured",
       Self::NodeFailed { .. } => "node.failed",
       Self::NodeSkipped { .. } => "node.skipped",
       Self::CheckpointSaved { .. } => "checkpoint.saved",
@@ -241,6 +252,9 @@ impl fmt::Display for WorkflowEvent {
         node_id, duration, ..
       } => {
         write!(f, "Node '{}' completed in {:?}", node_id, duration)
+      }
+      Self::NodeOutputCaptured { node_id, .. } => {
+        write!(f, "Node '{}' output captured", node_id)
       }
       Self::NodeFailed { node_id, error, .. } => {
         write!(f, "Node '{}' failed: {}", node_id, error)

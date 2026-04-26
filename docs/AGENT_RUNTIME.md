@@ -57,6 +57,12 @@ and stop conditions.
 Skill execution, including tool calls to MCP-backed tools and the resulting
 AgentRuntime steps/events.
 
+Workflow tracing can now attach an event listener to `Flow`. The trace collector
+captures workflow/node lifecycle events, node outputs, and nested
+`agent_result` payloads. Agent step history and tool calls are stored under the
+node's `agent_details`; tool names beginning with `mcp_` are marked as MCP tool
+calls so one trace can connect workflow -> agent -> tool -> MCP.
+
 ## Flow Interop Direction
 
 `AgentNode` should wrap an `AgentRuntime` and map workflow input into

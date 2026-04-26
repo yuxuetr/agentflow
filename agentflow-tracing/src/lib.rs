@@ -16,6 +16,7 @@
 //! ```rust,no_run
 //! use agentflow_tracing::{TraceCollector, TraceConfig};
 //! use agentflow_tracing::storage::file::FileTraceStorage;
+//! use agentflow_tracing::TraceStorage;
 //! use std::sync::Arc;
 //! use std::path::PathBuf;
 //!

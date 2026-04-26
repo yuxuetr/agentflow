@@ -2,6 +2,7 @@ use crate::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus},
   error::AgentFlowError,
+  events::{EventListener, WorkflowEvent},
   value::FlowValue,
 };
 use dirs;
@@ -12,6 +13,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -43,6 +45,7 @@ pub struct Flow {
   nodes: HashMap<String, GraphNode>,
   checkpoint_enabled: bool,
   checkpoint_manager: Option<Arc<CheckpointManager>>,
+  event_listener: Option<Arc<dyn EventListener>>,
 }
 
 impl Flow {
@@ -52,6 +55,7 @@ impl Flow {
       nodes: nodes_map,
       checkpoint_enabled: false,
       checkpoint_manager: None,
+      event_listener: None,
     }
   }
 
@@ -70,6 +74,12 @@ impl Flow {
 
   pub fn add_node(&mut self, node: GraphNode) {
     self.nodes.insert(node.id.clone(), node);
+  }
+
+  /// Attach a workflow event listener for tracing, metrics, or logs.
+  pub fn with_event_listener(mut self, listener: Arc<dyn EventListener>) -> Self {
+    self.event_listener = Some(listener);
+    self
   }
 
   pub async fn run(&self) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
@@ -127,6 +137,11 @@ impl Flow {
     restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let workflow_started_at = Instant::now();
+    self.emit_event(WorkflowEvent::WorkflowStarted {
+      workflow_id: run_id.clone(),
+      timestamp: workflow_started_at,
+    });
     let base_dir = dirs::home_dir()
       .ok_or_else(|| AgentFlowError::ConfigurationError {
         message: "Could not find home directory".to_string(),
@@ -196,6 +211,12 @@ impl Flow {
       inputs.extend(initial_inputs.clone());
 
       println!("▶️  Executing node '{}'", node_id);
+      let node_started_at = Instant::now();
+      self.emit_event(WorkflowEvent::NodeStarted {
+        workflow_id: run_id.clone(),
+        node_id: node_id.clone(),
+        timestamp: node_started_at,
+      });
       let result = match &graph_node.node_type {
         NodeType::Standard(node) => node.execute(&inputs).await,
         NodeType::Map { template, parallel } => {
@@ -217,6 +238,40 @@ impl Flow {
       };
 
       self.persist_step_result(&run_dir, &node_id, &result)?;
+
+      match &result {
+        Ok(outputs) => {
+          self.emit_event(WorkflowEvent::NodeOutputCaptured {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            output: Self::outputs_to_json(outputs),
+            timestamp: Instant::now(),
+          });
+          self.emit_event(WorkflowEvent::NodeCompleted {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            duration: node_started_at.elapsed(),
+            timestamp: Instant::now(),
+          });
+        }
+        Err(AgentFlowError::NodeSkipped) => {
+          self.emit_event(WorkflowEvent::NodeSkipped {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            reason: "run_if evaluated to false".to_string(),
+            timestamp: Instant::now(),
+          });
+        }
+        Err(err) => {
+          self.emit_event(WorkflowEvent::NodeFailed {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            error: err.to_string(),
+            duration: node_started_at.elapsed(),
+            timestamp: Instant::now(),
+          });
+        }
+      }
 
       state_pool.insert(node_id.to_string(), result);
 
@@ -242,6 +297,26 @@ impl Flow {
           }
         }
       }
+    }
+
+    let workflow_failed = state_pool.values().any(Result::is_err);
+    if workflow_failed {
+      let error = state_pool
+        .values()
+        .find_map(|result| result.as_ref().err().map(ToString::to_string))
+        .unwrap_or_else(|| "workflow failed".to_string());
+      self.emit_event(WorkflowEvent::WorkflowFailed {
+        workflow_id: run_id.clone(),
+        error,
+        duration: workflow_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
+    } else {
+      self.emit_event(WorkflowEvent::WorkflowCompleted {
+        workflow_id: run_id.clone(),
+        duration: workflow_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
     }
 
     // Mark workflow as completed or failed
@@ -341,6 +416,35 @@ impl Flow {
         }
       })
       .collect()
+  }
+
+  fn outputs_to_json(outputs: &HashMap<String, FlowValue>) -> serde_json::Value {
+    let json_outputs: HashMap<String, serde_json::Value> = outputs
+      .iter()
+      .map(|(key, value)| {
+        let json = match value {
+          FlowValue::Json(json) => json.clone(),
+          FlowValue::File { path, mime_type } => serde_json::json!({
+            "$type": "file",
+            "path": path,
+            "mime_type": mime_type,
+          }),
+          FlowValue::Url { url, mime_type } => serde_json::json!({
+            "$type": "url",
+            "url": url,
+            "mime_type": mime_type,
+          }),
+        };
+        (key.clone(), json)
+      })
+      .collect();
+    serde_json::to_value(json_outputs).unwrap_or_else(|_| serde_json::json!({}))
+  }
+
+  fn emit_event(&self, event: WorkflowEvent) {
+    if let Some(listener) = &self.event_listener {
+      listener.on_event(&event);
+    }
   }
 
   fn checkpoint_state_to_state_pool(
@@ -822,6 +926,17 @@ mod tests {
   use super::*;
   use async_trait::async_trait;
   use serde_json::json;
+  use std::sync::Mutex;
+
+  struct RecordingListener {
+    events: Arc<Mutex<Vec<&'static str>>>,
+  }
+
+  impl EventListener for RecordingListener {
+    fn on_event(&self, event: &WorkflowEvent) {
+      self.events.lock().unwrap().push(event.event_type());
+    }
+  }
 
   fn use_writable_home() {
     let home = std::env::temp_dir().join(format!("agentflow-flow-test-{}", uuid::Uuid::new_v4()));
@@ -881,6 +996,46 @@ mod tests {
     };
 
     assert_eq!(results_array.len(), 3);
+  }
+
+  #[tokio::test]
+  async fn test_flow_emits_workflow_node_and_output_events() {
+    use_writable_home();
+    struct TestNode;
+    #[async_trait]
+    impl AsyncNode for TestNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert("result".to_string(), FlowValue::Json(json!("ok")));
+        Ok(outputs)
+      }
+    }
+
+    let node = GraphNode {
+      id: "node".to_string(),
+      node_type: NodeType::Standard(Arc::new(TestNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    Flow::new(vec![node])
+      .with_event_listener(listener)
+      .run()
+      .await
+      .unwrap();
+
+    let events = events.lock().unwrap().clone();
+    assert!(events.contains(&"workflow.started"));
+    assert!(events.contains(&"node.started"));
+    assert!(events.contains(&"node.output.captured"));
+    assert!(events.contains(&"node.completed"));
+    assert!(events.contains(&"workflow.completed"));
   }
 
   #[tokio::test]
