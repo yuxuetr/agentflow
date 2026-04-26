@@ -116,7 +116,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 
 - 标准化 `AgentNode`。✅
 - 标准化 `WorkflowTool`。✅
-- 统一状态序列化和恢复。
+- 统一状态序列化和恢复。✅
 - 增强 trace，能跨 workflow/agent/tool 串联一次完整执行。
 
 ## Phase 4: Memory、Reflection、Planning 深化
@@ -196,7 +196,8 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 
 - DAG 可调用 agent。✅
 - Agent 可调用 workflow。✅
-- checkpoint/trace 能覆盖混合执行。
+- checkpoint 能覆盖 AgentNode 状态和 agent step history。✅
+- trace 能覆盖混合执行。
 
 ### M4: Skill 标准稳定
 

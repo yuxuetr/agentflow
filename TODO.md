@@ -39,14 +39,14 @@
 
 - [x] 标准化 `AgentNode`，让 DAG 节点可以执行 agent。
 - [x] 标准化 `WorkflowTool`，让 agent 可以调用 workflow。
-- [ ] checkpoint 覆盖 AgentNode 状态和 agent step history。
+- [x] checkpoint 覆盖 AgentNode 状态和 agent step history。
 - [ ] trace 串联 workflow、agent、tool、MCP 调用。
 - [ ] 增加 DAG + Agent 混合端到端示例。
 
 ## 建议立即执行顺序
 
-1. checkpoint 覆盖 AgentNode 状态和 agent step history。
-2. trace 串联 workflow、agent、tool、MCP 调用。
+1. trace 串联 workflow、agent、tool、MCP 调用。
+2. 增加 DAG + Agent 混合端到端示例。
 
 ---
 

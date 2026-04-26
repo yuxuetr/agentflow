@@ -114,7 +114,7 @@ impl Flow {
     initial_inputs: AsyncNodeInputs,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None)
+      .execute_with_workflow_id(None, initial_inputs, None, None)
       .await
   }
 
@@ -124,6 +124,7 @@ impl Flow {
     workflow_id: Option<String>,
     initial_inputs: AsyncNodeInputs,
     skip_until: Option<String>,
+    restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let base_dir = dirs::home_dir()
@@ -138,7 +139,7 @@ impl Flow {
     })?;
 
     let sorted_nodes = self.topological_sort()?;
-    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    let mut state_pool: HashMap<String, AsyncNodeResult> = restored_state_pool.unwrap_or_default();
 
     // Flag to skip nodes until we reach the checkpoint resume point
     let mut should_skip = skip_until.is_some();
@@ -217,8 +218,15 @@ impl Flow {
 
       self.persist_step_result(&run_dir, &node_id, &result)?;
 
+      state_pool.insert(node_id.to_string(), result);
+
       // Save checkpoint if enabled
-      if self.checkpoint_enabled && result.is_ok() {
+      if self.checkpoint_enabled
+        && state_pool
+          .get(node_id)
+          .map(|result| result.is_ok())
+          .unwrap_or(false)
+      {
         if let Some(ref manager) = self.checkpoint_manager {
           let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
           if let Err(e) = manager
@@ -234,8 +242,6 @@ impl Flow {
           }
         }
       }
-
-      state_pool.insert(node_id.to_string(), result);
     }
 
     // Mark workflow as completed or failed
@@ -272,15 +278,7 @@ impl Flow {
     checkpoint: Checkpoint,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     // Restore state pool from checkpoint
-    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
-    for (node_id, value) in &checkpoint.state {
-      let result = Ok(
-        vec![("result".to_string(), FlowValue::Json(value.clone()))]
-          .into_iter()
-          .collect(),
-      );
-      state_pool.insert(node_id.clone(), result);
-    }
+    let state_pool = Self::checkpoint_state_to_state_pool(&checkpoint.state);
 
     // Find the next node to execute after the checkpoint
     let sorted_nodes = self.topological_sort()?;
@@ -306,6 +304,7 @@ impl Flow {
           Some(workflow_id.to_string()),
           HashMap::new(),
           Some(next_node_id),
+          Some(state_pool),
         )
         .await
     } else {
@@ -340,6 +339,30 @@ impl Flow {
         } else {
           None
         }
+      })
+      .collect()
+  }
+
+  fn checkpoint_state_to_state_pool(
+    checkpoint_state: &HashMap<String, serde_json::Value>,
+  ) -> HashMap<String, AsyncNodeResult> {
+    checkpoint_state
+      .iter()
+      .map(|(node_id, value)| {
+        let outputs = match value {
+          serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| {
+              let flow_value = serde_json::from_value::<FlowValue>(value.clone())
+                .unwrap_or_else(|_| FlowValue::Json(value.clone()));
+              (key.clone(), flow_value)
+            })
+            .collect(),
+          other => vec![("result".to_string(), FlowValue::Json(other.clone()))]
+            .into_iter()
+            .collect(),
+        };
+        (node_id.clone(), Ok(outputs))
       })
       .collect()
   }
@@ -800,8 +823,15 @@ mod tests {
   use async_trait::async_trait;
   use serde_json::json;
 
+  fn use_writable_home() {
+    let home = std::env::temp_dir().join(format!("agentflow-flow-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&home).unwrap();
+    std::env::set_var("HOME", home);
+  }
+
   #[tokio::test]
   async fn test_map_node_sequential_execution() {
+    use_writable_home();
     struct MultiplyNode;
     #[async_trait]
     impl AsyncNode for MultiplyNode {
@@ -855,6 +885,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_map_node_parallel_execution() {
+    use_writable_home();
     struct MultiplyNode;
     #[async_trait]
     impl AsyncNode for MultiplyNode {
@@ -911,6 +942,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_while_node_basic_loop() {
+    use_writable_home();
     struct IncrementNode;
     #[async_trait]
     impl AsyncNode for IncrementNode {
@@ -976,6 +1008,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_while_node_condition_check() {
+    use_writable_home();
     struct CheckNode;
     #[async_trait]
     impl AsyncNode for CheckNode {

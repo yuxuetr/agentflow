@@ -2,7 +2,7 @@
 
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
-  checkpoint::CheckpointConfig,
+  checkpoint::{CheckpointConfig, CheckpointManager},
   flow::{Flow, GraphNode, NodeType},
   value::FlowValue,
 };
@@ -11,11 +11,48 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+fn use_writable_home() {
+  let home = std::env::temp_dir().join(format!(
+    "agentflow-checkpoint-test-{}",
+    uuid::Uuid::new_v4()
+  ));
+  std::fs::create_dir_all(&home).unwrap();
+  std::env::set_var("HOME", home);
+}
+
 /// Simple test node
 #[derive(Clone)]
 struct SimpleNode {
   _id: String,
   output_value: String,
+}
+
+#[derive(Clone)]
+struct AgentLikeNode;
+
+#[async_trait]
+impl AsyncNode for AgentLikeNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("done")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-1",
+        "answer": "done",
+        "stop_reason": {"reason": "final_answer"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "final_answer", "answer": "done"}}
+        ],
+        "events": []
+      })),
+    );
+    Ok(outputs)
+  }
 }
 
 impl SimpleNode {
@@ -41,6 +78,7 @@ impl AsyncNode for SimpleNode {
 
 #[tokio::test]
 async fn test_checkpointing_enabled() {
+  use_writable_home();
   let temp_dir = TempDir::new().unwrap();
   let config = CheckpointConfig::default()
     .with_checkpoint_dir(temp_dir.path())
@@ -66,6 +104,7 @@ async fn test_checkpointing_enabled() {
 
 #[tokio::test]
 async fn test_checkpoint_saves_state() {
+  use_writable_home();
   let temp_dir = TempDir::new().unwrap();
   let config = CheckpointConfig::default()
     .with_checkpoint_dir(temp_dir.path())
@@ -111,7 +150,48 @@ async fn test_checkpoint_saves_state() {
 }
 
 #[tokio::test]
+async fn test_checkpoint_preserves_agent_node_step_history() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+
+  let nodes = vec![GraphNode {
+    id: "agent".to_string(),
+    node_type: NodeType::Standard(Arc::new(AgentLikeNode)),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let result = flow.run().await.unwrap();
+  assert!(result.contains_key("agent"));
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+  let checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+
+  let agent_result = &checkpoint.state["agent"]["agent_result"];
+  assert_eq!(agent_result["session_id"], "session-1");
+  assert_eq!(agent_result["steps"][0]["kind"]["type"], "observe");
+  assert_eq!(agent_result["steps"][1]["kind"]["type"], "final_answer");
+}
+
+#[tokio::test]
 async fn test_default_checkpointing() {
+  use_writable_home();
   let nodes = vec![GraphNode {
     id: "node1".to_string(),
     node_type: NodeType::Standard(Arc::new(SimpleNode::new("node1", "test"))),
@@ -130,6 +210,7 @@ async fn test_default_checkpointing() {
 
 #[tokio::test]
 async fn test_checkpoint_after_each_node() {
+  use_writable_home();
   let temp_dir = TempDir::new().unwrap();
   let config = CheckpointConfig::default()
     .with_checkpoint_dir(temp_dir.path())
@@ -178,6 +259,7 @@ async fn test_checkpoint_after_each_node() {
 
 #[tokio::test]
 async fn test_workflow_without_checkpointing() {
+  use_writable_home();
   // Ensure normal workflows still work without checkpointing
   let nodes = vec![GraphNode {
     id: "node1".to_string(),

@@ -66,6 +66,9 @@ compact summary, not the runtime implementation itself.
 
 Current `AgentNode` output includes `response`, `session_id`, `stop_reason`, and
 `agent_result`, so DAG workflows can persist or inspect agent step history.
+Flow checkpoints preserve the full `agent_result` output, including serialized
+agent steps, and restore original node output keys instead of collapsing them
+into a generic result field.
 
 `WorkflowTool` should wrap a `Flow` as a `Tool`, exposing a JSON schema and
 returning a `ToolOutput`. From an agent perspective, workflows are just tools.
