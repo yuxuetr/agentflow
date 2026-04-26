@@ -194,6 +194,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - 支持 ToolRegistry、Memory、Tracing。
 - 支持 reflection 策略。
 - Agent runtime trace 有 golden fixture 覆盖。✅
+- Release 前检查清单已建立，用于人工门禁和后续 CI 对齐。✅
 
 ### M3: DAG + Agent 混合
 

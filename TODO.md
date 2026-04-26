@@ -46,9 +46,14 @@
 - [x] 恢复后继续执行 DAG，并避免重复已完成 agent 工具调用。
 - [x] 支持 workflow tool 的超时配置。
 
+## P3: 质量门禁
+
+- [x] 增加 agent runtime golden tests。
+- [x] 建立 release 前检查清单。
+
 ## 建议立即执行顺序
 
-1. 建立 release 前检查清单。
+1. 更新 `README.md` 的智能体框架定位。
 
 ---
 
