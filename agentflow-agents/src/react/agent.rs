@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::{MemoryStore, Message, Role};
@@ -188,7 +189,11 @@ impl ReActAgent {
       .limits
       .max_steps
       .unwrap_or(self.config.max_iterations);
+    let max_tool_calls = context.limits.max_tool_calls;
+    let timeout_ms = context.limits.timeout_ms;
     let budget_tokens = context.limits.token_budget.or(self.config.budget_tokens);
+    let run_started_at = Instant::now();
+    let mut tool_calls = 0usize;
 
     // 1. Store user message
     self
@@ -203,6 +208,18 @@ impl ReActAgent {
     let mut iteration = 0;
 
     loop {
+      if timed_out(run_started_at, timeout_ms) {
+        return Ok(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::Timeout {
+            timeout_ms: timeout_ms.unwrap_or_default(),
+          },
+          steps,
+          events,
+        ));
+      }
+
       // --- Guard: max iterations ---
       if iteration >= max_iterations {
         return Ok(Self::stopped_result(
@@ -235,10 +252,26 @@ impl ReActAgent {
 
       // --- Call LLM ---
       debug!(iteration, "Calling LLM");
-      let raw_response = AgentFlow::model(&self.config.model)
+      let llm_call = AgentFlow::model(&self.config.model)
         .multimodal_messages(messages)
-        .execute()
-        .await?;
+        .execute();
+      let raw_response = match remaining_timeout(run_started_at, timeout_ms) {
+        Some(remaining) => match tokio::time::timeout(remaining, llm_call).await {
+          Ok(result) => result?,
+          Err(_) => {
+            return Ok(Self::stopped_result(
+              &self.session_id,
+              None,
+              AgentStopReason::Timeout {
+                timeout_ms: timeout_ms.unwrap_or_default(),
+              },
+              steps,
+              events,
+            ));
+          }
+        },
+        None => llm_call.await?,
+      };
 
       debug!(response = %raw_response, "LLM responded");
 
@@ -278,6 +311,18 @@ impl ReActAgent {
           params,
         } => {
           info!(iteration, tool = %tool, thought = %thought, "Tool call");
+          if let Some(max_tool_calls) = max_tool_calls {
+            if tool_calls >= max_tool_calls {
+              return Ok(Self::stopped_result(
+                &self.session_id,
+                None,
+                AgentStopReason::MaxToolCalls { max_tool_calls },
+                steps,
+                events,
+              ));
+            }
+          }
+
           if !thought.trim().is_empty() {
             steps.push(AgentStep::new(
               step_index,
@@ -306,13 +351,46 @@ impl ReActAgent {
           step_index += 1;
 
           let started_at = std::time::Instant::now();
-          let tool_output = match self.tools.execute(&tool, params).await {
-            Ok(out) => out,
-            Err(e) => {
-              warn!(tool = %tool, error = %e, "Tool execution failed");
-              agentflow_tools::ToolOutput::error(e.to_string())
-            }
+          let tool_call = self.tools.execute(&tool, params);
+          let tool_output = match remaining_timeout(run_started_at, timeout_ms) {
+            Some(remaining) => match tokio::time::timeout(remaining, tool_call).await {
+              Ok(result) => match result {
+                Ok(out) => out,
+                Err(e) => {
+                  warn!(tool = %tool, error = %e, "Tool execution failed");
+                  agentflow_tools::ToolOutput::error(e.to_string())
+                }
+              },
+              Err(_) => {
+                let duration_ms = started_at.elapsed().as_millis() as u64;
+                events.push(AgentEvent::ToolCallCompleted {
+                  session_id: self.session_id.clone(),
+                  step_index: tool_step_index,
+                  tool: tool.clone(),
+                  is_error: true,
+                  duration_ms,
+                  timestamp: Utc::now(),
+                });
+                return Ok(Self::stopped_result(
+                  &self.session_id,
+                  None,
+                  AgentStopReason::Timeout {
+                    timeout_ms: timeout_ms.unwrap_or_default(),
+                  },
+                  steps,
+                  events,
+                ));
+              }
+            },
+            None => match tool_call.await {
+              Ok(out) => out,
+              Err(e) => {
+                warn!(tool = %tool, error = %e, "Tool execution failed");
+                agentflow_tools::ToolOutput::error(e.to_string())
+              }
+            },
           };
+          tool_calls += 1;
           let duration_ms = started_at.elapsed().as_millis() as u64;
 
           let observation = if tool_output.is_error {
@@ -552,4 +630,16 @@ impl AgentRuntime for ReActAgent {
   fn runtime_name(&self) -> &'static str {
     "react"
   }
+}
+
+fn timed_out(started_at: Instant, timeout_ms: Option<u64>) -> bool {
+  timeout_ms
+    .map(Duration::from_millis)
+    .is_some_and(|timeout| started_at.elapsed() >= timeout)
+}
+
+fn remaining_timeout(started_at: Instant, timeout_ms: Option<u64>) -> Option<Duration> {
+  timeout_ms
+    .map(Duration::from_millis)
+    .map(|timeout| timeout.saturating_sub(started_at.elapsed()))
 }
