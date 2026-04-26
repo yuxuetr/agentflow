@@ -72,10 +72,8 @@ fn parent_workflow(agent: ReActAgent) -> Flow {
 }
 
 fn setup_mock_model() -> anyhow::Result<String> {
-  let home = std::env::temp_dir().join(format!(
-    "agentflow-hybrid-example-{}",
-    uuid::Uuid::new_v4()
-  ));
+  let home =
+    std::env::temp_dir().join(format!("agentflow-hybrid-example-{}", uuid::Uuid::new_v4()));
   fs::create_dir_all(home.join(".agentflow"))?;
   std::env::set_var("HOME", &home);
 

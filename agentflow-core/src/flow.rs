@@ -155,6 +155,17 @@ impl Flow {
 
     let sorted_nodes = self.topological_sort()?;
     let mut state_pool: HashMap<String, AsyncNodeResult> = restored_state_pool.unwrap_or_default();
+    let mut last_completed_node = state_pool
+      .iter()
+      .filter_map(|(node_id, result)| result.as_ref().ok().map(|_| node_id.as_str()))
+      .filter_map(|node_id| {
+        sorted_nodes
+          .iter()
+          .position(|sorted_node| sorted_node == node_id)
+          .map(|idx| (idx, node_id.to_string()))
+      })
+      .max_by_key(|(idx, _)| *idx)
+      .map(|(_, node_id)| node_id);
 
     // Flag to skip nodes until we reach the checkpoint resume point
     let mut should_skip = skip_until.is_some();
@@ -241,6 +252,7 @@ impl Flow {
 
       match &result {
         Ok(outputs) => {
+          last_completed_node = Some(node_id.clone());
           self.emit_event(WorkflowEvent::NodeOutputCaptured {
             workflow_id: run_id.clone(),
             node_id: node_id.clone(),
@@ -328,14 +340,10 @@ impl Flow {
         } else {
           WorkflowStatus::Failed
         };
+        let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
 
         if let Err(e) = manager
-          .save_checkpoint_with_status(
-            &run_id,
-            sorted_nodes.last().unwrap_or(&"".to_string()),
-            &checkpoint_state,
-            status,
-          )
+          .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
           .await
         {
           eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
@@ -368,9 +376,11 @@ impl Flow {
       }
     }
 
-    let next_node = next_node_idx
-      .and_then(|idx| sorted_nodes.get(idx))
-      .map(|s| s.to_string());
+    let next_node = match next_node_idx {
+      Some(idx) => sorted_nodes.get(idx).map(|s| s.to_string()),
+      None if resume_from.is_empty() => sorted_nodes.first().map(|s| s.to_string()),
+      None => None,
+    };
 
     if let Some(next_node_id) = next_node {
       // Continue execution from next node

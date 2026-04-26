@@ -307,7 +307,11 @@ nodes:
       content: "{{ nodes.process_data.outputs.result }}"
 ```
 
-Checkpoints are automatically saved after each node completes successfully.
+Checkpoints are automatically saved after each node completes successfully. If a
+later node fails, the final failed checkpoint still points at the last successful
+node, so `Flow::resume()` continues with the next DAG node and reuses restored
+outputs for completed nodes such as `AgentNode`. This prevents already completed
+agent tool calls from running again during workflow recovery.
 
 ### Manual Checkpoint Control
 
