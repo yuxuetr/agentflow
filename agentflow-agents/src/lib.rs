@@ -9,6 +9,7 @@
 pub mod common;
 pub mod nodes;
 pub mod react;
+pub mod reflection;
 pub mod runtime;
 pub mod supervisor;
 pub mod tools;
@@ -32,6 +33,10 @@ pub use agentflow_tools;
 
 // Re-export M3 multi-agent building blocks
 pub use nodes::AgentNode;
+pub use reflection::{
+  FailureReflection, FinalReflection, NoOpReflection, Reflection, ReflectionContext,
+  ReflectionError, ReflectionStrategy, ReflectionTrigger,
+};
 pub use runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason, RuntimeLimits,
