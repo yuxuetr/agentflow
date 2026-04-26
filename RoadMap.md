@@ -84,17 +84,18 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - 抽象模型调用接口，复用 `agentflow-llm`。
 - Tool 调用全部通过 ToolRegistry。✅
 - Runtime guard 已覆盖 max steps、max tool calls、timeout 和 stop condition。✅
-- Memory 接入短期会话记忆和长期语义记忆。
+- Memory 已接入短期会话记忆；长期语义记忆后续深化。✅
 - Reflection 作为可插拔策略，而不是写死在 agent loop 中。✅
 - ReAct runtime 已把 reflection 输出写入 `Reflect` step 和 `ReflectionAdded` event。✅
 - Agent runtime 已增加 mock LLM 单元测试覆盖 action、tool、answer、steps/events/reflection。✅
 - Runtime 与现有 `Flow` 的边界已明确。✅
+- `agentflow skill run --trace` 已暴露 Skill/MCP tool 调用的 AgentRuntime steps/events。✅
 
 验收标准:
 
 - 可以运行一个最小 ReAct agent。
-- 可以加载一个 Skill，并在 agent loop 中调用 Skill/MCP 工具。
-- 每一步 agent 决策、工具调用和反思都可追踪。
+- 可以加载一个 Skill，并在 agent loop 中调用 Skill/MCP 工具。✅
+- 每一步 agent 决策、工具调用和反思都可追踪。✅
 
 ## Phase 3: DAG + Agent 混合编排
 

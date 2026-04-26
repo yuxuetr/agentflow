@@ -5,7 +5,12 @@ use super::error_context::mcp_context;
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
-pub async fn execute(skill_dir: String, message: String, session_id: Option<String>) -> Result<()> {
+pub async fn execute(
+  skill_dir: String,
+  message: String,
+  session_id: Option<String>,
+  trace: bool,
+) -> Result<()> {
   let dir = Path::new(&skill_dir);
 
   // Load + validate manifest
@@ -42,10 +47,24 @@ pub async fn execute(skill_dir: String, message: String, session_id: Option<Stri
   println!("💬 User: {}\n", message);
 
   let start = std::time::Instant::now();
-  let answer = agent.run(&message).await.context("Agent run failed")?;
+  let result = agent
+    .run_with_trace(&message)
+    .await
+    .context("Agent run failed")?;
   let elapsed = start.elapsed();
+  if !result.stop_reason.is_success() {
+    anyhow::bail!(
+      "Agent stopped before final answer: {:?}",
+      result.stop_reason
+    );
+  }
+  let answer = result.answer.clone().unwrap_or_default();
 
   println!("🤖 Agent: {}", answer);
+  if trace {
+    println!("\n📋 Runtime Trace:");
+    println!("{}", serde_json::to_string_pretty(&result)?);
+  }
   println!("\n⏱  Completed in {:.2?}", elapsed);
 
   Ok(())

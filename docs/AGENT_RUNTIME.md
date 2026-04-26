@@ -53,6 +53,10 @@ legacy `run(&str) -> Result<String, ReActError>` API.
 Runtime guards cover max steps, max tool calls, global timeout, token budget,
 and stop conditions.
 
+`agentflow skill run --trace` prints the structured `AgentRunResult` JSON for a
+Skill execution, including tool calls to MCP-backed tools and the resulting
+AgentRuntime steps/events.
+
 ## Flow Interop Direction
 
 `AgentNode` should wrap an `AgentRuntime` and map workflow input into

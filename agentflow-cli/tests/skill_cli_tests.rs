@@ -163,11 +163,17 @@ fn skill_run_can_call_mcp_tool_with_mock_llm() {
       skill.path().to_str().unwrap(),
       "--message",
       "echo through MCP",
+      "--trace",
     ])
     .assert()
     .success()
     .stdout(predicate::str::contains(
       "Agent: MCP said: mcp-basic: from run",
+    ))
+    .stdout(predicate::str::contains("Runtime Trace"))
+    .stdout(predicate::str::contains("\"type\": \"tool_call\""))
+    .stdout(predicate::str::contains(
+      "\"tool\": \"mcp_local_demo_echo\"",
     ));
 }
 

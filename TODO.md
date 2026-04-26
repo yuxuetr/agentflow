@@ -29,7 +29,7 @@
 - [x] 定义 `AgentRuntime`、`AgentContext`、`AgentStep`、`AgentEvent`、`AgentStopReason`。
 - [x] 实现最小 ReAct loop: observe -> plan -> act -> observe。
 - [x] Tool 调用统一走 ToolRegistry。
-- [ ] 接入 Skills、MCP tools、Memory、Tracing。
+- [x] 接入 Skills、MCP tools、Memory、Tracing。
 - [x] 增加 step limit、tool call limit、timeout、stop condition。
 - [x] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
 - [x] 将 reflection 事件写入 AgentRuntime trace。
@@ -45,8 +45,8 @@
 
 ## 建议立即执行顺序
 
-1. 接入 Skills、MCP tools、Memory、Tracing。
-2. checkpoint 覆盖 AgentNode 状态和 agent step history。
+1. checkpoint 覆盖 AgentNode 状态和 agent step history。
+2. trace 串联 workflow、agent、tool、MCP 调用。
 
 ---
 

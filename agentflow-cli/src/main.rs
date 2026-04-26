@@ -286,6 +286,9 @@ enum SkillCommands {
     /// Reuse an existing session ID for multi-turn conversations
     #[arg(long)]
     session: Option<String>,
+    /// Print the structured AgentRuntime trace as JSON
+    #[arg(long)]
+    trace: bool,
   },
   /// Start an interactive multi-turn chat session with a skill
   Chat {
@@ -548,7 +551,8 @@ async fn main() {
         skill_dir,
         message,
         session,
-      } => skill::run::execute(skill_dir, message, session).await,
+        trace,
+      } => skill::run::execute(skill_dir, message, session, trace).await,
       SkillCommands::Chat { skill_dir, session } => skill::chat::execute(skill_dir, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
