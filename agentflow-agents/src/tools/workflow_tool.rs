@@ -1,6 +1,7 @@
 //! Wrap a DAG [`Flow`](agentflow_core::Flow) as an agent-callable tool.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentflow_core::{async_node::AsyncNodeInputs, Flow, FlowValue};
 use agentflow_tools::{Tool, ToolError, ToolOutput, ToolOutputPart};
@@ -13,6 +14,7 @@ pub struct WorkflowTool {
   description: String,
   parameters_schema: Value,
   flow: Arc<Flow>,
+  timeout: Option<Duration>,
 }
 
 impl WorkflowTool {
@@ -36,6 +38,7 @@ impl WorkflowTool {
       description: description.into(),
       parameters_schema,
       flow: Arc::new(flow),
+      timeout: None,
     }
   }
 
@@ -50,7 +53,21 @@ impl WorkflowTool {
       description: description.into(),
       parameters_schema,
       flow,
+      timeout: None,
     }
+  }
+
+  pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    self.timeout = Some(timeout);
+    self
+  }
+
+  pub fn with_timeout_ms(self, timeout_ms: u64) -> Self {
+    self.with_timeout(Duration::from_millis(timeout_ms))
+  }
+
+  pub fn timeout(&self) -> Option<Duration> {
+    self.timeout
   }
 
   pub fn flow_handle(&self) -> Arc<Flow> {
@@ -74,14 +91,22 @@ impl Tool for WorkflowTool {
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
     let inputs = params_to_inputs(params)?;
-    let results =
-      self
-        .flow
-        .execute_from_inputs(inputs)
+    let execution = self.flow.execute_from_inputs(inputs);
+    let results = match self.timeout {
+      Some(timeout) => tokio::time::timeout(timeout, execution)
         .await
-        .map_err(|e| ToolError::ExecutionFailed {
-          message: format!("Workflow tool '{}' failed: {}", self.name, e),
-        })?;
+        .map_err(|_| ToolError::ExecutionFailed {
+          message: format!(
+            "Workflow tool '{}' timed out after {}ms",
+            self.name,
+            timeout.as_millis()
+          ),
+        })?,
+      None => execution.await,
+    }
+    .map_err(|e| ToolError::ExecutionFailed {
+      message: format!("Workflow tool '{}' failed: {}", self.name, e),
+    })?;
     let has_node_error = results.values().any(Result::is_err);
     let value = serde_json::to_value(&results).map_err(ToolError::SerdeError)?;
     let content = serde_json::to_string_pretty(&value).map_err(ToolError::SerdeError)?;
@@ -153,12 +178,24 @@ mod tests {
 
   struct FailingNode;
 
+  struct SlowNode;
+
   #[async_trait]
   impl agentflow_core::AsyncNode for FailingNode {
     async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
       Err(AgentFlowError::NodeExecutionFailed {
         message: "boom".to_string(),
       })
+    }
+  }
+
+  #[async_trait]
+  impl agentflow_core::AsyncNode for SlowNode {
+    async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      let mut outputs = AsyncNodeInputs::new();
+      outputs.insert("done".to_string(), FlowValue::Json(json!(true)));
+      Ok(outputs)
     }
   }
 
@@ -232,5 +269,28 @@ mod tests {
     let err = tool.execute(json!("bad")).await.unwrap_err();
 
     assert!(matches!(err, ToolError::InvalidParams { .. }));
+  }
+
+  #[tokio::test]
+  async fn workflow_tool_times_out_slow_flows() {
+    use_writable_home();
+    let tool = WorkflowTool::new(
+      "slow_workflow",
+      "Run slow workflow",
+      single_node_flow("slow", Arc::new(SlowNode)),
+    )
+    .with_timeout_ms(10);
+
+    assert_eq!(tool.timeout(), Some(Duration::from_millis(10)));
+
+    let err = tool.execute(json!({})).await.unwrap_err();
+
+    match err {
+      ToolError::ExecutionFailed { message } => {
+        assert!(message.contains("slow_workflow"));
+        assert!(message.contains("timed out after 10ms"));
+      }
+      other => panic!("expected timeout execution failure, got {other:?}"),
+    }
   }
 }

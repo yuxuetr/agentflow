@@ -119,6 +119,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - 统一状态序列化和恢复。✅
 - 增强 trace，能跨 workflow/agent/tool 串联一次完整执行。✅
 - 恢复后继续执行 DAG，并跳过已完成 AgentNode，避免重复工具调用。✅
+- `WorkflowTool` 支持配置调用超时。✅
 
 ## Phase 4: Memory、Reflection、Planning 深化
 

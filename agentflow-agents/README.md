@@ -101,6 +101,11 @@ cargo run -p agentflow-agents --example hybrid_workflow_agent
 containing an `AgentNode`; the agent calls a `WorkflowTool` that wraps a child
 DAG, then prints the structured AgentRuntime result.
 
+`WorkflowTool` can be bounded with `.with_timeout(duration)` or
+`.with_timeout_ms(ms)`. If the child DAG does not finish in time, the tool
+returns an execution failure that the ReAct runtime records as a tool error
+observation.
+
 ## 📁 Project Structure
 
 ```

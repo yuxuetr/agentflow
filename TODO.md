@@ -43,10 +43,11 @@
 - [x] trace 串联 workflow、agent、tool、MCP 调用。
 - [x] 增加 DAG + Agent 混合端到端示例。
 - [x] 恢复后继续执行 DAG，并避免重复已完成 agent 工具调用。
+- [x] 支持 workflow tool 的超时配置。
 
 ## 建议立即执行顺序
 
-1. 支持 workflow tool 的超时配置。
+1. 增加 agent runtime golden tests。
 
 ---
 
