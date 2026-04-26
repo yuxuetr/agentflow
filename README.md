@@ -4,17 +4,36 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/)
 
-> **A modular, Rust-based AI workflow orchestration platform supporting both code-first and configuration-first paradigms with a focus on explicit, type-safe data flow.**
+> **A modular Rust agent framework for deterministic DAG workflows, agent-native execution loops, Skills, MCP tools, memory, tracing, and checkpointed recovery.**
 
-AgentFlow V2 is a complete architectural redesign focused on robustness, clarity, and extensibility. It replaces implicit shared state with a powerful, DAG-based execution model where data flow is explicit and traceable.
+AgentFlow V2 is evolving from a workflow orchestration engine into an agent framework with a shared runtime foundation. It supports deterministic DAG workflows for production automation and agent-native loops for planning, tool use, reflection, memory, and multi-step decision making.
 
-## 🏗️ V2 Architecture: Explicit Dataflow
+## 🏗️ Architecture: Shared Runtime For Workflows And Agents
 
-AgentFlow V2 is built on three core principles:
+AgentFlow is built on five core principles:
 
-1.  **Directed Acyclic Graph (DAG)**: Workflows are defined as a graph where nodes have explicit dependencies.
-2.  **Explicit I/O**: Nodes are stateless and receive all data through typed inputs, producing typed outputs.
-3.  **Layered API**: The framework provides different levels of abstraction for different users.
+1. **Directed Acyclic Graph (DAG)**: Workflows are defined as graphs where nodes have explicit dependencies.
+2. **Agent-native runtime**: Agents record observe, plan, tool call, tool result, reflection, and final answer steps.
+3. **Explicit I/O**: Nodes and tools receive typed inputs and produce typed outputs.
+4. **Shared tools and skills**: Built-in tools, script tools, MCP tools, and workflow tools all adapt into one `ToolRegistry`.
+5. **Recoverable execution**: Workflow checkpoints preserve node outputs and agent step history so interrupted runs can resume.
+
+## 🤖 Agent Framework Positioning
+
+AgentFlow now treats workflows and agents as complementary execution strategies:
+
+- Use `agentflow-core::Flow` for deterministic production pipelines, batch jobs, RAG flows, and business processes.
+- Use `agentflow-agents::AgentRuntime` / `ReActAgent` for autonomous loops with planning, tool use, reflection, memory, and runtime guards.
+- Use `AgentNode` when a DAG needs an agent for a non-deterministic step.
+- Use `WorkflowTool` when an agent should call a stable DAG workflow as a normal tool.
+- Use Skills to package instructions, manifests, script tools, MCP server declarations, and runtime constraints.
+- Use MCP integration to expose external tool servers through the same tool interface as local tools.
+
+The intended dependency direction is:
+
+```text
+Flow -> AgentNode -> AgentRuntime -> ToolRegistry -> Tool / MCP / WorkflowTool
+```
 
 ## 🎯 Two Ways to Build
 
@@ -34,7 +53,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 #[tokio::main]
-asyn fn main() {
+async fn main() {
     // 1. Define the nodes in the workflow
     let template_node = GraphNode {
         id: "get_topic".to_string(),
@@ -116,6 +135,11 @@ agentflow workflow run workflow_v2.yml
 - **Explicit Input Mapping**: The `input_mapping` field provides full control over data flow between nodes.
 - **Powerful Control Flow**: Native support for conditional execution (`run_if`), `while` loops, and `map` iteration (with parallel execution support).
 - **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing.
+- **Agent Runtime**: ReAct-compatible runtime with structured steps/events, stop reasons, reflection hooks, runtime guards, and golden test coverage.
+- **Hybrid DAG + Agent Execution**: `AgentNode` embeds agents in DAGs; `WorkflowTool` lets agents call DAG workflows.
+- **Skills + MCP Tools**: Skills can declare MCP servers, discover tools, expose schemas, and call them through the unified tool registry.
+- **Tracing Across Boundaries**: Workflow, agent, tool, and MCP calls can be linked through structured trace events.
+- **Checkpointed Recovery**: Workflow resume skips completed nodes and preserves serialized agent step history.
 
 ## ✨ New in v0.2.0: Production-Ready Stability
 
@@ -278,8 +302,12 @@ All features meet strict performance targets:
 ## 📚 Documentation
 
 ### Core Documentation
-- **[V2 Architecture](ARCHITECTURE.md)**: The complete technical design for the new architecture.
-- **[V1 to V2 Migration Guide](MIGRATION_V2.md)**: A step-by-step guide for updating old workflows and nodes.
+- **[RoadMap](RoadMap.md)**: Current direction for evolving AgentFlow into a DAG + agent framework.
+- **[Agent Runtime](docs/AGENT_RUNTIME.md)**: Runtime boundary, core types, ReAct trace contract, and DAG interop.
+- **[V2 Architecture](docs/ARCHITECTURE.md)**: Technical design for the DAG workflow architecture.
+- **[Skill Format](docs/SKILL_FORMAT.md)**: `SKILL.md` and `skill.toml` behavior for reusable capabilities.
+- **[MCP Skills Integration](docs/MCP_SKILLS_INTEGRATION.md)**: Skills, MCP server configuration, and tool discovery.
+- **[Release Checklist](docs/RELEASE_CHECKLIST.md)**: Manual quality gate before tagging or publishing.
 
 ### v0.2.0 Feature Guides
 - **[Retry Mechanism](docs/RETRY_MECHANISM.md)**: Comprehensive guide to retry configuration and strategies
@@ -294,6 +322,9 @@ All features meet strict performance targets:
 ### Examples
 - `agentflow-core/examples/retry_example.rs`: Retry mechanism demonstrations
 - `agentflow-core/examples/resource_management_example.rs`: Resource monitoring examples
+- `agentflow-agents/examples/react_agent.rs`: ReAct agent runtime example
+- `agentflow-agents/examples/hybrid_workflow_agent.rs`: DAG + Agent hybrid example
+- `examples/skills/mcp-basic`: Minimal Skill with MCP server configuration
 - `agentflow-cli/examples/workflows/`: Complete workflow examples including AI research assistant
 
 ## 📦 Installation
@@ -313,4 +344,4 @@ agentflow --help
 
 ## 🛣️ Development Plan
 
-See our progress and upcoming tasks in the [TODOs.md](TODOs.md) file (note: this file is in `.gitignore`).
+See the tracked short-term plan in [TODO.md](TODO.md) and the longer-term framework direction in [RoadMap.md](RoadMap.md). A more granular local task list exists in `TODOs.md`, but that file is intentionally ignored.
