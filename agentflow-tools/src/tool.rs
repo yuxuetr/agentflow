@@ -11,6 +11,27 @@ pub struct ToolOutput {
   pub content: String,
   /// Whether this output represents an error condition
   pub is_error: bool,
+  /// Structured content parts returned by tools that support typed output.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub parts: Vec<ToolOutputPart>,
+}
+
+/// Typed output content returned by tools.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOutputPart {
+  Text {
+    text: String,
+  },
+  Image {
+    data: String,
+    mime_type: String,
+  },
+  Resource {
+    uri: String,
+    mime_type: Option<String>,
+    text: Option<String>,
+  },
 }
 
 impl ToolOutput {
@@ -18,6 +39,7 @@ impl ToolOutput {
     Self {
       content: content.into(),
       is_error: false,
+      parts: Vec::new(),
     }
   }
 
@@ -25,7 +47,29 @@ impl ToolOutput {
     Self {
       content: content.into(),
       is_error: true,
+      parts: Vec::new(),
     }
+  }
+
+  pub fn success_parts(content: impl Into<String>, parts: Vec<ToolOutputPart>) -> Self {
+    Self {
+      content: content.into(),
+      is_error: false,
+      parts,
+    }
+  }
+
+  pub fn error_parts(content: impl Into<String>, parts: Vec<ToolOutputPart>) -> Self {
+    Self {
+      content: content.into(),
+      is_error: true,
+      parts,
+    }
+  }
+
+  pub fn with_parts(mut self, parts: Vec<ToolOutputPart>) -> Self {
+    self.parts = parts;
+    self
   }
 }
 
@@ -36,6 +80,38 @@ pub struct ToolCall {
   pub tool: String,
   /// Parameters for the tool (matches the tool's JSON schema)
   pub params: Value,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn string_output_constructors_have_no_parts_by_default() {
+    let output = ToolOutput::success("ok");
+
+    assert_eq!(output.content, "ok");
+    assert!(!output.is_error);
+    assert!(output.parts.is_empty());
+  }
+
+  #[test]
+  fn typed_output_preserves_parts_and_compatible_content() {
+    let output = ToolOutput::success_parts(
+      "hello",
+      vec![ToolOutputPart::Text {
+        text: "hello".to_string(),
+      }],
+    );
+
+    assert_eq!(output.content, "hello");
+    assert_eq!(
+      output.parts,
+      vec![ToolOutputPart::Text {
+        text: "hello".to_string(),
+      }]
+    );
+  }
 }
 
 /// OpenAI-compatible function definition for use in prompts or API calls

@@ -50,6 +50,11 @@ def tools():
             },
         },
         {
+            "name": "image",
+            "description": "Return a tiny image content part",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
             "name": "tool_error",
             "description": "Return an MCP tool result marked as an error",
             "inputSchema": {"type": "object", "properties": {}},
@@ -132,6 +137,19 @@ def main():
                 respond(
                     message,
                     {"content": [{"type": "text", "text": "slow response"}]},
+                )
+            elif name == "image":
+                respond(
+                    message,
+                    {
+                        "content": [
+                            {
+                                "type": "image",
+                                "data": "aW1n",
+                                "mimeType": "image/png",
+                            }
+                        ]
+                    },
                 )
             elif name == "rpc_error":
                 respond(

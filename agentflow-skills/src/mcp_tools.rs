@@ -1,5 +1,5 @@
 use agentflow_mcp::client::{ClientBuilder, Content, MCPClient, Tool as McpTool};
-use agentflow_tools::{Tool, ToolError, ToolOutput};
+use agentflow_tools::{Tool, ToolError, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ impl McpClientPool {
       }
     };
 
-    let content = format_mcp_result_content(&result.content);
+    let (content, parts) = convert_mcp_result_content(&result.content);
     if result.is_error() {
       warn!(
         event = "mcp_tool_call_result_error",
@@ -123,7 +123,7 @@ impl McpClientPool {
         tool = %tool_name,
         "MCP tool returned an error result"
       );
-      Ok(ToolOutput::error(content))
+      Ok(ToolOutput::error_parts(content, parts))
     } else {
       info!(
         event = "mcp_tool_call_succeeded",
@@ -131,7 +131,7 @@ impl McpClientPool {
         tool = %tool_name,
         "MCP tool call succeeded"
       );
-      Ok(ToolOutput::success(content))
+      Ok(ToolOutput::success_parts(content, parts))
     }
   }
 }
@@ -290,17 +290,25 @@ async fn build_client(config: &McpServerConfig) -> agentflow_mcp::MCPResult<MCPC
     .await
 }
 
-fn format_mcp_result_content(content: &[Content]) -> String {
+fn convert_mcp_result_content(content: &[Content]) -> (String, Vec<ToolOutputPart>) {
   if content.is_empty() {
-    return String::new();
+    return (String::new(), Vec::new());
   }
 
-  let mut parts = Vec::with_capacity(content.len());
+  let mut text_parts = Vec::with_capacity(content.len());
+  let mut output_parts = Vec::with_capacity(content.len());
   for item in content {
     match item {
-      Content::Text { text } => parts.push(text.clone()),
+      Content::Text { text } => {
+        text_parts.push(text.clone());
+        output_parts.push(ToolOutputPart::Text { text: text.clone() });
+      }
       Content::Image { data, mime_type } => {
-        parts.push(format!("[image:{};{} bytes]", mime_type, data.len()));
+        text_parts.push(format!("[image:{};{} bytes]", mime_type, data.len()));
+        output_parts.push(ToolOutputPart::Image {
+          data: data.clone(),
+          mime_type: mime_type.clone(),
+        });
       }
       Content::Resource {
         uri,
@@ -308,16 +316,21 @@ fn format_mcp_result_content(content: &[Content]) -> String {
         text,
       } => {
         if let Some(text) = text {
-          parts.push(text.clone());
+          text_parts.push(text.clone());
         } else if let Some(mime_type) = mime_type {
-          parts.push(format!("[resource:{};{}]", uri, mime_type));
+          text_parts.push(format!("[resource:{};{}]", uri, mime_type));
         } else {
-          parts.push(format!("[resource:{}]", uri));
+          text_parts.push(format!("[resource:{}]", uri));
         }
+        output_parts.push(ToolOutputPart::Resource {
+          uri: uri.clone(),
+          mime_type: mime_type.clone(),
+          text: text.clone(),
+        });
       }
     }
   }
-  parts.join("\n")
+  (text_parts.join("\n"), output_parts)
 }
 
 #[cfg(test)]

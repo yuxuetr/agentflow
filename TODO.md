@@ -1,6 +1,6 @@
 # AgentFlow 智能体框架近期执行计划
 
-最后更新: 2026-04-25
+最后更新: 2026-04-26
 
 说明:
 
@@ -14,7 +14,7 @@
 - [x] 测试 `SKILL.md/skill.toml -> mcp_servers -> ToolRegistry -> call_tool` 全链路。
 - [x] 将 MCP tool `description` 和 `inputSchema` 暴露到 Tool metadata。
 - [x] 完善 MCP tool adapter 的调用超时。
-- [ ] 完善 MCP tool adapter 的 typed content 类型转换。
+- [x] 完善 MCP tool adapter 的 typed content 类型转换。
 - [x] 增加 MCP server/tool 调用 tracing 事件。
 - [x] 为 MCP client pool 增加显式 shutdown/disconnect。
 - [x] 打通 CLI: `skill validate` 校验 MCP server 配置。
@@ -43,9 +43,8 @@
 
 ## 建议立即执行顺序
 
-1. MCP Tool adapter typed content
-2. CLI 错误信息补充 MCP server name、tool name 和失败原因
-3. Phase 2 Agent Runtime 类型设计
+1. CLI 错误信息补充 MCP server name、tool name 和失败原因
+2. Phase 2 Agent Runtime 类型设计
 
 ---
 

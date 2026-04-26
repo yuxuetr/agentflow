@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use agentflow_skills::{SkillBuilder, SkillError, SkillLoader};
+use agentflow_tools::ToolOutputPart;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -87,6 +88,19 @@ async fn skill_toml_loads_mcp_tools_and_calls_through_registry() {
   assert!(!output.is_error);
   assert!(output.content.contains("echo: hello"));
   assert!(output.content.contains(r#"resource: {"message": "hello"}"#));
+  assert_eq!(
+    output.parts,
+    vec![
+      ToolOutputPart::Text {
+        text: "echo: hello".to_string()
+      },
+      ToolOutputPart::Resource {
+        uri: "mock://echo".to_string(),
+        mime_type: Some("text/plain".to_string()),
+        text: Some(r#"resource: {"message": "hello"}"#.to_string()),
+      }
+    ]
+  );
 }
 
 #[tokio::test]
@@ -294,6 +308,35 @@ timeout_secs = 1
   let message = err.to_string();
 
   assert!(message.contains("MCP server 'fixture' tool 'slow' timed out"));
+}
+
+#[tokio::test]
+async fn mcp_image_content_is_preserved_as_typed_output_part() {
+  let dir = TempDir::new().unwrap();
+  let server = fixture_server().to_string_lossy().into_owned();
+  write_file(
+    &dir.path().join("skill.toml"),
+    &toml_skill("image-mcp", "fixture", "python3", &[server]),
+  );
+
+  let manifest = SkillLoader::load(dir.path()).unwrap();
+  let registry = SkillBuilder::build_registry(&manifest, dir.path())
+    .await
+    .unwrap();
+  let output = registry
+    .execute("mcp_fixture_image", json!({}))
+    .await
+    .unwrap();
+
+  assert!(!output.is_error);
+  assert_eq!(output.content, "[image:image/png;4 bytes]");
+  assert_eq!(
+    output.parts,
+    vec![ToolOutputPart::Image {
+      data: "aW1n".to_string(),
+      mime_type: "image/png".to_string(),
+    }]
+  );
 }
 
 #[tokio::test]
