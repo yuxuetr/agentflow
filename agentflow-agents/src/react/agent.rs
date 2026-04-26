@@ -9,6 +9,7 @@ use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::react::parser::AgentResponse;
+use crate::reflection::{ReflectionContext, ReflectionStrategy};
 use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason, RuntimeLimits,
@@ -132,6 +133,7 @@ pub struct ReActAgent {
   config: ReActConfig,
   memory: Box<dyn MemoryStore>,
   tools: Arc<ToolRegistry>,
+  reflection: Option<Arc<dyn ReflectionStrategy>>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
 }
@@ -143,6 +145,7 @@ impl ReActAgent {
       config,
       memory,
       tools,
+      reflection: None,
       session_id,
     }
   }
@@ -150,6 +153,12 @@ impl ReActAgent {
   /// Continue an existing session by reusing a known `session_id`.
   pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
     self.session_id = session_id.into();
+    self
+  }
+
+  /// Attach a reflection strategy to the runtime trace.
+  pub fn with_reflection_strategy(mut self, strategy: Arc<dyn ReflectionStrategy>) -> Self {
+    self.reflection = Some(strategy);
     self
   }
 
@@ -209,6 +218,21 @@ impl ReActAgent {
 
     loop {
       if timed_out(run_started_at, timeout_ms) {
+        self
+          .record_reflection(
+            ReflectionContext::failure(
+              &self.session_id,
+              step_index,
+              format!(
+                "runtime timed out after {}ms",
+                timeout_ms.unwrap_or_default()
+              ),
+            ),
+            &mut step_index,
+            &mut steps,
+            &mut events,
+          )
+          .await?;
         return Ok(Self::stopped_result(
           &self.session_id,
           None,
@@ -222,6 +246,18 @@ impl ReActAgent {
 
       // --- Guard: max iterations ---
       if iteration >= max_iterations {
+        self
+          .record_reflection(
+            ReflectionContext::failure(
+              &self.session_id,
+              step_index,
+              format!("max steps ({}) reached", max_iterations),
+            ),
+            &mut step_index,
+            &mut steps,
+            &mut events,
+          )
+          .await?;
         return Ok(Self::stopped_result(
           &self.session_id,
           None,
@@ -237,6 +273,18 @@ impl ReActAgent {
       if let Some(budget) = budget_tokens {
         let used = self.memory.session_token_count(&self.session_id).await?;
         if used > budget {
+          self
+            .record_reflection(
+              ReflectionContext::failure(
+                &self.session_id,
+                step_index,
+                format!("token budget exceeded: {} / {}", used, budget),
+              ),
+              &mut step_index,
+              &mut steps,
+              &mut events,
+            )
+            .await?;
           return Ok(Self::stopped_result(
             &self.session_id,
             None,
@@ -259,6 +307,21 @@ impl ReActAgent {
         Some(remaining) => match tokio::time::timeout(remaining, llm_call).await {
           Ok(result) => result?,
           Err(_) => {
+            self
+              .record_reflection(
+                ReflectionContext::failure(
+                  &self.session_id,
+                  step_index,
+                  format!(
+                    "runtime timed out after {}ms",
+                    timeout_ms.unwrap_or_default()
+                  ),
+                ),
+                &mut step_index,
+                &mut steps,
+                &mut events,
+              )
+              .await?;
             return Ok(Self::stopped_result(
               &self.session_id,
               None,
@@ -282,6 +345,14 @@ impl ReActAgent {
           self
             .memory
             .add_message(Message::assistant(&self.session_id, &raw_response))
+            .await?;
+          self
+            .record_reflection(
+              ReflectionContext::final_answer(&self.session_id, step_index, &raw_response),
+              &mut step_index,
+              &mut steps,
+              &mut events,
+            )
             .await?;
           return Ok(Self::stopped_result(
             &self.session_id,
@@ -313,6 +384,18 @@ impl ReActAgent {
           info!(iteration, tool = %tool, thought = %thought, "Tool call");
           if let Some(max_tool_calls) = max_tool_calls {
             if tool_calls >= max_tool_calls {
+              self
+                .record_reflection(
+                  ReflectionContext::failure(
+                    &self.session_id,
+                    step_index,
+                    format!("max tool calls ({}) reached", max_tool_calls),
+                  ),
+                  &mut step_index,
+                  &mut steps,
+                  &mut events,
+                )
+                .await?;
               return Ok(Self::stopped_result(
                 &self.session_id,
                 None,
@@ -371,6 +454,21 @@ impl ReActAgent {
                   duration_ms,
                   timestamp: Utc::now(),
                 });
+                self
+                  .record_reflection(
+                    ReflectionContext::failure(
+                      &self.session_id,
+                      step_index,
+                      format!(
+                        "runtime timed out after {}ms",
+                        timeout_ms.unwrap_or_default()
+                      ),
+                    ),
+                    &mut step_index,
+                    &mut steps,
+                    &mut events,
+                  )
+                  .await?;
                 return Ok(Self::stopped_result(
                   &self.session_id,
                   None,
@@ -418,6 +516,16 @@ impl ReActAgent {
             timestamp: Utc::now(),
           });
           step_index += 1;
+          if tool_output.is_error {
+            self
+              .record_reflection(
+                ReflectionContext::failure(&self.session_id, step_index, &observation),
+                &mut step_index,
+                &mut steps,
+                &mut events,
+              )
+              .await?;
+          }
 
           self
             .memory
@@ -439,6 +547,15 @@ impl ReActAgent {
               answer: answer.clone(),
             },
           ));
+          step_index += 1;
+          self
+            .record_reflection(
+              ReflectionContext::final_answer(&self.session_id, step_index, &answer),
+              &mut step_index,
+              &mut steps,
+              &mut events,
+            )
+            .await?;
           return Ok(Self::stopped_result(
             &self.session_id,
             Some(answer),
@@ -457,6 +574,15 @@ impl ReActAgent {
               answer: text.clone(),
             },
           ));
+          step_index += 1;
+          self
+            .record_reflection(
+              ReflectionContext::final_answer(&self.session_id, step_index, &text),
+              &mut step_index,
+              &mut steps,
+              &mut events,
+            )
+            .await?;
           return Ok(Self::stopped_result(
             &self.session_id,
             Some(text),
@@ -512,6 +638,43 @@ impl ReActAgent {
       steps,
       events,
     }
+  }
+
+  async fn record_reflection(
+    &self,
+    context: ReflectionContext,
+    step_index: &mut usize,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+  ) -> Result<(), ReActError> {
+    let Some(strategy) = &self.reflection else {
+      return Ok(());
+    };
+    let reflection = strategy
+      .reflect(&context)
+      .await
+      .map_err(|err| ReActError::ToolError {
+        tool: "reflection".to_string(),
+        message: err.to_string(),
+      })?;
+    let Some(reflection) = reflection else {
+      return Ok(());
+    };
+
+    let current_step = *step_index;
+    steps.push(AgentStep::new(
+      current_step,
+      AgentStepKind::Reflect {
+        content: reflection.content,
+      },
+    ));
+    events.push(AgentEvent::ReflectionAdded {
+      session_id: self.session_id.clone(),
+      step_index: current_step,
+      timestamp: reflection.timestamp,
+    });
+    *step_index += 1;
+    Ok(())
   }
 
   fn answer_from_result(result: AgentRunResult) -> Result<String, ReActError> {

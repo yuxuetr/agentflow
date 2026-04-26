@@ -32,6 +32,7 @@
 - [ ] 接入 Skills、MCP tools、Memory、Tracing。
 - [x] 增加 step limit、tool call limit、timeout、stop condition。
 - [x] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
+- [x] 将 reflection 事件写入 AgentRuntime trace。
 - [ ] 使用 mock LLM 增加 agent runtime 单元测试。
 
 ## P2: DAG + Agent 混合执行
@@ -44,8 +45,8 @@
 
 ## 建议立即执行顺序
 
-1. 将 reflection 事件写入 AgentRuntime trace。
-2. 使用 mock LLM 增加 agent runtime 单元测试。
+1. 使用 mock LLM 增加 agent runtime 单元测试。
+2. 接入 Skills、MCP tools、Memory、Tracing。
 
 ---
 
