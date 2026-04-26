@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+use super::error_context::mcp_context;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
 pub async fn execute(skill_dir: String) -> Result<()> {
@@ -132,7 +133,7 @@ pub async fn execute(skill_dir: String) -> Result<()> {
     }
     let registry = SkillBuilder::build_registry(&manifest, dir)
       .await
-      .with_context(|| "MCP server validation failed")?;
+      .with_context(|| mcp_context("MCP server validation failed", &manifest))?;
     let mcp_tool_count = registry
       .list()
       .iter()

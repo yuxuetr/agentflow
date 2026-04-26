@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
+use super::error_context::mcp_context;
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
@@ -36,7 +37,7 @@ pub async fn execute(skill_dir: String, session_id: Option<String>) -> Result<()
   // ── Build agent ───────────────────────────────────────────────────────────
   let mut agent = SkillBuilder::build(&manifest, dir)
     .await
-    .context("Failed to build agent from skill manifest")?;
+    .with_context(|| mcp_context("Failed to build agent from skill manifest", &manifest))?;
 
   if let Some(sid) = session_id {
     agent = agent.with_session_id(sid);

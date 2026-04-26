@@ -236,6 +236,9 @@ async fn mcp_tool_result_error_maps_to_tool_output_error() {
     .await
     .unwrap();
   assert!(output.is_error);
+  assert!(output
+    .content
+    .contains("MCP server 'fixture' tool 'tool_error' returned error"));
   assert!(output.content.contains("mock tool reported a domain error"));
 }
 

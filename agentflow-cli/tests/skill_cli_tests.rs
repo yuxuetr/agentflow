@@ -61,6 +61,26 @@ args = [{server:?}]
   .unwrap();
 }
 
+fn write_broken_mcp_skill(dir: &Path) {
+  fs::write(
+    dir.join("skill.toml"),
+    r#"
+[skill]
+name = "broken_mcp"
+version = "0.1.0"
+description = "Broken MCP skill for CLI error tests"
+
+[persona]
+role = "Use MCP tools when needed."
+
+[[mcp_servers]]
+name = "broken-demo"
+command = "agentflow-no-such-mcp-server-command"
+"#,
+  )
+  .unwrap();
+}
+
 fn mock_react_responses() -> String {
   serde_json::to_string(&vec![
     r#"{"thought":"call echo","action":{"tool":"mcp_local_demo_echo","params":{"text":"from run"}}}"#,
@@ -90,6 +110,40 @@ fn skill_list_tools_shows_mcp_tools_and_schema() {
     .stdout(predicate::str::contains("mcp_local_demo_echo"))
     .stdout(predicate::str::contains("mcp_local_demo_status"))
     .stdout(predicate::str::contains("text (string): Text to echo."));
+}
+
+#[test]
+fn skill_validate_mcp_failure_names_server_and_reason() {
+  let skill = TempDir::new().unwrap();
+  write_broken_mcp_skill(skill.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "validate", skill.path().to_str().unwrap()])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("MCP server validation failed"))
+    .stderr(predicate::str::contains("server 'broken-demo'"))
+    .stderr(predicate::str::contains(
+      "agentflow-no-such-mcp-server-command",
+    ));
+}
+
+#[test]
+fn skill_list_tools_mcp_failure_names_server_and_tool_naming_rule() {
+  let skill = TempDir::new().unwrap();
+  write_broken_mcp_skill(skill.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "list-tools", skill.path().to_str().unwrap()])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "Failed to build skill tool registry",
+    ))
+    .stderr(predicate::str::contains("server 'broken-demo'"))
+    .stderr(predicate::str::contains("mcp_<server>_<tool>"));
 }
 
 #[test]

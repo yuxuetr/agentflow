@@ -20,6 +20,7 @@
 - [x] 打通 CLI: `skill validate` 校验 MCP server 配置。
 - [x] 打通 CLI: `skill list-tools` 展示内置工具、脚本工具、MCP 工具。
 - [x] 打通 CLI: `skill run/chat` 真实调用 MCP 工具。
+- [x] CLI 错误信息补充 MCP server name、tool name 和失败原因。
 - [x] 增加 `examples/skills/mcp-basic` 示例。
 - [x] 明确 `SKILL.md` 为主标准入口，并保留 `skill.toml` 兼容策略。
 
@@ -43,8 +44,7 @@
 
 ## 建议立即执行顺序
 
-1. CLI 错误信息补充 MCP server name、tool name 和失败原因
-2. Phase 2 Agent Runtime 类型设计
+1. Phase 2 Agent Runtime 类型设计
 
 ---
 

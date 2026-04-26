@@ -117,6 +117,10 @@ impl McpClientPool {
 
     let (content, parts) = convert_mcp_result_content(&result.content);
     if result.is_error() {
+      let content = format!(
+        "MCP server '{}' tool '{}' returned error: {}",
+        self.config.name, tool_name, content
+      );
       warn!(
         event = "mcp_tool_call_result_error",
         server = %self.config.name,

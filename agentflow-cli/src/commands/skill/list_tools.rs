@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
 
+use super::error_context::mcp_context;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
 pub async fn execute(skill_dir: String) -> Result<()> {
@@ -12,7 +13,7 @@ pub async fn execute(skill_dir: String) -> Result<()> {
 
   let registry = SkillBuilder::build_registry(&manifest, dir)
     .await
-    .with_context(|| "Failed to build skill tool registry")?;
+    .with_context(|| mcp_context("Failed to build skill tool registry", &manifest))?;
 
   let mut definitions = registry
     .list()
