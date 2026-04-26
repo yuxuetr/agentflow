@@ -89,6 +89,18 @@ impl AgentApplication for MyAgent {
 }
 ```
 
+### Runnable Examples
+
+```bash
+cargo run -p agentflow-agents --example react_agent
+cargo run -p agentflow-agents --example multi_agent
+cargo run -p agentflow-agents --example hybrid_workflow_agent
+```
+
+`hybrid_workflow_agent` is a self-contained mock example. It runs a DAG
+containing an `AgentNode`; the agent calls a `WorkflowTool` that wraps a child
+DAG, then prints the structured AgentRuntime result.
+
 ## 📁 Project Structure
 
 ```

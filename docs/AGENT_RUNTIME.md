@@ -87,3 +87,7 @@ the failed workflow observation.
 This keeps the dependency direction stable:
 
 `Flow -> AgentNode -> AgentRuntime -> ToolRegistry -> Tool/MCP/WorkflowTool`
+
+See `agentflow-agents/examples/hybrid_workflow_agent.rs` for a runnable mock
+example of this full path. It runs a parent DAG with `AgentNode`, calls a child
+DAG through `WorkflowTool`, and prints the resulting agent steps/events.

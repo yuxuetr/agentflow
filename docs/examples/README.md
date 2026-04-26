@@ -64,6 +64,7 @@ mmdc -i simple_agent_llm_flow_diagram.mermaid -o flow_diagram.png
 
 ### 🌟 **AI Integration Examples**
 - `simple_agent_llm_flow.rs` - LLM-powered workflows with intelligent routing
+- `agentflow-agents/examples/hybrid_workflow_agent.rs` - DAG + Agent hybrid flow where an `AgentNode` calls a child workflow through `WorkflowTool`
 
 ### 🔧 **Core Functionality Examples** (from main examples/)
 - `hello_world.rs` - Basic AsyncNode functionality

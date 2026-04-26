@@ -198,6 +198,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - Agent 可调用 workflow。✅
 - checkpoint 能覆盖 AgentNode 状态和 agent step history。✅
 - trace 能覆盖混合执行。✅
+- DAG + Agent hybrid 可运行示例已覆盖。✅
 
 ### M4: Skill 标准稳定
 
@@ -209,4 +210,4 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 
 - tracing、security、deployment、docs 完整。
 - 核心测试和集成测试稳定。
-- 示例覆盖 DAG、agent-native、hybrid 三种模式。
+- 示例覆盖 DAG、agent-native、hybrid 三种模式。✅
