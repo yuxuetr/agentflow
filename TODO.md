@@ -27,8 +27,8 @@
 ## P1: Agent Runtime MVP
 
 - [x] 定义 `AgentRuntime`、`AgentContext`、`AgentStep`、`AgentEvent`、`AgentStopReason`。
-- [ ] 实现最小 ReAct loop: observe -> plan -> act -> observe。
-- [ ] Tool 调用统一走 ToolRegistry。
+- [x] 实现最小 ReAct loop: observe -> plan -> act -> observe。
+- [x] Tool 调用统一走 ToolRegistry。
 - [ ] 接入 Skills、MCP tools、Memory、Tracing。
 - [ ] 增加 step limit、tool call limit、timeout、stop condition。
 - [ ] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
@@ -44,8 +44,8 @@
 
 ## 建议立即执行顺序
 
-1. 将现有 ReAct loop 接入 AgentRuntime/AgentStep/AgentEvent。
-2. Tool 调用统一走 ToolRegistry，并记录 step/event。
+1. 增加 step limit、tool call limit、timeout、stop condition 的统一 runtime guard。
+2. 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
 
 ---
 

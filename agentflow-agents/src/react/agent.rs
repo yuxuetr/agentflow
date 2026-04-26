@@ -3,9 +3,15 @@ use std::sync::Arc;
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::{MemoryStore, Message, Role};
 use agentflow_tools::ToolRegistry;
+use async_trait::async_trait;
+use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::react::parser::AgentResponse;
+use crate::runtime::{
+  AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
+  AgentStepKind, AgentStopReason, RuntimeLimits,
+};
 
 /// Error type for ReAct agent operations
 #[derive(Debug, thiserror::Error)]
@@ -148,16 +154,46 @@ impl ReActAgent {
 
   /// Run the agent on a new user message and return the final answer.
   pub async fn run(&mut self, user_input: &str) -> Result<String, ReActError> {
+    let result = self
+      .run_with_context(self.context_for_input(user_input))
+      .await?;
+    Self::answer_from_result(result)
+  }
+
+  /// Run the agent and return structured runtime steps and events.
+  pub async fn run_with_context(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<AgentRunResult, ReActError> {
+    self.apply_context(&context);
     info!(
         session = %self.session_id,
         model = %self.config.model,
         "ReActAgent starting"
     );
 
+    let mut steps = vec![AgentStep::new(
+      0,
+      AgentStepKind::Observe {
+        input: context.input.clone(),
+      },
+    )];
+    let mut events = vec![AgentEvent::RunStarted {
+      session_id: self.session_id.clone(),
+      model: self.config.model.clone(),
+      timestamp: context.started_at,
+    }];
+    let mut step_index = 1;
+    let max_iterations = context
+      .limits
+      .max_steps
+      .unwrap_or(self.config.max_iterations);
+    let budget_tokens = context.limits.token_budget.or(self.config.budget_tokens);
+
     // 1. Store user message
     self
       .memory
-      .add_message(Message::user(&self.session_id, user_input))
+      .add_message(Message::user(&self.session_id, &context.input))
       .await?;
 
     // 2. Inject system prompt if this is the first user message
@@ -168,15 +204,29 @@ impl ReActAgent {
 
     loop {
       // --- Guard: max iterations ---
-      if iteration >= self.config.max_iterations {
-        return Err(ReActError::MaxIterationsReached(self.config.max_iterations));
+      if iteration >= max_iterations {
+        return Ok(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::MaxSteps {
+            max_steps: max_iterations,
+          },
+          steps,
+          events,
+        ));
       }
 
       // --- Guard: token budget ---
-      if let Some(budget) = self.config.budget_tokens {
+      if let Some(budget) = budget_tokens {
         let used = self.memory.session_token_count(&self.session_id).await?;
         if used > budget {
-          return Err(ReActError::BudgetExceeded { used, budget });
+          return Ok(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::TokenBudgetExceeded { used, budget },
+            steps,
+            events,
+          ));
         }
       }
 
@@ -200,7 +250,15 @@ impl ReActAgent {
             .memory
             .add_message(Message::assistant(&self.session_id, &raw_response))
             .await?;
-          return Ok(raw_response);
+          return Ok(Self::stopped_result(
+            &self.session_id,
+            Some(raw_response),
+            AgentStopReason::StopCondition {
+              condition: cond.clone(),
+            },
+            steps,
+            events,
+          ));
         }
       }
 
@@ -220,7 +278,34 @@ impl ReActAgent {
           params,
         } => {
           info!(iteration, tool = %tool, thought = %thought, "Tool call");
+          if !thought.trim().is_empty() {
+            steps.push(AgentStep::new(
+              step_index,
+              AgentStepKind::Plan {
+                thought: thought.clone(),
+              },
+            ));
+            step_index += 1;
+          }
 
+          let tool_step_index = step_index;
+          events.push(AgentEvent::ToolCallStarted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            params: params.clone(),
+            timestamp: Utc::now(),
+          });
+          steps.push(AgentStep::new(
+            tool_step_index,
+            AgentStepKind::ToolCall {
+              tool: tool.clone(),
+              params: params.clone(),
+            },
+          ));
+          step_index += 1;
+
+          let started_at = std::time::Instant::now();
           let tool_output = match self.tools.execute(&tool, params).await {
             Ok(out) => out,
             Err(e) => {
@@ -228,14 +313,33 @@ impl ReActAgent {
               agentflow_tools::ToolOutput::error(e.to_string())
             }
           };
+          let duration_ms = started_at.elapsed().as_millis() as u64;
 
           let observation = if tool_output.is_error {
             format!("[ERROR] {}", tool_output.content)
           } else {
-            tool_output.content
+            tool_output.content.clone()
           };
 
           info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
+          steps.push(AgentStep::new(
+            step_index,
+            AgentStepKind::ToolResult {
+              tool: tool.clone(),
+              content: tool_output.content.clone(),
+              is_error: tool_output.is_error,
+              parts: tool_output.parts.clone(),
+            },
+          ));
+          events.push(AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            is_error: tool_output.is_error,
+            duration_ms,
+            timestamp: Utc::now(),
+          });
+          step_index += 1;
 
           self
             .memory
@@ -247,15 +351,112 @@ impl ReActAgent {
 
         AgentResponse::Answer { thought, answer } => {
           info!(thought = %thought, "Final answer reached");
-          return Ok(answer);
+          if !thought.trim().is_empty() {
+            steps.push(AgentStep::new(step_index, AgentStepKind::Plan { thought }));
+            step_index += 1;
+          }
+          steps.push(AgentStep::new(
+            step_index,
+            AgentStepKind::FinalAnswer {
+              answer: answer.clone(),
+            },
+          ));
+          return Ok(Self::stopped_result(
+            &self.session_id,
+            Some(answer),
+            AgentStopReason::FinalAnswer,
+            steps,
+            events,
+          ));
         }
 
         AgentResponse::Malformed(text) => {
           // Treat unstructured text as a final answer
           warn!("LLM returned non-JSON text; treating as final answer");
-          return Ok(text);
+          steps.push(AgentStep::new(
+            step_index,
+            AgentStepKind::FinalAnswer {
+              answer: text.clone(),
+            },
+          ));
+          return Ok(Self::stopped_result(
+            &self.session_id,
+            Some(text),
+            AgentStopReason::FinalAnswer,
+            steps,
+            events,
+          ));
         }
       }
+    }
+  }
+
+  fn context_for_input(&self, user_input: &str) -> AgentContext {
+    let mut context = AgentContext::new(&self.session_id, user_input, &self.config.model)
+      .with_limits(RuntimeLimits {
+        max_steps: Some(self.config.max_iterations),
+        max_tool_calls: None,
+        timeout_ms: None,
+        token_budget: self.config.budget_tokens,
+      });
+    if let Some(persona) = &self.config.persona {
+      context = context.with_persona(persona.clone());
+    }
+    context
+  }
+
+  fn apply_context(&mut self, context: &AgentContext) {
+    self.session_id = context.session_id.clone();
+    if !context.model.trim().is_empty() {
+      self.config.model = context.model.clone();
+    }
+    if let Some(persona) = &context.persona {
+      self.config.persona = Some(persona.clone());
+    }
+  }
+
+  fn stopped_result(
+    session_id: &str,
+    answer: Option<String>,
+    reason: AgentStopReason,
+    steps: Vec<AgentStep>,
+    mut events: Vec<AgentEvent>,
+  ) -> AgentRunResult {
+    events.push(AgentEvent::RunStopped {
+      session_id: session_id.to_string(),
+      reason: reason.clone(),
+      timestamp: Utc::now(),
+    });
+    AgentRunResult {
+      session_id: session_id.to_string(),
+      answer,
+      stop_reason: reason,
+      steps,
+      events,
+    }
+  }
+
+  fn answer_from_result(result: AgentRunResult) -> Result<String, ReActError> {
+    match result.stop_reason {
+      AgentStopReason::FinalAnswer | AgentStopReason::StopCondition { .. } => {
+        Ok(result.answer.unwrap_or_default())
+      }
+      AgentStopReason::MaxSteps { max_steps } => Err(ReActError::MaxIterationsReached(max_steps)),
+      AgentStopReason::TokenBudgetExceeded { used, budget } => {
+        Err(ReActError::BudgetExceeded { used, budget })
+      }
+      AgentStopReason::MaxToolCalls { max_tool_calls } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message: format!("max tool calls ({}) reached", max_tool_calls),
+      }),
+      AgentStopReason::Timeout { timeout_ms } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message: format!("timeout after {}ms", timeout_ms),
+      }),
+      AgentStopReason::Error { message } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message,
+      }),
     }
   }
 
@@ -334,5 +535,21 @@ impl ReActAgent {
   /// Estimated tokens used in the current session.
   pub async fn token_count(&self) -> Result<u32, ReActError> {
     Ok(self.memory.session_token_count(&self.session_id).await?)
+  }
+}
+
+#[async_trait]
+impl AgentRuntime for ReActAgent {
+  async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError> {
+    self
+      .run_with_context(context)
+      .await
+      .map_err(|err| AgentRuntimeError::ExecutionFailed {
+        message: err.to_string(),
+      })
+  }
+
+  fn runtime_name(&self) -> &'static str {
+    "react"
   }
 }
