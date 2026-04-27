@@ -334,7 +334,7 @@ mod tests {
     let int_val: MetadataValue = 42i64.into();
     assert!(matches!(int_val, MetadataValue::Integer(42)));
 
-    let float_val: MetadataValue = 3.14f64.into();
+    let float_val: MetadataValue = 3.5f64.into();
     assert!(matches!(float_val, MetadataValue::Float(_)));
 
     let bool_val: MetadataValue = true.into();
