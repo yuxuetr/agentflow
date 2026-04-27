@@ -279,6 +279,20 @@ enum McpCommands {
 
 #[derive(Subcommand)]
 enum SkillCommands {
+  /// Create a new standard SKILL.md scaffold
+  Init {
+    /// Directory to create the skill in
+    skill_dir: String,
+    /// Skill name. Defaults to the target directory name.
+    #[arg(long)]
+    name: Option<String>,
+    /// Skill description written to SKILL.md
+    #[arg(short, long)]
+    description: Option<String>,
+    /// Overwrite scaffold files if they already exist
+    #[arg(long)]
+    force: bool,
+  },
   /// Validate a skill manifest and print its configuration
   Validate {
     /// Path to the skill directory (must contain skill.toml or SKILL.md)
@@ -572,6 +586,12 @@ async fn main() {
       } => mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await,
     },
     Commands::Skill(args) => match args.command {
+      SkillCommands::Init {
+        skill_dir,
+        name,
+        description,
+        force,
+      } => skill::init::execute(skill_dir, name, description, force).await,
       SkillCommands::Validate { skill_dir } => skill::validate::execute(skill_dir).await,
       SkillCommands::Run {
         skill_dir,

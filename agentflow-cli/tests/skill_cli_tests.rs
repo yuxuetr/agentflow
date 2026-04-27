@@ -93,6 +93,65 @@ fn mock_react_responses() -> String {
 }
 
 #[test]
+fn skill_init_creates_valid_skill_scaffold() {
+  let skill = TempDir::new().unwrap();
+  let skill_dir = skill.path().join("my-generated-skill");
+
+  let mut init = Command::cargo_bin("agentflow").unwrap();
+  init
+    .args([
+      "skill",
+      "init",
+      skill_dir.to_str().unwrap(),
+      "--description",
+      "Generated skill for CLI tests",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Created skill scaffold"))
+    .stdout(predicate::str::contains("SKILL.md"))
+    .stdout(predicate::str::contains("tests/smoke.sh"));
+
+  assert!(skill_dir.join("SKILL.md").is_file());
+  assert!(skill_dir.join("README.md").is_file());
+  assert!(skill_dir.join("scripts").join("hello.py").is_file());
+  assert!(skill_dir.join("references").join("example.md").is_file());
+  assert!(skill_dir.join("tests").join("smoke.sh").is_file());
+
+  let skill_md = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+  assert!(skill_md.contains("name: my-generated-skill"));
+  assert!(skill_md.contains("allowed-tools: script"));
+
+  let mut validate = Command::cargo_bin("agentflow").unwrap();
+  validate
+    .args(["skill", "validate", skill_dir.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Skill is valid"));
+
+  let mut list_tools = Command::cargo_bin("agentflow").unwrap();
+  list_tools
+    .args(["skill", "list-tools", skill_dir.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("script"))
+    .stdout(predicate::str::contains("source: script"));
+}
+
+#[test]
+fn skill_init_refuses_non_empty_directory_without_force() {
+  let skill = TempDir::new().unwrap();
+  fs::write(skill.path().join("existing.txt"), "keep").unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "init", skill.path().to_str().unwrap()])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("already exists and is not empty"));
+}
+
+#[test]
 fn skill_validate_checks_mcp_server_config() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd

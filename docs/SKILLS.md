@@ -207,6 +207,15 @@ Supported values are:
 
 ## CLI Workflow
 
+Create a new skill scaffold:
+
+```bash
+cargo run -p agentflow-cli -- skill init ./my-skill \
+  --description "Describe when this skill should be used."
+```
+
+The scaffold includes `SKILL.md`, `README.md`, `references/example.md`, `scripts/hello.py`, and `tests/smoke.sh`.
+
 Validate a skill:
 
 ```bash
