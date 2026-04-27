@@ -84,6 +84,42 @@ command = "agentflow-no-such-mcp-server-command"
   .unwrap();
 }
 
+fn write_skill_registry_index(root: &Path) {
+  let skill_dir = root.join("skills").join("sample-skill");
+  fs::create_dir_all(&skill_dir).unwrap();
+  fs::write(
+    skill_dir.join("skill.toml"),
+    r#"
+[skill]
+name = "sample-skill"
+version = "1.2.3"
+description = "Sample skill for registry tests"
+
+[persona]
+role = "Use the sample skill."
+"#,
+  )
+  .unwrap();
+
+  fs::write(
+    root.join("skills.index.toml"),
+    r#"
+schema_version = 1
+name = "org-shared"
+description = "Shared skills for the organization"
+
+[[skills]]
+name = "sample-skill"
+version = "1.2.3"
+path = "skills/sample-skill"
+manifest = "skill.toml"
+aliases = ["sample"]
+channel = "stable"
+"#,
+  )
+  .unwrap();
+}
+
 fn mock_react_responses() -> String {
   serde_json::to_string(&vec![
     r#"{"thought":"call echo","action":{"tool":"mcp_local_demo_echo","params":{"text":"from run","api_key":"should-not-print"}}}"#,
@@ -161,6 +197,47 @@ fn skill_init_refuses_non_empty_directory_without_force() {
     .assert()
     .failure()
     .stderr(predicate::str::contains("already exists and is not empty"));
+}
+
+#[test]
+fn skill_index_validate_list_and_resolve_work_for_shared_skills() {
+  let root = TempDir::new().unwrap();
+  write_skill_registry_index(root.path());
+  let index = root.path().join("skills.index.toml");
+
+  let mut validate = Command::cargo_bin("agentflow").unwrap();
+  validate
+    .args(["skill", "index", "validate", index.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Registry index: org-shared"))
+    .stdout(predicate::str::contains("Skill registry index is valid"));
+
+  let mut list = Command::cargo_bin("agentflow").unwrap();
+  list
+    .args(["skill", "index", "list", index.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("sample-skill @ 1.2.3"))
+    .stdout(predicate::str::contains("lock: version only"))
+    .stdout(predicate::str::contains("aliases: sample"))
+    .stdout(predicate::str::contains("channel: stable"));
+
+  let mut resolve = Command::cargo_bin("agentflow").unwrap();
+  resolve
+    .args([
+      "skill",
+      "index",
+      "resolve",
+      index.to_str().unwrap(),
+      "sample",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("sample-skill"))
+    .stdout(predicate::str::contains("version: 1.2.3"))
+    .stdout(predicate::str::contains("skills/sample-skill"))
+    .stdout(predicate::str::contains("manifest:"));
 }
 
 #[test]

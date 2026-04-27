@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Skill 生态和 CLI: 设计本地 skill registry/index 格式，支持组织内共享和版本锁定。
+1. Skill 生态和 CLI: 补充可运行教程: 固定 DAG、agent-native、hybrid、Skill + MCP、WorkflowTool。
 
 ---
 

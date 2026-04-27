@@ -39,6 +39,7 @@
 
 pub mod builder;
 pub mod error;
+pub mod index;
 pub mod loader;
 pub mod manifest;
 pub mod mcp_tools;
@@ -46,6 +47,9 @@ pub mod skill_md;
 
 pub use builder::SkillBuilder;
 pub use error::SkillError;
+pub use index::{
+  ResolvedSkillRegistryEntry, SkillRegistryEntry, SkillRegistryIndex, DEFAULT_INDEX_FILE,
+};
 pub use loader::SkillLoader;
 pub use manifest::{
   KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SecurityConfig,

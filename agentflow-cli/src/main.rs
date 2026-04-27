@@ -279,6 +279,8 @@ enum McpCommands {
 
 #[derive(Subcommand)]
 enum SkillCommands {
+  /// Inspect or validate a local skill registry index
+  Index(IndexArgs),
   /// Create a new standard SKILL.md scaffold
   Init {
     /// Directory to create the skill in
@@ -338,6 +340,30 @@ enum SkillCommands {
     /// Also run tests/smoke.sh when present
     #[arg(long)]
     smoke: bool,
+  },
+}
+
+#[derive(Args)]
+struct IndexArgs {
+  #[command(subcommand)]
+  command: SkillIndexCommands,
+}
+
+#[derive(Subcommand)]
+enum SkillIndexCommands {
+  Validate {
+    /// Path to the skill registry index file
+    index_file: String,
+  },
+  List {
+    /// Path to the skill registry index file
+    index_file: String,
+  },
+  Resolve {
+    /// Path to the skill registry index file
+    index_file: String,
+    /// Skill name or alias to resolve
+    skill: String,
   },
 }
 
@@ -594,6 +620,13 @@ async fn main() {
       } => mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await,
     },
     Commands::Skill(args) => match args.command {
+      SkillCommands::Index(args) => match args.command {
+        SkillIndexCommands::Validate { index_file } => skill::index::validate(index_file).await,
+        SkillIndexCommands::List { index_file } => skill::index::list(index_file).await,
+        SkillIndexCommands::Resolve { index_file, skill } => {
+          skill::index::resolve(index_file, skill).await
+        }
+      },
       SkillCommands::Init {
         skill_dir,
         name,
