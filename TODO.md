@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Skill 生态和 CLI: 增加 `agentflow skill test`，运行 skill manifest 校验、工具发现和最小调用回归。
+1. Skill 生态和 CLI: 设计本地 skill registry/index 格式，支持组织内共享和版本锁定。
 
 ---
 

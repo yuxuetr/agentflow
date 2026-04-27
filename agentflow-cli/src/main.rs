@@ -331,6 +331,14 @@ enum SkillCommands {
     /// Path to the skill directory
     skill_dir: String,
   },
+  /// Run skill validation, tool discovery, and minimal regression checks
+  Test {
+    /// Path to the skill directory
+    skill_dir: String,
+    /// Also run tests/smoke.sh when present
+    #[arg(long)]
+    smoke: bool,
+  },
 }
 
 #[derive(Subcommand)]
@@ -602,6 +610,7 @@ async fn main() {
       SkillCommands::Chat { skill_dir, session } => skill::chat::execute(skill_dir, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
+      SkillCommands::Test { skill_dir, smoke } => skill::test::execute(skill_dir, smoke).await,
     },
     Commands::Trace(args) => match args.command {
       TraceCommands::Replay {

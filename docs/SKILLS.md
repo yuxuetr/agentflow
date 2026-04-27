@@ -228,6 +228,14 @@ List all tools exposed by a skill:
 cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
 ```
 
+Run the skill test gate:
+
+```bash
+cargo run -p agentflow-cli -- skill test agentflow-skills/examples/skills/mcp-basic
+```
+
+`skill test` runs manifest validation, tool discovery, and built-in minimal regressions. For the default scaffold it invokes `scripts/hello.py` through the script tool. Pass `--smoke` to also run `tests/smoke.sh` when present.
+
 Run one message through a skill:
 
 ```bash

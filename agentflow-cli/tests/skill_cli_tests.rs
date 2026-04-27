@@ -136,6 +136,18 @@ fn skill_init_creates_valid_skill_scaffold() {
     .success()
     .stdout(predicate::str::contains("script"))
     .stdout(predicate::str::contains("source: script"));
+
+  let mut test = Command::cargo_bin("agentflow").unwrap();
+  test
+    .args(["skill", "test", skill_dir.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("manifest: valid"))
+    .stdout(predicate::str::contains("tools: discovered"))
+    .stdout(predicate::str::contains(
+      "script hello.py: hello from skill-test",
+    ))
+    .stdout(predicate::str::contains("Skill test passed"));
 }
 
 #[test]
@@ -160,6 +172,20 @@ fn skill_validate_checks_mcp_server_config() {
     .success()
     .stdout(predicate::str::contains("MCP Servers (1)"))
     .stdout(predicate::str::contains("discovered MCP tools: 2"));
+}
+
+#[test]
+fn skill_test_runs_validation_and_tool_discovery_for_mcp_skill() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "test", &mcp_basic_skill_path()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("manifest: valid"))
+    .stdout(predicate::str::contains("tools: discovered 2"))
+    .stdout(predicate::str::contains("mcp_local_demo_echo"))
+    .stdout(predicate::str::contains("regressions: 0 passed"))
+    .stdout(predicate::str::contains("Skill test passed"));
 }
 
 #[test]

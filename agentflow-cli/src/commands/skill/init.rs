@@ -154,6 +154,7 @@ This directory is an AgentFlow skill scaffold.
 ```sh
 agentflow skill validate .
 agentflow skill list-tools .
+agentflow skill test .
 ```
 "#
   )
@@ -174,6 +175,7 @@ set -eu
 
 agentflow skill validate "$(dirname "$0")/.."
 agentflow skill list-tools "$(dirname "$0")/.."
+agentflow skill test "$(dirname "$0")/.."
 "#
   .to_string()
 }

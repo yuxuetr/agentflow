@@ -29,6 +29,7 @@ agentflow-rag    = { path = "../agentflow-rag", optional = true }
 agentflow-skills = { path = "../agentflow-skills" }
 agentflow-agents = { path = "../agentflow-agents" }
 agentflow-tracing = { path = "../agentflow-tracing" }
+agentflow-tools = { path = "../agentflow-tools" }
 
 # CLI framework
 clap = { version = "4.4", features = ["derive", "color", "suggestions"] }
