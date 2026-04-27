@@ -35,6 +35,13 @@ pub async fn execute(skill_dir: String) -> Result<()> {
 
   for definition in definitions {
     println!("   - {}", definition.name);
+    println!("     source: {}", definition.metadata.source.as_str());
+    if let Some(server) = &definition.metadata.mcp_server_name {
+      println!("     mcp_server: {}", server);
+    }
+    if let Some(tool) = &definition.metadata.mcp_tool_name {
+      println!("     mcp_tool: {}", tool);
+    }
     if !definition.description.trim().is_empty() {
       println!("     {}", definition.description);
     }

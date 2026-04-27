@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentflow_core::{async_node::AsyncNodeInputs, Flow, FlowValue};
-use agentflow_tools::{Tool, ToolError, ToolOutput, ToolOutputPart};
+use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -87,6 +87,10 @@ impl Tool for WorkflowTool {
 
   fn parameters_schema(&self) -> Value {
     self.parameters_schema.clone()
+  }
+
+  fn metadata(&self) -> ToolMetadata {
+    ToolMetadata::workflow()
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

@@ -1,5 +1,5 @@
 use agentflow_mcp::client::{ClientBuilder, Content, MCPClient, Tool as McpTool};
-use agentflow_tools::{Tool, ToolError, ToolOutput, ToolOutputPart};
+use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -184,6 +184,10 @@ impl Tool for McpToolAdapter {
     self.input_schema.clone()
   }
 
+  fn metadata(&self) -> ToolMetadata {
+    ToolMetadata::mcp(self.pool.server_name(), &self.remote_name)
+  }
+
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
     self.pool.call_tool(&self.remote_name, params).await
   }
@@ -352,5 +356,36 @@ mod tests {
   #[test]
   fn empty_tool_name_segments_fall_back() {
     assert_eq!(public_tool_name("!!!", "???"), "mcp_tool_tool");
+  }
+
+  #[test]
+  fn mcp_adapter_metadata_preserves_original_server_and_tool_names() {
+    let pool = Arc::new(McpClientPool::new(McpServerConfig {
+      name: "local-demo".to_string(),
+      command: "python3".to_string(),
+      args: vec![],
+      env: Default::default(),
+      timeout_secs: None,
+    }));
+    let adapter = McpToolAdapter::new(
+      pool,
+      McpTool {
+        name: "echo/raw".to_string(),
+        description: Some("Echo".to_string()),
+        input_schema: serde_json::json!({"type": "object"}),
+      },
+    );
+
+    let definition = adapter.definition();
+    assert_eq!(definition.name, "mcp_local_demo_echo_raw");
+    assert_eq!(definition.metadata.source, agentflow_tools::ToolSource::Mcp);
+    assert_eq!(
+      definition.metadata.mcp_server_name.as_deref(),
+      Some("local-demo")
+    );
+    assert_eq!(
+      definition.metadata.mcp_tool_name.as_deref(),
+      Some("echo/raw")
+    );
   }
 }

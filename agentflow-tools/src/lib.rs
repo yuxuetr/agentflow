@@ -27,4 +27,6 @@ pub mod tool;
 pub use error::ToolError;
 pub use registry::ToolRegistry;
 pub use sandbox::SandboxPolicy;
-pub use tool::{Tool, ToolCall, ToolDefinition, ToolOutput, ToolOutputPart};
+pub use tool::{
+  Tool, ToolCall, ToolDefinition, ToolMetadata, ToolOutput, ToolOutputPart, ToolSource,
+};

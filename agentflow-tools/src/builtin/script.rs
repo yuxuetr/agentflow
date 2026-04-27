@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolOutput};
+use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolMetadata, ToolOutput};
 
 /// Execute a named script from the skill's `scripts/` directory.
 ///
@@ -78,6 +78,10 @@ impl Tool for ScriptTool {
         },
         "required": ["script"]
     })
+  }
+
+  fn metadata(&self) -> ToolMetadata {
+    ToolMetadata::script()
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

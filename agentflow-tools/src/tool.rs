@@ -120,6 +120,79 @@ pub struct ToolDefinition {
   pub name: String,
   pub description: String,
   pub parameters: Value,
+  #[serde(default)]
+  pub metadata: ToolMetadata,
+}
+
+/// Stable source classification for tools registered in AgentFlow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSource {
+  Builtin,
+  Script,
+  Mcp,
+  Workflow,
+}
+
+impl ToolSource {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::Builtin => "builtin",
+      Self::Script => "script",
+      Self::Mcp => "mcp",
+      Self::Workflow => "workflow",
+    }
+  }
+}
+
+/// Metadata used for inspection, tracing, and tool registry diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolMetadata {
+  pub source: ToolSource,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub mcp_server_name: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub mcp_tool_name: Option<String>,
+}
+
+impl ToolMetadata {
+  pub fn builtin() -> Self {
+    Self {
+      source: ToolSource::Builtin,
+      mcp_server_name: None,
+      mcp_tool_name: None,
+    }
+  }
+
+  pub fn script() -> Self {
+    Self {
+      source: ToolSource::Script,
+      mcp_server_name: None,
+      mcp_tool_name: None,
+    }
+  }
+
+  pub fn mcp(server_name: impl Into<String>, tool_name: impl Into<String>) -> Self {
+    Self {
+      source: ToolSource::Mcp,
+      mcp_server_name: Some(server_name.into()),
+      mcp_tool_name: Some(tool_name.into()),
+    }
+  }
+
+  pub fn workflow() -> Self {
+    Self {
+      source: ToolSource::Workflow,
+      mcp_server_name: None,
+      mcp_tool_name: None,
+    }
+  }
+}
+
+impl Default for ToolMetadata {
+  fn default() -> Self {
+    Self::builtin()
+  }
 }
 
 /// Core trait that every tool must implement
@@ -134,6 +207,11 @@ pub trait Tool: Send + Sync {
   /// JSON Schema for the tool's parameters object
   fn parameters_schema(&self) -> Value;
 
+  /// Metadata for registry inspection and diagnostics.
+  fn metadata(&self) -> ToolMetadata {
+    ToolMetadata::builtin()
+  }
+
   /// Execute the tool and return its output
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError>;
 
@@ -143,6 +221,7 @@ pub trait Tool: Send + Sync {
       name: self.name().to_string(),
       description: self.description().to_string(),
       parameters: self.parameters_schema(),
+      metadata: self.metadata(),
     }
   }
 
