@@ -152,7 +152,7 @@ fn build_tool_registry(tool_configs: &[ToolConfig], skill_dir: &Path) -> ToolReg
 
   // Merge all per-tool constraints into a single SandboxPolicy.
   // Each built-in tool only checks its relevant policy field, so merging is safe.
-  let policy = Arc::new(build_sandbox_policy(tool_configs));
+  let policy = Arc::new(build_sandbox_policy(tool_configs, skill_dir));
 
   for tool_cfg in tool_configs {
     match tool_cfg.name.to_lowercase().as_str() {
@@ -266,7 +266,7 @@ fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String 
 }
 
 /// Merge all tool constraints into a unified `SandboxPolicy`.
-fn build_sandbox_policy(tool_configs: &[ToolConfig]) -> SandboxPolicy {
+fn build_sandbox_policy(tool_configs: &[ToolConfig], skill_dir: &Path) -> SandboxPolicy {
   let mut allowed_commands: Vec<String> = Vec::new();
   let mut allowed_paths: Vec<PathBuf> = Vec::new();
   let mut allowed_domains: Vec<String> = Vec::new();
@@ -280,7 +280,12 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig]) -> SandboxPolicy {
     // File paths
     for p in &tc.allowed_paths {
       let expanded = expand_tilde(p);
-      allowed_paths.push(PathBuf::from(expanded));
+      let path = PathBuf::from(expanded);
+      if path.is_relative() {
+        allowed_paths.push(skill_dir.join(path));
+      } else {
+        allowed_paths.push(path);
+      }
     }
     // HTTP domains
     allowed_domains.extend(tc.allowed_domains.iter().cloned());
@@ -303,9 +308,27 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig]) -> SandboxPolicy {
   let has_shell = tool_configs
     .iter()
     .any(|t| t.name.to_lowercase() == "shell");
+  let has_script = tool_configs
+    .iter()
+    .any(|t| t.name.to_lowercase() == "script");
   if has_shell && allowed_commands.is_empty() {
     // Default safe command list from SandboxPolicy::default()
     allowed_commands = SandboxPolicy::default().allowed_commands;
+  }
+  if has_script && allowed_commands.is_empty() {
+    allowed_commands = default_script_interpreters();
+  } else if has_script {
+    for interpreter in default_script_interpreters() {
+      if !allowed_commands.contains(&interpreter) {
+        allowed_commands.push(interpreter);
+      }
+    }
+    allowed_commands.sort();
+    allowed_commands.dedup();
+  }
+
+  if has_script && allowed_paths.is_empty() {
+    allowed_paths.push(skill_dir.join("scripts"));
   }
 
   SandboxPolicy {
@@ -315,6 +338,13 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig]) -> SandboxPolicy {
     max_exec_time_secs,
     max_file_read_bytes: 10 * 1024 * 1024, // 10 MB
   }
+}
+
+fn default_script_interpreters() -> Vec<String> {
+  ["python3", "bash", "node"]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
 }
 
 // ── MemoryStore builder ──────────────────────────────────────────────────────
@@ -585,7 +615,8 @@ description = "Coding rules"
       name: "shell".to_string(),
       ..ToolConfig::default()
     }];
-    let policy = build_sandbox_policy(&tool_configs);
+    let dir = TempDir::new().unwrap();
+    let policy = build_sandbox_policy(&tool_configs, dir.path());
     // Should have the default safe command list, not empty
     assert!(!policy.allowed_commands.is_empty());
     assert!(policy.allowed_commands.iter().any(|c| c == "echo"));
@@ -605,7 +636,8 @@ description = "Coding rules"
         ..ToolConfig::default()
       },
     ];
-    let policy = build_sandbox_policy(&tool_configs);
+    let dir = TempDir::new().unwrap();
+    let policy = build_sandbox_policy(&tool_configs, dir.path());
     assert!(policy.allowed_commands.contains(&"cargo".to_string()));
     assert!(policy.allowed_commands.contains(&"rustfmt".to_string()));
   }
@@ -617,7 +649,8 @@ description = "Coding rules"
       allowed_commands: vec!["cargo".to_string(), "cargo".to_string()],
       ..ToolConfig::default()
     }];
-    let policy = build_sandbox_policy(&tool_configs);
+    let dir = TempDir::new().unwrap();
+    let policy = build_sandbox_policy(&tool_configs, dir.path());
     let cargo_count = policy
       .allowed_commands
       .iter()
@@ -640,7 +673,24 @@ description = "Coding rules"
         ..ToolConfig::default()
       },
     ];
-    let policy = build_sandbox_policy(&tool_configs);
+    let dir = TempDir::new().unwrap();
+    let policy = build_sandbox_policy(&tool_configs, dir.path());
     assert_eq!(policy.max_exec_time_secs, 60);
+  }
+
+  #[test]
+  fn sandbox_policy_restricts_script_defaults_to_scripts_dir_and_interpreters() {
+    let dir = TempDir::new().unwrap();
+    let tool_configs = vec![ToolConfig {
+      name: "script".to_string(),
+      ..ToolConfig::default()
+    }];
+
+    let policy = build_sandbox_policy(&tool_configs, dir.path());
+
+    assert_eq!(policy.allowed_paths, vec![dir.path().join("scripts")]);
+    assert!(policy.allowed_commands.contains(&"python3".to_string()));
+    assert!(policy.allowed_commands.contains(&"bash".to_string()));
+    assert!(policy.allowed_commands.contains(&"node".to_string()));
   }
 }

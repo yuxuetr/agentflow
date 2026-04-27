@@ -111,7 +111,9 @@ my-skill/
     summarize.sh
 ```
 
-When the skill is built, AgentFlow registers one `script` tool rooted at that directory. Script parameters can be constrained with a JSON schema through `skill.toml`:
+When the skill is built, AgentFlow registers one `script` tool rooted at that directory. The script tool always validates wrapper parameters with JSON Schema before execution. By default it only accepts a plain `script` filename ending in `.py`, `.sh`, or `.js`, plus optional `args`; extra top-level parameters are rejected.
+
+Script parameters can be further constrained with a JSON schema through `skill.toml`:
 
 ```toml
 [[tools]]
@@ -127,6 +129,8 @@ type = "string"
 [tools.parameters.properties.args]
 type = "array"
 ```
+
+For sandboxing, script tools resolve and canonicalize the target path before execution. Symlinks or paths that escape `scripts/` are rejected. If a skill declares only the `script` tool and omits `allowed_commands`, AgentFlow allows only the known script interpreters: `python3`, `bash`, and `node`.
 
 ## MCP Tools
 

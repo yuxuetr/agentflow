@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Security 和 Tool Governance: 为 script tools 增加 JSON Schema 参数校验和更严格的 sandbox policy。
+1. Security 和 Tool Governance: 增加 MCP server allowlist、command/env 审计和超时/并发默认限制。
 
 ---
 

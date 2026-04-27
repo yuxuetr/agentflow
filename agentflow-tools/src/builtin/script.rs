@@ -64,20 +64,10 @@ impl Tool for ScriptTool {
   }
 
   fn parameters_schema(&self) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "script": {
-                "type": "string",
-                "description": "Script filename (e.g. 'check_syntax.py'). Must be inside the skill scripts/ directory."
-            },
-            "args": {
-                "description": "Optional arguments forwarded to the script as JSON on stdin. Can be any JSON value.",
-                "default": null
-            }
-        },
-        "required": ["script"]
-    })
+    self
+      .parameters_schema
+      .clone()
+      .unwrap_or_else(default_script_parameters_schema)
   }
 
   fn metadata(&self) -> ToolMetadata {
@@ -86,23 +76,20 @@ impl Tool for ScriptTool {
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
     // ── Schema validation ────────────────────────────────────────────────
-    if let Some(schema) = &self.parameters_schema {
-      if let Ok(compiled_schema) = jsonschema::JSONSchema::options().compile(schema) {
-        if let Err(errors) = compiled_schema.validate(&params) {
-          let mut error_messages = Vec::new();
-          for error in errors {
-            error_messages.push(error.to_string());
-          }
-          return Err(ToolError::InvalidParams {
-            message: format!(
-              "Parameters failed schema validation: {}",
-              error_messages.join(", ")
-            ),
-          });
-        }
-      } else {
-        tracing::warn!("Failed to compile JSON schema for script tool");
-      }
+    let schema = self.parameters_schema();
+    let compiled_schema = jsonschema::JSONSchema::options()
+      .compile(&schema)
+      .map_err(|e| ToolError::InvalidParams {
+        message: format!("Invalid script tool JSON schema: {}", e),
+      })?;
+    if let Err(errors) = compiled_schema.validate(&params) {
+      let error_messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+      return Err(ToolError::InvalidParams {
+        message: format!(
+          "Parameters failed schema validation: {}",
+          error_messages.join(", ")
+        ),
+      });
     }
 
     // ── Parameter extraction ─────────────────────────────────────────────
@@ -134,8 +121,44 @@ impl Tool for ScriptTool {
       });
     }
 
+    let canonical_scripts_dir =
+      self
+        .scripts_dir
+        .canonicalize()
+        .map_err(|e| ToolError::ExecutionFailed {
+          message: format!(
+            "Failed to canonicalize scripts directory '{}': {}",
+            self.scripts_dir.display(),
+            e
+          ),
+        })?;
+    let canonical_script_path =
+      script_path
+        .canonicalize()
+        .map_err(|e| ToolError::ExecutionFailed {
+          message: format!("Failed to canonicalize script '{}': {}", script_name, e),
+        })?;
+    if !canonical_script_path.starts_with(&canonical_scripts_dir) {
+      return Err(ToolError::SandboxViolation {
+        message: format!(
+          "Script '{}' resolves outside scripts directory '{}'",
+          script_name,
+          self.scripts_dir.display()
+        ),
+      });
+    }
+
+    if !self.policy.is_path_allowed(&canonical_script_path) {
+      return Err(ToolError::SandboxViolation {
+        message: format!(
+          "Script '{}' is outside allowed path prefixes",
+          canonical_script_path.display()
+        ),
+      });
+    }
+
     // ── Interpreter selection ────────────────────────────────────────────
-    let ext = script_path
+    let ext = canonical_script_path
       .extension()
       .and_then(|e| e.to_str())
       .unwrap_or("");
@@ -157,9 +180,9 @@ impl Tool for ScriptTool {
     }
 
     // ── Serialise args as JSON for stdin ─────────────────────────────────
-    let stdin_json = match &params["args"] {
-      Value::Null | Value::Object(_) if params.get("args").is_none() => String::new(),
-      v => serde_json::to_string(v).unwrap_or_default(),
+    let stdin_json = match params.get("args") {
+      None | Some(Value::Null) => String::new(),
+      Some(value) => serde_json::to_string(value).unwrap_or_default(),
     };
 
     // ── Execution ────────────────────────────────────────────────────────
@@ -167,8 +190,8 @@ impl Tool for ScriptTool {
 
     let mut cmd = tokio::process::Command::new(interpreter);
     cmd
-      .arg(&script_path)
-      .current_dir(&self.scripts_dir)
+      .arg(&canonical_script_path)
+      .current_dir(&canonical_scripts_dir)
       .stdin(std::process::Stdio::piped())
       .stdout(std::process::Stdio::piped())
       .stderr(std::process::Stdio::piped());
@@ -224,6 +247,25 @@ impl Tool for ScriptTool {
   }
 }
 
+fn default_script_parameters_schema() -> Value {
+  json!({
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+          "script": {
+              "type": "string",
+              "pattern": r"^[A-Za-z0-9._-]+\.(py|sh|js)$",
+              "description": "Script filename (e.g. 'check_syntax.py'). Must be inside the skill scripts/ directory."
+          },
+          "args": {
+              "description": "Optional arguments forwarded to the script as JSON on stdin. Can be any JSON value.",
+              "default": null
+          }
+      },
+      "required": ["script"]
+  })
+}
+
 /// Map a file extension to a known interpreter binary name.
 fn interpreter_for(ext: &str) -> Option<&'static str> {
   match ext {
@@ -267,7 +309,7 @@ mod tests {
     let dir = TempDir::new().unwrap();
     let tool = make_tool(dir.path());
     let result = tool.execute(json!({"script": "../etc/passwd"})).await;
-    assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+    assert!(matches!(result, Err(ToolError::InvalidParams { .. })));
   }
 
   #[tokio::test]
@@ -277,6 +319,62 @@ mod tests {
     std::fs::File::create(dir.path().join("run.rb")).unwrap();
     let tool = make_tool(dir.path());
     let result = tool.execute(json!({"script": "run.rb"})).await;
-    assert!(matches!(result, Err(ToolError::ExecutionFailed { .. })));
+    assert!(matches!(result, Err(ToolError::InvalidParams { .. })));
+  }
+
+  #[tokio::test]
+  async fn rejects_extra_top_level_params_by_default() {
+    let dir = TempDir::new().unwrap();
+    let script = dir.path().join("hello.sh");
+    std::fs::write(&script, "echo ok").unwrap();
+    let tool = make_tool(dir.path());
+
+    let result = tool
+      .execute(json!({"script": "hello.sh", "unexpected": true}))
+      .await;
+
+    assert!(matches!(result, Err(ToolError::InvalidParams { .. })));
+  }
+
+  #[tokio::test]
+  async fn custom_schema_validation_rejects_bad_args() {
+    let dir = TempDir::new().unwrap();
+    let script = dir.path().join("hello.sh");
+    std::fs::write(&script, "echo ok").unwrap();
+    let tool = make_tool(dir.path()).with_parameters_schema(json!({
+      "type": "object",
+      "required": ["script", "args"],
+      "properties": {
+        "script": {"type": "string"},
+        "args": {
+          "type": "object",
+          "required": ["count"],
+          "properties": {"count": {"type": "integer"}}
+        }
+      }
+    }));
+
+    let result = tool
+      .execute(json!({"script": "hello.sh", "args": {"count": "bad"}}))
+      .await;
+
+    assert!(matches!(result, Err(ToolError::InvalidParams { .. })));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn rejects_symlink_that_escapes_scripts_dir() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("escape.sh");
+    std::fs::write(&target, "echo escaped").unwrap();
+    symlink(&target, dir.path().join("escape.sh")).unwrap();
+    let tool = make_tool(dir.path());
+
+    let result = tool.execute(json!({"script": "escape.sh"})).await;
+
+    assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
   }
 }
