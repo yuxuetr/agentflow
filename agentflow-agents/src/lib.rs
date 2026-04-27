@@ -8,6 +8,7 @@
 
 pub mod common;
 pub mod nodes;
+pub mod plan_execute;
 pub mod react;
 pub mod reflection;
 pub mod runtime;
@@ -32,17 +33,29 @@ pub use agentflow_memory;
 pub use agentflow_tools;
 
 // Re-export M3 multi-agent building blocks
-pub use nodes::AgentNode;
+pub use nodes::{
+  AgentNode, AgentNodeResumeContract, AgentNodeResumeMode, AgentNodeToolReplayPolicy,
+  AgentNodeToolResumeRecord,
+};
+pub use plan_execute::{PlanExecuteAgent, PlanExecuteConfig, PlanExecuteError, PlanExecuteStep};
+pub use react::{
+  CompactMemorySummary, MemorySummaryBackend, MemorySummaryContext, MemorySummaryStrategy,
+  RecentOnlyMemorySummary,
+};
 pub use reflection::{
   FailureReflection, FinalReflection, NoOpReflection, Reflection, ReflectionContext,
   ReflectionError, ReflectionStrategy, ReflectionTrigger,
 };
 pub use runtime::{
-  AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
-  AgentStepKind, AgentStopReason, RuntimeLimits,
+  AgentCancellationToken, AgentContext, AgentEvent, AgentMemoryHook, AgentRunResult, AgentRuntime,
+  AgentRuntimeError, AgentStep, AgentStepKind, AgentStopReason, MemoryHookContext, MemoryHookKind,
+  RuntimeLimits,
 };
 pub use supervisor::{Supervisor, SupervisorBuilder};
 pub use tools::{AgentTool, WorkflowTool};
 
 // Common result type for agents
 pub type AgentResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[cfg(test)]
+pub(crate) static LLM_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

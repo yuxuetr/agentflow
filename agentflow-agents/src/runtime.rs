@@ -1,8 +1,13 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::Notify;
 
+use agentflow_memory::Message;
 use agentflow_tools::ToolOutputPart;
 
 /// Runtime limits shared by agent-native execution loops.
@@ -37,6 +42,8 @@ pub struct AgentContext {
   #[serde(default)]
   pub metadata: Value,
   pub started_at: DateTime<Utc>,
+  #[serde(skip)]
+  pub cancellation_token: Option<AgentCancellationToken>,
 }
 
 impl AgentContext {
@@ -54,6 +61,7 @@ impl AgentContext {
       limits: RuntimeLimits::default(),
       metadata: Value::Object(Default::default()),
       started_at: Utc::now(),
+      cancellation_token: None,
     }
   }
 
@@ -71,7 +79,48 @@ impl AgentContext {
     self.limits = limits;
     self
   }
+
+  pub fn with_cancellation_token(mut self, token: AgentCancellationToken) -> Self {
+    self.cancellation_token = Some(token);
+    self
+  }
 }
+
+/// Shared cancellation signal for long-running agent loops.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCancellationToken {
+  cancelled: Arc<AtomicBool>,
+  notify: Arc<Notify>,
+}
+
+impl AgentCancellationToken {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn cancel(&self) {
+    self.cancelled.store(true, Ordering::SeqCst);
+    self.notify.notify_waiters();
+  }
+
+  pub fn is_cancelled(&self) -> bool {
+    self.cancelled.load(Ordering::SeqCst)
+  }
+
+  pub async fn cancelled(&self) {
+    while !self.is_cancelled() {
+      self.notify.notified().await;
+    }
+  }
+}
+
+impl PartialEq for AgentCancellationToken {
+  fn eq(&self, other: &Self) -> bool {
+    self.is_cancelled() == other.is_cancelled()
+  }
+}
+
+impl Eq for AgentCancellationToken {}
 
 /// Why an agent-native loop stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +131,7 @@ pub enum AgentStopReason {
   MaxSteps { max_steps: usize },
   MaxToolCalls { max_tool_calls: usize },
   Timeout { timeout_ms: u64 },
+  Cancelled { message: String },
   TokenBudgetExceeded { used: u32, budget: u32 },
   Error { message: String },
 }
@@ -217,6 +267,35 @@ impl AgentRunResult {
   }
 }
 
+/// Memory operation observed by an agent runtime hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryHookKind {
+  ReadHistory,
+  Search,
+  Write,
+}
+
+/// Context passed to an [`AgentMemoryHook`].
+#[derive(Debug, Clone)]
+pub struct MemoryHookContext {
+  pub session_id: String,
+  pub kind: MemoryHookKind,
+  pub query: Option<String>,
+  pub limit: Option<usize>,
+  pub messages: Vec<Message>,
+}
+
+/// Optional observer for memory reads and writes inside an agent loop.
+///
+/// Hooks are intentionally non-failing so memory observability cannot break the
+/// main agent run. Implementations can record metrics, build summaries, or feed
+/// another memory backend.
+pub trait AgentMemoryHook: Send + Sync {
+  fn on_memory_read(&self, _context: &MemoryHookContext) {}
+
+  fn on_memory_write(&self, _context: &MemoryHookContext) {}
+}
+
 /// Common boundary for agent-native runtimes.
 #[async_trait]
 pub trait AgentRuntime: Send {
@@ -241,10 +320,12 @@ mod tests {
 
   #[test]
   fn context_builder_sets_runtime_boundaries() {
+    let token = AgentCancellationToken::new();
     let context = AgentContext::new("session-1", "hello", "mock-model")
       .with_persona("Be concise")
       .with_skill_name("demo")
-      .with_limits(RuntimeLimits::react_defaults());
+      .with_limits(RuntimeLimits::react_defaults())
+      .with_cancellation_token(token.clone());
 
     assert_eq!(context.session_id, "session-1");
     assert_eq!(context.input, "hello");
@@ -252,6 +333,24 @@ mod tests {
     assert_eq!(context.persona.as_deref(), Some("Be concise"));
     assert_eq!(context.skill_name.as_deref(), Some("demo"));
     assert_eq!(context.limits.max_steps, Some(15));
+    assert_eq!(context.cancellation_token, Some(token));
+  }
+
+  #[tokio::test]
+  async fn cancellation_token_notifies_waiters() {
+    let token = AgentCancellationToken::new();
+    assert!(!token.is_cancelled());
+
+    let waiter = {
+      let token = token.clone();
+      tokio::spawn(async move {
+        token.cancelled().await;
+      })
+    };
+    token.cancel();
+
+    waiter.await.unwrap();
+    assert!(token.is_cancelled());
   }
 
   #[test]
@@ -262,6 +361,10 @@ mod tests {
     }
     .is_success());
     assert!(!AgentStopReason::MaxSteps { max_steps: 3 }.is_success());
+    assert!(!AgentStopReason::Cancelled {
+      message: "cancelled".to_string(),
+    }
+    .is_success());
   }
 
   #[test]
