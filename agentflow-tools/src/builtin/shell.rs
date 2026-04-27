@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolOutput};
+use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolMetadata, ToolOutput};
 
 /// Execute a shell command via `sh -c` with sandbox enforcement.
 pub struct ShellTool {
@@ -45,6 +45,10 @@ impl Tool for ShellTool {
         },
         "required": ["command"]
     })
+  }
+
+  fn metadata(&self) -> ToolMetadata {
+    ToolMetadata::builtin_named(self.name())
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::{Tool, ToolError, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolPermission};
 
 /// Central registry for all available tools.
 ///
@@ -34,6 +34,25 @@ impl ToolRegistry {
   /// List all registered tools.
   pub fn list(&self) -> Vec<Arc<dyn Tool>> {
     self.tools.values().cloned().collect()
+  }
+
+  /// List tools whose metadata includes a specific permission.
+  pub fn list_by_permission(&self, permission: ToolPermission) -> Vec<Arc<dyn Tool>> {
+    self
+      .tools
+      .values()
+      .filter(|tool| tool.metadata().permissions.allows(&permission))
+      .cloned()
+      .collect()
+  }
+
+  /// Check whether a registered tool declares a permission.
+  pub fn tool_has_permission(&self, name: &str, permission: &ToolPermission) -> bool {
+    self
+      .tools
+      .get(name)
+      .map(|tool| tool.metadata().permissions.allows(permission))
+      .unwrap_or(false)
   }
 
   /// Build an OpenAI-style `tools` array for use in API calls.
@@ -78,5 +97,99 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
   fn default() -> Self {
     Self::new()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{ToolDefinition, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
+  use async_trait::async_trait;
+  use serde_json::json;
+
+  struct StaticTool {
+    name: &'static str,
+    metadata: ToolMetadata,
+  }
+
+  #[async_trait]
+  impl Tool for StaticTool {
+    fn name(&self) -> &str {
+      self.name
+    }
+
+    fn description(&self) -> &str {
+      "static test tool"
+    }
+
+    fn parameters_schema(&self) -> Value {
+      json!({"type": "object"})
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+      self.metadata.clone()
+    }
+
+    async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+      Ok(ToolOutput::success("ok"))
+    }
+  }
+
+  #[test]
+  fn registry_can_filter_tools_by_permission() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    registry.register(Arc::new(StaticTool {
+      name: "workflow",
+      metadata: ToolMetadata::workflow(),
+    }));
+
+    let network_tools = registry.list_by_permission(ToolPermission::Network);
+    assert_eq!(network_tools.len(), 1);
+    assert_eq!(network_tools[0].name(), "http");
+    assert!(registry.tool_has_permission("workflow", &ToolPermission::Workflow));
+    assert!(!registry.tool_has_permission("workflow", &ToolPermission::Network));
+  }
+
+  #[test]
+  fn tool_definition_serializes_permissions() {
+    let definition = ToolDefinition {
+      name: "mcp_demo_echo".to_string(),
+      description: "demo".to_string(),
+      parameters: json!({"type": "object"}),
+      metadata: ToolMetadata::mcp("demo", "echo"),
+    };
+    let value = serde_json::to_value(definition).unwrap();
+
+    assert_eq!(value["metadata"]["source"], json!("mcp"));
+    assert_eq!(
+      value["metadata"]["permissions"]["permissions"],
+      json!(["mcp", "network"])
+    );
+  }
+
+  #[test]
+  fn permission_sets_are_stable_and_deduplicated() {
+    let set = ToolPermissionSet::new([
+      ToolPermission::Network,
+      ToolPermission::Network,
+      ToolPermission::Mcp,
+    ]);
+
+    assert_eq!(
+      set.permissions,
+      vec![ToolPermission::Mcp, ToolPermission::Network]
+    );
+  }
+
+  #[test]
+  fn default_metadata_is_builtin_without_permissions() {
+    let metadata = ToolMetadata::default();
+
+    assert_eq!(metadata.source, ToolSource::Builtin);
+    assert!(metadata.permissions.permissions.is_empty());
   }
 }

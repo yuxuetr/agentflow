@@ -36,6 +36,17 @@ pub async fn execute(skill_dir: String) -> Result<()> {
   for definition in definitions {
     println!("   - {}", definition.name);
     println!("     source: {}", definition.metadata.source.as_str());
+    if !definition.metadata.permissions.permissions.is_empty() {
+      let permissions = definition
+        .metadata
+        .permissions
+        .permissions
+        .iter()
+        .map(|permission| permission.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+      println!("     permissions: {}", permissions);
+    }
     if let Some(server) = &definition.metadata.mcp_server_name {
       println!("     mcp_server: {}", server);
     }

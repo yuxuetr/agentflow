@@ -124,6 +124,85 @@ pub struct ToolDefinition {
   pub metadata: ToolMetadata,
 }
 
+/// Stable permission categories used to govern tool access.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPermission {
+  /// Read local filesystem state.
+  FilesystemRead,
+  /// Write or mutate local filesystem state.
+  FilesystemWrite,
+  /// Execute local commands or scripts.
+  ProcessExec,
+  /// Make outbound network requests.
+  Network,
+  /// Connect to or invoke MCP servers.
+  Mcp,
+  /// Execute nested AgentFlow workflows.
+  Workflow,
+}
+
+impl ToolPermission {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::FilesystemRead => "filesystem_read",
+      Self::FilesystemWrite => "filesystem_write",
+      Self::ProcessExec => "process_exec",
+      Self::Network => "network",
+      Self::Mcp => "mcp",
+      Self::Workflow => "workflow",
+    }
+  }
+}
+
+/// Permission set attached to tool metadata for inspection and governance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolPermissionSet {
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub permissions: Vec<ToolPermission>,
+}
+
+impl ToolPermissionSet {
+  pub fn new(permissions: impl IntoIterator<Item = ToolPermission>) -> Self {
+    let mut permissions: Vec<_> = permissions.into_iter().collect();
+    permissions.sort_by_key(|permission| permission.as_str());
+    permissions.dedup();
+    Self { permissions }
+  }
+
+  pub fn empty() -> Self {
+    Self::default()
+  }
+
+  pub fn allows(&self, permission: &ToolPermission) -> bool {
+    self.permissions.contains(permission)
+  }
+
+  pub fn builtin(tool_name: &str) -> Self {
+    match tool_name {
+      "shell" => Self::new([ToolPermission::ProcessExec]),
+      "file" => Self::new([
+        ToolPermission::FilesystemRead,
+        ToolPermission::FilesystemWrite,
+      ]),
+      "http" => Self::new([ToolPermission::Network]),
+      _ => Self::empty(),
+    }
+  }
+
+  pub fn script() -> Self {
+    Self::new([ToolPermission::ProcessExec, ToolPermission::FilesystemRead])
+  }
+
+  pub fn mcp() -> Self {
+    Self::new([ToolPermission::Mcp, ToolPermission::Network])
+  }
+
+  pub fn workflow() -> Self {
+    Self::new([ToolPermission::Workflow])
+  }
+}
+
 /// Stable source classification for tools registered in AgentFlow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -149,6 +228,8 @@ impl ToolSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolMetadata {
   pub source: ToolSource,
+  #[serde(default)]
+  pub permissions: ToolPermissionSet,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub mcp_server_name: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,8 +238,13 @@ pub struct ToolMetadata {
 
 impl ToolMetadata {
   pub fn builtin() -> Self {
+    Self::builtin_named("builtin")
+  }
+
+  pub fn builtin_named(tool_name: impl AsRef<str>) -> Self {
     Self {
       source: ToolSource::Builtin,
+      permissions: ToolPermissionSet::builtin(tool_name.as_ref()),
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -167,6 +253,7 @@ impl ToolMetadata {
   pub fn script() -> Self {
     Self {
       source: ToolSource::Script,
+      permissions: ToolPermissionSet::script(),
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -175,6 +262,7 @@ impl ToolMetadata {
   pub fn mcp(server_name: impl Into<String>, tool_name: impl Into<String>) -> Self {
     Self {
       source: ToolSource::Mcp,
+      permissions: ToolPermissionSet::mcp(),
       mcp_server_name: Some(server_name.into()),
       mcp_tool_name: Some(tool_name.into()),
     }
@@ -183,6 +271,7 @@ impl ToolMetadata {
   pub fn workflow() -> Self {
     Self {
       source: ToolSource::Workflow,
+      permissions: ToolPermissionSet::workflow(),
       mcp_server_name: None,
       mcp_tool_name: None,
     }

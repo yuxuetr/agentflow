@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Security 和 Tool Governance: 标准化 tool permission model，覆盖 builtin/script/mcp/workflow 四类来源。
+1. Security 和 Tool Governance: 为 script tools 增加 JSON Schema 参数校验和更严格的 sandbox policy。
 
 ---
 
