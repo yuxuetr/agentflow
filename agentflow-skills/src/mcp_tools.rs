@@ -3,7 +3,7 @@ use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart}
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tracing::{info, warn};
 
 use crate::{error::SkillError, manifest::McpServerConfig};
@@ -16,13 +16,16 @@ use crate::{error::SkillError, manifest::McpServerConfig};
 pub struct McpClientPool {
   config: McpServerConfig,
   client: Mutex<Option<MCPClient>>,
+  call_slots: Semaphore,
 }
 
 impl McpClientPool {
   pub fn new(config: McpServerConfig) -> Self {
+    let max_calls = config.resolved_max_concurrent_calls();
     Self {
       config,
       client: Mutex::new(None),
+      call_slots: Semaphore::new(max_calls),
     }
   }
 
@@ -69,6 +72,16 @@ impl McpClientPool {
   }
 
   async fn call_tool(&self, tool_name: &str, params: Value) -> Result<ToolOutput, ToolError> {
+    let _permit = self
+      .call_slots
+      .acquire()
+      .await
+      .map_err(|_| ToolError::ExecutionFailed {
+        message: format!(
+          "MCP server '{}' concurrency limiter is closed",
+          self.config.name
+        ),
+      })?;
     let mut guard = self.client.lock().await;
     let client = ensure_client_for_tool(&self.config, &mut guard).await?;
     let timeout = self.config.resolved_timeout();
@@ -77,6 +90,7 @@ impl McpClientPool {
       server = %self.config.name,
       tool = %tool_name,
       timeout_ms = timeout.as_millis() as u64,
+      max_concurrent_calls = self.config.resolved_max_concurrent_calls(),
       "Calling MCP tool"
     );
     let result = match tokio::time::timeout(timeout, client.call_tool(tool_name, params)).await {
@@ -366,6 +380,7 @@ mod tests {
       args: vec![],
       env: Default::default(),
       timeout_secs: None,
+      max_concurrent_calls: None,
     }));
     let adapter = McpToolAdapter::new(
       pool,

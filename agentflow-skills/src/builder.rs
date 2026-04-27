@@ -11,7 +11,7 @@ use tracing::info;
 use crate::{
   error::SkillError,
   loader::resolve_knowledge_path,
-  manifest::{McpServerConfig, MemoryConfig, SkillManifest, ToolConfig},
+  manifest::{McpServerConfig, MemoryConfig, SecurityConfig, SkillManifest, ToolConfig},
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
 
@@ -188,6 +188,8 @@ async fn register_mcp_tools(
   manifest: &SkillManifest,
   skill_dir: &Path,
 ) -> Result<(), SkillError> {
+  validate_mcp_governance(manifest)?;
+
   let mut active_pools: Vec<Arc<McpClientPool>> = Vec::new();
   for mcp in &manifest.mcp_servers {
     if mcp.name.trim().is_empty() {
@@ -201,13 +203,8 @@ async fn register_mcp_tools(
       });
     }
 
-    tracing::info!(
-        server = %mcp.name,
-        command = %mcp.command,
-        "Discovering MCP tools for skill"
-    );
-
-    let resolved_mcp = resolve_mcp_server_config(mcp, skill_dir);
+    let resolved_mcp = resolve_mcp_server_config(mcp, skill_dir, &manifest.security);
+    audit_mcp_server_config(&resolved_mcp);
     let pool = Arc::new(McpClientPool::new(resolved_mcp));
     let tools = match pool.list_tools().await {
       Ok(tools) => tools,
@@ -246,7 +243,81 @@ async fn register_mcp_tools(
   Ok(())
 }
 
-fn resolve_mcp_server_config(config: &McpServerConfig, skill_dir: &Path) -> McpServerConfig {
+fn validate_mcp_governance(manifest: &SkillManifest) -> Result<(), SkillError> {
+  let security = &manifest.security;
+  let max_servers = security.resolved_mcp_max_servers();
+  if manifest.mcp_servers.len() > max_servers {
+    return Err(SkillError::ValidationError {
+      message: format!(
+        "Skill declares {} MCP servers, exceeding security.mcp_max_servers={}",
+        manifest.mcp_servers.len(),
+        max_servers
+      ),
+    });
+  }
+
+  for config in &manifest.mcp_servers {
+    if !security.mcp_server_allowlist.is_empty()
+      && !security
+        .mcp_server_allowlist
+        .iter()
+        .any(|name| name == &config.name)
+    {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "MCP server '{}' is not listed in security.mcp_server_allowlist",
+          config.name
+        ),
+      });
+    }
+
+    let executable = executable_name(&config.command);
+    if !security
+      .resolved_mcp_command_allowlist()
+      .iter()
+      .any(|allowed| allowed == &executable)
+    {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "MCP server '{}' command '{}' is not listed in security.mcp_command_allowlist",
+          config.name, executable
+        ),
+      });
+    }
+
+    if !security.mcp_env_allowlist.is_empty() {
+      for key in config.env.keys() {
+        if !security
+          .mcp_env_allowlist
+          .iter()
+          .any(|allowed| allowed == key)
+        {
+          return Err(SkillError::ValidationError {
+            message: format!(
+              "MCP server '{}' env '{}' is not listed in security.mcp_env_allowlist",
+              config.name, key
+            ),
+          });
+        }
+      }
+    } else if !config.env.is_empty() {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "MCP server '{}' declares env values but security.mcp_env_allowlist is empty",
+          config.name
+        ),
+      });
+    }
+  }
+
+  Ok(())
+}
+
+fn resolve_mcp_server_config(
+  config: &McpServerConfig,
+  skill_dir: &Path,
+  security: &SecurityConfig,
+) -> McpServerConfig {
   let mut resolved = config.clone();
   resolved.command = resolve_skill_relative_command_part(&resolved.command, skill_dir);
   resolved.args = resolved
@@ -254,7 +325,40 @@ fn resolve_mcp_server_config(config: &McpServerConfig, skill_dir: &Path) -> McpS
     .iter()
     .map(|arg| resolve_skill_relative_command_part(arg, skill_dir))
     .collect();
+  if resolved.timeout_secs.is_none() {
+    resolved.timeout_secs = Some(security.resolved_mcp_default_timeout_secs());
+  } else {
+    resolved.timeout_secs = Some(resolved.resolved_timeout_secs());
+  }
+  if resolved.max_concurrent_calls.is_none() {
+    resolved.max_concurrent_calls = Some(security.resolved_mcp_max_concurrent_calls());
+  } else {
+    resolved.max_concurrent_calls = Some(resolved.resolved_max_concurrent_calls());
+  }
   resolved
+}
+
+fn audit_mcp_server_config(config: &McpServerConfig) {
+  let mut env_keys: Vec<_> = config.env.keys().cloned().collect();
+  env_keys.sort();
+  tracing::info!(
+    event = "mcp_server_config_audit",
+    server = %config.name,
+    command = %executable_name(&config.command),
+    args_count = config.args.len(),
+    env_keys = ?env_keys,
+    timeout_secs = config.resolved_timeout_secs(),
+    max_concurrent_calls = config.resolved_max_concurrent_calls(),
+    "Audited MCP server config"
+  );
+}
+
+fn executable_name(command: &str) -> String {
+  Path::new(command)
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or(command)
+    .to_string()
 }
 
 fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String {
@@ -440,7 +544,7 @@ mod tests {
   use super::*;
   use crate::{
     loader::SkillLoader,
-    manifest::{ModelConfig, PersonaConfig, SkillInfo},
+    manifest::{ModelConfig, PersonaConfig, SecurityConfig, SkillInfo},
   };
   use std::fs;
   use std::io::Write;
@@ -473,6 +577,7 @@ mod tests {
         language: None,
       },
       model: ModelConfig::default(),
+      security: SecurityConfig::default(),
       tools: vec![],
       mcp_servers: vec![],
       knowledge: vec![],
@@ -692,5 +797,51 @@ description = "Coding rules"
     assert!(policy.allowed_commands.contains(&"python3".to_string()));
     assert!(policy.allowed_commands.contains(&"bash".to_string()));
     assert!(policy.allowed_commands.contains(&"node".to_string()));
+  }
+
+  #[test]
+  fn mcp_governance_applies_default_limits() {
+    let mut manifest = minimal_manifest("mcp-defaults");
+    manifest.mcp_servers = vec![McpServerConfig {
+      name: "fixture".to_string(),
+      command: "python3".to_string(),
+      args: vec!["server.py".to_string()],
+      env: Default::default(),
+      timeout_secs: None,
+      max_concurrent_calls: None,
+    }];
+
+    validate_mcp_governance(&manifest).unwrap();
+    let resolved = resolve_mcp_server_config(
+      &manifest.mcp_servers[0],
+      Path::new("/tmp/skill"),
+      &manifest.security,
+    );
+
+    assert_eq!(
+      resolved.timeout_secs,
+      Some(manifest.security.resolved_mcp_default_timeout_secs())
+    );
+    assert_eq!(
+      resolved.max_concurrent_calls,
+      Some(manifest.security.resolved_mcp_max_concurrent_calls())
+    );
+  }
+
+  #[test]
+  fn mcp_governance_rejects_unapproved_command() {
+    let mut manifest = minimal_manifest("mcp-blocked");
+    manifest.mcp_servers = vec![McpServerConfig {
+      name: "fixture".to_string(),
+      command: "curl".to_string(),
+      args: vec![],
+      env: Default::default(),
+      timeout_secs: None,
+      max_concurrent_calls: None,
+    }];
+
+    let result = validate_mcp_governance(&manifest);
+
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
   }
 }

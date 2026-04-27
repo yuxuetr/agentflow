@@ -151,11 +151,16 @@ async fn mcp_server_start_failure_maps_to_skill_error() {
   let dir = TempDir::new().unwrap();
   write_file(
     &dir.path().join("skill.toml"),
-    &toml_skill(
+    &toml_skill_with_mcp_config(
       "bad-mcp",
-      "missing",
-      "agentflow-no-such-mcp-server-command",
-      &[],
+      r#"
+[security]
+mcp_command_allowlist = ["agentflow-no-such-mcp-server-command"]
+
+[[mcp_servers]]
+name = "missing"
+command = "agentflow-no-such-mcp-server-command"
+"#,
     ),
   );
 
@@ -259,6 +264,9 @@ args = [{server:?}]
 
 [mcp_servers.env]
 AGENTFLOW_MCP_TEST_VALUE = "from-env"
+
+[security]
+mcp_env_allowlist = ["AGENTFLOW_MCP_TEST_VALUE"]
 "#
       ),
     ),

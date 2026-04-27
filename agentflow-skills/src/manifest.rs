@@ -40,6 +40,8 @@ pub struct SkillManifest {
   #[serde(default)]
   pub model: ModelConfig,
   #[serde(default)]
+  pub security: SecurityConfig,
+  #[serde(default)]
   pub tools: Vec<ToolConfig>,
   #[serde(default)]
   pub mcp_servers: Vec<McpServerConfig>,
@@ -98,14 +100,120 @@ pub struct McpServerConfig {
   #[serde(default)]
   pub env: std::collections::HashMap<String, String>,
   /// Timeout for MCP connect, discovery, and tool calls in seconds.
-  /// Defaults to 30 seconds.
+  /// Defaults to [`SecurityConfig::mcp_default_timeout_secs`].
   pub timeout_secs: Option<u64>,
+  /// Maximum concurrent calls admitted for this server.
+  /// Defaults to [`SecurityConfig::mcp_max_concurrent_calls`].
+  pub max_concurrent_calls: Option<usize>,
 }
 
 impl McpServerConfig {
   pub fn resolved_timeout(&self) -> std::time::Duration {
-    std::time::Duration::from_secs(self.timeout_secs.unwrap_or(30).max(1))
+    std::time::Duration::from_secs(self.resolved_timeout_secs())
   }
+
+  pub fn resolved_timeout_secs(&self) -> u64 {
+    self
+      .timeout_secs
+      .unwrap_or(DEFAULT_MCP_TIMEOUT_SECS)
+      .clamp(1, MAX_MCP_TIMEOUT_SECS)
+  }
+
+  pub fn resolved_max_concurrent_calls(&self) -> usize {
+    self
+      .max_concurrent_calls
+      .unwrap_or(DEFAULT_MCP_MAX_CONCURRENT_CALLS)
+      .clamp(1, MAX_MCP_MAX_CONCURRENT_CALLS)
+  }
+}
+
+pub const DEFAULT_MCP_TIMEOUT_SECS: u64 = 30;
+pub const MAX_MCP_TIMEOUT_SECS: u64 = 120;
+pub const DEFAULT_MCP_MAX_CONCURRENT_CALLS: usize = 4;
+pub const MAX_MCP_MAX_CONCURRENT_CALLS: usize = 32;
+pub const DEFAULT_MCP_MAX_SERVERS: usize = 4;
+pub const MAX_MCP_MAX_SERVERS: usize = 32;
+
+/// Skill-level governance controls for tool and MCP execution.
+///
+/// Empty allowlists mean "use AgentFlow's default policy"; they do not mean
+/// unrestricted execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+  /// Allowed MCP server names. Empty = allow all declared server names.
+  #[serde(default)]
+  pub mcp_server_allowlist: Vec<String>,
+  /// Allowed executable names for MCP stdio servers.
+  #[serde(default = "default_mcp_command_allowlist")]
+  pub mcp_command_allowlist: Vec<String>,
+  /// Allowed environment variable names forwarded to MCP servers.
+  #[serde(default)]
+  pub mcp_env_allowlist: Vec<String>,
+  /// Default MCP connect/discovery/call timeout in seconds.
+  #[serde(default = "default_mcp_timeout_secs")]
+  pub mcp_default_timeout_secs: u64,
+  /// Default max concurrent tool calls admitted per MCP server.
+  #[serde(default = "default_mcp_max_concurrent_calls")]
+  pub mcp_max_concurrent_calls: usize,
+  /// Maximum MCP server declarations in one skill.
+  #[serde(default = "default_mcp_max_servers")]
+  pub mcp_max_servers: usize,
+}
+
+impl Default for SecurityConfig {
+  fn default() -> Self {
+    Self {
+      mcp_server_allowlist: Vec::new(),
+      mcp_command_allowlist: default_mcp_command_allowlist(),
+      mcp_env_allowlist: Vec::new(),
+      mcp_default_timeout_secs: DEFAULT_MCP_TIMEOUT_SECS,
+      mcp_max_concurrent_calls: DEFAULT_MCP_MAX_CONCURRENT_CALLS,
+      mcp_max_servers: DEFAULT_MCP_MAX_SERVERS,
+    }
+  }
+}
+
+impl SecurityConfig {
+  pub fn resolved_mcp_command_allowlist(&self) -> Vec<String> {
+    if self.mcp_command_allowlist.is_empty() {
+      default_mcp_command_allowlist()
+    } else {
+      self.mcp_command_allowlist.clone()
+    }
+  }
+
+  pub fn resolved_mcp_default_timeout_secs(&self) -> u64 {
+    self.mcp_default_timeout_secs.clamp(1, MAX_MCP_TIMEOUT_SECS)
+  }
+
+  pub fn resolved_mcp_max_concurrent_calls(&self) -> usize {
+    self
+      .mcp_max_concurrent_calls
+      .clamp(1, MAX_MCP_MAX_CONCURRENT_CALLS)
+  }
+
+  pub fn resolved_mcp_max_servers(&self) -> usize {
+    self.mcp_max_servers.clamp(1, MAX_MCP_MAX_SERVERS)
+  }
+}
+
+fn default_mcp_timeout_secs() -> u64 {
+  DEFAULT_MCP_TIMEOUT_SECS
+}
+
+fn default_mcp_max_concurrent_calls() -> usize {
+  DEFAULT_MCP_MAX_CONCURRENT_CALLS
+}
+
+fn default_mcp_max_servers() -> usize {
+  DEFAULT_MCP_MAX_SERVERS
+}
+
+pub fn default_mcp_command_allowlist() -> Vec<String> {
+  ["python", "python3", "node", "npx", "uvx"]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
 }
 
 /// Declares a tool the skill is authorised to use, with optional constraints.

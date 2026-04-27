@@ -48,8 +48,8 @@ pub use builder::SkillBuilder;
 pub use error::SkillError;
 pub use loader::SkillLoader;
 pub use manifest::{
-  KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SkillInfo,
-  SkillManifest, ToolConfig,
+  KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SecurityConfig,
+  SkillInfo, SkillManifest, ToolConfig,
 };
 pub use mcp_tools::{public_tool_name, McpClientPool, McpToolAdapter};
 pub use skill_md::SkillMd;

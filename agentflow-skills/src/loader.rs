@@ -90,6 +90,17 @@ impl SkillLoader {
     }
 
     // ── MCP servers ─────────────────────────────────────────────────────
+    let max_servers = manifest.security.resolved_mcp_max_servers();
+    if manifest.mcp_servers.len() > max_servers {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "Skill declares {} MCP servers, exceeding security.mcp_max_servers={}",
+          manifest.mcp_servers.len(),
+          max_servers
+        ),
+      });
+    }
+
     for server in &manifest.mcp_servers {
       if server.name.trim().is_empty() {
         return Err(SkillError::ValidationError {
@@ -103,6 +114,72 @@ impl SkillLoader {
             server.name
           ),
         });
+      }
+      if !manifest.security.mcp_server_allowlist.is_empty()
+        && !manifest
+          .security
+          .mcp_server_allowlist
+          .iter()
+          .any(|name| name == &server.name)
+      {
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "[[mcp_servers]] '{}' is not listed in security.mcp_server_allowlist",
+            server.name
+          ),
+        });
+      }
+
+      let executable = executable_name(&server.command);
+      if !manifest
+        .security
+        .resolved_mcp_command_allowlist()
+        .iter()
+        .any(|allowed| allowed == &executable)
+      {
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "[[mcp_servers]] '{}' command '{}' is not listed in security.mcp_command_allowlist",
+            server.name, executable
+          ),
+        });
+      }
+
+      if manifest.security.mcp_env_allowlist.is_empty() && !server.env.is_empty() {
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "[[mcp_servers]] '{}' declares env values but security.mcp_env_allowlist is empty",
+            server.name
+          ),
+        });
+      }
+      for key in server.env.keys() {
+        if !manifest
+          .security
+          .mcp_env_allowlist
+          .iter()
+          .any(|allowed| allowed == key)
+        {
+          return Err(SkillError::ValidationError {
+            message: format!(
+              "[[mcp_servers]] '{}' env '{}' is not listed in security.mcp_env_allowlist",
+              server.name, key
+            ),
+          });
+        }
+      }
+
+      if server.timeout_secs.is_some_and(|timeout| timeout == 0) {
+        warnings.push(format!(
+          "[[mcp_servers]] '{}' timeout_secs=0 will be clamped to 1",
+          server.name
+        ));
+      }
+      if server.max_concurrent_calls.is_some_and(|limit| limit == 0) {
+        warnings.push(format!(
+          "[[mcp_servers]] '{}' max_concurrent_calls=0 will be clamped to 1",
+          server.name
+        ));
       }
     }
 
@@ -137,6 +214,14 @@ impl SkillLoader {
 
     Ok(warnings)
   }
+}
+
+fn executable_name(command: &str) -> String {
+  Path::new(command)
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or(command)
+    .to_string()
 }
 
 /// Resolve a knowledge path (possibly a glob) relative to `skill_dir`.
@@ -398,6 +483,90 @@ role = "expert"
 
 [[tools]]
 name = "script"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  #[test]
+  fn validates_mcp_security_allowlists() {
+    let dir = TempDir::new().unwrap();
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "mcp-secure"
+version = "0.1"
+description = "mcp"
+
+[persona]
+role = "expert"
+
+[security]
+mcp_server_allowlist = ["fixture"]
+mcp_command_allowlist = ["python3"]
+mcp_env_allowlist = ["FIXTURE_TOKEN"]
+
+[[mcp_servers]]
+name = "fixture"
+command = "python3"
+args = ["server.py"]
+env = { FIXTURE_TOKEN = "secret" }
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+    assert!(warnings.is_empty());
+  }
+
+  #[test]
+  fn rejects_mcp_server_outside_allowlist() {
+    let dir = TempDir::new().unwrap();
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "mcp-blocked"
+version = "0.1"
+description = "mcp"
+
+[persona]
+role = "expert"
+
+[security]
+mcp_server_allowlist = ["approved"]
+mcp_command_allowlist = ["python3"]
+
+[[mcp_servers]]
+name = "blocked"
+command = "python3"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  #[test]
+  fn rejects_mcp_env_without_env_allowlist() {
+    let dir = TempDir::new().unwrap();
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "mcp-env"
+version = "0.1"
+description = "mcp"
+
+[persona]
+role = "expert"
+
+[[mcp_servers]]
+name = "fixture"
+command = "python3"
+env = { API_KEY = "secret" }
 "#,
     );
     let m = SkillLoader::load(dir.path()).unwrap();

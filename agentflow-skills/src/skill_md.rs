@@ -25,7 +25,9 @@ use serde::Deserialize;
 
 use crate::{
   error::SkillError,
-  manifest::{McpServerConfig, PersonaConfig, SkillInfo, SkillManifest, ToolConfig},
+  manifest::{
+    McpServerConfig, PersonaConfig, SecurityConfig, SkillInfo, SkillManifest, ToolConfig,
+  },
 };
 
 /// Filename expected for the Agent Skills standard manifest.
@@ -51,6 +53,8 @@ struct SkillMdFrontmatter {
   pub metadata: Option<HashMap<String, String>>,
   /// Optional AgentFlow extension: MCP servers exposed to this skill.
   pub mcp_servers: Option<Vec<McpServerConfig>>,
+  /// Optional AgentFlow extension: security and tool governance controls.
+  pub security: Option<SecurityConfig>,
   /// Optional (experimental): space-delimited list of pre-approved tools.
   /// e.g. `"shell file script"`
   #[serde(rename = "allowed-tools")]
@@ -72,6 +76,8 @@ pub struct SkillMd {
   pub metadata: HashMap<String, String>,
   /// AgentFlow extension for declarative MCP server attachment.
   pub mcp_servers: Vec<McpServerConfig>,
+  /// AgentFlow extension for security and tool governance controls.
+  pub security: SecurityConfig,
   /// Space-delimited tool names recognised by agentflow
   /// (`shell`, `file`, `http`, `script`).
   pub allowed_tools: Vec<String>,
@@ -122,6 +128,7 @@ impl SkillMd {
       compatibility: fm.compatibility,
       metadata: fm.metadata.unwrap_or_default(),
       mcp_servers: fm.mcp_servers.unwrap_or_default(),
+      security: fm.security.unwrap_or_default(),
       allowed_tools,
       body: body.trim().to_string(),
     })
@@ -171,6 +178,7 @@ impl SkillMd {
         language: self.metadata.get("language").cloned(),
       },
       model: Default::default(),
+      security: self.security,
       tools,
       mcp_servers,
       knowledge: vec![],

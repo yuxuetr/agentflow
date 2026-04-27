@@ -50,8 +50,23 @@ Use the local MCP demo tools when the user asks to echo text or inspect the demo
 - `args`: command arguments. Optional.
 - `env`: environment variables passed to the server. Optional.
 - `timeout_secs`: timeout for connect, discovery, and tool calls. Defaults to 30 seconds.
+- `max_concurrent_calls`: per-server MCP tool call admission limit. Defaults to 4.
 
 Relative command parts such as `./server.py` are resolved from the skill directory.
+
+Governance fields:
+
+```toml
+[security]
+mcp_server_allowlist = ["local-demo"]
+mcp_command_allowlist = ["python3"]
+mcp_env_allowlist = ["MCP_TOKEN"]
+mcp_default_timeout_secs = 30
+mcp_max_concurrent_calls = 4
+mcp_max_servers = 4
+```
+
+Empty `mcp_server_allowlist` allows all declared server names. `mcp_command_allowlist` defaults to `python`, `python3`, `node`, `npx`, and `uvx`. Environment variables are denied unless their keys are listed in `mcp_env_allowlist`.
 
 ## skill.toml Equivalent
 
@@ -191,8 +206,9 @@ Treat MCP servers as executable dependencies:
 
 - Prefer pinning server packages or using local scripts checked into the skill.
 - Keep server commands and arguments explicit.
-- Pass secrets through `env` only when the MCP server needs them.
-- Use short `timeout_secs` for tools that call external systems.
+- Pass secrets through `env` only when the MCP server needs them, and list the keys in `mcp_env_allowlist`.
+- Use short `timeout_secs` for tools that call external systems. Values are clamped to 1-120 seconds.
+- Review audit logs for `mcp_server_config_audit`; they include server names, command names, arg counts, env keys, timeout, and concurrency limits.
 - Validate a Skill before allowing an agent loop to use it.
 
 MCP server permissions are controlled by the server implementation itself. AgentFlow wraps discovered tools but does not sandbox arbitrary work performed inside an external MCP process.

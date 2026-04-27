@@ -73,6 +73,9 @@ description = "Broken MCP skill for CLI error tests"
 [persona]
 role = "Use MCP tools when needed."
 
+[security]
+mcp_command_allowlist = ["agentflow-no-such-mcp-server-command"]
+
 [[mcp_servers]]
 name = "broken-demo"
 command = "agentflow-no-such-mcp-server-command"
