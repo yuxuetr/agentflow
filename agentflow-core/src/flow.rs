@@ -124,7 +124,7 @@ impl Flow {
     initial_inputs: AsyncNodeInputs,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None)
+      .execute_with_workflow_id(None, initial_inputs, None, None, None)
       .await
   }
 
@@ -135,6 +135,7 @@ impl Flow {
     initial_inputs: AsyncNodeInputs,
     skip_until: Option<String>,
     restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
+    restored_last_completed_node: Option<String>,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let workflow_started_at = Instant::now();
@@ -155,17 +156,19 @@ impl Flow {
 
     let sorted_nodes = self.topological_sort()?;
     let mut state_pool: HashMap<String, AsyncNodeResult> = restored_state_pool.unwrap_or_default();
-    let mut last_completed_node = state_pool
-      .iter()
-      .filter_map(|(node_id, result)| result.as_ref().ok().map(|_| node_id.as_str()))
-      .filter_map(|node_id| {
-        sorted_nodes
-          .iter()
-          .position(|sorted_node| sorted_node == node_id)
-          .map(|idx| (idx, node_id.to_string()))
-      })
-      .max_by_key(|(idx, _)| *idx)
-      .map(|(_, node_id)| node_id);
+    let mut last_completed_node = restored_last_completed_node.or_else(|| {
+      state_pool
+        .iter()
+        .filter_map(|(node_id, result)| result.as_ref().ok().map(|_| node_id.as_str()))
+        .filter_map(|node_id| {
+          sorted_nodes
+            .iter()
+            .position(|sorted_node| sorted_node == node_id)
+            .map(|idx| (idx, node_id.to_string()))
+        })
+        .max_by_key(|(idx, _)| *idx)
+        .map(|(_, node_id)| node_id)
+    });
 
     // Flag to skip nodes until we reach the checkpoint resume point
     let mut should_skip = skip_until.is_some();
@@ -394,6 +397,7 @@ impl Flow {
           HashMap::new(),
           Some(next_node_id),
           Some(state_pool),
+          Some(checkpoint.last_completed_node),
         )
         .await
     } else {

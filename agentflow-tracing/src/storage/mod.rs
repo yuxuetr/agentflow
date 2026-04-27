@@ -1,6 +1,7 @@
 //! Storage backends for execution traces
 
 pub mod file;
+pub mod schema;
 
 use crate::types::*;
 use async_trait::async_trait;

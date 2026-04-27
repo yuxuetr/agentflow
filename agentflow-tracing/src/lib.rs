@@ -46,6 +46,7 @@
 
 pub mod collector;
 pub mod format;
+pub mod otel;
 pub mod storage;
 pub mod types;
 
@@ -53,6 +54,14 @@ pub mod types;
 pub use collector::{StorageErrorPolicy, TraceCollector, TraceConfig};
 pub use format::{
   export_trace_json, export_trace_json_compact, format_trace_human_readable, format_trace_summary,
+};
+pub use otel::{
+  trace_to_spans, OtelAttribute, OtelExporterConfig, OtelSpan, OtelSpanEvent, OtelSpanKind,
+  OtelSpanSink, OtelStatus, OtelStatusCode, OtelTraceExporter, OtelValue, TraceExporter,
+};
+pub use storage::schema::{
+  schema_for_dialect, TraceSchemaDialect, POSTGRES_TRACE_SCHEMA, SQLITE_TRACE_SCHEMA,
+  TRACE_SCHEMA_VERSION,
 };
 pub use storage::{TimeRange, TraceQuery, TraceStorage};
 pub use types::*;

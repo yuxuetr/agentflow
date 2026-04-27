@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Runtime 生产化: 增强 partial resume 与 workflow checkpoint manager 的自动衔接。
+1. Observability 和 Replay: 增加 `agentflow trace replay <run_id>` 或等价 API，用于复盘一次 workflow/agent 混合执行。
 
 ---
 

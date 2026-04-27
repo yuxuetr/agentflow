@@ -2,6 +2,7 @@
 
 use crate::storage::TraceStorage;
 use crate::types::*;
+use crate::TraceExporter;
 use agentflow_core::events::{EventListener, WorkflowEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -88,6 +89,9 @@ pub struct TraceCollector {
 
   /// Pending LLM prompts (workflow_id, node_id) -> LLMTrace
   pending_llm: Arc<RwLock<HashMap<(String, String), LLMTrace>>>,
+
+  /// Exporters invoked once a workflow trace reaches a terminal state.
+  exporters: Vec<Arc<dyn TraceExporter>>,
 }
 
 impl TraceCollector {
@@ -98,7 +102,14 @@ impl TraceCollector {
       config,
       current_traces: Arc::new(RwLock::new(HashMap::new())),
       pending_llm: Arc::new(RwLock::new(HashMap::new())),
+      exporters: Vec::new(),
     }
+  }
+
+  /// Attach an exporter for completed or failed traces.
+  pub fn with_exporter(mut self, exporter: Arc<dyn TraceExporter>) -> Self {
+    self.exporters.push(exporter);
+    self
   }
 
   /// Get a trace by workflow ID
@@ -138,6 +149,7 @@ impl TraceCollector {
     traces: Arc<RwLock<HashMap<String, ExecutionTrace>>>,
     pending_llm: Arc<RwLock<HashMap<(String, String), LLMTrace>>>,
     config: TraceConfig,
+    exporters: Vec<Arc<dyn TraceExporter>>,
     event: WorkflowEvent,
   ) -> Result<(), anyhow::Error> {
     match event {
@@ -321,6 +333,7 @@ impl TraceCollector {
           if let Err(e) = storage.save_trace(&trace).await {
             Self::handle_storage_error(&config, e);
           }
+          Self::export_trace_to_sinks(&config, &exporters, &trace).await;
         }
       }
 
@@ -339,6 +352,7 @@ impl TraceCollector {
           if let Err(e) = storage.save_trace(&trace).await {
             Self::handle_storage_error(&config, e);
           }
+          Self::export_trace_to_sinks(&config, &exporters, &trace).await;
         }
       }
 
@@ -347,6 +361,18 @@ impl TraceCollector {
     }
 
     Ok(())
+  }
+
+  async fn export_trace_to_sinks(
+    config: &TraceConfig,
+    exporters: &[Arc<dyn TraceExporter>],
+    trace: &ExecutionTrace,
+  ) {
+    for exporter in exporters {
+      if let Err(e) = exporter.export_trace(trace).await {
+        Self::handle_storage_error(config, e);
+      }
+    }
   }
 
   /// Handle storage errors according to policy
@@ -397,13 +423,21 @@ impl EventListener for TraceCollector {
     let traces = self.current_traces.clone();
     let pending_llm = self.pending_llm.clone();
     let config = self.config.clone();
+    let exporters = self.exporters.clone();
     let event = event.clone();
 
     // Spawn async task to process event (non-blocking)
     if self.config.async_storage {
       tokio::spawn(async move {
-        if let Err(e) =
-          Self::process_event(storage, traces, pending_llm, config.clone(), event).await
+        if let Err(e) = Self::process_event(
+          storage,
+          traces,
+          pending_llm,
+          config.clone(),
+          exporters,
+          event,
+        )
+        .await
         {
           Self::handle_storage_error(&config, e);
         }
@@ -412,8 +446,15 @@ impl EventListener for TraceCollector {
       // Blocking mode (for testing or special cases)
       let rt = tokio::runtime::Handle::current();
       rt.block_on(async {
-        if let Err(e) =
-          Self::process_event(storage, traces, pending_llm, config.clone(), event).await
+        if let Err(e) = Self::process_event(
+          storage,
+          traces,
+          pending_llm,
+          config.clone(),
+          exporters,
+          event,
+        )
+        .await
         {
           Self::handle_storage_error(&config, e);
         }
@@ -426,8 +467,26 @@ impl EventListener for TraceCollector {
 mod tests {
   use super::*;
   use crate::storage::file::FileTraceStorage;
+  use async_trait::async_trait;
   use std::time::Duration as StdDuration;
   use tempfile::tempdir;
+
+  #[derive(Default)]
+  struct RecordingTraceExporter {
+    workflow_ids: tokio::sync::Mutex<Vec<String>>,
+  }
+
+  #[async_trait]
+  impl TraceExporter for RecordingTraceExporter {
+    async fn export_trace(&self, trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
+      self
+        .workflow_ids
+        .lock()
+        .await
+        .push(trace.workflow_id.clone());
+      Ok(())
+    }
+  }
 
   #[tokio::test]
   async fn test_trace_collector_workflow_lifecycle() {
@@ -504,6 +563,31 @@ mod tests {
     assert_eq!(trace.nodes.len(), 1);
     assert_eq!(trace.nodes[0].node_id, node_id);
     assert_eq!(trace.nodes[0].status, NodeStatus::Completed);
+  }
+
+  #[tokio::test]
+  async fn test_trace_collector_exports_terminal_trace() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let exporter = Arc::new(RecordingTraceExporter::default());
+    let collector =
+      TraceCollector::new(storage, TraceConfig::development()).with_exporter(exporter.clone());
+
+    let workflow_id = "test-wf-export".to_string();
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: workflow_id.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: workflow_id.clone(),
+      duration: StdDuration::from_millis(5),
+      timestamp: std::time::Instant::now(),
+    });
+
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+
+    let exported = exporter.workflow_ids.lock().await;
+    assert_eq!(exported.as_slice(), &[workflow_id]);
   }
 
   #[tokio::test]
