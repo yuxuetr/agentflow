@@ -36,7 +36,7 @@ fn trace_replay_prints_agent_and_mcp_timeline() {
             "tool_calls": [
               {
                 "tool": "mcp_echo",
-                "params": {"message": "hello"},
+                "params": {"message": "hello", "api_key": "should-not-print"},
                 "is_error": false,
                 "duration_ms": 12,
                 "is_mcp": true
@@ -70,5 +70,7 @@ fn trace_replay_prints_agent_and_mcp_timeline() {
     .stdout(predicate::str::contains("Trace Replay: wf-replay"))
     .stdout(predicate::str::contains("Workflow: Replay Test"))
     .stdout(predicate::str::contains("step 1: tool_call mcp_echo"))
-    .stdout(predicate::str::contains("tool: mcp_echo source=mcp"));
+    .stdout(predicate::str::contains("tool: mcp_echo source=mcp"))
+    .stdout(predicate::str::contains("[REDACTED]"))
+    .stdout(predicate::str::contains("should-not-print").not());
 }

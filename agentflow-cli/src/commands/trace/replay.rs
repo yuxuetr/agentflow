@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use agentflow_tracing::{
-  format_trace_replay, storage::file::FileTraceStorage, ReplayOptions, TraceStorage,
+  format_trace_replay, redact_trace, storage::file::FileTraceStorage, RedactionConfig,
+  ReplayOptions, TraceStorage,
 };
 
 pub async fn execute(
@@ -21,11 +22,12 @@ pub async fn execute(
 
   let storage = FileTraceStorage::new(trace_dir.clone())
     .with_context(|| format!("Failed to open trace directory '{}'", trace_dir.display()))?;
-  let trace = storage
+  let mut trace = storage
     .get_trace(&run_id)
     .await
     .with_context(|| format!("Failed to load trace '{}'", run_id))?
     .with_context(|| format!("Trace '{}' not found in '{}'", run_id, trace_dir.display()))?;
+  redact_trace(&mut trace, &RedactionConfig::default());
 
   let replay = format_trace_replay(
     &trace,

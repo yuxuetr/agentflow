@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Observability 和 Replay: 增加 trace redaction，默认隐藏 API key、env secret、tool sensitive params。
+1. Security 和 Tool Governance: 标准化 tool permission model，覆盖 builtin/script/mcp/workflow 四类来源。
 
 ---
 

@@ -1,5 +1,6 @@
 //! Trace collector - implements EventListener to collect workflow traces
 
+use crate::redaction::{redact_trace, redact_value, RedactionConfig};
 use crate::storage::TraceStorage;
 use crate::types::*;
 use crate::TraceExporter;
@@ -25,6 +26,9 @@ pub struct TraceConfig {
 
   /// Behavior when storage fails
   pub on_storage_error: StorageErrorPolicy,
+
+  /// Redaction policy applied before trace persistence and export.
+  pub redaction: RedactionConfig,
 }
 
 impl Default for TraceConfig {
@@ -35,6 +39,7 @@ impl Default for TraceConfig {
       max_io_size_bytes: 1024 * 1024, // 1MB
       async_storage: true,
       on_storage_error: StorageErrorPolicy::LogError,
+      redaction: RedactionConfig::default(),
     }
   }
 }
@@ -48,6 +53,7 @@ impl TraceConfig {
       max_io_size_bytes: 0,
       async_storage: true,
       on_storage_error: StorageErrorPolicy::LogError,
+      redaction: RedactionConfig::default(),
     }
   }
 
@@ -59,6 +65,7 @@ impl TraceConfig {
       max_io_size_bytes: 10 * 1024 * 1024, // 10MB
       async_storage: true,
       on_storage_error: StorageErrorPolicy::Ignore,
+      redaction: RedactionConfig::default().with_max_value_bytes(10 * 1024 * 1024),
     }
   }
 }
@@ -201,7 +208,7 @@ impl TraceCollector {
         timestamp: _,
       } => {
         if config.capture_io {
-          if let Err(e) = Self::sanitize_value(&mut output, config.max_io_size_bytes) {
+          if let Err(e) = Self::limit_value_size(&mut output, config.max_io_size_bytes) {
             Self::handle_storage_error(&config, e);
           }
         }
@@ -267,8 +274,16 @@ impl TraceCollector {
         let llm_trace = LLMTrace {
           model,
           provider,
-          system_prompt,
-          user_prompt,
+          system_prompt: if config.capture_prompts {
+            system_prompt
+          } else {
+            None
+          },
+          user_prompt: if config.capture_prompts {
+            user_prompt
+          } else {
+            "[REDACTED]".to_string()
+          },
           response: String::new(), // Will be filled later
           temperature,
           max_tokens,
@@ -329,6 +344,8 @@ impl TraceCollector {
           trace.completed_at = Some(chrono::Utc::now());
           trace.status = TraceStatus::Completed;
 
+          let trace = Self::prepare_terminal_trace(trace, &config);
+
           // Save to storage
           if let Err(e) = storage.save_trace(&trace).await {
             Self::handle_storage_error(&config, e);
@@ -347,6 +364,8 @@ impl TraceCollector {
         if let Some(mut trace) = traces_guard.remove(&workflow_id) {
           trace.completed_at = Some(chrono::Utc::now());
           trace.status = TraceStatus::Failed { error };
+
+          let trace = Self::prepare_terminal_trace(trace, &config);
 
           // Save to storage
           if let Err(e) = storage.save_trace(&trace).await {
@@ -375,6 +394,11 @@ impl TraceCollector {
     }
   }
 
+  fn prepare_terminal_trace(mut trace: ExecutionTrace, config: &TraceConfig) -> ExecutionTrace {
+    redact_trace(&mut trace, &config.redaction);
+    trace
+  }
+
   /// Handle storage errors according to policy
   fn handle_storage_error(config: &TraceConfig, error: anyhow::Error) {
     match config.on_storage_error {
@@ -390,23 +414,10 @@ impl TraceCollector {
     }
   }
 
-  /// Sanitize value to remove sensitive data and limit size
+  /// Limit captured value size before it is attached to a node.
   #[allow(dead_code)]
-  fn sanitize_value(value: &mut serde_json::Value, max_size: usize) -> Result<(), anyhow::Error> {
-    // Remove sensitive keys
-    if let serde_json::Value::Object(map) = value {
-      let sensitive_keys = ["api_key", "password", "token", "secret", "credential"];
-      for key in sensitive_keys {
-        if map.contains_key(key) {
-          map.insert(
-            key.to_string(),
-            serde_json::Value::String("[REDACTED]".to_string()),
-          );
-        }
-      }
-    }
-
-    // Limit size
+  fn limit_value_size(value: &mut serde_json::Value, max_size: usize) -> Result<(), anyhow::Error> {
+    redact_value(value, &RedactionConfig::default());
     let json_str = serde_json::to_string(value)?;
     if json_str.len() > max_size {
       *value = serde_json::Value::String(format!("[TRUNCATED: {} bytes]", json_str.len()));
@@ -474,6 +485,7 @@ mod tests {
   #[derive(Default)]
   struct RecordingTraceExporter {
     workflow_ids: tokio::sync::Mutex<Vec<String>>,
+    traces: tokio::sync::Mutex<Vec<ExecutionTrace>>,
   }
 
   #[async_trait]
@@ -484,6 +496,7 @@ mod tests {
         .lock()
         .await
         .push(trace.workflow_id.clone());
+      self.traces.lock().await.push(trace.clone());
       Ok(())
     }
   }
@@ -588,6 +601,86 @@ mod tests {
 
     let exported = exporter.workflow_ids.lock().await;
     assert_eq!(exported.as_slice(), &[workflow_id]);
+  }
+
+  #[tokio::test]
+  async fn test_trace_collector_redacts_terminal_trace_before_storage_and_export() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let exporter = Arc::new(RecordingTraceExporter::default());
+    let collector = TraceCollector::new(storage.clone(), TraceConfig::development())
+      .with_exporter(exporter.clone());
+
+    let workflow_id = "test-wf-redact".to_string();
+    let node_id = "agent_node".to_string();
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: workflow_id.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: workflow_id.clone(),
+      node_id: node_id.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::NodeOutputCaptured {
+      workflow_id: workflow_id.clone(),
+      node_id: node_id.clone(),
+      output: serde_json::json!({
+        "agent_result": {
+          "session_id": "session-1",
+          "answer": "done",
+          "stop_reason": {"reason": "final_answer"},
+          "steps": [
+            {
+              "index": 0,
+              "kind": {
+                "type": "tool_call",
+                "tool": "http",
+                "params": {
+                  "url": "https://example.test",
+                  "headers": {"Authorization": "Bearer secret"},
+                  "api_key": "secret"
+                }
+              }
+            }
+          ],
+          "events": []
+        }
+      }),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: workflow_id.clone(),
+      duration: StdDuration::from_millis(5),
+      timestamp: std::time::Instant::now(),
+    });
+
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+
+    let stored = storage
+      .get_trace(&workflow_id)
+      .await
+      .unwrap()
+      .expect("stored trace");
+    let stored_agent = stored.nodes[0].agent_details.as_ref().expect("agent trace");
+    assert_eq!(
+      stored_agent.steps[0]["kind"]["params"]["api_key"],
+      serde_json::json!("[REDACTED]")
+    );
+    assert_eq!(
+      stored_agent.steps[0]["kind"]["params"]["headers"]["Authorization"],
+      serde_json::json!("[REDACTED]")
+    );
+
+    let exported = exporter.traces.lock().await;
+    let exported_agent = exported[0].nodes[0]
+      .agent_details
+      .as_ref()
+      .expect("exported agent trace");
+    assert_eq!(
+      exported_agent.steps[0]["kind"]["params"]["api_key"],
+      serde_json::json!("[REDACTED]")
+    );
   }
 
   #[tokio::test]

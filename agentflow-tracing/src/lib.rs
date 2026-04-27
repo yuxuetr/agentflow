@@ -47,6 +47,7 @@
 pub mod collector;
 pub mod format;
 pub mod otel;
+pub mod redaction;
 pub mod replay;
 pub mod storage;
 pub mod types;
@@ -60,6 +61,7 @@ pub use otel::{
   trace_to_spans, OtelAttribute, OtelExporterConfig, OtelSpan, OtelSpanEvent, OtelSpanKind,
   OtelSpanSink, OtelStatus, OtelStatusCode, OtelTraceExporter, OtelValue, TraceExporter,
 };
+pub use redaction::{redact_trace, redact_value, RedactionConfig, REDACTED_VALUE};
 pub use replay::{format_trace_replay, ReplayOptions};
 pub use storage::schema::{
   schema_for_dialect, TraceSchemaDialect, POSTGRES_TRACE_SCHEMA, SQLITE_TRACE_SCHEMA,
