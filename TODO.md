@@ -74,7 +74,7 @@
 
 ## 建议立即执行顺序
 
-1. Observability 和 Replay: 增加 `agentflow trace replay <run_id>` 或等价 API，用于复盘一次 workflow/agent 混合执行。
+1. Observability 和 Replay: 增加 trace redaction，默认隐藏 API key、env secret、tool sensitive params。
 
 ---
 

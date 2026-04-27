@@ -61,6 +61,7 @@ dependencies = [
  "agentflow-nodes",
  "agentflow-rag",
  "agentflow-skills",
+ "agentflow-tracing",
  "anyhow",
  "assert_cmd",
  "async-trait",

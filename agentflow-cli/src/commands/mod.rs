@@ -5,4 +5,5 @@ pub mod llm;
 pub mod mcp;
 pub mod rag;
 pub mod skill;
+pub mod trace;
 pub mod workflow;

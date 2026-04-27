@@ -6,7 +6,7 @@ mod executor;
 
 #[cfg(feature = "rag")]
 use commands::rag;
-use commands::{audio, config as config_cmd, image, llm, mcp, skill, workflow};
+use commands::{audio, config as config_cmd, image, llm, mcp, skill, trace, workflow};
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -31,6 +31,8 @@ enum Commands {
   Mcp(McpArgs),
   /// Skill management commands
   Skill(SkillArgs),
+  /// Trace inspection and replay commands
+  Trace(TraceArgs),
   #[cfg(feature = "rag")]
   /// RAG (Retrieval-Augmented Generation) commands
   Rag(RagArgs),
@@ -70,6 +72,11 @@ struct McpArgs {
 struct SkillArgs {
   #[command(subcommand)]
   command: SkillCommands,
+}
+#[derive(Args)]
+struct TraceArgs {
+  #[command(subcommand)]
+  command: TraceCommands,
 }
 #[cfg(feature = "rag")]
 #[derive(Args)]
@@ -308,6 +315,24 @@ enum SkillCommands {
   ListTools {
     /// Path to the skill directory
     skill_dir: String,
+  },
+}
+
+#[derive(Subcommand)]
+enum TraceCommands {
+  /// Replay a persisted workflow/agent trace without re-executing tools or LLMs
+  Replay {
+    /// Workflow run ID / trace ID to replay
+    run_id: String,
+    /// Directory containing file-backed traces (default: ~/.agentflow/traces)
+    #[arg(long)]
+    dir: Option<String>,
+    /// Include raw trace JSON after the replay timeline
+    #[arg(long)]
+    json: bool,
+    /// Maximum characters printed for prompt, response, params, and output fields
+    #[arg(long, default_value_t = 160)]
+    max_field_chars: usize,
   },
 }
 
@@ -556,6 +581,14 @@ async fn main() {
       SkillCommands::Chat { skill_dir, session } => skill::chat::execute(skill_dir, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
+    },
+    Commands::Trace(args) => match args.command {
+      TraceCommands::Replay {
+        run_id,
+        dir,
+        json,
+        max_field_chars,
+      } => trace::replay::execute(run_id, dir, json, max_field_chars).await,
     },
     #[cfg(feature = "rag")]
     Commands::Rag(args) => match args.command {

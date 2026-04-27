@@ -28,6 +28,7 @@ agentflow-mcp = { path = "../agentflow-mcp" }
 agentflow-rag    = { path = "../agentflow-rag", optional = true }
 agentflow-skills = { path = "../agentflow-skills" }
 agentflow-agents = { path = "../agentflow-agents" }
+agentflow-tracing = { path = "../agentflow-tracing" }
 
 # CLI framework
 clap = { version = "4.4", features = ["derive", "color", "suggestions"] }
