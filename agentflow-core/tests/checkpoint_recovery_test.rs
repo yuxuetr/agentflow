@@ -3,6 +3,7 @@
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   checkpoint::{CheckpointConfig, CheckpointManager},
+  error::AgentFlowError,
   flow::{Flow, GraphNode, NodeType},
   value::FlowValue,
 };
@@ -33,6 +34,11 @@ struct AgentLikeNode;
 
 #[derive(Clone)]
 struct CountingAgentLikeNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct PartialResumeAgentLikeNode {
   calls: Arc<AtomicUsize>,
 }
 
@@ -86,6 +92,76 @@ impl AsyncNode for CountingAgentLikeNode {
           {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"call_count": call_count}}},
           {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached by checkpoint", "is_error": false}},
           {"index": 3, "kind": {"type": "final_answer", "answer": "done"}}
+        ],
+        "events": []
+      })),
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for PartialResumeAgentLikeNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut outputs = HashMap::new();
+
+    if call_count == 1 {
+      outputs.insert(
+        "response".to_string(),
+        FlowValue::Json(serde_json::json!("")),
+      );
+      outputs.insert(
+        "agent_result".to_string(),
+        FlowValue::Json(serde_json::json!({
+          "session_id": "session-partial",
+          "answer": null,
+          "stop_reason": {"reason": "cancelled", "message": "interrupted"},
+          "steps": [
+            {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+            {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"query": "hello"}}},
+            {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached observation", "is_error": false}}
+          ],
+          "events": []
+        })),
+      );
+      outputs.insert(
+        "agent_resume".to_string(),
+        FlowValue::Json(serde_json::json!({
+          "version": 1,
+          "resume_mode": "partial_run_supported",
+          "partial_run_resume_supported": true
+        })),
+      );
+      return Err(AgentFlowError::NodePartialExecutionFailed {
+        message: "interrupted after durable tool result".to_string(),
+        partial_outputs: outputs,
+      });
+    }
+
+    let prior = inputs
+      .get("agent_result")
+      .expect("checkpointed agent_result should be injected on resume");
+    match prior {
+      FlowValue::Json(value) => assert_eq!(value["session_id"], "session-partial"),
+      other => panic!("expected JSON prior agent_result, got {other:?}"),
+    }
+
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("done after resume")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-partial",
+        "answer": "done after resume",
+        "stop_reason": {"reason": "final_answer"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"query": "hello"}}},
+          {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached observation", "is_error": false}},
+          {"index": 3, "kind": {"type": "final_answer", "answer": "done after resume"}}
         ],
         "events": []
       })),
@@ -316,6 +392,63 @@ async fn test_resume_continues_after_agent_node_without_reexecuting_it() {
   };
   assert_eq!(agent_result["steps"][1]["kind"]["type"], "tool_call");
   assert_eq!(agent_result["steps"][2]["kind"]["type"], "tool_result");
+}
+
+#[tokio::test]
+async fn test_resume_reexecutes_failed_agent_node_with_checkpointed_partial_trace() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+  let agent_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![GraphNode {
+    id: "agent".to_string(),
+    node_type: NodeType::Standard(Arc::new(PartialResumeAgentLikeNode {
+      calls: agent_calls.clone(),
+    })),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["agent"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+  let failed_checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+
+  assert_eq!(failed_checkpoint.last_completed_node, "");
+  assert!(failed_checkpoint.state.contains_key("agent"));
+  assert_eq!(
+    failed_checkpoint.state["agent"]["agent_result"]["steps"][2]["kind"]["type"],
+    "tool_result"
+  );
+  assert_eq!(
+    failed_checkpoint.state["agent"]["agent_resume"]["resume_mode"],
+    "partial_run_supported"
+  );
+
+  let resumed = flow.resume(&workflow_id).await.unwrap();
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 2);
+  assert_eq!(
+    resumed["agent"].as_ref().unwrap()["response"],
+    FlowValue::Json(serde_json::json!("done after resume"))
+  );
 }
 
 #[tokio::test]

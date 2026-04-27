@@ -255,6 +255,7 @@ impl ErrorPattern {
           AgentFlowError::ConfigurationError { .. } => "ConfigurationError",
           AgentFlowError::ValidationError { .. } => "ValidationError",
           AgentFlowError::NodeExecutionFailed { .. } => "NodeExecutionFailed",
+          AgentFlowError::NodePartialExecutionFailed { .. } => "NodePartialExecutionFailed",
           AgentFlowError::NodeInputError { .. } => "NodeInputError",
           AgentFlowError::NodeSkipped => "NodeSkipped",
           AgentFlowError::AsyncExecutionError { .. } => "AsyncExecutionError",

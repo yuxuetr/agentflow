@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
+
+use crate::value::FlowValue;
 
 /// Error category for classification and handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +115,12 @@ pub enum AgentFlowError {
   #[error("Node execution failed: {message}")]
   NodeExecutionFailed { message: String },
 
+  #[error("Node execution failed with partial outputs: {message}")]
+  NodePartialExecutionFailed {
+    message: String,
+    partial_outputs: HashMap<String, FlowValue>,
+  },
+
   #[error("Node input error: {message}")]
   NodeInputError { message: String },
 
@@ -216,6 +225,7 @@ impl AgentFlowError {
   pub fn category(&self) -> ErrorCategory {
     match self {
       Self::NodeExecutionFailed { .. }
+      | Self::NodePartialExecutionFailed { .. }
       | Self::NodeInputError { .. }
       | Self::NodeSkipped
       | Self::DependencyNotMet { .. } => ErrorCategory::Node,

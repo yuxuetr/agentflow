@@ -221,6 +221,10 @@ impl Flow {
       // These provide loop variables and context that should be available to all nodes
       inputs.extend(initial_inputs.clone());
 
+      if let Some(Ok(restored_outputs)) = state_pool.get(node_id) {
+        inputs.extend(restored_outputs.clone());
+      }
+
       println!("▶️  Executing node '{}'", node_id);
       let node_started_at = Instant::now();
       self.emit_event(WorkflowEvent::NodeStarted {
@@ -406,7 +410,7 @@ impl Flow {
     state_pool
       .iter()
       .filter_map(|(node_id, result)| {
-        if let Ok(outputs) = result {
+        if let Some(outputs) = Self::checkpointable_outputs(result) {
           // Convert outputs to JSON value
           let json_outputs: HashMap<String, serde_json::Value> = outputs
             .iter()
@@ -426,6 +430,16 @@ impl Flow {
         }
       })
       .collect()
+  }
+
+  fn checkpointable_outputs(result: &AsyncNodeResult) -> Option<&HashMap<String, FlowValue>> {
+    match result {
+      Ok(outputs) => Some(outputs),
+      Err(AgentFlowError::NodePartialExecutionFailed {
+        partial_outputs, ..
+      }) => Some(partial_outputs),
+      Err(_) => None,
+    }
   }
 
   fn outputs_to_json(outputs: &HashMap<String, FlowValue>) -> serde_json::Value {
