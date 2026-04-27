@@ -3,6 +3,7 @@ use clap::{Args, Parser, Subcommand};
 mod commands;
 mod config;
 mod executor;
+mod redaction;
 
 #[cfg(feature = "rag")]
 use commands::rag;

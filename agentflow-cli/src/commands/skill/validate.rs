@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use crate::redaction::redact_cli_text;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
 pub async fn execute(skill_dir: String) -> Result<()> {
@@ -129,7 +130,13 @@ pub async fn execute(skill_dir: String) -> Result<()> {
   } else {
     println!("🔌 MCP Servers ({}):", manifest.mcp_servers.len());
     for server in &manifest.mcp_servers {
-      println!("   - {}: {} {:?}", server.name, server.command, server.args);
+      let args = server.args.iter().map(redact_cli_text).collect::<Vec<_>>();
+      println!(
+        "   - {}: {} {:?}",
+        server.name,
+        redact_cli_text(&server.command),
+        args
+      );
     }
     let registry = SkillBuilder::build_registry(&manifest, dir)
       .await

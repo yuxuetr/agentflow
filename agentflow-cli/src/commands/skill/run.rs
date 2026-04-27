@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use crate::redaction::{redact_cli_text, to_redacted_json_value};
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
@@ -44,7 +45,7 @@ pub async fn execute(
   }
 
   println!("📝 Session: {}", agent.session_id);
-  println!("💬 User: {}\n", message);
+  println!("💬 User: {}\n", redact_cli_text(&message));
 
   let start = std::time::Instant::now();
   let result = agent
@@ -60,10 +61,13 @@ pub async fn execute(
   }
   let answer = result.answer.clone().unwrap_or_default();
 
-  println!("🤖 Agent: {}", answer);
+  println!("🤖 Agent: {}", redact_cli_text(&answer));
   if trace {
     println!("\n📋 Runtime Trace:");
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    println!(
+      "{}",
+      serde_json::to_string_pretty(&to_redacted_json_value(&result)?)?
+    );
   }
   println!("\n⏱  Completed in {:.2?}", elapsed);
 

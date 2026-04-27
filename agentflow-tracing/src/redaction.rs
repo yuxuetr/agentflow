@@ -84,6 +84,20 @@ pub fn redact_value(value: &mut Value, config: &RedactionConfig) {
   redact_value_at_key(value, None, config);
 }
 
+/// Redact sensitive fragments in plain text intended for CLI/log display.
+///
+/// This covers common inline forms such as `API_KEY=value`,
+/// `Authorization: Bearer value`, and `--token=value`. Structured trace data
+/// should still use [`redact_value`] or [`redact_trace`] first.
+pub fn redact_text(value: &str, config: &RedactionConfig) -> String {
+  if !config.enabled {
+    return value.to_string();
+  }
+
+  let redacted = redact_bearer_tokens(value, config);
+  redact_assignment_like_tokens(&redacted, config)
+}
+
 fn redact_option_value(value: &mut Option<Value>, config: &RedactionConfig) {
   if let Some(value) = value {
     redact_value(value, config);
@@ -121,11 +135,89 @@ fn redact_string(value: &mut Option<String>, config: &RedactionConfig) {
 }
 
 fn redact_plain_string(value: &mut String, config: &RedactionConfig) {
+  *value = redact_text(value, config);
   if let Some(max_value_bytes) = config.max_value_bytes {
     if value.len() > max_value_bytes {
       *value = format!("[TRUNCATED: {} bytes]", value.len());
     }
   }
+}
+
+fn redact_bearer_tokens(value: &str, config: &RedactionConfig) -> String {
+  let mut output = String::with_capacity(value.len());
+  let mut redact_next = false;
+  map_whitespace_tokens(
+    value,
+    |token| {
+      if redact_next {
+        redact_next = false;
+        config.replacement.clone()
+      } else {
+        if token.eq_ignore_ascii_case("bearer") {
+          redact_next = true;
+        }
+        token.to_string()
+      }
+    },
+    &mut output,
+  );
+  output
+}
+
+fn redact_assignment_like_tokens(value: &str, config: &RedactionConfig) -> String {
+  let mut output = String::with_capacity(value.len());
+  map_whitespace_tokens(
+    value,
+    |token| redact_assignment_token(token, config),
+    &mut output,
+  );
+  output
+}
+
+fn map_whitespace_tokens<F>(value: &str, mut map_token: F, output: &mut String)
+where
+  F: FnMut(&str) -> String,
+{
+  let mut token_start: Option<usize> = None;
+  for (index, ch) in value.char_indices() {
+    if ch.is_whitespace() {
+      if let Some(start) = token_start.take() {
+        output.push_str(&map_token(&value[start..index]));
+      }
+      output.push(ch);
+    } else if token_start.is_none() {
+      token_start = Some(index);
+    }
+  }
+
+  if let Some(start) = token_start {
+    output.push_str(&map_token(&value[start..]));
+  }
+}
+
+fn redact_assignment_token(token: &str, config: &RedactionConfig) -> String {
+  for delimiter in ['=', ':'] {
+    if let Some(index) = token.find(delimiter) {
+      let (key, value_with_delimiter) = token.split_at(index);
+      let key = key
+        .trim_start_matches('-')
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '{' | '['));
+      if is_sensitive_key(key, config) {
+        let value = &value_with_delimiter[delimiter.len_utf8()..];
+        let suffix = value
+          .chars()
+          .rev()
+          .take_while(|ch| matches!(ch, ',' | ';' | ')' | ']' | '}'))
+          .collect::<String>()
+          .chars()
+          .rev()
+          .collect::<String>();
+        return format!("{key}{delimiter}{}{}", config.replacement, suffix);
+      }
+    }
+  }
+
+  token.to_string()
 }
 
 fn is_sensitive_key(key: &str, config: &RedactionConfig) -> bool {
@@ -241,5 +333,21 @@ mod tests {
       agent.tool_calls[0].params.as_ref().unwrap()["headers"]["Authorization"],
       serde_json::json!(REDACTED_VALUE)
     );
+  }
+
+  #[test]
+  fn redacts_sensitive_plain_text_fragments() {
+    let redacted = redact_text(
+      "call --api-key=abc Authorization: Bearer secret TOKEN:xyz safe=value",
+      &RedactionConfig::default(),
+    );
+
+    assert!(redacted.contains("api-key=[REDACTED]"));
+    assert!(redacted.contains("Bearer [REDACTED]"));
+    assert!(redacted.contains("TOKEN:[REDACTED]"));
+    assert!(redacted.contains("safe=value"));
+    assert!(!redacted.contains("abc"));
+    assert!(!redacted.contains("secret"));
+    assert!(!redacted.contains("xyz"));
   }
 }

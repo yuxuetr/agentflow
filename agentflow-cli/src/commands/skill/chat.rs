@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use crate::redaction::redact_cli_text;
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
@@ -102,12 +103,12 @@ pub async fn execute(skill_dir: String, session_id: Option<String>) -> Result<()
         let elapsed = start.elapsed();
         // Clear the "Thinking..." line
         print!("\r                    \r");
-        println!("🤖  {}", answer);
+        println!("🤖  {}", redact_cli_text(&answer));
         println!("    ⏱  {:.2?}\n", elapsed);
       }
       Err(e) => {
         print!("\r                    \r");
-        eprintln!("❌  Agent error: {}", e);
+        eprintln!("❌  Agent error: {}", redact_cli_text(e.to_string()));
         eprintln!("    Use /reset to start a fresh session or /exit to quit.\n");
       }
     }

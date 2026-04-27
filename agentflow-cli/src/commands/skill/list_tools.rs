@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use crate::redaction::redact_cli_text;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
 pub async fn execute(skill_dir: String) -> Result<()> {
@@ -54,7 +55,7 @@ pub async fn execute(skill_dir: String) -> Result<()> {
       println!("     mcp_tool: {}", tool);
     }
     if !definition.description.trim().is_empty() {
-      println!("     {}", definition.description);
+      println!("     {}", redact_cli_text(&definition.description));
     }
     print_schema_summary(&definition.parameters);
   }
@@ -84,7 +85,12 @@ fn print_schema_summary(schema: &Value) {
     if description.is_empty() {
       println!("       - {} ({})", name, ty);
     } else {
-      println!("       - {} ({}): {}", name, ty, description);
+      println!(
+        "       - {} ({}): {}",
+        name,
+        ty,
+        redact_cli_text(description)
+      );
     }
   }
 }

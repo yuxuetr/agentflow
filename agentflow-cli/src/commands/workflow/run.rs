@@ -1,5 +1,6 @@
 use crate::config::v2::FlowDefinitionV2;
 use crate::executor::factory;
+use crate::redaction::redact_cli_value;
 use agentflow_core::flow::Flow;
 use anyhow::{Context, Result};
 use std::fs;
@@ -50,10 +51,16 @@ pub async fn execute(
   println!("\n✅ Workflow completed in {:.2?}.", duration);
 
   // 4. Print the results
-  println!("DEBUG: Final state before returning: {:?}", final_state);
+  let mut redacted_final_state =
+    serde_json::to_value(&final_state).context("Failed to serialize final state for redaction.")?;
+  redact_cli_value(&mut redacted_final_state);
+  println!(
+    "DEBUG: Final state before returning: {:?}",
+    redacted_final_state
+  );
   println!("\n📊 Final State Pool:");
-  let final_state_json = serde_json::to_string_pretty(&final_state)
-    .context("Failed to serialize final state to JSON.")?;
+  let final_state_json = serde_json::to_string_pretty(&redacted_final_state)
+    .context("Failed to serialize redacted final state to JSON.")?;
   println!("{}", final_state_json);
 
   Ok(())

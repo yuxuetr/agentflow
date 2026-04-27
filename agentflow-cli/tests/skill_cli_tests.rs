@@ -86,8 +86,8 @@ command = "agentflow-no-such-mcp-server-command"
 
 fn mock_react_responses() -> String {
   serde_json::to_string(&vec![
-    r#"{"thought":"call echo","action":{"tool":"mcp_local_demo_echo","params":{"text":"from run"}}}"#,
-    r#"{"thought":"observed echo","answer":"MCP said: mcp-basic: from run"}"#,
+    r#"{"thought":"call echo","action":{"tool":"mcp_local_demo_echo","params":{"text":"from run","api_key":"should-not-print"}}}"#,
+    r#"{"thought":"observed echo","answer":"MCP said: mcp-basic: from run token=answer-secret"}"#,
   ])
   .unwrap()
 }
@@ -171,13 +171,16 @@ fn skill_run_can_call_mcp_tool_with_mock_llm() {
     .assert()
     .success()
     .stdout(predicate::str::contains(
-      "Agent: MCP said: mcp-basic: from run",
+      "Agent: MCP said: mcp-basic: from run token=[REDACTED]",
     ))
     .stdout(predicate::str::contains("Runtime Trace"))
     .stdout(predicate::str::contains("\"type\": \"tool_call\""))
     .stdout(predicate::str::contains(
       "\"tool\": \"mcp_local_demo_echo\"",
-    ));
+    ))
+    .stdout(predicate::str::contains("[REDACTED]"))
+    .stdout(predicate::str::contains("should-not-print").not())
+    .stdout(predicate::str::contains("answer-secret").not());
 }
 
 #[test]
@@ -195,5 +198,8 @@ fn skill_chat_can_call_mcp_tool_with_mock_llm() {
     .write_stdin("echo through MCP\n/exit\n")
     .assert()
     .success()
-    .stdout(predicate::str::contains("MCP said: mcp-basic: from run"));
+    .stdout(predicate::str::contains(
+      "MCP said: mcp-basic: from run token=[REDACTED]",
+    ))
+    .stdout(predicate::str::contains("answer-secret").not());
 }

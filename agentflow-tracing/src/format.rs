@@ -1,9 +1,11 @@
 //! Formatting utilities for execution traces
 
-use crate::types::*;
+use crate::{redact_trace, types::*, RedactionConfig};
 
 /// Format a trace as human-readable text
 pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
+  let mut trace = trace.clone();
+  redact_trace(&mut trace, &RedactionConfig::default());
   let mut output = String::new();
 
   // Header
@@ -148,12 +150,16 @@ pub fn format_trace_summary(trace: &ExecutionTrace) -> String {
 
 /// Export trace as JSON
 pub fn export_trace_json(trace: &ExecutionTrace) -> Result<String, anyhow::Error> {
-  Ok(serde_json::to_string_pretty(trace)?)
+  let mut trace = trace.clone();
+  redact_trace(&mut trace, &RedactionConfig::default());
+  Ok(serde_json::to_string_pretty(&trace)?)
 }
 
 /// Export trace as compact JSON (no pretty printing)
 pub fn export_trace_json_compact(trace: &ExecutionTrace) -> Result<String, anyhow::Error> {
-  Ok(serde_json::to_string(trace)?)
+  let mut trace = trace.clone();
+  redact_trace(&mut trace, &RedactionConfig::default());
+  Ok(serde_json::to_string(&trace)?)
 }
 
 /// Truncate string with ellipsis
@@ -203,9 +209,15 @@ mod tests {
 
   #[test]
   fn test_export_json() {
-    let trace = ExecutionTrace::new("wf-json".to_string());
+    let mut trace = ExecutionTrace::new("wf-json".to_string());
+    let mut node = NodeTrace::new("node".to_string(), "tool".to_string());
+    node.input = Some(serde_json::json!({"api_key": "secret"}));
+    trace.nodes.push(node);
+
     let json = export_trace_json(&trace).unwrap();
     assert!(json.contains("wf-json"));
+    assert!(json.contains("[REDACTED]"));
+    assert!(!json.contains("secret"));
 
     // Should be able to deserialize
     let _: ExecutionTrace = serde_json::from_str(&json).unwrap();

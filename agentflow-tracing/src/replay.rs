@@ -4,8 +4,12 @@
 //! persisted [`ExecutionTrace`](crate::ExecutionTrace) without calling tools,
 //! MCP servers, workflows, or LLM providers again.
 
-use crate::types::{
-  AgentTrace, ExecutionTrace, LLMTrace, NodeStatus, NodeTrace, ToolCallTrace, TraceStatus,
+use crate::{
+  redact_trace,
+  types::{
+    AgentTrace, ExecutionTrace, LLMTrace, NodeStatus, NodeTrace, ToolCallTrace, TraceStatus,
+  },
+  RedactionConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +28,8 @@ impl Default for ReplayOptions {
 }
 
 pub fn format_trace_replay(trace: &ExecutionTrace, options: ReplayOptions) -> String {
+  let mut trace = trace.clone();
+  redact_trace(&mut trace, &RedactionConfig::default());
   let mut out = String::new();
   out.push_str(&format!("Trace Replay: {}\n", trace.workflow_id));
   if let Some(name) = &trace.workflow_name {
@@ -46,7 +52,7 @@ pub fn format_trace_replay(trace: &ExecutionTrace, options: ReplayOptions) -> St
 
   if options.include_json {
     out.push_str("\nRaw Trace JSON:\n");
-    match serde_json::to_string_pretty(trace) {
+    match serde_json::to_string_pretty(&trace) {
       Ok(json) => out.push_str(&json),
       Err(err) => out.push_str(&format!("failed to serialize trace: {err}")),
     }
@@ -293,7 +299,11 @@ mod tests {
 
   #[test]
   fn replay_can_include_raw_json() {
-    let trace = ExecutionTrace::new("wf-json".to_string());
+    let mut trace = ExecutionTrace::new("wf-json".to_string());
+    let mut node = NodeTrace::new("node".to_string(), "tool".to_string());
+    node.input = Some(serde_json::json!({"api_key": "secret"}));
+    trace.nodes.push(node);
+
     let replay = format_trace_replay(
       &trace,
       ReplayOptions {
@@ -304,5 +314,7 @@ mod tests {
 
     assert!(replay.contains("Raw Trace JSON:"));
     assert!(replay.contains("\"workflow_id\": \"wf-json\""));
+    assert!(replay.contains("[REDACTED]"));
+    assert!(!replay.contains("secret"));
   }
 }
