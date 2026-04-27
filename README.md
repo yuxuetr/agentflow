@@ -305,8 +305,11 @@ All features meet strict performance targets:
 - **[RoadMap](RoadMap.md)**: Current direction for evolving AgentFlow into a DAG + agent framework.
 - **[Agent Runtime](docs/AGENT_RUNTIME.md)**: Runtime boundary, core types, ReAct trace contract, and DAG interop.
 - **[V2 Architecture](docs/ARCHITECTURE.md)**: Technical design for the DAG workflow architecture.
+- **[Skills](docs/SKILLS.md)**: User-facing guide for packaging agent instructions, tools, MCP servers, knowledge, and memory.
 - **[Skill Format](docs/SKILL_FORMAT.md)**: `SKILL.md` and `skill.toml` behavior for reusable capabilities.
+- **[MCP Skills](docs/MCP_SKILLS.md)**: Operational guide for exposing MCP server tools through Skills.
 - **[MCP Skills Integration](docs/MCP_SKILLS_INTEGRATION.md)**: Skills, MCP server configuration, and tool discovery.
+- **[Hybrid Workflow](docs/HYBRID_WORKFLOW.md)**: Guide for embedding agents in DAGs and exposing workflows as tools.
 - **[Release Checklist](docs/RELEASE_CHECKLIST.md)**: Manual quality gate before tagging or publishing.
 
 ### v0.2.0 Feature Guides
@@ -321,9 +324,12 @@ All features meet strict performance targets:
 
 ### Examples
 - `agentflow-core/examples/retry_example.rs`: Retry mechanism demonstrations
+- `agentflow-core/examples/fixed_dag_workflow.rs`: Deterministic fixed DAG workflow example
 - `agentflow-core/examples/resource_management_example.rs`: Resource monitoring examples
+- `agentflow-agents/examples/agent_native_react.rs`: Self-contained ReAct agent-native runtime example
 - `agentflow-agents/examples/react_agent.rs`: ReAct agent runtime example
 - `agentflow-agents/examples/hybrid_workflow_agent.rs`: DAG + Agent hybrid example
+- `agentflow-skills/examples/skill_calls_mcp_tool.rs`: Skill-to-MCP tool call example
 - `examples/skills/mcp-basic`: Minimal Skill with MCP server configuration
 - `agentflow-cli/examples/workflows/`: Complete workflow examples including AI research assistant
 

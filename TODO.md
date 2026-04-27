@@ -1,6 +1,6 @@
 # AgentFlow 智能体框架近期执行计划
 
-最后更新: 2026-04-26
+最后更新: 2026-04-27
 
 说明:
 
@@ -13,6 +13,8 @@
 - [x] 增加 Skills + MCP mock server 端到端集成测试。
 - [x] 测试 `SKILL.md/skill.toml -> mcp_servers -> ToolRegistry -> call_tool` 全链路。
 - [x] 将 MCP tool `description` 和 `inputSchema` 暴露到 Tool metadata。
+- [x] 保留 MCP tool 原始 server/tool name。
+- [x] 增加工具来源字段: builtin/script/mcp/workflow。
 - [x] 完善 MCP tool adapter 的调用超时。
 - [x] 完善 MCP tool adapter 的 typed content 类型转换。
 - [x] 增加 MCP server/tool 调用 tracing 事件。
@@ -33,8 +35,16 @@
 - [x] 增加 step limit、tool call limit、timeout、stop condition。
 - [x] 实现 `ReflectionStrategy` trait 和 no-op/failure/final reflection。
 - [x] 将 reflection 事件写入 AgentRuntime trace。
+- [x] 增加 reflection 可关闭开关。
+- [x] 接入 semantic memory 查询接口。
+- [x] 为 agent loop 增加 memory read/write hook。
+- [x] 增加 memory budget 和摘要策略。
+- [x] 测试 memory 在多步 agent 中可用。
 - [x] 使用 mock LLM 增加 agent runtime 单元测试。
 - [x] 增加 agent runtime golden tests。
+- [x] 增加 Plan-and-Execute runtime 原型。
+- [x] 为 AgentNode 增加更细粒度的 resume contract。
+- [x] 增加 AgentNode partial resume 执行能力。
 
 ## P2: DAG + Agent 混合执行
 
@@ -51,10 +61,20 @@
 - [x] 增加 agent runtime golden tests。
 - [x] 建立 release 前检查清单。
 - [x] 更新 `README.md` 的智能体框架定位。
+- [x] 增加 `docs/SKILLS.md`。
+- [x] 增加 `docs/MCP_SKILLS.md`。
+- [x] 增加 `docs/AGENT_RUNTIME.md`。
+- [x] 增加 `docs/HYBRID_WORKFLOW.md`。
+- [x] 示例: DAG 固定工作流。
+- [x] 示例: ReAct agent-native。
+- [x] 示例: Skill 调 MCP 工具。
+- [x] CI 增加 `cargo fmt --check`。
+- [x] CI 增加 `cargo clippy --workspace --all-targets`。
+- [x] CI 增加核心 crates test matrix。
 
 ## 建议立即执行顺序
 
-1. 增加 `docs/SKILLS.md`。
+1. Runtime 生产化: 增强 partial resume 与 workflow checkpoint manager 的自动衔接。
 
 ---
 

@@ -13,6 +13,9 @@ The Checkpoint Recovery System provides persistent workflow state management, en
 - **Incremental Checkpointing**: Automatic checkpoints after each node execution
 - **Atomic Operations**: Write-then-rename for crash-safe checkpointing
 - **Workflow Recovery**: Resume from last successful checkpoint
+- **AgentNode Resume Contract**: Agent nodes persist `agent_result` and
+  `agent_resume`, so checkpointed workflows can inspect whether an agent run is
+  reusable, partial, or restart-only.
 - **TTL-based Cleanup**: Automatic cleanup of old checkpoints
 - **Configurable Retention**: Different retention for successful vs failed workflows
 - **Concurrent-Safe**: File locking for multi-process safety
@@ -264,6 +267,35 @@ pub struct Checkpoint {
     pub metadata: HashMap<String, String>,
 }
 ```
+
+### AgentNode State
+
+When a workflow node is an `AgentNode`, its checkpointed output includes:
+
+- `response`: final agent answer.
+- `session_id`: memory/session identifier.
+- `stop_reason`: structured terminal reason.
+- `agent_result`: serialized `AgentRunResult` with steps and events.
+- `agent_resume`: serialized `AgentNodeResumeContract`.
+
+`agent_resume.resume_mode` defines the recovery boundary:
+
+- `completed_run`: safe to reuse checkpointed outputs without re-running tools.
+- `partial_run_supported`: durable tool observations are present, and the agent
+  can continue from recovered memory without replaying completed tool calls.
+- `partial_run_unsupported`: durable steps exist, but the current runtime cannot
+  continue from the middle of the agent loop.
+- `restart_required`: no reusable partial state is available.
+
+For tool calls, `agent_resume.tool_calls[].replay_policy` is either
+`reuse_recorded_result` when a tool result step exists, or
+`requires_idempotent_retry` when a restart would call the tool again. This makes
+idempotency requirements explicit before enabling finer-grained agent resume.
+
+`AgentNode` can consume a previous `agent_result` as input. If the trace has no
+unresolved tool calls, it restores the prior observations into memory and asks
+the runtime to continue. If a tool call has no recorded result, resume is
+rejected so the caller can choose an explicit idempotent restart policy.
 
 ### WorkflowStatus
 
