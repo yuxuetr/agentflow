@@ -278,6 +278,14 @@ impl ReActAgent {
     self
   }
 
+  /// Build the LLM message list without calling a model.
+  ///
+  /// This is useful for prompt debugging and prompt assembly benchmarks.
+  pub async fn preview_llm_messages(&self) -> Result<Vec<MultimodalMessage>, ReActError> {
+    let system_prompt = self.build_system_prompt();
+    self.build_llm_messages(&system_prompt).await
+  }
+
   /// Run the agent on a new user message and return the final answer.
   pub async fn run(&mut self, user_input: &str) -> Result<String, ReActError> {
     let result = self
