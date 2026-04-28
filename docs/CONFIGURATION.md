@@ -8,6 +8,8 @@
 
 This document provides a comprehensive reference for AgentFlow's enhanced YAML configuration format. The configuration-first approach allows users to build sophisticated AI workflows without writing code.
 
+For API key and secret handling rules, see [Secret Management](./SECRET_MANAGEMENT.md).
+
 ## Configuration File Structure
 
 ### Complete Configuration Template

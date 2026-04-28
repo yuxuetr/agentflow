@@ -222,6 +222,9 @@ fn redact_assignment_token(token: &str, config: &RedactionConfig) -> String {
 
 fn is_sensitive_key(key: &str, config: &RedactionConfig) -> bool {
   let normalized = normalize_key(key);
+  if is_environment_variable_name_key(&normalized) {
+    return false;
+  }
   config
     .sensitive_key_patterns
     .iter()
@@ -235,6 +238,13 @@ fn normalize_key(key: &str) -> String {
     .filter(|ch| ch.is_ascii_alphanumeric())
     .flat_map(|ch| ch.to_lowercase())
     .collect()
+}
+
+fn is_environment_variable_name_key(normalized_key: &str) -> bool {
+  matches!(
+    normalized_key,
+    "apikeyenv" | "tokenenv" | "secretenv" | "passwordenv" | "credentialenv"
+  )
 }
 
 fn default_sensitive_key_patterns() -> Vec<String> {
@@ -284,6 +294,19 @@ mod tests {
     assert_eq!(value["headers"]["x-api-key"], REDACTED_VALUE);
     assert_eq!(value["nested"]["credentials"], REDACTED_VALUE);
     assert_eq!(value["safe"], "visible");
+  }
+
+  #[test]
+  fn keeps_environment_variable_names_visible() {
+    let mut value = serde_json::json!({
+      "api_key_env": "OPENAI_API_KEY",
+      "api_key": "secret-key"
+    });
+
+    redact_value(&mut value, &RedactionConfig::default());
+
+    assert_eq!(value["api_key_env"], "OPENAI_API_KEY");
+    assert_eq!(value["api_key"], REDACTED_VALUE);
   }
 
   #[test]
