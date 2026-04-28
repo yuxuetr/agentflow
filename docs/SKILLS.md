@@ -224,7 +224,7 @@ cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.
 cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
 ```
 
-`skills.index.toml` is a local, organization-owned catalog. Each entry pins a skill `version` and can optionally lock the manifest with `manifest_sha256`. Relative `path` values are resolved from the index file directory, so a repository can keep shared skills and the index side by side. The checked-in example resolves `mcp-demo` to `agentflow-skills/examples/skills/mcp-basic`.
+`skills.index.toml` is a local, organization-owned catalog. Each entry pins a skill `version` and can optionally lock the manifest with `manifest_sha256`. Relative `path` values are resolved from the index file directory, so a repository can keep shared skills and the index side by side. The checked-in example resolves `mcp-demo` to `agentflow-skills/examples/skills/mcp-basic`. See [SKILL_REGISTRY.md](SKILL_REGISTRY.md) for the schema, compatibility policy, locking model, install flow, and future remote registry boundaries.
 
 Install a skill from a local registry index:
 
