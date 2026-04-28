@@ -1,10 +1,20 @@
 use crate::config::v2::NodeDefinitionV2;
-use agentflow_core::flow::{GraphNode, NodeType};
+use agentflow_agents::{AgentNodeResumeContract, AgentRunResult};
+use agentflow_core::{
+  async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+  error::AgentFlowError,
+  flow::{GraphNode, NodeType},
+  value::FlowValue,
+};
+use agentflow_llm::AgentFlow;
 use agentflow_nodes::nodes::{
   arxiv::ArxivNode, asr::ASRNode, file::FileNode, http::HttpNode, image_edit::ImageEditNode,
   image_to_image::ImageToImageNode, image_understand::ImageUnderstandNode, llm::LlmNode,
   markmap::MarkMapNode, template::TemplateNode, text_to_image::TextToImageNode, tts::TTSNode,
 };
+use agentflow_skills::{SkillBuilder, SkillLoader};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 #[cfg(feature = "mcp")]
 use agentflow_nodes::nodes::mcp::MCPNode;
@@ -28,6 +38,10 @@ fn get_string_param_optional(params: &HashMap<String, serde_yaml::Value>, key: &
 pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
   let node_type = match node_def.node_type.as_str() {
     "llm" => Ok(NodeType::Standard(Arc::new(LlmNode))),
+    "skill_agent" | "agent" => {
+      let node = SkillAgentWorkflowNode::new(&node_def.id);
+      Ok(NodeType::Standard(Arc::new(node)))
+    }
     "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
     "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
     "template" => {
@@ -273,4 +287,147 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     run_if: node_def.run_if.clone(),
     initial_inputs,
   })
+}
+
+#[derive(Debug, Clone)]
+struct SkillAgentWorkflowNode {
+  name: String,
+}
+
+impl SkillAgentWorkflowNode {
+  fn new(name: &str) -> Self {
+    Self {
+      name: name.to_string(),
+    }
+  }
+}
+
+#[async_trait]
+impl AsyncNode for SkillAgentWorkflowNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let skill_dir =
+      get_required_string(inputs, "skill").map_err(|message| AgentFlowError::NodeInputError {
+        message: format!("skill_agent '{}': {}", self.name, message),
+      })?;
+    let message =
+      get_required_string(inputs, "message").map_err(|message| AgentFlowError::NodeInputError {
+        message: format!("skill_agent '{}': {}", self.name, message),
+      })?;
+    let model_override =
+      get_optional_string(inputs, "model").map_err(|message| AgentFlowError::NodeInputError {
+        message: format!("skill_agent '{}': {}", self.name, message),
+      })?;
+
+    let dir = std::path::Path::new(skill_dir);
+    let mut manifest = SkillLoader::load(dir).map_err(|err| AgentFlowError::NodeInputError {
+      message: format!(
+        "skill_agent '{}': failed to load skill '{}': {}",
+        self.name, skill_dir, err
+      ),
+    })?;
+    if let Some(model) = model_override {
+      manifest.model.name = Some(model.to_string());
+    }
+    SkillLoader::validate(&manifest, dir).map_err(|err| AgentFlowError::NodeInputError {
+      message: format!(
+        "skill_agent '{}': skill validation failed for '{}': {}",
+        self.name, skill_dir, err
+      ),
+    })?;
+
+    AgentFlow::init()
+      .await
+      .map_err(|err| AgentFlowError::ConfigurationError {
+        message: format!(
+          "skill_agent '{}': failed to initialize LLM: {}",
+          self.name, err
+        ),
+      })?;
+
+    let mut agent = SkillBuilder::build(&manifest, dir).await.map_err(|err| {
+      AgentFlowError::NodeExecutionFailed {
+        message: format!(
+          "skill_agent '{}': failed to build agent from skill '{}': {}",
+          self.name, skill_dir, err
+        ),
+      }
+    })?;
+
+    let result =
+      agent
+        .run_with_trace(message)
+        .await
+        .map_err(|err| AgentFlowError::NodeExecutionFailed {
+          message: format!("skill_agent '{}': agent run failed: {}", self.name, err),
+        })?;
+
+    if !result.stop_reason.is_success() {
+      let partial_outputs = build_skill_agent_outputs(&self.name, &result)?;
+      return Err(AgentFlowError::NodePartialExecutionFailed {
+        message: format!(
+          "skill_agent '{}': agent stopped before final answer: {:?}",
+          self.name, result.stop_reason
+        ),
+        partial_outputs,
+      });
+    }
+
+    build_skill_agent_outputs(&self.name, &result)
+  }
+}
+
+fn get_required_string<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, String> {
+  get_optional_string(inputs, key)?.ok_or_else(|| format!("required input '{}' is missing", key))
+}
+
+fn get_optional_string<'a>(
+  inputs: &'a AsyncNodeInputs,
+  key: &str,
+) -> Result<Option<&'a str>, String> {
+  match inputs.get(key) {
+    None => Ok(None),
+    Some(FlowValue::Json(Value::String(value))) => Ok(Some(value.as_str())),
+    Some(_) => Err(format!("input '{}' must be a string", key)),
+  }
+}
+
+fn build_skill_agent_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
+  let response = result.answer.clone().unwrap_or_default();
+  let stop_reason = serde_json::to_value(&result.stop_reason).map_err(|err| {
+    AgentFlowError::NodeExecutionFailed {
+      message: format!(
+        "skill_agent '{}': failed to serialize stop reason: {}",
+        node_name, err
+      ),
+    }
+  })?;
+  let agent_result =
+    serde_json::to_value(result).map_err(|err| AgentFlowError::NodeExecutionFailed {
+      message: format!(
+        "skill_agent '{}': failed to serialize runtime result: {}",
+        node_name, err
+      ),
+    })?;
+  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result(
+    node_name,
+    "skill_agent",
+    result,
+  ))
+  .map_err(|err| AgentFlowError::NodeExecutionFailed {
+    message: format!(
+      "skill_agent '{}': failed to serialize resume contract: {}",
+      node_name, err
+    ),
+  })?;
+
+  let mut outputs = std::collections::HashMap::new();
+  outputs.insert("response".to_string(), FlowValue::Json(json!(response)));
+  outputs.insert(
+    "session_id".to_string(),
+    FlowValue::Json(json!(result.session_id)),
+  );
+  outputs.insert("stop_reason".to_string(), FlowValue::Json(stop_reason));
+  outputs.insert("agent_result".to_string(), FlowValue::Json(agent_result));
+  outputs.insert("agent_resume".to_string(), FlowValue::Json(agent_resume));
+  Ok(outputs)
 }

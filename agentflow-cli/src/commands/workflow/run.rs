@@ -119,7 +119,7 @@ fn apply_model_override(
   let Some(model) = model_override else {
     return;
   };
-  if node_def.node_type == "llm" {
+  if matches!(node_def.node_type.as_str(), "llm" | "skill_agent" | "agent") {
     graph_node.initial_inputs.insert(
       "model".to_string(),
       FlowValue::Json(Value::String(model.to_string())),

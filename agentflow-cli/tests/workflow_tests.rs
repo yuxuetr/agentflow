@@ -76,6 +76,52 @@ nodes:
   workflow
 }
 
+fn write_basic_skill(dir: &TempDir) -> std::path::PathBuf {
+  let skill_dir = dir.path().join("review-skill");
+  fs::create_dir_all(&skill_dir).unwrap();
+  fs::write(
+    skill_dir.join("skill.toml"),
+    r#"
+[skill]
+name = "review-skill"
+version = "0.1.0"
+description = "Review skill for workflow tests"
+
+[persona]
+role = "Return a concise review."
+"#,
+  )
+  .unwrap();
+  skill_dir
+}
+
+fn write_skill_agent_workflow(dir: &TempDir, skill_dir: &std::path::Path) -> std::path::PathBuf {
+  let workflow = dir.path().join("skill_agent_workflow.yml");
+  fs::write(
+    &workflow,
+    format!(
+      r#"
+name: CLI Skill Agent Workflow
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Review AgentFlow"
+  - id: review
+    type: skill_agent
+    dependencies: ["prepare"]
+    input_mapping:
+      message: "{{{{ nodes.prepare.outputs.output }}}}"
+    parameters:
+      skill: {:?}
+"#,
+      skill_dir.display().to_string()
+    ),
+  )
+  .unwrap();
+  workflow
+}
+
 #[test]
 fn cli_workflow_run_dry_run_shows_execution_order_without_running_nodes() {
   let home = TempDir::new().unwrap();
@@ -163,6 +209,40 @@ fn cli_workflow_run_model_override_applies_to_llm_nodes() {
 
   let saved = fs::read_to_string(output).unwrap();
   assert!(saved.contains("mocked workflow answer"));
+}
+
+#[test]
+fn cli_workflow_run_supports_skill_agent_node() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(&home);
+  let work = TempDir::new().unwrap();
+  let skill_dir = write_basic_skill(&work);
+  let workflow = write_skill_agent_workflow(&work, &skill_dir);
+  let output = work.path().join("skill-agent-result.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--model",
+      "mock-model",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .env(
+      "AGENTFLOW_MOCK_RESPONSE",
+      r#"{"thought":"done","answer":"skill agent reviewed"}"#,
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Model override: mock-model"));
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(saved.contains("skill agent reviewed"));
+  assert!(saved.contains("agent_resume"));
 }
 
 #[tokio::test]
