@@ -5,9 +5,13 @@ use agentflow_core::{
 };
 use agentflow_nodes::nodes::llm::LlmNode;
 use agentflow_nodes::nodes::template::TemplateNode;
+use assert_cmd::Command;
+use predicates::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 // Helper function to check for API key and skip test if not present
 fn check_api_key() -> bool {
@@ -17,6 +21,83 @@ fn check_api_key() -> bool {
   } else {
     false
   }
+}
+
+fn write_template_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("template_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: CLI Template Workflow
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello {{ topic }}"
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_run_dry_run_shows_execution_order_without_running_nodes() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--dry-run"])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Dry run complete"))
+    .stdout(predicate::str::contains("1. render"))
+    .stdout(predicate::str::contains("Final State Pool").not());
+}
+
+#[test]
+fn cli_workflow_run_accepts_inputs_and_writes_output_file() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+  let output = work.path().join("result.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--input",
+      "topic",
+      "AgentFlow",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Final state written"));
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(saved.contains("Hello AgentFlow"));
+}
+
+#[test]
+fn cli_workflow_run_rejects_unimplemented_watch_flag() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--watch"])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("--watch is not implemented yet"));
 }
 
 #[tokio::test]

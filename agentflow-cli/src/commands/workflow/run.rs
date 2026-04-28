@@ -1,19 +1,25 @@
 use crate::config::v2::FlowDefinitionV2;
 use crate::executor::factory;
 use crate::redaction::redact_cli_value;
-use agentflow_core::flow::Flow;
-use anyhow::{Context, Result};
+use agentflow_core::{async_node::AsyncNodeInputs, flow::Flow, value::FlowValue};
+use anyhow::{bail, Context, Result};
+use serde_json::Value;
 use std::fs;
+use std::time::Duration;
 
 pub async fn execute(
   workflow_file: String,
-  _watch: bool,                  // not implemented
-  _output: Option<String>,       // not implemented
-  _input: Vec<(String, String)>, // not implemented
-  _dry_run: bool,                // not implemented
-  _timeout: String,              // not implemented
-  _max_retries: u32,             // not implemented
+  watch: bool,
+  output: Option<String>,
+  input: Vec<(String, String)>,
+  dry_run: bool,
+  timeout: String,
+  max_retries: u32,
 ) -> Result<()> {
+  if watch {
+    bail!("--watch is not implemented yet; run without --watch or use workflow debug --dry-run");
+  }
+
   println!(
     "🚀 Starting AgentFlow V2 workflow execution: {}",
     workflow_file
@@ -27,7 +33,61 @@ pub async fn execute(
 
   println!("📄 Workflow '\'{}\'\' loaded.", flow_def.name);
 
-  // 2. Build the core Flow object from the definition
+  let flow = build_flow(&flow_def)?;
+
+  if dry_run {
+    let order = flow
+      .execution_order()
+      .context("Failed to build workflow execution order")?;
+    println!("\n🧪 Dry run complete. No nodes were executed.");
+    println!("📅 Execution order:");
+    for (idx, node_id) in order.iter().enumerate() {
+      println!("  {}. {}", idx + 1, node_id);
+    }
+    return Ok(());
+  }
+
+  let initial_inputs = parse_inputs(input)?;
+  if !initial_inputs.is_empty() {
+    println!("📥 Loaded {} CLI input value(s).", initial_inputs.len());
+  }
+
+  let timeout_duration =
+    parse_duration(&timeout).with_context(|| format!("Invalid --timeout value '{}'", timeout))?;
+
+  // 3. Execute the flow
+  println!("\n▶️  Running flow...");
+  let start_time = std::time::Instant::now();
+  let final_state = run_with_retries(flow, initial_inputs, timeout_duration, max_retries).await?;
+  let duration = start_time.elapsed();
+  println!("\n✅ Workflow completed in {:.2?}.", duration);
+
+  // 4. Print or save the results
+  let mut redacted_final_state =
+    serde_json::to_value(&final_state).context("Failed to serialize final state for redaction.")?;
+  redact_cli_value(&mut redacted_final_state);
+  let final_state_json = serde_json::to_string_pretty(&redacted_final_state)
+    .context("Failed to serialize redacted final state to JSON.")?;
+
+  match output.as_deref() {
+    Some("-") => {
+      println!("{}", final_state_json);
+    }
+    Some(path) => {
+      fs::write(path, &final_state_json)
+        .with_context(|| format!("Failed to write workflow output to {}", path))?;
+      println!("💾 Final state written to {}", path);
+    }
+    None => {
+      println!("\n📊 Final State Pool:");
+      println!("{}", final_state_json);
+    }
+  }
+
+  Ok(())
+}
+
+fn build_flow(flow_def: &FlowDefinitionV2) -> Result<Flow> {
   let mut flow = Flow::default();
   println!(
     "🔨 Building workflow graph with {} nodes...",
@@ -43,25 +103,85 @@ pub async fn execute(
     );
   }
 
-  // 3. Execute the flow
-  println!("\n▶️  Running flow...");
-  let start_time = std::time::Instant::now();
-  let final_state = flow.run().await?;
-  let duration = start_time.elapsed();
-  println!("\n✅ Workflow completed in {:.2?}.", duration);
+  Ok(flow)
+}
 
-  // 4. Print the results
-  let mut redacted_final_state =
-    serde_json::to_value(&final_state).context("Failed to serialize final state for redaction.")?;
-  redact_cli_value(&mut redacted_final_state);
-  println!(
-    "DEBUG: Final state before returning: {:?}",
-    redacted_final_state
-  );
-  println!("\n📊 Final State Pool:");
-  let final_state_json = serde_json::to_string_pretty(&redacted_final_state)
-    .context("Failed to serialize redacted final state to JSON.")?;
-  println!("{}", final_state_json);
+fn parse_inputs(input: Vec<(String, String)>) -> Result<AsyncNodeInputs> {
+  let mut inputs = AsyncNodeInputs::new();
+  for (key, raw_value) in input {
+    if key.trim().is_empty() {
+      bail!("Input key cannot be empty");
+    }
+    let value = parse_input_value(&raw_value);
+    inputs.insert(key, FlowValue::Json(value));
+  }
+  Ok(inputs)
+}
 
-  Ok(())
+fn parse_input_value(raw_value: &str) -> Value {
+  serde_json::from_str(raw_value).unwrap_or_else(|_| Value::String(raw_value.to_string()))
+}
+
+fn parse_duration(raw: &str) -> Result<Duration> {
+  let raw = raw.trim();
+  if raw.is_empty() {
+    bail!("duration cannot be empty");
+  }
+
+  let (number, multiplier) = if let Some(value) = raw.strip_suffix("ms") {
+    (value, 1)
+  } else if let Some(value) = raw.strip_suffix('s') {
+    (value, 1_000)
+  } else if let Some(value) = raw.strip_suffix('m') {
+    (value, 60_000)
+  } else {
+    (raw, 1_000)
+  };
+
+  let amount: u64 = number
+    .trim()
+    .parse()
+    .with_context(|| "duration must be an integer followed by ms, s, or m")?;
+  Ok(Duration::from_millis(amount.saturating_mul(multiplier)))
+}
+
+async fn run_with_retries(
+  flow: Flow,
+  initial_inputs: AsyncNodeInputs,
+  timeout_duration: Duration,
+  max_retries: u32,
+) -> Result<std::collections::HashMap<String, agentflow_core::async_node::AsyncNodeResult>> {
+  let attempts = max_retries.saturating_add(1);
+  let mut last_error = None;
+
+  for attempt in 1..=attempts {
+    if attempts > 1 {
+      println!("🔁 Workflow attempt {}/{}", attempt, attempts);
+    }
+
+    let run = flow.execute_from_inputs(initial_inputs.clone());
+    match tokio::time::timeout(timeout_duration, run).await {
+      Ok(Ok(state)) => return Ok(state),
+      Ok(Err(err)) => {
+        last_error = Some(
+          anyhow::Error::new(err)
+            .context(format!("workflow attempt {}/{} failed", attempt, attempts)),
+        );
+      }
+      Err(_) => {
+        last_error = Some(anyhow::anyhow!(
+          "workflow attempt {}/{} timed out after {:?}",
+          attempt,
+          attempts,
+          timeout_duration
+        ));
+      }
+    }
+
+    if attempt < attempts {
+      println!("⚠️  Attempt {} failed; retrying...", attempt);
+    }
+  }
+
+  Err(last_error.unwrap_or_else(|| anyhow::anyhow!("workflow execution failed")))
 }
