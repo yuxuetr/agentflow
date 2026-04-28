@@ -50,6 +50,34 @@ jobs:
       - name: Run package tests
         run: cargo test -p ${{ matrix.package }} --all-targets
 
+  doctest:
+    name: cargo test docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run workspace doc tests
+        run: cargo test --workspace --doc
+
+  features:
+    name: cargo check features (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core-observability
+            command: cargo check -p agentflow-core --features observability
+          - name: mcp-local-transports
+            command: cargo check -p agentflow-mcp --features client,server,stdio
+          - name: cli-mcp
+            command: cargo check -p agentflow-cli --no-default-features --features mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check feature combination
+        run: ${{ matrix.command }}
+
   examples:
     name: examples compile and smoke
     runs-on: ubuntu-latest

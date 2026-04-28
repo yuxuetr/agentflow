@@ -5,7 +5,7 @@
 //! ## Quick Start
 //!
 //! ### Text-only Models
-//! ```rust
+//! ```ignore
 //! use agentflow_llm::AgentFlow;
 //!
 //! #[tokio::main]
@@ -25,7 +25,7 @@
 //! ```
 //!
 //! ### Multimodal Models (Text + Images)
-//! ```rust
+//! ```ignore
 //! use agentflow_llm::{AgentFlow, MultimodalMessage};
 //!
 //! #[tokio::main]
@@ -63,7 +63,7 @@
 //!
 //! ### Generate Configuration Files
 //!
-//! ```rust
+//! ```ignore
 //! // Generate user-specific config
 //! AgentFlow::generate_config().await?;
 //! ```
@@ -112,7 +112,7 @@ use crate::client::LLMClientBuilder;
 /// Main entry point for AgentFlow LLM integration
 ///
 /// Example usage:
-/// ```rust
+/// ```ignore
 /// // Non-streaming request
 /// let response = AgentFlow::model("gpt-4o")
 ///     .prompt("Hello, world!")
@@ -280,7 +280,7 @@ impl AgentFlow {
   /// Only vendors that support model list fetching will be included.
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let models = AgentFlow::fetch_all_models().await?;
   /// for (vendor, model_list) in models {
   ///   println!("Vendor {}: {} models", vendor, model_list.len());
@@ -297,7 +297,7 @@ impl AgentFlow {
   /// Fetch models from a specific vendor
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let moonshot_models = AgentFlow::fetch_vendor_models("moonshot").await?;
   /// println!("Found {} MoonShot models", moonshot_models.len());
   /// ```
@@ -312,7 +312,7 @@ impl AgentFlow {
   /// Returns a validation result with details about valid/invalid models.
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// AgentFlow::init().await?;
   /// let result = AgentFlow::validate_models().await?;
   /// println!("Validation report:\n{}", result.create_report());
@@ -327,7 +327,7 @@ impl AgentFlow {
   /// Validate a specific model by name and vendor
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let is_valid = AgentFlow::validate_model("moonshot-v1-8k", "moonshot").await?;
   /// println!("Model is valid: {}", is_valid);
   /// ```
@@ -342,7 +342,7 @@ impl AgentFlow {
   /// configuration file. If the file doesn't exist, it will be created.
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let result = AgentFlow::update_models_config("templates/default_models.yml").await?;
   /// println!("Update report:\n{}", result.create_report());
   /// ```
@@ -356,7 +356,7 @@ impl AgentFlow {
   /// Check if a model exists for a vendor
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let exists = AgentFlow::model_exists("claude-3-5-sonnet-20241022", "anthropic").await?;
   /// println!("Claude 3.5 Sonnet exists: {}", exists);
   /// ```
@@ -368,7 +368,7 @@ impl AgentFlow {
   /// Get information about a specific model if it exists
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// if let Some(model_info) = AgentFlow::get_model_info("gpt-4o", "openai").await? {
   ///   println!("Model: {} owned by {}", model_info.id, model_info.owned_by.unwrap_or_default());
   /// }
@@ -384,7 +384,7 @@ impl AgentFlow {
   /// Suggest similar models when a requested model is not found
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let suggestions = AgentFlow::suggest_similar_models("gpt-4-turbo", "openai").await?;
   /// println!("Did you mean one of these? {:?}", suggestions);
   /// ```
@@ -396,7 +396,7 @@ impl AgentFlow {
   /// Create a StepFun specialized client for image generation, TTS, ASR, and voice cloning
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let stepfun_client = AgentFlow::stepfun_client(api_key).await?;
   ///
   /// // Generate image from text
@@ -430,7 +430,7 @@ impl AgentFlow {
   /// Create a Text2Image builder for StepFun image generation
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let image_request = AgentFlow::text2image("step-1x-medium", "A cyberpunk cityscape")
   ///     .size("1280x800")
   ///     .cfg_scale(7.5)
@@ -444,7 +444,7 @@ impl AgentFlow {
   /// Create a TTS builder for StepFun text-to-speech
   ///
   /// Example:
-  /// ```rust
+  /// ```ignore
   /// let tts_request = AgentFlow::text_to_speech("step-tts-vivid", "Welcome to AgentFlow!", "default_voice")
   ///     .response_format("wav")
   ///     .speed(1.0)

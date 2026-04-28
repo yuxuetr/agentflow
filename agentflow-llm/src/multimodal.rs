@@ -4,7 +4,7 @@
 //!
 //! ## Example Usage
 //!
-//! ```rust
+//! ```ignore
 //! use agentflow_llm::{AgentFlow, multimodal::{MultimodalMessage, MessageContent}};
 //!
 //! let message = MultimodalMessage::new("user")

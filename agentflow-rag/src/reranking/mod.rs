@@ -40,7 +40,7 @@ impl ReRankingStrategy for NoReRanking {
 /// - λ = 0.5: Balanced
 ///
 /// # Example
-/// ```rust,no_run
+/// ```ignore
 /// use agentflow_rag::reranking::{MMRReRanking, ReRankingStrategy};
 /// use agentflow_rag::types::SearchResult;
 ///

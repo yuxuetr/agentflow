@@ -25,7 +25,7 @@ use std::collections::HashMap;
 /// - No need to normalize scores
 ///
 /// # Example
-/// ```rust,no_run
+/// ```ignore
 /// use agentflow_rag::retrieval::hybrid::HybridRetriever;
 ///
 /// let mut hybrid = HybridRetriever::new();

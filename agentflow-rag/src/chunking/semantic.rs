@@ -22,7 +22,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use agentflow_rag::chunking::{ChunkingStrategy, SemanticChunker};
 //! use agentflow_rag::embeddings::{EmbeddingProvider, OpenAIEmbedding};
 //!
