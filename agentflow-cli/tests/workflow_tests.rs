@@ -40,6 +40,42 @@ nodes:
   workflow
 }
 
+fn write_mock_models_config(home: &TempDir) {
+  let config_dir = home.path().join(".agentflow");
+  fs::create_dir_all(&config_dir).unwrap();
+  fs::write(
+    config_dir.join("models.yml"),
+    r#"
+models:
+  mock-model:
+    vendor: mock
+    type: text
+    model_id: mock-model
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#,
+  )
+  .unwrap();
+}
+
+fn write_llm_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("llm_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: CLI LLM Workflow
+nodes:
+  - id: answer
+    type: llm
+    parameters:
+      prompt: "Say hello"
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
 #[test]
 fn cli_workflow_run_dry_run_shows_execution_order_without_running_nodes() {
   let home = TempDir::new().unwrap();
@@ -98,6 +134,35 @@ fn cli_workflow_run_rejects_unimplemented_watch_flag() {
     .assert()
     .failure()
     .stderr(predicate::str::contains("--watch is not implemented yet"));
+}
+
+#[test]
+fn cli_workflow_run_model_override_applies_to_llm_nodes() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(&home);
+  let work = TempDir::new().unwrap();
+  let workflow = write_llm_workflow(&work);
+  let output = work.path().join("llm-result.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--model",
+      "mock-model",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSE", "mocked workflow answer")
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Model override: mock-model"));
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(saved.contains("mocked workflow answer"));
 }
 
 #[tokio::test]

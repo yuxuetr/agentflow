@@ -17,12 +17,20 @@ Commands:
   (empty line)  — skipped
 ";
 
-pub async fn execute(skill_dir: String, session_id: Option<String>) -> Result<()> {
+pub async fn execute(
+  skill_dir: String,
+  model_override: Option<String>,
+  session_id: Option<String>,
+) -> Result<()> {
   let dir = Path::new(&skill_dir);
 
   // ── Load + validate ───────────────────────────────────────────────────────
-  let manifest =
+  let mut manifest =
     SkillLoader::load(dir).with_context(|| format!("Failed to load skill from '{}'", skill_dir))?;
+
+  if let Some(model) = model_override {
+    manifest.model.name = Some(model);
+  }
 
   let warnings =
     SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;

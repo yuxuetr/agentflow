@@ -61,6 +61,37 @@ args = [{server:?}]
   .unwrap();
 }
 
+fn write_mock_mcp_skill_with_model(dir: &Path, model: &str) {
+  let server = format!(
+    "{}/../agentflow-skills/examples/skills/mcp-basic/server.py",
+    env!("CARGO_MANIFEST_DIR")
+  );
+  fs::write(
+    dir.join("skill.toml"),
+    format!(
+      r#"
+[skill]
+name = "mock_mcp_runner"
+version = "0.1.0"
+description = "Mock ReAct skill for MCP CLI tests"
+
+[persona]
+role = "Use MCP tools when needed."
+
+[model]
+name = {model:?}
+max_iterations = 4
+
+[[mcp_servers]]
+name = "local-demo"
+command = "python3"
+args = [{server:?}]
+"#
+    ),
+  )
+  .unwrap();
+}
+
 fn write_broken_mcp_skill(dir: &Path) {
   fs::write(
     dir.join("skill.toml"),
@@ -487,6 +518,32 @@ fn skill_run_can_call_mcp_tool_with_mock_llm() {
     .stdout(predicate::str::contains("[REDACTED]"))
     .stdout(predicate::str::contains("should-not-print").not())
     .stdout(predicate::str::contains("answer-secret").not());
+}
+
+#[test]
+fn skill_run_model_override_replaces_manifest_model() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let skill = TempDir::new().unwrap();
+  write_mock_mcp_skill_with_model(skill.path(), "not-configured-model");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_react_responses())
+    .args([
+      "skill",
+      "run",
+      skill.path().to_str().unwrap(),
+      "--message",
+      "echo through MCP",
+      "--model",
+      "mock-model",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Model: mock-model"))
+    .stdout(predicate::str::contains("Agent: MCP said:"));
 }
 
 #[test]

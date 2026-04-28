@@ -9,14 +9,19 @@ use agentflow_skills::{SkillBuilder, SkillLoader};
 pub async fn execute(
   skill_dir: String,
   message: String,
+  model_override: Option<String>,
   session_id: Option<String>,
   trace: bool,
 ) -> Result<()> {
   let dir = Path::new(&skill_dir);
 
   // Load + validate manifest
-  let manifest =
+  let mut manifest =
     SkillLoader::load(dir).with_context(|| format!("Failed to load skill from '{}'", skill_dir))?;
+
+  if let Some(model) = model_override {
+    manifest.model.name = Some(model);
+  }
 
   let warnings =
     SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;
@@ -28,6 +33,7 @@ pub async fn execute(
     "🚀 Running skill '{}' v{}",
     manifest.skill.name, manifest.skill.version
   );
+  println!("🤖 Model: {}", manifest.model.resolved_model());
 
   // Initialise AgentFlow (loads LLM provider config)
   AgentFlow::init()

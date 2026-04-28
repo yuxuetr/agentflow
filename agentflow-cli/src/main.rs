@@ -94,6 +94,9 @@ enum WorkflowCommands {
     watch: bool,
     #[arg(short, long)]
     output: Option<String>,
+    /// Override the model used by LLM nodes in this workflow
+    #[arg(short = 'm', long)]
+    model: Option<String>,
     #[arg(short, long, num_args = 2, value_names = ["KEY", "VALUE"])]
     input: Vec<String>,
     #[arg(long)]
@@ -322,6 +325,9 @@ enum SkillCommands {
     /// The message to send to the agent
     #[arg(short, long)]
     message: String,
+    /// Override the model declared by the skill manifest
+    #[arg(long)]
+    model: Option<String>,
     /// Reuse an existing session ID for multi-turn conversations
     #[arg(long)]
     session: Option<String>,
@@ -333,6 +339,9 @@ enum SkillCommands {
   Chat {
     /// Path to the skill directory
     skill_dir: String,
+    /// Override the model declared by the skill manifest
+    #[arg(long)]
+    model: Option<String>,
     /// Resume an existing session by ID (optional)
     #[arg(long)]
     session: Option<String>,
@@ -522,6 +531,7 @@ async fn main() {
         workflow_file,
         watch,
         output,
+        model,
         input,
         dry_run,
         timeout,
@@ -539,6 +549,7 @@ async fn main() {
           workflow_file,
           watch,
           output,
+          model,
           input_pairs,
           dry_run,
           timeout,
@@ -711,10 +722,15 @@ async fn main() {
       SkillCommands::Run {
         skill_dir,
         message,
+        model,
         session,
         trace,
-      } => skill::run::execute(skill_dir, message, session, trace).await,
-      SkillCommands::Chat { skill_dir, session } => skill::chat::execute(skill_dir, session).await,
+      } => skill::run::execute(skill_dir, message, model, session, trace).await,
+      SkillCommands::Chat {
+        skill_dir,
+        model,
+        session,
+      } => skill::chat::execute(skill_dir, model, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
       SkillCommands::Test { skill_dir, smoke } => skill::test::execute(skill_dir, smoke).await,
