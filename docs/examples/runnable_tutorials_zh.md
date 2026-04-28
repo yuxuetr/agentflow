@@ -102,6 +102,17 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 
 `agentflow-skills/examples/skills.index.toml` 是本地共享目录示例，`mcp-demo` alias 会解析到 `agentflow-skills/examples/skills/mcp-basic`。
 
+也可以先安装到本地 skills 目录再验证:
+
+```bash
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill install agentflow-skills/examples/skills.index.toml mcp-demo --dir /tmp/agentflow-skills
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate /tmp/agentflow-skills/mcp-basic
+```
+
+`skill install` 会复制 index 中解析到的本地 Skill 目录；目标目录已存在时会拒绝覆盖，除非显式传入 `--force`。
+
 先验证 Skill manifest 和 MCP 工具发现:
 
 ```bash
@@ -230,6 +241,10 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index list agentflow-skills/examples/skills.index.toml
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill install agentflow-skills/examples/skills.index.toml mcp-demo --dir /tmp/agentflow-skills --force
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate /tmp/agentflow-skills/mcp-basic
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate agentflow-skills/examples/skills/mcp-basic
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \

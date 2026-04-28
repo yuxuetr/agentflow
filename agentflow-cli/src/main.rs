@@ -295,6 +295,19 @@ enum SkillCommands {
     #[arg(long)]
     force: bool,
   },
+  /// Install a skill from a local registry index
+  Install {
+    /// Path to the skill registry index file
+    index_file: String,
+    /// Skill name or alias to install
+    skill: String,
+    /// Target skills directory (default: ~/.agentflow/skills)
+    #[arg(short, long)]
+    dir: Option<String>,
+    /// Overwrite an existing installed skill directory
+    #[arg(long)]
+    force: bool,
+  },
   /// Validate a skill manifest and print its configuration
   Validate {
     /// Path to the skill directory (must contain skill.toml or SKILL.md)
@@ -633,6 +646,12 @@ async fn main() {
         description,
         force,
       } => skill::init::execute(skill_dir, name, description, force).await,
+      SkillCommands::Install {
+        index_file,
+        skill,
+        dir,
+        force,
+      } => skill::install::execute(index_file, skill, dir, force).await,
       SkillCommands::Validate { skill_dir } => skill::validate::execute(skill_dir).await,
       SkillCommands::Run {
         skill_dir,

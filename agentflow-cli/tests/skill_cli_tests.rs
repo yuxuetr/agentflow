@@ -241,6 +241,79 @@ fn skill_index_validate_list_and_resolve_work_for_shared_skills() {
 }
 
 #[test]
+fn skill_install_copies_local_registry_skill_and_respects_force() {
+  let index = format!(
+    "{}/../agentflow-skills/examples/skills.index.toml",
+    env!("CARGO_MANIFEST_DIR")
+  );
+  let install_root = TempDir::new().unwrap();
+  let installed_skill = install_root.path().join("mcp-basic");
+
+  let mut install = Command::cargo_bin("agentflow").unwrap();
+  install
+    .args([
+      "skill",
+      "install",
+      &index,
+      "mcp-demo",
+      "--dir",
+      install_root.path().to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Installed skill: mcp-basic @ 1.0.0",
+    ))
+    .stdout(predicate::str::contains(
+      "Validate with: agentflow skill validate",
+    ));
+
+  assert!(installed_skill.join("SKILL.md").is_file());
+  assert!(installed_skill.join("README.md").is_file());
+  assert!(installed_skill.join("server.py").is_file());
+
+  let mut validate = Command::cargo_bin("agentflow").unwrap();
+  validate
+    .args(["skill", "validate", installed_skill.to_str().unwrap()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Skill is valid"));
+
+  let mut duplicate = Command::cargo_bin("agentflow").unwrap();
+  duplicate
+    .args([
+      "skill",
+      "install",
+      &index,
+      "mcp-demo",
+      "--dir",
+      install_root.path().to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("already exists"))
+    .stderr(predicate::str::contains("mcp-demo"))
+    .stderr(predicate::str::contains("skills.index.toml"));
+
+  let mut forced = Command::cargo_bin("agentflow").unwrap();
+  forced
+    .args([
+      "skill",
+      "install",
+      &index,
+      "mcp-demo",
+      "--dir",
+      install_root.path().to_str().unwrap(),
+      "--force",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Installed skill: mcp-basic @ 1.0.0",
+    ));
+}
+
+#[test]
 fn skill_validate_checks_mcp_server_config() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
