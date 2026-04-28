@@ -6,7 +6,7 @@ use std::process::Command;
 use super::error_context::mcp_context;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
-pub async fn execute(skill_dir: String, smoke: bool) -> Result<()> {
+pub async fn execute(skill_dir: String, dry_run: bool, smoke: bool) -> Result<()> {
   let dir = canonical_skill_dir(&skill_dir)?;
   println!("🧪 Testing skill at {}", dir.display());
 
@@ -34,6 +34,12 @@ pub async fn execute(skill_dir: String, smoke: bool) -> Result<()> {
     println!("   none");
   } else {
     println!("   {}", tool_names.join(", "));
+  }
+
+  if dry_run {
+    println!("✅ dry-run: skipped regressions and smoke tests");
+    println!("\n✅ Skill dry run passed");
+    return Ok(());
   }
 
   let regression_count = run_minimal_regressions(&dir, &registry).await?;

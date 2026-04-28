@@ -441,6 +441,45 @@ fn skill_test_runs_validation_and_tool_discovery_for_mcp_skill() {
 }
 
 #[test]
+fn skill_test_dry_run_skips_regressions_and_smoke() {
+  let skill = TempDir::new().unwrap();
+  let skill_dir = skill.path().join("dry-run-skill");
+
+  let mut init = Command::cargo_bin("agentflow").unwrap();
+  init
+    .args(["skill", "init", skill_dir.to_str().unwrap()])
+    .assert()
+    .success();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "test", skill_dir.to_str().unwrap(), "--dry-run"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("manifest: valid"))
+    .stdout(predicate::str::contains("tools: discovered"))
+    .stdout(predicate::str::contains(
+      "dry-run: skipped regressions and smoke tests",
+    ))
+    .stdout(predicate::str::contains("script hello.py").not());
+}
+
+#[test]
+fn skill_inspect_summarizes_manifest_without_running_agent() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["skill", "inspect", &mcp_basic_skill_path()])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Skill: mcp-basic"))
+    .stdout(predicate::str::contains("Model:"))
+    .stdout(predicate::str::contains("MCP Servers:"))
+    .stdout(predicate::str::contains("local-demo"))
+    .stdout(predicate::str::contains("Security:"))
+    .stdout(predicate::str::contains("Status: valid"));
+}
+
+#[test]
 fn skill_list_tools_shows_mcp_tools_and_schema() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd

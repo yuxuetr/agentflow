@@ -318,6 +318,11 @@ enum SkillCommands {
     /// Path to the skill directory (must contain skill.toml or SKILL.md)
     skill_dir: String,
   },
+  /// Inspect a skill manifest without running the agent
+  Inspect {
+    /// Path to the skill directory (must contain skill.toml or SKILL.md)
+    skill_dir: String,
+  },
   /// Run a skill with a single message and exit
   Run {
     /// Path to the skill directory
@@ -329,7 +334,7 @@ enum SkillCommands {
     #[arg(long)]
     model: Option<String>,
     /// Reuse an existing session ID for multi-turn conversations
-    #[arg(long)]
+    #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
     /// Print the structured AgentRuntime trace as JSON
     #[arg(long)]
@@ -343,7 +348,7 @@ enum SkillCommands {
     #[arg(long)]
     model: Option<String>,
     /// Resume an existing session by ID (optional)
-    #[arg(long)]
+    #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
   },
   /// List available skills in a directory
@@ -361,6 +366,9 @@ enum SkillCommands {
   Test {
     /// Path to the skill directory
     skill_dir: String,
+    /// Only validate manifest and discover tools; do not execute regressions or smoke scripts
+    #[arg(long)]
+    dry_run: bool,
     /// Also run tests/smoke.sh when present
     #[arg(long)]
     smoke: bool,
@@ -719,6 +727,7 @@ async fn main() {
         force,
       } => skill::install::execute(index_file, skill, dir, force).await,
       SkillCommands::Validate { skill_dir } => skill::validate::execute(skill_dir).await,
+      SkillCommands::Inspect { skill_dir } => skill::inspect::execute(skill_dir).await,
       SkillCommands::Run {
         skill_dir,
         message,
@@ -733,7 +742,11 @@ async fn main() {
       } => skill::chat::execute(skill_dir, model, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
-      SkillCommands::Test { skill_dir, smoke } => skill::test::execute(skill_dir, smoke).await,
+      SkillCommands::Test {
+        skill_dir,
+        dry_run,
+        smoke,
+      } => skill::test::execute(skill_dir, dry_run, smoke).await,
     },
     Commands::Trace(args) => match args.command {
       TraceCommands::Replay {

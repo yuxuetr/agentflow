@@ -2,6 +2,7 @@ pub mod chat;
 mod error_context;
 pub mod index;
 pub mod init;
+pub mod inspect;
 pub mod install;
 pub mod list;
 pub mod list_tools;
