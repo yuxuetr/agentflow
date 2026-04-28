@@ -76,6 +76,14 @@ impl Flow {
     self.nodes.insert(node.id.clone(), node);
   }
 
+  /// Return the workflow execution order after dependency validation.
+  ///
+  /// This is useful for dry-run planning, debugging, and scheduler benchmarks.
+  /// It does not execute nodes or create run artifacts.
+  pub fn execution_order(&self) -> Result<Vec<String>, AgentFlowError> {
+    self.topological_sort()
+  }
+
   /// Attach a workflow event listener for tracing, metrics, or logs.
   pub fn with_event_listener(mut self, listener: Arc<dyn EventListener>) -> Self {
     self.event_listener = Some(listener);

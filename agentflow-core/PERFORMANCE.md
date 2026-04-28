@@ -141,6 +141,9 @@ cargo test --test performance_benchmarks -- --nocapture
 
 # Run specific benchmark
 cargo test --test performance_benchmarks benchmark_retry_overhead -- --nocapture
+
+# Run large DAG scheduler benchmark
+cargo test -p agentflow-core --test large_dag_benchmarks --target-dir /tmp/agentflow-target -- --nocapture
 ```
 
 ## Benchmark Tests
@@ -157,6 +160,7 @@ cargo test --test performance_benchmarks benchmark_retry_overhead -- --nocapture
 10. `benchmark_health_checks` - Health check system performance
 11. `benchmark_checkpoint_operations` - Checkpoint save/load operations
 12. `benchmark_summary` - Overall summary
+13. `large_dag_benchmarks` - Synthetic 100 / 1,000 / 10,000 node DAG build and scheduler baseline
 
 ## Future Benchmarking
 
