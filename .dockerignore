@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+.claude/
+*.log
+*.tmp
+.DS_Store
+TODOs.md
+agentflow-cli/runs/
+**/.env
+**/.env.*

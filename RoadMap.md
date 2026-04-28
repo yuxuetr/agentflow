@@ -240,7 +240,7 @@ Runtime 与现有 DAG `Flow` 的职责边界已记录在 `docs/AGENT_RUNTIME.md`
 - Web UI 或 TUI 调试器。✅ 最小终端 timeline 已支持 `agentflow trace tui`。
 - 运行记录 replay。
 - 配置加密和 secret 管理。✅ 已定义 secret 边界，`config show/validate` 默认不打印密钥值。
-- Docker/Helm 部署。
+- Docker/Helm 部署。✅ 已提供 server Dockerfile、docker-compose 和 Helm chart 初版。
 - Plugin/Skill marketplace 雏形。
 
 ## 里程碑

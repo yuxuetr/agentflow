@@ -1,0 +1,9 @@
+AgentFlow has been installed.
+
+Health endpoints:
+  /health
+  /health/live
+  /health/ready
+
+Port-forward locally:
+  kubectl port-forward svc/{{ include "agentflow.fullname" . }} 3000:{{ .Values.service.port }}
