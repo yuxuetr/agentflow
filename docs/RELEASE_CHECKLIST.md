@@ -56,13 +56,35 @@ cargo test --workspace --target-dir /tmp/agentflow-target
 ## 4. Integration Smoke Tests
 
 ```bash
-cargo run -p agentflow-agents --example react_agent --target-dir /tmp/agentflow-target
-cargo run -p agentflow-agents --example multi_agent --target-dir /tmp/agentflow-target
-cargo run -p agentflow-agents --example hybrid_workflow_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo test --workspace --examples --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-core --example fixed_dag_workflow --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-agents --example agent_native_react --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-agents --example plan_execute_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index validate agentflow-skills/examples/skills.index.toml
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index list agentflow-skills/examples/skills.index.toml
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate agentflow-skills/examples/skills/mcp-basic
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill list-tools agentflow-skills/examples/skills/mcp-basic
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-skills --example skill_calls_mcp_tool --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-agents --example hybrid_workflow_agent --target-dir /tmp/agentflow-target
 ```
 
-- [ ] ReAct agent example runs.
-- [ ] Multi-agent example runs.
+- [ ] Workspace examples compile.
+- [ ] Fixed DAG example runs.
+- [ ] Agent-native ReAct mock example runs.
+- [ ] Plan-and-Execute mock example runs.
+- [ ] Skill registry index validates, lists, and resolves.
 - [ ] DAG + Agent hybrid example runs.
 - [ ] Skill examples validate and list tools through the CLI.
 - [ ] A local MCP skill can validate, list tools, and run a tool call.

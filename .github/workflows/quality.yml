@@ -49,3 +49,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run package tests
         run: cargo test -p ${{ matrix.package }} --all-targets
+
+  examples:
+    name: examples compile and smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile workspace examples
+        run: cargo test --workspace --examples
+      - name: Run no-API example smoke tests
+        run: |
+          cargo run -p agentflow-core --example fixed_dag_workflow
+          cargo run -p agentflow-agents --example agent_native_react
+          cargo run -p agentflow-agents --example plan_execute_agent
+          cargo run -p agentflow-cli -- skill index validate agentflow-skills/examples/skills.index.toml
+          cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.index.toml
+          cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+          cargo run -p agentflow-cli -- skill validate agentflow-skills/examples/skills/mcp-basic
+          cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
+          cargo run -p agentflow-skills --example skill_calls_mcp_tool
+          cargo run -p agentflow-agents --example hybrid_workflow_agent
