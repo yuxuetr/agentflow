@@ -1,7 +1,27 @@
 # Release Checklist
 
-Use this checklist before tagging or publishing an AgentFlow release. It keeps
-the manual gate aligned with `.github/workflows/quality.yml`.
+Use this checklist before tagging or publishing an AgentFlow release. The
+automated checks are enforced by the `release gate` job in
+`.github/workflows/quality.yml`; the remaining items require human judgement.
+
+For release tracking, open `.github/ISSUE_TEMPLATE/release.md` and link the CI
+run that passed on the release branch or tag.
+
+## CI Coverage
+
+The `release gate` job requires these automated jobs to pass:
+
+- `cargo fmt`
+- `cargo clippy`
+- package test matrix for `agentflow-core`, `agentflow-tools`,
+  `agentflow-memory`, `agentflow-mcp`, `agentflow-skills`,
+  `agentflow-agents`, and `agentflow-cli`
+- workspace doc tests
+- selected feature combinations
+- workspace examples compile and no-API smoke tests
+
+The checklist below keeps local parity commands for reproducing CI failures,
+then lists the manual release review items.
 
 ## 1. Scope
 
@@ -12,7 +32,7 @@ the manual gate aligned with `.github/workflows/quality.yml`.
 - [ ] Review `git status --short --ignored` and ensure only intentional ignored
       files remain.
 
-## 2. Code Quality
+## 2. Code Quality (CI Covered)
 
 ```bash
 cargo fmt --all -- --check
@@ -27,7 +47,7 @@ cargo test --workspace --doc --target-dir /tmp/agentflow-target
 - [ ] Workspace doc tests pass.
 - [ ] No accidental debug prints, temporary fixtures, or local paths are present.
 
-## 3. Core Test Matrix
+## 3. Core Test Matrix (CI Covered)
 
 Run the focused crate matrix first so failures are easy to localize:
 
@@ -55,7 +75,7 @@ cargo test --workspace --target-dir /tmp/agentflow-target
 - [ ] CLI tests pass.
 - [ ] Full workspace tests pass, or documented exclusions are approved.
 
-## 4. Feature Matrix
+## 4. Feature Matrix (CI Covered)
 
 The CI feature matrix intentionally checks selected combinations instead of
 `--all-features`, because some optional integrations are designed for external
@@ -85,7 +105,7 @@ cargo check -p agentflow-cli --no-default-features --features mcp --target-dir /
 - [ ] Any skipped feature combination is documented with service/runtime
       requirements.
 
-## 5. Integration Smoke Tests
+## 5. Integration Smoke Tests (CI Covered)
 
 ```bash
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
@@ -121,7 +141,7 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 - [ ] Skill examples validate and list tools through the CLI.
 - [ ] A local MCP skill can validate, list tools, and run a tool call.
 
-## 6. Runtime Contracts
+## 6. Runtime Contracts (Manual)
 
 - [ ] `AgentRunResult` golden fixture changes are intentional and reviewed.
 - [ ] Workflow checkpoint resume still skips completed nodes.
@@ -130,7 +150,7 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 - [ ] `WorkflowTool` exposes schema and timeout behavior as documented.
 - [ ] Trace output links workflow, agent, tool, and MCP calls where applicable.
 
-## 7. Documentation
+## 7. Documentation (Manual)
 
 - [ ] `README.md` reflects the current release positioning.
 - [ ] `docs/AGENT_RUNTIME.md` matches runtime behavior.
@@ -139,7 +159,7 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 - [ ] Release notes include breaking changes, migration notes, and known issues.
 - [ ] Examples referenced by docs compile or run.
 
-## 8. Version And Packaging
+## 8. Version And Packaging (Manual)
 
 - [ ] Crate versions are updated consistently.
 - [ ] `Cargo.lock` is intentionally updated.
@@ -147,7 +167,7 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 - [ ] `cargo package --list` for publishable crates excludes local artifacts.
 - [ ] Release notes and tag name match the version.
 
-## 9. Final Gate
+## 9. Final Gate (Manual)
 
 ```bash
 git diff --check
@@ -156,5 +176,6 @@ git status --short --ignored
 
 - [ ] No whitespace errors.
 - [ ] No unintended tracked changes.
+- [ ] `release gate` passed on the release branch or tag.
 - [ ] Release commit is tagged only after all required checks pass.
 - [ ] Any skipped check is recorded in the release notes with owner and reason.
