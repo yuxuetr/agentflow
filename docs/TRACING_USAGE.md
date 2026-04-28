@@ -278,6 +278,24 @@ println!("{}", summary);
 // 输出: ✅ workflow-001 | completed | 3 nodes | 45000ms
 ```
 
+### 终端调试视图
+
+`agentflow trace tui` 提供最小的静态 TUI timeline，用于在不重新执行 workflow、tool、MCP server 或 LLM 的情况下聚焦查看已持久化 trace。
+
+```bash
+agentflow trace tui workflow-001 --dir ./traces
+agentflow trace tui workflow-001 --dir ./traces --filter mcp --details
+agentflow trace tui workflow-001 --dir ./traces --filter agent --max-field-chars 240
+```
+
+可用 filter:
+
+- `all`: workflow、node、agent、tool/MCP 调用。
+- `workflow`: workflow 和 node 层级概览。
+- `agent`: agent session、step 数量、tool 数量。
+- `tool`: 所有 tool 调用。
+- `mcp`: 只显示 MCP tool 调用。
+
 ---
 
 ## 📝 事件类型

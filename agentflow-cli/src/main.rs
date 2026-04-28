@@ -396,6 +396,23 @@ enum TraceCommands {
     #[arg(long, default_value_t = 160)]
     max_field_chars: usize,
   },
+  /// Inspect a persisted trace as a focused terminal timeline
+  Tui {
+    /// Workflow run ID / trace ID to inspect
+    run_id: String,
+    /// Directory containing file-backed traces (default: ~/.agentflow/traces)
+    #[arg(long)]
+    dir: Option<String>,
+    /// Timeline focus: all, workflow, agent, tool, or mcp
+    #[arg(long, default_value = "all")]
+    filter: trace::tui::CliTraceTuiFilter,
+    /// Expand matching timeline rows with captured fields
+    #[arg(long)]
+    details: bool,
+    /// Maximum characters printed for params, steps, input, and output fields
+    #[arg(long, default_value_t = 120)]
+    max_field_chars: usize,
+  },
 }
 
 #[cfg(feature = "rag")]
@@ -671,6 +688,13 @@ async fn main() {
         json,
         max_field_chars,
       } => trace::replay::execute(run_id, dir, json, max_field_chars).await,
+      TraceCommands::Tui {
+        run_id,
+        dir,
+        filter,
+        details,
+        max_field_chars,
+      } => trace::tui::execute(run_id, dir, filter, details, max_field_chars).await,
     },
     #[cfg(feature = "rag")]
     Commands::Rag(args) => match args.command {

@@ -50,6 +50,7 @@ pub mod otel;
 pub mod redaction;
 pub mod replay;
 pub mod storage;
+pub mod tui;
 pub mod types;
 
 // Re-exports for convenience
@@ -68,4 +69,5 @@ pub use storage::schema::{
   TRACE_SCHEMA_VERSION,
 };
 pub use storage::{TimeRange, TraceQuery, TraceStorage};
+pub use tui::{format_trace_tui, TraceTuiFilter, TraceTuiOptions};
 pub use types::*;
