@@ -376,12 +376,9 @@ fn build_dependency_graph(flow_def: &FlowDefinitionV2) -> HashMap<String, Vec<St
   let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
   for node in &flow_def.nodes {
-    graph.entry(node.id.clone()).or_insert_with(Vec::new);
+    graph.entry(node.id.clone()).or_default();
     for dep in &node.dependencies {
-      graph
-        .entry(dep.clone())
-        .or_insert_with(Vec::new)
-        .push(node.id.clone());
+      graph.entry(dep.clone()).or_default().push(node.id.clone());
     }
   }
 

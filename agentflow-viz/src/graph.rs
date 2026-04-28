@@ -179,10 +179,11 @@ impl VisualNode {
 }
 
 /// Types of nodes with different visual representations
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VisualNodeType {
   /// Standard processing node (rectangle)
+  #[default]
   Standard,
   /// LLM/AI node (rounded rectangle)
   Llm,
@@ -207,12 +208,6 @@ pub enum VisualNodeType {
     /// The nested graph
     graph: Box<VisualGraph>,
   },
-}
-
-impl Default for VisualNodeType {
-  fn default() -> Self {
-    Self::Standard
-  }
 }
 
 /// Execution status of a node
@@ -322,7 +317,7 @@ impl Position {
 }
 
 /// Visual styling options for a node
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct NodeStyle {
   /// Fill color (hex or named)
   pub fill_color: Option<String>,
@@ -332,17 +327,6 @@ pub struct NodeStyle {
   pub text_color: Option<String>,
   /// Border width
   pub border_width: Option<f64>,
-}
-
-impl Default for NodeStyle {
-  fn default() -> Self {
-    Self {
-      fill_color: None,
-      border_color: None,
-      text_color: None,
-      border_width: None,
-    }
-  }
 }
 
 /// Metadata about the graph

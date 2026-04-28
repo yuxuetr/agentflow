@@ -140,23 +140,20 @@ impl ModelType {
 
   /// Check if this model requires streaming (no non-streaming mode)
   pub fn requires_streaming(&self) -> bool {
-    match self {
-      // Most models have both streaming and non-streaming modes
-      _ => false,
-    }
+    false
   }
 
   /// Check if this model supports tools/function calling
   pub fn supports_tools(&self) -> bool {
-    match self {
+    matches!(
+      self,
       ModelType::Text
-      | ModelType::ImageUnderstand
-      | ModelType::VideoUnderstand
-      | ModelType::DocUnderstand
-      | ModelType::CodeGen
-      | ModelType::FunctionCalling => true,
-      _ => false,
-    }
+        | ModelType::ImageUnderstand
+        | ModelType::VideoUnderstand
+        | ModelType::DocUnderstand
+        | ModelType::CodeGen
+        | ModelType::FunctionCalling
+    )
   }
 
   /// Check if this is a multimodal model (accepts multiple input types)
@@ -309,15 +306,15 @@ impl ModelCapabilities {
       supports_streaming: model_type.supports_streaming(),
       requires_streaming: model_type.requires_streaming(),
       supports_tools: model_type.supports_tools(),
-      supports_system_messages: match model_type {
+      supports_system_messages: matches!(
+        model_type,
         ModelType::Text
-        | ModelType::ImageUnderstand
-        | ModelType::VideoUnderstand
-        | ModelType::DocUnderstand
-        | ModelType::CodeGen
-        | ModelType::FunctionCalling => true,
-        _ => false,
-      },
+          | ModelType::ImageUnderstand
+          | ModelType::VideoUnderstand
+          | ModelType::DocUnderstand
+          | ModelType::CodeGen
+          | ModelType::FunctionCalling
+      ),
       max_context_tokens: None,
       max_output_tokens: None,
       custom_capabilities: std::collections::HashMap::new(),

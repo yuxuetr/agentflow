@@ -12,18 +12,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum AudioResponseFormat {
   Wav,
+  #[default]
   Mp3,
   Flac,
   Opus,
-}
-
-impl Default for AudioResponseFormat {
-  fn default() -> Self {
-    AudioResponseFormat::Mp3
-  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

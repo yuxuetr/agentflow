@@ -146,7 +146,7 @@ fn params_to_inputs(params: Value) -> Result<AsyncNodeInputs, ToolError> {
   let mut inputs = AsyncNodeInputs::new();
   for (key, value) in map {
     let flow_value =
-      serde_json::from_value::<FlowValue>(value.clone()).unwrap_or_else(|_| FlowValue::Json(value));
+      serde_json::from_value::<FlowValue>(value.clone()).unwrap_or(FlowValue::Json(value));
     inputs.insert(key, flow_value);
   }
   Ok(inputs)

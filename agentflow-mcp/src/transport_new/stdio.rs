@@ -378,7 +378,7 @@ impl Drop for StdioTransport {
   fn drop(&mut self) {
     // Best effort cleanup
     if let Some(mut process) = self.process.take() {
-      let _ = futures::executor::block_on(async {
+      futures::executor::block_on(async {
         let _ = process.kill().await;
         let _ = process.wait().await;
       });
@@ -735,8 +735,7 @@ mod tests {
       transport.connect().await.unwrap();
       // Transport dropped here
     }
-    // If we get here without hanging, drop worked
-    assert!(true);
+    // If we get here without hanging, drop worked.
   }
 
   // ============================================================================

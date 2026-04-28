@@ -24,10 +24,10 @@ impl AsyncNode for LlmNode {
         message: format!("Failed to initialize AgentFlow LLM service: {}", e),
       })?;
 
-    let mut request = AgentFlow::model(model.as_deref().unwrap_or_default()).prompt(&prompt);
+    let mut request = AgentFlow::model(model.unwrap_or_default()).prompt(prompt);
 
     if let Some(sys) = system {
-      request = request.system(&sys);
+      request = request.system(sys);
     }
     if let Some(temp) = get_optional_f64_input(inputs, "temperature")? {
       request = request.temperature(temp as f32);
@@ -122,7 +122,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_llm_node_async_execution() {
-    let node = LlmNode::default();
+    let node = LlmNode;
     let mut inputs = AsyncNodeInputs::new();
     inputs.insert(
       "prompt".to_string(),

@@ -79,7 +79,7 @@ impl BatchProcessor {
     let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::new();
 
-    for (_index, item) in items.into_iter().enumerate() {
+    for item in items {
       let sem = semaphore.clone();
       let proc = processor.clone();
       let prog = progress.clone();

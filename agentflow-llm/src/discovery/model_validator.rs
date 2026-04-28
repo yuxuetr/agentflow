@@ -134,7 +134,7 @@ impl ModelValidator {
       .collect();
 
     // Sort by similarity (higher is better)
-    suggestions.sort_by(|a, b| b.1.cmp(&a.1));
+    suggestions.sort_by_key(|suggestion| std::cmp::Reverse(suggestion.1));
 
     // Return top 5 suggestions
     Ok(

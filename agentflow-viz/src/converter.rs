@@ -78,7 +78,7 @@ impl WorkflowConverter {
       }
 
       // Also create edges from input_mapping references
-      for (_input_name, mapping) in &node_def.input_mapping {
+      for mapping in node_def.input_mapping.values() {
         // Parse mapping like "{{ nodes.other_node.outputs.result }}"
         if let Some(source_node) = Self::parse_node_reference(mapping) {
           // Only add edge if not already a dependency

@@ -118,7 +118,7 @@ impl TraceStorage for FileTraceStorage {
     }
 
     // Sort by started_at (newest first)
-    traces.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    traces.sort_by_key(|trace| std::cmp::Reverse(trace.started_at));
 
     // Apply offset
     if let Some(offset) = query.offset {

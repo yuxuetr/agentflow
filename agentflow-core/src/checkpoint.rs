@@ -329,7 +329,7 @@ impl CheckpointManager {
     }
 
     // Sort by timestamp, newest first
-    checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
 
     Ok(checkpoints)
   }

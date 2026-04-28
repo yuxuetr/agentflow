@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Using mock transport\n");
     build_mock_client().await?
   } else {
-    let command: Vec<String> = args.iter().skip(1).map(|s| s.clone()).collect();
+    let command: Vec<String> = args.iter().skip(1).cloned().collect();
 
     if command.is_empty() {
       eprintln!(

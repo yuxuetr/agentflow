@@ -137,7 +137,7 @@ mod tests {
       .mount(&server)
       .await;
 
-    let node = HttpNode::default();
+    let node = HttpNode;
     let mut inputs = AsyncNodeInputs::new();
     let url = format!("{}/test", server.uri());
     inputs.insert("url".to_string(), FlowValue::Json(json!(url)));

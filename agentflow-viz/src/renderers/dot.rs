@@ -259,8 +259,10 @@ mod tests {
   fn test_render_different_directions() {
     let graph = create_test_graph();
 
-    let mut config = RenderConfig::default();
-    config.direction = super::super::GraphDirection::LeftToRight;
+    let config = RenderConfig {
+      direction: super::super::GraphDirection::LeftToRight,
+      ..Default::default()
+    };
 
     let renderer = DotRenderer::new(config);
     let result = renderer.render(&graph).unwrap();

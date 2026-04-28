@@ -283,12 +283,14 @@ mod tests {
   use tempfile::TempDir;
 
   fn make_tool(dir: &std::path::Path) -> ScriptTool {
-    let mut policy = SandboxPolicy::default();
-    policy.allowed_commands = vec![
-      "python3".to_string(),
-      "bash".to_string(),
-      "node".to_string(),
-    ];
+    let policy = SandboxPolicy {
+      allowed_commands: vec![
+        "python3".to_string(),
+        "bash".to_string(),
+        "node".to_string(),
+      ],
+      ..Default::default()
+    };
     ScriptTool::new(dir.to_path_buf(), Arc::new(policy))
   }
 

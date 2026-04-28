@@ -46,7 +46,7 @@ pub async fn execute(
   let image_base64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
 
   // Determine image format
-  let image_format = match image_path.to_lowercase().split('.').last() {
+  let image_format = match image_path.to_lowercase().split('.').next_back() {
     Some("jpg") | Some("jpeg") => "image/jpeg",
     Some("png") => "image/png",
     Some("gif") => "image/gif",
@@ -130,11 +130,10 @@ pub async fn execute(
   // Save to file if specified
   if let Some(output_path) = output {
     println!("💾 Saving results to: {}", output_path);
-    let output_content = format!("# Image Analysis Results\n\n");
-    let output_content = format!("{}**Model:** {}\n", output_content, model);
-    let output_content = format!("{}**Image:** {}\n", output_content, image_path);
-    let output_content = format!("{}**Prompt:** {}\n\n", output_content, prompt);
-    let output_content = format!("{}**Analysis:**\n{}\n", output_content, response_text);
+    let output_content = format!(
+      "# Image Analysis Results\n\n**Model:** {}\n**Image:** {}\n**Prompt:** {}\n\n**Analysis:**\n{}\n",
+      model, image_path, prompt, response_text
+    );
 
     fs::write(&output_path, &output_content).await?;
     println!("✅ Results saved successfully");

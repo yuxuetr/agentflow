@@ -53,6 +53,7 @@ pub enum ContentBlock {
 
 impl ContentType {
   /// Convert content to a plain text string (for backward compatibility)
+  #[allow(clippy::inherent_to_string)]
   pub fn to_string(&self) -> String {
     match self {
       ContentType::Text(text) => text.clone(),
@@ -112,6 +113,11 @@ impl ContentType {
         })
         .sum(),
     }
+  }
+
+  /// Check whether the content has zero bytes or characters.
+  pub fn is_empty(&self) -> bool {
+    self.len() == 0
   }
 }
 

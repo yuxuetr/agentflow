@@ -132,6 +132,7 @@ pub struct MultimodalMessage {
 
 impl MultimodalMessage {
   /// Create a new multimodal message
+  #[allow(clippy::new_ret_no_self)]
   pub fn new<S: Into<String>>(role: S) -> MultimodalMessageBuilder {
     MultimodalMessageBuilder {
       role: role.into(),

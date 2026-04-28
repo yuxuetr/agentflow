@@ -177,7 +177,7 @@ impl fmt::Display for ResourceLimits {
 }
 
 /// Builder for ResourceLimits with fluent API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ResourceLimitsBuilder {
   max_state_size: Option<usize>,
   max_value_size: Option<usize>,
@@ -186,20 +186,6 @@ pub struct ResourceLimitsBuilder {
   auto_cleanup: Option<bool>,
   enable_streaming: Option<bool>,
   stream_chunk_size: Option<usize>,
-}
-
-impl Default for ResourceLimitsBuilder {
-  fn default() -> Self {
-    Self {
-      max_state_size: None,
-      max_value_size: None,
-      max_cache_entries: None,
-      cleanup_threshold: None,
-      auto_cleanup: None,
-      enable_streaming: None,
-      stream_chunk_size: None,
-    }
-  }
 }
 
 impl ResourceLimitsBuilder {

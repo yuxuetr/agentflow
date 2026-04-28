@@ -127,14 +127,12 @@ impl RetryPolicyBuilder {
   pub fn build(self) -> RetryPolicy {
     RetryPolicy {
       max_attempts: self.max_attempts.unwrap_or(3),
-      strategy: self
-        .strategy
-        .unwrap_or_else(|| RetryStrategy::ExponentialBackoff {
-          initial_delay_ms: 100,
-          max_delay_ms: 10000,
-          multiplier: 2.0,
-          jitter: true,
-        }),
+      strategy: self.strategy.unwrap_or(RetryStrategy::ExponentialBackoff {
+        initial_delay_ms: 100,
+        max_delay_ms: 10000,
+        multiplier: 2.0,
+        jitter: true,
+      }),
       retryable_errors: self.retryable_errors,
       max_duration: self.max_duration,
     }

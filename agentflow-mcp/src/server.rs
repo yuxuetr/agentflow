@@ -204,6 +204,12 @@ impl AgentFlowServerHandler {
   }
 }
 
+impl Default for AgentFlowServerHandler {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl MCPServerHandler for AgentFlowServerHandler {
   fn list_tools(&self) -> Vec<ToolDefinition> {
     self.tools.values().cloned().collect()

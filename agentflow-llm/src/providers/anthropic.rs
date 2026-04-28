@@ -143,8 +143,8 @@ impl LLMProvider for AnthropicProvider {
     let content_text = anthropic_response
       .content
       .first()
-      .and_then(|content| match content {
-        AnthropicContent::Text { text } => Some(text.clone()),
+      .map(|content| match content {
+        AnthropicContent::Text { text } => text.clone(),
       })
       .unwrap_or_default();
 

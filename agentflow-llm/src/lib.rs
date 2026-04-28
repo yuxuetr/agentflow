@@ -106,13 +106,6 @@ pub use providers::stepfun::{
 };
 pub use registry::ModelRegistry;
 
-// External dependencies for configuration
-use dirs;
-use dotenvy;
-
-#[cfg(feature = "logging")]
-use tracing_subscriber;
-
 // Fluent API entry point
 use crate::client::LLMClientBuilder;
 

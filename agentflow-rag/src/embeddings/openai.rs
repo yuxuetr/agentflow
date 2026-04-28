@@ -232,13 +232,13 @@ impl EmbeddingProvider for OpenAIEmbedding {
       }
 
       // If adding this text would exceed batch size, process current batch
-      if current_tokens + tokens > MAX_BATCH_SIZE || current_batch.len() >= 2048 {
-        if !current_batch.is_empty() {
-          let response = self.call_api(current_batch.clone()).await?;
-          all_embeddings.extend(response.data.into_iter().map(|d| d.embedding));
-          current_batch.clear();
-          current_tokens = 0;
-        }
+      if (current_tokens + tokens > MAX_BATCH_SIZE || current_batch.len() >= 2048)
+        && !current_batch.is_empty()
+      {
+        let response = self.call_api(current_batch.clone()).await?;
+        all_embeddings.extend(response.data.into_iter().map(|d| d.embedding));
+        current_batch.clear();
+        current_tokens = 0;
       }
 
       current_batch.push(text.to_string());

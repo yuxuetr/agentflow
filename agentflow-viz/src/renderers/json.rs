@@ -77,8 +77,10 @@ mod tests {
   fn test_render_compact_json() {
     let graph = create_test_graph();
 
-    let mut config = RenderConfig::default();
-    config.pretty_print = false;
+    let config = RenderConfig {
+      pretty_print: false,
+      ..Default::default()
+    };
 
     let renderer = JsonRenderer::new(config);
     let result = renderer.render(&graph).unwrap();

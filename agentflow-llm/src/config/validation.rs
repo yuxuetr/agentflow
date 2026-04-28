@@ -76,7 +76,7 @@ impl ConfigValidator {
 
     // Validate temperature range
     if let Some(temp) = model_config.temperature {
-      if temp < 0.0 || temp > 2.0 {
+      if !(0.0..=2.0).contains(&temp) {
         return Err(LLMError::InvalidModelConfig {
           message: "Temperature must be between 0.0 and 2.0".to_string(),
         });
@@ -85,7 +85,7 @@ impl ConfigValidator {
 
     // Validate top_p range
     if let Some(top_p) = model_config.top_p {
-      if top_p < 0.0 || top_p > 1.0 {
+      if !(0.0..=1.0).contains(&top_p) {
         return Err(LLMError::InvalidModelConfig {
           message: "top_p must be between 0.0 and 1.0".to_string(),
         });
@@ -102,19 +102,15 @@ impl ConfigValidator {
 
       // Provider-specific limits
       match model_config.vendor.as_str() {
-        "openai" => {
-          if max_tokens > 128000 {
-            return Err(LLMError::InvalidModelConfig {
-              message: "OpenAI models typically support max 128k tokens".to_string(),
-            });
-          }
+        "openai" if max_tokens > 128000 => {
+          return Err(LLMError::InvalidModelConfig {
+            message: "OpenAI models typically support max 128k tokens".to_string(),
+          });
         }
-        "anthropic" => {
-          if max_tokens > 200000 {
-            return Err(LLMError::InvalidModelConfig {
-              message: "Anthropic models typically support max 200k tokens".to_string(),
-            });
-          }
+        "anthropic" if max_tokens > 200000 => {
+          return Err(LLMError::InvalidModelConfig {
+            message: "Anthropic models typically support max 200k tokens".to_string(),
+          });
         }
         _ => {}
       }
@@ -171,12 +167,12 @@ impl ConfigValidator {
     // Collect all required environment variables
     let mut required_env_vars = HashSet::new();
 
-    for (_, provider_config) in &self.config.providers {
+    for provider_config in self.config.providers.values() {
       required_env_vars.insert(provider_config.api_key_env.clone());
     }
 
     // Also check for models without explicit provider config
-    for (_, model_config) in &self.config.models {
+    for model_config in self.config.models.values() {
       if !self.config.providers.contains_key(&model_config.vendor) {
         // Use default environment variable patterns
         let default_env_var = format!("{}_API_KEY", model_config.vendor.to_uppercase());
@@ -274,6 +270,12 @@ impl ValidationReport {
     }
 
     summary
+  }
+}
+
+impl Default for ValidationReport {
+  fn default() -> Self {
+    Self::new()
   }
 }
 

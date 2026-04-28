@@ -12,18 +12,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum ASRResponseFormat {
   Json,
+  #[default]
   Text,
   Srt,
   Vtt,
-}
-
-impl Default for ASRResponseFormat {
-  fn default() -> Self {
-    ASRResponseFormat::Text
-  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

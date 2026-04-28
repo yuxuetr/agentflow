@@ -27,9 +27,9 @@ fn get_string_param_optional(params: &HashMap<String, serde_yaml::Value>, key: &
 
 pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
   let node_type = match node_def.node_type.as_str() {
-    "llm" => Ok(NodeType::Standard(Arc::new(LlmNode::default()))),
-    "http" => Ok(NodeType::Standard(Arc::new(HttpNode::default()))),
-    "file" => Ok(NodeType::Standard(Arc::new(FileNode::default()))),
+    "llm" => Ok(NodeType::Standard(Arc::new(LlmNode))),
+    "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
+    "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
     "template" => {
       let template_str = get_string_param_optional(&node_def.parameters, "template");
       let mut node = TemplateNode::new(&node_def.id, &template_str);

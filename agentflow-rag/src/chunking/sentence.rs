@@ -235,7 +235,7 @@ mod tests {
 
         // Some chunks might not have overlap if sentences are too long
         // Just verify the structure is correct
-        assert!(current.len() > 0 && next.len() > 0);
+        assert!(!current.is_empty() && !next.is_empty());
       }
     }
   }

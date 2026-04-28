@@ -321,7 +321,7 @@ impl VectorStore for QdrantStore {
       collection
     );
 
-    let point_ids: Vec<PointId> = ids.into_iter().map(|id| PointId::from(id)).collect();
+    let point_ids: Vec<PointId> = ids.into_iter().map(PointId::from).collect();
 
     self
       .client

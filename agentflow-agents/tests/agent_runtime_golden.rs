@@ -96,7 +96,7 @@ fn normalize_runtime_json(value: &mut Value) {
 async fn react_runtime_trace_matches_golden_fixture() {
   let model = "mock-golden-runtime";
   init_mock_model(
-    &model,
+    model,
     &[
       r#"{"thought":"use tool","action":{"tool":"echo","params":{"text":"hi"}}}"#,
       r#"{"thought":"done","answer":"final: echo: hi"}"#,

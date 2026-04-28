@@ -281,7 +281,7 @@ fn default_batch_size() -> usize {
 }
 
 /// Indexing statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IndexingStats {
   /// Number of documents processed
   pub documents_processed: usize,
@@ -297,18 +297,6 @@ pub struct IndexingStats {
 
   /// Number of errors encountered
   pub errors: usize,
-}
-
-impl Default for IndexingStats {
-  fn default() -> Self {
-    Self {
-      documents_processed: 0,
-      chunks_created: 0,
-      embeddings_generated: 0,
-      processing_time_ms: 0,
-      errors: 0,
-    }
-  }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use base64::{engine::general_purpose, Engine as _};
 use std::env;
 use tokio::fs;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   prompt: String,
   model: Option<String>,

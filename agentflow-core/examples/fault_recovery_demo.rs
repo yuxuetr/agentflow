@@ -268,7 +268,7 @@ async fn resume_workflow(
   let last_completed = checkpoint.last_completed_node.as_str();
 
   // Workflow steps
-  let all_steps = vec![
+  let all_steps = [
     "load_data",
     "process_data",
     "validate_results",

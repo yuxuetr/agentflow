@@ -185,16 +185,22 @@ impl ModelRegistry {
       invalid_providers: Vec::new(),
     };
 
-    let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
-      message: format!("Providers lock poisoned: {}", e),
-    })?;
+    let providers = {
+      let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
+        message: format!("Providers lock poisoned: {}", e),
+      })?;
+      providers_guard
+        .iter()
+        .map(|(name, provider)| (name.clone(), Arc::clone(provider)))
+        .collect::<Vec<_>>()
+    };
 
-    for (provider_name, provider) in providers_guard.iter() {
+    for (provider_name, provider) in providers {
       match provider.validate_config().await {
-        Ok(()) => report.valid_providers.push(provider_name.clone()),
+        Ok(()) => report.valid_providers.push(provider_name),
         Err(e) => report
           .invalid_providers
-          .push((provider_name.clone(), e.to_string())),
+          .push((provider_name, e.to_string())),
       }
     }
 
@@ -206,7 +212,7 @@ impl ModelRegistry {
     let mut unique_providers = std::collections::HashSet::new();
 
     // Collect all unique providers from model configurations
-    for (_, model_config) in &config.models {
+    for model_config in config.models.values() {
       unique_providers.insert(model_config.vendor.clone());
     }
 

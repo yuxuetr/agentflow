@@ -73,7 +73,7 @@ impl StepFunPDFParser {
 
       let content_response = self
         .client
-        .get(&format!(
+        .get(format!(
           "https://api.stepfun.com/v1/files/{}/content",
           file_id
         ))

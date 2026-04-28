@@ -23,7 +23,7 @@ fn json_to_tera_value(json: &JsonValue) -> TeraValue {
       } else if let Some(u) = n.as_u64() {
         TeraValue::Number(u.into())
       } else if let Some(f) = n.as_f64() {
-        TeraValue::Number(serde_json::Number::from_f64(f).unwrap().into())
+        TeraValue::Number(serde_json::Number::from_f64(f).unwrap())
       } else {
         TeraValue::Null
       }

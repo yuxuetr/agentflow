@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -208,7 +208,7 @@ impl Flow {
       if !should_run {
         println!("⏭️  Skipping node '{}' due to condition.", node_id);
         let result = Err(AgentFlowError::NodeSkipped);
-        self.persist_step_result(&run_dir, &node_id, &result)?;
+        self.persist_step_result(&run_dir, node_id, &result)?;
         state_pool.insert(node_id.to_string(), result);
         continue;
       }
@@ -255,7 +255,7 @@ impl Flow {
         }
       };
 
-      self.persist_step_result(&run_dir, &node_id, &result)?;
+      self.persist_step_result(&run_dir, node_id, &result)?;
 
       match &result {
         Ok(outputs) => {
@@ -679,7 +679,7 @@ impl Flow {
 
   fn persist_step_result(
     &self,
-    run_dir: &PathBuf,
+    run_dir: &Path,
     node_id: &str,
     result: &AsyncNodeResult,
   ) -> Result<(), AgentFlowError> {

@@ -145,7 +145,7 @@ mod tests {
     let doc = loader.load(&file_path).await.unwrap();
 
     assert_eq!(doc.content, "# Heading\n\nContent");
-    assert!(doc.metadata.get("file_type").is_some());
+    assert!(doc.metadata.contains_key("file_type"));
   }
 
   #[tokio::test]

@@ -83,7 +83,7 @@ impl VendorConfigManager {
     for (model_name, model_config) in &source_config.models {
       vendor_models
         .entry(model_config.vendor.clone())
-        .or_insert_with(HashMap::new)
+        .or_default()
         .insert(model_name.clone(), model_config.clone());
     }
 

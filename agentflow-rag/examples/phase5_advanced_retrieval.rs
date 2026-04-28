@@ -218,7 +218,7 @@ fn demo_mmr_reranking(_documents: &[(&str, &str)]) {
 // Helper function to simulate semantic search results
 fn simulate_semantic_results(documents: &[(&str, &str)]) -> Vec<SearchResult> {
   // Simulate vector similarity scores (in real usage, these come from vector DB)
-  let scores = vec![0.92, 0.88, 0.95, 0.75, 0.90, 0.85, 0.70];
+  let scores = [0.92, 0.88, 0.95, 0.75, 0.90, 0.85, 0.70];
 
   documents
     .iter()

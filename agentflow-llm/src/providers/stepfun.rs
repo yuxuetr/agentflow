@@ -13,6 +13,7 @@ use tokio_stream::Stream;
 
 /// Model types supported by StepFun
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 #[allow(dead_code)] // Some variants like VoiceClone are defined but not yet used in routing logic
 enum ModelType {
   Text,

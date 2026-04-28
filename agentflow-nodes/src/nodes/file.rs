@@ -81,7 +81,7 @@ mod tests {
     let file_path_str = file_path.to_str().unwrap();
 
     // Write to file
-    let write_node = FileNode::default();
+    let write_node = FileNode;
     let mut write_inputs = AsyncNodeInputs::new();
     write_inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
     write_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
@@ -91,7 +91,7 @@ mod tests {
     assert!(write_result.is_ok());
 
     // Read from file
-    let read_node = FileNode::default();
+    let read_node = FileNode;
     let mut read_inputs = AsyncNodeInputs::new();
     read_inputs.insert("operation".to_string(), FlowValue::Json(json!("read")));
     read_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));

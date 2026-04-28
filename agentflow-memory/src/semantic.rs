@@ -717,7 +717,7 @@ mod tests {
 
     for i in 0..5 {
       mem
-        .add_message(Message::user(sid, &format!("message {i}")))
+        .add_message(Message::user(sid, format!("message {i}")))
         .await
         .unwrap();
     }

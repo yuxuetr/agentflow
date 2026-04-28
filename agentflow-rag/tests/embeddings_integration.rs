@@ -42,7 +42,7 @@ async fn setup_test_collection(
 
   let documents: Vec<Document> = texts
     .into_iter()
-    .zip(embeddings.into_iter())
+    .zip(embeddings)
     .enumerate()
     .map(|(i, (text, embedding))| {
       Document::new(text)

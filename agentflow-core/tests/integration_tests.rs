@@ -87,7 +87,6 @@ async fn test_retry_max_attempts_with_error_context() {
 
   // After retry exhaustion, we may get RetryExhausted
   // The original error should be in the context's error chain
-  assert!(context.error_chain.len() > 0);
   assert!(!context.error_chain.is_empty());
 }
 

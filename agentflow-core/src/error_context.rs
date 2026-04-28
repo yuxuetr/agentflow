@@ -141,15 +141,9 @@ impl ErrorContext {
   pub fn detailed_report(&self) -> String {
     let mut report = String::new();
 
-    report.push_str(&format!(
-      "╔══════════════════════════════════════════════════════════════╗\n"
-    ));
-    report.push_str(&format!(
-      "║ ERROR CONTEXT REPORT                                         ║\n"
-    ));
-    report.push_str(&format!(
-      "╠══════════════════════════════════════════════════════════════╣\n"
-    ));
+    report.push_str("╔══════════════════════════════════════════════════════════════╗\n");
+    report.push_str("║ ERROR CONTEXT REPORT                                         ║\n");
+    report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
     report.push_str(&format!("  Run ID: {}\n", self.run_id));
     report.push_str(&format!(
       "  Failed Node: {} ({})\n",
@@ -163,10 +157,8 @@ impl ErrorContext {
       report.push_str(&format!("  Retry Attempt: {}\n", attempt + 1));
     }
 
-    report.push_str(&format!(
-      "╠══════════════════════════════════════════════════════════════╣\n"
-    ));
-    report.push_str(&format!("  ERROR CHAIN:\n"));
+    report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
+    report.push_str("  ERROR CHAIN:\n");
     for (i, error_info) in self.error_chain.iter().enumerate() {
       if i == 0 {
         report.push_str(&format!(
@@ -185,10 +177,8 @@ impl ErrorContext {
     }
 
     if !self.execution_history.is_empty() {
-      report.push_str(&format!(
-        "╠══════════════════════════════════════════════════════════════╣\n"
-      ));
-      report.push_str(&format!("  EXECUTION HISTORY:\n"));
+      report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
+      report.push_str("  EXECUTION HISTORY:\n");
       for (i, node) in self.execution_history.iter().enumerate() {
         report.push_str(&format!("    {}. {}\n", i + 1, node));
       }
@@ -196,10 +186,8 @@ impl ErrorContext {
 
     if let Some(inputs) = &self.inputs {
       if !inputs.is_empty() {
-        report.push_str(&format!(
-          "╠══════════════════════════════════════════════════════════════╣\n"
-        ));
-        report.push_str(&format!("  NODE INPUTS:\n"));
+        report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
+        report.push_str("  NODE INPUTS:\n");
         for (key, value) in inputs.iter() {
           report.push_str(&format!("    {}: {}\n", key, value));
         }
@@ -207,18 +195,14 @@ impl ErrorContext {
     }
 
     if !self.metadata.is_empty() {
-      report.push_str(&format!(
-        "╠══════════════════════════════════════════════════════════════╣\n"
-      ));
-      report.push_str(&format!("  METADATA:\n"));
+      report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
+      report.push_str("  METADATA:\n");
       for (key, value) in self.metadata.iter() {
         report.push_str(&format!("    {}: {}\n", key, value));
       }
     }
 
-    report.push_str(&format!(
-      "╚══════════════════════════════════════════════════════════════╝\n"
-    ));
+    report.push_str("╚══════════════════════════════════════════════════════════════╝\n");
 
     report
   }

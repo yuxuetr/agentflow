@@ -241,7 +241,7 @@ pub struct RateLimitConfig {
 }
 
 /// Main configuration structure for all LLM models and providers
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LLMConfig {
   /// Model configurations keyed by model name
   pub models: HashMap<String, ModelConfig>,
@@ -353,7 +353,7 @@ impl LLMConfig {
       }
 
       // Check if API key is available
-      if let Err(_) = self.get_api_key(&model_config.vendor) {
+      if self.get_api_key(&model_config.vendor).is_err() {
         return Err(LLMError::MissingApiKey {
           provider: model_config.vendor.clone(),
         });
@@ -361,7 +361,7 @@ impl LLMConfig {
 
       // Validate model-specific configuration
       if let Some(temp) = model_config.temperature {
-        if temp < 0.0 || temp > 2.0 {
+        if !(0.0..=2.0).contains(&temp) {
           return Err(LLMError::InvalidModelConfig {
             message: format!(
               "Temperature for model '{}' must be between 0.0 and 2.0",
@@ -372,7 +372,7 @@ impl LLMConfig {
       }
 
       if let Some(top_p) = model_config.top_p {
-        if top_p < 0.0 || top_p > 1.0 {
+        if !(0.0..=1.0).contains(&top_p) {
           return Err(LLMError::InvalidModelConfig {
             message: format!(
               "top_p for model '{}' must be between 0.0 and 1.0",
@@ -383,7 +383,7 @@ impl LLMConfig {
       }
 
       if let Some(freq_penalty) = model_config.frequency_penalty {
-        if freq_penalty < 0.0 || freq_penalty > 2.0 {
+        if !(0.0..=2.0).contains(&freq_penalty) {
           return Err(LLMError::InvalidModelConfig {
             message: format!(
               "frequency_penalty for model '{}' must be between 0.0 and 2.0",
@@ -403,16 +403,6 @@ impl LLMConfig {
     }
 
     Ok(())
-  }
-}
-
-impl Default for LLMConfig {
-  fn default() -> Self {
-    Self {
-      models: HashMap::new(),
-      providers: HashMap::new(),
-      defaults: GlobalDefaults::default(),
-    }
   }
 }
 

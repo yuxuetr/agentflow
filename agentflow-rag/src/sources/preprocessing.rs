@@ -456,25 +456,13 @@ impl DocumentDeduplicator {
 }
 
 /// Complete preprocessing pipeline
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PreprocessingPipeline {
   cleaner: TextCleaner,
   language_detector: LanguageDetector,
   deduplicator: DocumentDeduplicator,
   enable_language_detection: bool,
   enable_deduplication: bool,
-}
-
-impl Default for PreprocessingPipeline {
-  fn default() -> Self {
-    Self {
-      cleaner: TextCleaner::default(),
-      language_detector: LanguageDetector::default(),
-      deduplicator: DocumentDeduplicator::default(),
-      enable_language_detection: false,
-      enable_deduplication: false,
-    }
-  }
 }
 
 impl PreprocessingPipeline {

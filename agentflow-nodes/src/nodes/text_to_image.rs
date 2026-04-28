@@ -36,9 +36,10 @@ pub struct TextToImageNode {
   pub timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum ImageResponseFormat {
   #[serde(rename = "b64_json")]
+  #[default]
   Base64Json, // Return as base64 encoded JSON
   #[serde(rename = "url")]
   Url, // Return as URL reference
@@ -49,12 +50,6 @@ pub struct StyleReference {
   pub image_url: Option<String>,  // Reference image URL
   pub style_weight: Option<f32>,  // Style influence weight (0.0-1.0)
   pub style_name: Option<String>, // Named style preset
-}
-
-impl Default for ImageResponseFormat {
-  fn default() -> Self {
-    ImageResponseFormat::Base64Json
-  }
 }
 
 impl TextToImageNode {
