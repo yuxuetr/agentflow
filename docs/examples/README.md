@@ -4,6 +4,16 @@ This directory contains comprehensive documentation for AgentFlow examples, demo
 
 ## Available Examples
 
+### 📘 [Runnable Tutorials (中文)](./runnable_tutorials_zh.md)
+
+Copy-and-run tutorials for the current AgentFlow runtime paths:
+
+- Fixed DAG workflow
+- Agent-native ReAct runtime
+- DAG + Agent hybrid workflow
+- Skill + MCP tool discovery and call
+- `WorkflowTool` wrapping a child DAG
+
 ### 🤖 [Simple Agent LLM Flow](./simple_agent_llm_flow.md)
 
 **File**: `examples/simple_agent_llm_flow.rs`
@@ -64,6 +74,9 @@ mmdc -i simple_agent_llm_flow_diagram.mermaid -o flow_diagram.png
 
 ### 🌟 **AI Integration Examples**
 - `simple_agent_llm_flow.rs` - LLM-powered workflows with intelligent routing
+- `agentflow-core/examples/fixed_dag_workflow.rs` - deterministic fixed DAG workflow without an LLM
+- `agentflow-agents/examples/agent_native_react.rs` - mock agent-native ReAct loop with a local echo tool
+- `agentflow-skills/examples/skill_calls_mcp_tool.rs` - Skill loads a local MCP server and calls a discovered tool
 - `agentflow-agents/examples/hybrid_workflow_agent.rs` - DAG + Agent hybrid flow where an `AgentNode` calls a child workflow through `WorkflowTool`
 
 ### 🔧 **Core Functionality Examples** (from main examples/)
