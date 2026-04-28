@@ -39,7 +39,23 @@ Orchestrate and execute complex, multi-node workflows defined in YAML files.
 ```bash
 # Run a workflow file
 agentflow workflow run path/to/your/workflow.yml
+
+# Preview the V2 DAG execution order without running nodes
+agentflow workflow run path/to/your/workflow.yml --dry-run
+
+# Inject CLI inputs, override LLM/skill-agent models, and save final state
+agentflow workflow run path/to/your/workflow.yml \
+  --input topic AgentFlow \
+  --model mock-model \
+  --output result.json
+
+# Inspect validation, structure, analysis, and execution plan
+agentflow workflow debug path/to/your/workflow.yml --validate --plan --analyze
 ```
+
+Current `workflow run` uses the V2 `FlowDefinitionV2 -> GraphNode -> agentflow_core::Flow`
+path. Public flags are wired to behavior; `--watch` currently returns an explicit
+not-implemented error instead of being ignored.
 
 ### `audio`
 
@@ -86,7 +102,7 @@ Directly interact with language models.
 
 **Subcommands:**
 
--   `chat`: Start an interactive chat session (implementation pending).
+-   `chat`: Start an interactive chat session.
 -   `models`: List available models.
 
 **Usage Examples:**
@@ -97,6 +113,9 @@ agentflow llm models
 
 # List models from a specific provider
 agentflow llm models --provider openai
+
+# Chat with an explicit model from ~/.agentflow/models.yml
+agentflow llm chat --model gpt-4o-mini
 ```
 
 ### `config`
@@ -117,4 +136,33 @@ agentflow config init
 
 # Show the current configuration
 agentflow config show
+
+# Show only configured models or validate env var availability
+agentflow config show models
+agentflow config validate
+```
+
+### `skill`
+
+Create, install, inspect, test, and run agent Skills.
+
+**Usage Examples:**
+
+```bash
+# Create and validate a Skill
+agentflow skill init ./skills/code-reviewer
+agentflow skill validate ./skills/code-reviewer
+
+# Inspect model, tools, memory, MCP servers, knowledge, and security settings
+agentflow skill inspect ./skills/code-reviewer
+
+# Discover tools without running the agent
+agentflow skill list-tools ./skills/code-reviewer
+agentflow skill test ./skills/code-reviewer --dry-run
+
+# Run with model override and trace output
+agentflow skill run ./skills/code-reviewer \
+  --message "Review this change" \
+  --model gpt-4o-mini \
+  --trace
 ```
