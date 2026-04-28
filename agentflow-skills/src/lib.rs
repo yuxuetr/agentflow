@@ -42,6 +42,7 @@ pub mod error;
 pub mod index;
 pub mod loader;
 pub mod manifest;
+pub mod marketplace;
 pub mod mcp_tools;
 pub mod skill_md;
 
@@ -54,6 +55,10 @@ pub use loader::SkillLoader;
 pub use manifest::{
   KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SecurityConfig,
   SkillInfo, SkillManifest, ToolConfig,
+};
+pub use marketplace::{
+  FeaturedSkill, MarketplaceResolvedSkill, MarketplaceSkillListing, SkillMarketplace,
+  SkillMarketplaceIndex,
 };
 pub use mcp_tools::{public_tool_name, McpClientPool, McpToolAdapter};
 pub use skill_md::SkillMd;

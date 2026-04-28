@@ -5,6 +5,7 @@ pub mod init;
 pub mod install;
 pub mod list;
 pub mod list_tools;
+pub mod marketplace;
 pub mod run;
 pub mod test;
 pub mod validate;

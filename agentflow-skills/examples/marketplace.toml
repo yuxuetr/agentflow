@@ -1,0 +1,16 @@
+schema_version = 1
+name = "agentflow-example-marketplace"
+description = "Local marketplace that exposes the checked-in example skill registry."
+homepage = "https://github.com/agentflow/agentflow"
+
+[[indexes]]
+name = "examples"
+kind = "organization"
+source = "skills.index.toml"
+description = "Example skills shipped with the AgentFlow repository."
+trust = "local-example"
+
+[[featured]]
+skill = "mcp-basic"
+index = "examples"
+reason = "Minimal Skill that exposes a local MCP server."

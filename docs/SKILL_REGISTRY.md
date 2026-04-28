@@ -126,3 +126,58 @@ without changing local semantics:
 
 This preserves the current no-network CI path while leaving room for Git-backed
 or marketplace-backed distribution.
+
+## Marketplace Manifest
+
+A marketplace manifest groups one or more registry indexes into a browsable
+catalog. It does not replace `skills.index.toml`; instead it points at local,
+organization, or future remote indexes and lets the CLI show install commands
+that still use `agentflow skill install <index_file> <skill>`.
+
+Use `marketplace.toml` as the conventional file name:
+
+```toml
+schema_version = 1
+name = "team-marketplace"
+description = "Curated skills approved for this team."
+homepage = "https://example.com/agentflow/skills"
+
+[[indexes]]
+name = "team"
+kind = "organization"
+source = "skills.index.toml"
+description = "Repository-local team skills."
+trust = "reviewed"
+
+[[featured]]
+skill = "mcp-basic"
+index = "team"
+reason = "Minimal Skill that exposes an MCP server."
+```
+
+Marketplace fields:
+
+- `schema_version`: required compatibility marker. Version `1` is supported.
+- `name`: human-readable marketplace name.
+- `description`: optional marketplace description.
+- `homepage`: optional web page for humans.
+- `indexes[].name`: unique index identifier within the marketplace.
+- `indexes[].kind`: `local`, `organization`, or `remote`. Local validation
+  loads `local` and `organization`; `remote` is declared but not fetched.
+- `indexes[].source`: path to a `skills.index.toml` for local/organization
+  indexes. Relative paths are resolved from the marketplace file directory.
+- `indexes[].trust`: optional trust label such as `reviewed`, `internal`, or
+  `local-example`.
+- `featured[]`: optional curated skill references for UI or docs.
+
+CLI flow:
+
+```bash
+cargo run -p agentflow-cli -- skill marketplace validate agentflow-skills/examples/marketplace.toml
+cargo run -p agentflow-cli -- skill marketplace list agentflow-skills/examples/marketplace.toml
+cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/examples/marketplace.toml mcp-demo
+```
+
+`marketplace resolve` prints the exact `agentflow skill install ...` command.
+The install path remains unchanged, so marketplace browsing does not add a new
+trust or overwrite model.

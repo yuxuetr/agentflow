@@ -120,6 +120,29 @@ channel = "stable"
   .unwrap();
 }
 
+fn write_skill_marketplace(root: &Path) {
+  fs::write(
+    root.join("marketplace.toml"),
+    r#"
+schema_version = 1
+name = "org-marketplace"
+description = "Shared marketplace for registry tests"
+
+[[indexes]]
+name = "org"
+kind = "organization"
+source = "skills.index.toml"
+description = "Organization index"
+
+[[featured]]
+skill = "sample-skill"
+index = "org"
+reason = "Used by tests"
+"#,
+  )
+  .unwrap();
+}
+
 fn mock_react_responses() -> String {
   serde_json::to_string(&vec![
     r#"{"thought":"call echo","action":{"tool":"mcp_local_demo_echo","params":{"text":"from run","api_key":"should-not-print"}}}"#,
@@ -311,6 +334,54 @@ fn skill_install_copies_local_registry_skill_and_respects_force() {
     .stdout(predicate::str::contains(
       "Installed skill: mcp-basic @ 1.0.0",
     ));
+}
+
+#[test]
+fn skill_marketplace_lists_and_resolves_install_command() {
+  let root = TempDir::new().unwrap();
+  write_skill_registry_index(root.path());
+  write_skill_marketplace(root.path());
+  let marketplace = root.path().join("marketplace.toml");
+
+  let mut validate = Command::cargo_bin("agentflow").unwrap();
+  validate
+    .args([
+      "skill",
+      "marketplace",
+      "validate",
+      marketplace.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Skill marketplace is valid"));
+
+  let mut list = Command::cargo_bin("agentflow").unwrap();
+  list
+    .args([
+      "skill",
+      "marketplace",
+      "list",
+      marketplace.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("sample-skill @ 1.2.3"))
+    .stdout(predicate::str::contains("agentflow skill install"))
+    .stdout(predicate::str::contains("skills.index.toml"));
+
+  let mut resolve = Command::cargo_bin("agentflow").unwrap();
+  resolve
+    .args([
+      "skill",
+      "marketplace",
+      "resolve",
+      marketplace.to_str().unwrap(),
+      "sample",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("sample-skill"))
+    .stdout(predicate::str::contains("install: agentflow skill install"));
 }
 
 #[test]

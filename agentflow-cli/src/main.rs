@@ -281,6 +281,8 @@ enum McpCommands {
 enum SkillCommands {
   /// Inspect or validate a local skill registry index
   Index(IndexArgs),
+  /// Browse a local marketplace that groups skill registry indexes
+  Marketplace(MarketplaceArgs),
   /// Create a new standard SKILL.md scaffold
   Init {
     /// Directory to create the skill in
@@ -362,6 +364,12 @@ struct IndexArgs {
   command: SkillIndexCommands,
 }
 
+#[derive(Args)]
+struct MarketplaceArgs {
+  #[command(subcommand)]
+  command: SkillMarketplaceCommands,
+}
+
 #[derive(Subcommand)]
 enum SkillIndexCommands {
   Validate {
@@ -375,6 +383,24 @@ enum SkillIndexCommands {
   Resolve {
     /// Path to the skill registry index file
     index_file: String,
+    /// Skill name or alias to resolve
+    skill: String,
+  },
+}
+
+#[derive(Subcommand)]
+enum SkillMarketplaceCommands {
+  Validate {
+    /// Path to the skill marketplace file
+    marketplace_file: String,
+  },
+  List {
+    /// Path to the skill marketplace file
+    marketplace_file: String,
+  },
+  Resolve {
+    /// Path to the skill marketplace file
+    marketplace_file: String,
     /// Skill name or alias to resolve
     skill: String,
   },
@@ -656,6 +682,18 @@ async fn main() {
         SkillIndexCommands::Resolve { index_file, skill } => {
           skill::index::resolve(index_file, skill).await
         }
+      },
+      SkillCommands::Marketplace(args) => match args.command {
+        SkillMarketplaceCommands::Validate { marketplace_file } => {
+          skill::marketplace::validate(marketplace_file).await
+        }
+        SkillMarketplaceCommands::List { marketplace_file } => {
+          skill::marketplace::list(marketplace_file).await
+        }
+        SkillMarketplaceCommands::Resolve {
+          marketplace_file,
+          skill,
+        } => skill::marketplace::resolve(marketplace_file, skill).await,
       },
       SkillCommands::Init {
         skill_dir,

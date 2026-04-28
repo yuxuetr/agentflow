@@ -236,6 +236,17 @@ cargo run -p agentflow-cli -- skill validate /tmp/agentflow-skills/mcp-basic
 
 `skill install` copies the resolved local skill directory into the target skills directory using the canonical skill name as the destination directory. It refuses to overwrite an existing skill unless `--force` is passed. The default target is `~/.agentflow/skills`.
 
+Browse a marketplace that groups one or more registry indexes:
+
+```bash
+cargo run -p agentflow-cli -- skill marketplace list agentflow-skills/examples/marketplace.toml
+cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/examples/marketplace.toml mcp-demo
+```
+
+Marketplace files are catalogs only. They point at registry indexes and print
+the matching `agentflow skill install <index_file> <skill>` command; install
+still validates and copies from the resolved registry index.
+
 Validate a skill:
 
 ```bash
