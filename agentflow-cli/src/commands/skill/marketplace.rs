@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+use super::install as skill_install;
 use agentflow_skills::SkillMarketplace;
 
 pub async fn validate(marketplace_file: String) -> Result<()> {
@@ -90,4 +91,35 @@ pub async fn resolve(marketplace_file: String, skill: String) -> Result<()> {
   );
 
   Ok(())
+}
+
+pub async fn install(
+  marketplace_file: String,
+  skill: String,
+  target_dir: Option<String>,
+  force: bool,
+) -> Result<()> {
+  let path = Path::new(&marketplace_file);
+  let marketplace = SkillMarketplace::load(path)
+    .with_context(|| format!("Failed to load skill marketplace '{}'", marketplace_file))?;
+  let resolved = marketplace
+    .resolve_local_skill(&skill, path)
+    .with_context(|| {
+      format!(
+        "Failed to resolve skill '{}' from '{}'",
+        skill, marketplace_file
+      )
+    })?;
+
+  println!(
+    "🛒 Resolved '{}' from marketplace '{}' via index '{}'",
+    resolved.skill_name, marketplace.name, resolved.index_name
+  );
+  skill_install::execute(
+    resolved.index_source.display().to_string(),
+    resolved.skill_name,
+    target_dir,
+    force,
+  )
+  .await
 }

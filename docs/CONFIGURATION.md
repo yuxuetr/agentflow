@@ -10,6 +10,70 @@ This document provides a comprehensive reference for AgentFlow's enhanced YAML c
 
 For API key and secret handling rules, see [Secret Management](./SECRET_MANAGEMENT.md).
 
+## Current CLI Model Configuration
+
+AgentFlow CLI currently reads model configuration from:
+
+1. `~/.agentflow/models.yml`
+2. bundled defaults when no user config exists
+
+Secrets should not be stored directly in `models.yml`; use provider `api_key_env`
+fields and set the actual values in the shell or `~/.agentflow/.env`.
+
+Useful commands:
+
+```bash
+agentflow config init
+agentflow config show models
+agentflow config show providers
+agentflow config validate
+agentflow llm models --provider openai --detailed
+agentflow llm chat --model gpt-4o-mini
+```
+
+Runtime model override precedence is:
+
+1. CLI `--model` for the current command.
+2. Node-level `parameters.model` in workflow YAML or `[model].name` in a Skill.
+3. Built-in runtime default such as `gpt-4o`.
+
+The override is supported consistently across:
+
+```bash
+agentflow llm chat --model mock-model
+agentflow workflow run flow.yml --model mock-model
+agentflow skill run ./skills/code-reviewer --message "review" --model mock-model
+agentflow skill chat ./skills/code-reviewer --model mock-model
+```
+
+### Model Alias Design
+
+The recommended next config extension is a small alias section under `defaults`.
+Aliases should be symbolic names resolved by CLI commands before falling back to
+literal model IDs:
+
+```yaml
+defaults:
+  default_chat_model: gpt-4o-mini
+  default_vision_model: step-1o-turbo-vision
+  default_embedding_model: text-embedding-3-small
+  aliases:
+    fast: gpt-4o-mini
+    strong: gpt-4o
+    local-test: mock-model
+```
+
+Resolution rules:
+
+- `--model fast` should resolve to `defaults.aliases.fast` when present.
+- Explicit model names still work unchanged.
+- Workflow node `parameters.model` and Skill `[model].name` should use the same
+  alias resolver as CLI `--model`.
+- Missing aliases should produce an actionable error that lists configured aliases.
+
+This keeps workflow YAML portable while allowing each environment to map aliases
+to provider-specific model IDs.
+
 ## Configuration File Structure
 
 ### Complete Configuration Template

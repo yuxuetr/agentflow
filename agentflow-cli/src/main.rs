@@ -427,6 +427,18 @@ enum SkillMarketplaceCommands {
     /// Skill name or alias to resolve
     skill: String,
   },
+  Install {
+    /// Path to the skill marketplace file
+    marketplace_file: String,
+    /// Skill name or alias to install
+    skill: String,
+    /// Target skills directory (default: ~/.agentflow/skills)
+    #[arg(short, long)]
+    dir: Option<String>,
+    /// Overwrite an existing installed skill directory
+    #[arg(long)]
+    force: bool,
+  },
 }
 
 #[derive(Subcommand)]
@@ -719,6 +731,12 @@ async fn main() {
           marketplace_file,
           skill,
         } => skill::marketplace::resolve(marketplace_file, skill).await,
+        SkillMarketplaceCommands::Install {
+          marketplace_file,
+          skill,
+          dir,
+          force,
+        } => skill::marketplace::install(marketplace_file, skill, dir, force).await,
       },
       SkillCommands::Init {
         skill_dir,

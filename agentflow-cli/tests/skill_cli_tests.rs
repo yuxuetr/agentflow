@@ -416,6 +416,39 @@ fn skill_marketplace_lists_and_resolves_install_command() {
 }
 
 #[test]
+fn skill_marketplace_install_resolves_and_installs_skill() {
+  let root = TempDir::new().unwrap();
+  write_skill_registry_index(root.path());
+  write_skill_marketplace(root.path());
+  let marketplace = root.path().join("marketplace.toml");
+  let install_root = TempDir::new().unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "sample",
+      "--dir",
+      install_root.path().to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Resolved 'sample-skill'"))
+    .stdout(predicate::str::contains(
+      "Installed skill: sample-skill @ 1.2.3",
+    ));
+
+  assert!(install_root
+    .path()
+    .join("sample-skill")
+    .join("skill.toml")
+    .is_file());
+}
+
+#[test]
 fn skill_validate_checks_mcp_server_config() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
