@@ -1,0 +1,40 @@
+# Skill-Agent Hybrid Workflow Example
+#
+# Uses a local mock Skill and can be dry-run without external API keys.
+#
+# Dry run:
+#   agentflow workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+#
+# Run with the mock provider:
+#   mkdir -p ~/.agentflow
+#   cat > ~/.agentflow/models.yml <<'YAML'
+#   models:
+#     mock-model:
+#       vendor: mock
+#       type: text
+#       model_id: mock-model
+#   providers:
+#     mock:
+#       api_key_env: MOCK_API_KEY
+#   YAML
+#   AGENTFLOW_MOCK_RESPONSE='{"thought":"done","answer":"Looks good."}' \
+#     agentflow workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml \
+#       --model mock-model \
+#       --output /tmp/agentflow-skill-agent.json
+
+name: "Skill Agent Hybrid"
+description: "A deterministic DAG step followed by a config-first skill_agent node."
+
+nodes:
+  - id: prepare_task
+    type: template
+    parameters:
+      template: "Review the AgentFlow CLI workflow changes."
+
+  - id: review_with_skill
+    type: skill_agent
+    dependencies: ["prepare_task"]
+    input_mapping:
+      message: "{{ nodes.prepare_task.outputs.output }}"
+    parameters:
+      skill: "agentflow-cli/examples/skills/mock-reviewer"

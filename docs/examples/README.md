@@ -14,6 +14,17 @@ Copy-and-run tutorials for the current AgentFlow runtime paths:
 - Skill + MCP tool discovery and call
 - `WorkflowTool` wrapping a child DAG
 
+### 🧰 [CLI Config-First Tutorial](./cli_config_first_tutorial.md)
+
+Copy-and-run CLI tutorial for the current V2 path:
+
+- mock model configuration
+- fixed DAG dry-run and execution
+- Skill inspect/list-tools/test
+- Skill run with `--model`, `--memory`, and `--trace`
+- `skill_agent` workflow execution
+- marketplace install flow
+
 ### 🤖 [Simple Agent LLM Flow](./simple_agent_llm_flow.md)
 
 **File**: `examples/simple_agent_llm_flow.rs`

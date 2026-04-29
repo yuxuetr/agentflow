@@ -1,0 +1,28 @@
+# Fixed DAG Basic Example
+#
+# No external API keys required.
+#
+# Dry run:
+#   agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+#
+# Run:
+#   agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml \
+#     --input topic AgentFlow \
+#     --output /tmp/agentflow-fixed-dag.json
+
+name: "Fixed DAG Basic"
+description: "A deterministic two-step template workflow."
+
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Topic: {{ topic | default(value='AgentFlow') }}"
+
+  - id: summarize
+    type: template
+    dependencies: ["prepare"]
+    input_mapping:
+      prepared: "{{ nodes.prepare.outputs.output }}"
+    parameters:
+      template: "Summary generated from {{ prepared }}"

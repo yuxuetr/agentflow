@@ -1,0 +1,16 @@
+[skill]
+name = "mock-reviewer"
+version = "0.1.0"
+description = "Mock reviewer skill for local CLI and workflow examples"
+
+[persona]
+role = "You are a concise reviewer. Return direct review feedback."
+
+[model]
+name = "mock-model"
+max_iterations = 3
+budget_tokens = 4000
+
+[memory]
+type = "session"
+window_tokens = 4000
