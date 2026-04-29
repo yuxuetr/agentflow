@@ -1,0 +1,48 @@
+# RAG + Skill Assistant Workflow Example
+#
+# Dry run does not require Qdrant or API keys:
+#   cargo run -p agentflow-cli --features rag -- \
+#     workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+#
+# Full execution requires:
+#   1. Build/run agentflow-cli with the `rag` feature.
+#   2. Qdrant reachable at http://localhost:6334.
+#   3. Embedding model credentials, for example OPENAI_API_KEY.
+#   4. A configured chat model, or pass --model mock-model for local mock runs.
+
+name: "RAG Skill Assistant"
+description: "Search a RAG collection, then pass the retrieved context to a Skill-backed agent."
+
+nodes:
+  - id: search_knowledge
+    type: rag
+    parameters:
+      operation: search
+      qdrant_url: "http://localhost:6334"
+      collection: "agentflow_docs"
+      query: "How should AgentFlow combine DAG workflows with agent-native Skills?"
+      top_k: 5
+      search_type: semantic
+      embedding_model: "text-embedding-3-small"
+
+  - id: prepare_answer_task
+    type: template
+    dependencies: ["search_knowledge"]
+    input_mapping:
+      search_results: "{{ nodes.search_knowledge.outputs.results }}"
+    parameters:
+      template: |
+        Use the retrieved context to answer this implementation question:
+
+        How should AgentFlow combine deterministic DAG workflows with agent-native Skills?
+
+        Retrieved context:
+        {{ search_results }}
+
+  - id: answer_with_skill
+    type: skill_agent
+    dependencies: ["prepare_answer_task"]
+    input_mapping:
+      message: "{{ nodes.prepare_answer_task.outputs.output }}"
+    parameters:
+      skill: "agentflow-cli/examples/skills/mock-reviewer"

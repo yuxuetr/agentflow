@@ -23,6 +23,7 @@ Copy-and-run CLI tutorial for the current V2 path:
 - Skill inspect/list-tools/test
 - Skill run with `--model`, `--memory`, and `--trace`
 - `skill_agent` workflow execution
+- RAG + Skill workflow dry-run with `agentflow-cli --features rag`
 - marketplace install flow
 
 ### 🤖 [Simple Agent LLM Flow](./simple_agent_llm_flow.md)
@@ -89,6 +90,7 @@ mmdc -i simple_agent_llm_flow_diagram.mermaid -o flow_diagram.png
 - `agentflow-agents/examples/agent_native_react.rs` - mock agent-native ReAct loop with a local echo tool
 - `agentflow-skills/examples/skill_calls_mcp_tool.rs` - Skill loads a local MCP server and calls a discovered tool
 - `agentflow-agents/examples/hybrid_workflow_agent.rs` - DAG + Agent hybrid flow where an `AgentNode` calls a child workflow through `WorkflowTool`
+- `agentflow-cli/examples/workflows/rag_skill_assistant.yml` - config-first RAG search followed by a Skill-backed agent node; dry-run is CI-friendly, full execution requires Qdrant and embedding credentials
 
 ### 🔧 **Core Functionality Examples** (from main examples/)
 - `hello_world.rs` - Basic AsyncNode functionality

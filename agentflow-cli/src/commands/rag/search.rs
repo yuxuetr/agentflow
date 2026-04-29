@@ -1,5 +1,4 @@
 use agentflow_rag::{
-  embeddings::OpenAIEmbedding,
   retrieval::{bm25::BM25Retriever, hybrid::HybridRetriever},
   vectorstore::{QdrantStore, VectorStore},
 };

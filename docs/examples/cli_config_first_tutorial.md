@@ -66,7 +66,21 @@ AGENTFLOW_MOCK_RESPONSE='{"thought":"done","answer":"Looks good."}' \
 The final state JSON contains the skill-agent `response`, `session_id`,
 `agent_result`, and `agent_resume` fields.
 
-## 6. Marketplace Install Flow
+## 6. Dry-Run A RAG + Skill Workflow
+
+This verifies the config-first shape for a workflow that searches a RAG
+collection and then passes retrieved context into a Skill-backed agent. The
+dry-run path does not contact Qdrant or an embedding provider.
+
+```bash
+cargo run -p agentflow-cli --features rag -- \
+  workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+```
+
+Full execution additionally requires Qdrant, embedding credentials such as
+`OPENAI_API_KEY`, and a configured chat model.
+
+## 7. Marketplace Install Flow
 
 ```bash
 agentflow skill marketplace list agentflow-skills/examples/marketplace.toml
@@ -76,7 +90,7 @@ agentflow skill marketplace install agentflow-skills/examples/marketplace.toml m
 agentflow skill inspect /tmp/agentflow-skills/mcp-basic
 ```
 
-## 7. Trace Viewing
+## 8. Trace Viewing
 
 When a command writes trace files, inspect them with:
 

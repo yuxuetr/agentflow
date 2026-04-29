@@ -75,6 +75,8 @@ jobs:
             command: cargo check -p agentflow-mcp --features client,server,stdio
           - name: cli-mcp
             command: cargo check -p agentflow-cli --no-default-features --features mcp
+          - name: cli-rag
+            command: cargo check -p agentflow-cli --no-default-features --features rag
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -94,6 +96,9 @@ jobs:
           cargo run -p agentflow-core --example fixed_dag_workflow
           cargo run -p agentflow-agents --example agent_native_react
           cargo run -p agentflow-agents --example plan_execute_agent
+          cargo run -p agentflow-cli -- workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+          cargo run -p agentflow-cli -- workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+          cargo run -p agentflow-cli --features rag -- workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
           cargo run -p agentflow-cli -- skill index validate agentflow-skills/examples/skills.index.toml
           cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.index.toml
           cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo

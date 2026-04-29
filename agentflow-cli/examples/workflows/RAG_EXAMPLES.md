@@ -72,6 +72,28 @@ agentflow workflow run examples/workflows/rag_knowledge_assistant.yml --features
 5. Generate answer using LLM with search context
 6. Get collection statistics
 
+### 3. RAG + Skill Assistant (`rag_skill_assistant.yml`)
+
+**Purpose**: Demonstrates a hybrid config-first workflow where a RAG node
+retrieves context and a `skill_agent` node turns that context into an answer.
+
+**Dry run**:
+```bash
+cargo run -p agentflow-cli --features rag -- \
+  workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+```
+
+**Full execution requires**:
+- Qdrant reachable at `http://localhost:6334`
+- Embedding credentials, for example `OPENAI_API_KEY`
+- A configured chat model, or `--model mock-model` for local mock-provider tests
+
+**Features Demonstrated**:
+- RAG search node in a CLI YAML workflow
+- Passing retrieved context through a deterministic template node
+- Skill-backed agent execution after retrieval
+- CI-friendly dry-run coverage without external services
+
 ## RAG Node Configuration
 
 ### Common Parameters

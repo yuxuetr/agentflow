@@ -99,6 +99,7 @@ CI-covered combinations:
 cargo check -p agentflow-core --features observability --target-dir /tmp/agentflow-target
 cargo check -p agentflow-mcp --features client,server,stdio --target-dir /tmp/agentflow-target
 cargo check -p agentflow-cli --no-default-features --features mcp --target-dir /tmp/agentflow-target
+cargo check -p agentflow-cli --no-default-features --features rag --target-dir /tmp/agentflow-target
 ```
 
 - [ ] CI-covered feature combinations pass.
@@ -116,6 +117,12 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-agents --example agent_native_react --target-dir /tmp/agentflow-target
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-agents --example plan_execute_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p agentflow-cli --features rag --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
   cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index validate agentflow-skills/examples/skills.index.toml
 HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
@@ -136,6 +143,7 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 - [ ] Fixed DAG example runs.
 - [ ] Agent-native ReAct mock example runs.
 - [ ] Plan-and-Execute mock example runs.
+- [ ] Config-first fixed DAG, Skill-agent, and RAG + Skill dry-runs pass.
 - [ ] Skill registry index validates, lists, and resolves.
 - [ ] DAG + Agent hybrid example runs.
 - [ ] Skill examples validate and list tools through the CLI.
