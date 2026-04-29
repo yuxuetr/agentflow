@@ -1,0 +1,151 @@
+{
+  "workflow_id": "hybrid-fixture",
+  "context": {
+    "run_id": "hybrid-fixture",
+    "trace_id": "hybrid-fixture",
+    "span_id": "workflow"
+  },
+  "workflow_name": "Hybrid Fixture",
+  "started_at": "2026-04-29T00:00:00Z",
+  "completed_at": "2026-04-29T00:00:01Z",
+  "status": {
+    "type": "completed"
+  },
+  "nodes": [
+    {
+      "node_id": "prepare",
+      "context": {
+        "run_id": "hybrid-fixture",
+        "trace_id": "hybrid-fixture",
+        "span_id": "node:prepare",
+        "parent_span_id": "workflow"
+      },
+      "node_type": "template",
+      "started_at": "2026-04-29T00:00:00Z",
+      "completed_at": "2026-04-29T00:00:00.100Z",
+      "duration_ms": 100,
+      "status": "completed",
+      "output": {
+        "output": "Review AgentFlow trace integration."
+      }
+    },
+    {
+      "node_id": "review_agent",
+      "context": {
+        "run_id": "hybrid-fixture",
+        "trace_id": "hybrid-fixture",
+        "span_id": "node:review_agent",
+        "parent_span_id": "workflow"
+      },
+      "node_type": "skill_agent",
+      "started_at": "2026-04-29T00:00:00.100Z",
+      "completed_at": "2026-04-29T00:00:01Z",
+      "duration_ms": 900,
+      "status": "completed",
+      "agent_details": {
+        "context": {
+          "run_id": "hybrid-fixture",
+          "trace_id": "hybrid-fixture",
+          "span_id": "agent:session-hybrid",
+          "parent_span_id": "node:review_agent"
+        },
+        "session_id": "session-hybrid",
+        "answer": "Trace chain is complete.",
+        "stop_reason": {
+          "reason": "final_answer"
+        },
+        "steps": [
+          {
+            "index": 0,
+            "kind": {
+              "type": "observe",
+              "input": "Review AgentFlow trace integration."
+            },
+            "timestamp": "2026-04-29T00:00:00.100Z",
+            "duration_ms": null
+          },
+          {
+            "index": 1,
+            "kind": {
+              "type": "tool_call",
+              "tool": "mcp_fixture_echo",
+              "params": {
+                "message": "trace"
+              }
+            },
+            "timestamp": "2026-04-29T00:00:00.200Z",
+            "duration_ms": null
+          },
+          {
+            "index": 2,
+            "kind": {
+              "type": "tool_result",
+              "tool": "mcp_fixture_echo",
+              "content": "trace",
+              "is_error": false
+            },
+            "timestamp": "2026-04-29T00:00:00.300Z",
+            "duration_ms": null
+          },
+          {
+            "index": 3,
+            "kind": {
+              "type": "final_answer",
+              "answer": "Trace chain is complete."
+            },
+            "timestamp": "2026-04-29T00:00:01Z",
+            "duration_ms": null
+          }
+        ],
+        "events": [
+          {
+            "event": "tool_call_started",
+            "session_id": "session-hybrid",
+            "step_index": 1,
+            "tool": "mcp_fixture_echo",
+            "params": {
+              "message": "trace"
+            },
+            "source": "mcp",
+            "permissions": ["mcp", "network"],
+            "timestamp": "2026-04-29T00:00:00.200Z"
+          },
+          {
+            "event": "tool_call_completed",
+            "session_id": "session-hybrid",
+            "step_index": 1,
+            "tool": "mcp_fixture_echo",
+            "is_error": false,
+            "duration_ms": 12,
+            "source": "mcp",
+            "permissions": ["mcp", "network"],
+            "timestamp": "2026-04-29T00:00:00.300Z"
+          }
+        ],
+        "tool_calls": [
+          {
+            "context": {
+              "run_id": "hybrid-fixture",
+              "trace_id": "hybrid-fixture",
+              "span_id": "tool:0:mcp_fixture_echo",
+              "parent_span_id": "agent:session-hybrid"
+            },
+            "tool": "mcp_fixture_echo",
+            "source": "mcp",
+            "permissions": ["mcp", "network"],
+            "params": {
+              "message": "trace"
+            },
+            "is_error": false,
+            "duration_ms": 12,
+            "is_mcp": true
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "tags": ["hybrid", "fixture"],
+    "environment": "test"
+  }
+}
