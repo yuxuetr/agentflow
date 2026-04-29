@@ -729,6 +729,8 @@ mod tests {
             {
               "event": "tool_call_completed",
               "tool": "mcp_fixture_echo",
+              "source": "mcp",
+              "permissions": ["mcp", "network"],
               "is_error": false,
               "duration_ms": 12
             }
@@ -761,6 +763,11 @@ mod tests {
     assert_eq!(agent.session_id, "session-1");
     assert_eq!(agent.tool_calls.len(), 1);
     assert_eq!(agent.tool_calls[0].tool, "mcp_fixture_echo");
+    assert_eq!(agent.tool_calls[0].source.as_deref(), Some("mcp"));
+    assert_eq!(
+      agent.tool_calls[0].permissions,
+      vec!["mcp".to_string(), "network".to_string()]
+    );
     assert_eq!(
       agent.tool_calls[0].context.parent_span_id.as_deref(),
       Some("agent:session-1")

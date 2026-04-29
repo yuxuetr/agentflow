@@ -258,6 +258,10 @@ pub struct ToolCallTrace {
   pub context: TraceContext,
   pub tool: String,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub source: Option<String>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub permissions: Vec<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub params: Option<serde_json::Value>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub is_error: Option<bool>,
@@ -346,6 +350,8 @@ fn collect_tool_calls(
     calls.push(ToolCallTrace {
       context: TraceContext::default(),
       tool: tool.to_string(),
+      source: None,
+      permissions: Vec::new(),
       params: kind.get("params").cloned(),
       is_error: None,
       duration_ms: None,
@@ -354,6 +360,28 @@ fn collect_tool_calls(
   }
 
   for event in events {
+    if event.get("event").and_then(|value| value.as_str()) == Some("tool_call_started") {
+      let Some(tool) = event.get("tool").and_then(|value| value.as_str()) else {
+        continue;
+      };
+      if let Some(call) = calls.iter_mut().rev().find(|call| call.tool == tool) {
+        call.source = event
+          .get("source")
+          .and_then(|value| value.as_str())
+          .map(ToString::to_string);
+        call.permissions = event
+          .get("permissions")
+          .and_then(|value| value.as_array())
+          .map(|values| {
+            values
+              .iter()
+              .filter_map(|value| value.as_str().map(ToString::to_string))
+              .collect()
+          })
+          .unwrap_or_default();
+      }
+      continue;
+    }
     if event.get("event").and_then(|value| value.as_str()) != Some("tool_call_completed") {
       continue;
     }
@@ -363,6 +391,24 @@ fn collect_tool_calls(
     if let Some(call) = calls.iter_mut().rev().find(|call| call.tool == tool) {
       call.is_error = event.get("is_error").and_then(|value| value.as_bool());
       call.duration_ms = event.get("duration_ms").and_then(|value| value.as_u64());
+      if call.source.is_none() {
+        call.source = event
+          .get("source")
+          .and_then(|value| value.as_str())
+          .map(ToString::to_string);
+      }
+      if call.permissions.is_empty() {
+        call.permissions = event
+          .get("permissions")
+          .and_then(|value| value.as_array())
+          .map(|values| {
+            values
+              .iter()
+              .filter_map(|value| value.as_str().map(ToString::to_string))
+              .collect()
+          })
+          .unwrap_or_default();
+      }
     }
   }
 

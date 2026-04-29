@@ -588,6 +588,8 @@ mod tests {
       tool_calls: vec![ToolCallTrace {
         context: Default::default(),
         tool: "mcp_fixture_echo".to_string(),
+        source: Some("mcp".to_string()),
+        permissions: vec!["mcp".to_string(), "network".to_string()],
         params: Some(serde_json::json!({"message": "hello"})),
         is_error: Some(false),
         duration_ms: Some(7),

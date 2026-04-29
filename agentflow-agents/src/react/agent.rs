@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::{MemoryStore, Message, Role};
-use agentflow_tools::ToolRegistry;
+use agentflow_tools::{ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
 use tracing::{debug, info, warn};
@@ -697,11 +697,15 @@ impl ReActAgent {
           }
 
           let tool_step_index = step_index;
+          let metadata = self.tools.tool_metadata(&tool);
+          let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
           events.push(AgentEvent::ToolCallStarted {
             session_id: self.session_id.clone(),
             step_index: tool_step_index,
             tool: tool.clone(),
             params: params.clone(),
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
             timestamp: Utc::now(),
           });
           steps.push(AgentStep::new(
@@ -737,6 +741,8 @@ impl ReActAgent {
                       tool: tool.clone(),
                       is_error: true,
                       duration_ms,
+                      source: tool_source.clone(),
+                      permissions: tool_permissions.clone(),
                       timestamp: Utc::now(),
                     });
                     self
@@ -772,6 +778,8 @@ impl ReActAgent {
                     tool: tool.clone(),
                     is_error: true,
                     duration_ms: started_at.elapsed().as_millis() as u64,
+                    source: tool_source.clone(),
+                    permissions: tool_permissions.clone(),
                     timestamp: Utc::now(),
                   });
                   return Ok(Self::cancelled_result(
@@ -799,6 +807,8 @@ impl ReActAgent {
                   tool: tool.clone(),
                   is_error: true,
                   duration_ms,
+                  source: tool_source.clone(),
+                  permissions: tool_permissions.clone(),
                   timestamp: Utc::now(),
                 });
                 self
@@ -843,6 +853,8 @@ impl ReActAgent {
                     tool: tool.clone(),
                     is_error: true,
                     duration_ms: started_at.elapsed().as_millis() as u64,
+                    source: tool_source.clone(),
+                    permissions: tool_permissions.clone(),
                     timestamp: Utc::now(),
                   });
                   return Ok(Self::cancelled_result(
@@ -887,6 +899,8 @@ impl ReActAgent {
             tool: tool.clone(),
             is_error: tool_output.is_error,
             duration_ms,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
             timestamp: Utc::now(),
           });
           step_index += 1;
@@ -1387,6 +1401,21 @@ fn has_unresolved_tool_call(result: &AgentRunResult) -> bool {
       )
     })
   })
+}
+
+fn tool_event_metadata(metadata: Option<&ToolMetadata>) -> (Option<String>, Vec<String>) {
+  match metadata {
+    Some(metadata) => (
+      Some(metadata.source.as_str().to_string()),
+      metadata
+        .permissions
+        .permissions
+        .iter()
+        .map(|permission| permission.as_str().to_string())
+        .collect(),
+    ),
+    None => (None, Vec::new()),
+  }
 }
 
 fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) -> AgentRunResult {

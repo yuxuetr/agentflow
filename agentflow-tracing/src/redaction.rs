@@ -333,6 +333,8 @@ mod tests {
       tool_calls: vec![ToolCallTrace {
         context: Default::default(),
         tool: "http".to_string(),
+        source: Some("builtin".to_string()),
+        permissions: vec!["network".to_string()],
         params: Some(serde_json::json!({
           "headers": {"Authorization": "Bearer abc"}
         })),

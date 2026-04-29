@@ -36,6 +36,10 @@ mixed run 串成同一棵树:
 这些字段会直接写入 JSON trace，并与 OpenTelemetry exporter 的 span
 层级保持一致。
 
+Tool call trace 同时记录 `source`、`permissions`、`duration_ms` 和
+`is_error`。这些字段来自 `ToolRegistry` 中注册工具的 metadata，以及
+runtime 对实际调用结果的计时和错误状态。
+
 ---
 
 ## 📦 快速开始

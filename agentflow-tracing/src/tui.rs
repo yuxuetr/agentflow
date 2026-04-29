@@ -182,7 +182,10 @@ fn append_tool_row(out: &mut String, row: usize, tool_call: &ToolCallTrace) {
   out.push_str(&format!(
     "{row:02} tool {} source={} error={}{}\n",
     tool_call.tool,
-    if tool_call.is_mcp { "mcp" } else { "tool" },
+    tool_call
+      .source
+      .as_deref()
+      .unwrap_or(if tool_call.is_mcp { "mcp" } else { "tool" }),
     tool_call.is_error.unwrap_or(false),
     duration
   ));
@@ -286,6 +289,8 @@ mod tests {
         ToolCallTrace {
           context: Default::default(),
           tool: "local_tool".to_string(),
+          source: Some("builtin".to_string()),
+          permissions: Vec::new(),
           params: Some(serde_json::json!({"value": "ok"})),
           is_error: Some(false),
           duration_ms: Some(5),
@@ -294,6 +299,8 @@ mod tests {
         ToolCallTrace {
           context: Default::default(),
           tool: "mcp_echo".to_string(),
+          source: Some("mcp".to_string()),
+          permissions: vec!["mcp".to_string(), "network".to_string()],
           params: Some(serde_json::json!({"api_key": "secret", "message": "hello"})),
           is_error: Some(false),
           duration_ms: Some(12),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::{Tool, ToolError, ToolOutput, ToolPermission};
+use crate::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermission};
 
 /// Central registry for all available tools.
 ///
@@ -53,6 +53,11 @@ impl ToolRegistry {
       .get(name)
       .map(|tool| tool.metadata().permissions.allows(permission))
       .unwrap_or(false)
+  }
+
+  /// Return metadata for a registered tool.
+  pub fn tool_metadata(&self, name: &str) -> Option<ToolMetadata> {
+    self.tools.get(name).map(|tool| tool.metadata())
   }
 
   /// Build an OpenAI-style `tools` array for use in API calls.

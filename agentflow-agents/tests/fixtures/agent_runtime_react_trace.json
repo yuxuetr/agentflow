@@ -86,6 +86,7 @@
       "session_id": "golden-session",
       "step_index": 2,
       "tool": "echo",
+      "source": "builtin",
       "params": {
         "text": "hi"
       },
@@ -98,6 +99,7 @@
       "tool": "echo",
       "is_error": false,
       "duration_ms": 0,
+      "source": "builtin",
       "timestamp": "<timestamp>"
     },
     {

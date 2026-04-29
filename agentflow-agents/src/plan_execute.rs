@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::{MemoryStore, Message};
-use agentflow_tools::ToolRegistry;
+use agentflow_tools::{ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -241,11 +241,15 @@ impl PlanExecuteAgent {
 
       let params = planned_step.params;
       let tool_step_index = step_index;
+      let metadata = self.tools.tool_metadata(&tool);
+      let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
       events.push(AgentEvent::ToolCallStarted {
         session_id: self.session_id.clone(),
         step_index: tool_step_index,
         tool: tool.clone(),
         params: params.clone(),
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
         timestamp: Utc::now(),
       });
       steps.push(AgentStep::new(
@@ -276,6 +280,8 @@ impl PlanExecuteAgent {
             tool: tool.clone(),
             is_error: true,
             duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
             timestamp: Utc::now(),
           });
           return Ok(self.cancelled_result(reason, steps, events));
@@ -287,6 +293,8 @@ impl PlanExecuteAgent {
             tool: tool.clone(),
             is_error: true,
             duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
             timestamp: Utc::now(),
           });
           return Ok(self.timeout_result(Some(timeout_ms), steps, events));
@@ -303,6 +311,8 @@ impl PlanExecuteAgent {
         tool: tool.clone(),
         is_error: output.is_error,
         duration_ms,
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
         timestamp: Utc::now(),
       });
       steps.push(
@@ -606,6 +616,21 @@ fn is_cancelled(token: &Option<AgentCancellationToken>) -> bool {
   token
     .as_ref()
     .is_some_and(AgentCancellationToken::is_cancelled)
+}
+
+fn tool_event_metadata(metadata: Option<&ToolMetadata>) -> (Option<String>, Vec<String>) {
+  match metadata {
+    Some(metadata) => (
+      Some(metadata.source.as_str().to_string()),
+      metadata
+        .permissions
+        .permissions
+        .iter()
+        .map(|permission| permission.as_str().to_string())
+        .collect(),
+    ),
+    None => (None, Vec::new()),
+  }
 }
 
 #[cfg(test)]

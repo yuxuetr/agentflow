@@ -220,6 +220,10 @@ pub enum AgentEvent {
     step_index: usize,
     tool: String,
     params: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    permissions: Vec<String>,
     timestamp: DateTime<Utc>,
   },
   ToolCallCompleted {
@@ -228,6 +232,10 @@ pub enum AgentEvent {
     tool: String,
     is_error: bool,
     duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    permissions: Vec<String>,
     timestamp: DateTime<Utc>,
   },
   ReflectionAdded {

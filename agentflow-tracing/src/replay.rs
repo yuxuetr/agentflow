@@ -205,9 +205,18 @@ fn append_tool_call(out: &mut String, tool_call: &ToolCallTrace, options: Replay
   out.push_str(&format!(
     "      tool: {} source={} error={}\n",
     tool_call.tool,
-    if tool_call.is_mcp { "mcp" } else { "tool" },
+    tool_call
+      .source
+      .as_deref()
+      .unwrap_or(if tool_call.is_mcp { "mcp" } else { "tool" }),
     tool_call.is_error.unwrap_or(false)
   ));
+  if !tool_call.permissions.is_empty() {
+    out.push_str(&format!(
+      "        permissions: {}\n",
+      tool_call.permissions.join(",")
+    ));
+  }
   if let Some(duration_ms) = tool_call.duration_ms {
     out.push_str(&format!("        duration: {duration_ms}ms\n"));
   }
@@ -284,6 +293,8 @@ mod tests {
       tool_calls: vec![ToolCallTrace {
         context: Default::default(),
         tool: "mcp_echo".to_string(),
+        source: Some("mcp".to_string()),
+        permissions: vec!["mcp".to_string(), "network".to_string()],
         params: Some(serde_json::json!({"message": "hello"})),
         is_error: Some(false),
         duration_ms: Some(12),
