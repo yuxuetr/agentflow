@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use super::runtime_options::{apply_memory_override, memory_label};
 use crate::redaction::{redact_cli_text, to_redacted_json_value};
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
@@ -10,6 +11,7 @@ pub async fn execute(
   skill_dir: String,
   message: String,
   model_override: Option<String>,
+  memory_override: Option<String>,
   session_id: Option<String>,
   trace: bool,
 ) -> Result<()> {
@@ -22,6 +24,7 @@ pub async fn execute(
   if let Some(model) = model_override {
     manifest.model.name = Some(model);
   }
+  apply_memory_override(&mut manifest, memory_override.as_deref());
 
   let warnings =
     SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;
@@ -34,6 +37,7 @@ pub async fn execute(
     manifest.skill.name, manifest.skill.version
   );
   println!("🤖 Model: {}", manifest.model.resolved_model());
+  println!("🧠 Memory: {}", memory_label(&manifest));
 
   // Initialise AgentFlow (loads LLM provider config)
   AgentFlow::init()

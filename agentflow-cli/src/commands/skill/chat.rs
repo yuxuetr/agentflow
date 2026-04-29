@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use super::error_context::mcp_context;
+use super::runtime_options::{apply_memory_override, memory_label};
 use crate::redaction::redact_cli_text;
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
@@ -20,6 +21,7 @@ Commands:
 pub async fn execute(
   skill_dir: String,
   model_override: Option<String>,
+  memory_override: Option<String>,
   session_id: Option<String>,
 ) -> Result<()> {
   let dir = Path::new(&skill_dir);
@@ -31,6 +33,7 @@ pub async fn execute(
   if let Some(model) = model_override {
     manifest.model.name = Some(model);
   }
+  apply_memory_override(&mut manifest, memory_override.as_deref());
 
   let warnings =
     SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;
@@ -56,6 +59,7 @@ pub async fn execute(
   println!("╔══════════════════════════════════════════════════╗");
   println!("║  🤖  Skill Chat — {}  ", manifest.skill.name);
   println!("║  Model: {}  ", manifest.model.resolved_model());
+  println!("║  Memory: {}  ", memory_label(&manifest));
   println!("║  Session: {}  ", agent.session_id);
   println!("╚══════════════════════════════════════════════════╝");
   println!("Type a message or /help for commands. Ctrl-C to exit.\n");

@@ -586,6 +586,32 @@ fn skill_run_model_override_replaces_manifest_model() {
 }
 
 #[test]
+fn skill_run_memory_override_replaces_manifest_memory() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let skill = TempDir::new().unwrap();
+  write_mock_mcp_skill(skill.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_react_responses())
+    .args([
+      "skill",
+      "run",
+      skill.path().to_str().unwrap(),
+      "--message",
+      "echo through MCP",
+      "--memory",
+      "none",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Memory: none"))
+    .stdout(predicate::str::contains("Agent: MCP said:"));
+}
+
+#[test]
 fn skill_chat_can_call_mcp_tool_with_mock_llm() {
   let home = TempDir::new().unwrap();
   write_mock_models_config(home.path());

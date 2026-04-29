@@ -333,6 +333,9 @@ enum SkillCommands {
     /// Override the model declared by the skill manifest
     #[arg(long)]
     model: Option<String>,
+    /// Override memory backend for this run: session, sqlite, or none
+    #[arg(long, value_parser = ["session", "sqlite", "none"])]
+    memory: Option<String>,
     /// Reuse an existing session ID for multi-turn conversations
     #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
@@ -347,6 +350,9 @@ enum SkillCommands {
     /// Override the model declared by the skill manifest
     #[arg(long)]
     model: Option<String>,
+    /// Override memory backend for this chat: session, sqlite, or none
+    #[arg(long, value_parser = ["session", "sqlite", "none"])]
+    memory: Option<String>,
     /// Resume an existing session by ID (optional)
     #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
@@ -732,14 +738,16 @@ async fn main() {
         skill_dir,
         message,
         model,
+        memory,
         session,
         trace,
-      } => skill::run::execute(skill_dir, message, model, session, trace).await,
+      } => skill::run::execute(skill_dir, message, model, memory, session, trace).await,
       SkillCommands::Chat {
         skill_dir,
         model,
+        memory,
         session,
-      } => skill::chat::execute(skill_dir, model, session).await,
+      } => skill::chat::execute(skill_dir, model, memory, session).await,
       SkillCommands::List { dir } => skill::list::execute(dir).await,
       SkillCommands::ListTools { skill_dir } => skill::list_tools::execute(skill_dir).await,
       SkillCommands::Test {
