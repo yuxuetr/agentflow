@@ -423,20 +423,7 @@ impl Flow {
       .iter()
       .filter_map(|(node_id, result)| {
         if let Some(outputs) = Self::checkpointable_outputs(result) {
-          // Convert outputs to JSON value
-          let json_outputs: HashMap<String, serde_json::Value> = outputs
-            .iter()
-            .map(|(k, v)| {
-              (
-                k.clone(),
-                match v {
-                  FlowValue::Json(json) => json.clone(),
-                  _ => serde_json::json!(null),
-                },
-              )
-            })
-            .collect();
-          Some((node_id.clone(), serde_json::to_value(json_outputs).ok()?))
+          Some((node_id.clone(), Self::outputs_to_json(outputs)))
         } else {
           None
         }
@@ -978,6 +965,42 @@ mod tests {
     let home = std::env::temp_dir().join(format!("agentflow-flow-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("HOME", home);
+  }
+
+  #[test]
+  fn checkpoint_state_roundtrips_flowvalue_variants() {
+    let file_value = FlowValue::File {
+      path: "/tmp/agentflow-report.txt".into(),
+      mime_type: Some("text/plain".to_string()),
+    };
+    let url_value = FlowValue::Url {
+      url: "https://example.test/data.json".to_string(),
+      mime_type: Some("application/json".to_string()),
+    };
+
+    let mut outputs = HashMap::new();
+    outputs.insert("json".to_string(), FlowValue::Json(json!({"ok": true})));
+    outputs.insert("file".to_string(), file_value.clone());
+    outputs.insert("url".to_string(), url_value.clone());
+
+    let mut state_pool = HashMap::new();
+    state_pool.insert("node".to_string(), Ok(outputs.clone()));
+
+    let checkpoint_state = Flow::default().state_pool_to_checkpoint_state(&state_pool);
+    let raw_node = checkpoint_state
+      .get("node")
+      .and_then(serde_json::Value::as_object)
+      .unwrap();
+
+    assert_eq!(raw_node["file"]["$type"], json!("file"));
+    assert_eq!(raw_node["url"]["$type"], json!("url"));
+
+    let restored = Flow::checkpoint_state_to_state_pool(&checkpoint_state);
+    let restored_outputs = restored.get("node").unwrap().as_ref().unwrap();
+
+    assert_eq!(restored_outputs.get("json"), outputs.get("json"));
+    assert_eq!(restored_outputs.get("file"), Some(&file_value));
+    assert_eq!(restored_outputs.get("url"), Some(&url_value));
   }
 
   #[tokio::test]
