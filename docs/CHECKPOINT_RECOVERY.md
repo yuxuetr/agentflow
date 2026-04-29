@@ -268,6 +268,28 @@ pub struct Checkpoint {
 }
 ```
 
+### FlowValue State
+
+Checkpoint state stores node outputs using the same stable JSON representation
+as workflow result serialization. `FlowValue::Json` is stored as its raw JSON
+value. File and URL references are stored as tagged JSON objects so resume can
+restore the original `FlowValue` type:
+
+```json
+{
+  "artifact": {
+    "$type": "file",
+    "path": "/tmp/report.md",
+    "mime_type": "text/markdown"
+  },
+  "source": {
+    "$type": "url",
+    "url": "https://example.com/data.json",
+    "mime_type": "application/json"
+  }
+}
+```
+
 ### AgentNode State
 
 When a workflow node is an `AgentNode`, its checkpointed output includes:
