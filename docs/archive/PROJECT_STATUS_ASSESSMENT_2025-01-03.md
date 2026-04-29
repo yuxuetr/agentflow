@@ -1,5 +1,7 @@
 # AgentFlow 项目现状评估与下一步规划
 
+> 归档说明: 本评估反映 2025-01-03 的历史状态，已被 `RoadMap.md`、`TODOs.md` 和 `OVERALL_EVALUATION_REPORT.md` 中的后续进展覆盖。不要把本文中的待完成项或版本号当作当前项目状态。
+
 **评估日期**: 2025-01-03
 **当前版本**: v0.3.0-alpha (RAG), v0.2.0 (Core)
 **评估人**: Claude Code

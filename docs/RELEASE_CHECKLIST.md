@@ -26,7 +26,7 @@ then lists the manual release review items.
 ## 1. Scope
 
 - [ ] Confirm release target, version, and branch.
-- [ ] Review `RoadMap.md`, `TODO.md`, and release notes for completed work.
+- [ ] Review `RoadMap.md`, `TODOs.md`, and release notes for completed work.
 - [ ] Confirm ignored local files such as `TODOs.md`, `target/`, and run output
       directories are not required in the release commit.
 - [ ] Review `git status --short --ignored` and ensure only intentional ignored

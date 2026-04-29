@@ -4,6 +4,8 @@
 评估范围：workspace 全部 crate、核心文档、CLI 执行路径、DAG 与 agent-native 能力边界。  
 验证结果：`cargo check --workspace --all-targets` 已通过；本次未运行完整 `cargo test`。
 
+> 更新说明: 本报告保留 2026-04-28 的评估上下文。报告发布后，`TODOs.md` 中的 N6/N7 产品化闭环已完成；涉及 `workflow run` flags、`agent`/`skill_agent` YAML 节点、旧 CLI runner、trace/recovery 示例的“不足”和 P0/P1 建议不再代表当前状态。
+
 ## 1. 总体结论
 
 AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agent-native runtime + 工具/MCP/Skills/Memory/RAG/Tracing 支撑层”的模块化 Rust 框架。当前代码可以编译，模块边界清晰，核心抽象已经成型。
@@ -14,9 +16,9 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 | --- | --- | --- |
 | DAG 工作流开发 | 较高 | `agentflow-core::Flow` 已支持节点依赖、拓扑排序、显式输入映射、条件、map、while、checkpoint、事件监听；适合作为生产自动化和确定性流程的核心。 |
 | agent-native 智能体开发 | 中等偏高 | `agentflow-agents` 已有 ReAct、Plan-Execute、Runtime trace、工具调用、记忆、反思、AgentNode、WorkflowTool；适合 SDK-first 构建智能体。 |
-| Config-first DAG | 中等 | CLI V2 能解析 YAML 并构建 Flow，但 `workflow run` 的 input/output/watch/dry-run/timeout/retry 参数仍是占位。 |
-| Config-first agent-native | 偏弱 | Skills CLI 与 SkillBuilder 存在，但普通 workflow YAML factory 尚未暴露 `agent` 节点；agent runtime 主要还是 SDK-first/Skill-first。 |
-| DAG + Agent 混合模式 | 中等 | SDK 层已有 `AgentNode` 和 `WorkflowTool`，但 CLI/YAML 层未形成完整闭环。 |
+| Config-first DAG | 中等偏高 | CLI V2 能解析 YAML 并构建 Flow；后续已补齐 `workflow run` input/output/dry-run/timeout/retry，`--watch` 会显式报错。 |
+| Config-first agent-native | 中等 | Skills CLI 与 SkillBuilder 已存在；后续已在 workflow YAML factory 暴露 `agent` / `skill_agent` 节点。 |
+| DAG + Agent 混合模式 | 中等偏高 | SDK 层已有 `AgentNode` 和 `WorkflowTool`；后续已补齐 CLI/YAML 层的 skill-agent hybrid 示例和 smoke gate。 |
 
 一句话判断：项目已经具备两种模式的核心骨架和可编译实现；DAG 模式更成熟，agent-native 模式功能面较完整但产品化入口、恢复语义、配置化编排仍需补齐。
 
@@ -80,7 +82,7 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 
 - 节点参数约定仍偏散，缺少统一 schema/validation 输出。
 - 一些节点强依赖外部服务或本地环境，测试隔离和 mock 层需要更系统。
-- `agent` 节点未在 CLI factory 中暴露，导致 Config-first 混合智能体流程不完整。
+- 后续已在 CLI factory 中暴露 `agent` / `skill_agent` 节点；剩余重点转为统一 schema、错误规范和节点参数校验。
 
 结论：节点生态已经有雏形，适合 DAG 应用；要支撑低门槛生产使用，需要统一 schema、错误规范和配置化 agent 节点。
 
@@ -202,10 +204,10 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 
 不足：
 
-- `workflow run` 的 `watch/output/input/dry_run/timeout/max_retries` 参数当前未实现。
-- workflow 输出仍包含 debug 打印，不适合作为稳定 CLI contract。
-- CLI 旧 runner 代码已不在执行路径，说明迁移未完全清理。
-- Config-first agent-native 入口不完整。
+- `workflow run` 的 `input/output/dry_run/timeout/max_retries` 已在后续闭环中实现，`watch` 已改为显式未实现错误。
+- workflow 输出契约已收敛为默认人类可读、`--output` 保存 JSON、`--output -` 输出机器可读 JSON。
+- 旧 CLI runner 已删除或隔离，当前执行路径为 `FlowDefinitionV2 -> GraphNode -> agentflow_core::Flow`。
+- Config-first agent-native 入口已补齐 `agent` / `skill_agent` 节点，后续重点是 schema 和错误体验。
 
 结论：CLI 是当前最大成熟度短板之一。它已经能跑 V2 DAG，但距离稳定用户界面还有明显差距。
 
@@ -297,25 +299,24 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 
 ## 6. 主要风险
 
-1. CLI 表面参数多但部分未实现，容易造成用户预期落差。
-2. 文档目标与实现成熟度不完全一致，尤其是 agent-native 和 hybrid workflow。
-3. agent、tool、MCP、workflow trace 需要统一关联，否则生产排障会困难。
-4. checkpoint/resume 已有基础，但 agent 工具副作用恢复仍是高风险区。
-5. 模块多、功能面宽，缺少一组权威端到端应用样例作为回归基准。
+1. YAML schema 和节点参数校验仍需统一，否则 config-first 错误体验会不稳定。
+2. agent 工具副作用恢复仍是高风险区，特别是 unresolved tool call 的幂等边界。
+3. MCP server、PostgreSQL trace storage、server gateway 等平台化能力仍需更多端到端验证。
+4. 模块多、功能面宽，需要持续维护权威端到端样例作为回归基准。
 
 ## 7. 优先级建议
 
 P0：
 
-- 补齐 `agentflow-cli workflow run` 的 input/output/dry-run/timeout/retry 行为。
-- 在 CLI factory 增加 `agent` 或 `skill_agent` 节点，让 YAML 能直接使用 agent-native 能力。
-- 清理或隔离旧 runner，避免维护者误判执行路径。
+- 统一 YAML schema 和节点参数校验，输出机器可读错误。
+- 梳理 MCP server、DB/server gateway 的生产化边界。
+- 强化 agent 工具副作用恢复和幂等策略。
 
 P1：
 
-- 统一 YAML schema 和节点参数校验，输出机器可读错误。
-- 强化 checkpoint 对 `FlowValue::File/Url` 和 `AgentNode` partial output 的序列化/恢复。
-- 让 tracing 贯穿 workflow、agent、tool、MCP、LLM 请求。
+- 引入 DAG 并发调度器。
+- 建立 RAG/Memory/Agent 的端到端评测用例。
+- 扩展 server API，支持 run 管理、trace 查询、skill registry、workflow 提交。
 
 P2：
 
@@ -334,4 +335,3 @@ P2：
 | 生产可观测性 | B |
 | 服务端平台化 | C |
 | 综合状态 | B：架构正确、核心可编译可扩展，但产品化闭环仍需集中补齐。 |
-

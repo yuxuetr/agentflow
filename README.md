@@ -350,4 +350,4 @@ agentflow --help
 
 ## 🛣️ Development Plan
 
-See the tracked short-term plan in [TODO.md](TODO.md) and the longer-term framework direction in [RoadMap.md](RoadMap.md). A more granular local task list exists in `TODOs.md`, but that file is intentionally ignored.
+See the current framework direction in [RoadMap.md](RoadMap.md). The local short-term execution queue is tracked in `TODOs.md`; the older `TODO.md` plan has been retired.

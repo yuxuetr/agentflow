@@ -145,7 +145,8 @@ chmod 600 ~/.agentflow/.env
 ## 📖 相关文档
 
 - `CLAUDE.md` - 项目配置和开发指南
-- `TODO.md` - 开发路线图
+- `RoadMap.md` - 开发路线图
+- `TODOs.md` - 本地短期执行队列
 - `docs/phase0/` - 错误处理审计报告
 - `docs/HEALTH_CHECKS.md` - 健康检查指南
 - `docs/CHECKPOINT_RECOVERY.md` - 检查点恢复

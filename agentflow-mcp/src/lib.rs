@@ -51,16 +51,18 @@
 //! - `client` - Production-ready MCP client implementation
 //! - `error` - Error types with context tracking
 //! - `protocol` - JSON-RPC and MCP protocol types
-//! - `transport_new` - Transport layer (stdio, http)
+//! - `transport_new` - Current transport layer (stdio; HTTP transport types are reserved)
 //! - `server` - MCP server implementation (experimental)
 
 pub mod client;
-pub mod client_old; // Legacy client, kept for reference
+#[doc(hidden)]
+pub mod client_old; // Legacy client kept for compatibility; use `agentflow_mcp::client`.
 pub mod error;
 pub mod protocol;
 pub mod server;
 pub mod tools;
-pub mod transport;
+#[doc(hidden)]
+pub mod transport; // Legacy transport kept for compatibility; use `agentflow_mcp::transport_new`.
 pub mod transport_new;
 
 // Re-export main types for convenience
