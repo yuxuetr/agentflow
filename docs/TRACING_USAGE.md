@@ -23,6 +23,19 @@ AgentFlow 追踪系统提供详细的工作流执行追踪，包括：
 4. **异步处理** - 不阻塞工作流执行
 5. **可查询** - 支持过滤、分页、时间范围
 
+### 关联上下文
+
+持久化 trace 在每个层级都包含显式 `context` 字段，用来把一次
+mixed run 串成同一棵树:
+
+- workflow: `context.run_id` / `context.trace_id` 等于 workflow run id，`span_id = "workflow"`
+- node: `span_id = "node:<node_id>"`，父 span 是 `workflow`
+- agent: `span_id = "agent:<session_id>"`，父 span 是所在 workflow node
+- tool/MCP call: `span_id = "tool:<index>:<tool>"`，父 span 是 agent
+
+这些字段会直接写入 JSON trace，并与 OpenTelemetry exporter 的 span
+层级保持一致。
+
 ---
 
 ## 📦 快速开始

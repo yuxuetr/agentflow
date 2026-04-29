@@ -181,7 +181,9 @@ impl TraceCollector {
           // Extract node_type from node_id (format: "type:id" or just "id")
           let node_type = node_id.split(':').next().unwrap_or("Unknown").to_string();
 
-          let node_trace = NodeTrace::new(node_id, node_type);
+          let mut node_trace = NodeTrace::new(node_id, node_type);
+          node_trace.context =
+            crate::TraceContext::child(&trace.context, format!("node:{}", node_trace.node_id));
           trace.nodes.push(node_trace);
         }
       }
@@ -213,7 +215,7 @@ impl TraceCollector {
           }
         }
 
-        let agent_details = output
+        let mut agent_details = output
           .get("agent_result")
           .and_then(AgentTrace::from_agent_result);
 
@@ -222,6 +224,9 @@ impl TraceCollector {
           if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
             if config.capture_io {
               node.output = Some(output);
+            }
+            if let Some(agent) = &mut agent_details {
+              agent.attach_context(&node.context);
             }
             node.agent_details = agent_details;
           }
@@ -742,11 +747,28 @@ mod tests {
     tokio::time::sleep(StdDuration::from_millis(100)).await;
 
     let trace = collector.get_trace(&workflow_id).await.unwrap().unwrap();
+    assert_eq!(trace.context.run_id, workflow_id);
+    assert_eq!(trace.context.span_id, "workflow");
     let node = &trace.nodes[0];
+    assert_eq!(node.context.parent_span_id.as_deref(), Some("workflow"));
+    assert_eq!(node.context.span_id, "node:agent_node");
     let agent = node.agent_details.as_ref().expect("agent trace");
+    assert_eq!(
+      agent.context.parent_span_id.as_deref(),
+      Some("node:agent_node")
+    );
+    assert_eq!(agent.context.span_id, "agent:session-1");
     assert_eq!(agent.session_id, "session-1");
     assert_eq!(agent.tool_calls.len(), 1);
     assert_eq!(agent.tool_calls[0].tool, "mcp_fixture_echo");
+    assert_eq!(
+      agent.tool_calls[0].context.parent_span_id.as_deref(),
+      Some("agent:session-1")
+    );
+    assert_eq!(
+      agent.tool_calls[0].context.span_id,
+      "tool:0:mcp_fixture_echo"
+    );
     assert!(agent.tool_calls[0].is_mcp);
     assert_eq!(agent.tool_calls[0].is_error, Some(false));
     assert_eq!(agent.tool_calls[0].duration_ms, Some(12));

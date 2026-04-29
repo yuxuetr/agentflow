@@ -14,6 +14,10 @@ pub struct ExecutionTrace {
   /// Unique workflow execution ID
   pub workflow_id: String,
 
+  /// Correlation context for this workflow run.
+  #[serde(default)]
+  pub context: TraceContext,
+
   /// Optional workflow name for easier identification
   pub workflow_name: Option<String>,
 
@@ -37,6 +41,7 @@ impl ExecutionTrace {
   /// Create a new execution trace
   pub fn new(workflow_id: String) -> Self {
     Self {
+      context: TraceContext::workflow(workflow_id.clone()),
       workflow_id,
       workflow_name: None,
       started_at: Utc::now(),
@@ -75,6 +80,48 @@ impl ExecutionTrace {
   }
 }
 
+/// Correlation identifiers that link workflow, node, agent, tool, MCP, and LLM
+/// records in a single persisted trace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceContext {
+  pub run_id: String,
+  pub trace_id: String,
+  pub span_id: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub parent_span_id: Option<String>,
+}
+
+impl TraceContext {
+  pub fn workflow(run_id: String) -> Self {
+    Self {
+      trace_id: run_id.clone(),
+      run_id,
+      span_id: "workflow".to_string(),
+      parent_span_id: None,
+    }
+  }
+
+  pub fn child(parent: &Self, span_id: impl Into<String>) -> Self {
+    Self {
+      run_id: parent.run_id.clone(),
+      trace_id: parent.trace_id.clone(),
+      span_id: span_id.into(),
+      parent_span_id: Some(parent.span_id.clone()),
+    }
+  }
+}
+
+impl Default for TraceContext {
+  fn default() -> Self {
+    Self {
+      run_id: String::new(),
+      trace_id: String::new(),
+      span_id: String::new(),
+      parent_span_id: None,
+    }
+  }
+}
+
 /// Execution status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -97,6 +144,10 @@ pub enum TraceStatus {
 pub struct NodeTrace {
   /// Node identifier
   pub node_id: String,
+
+  /// Correlation context for this node span.
+  #[serde(default)]
+  pub context: TraceContext,
 
   /// Node type (e.g., "LLMNode", "HttpNode")
   pub node_type: String,
@@ -138,6 +189,11 @@ impl NodeTrace {
   /// Create a new node trace
   pub fn new(node_id: String, node_type: String) -> Self {
     Self {
+      context: TraceContext {
+        span_id: format!("node:{node_id}"),
+        parent_span_id: Some("workflow".to_string()),
+        ..TraceContext::default()
+      },
       node_id,
       node_type,
       started_at: Utc::now(),
@@ -181,6 +237,8 @@ impl NodeTrace {
 /// Agent runtime details attached to an agent-capable workflow node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTrace {
+  #[serde(default)]
+  pub context: TraceContext,
   pub session_id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub answer: Option<String>,
@@ -196,6 +254,8 @@ pub struct AgentTrace {
 /// Tool call observed inside an agent runtime trace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallTrace {
+  #[serde(default)]
+  pub context: TraceContext,
   pub tool: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub params: Option<serde_json::Value>,
@@ -227,6 +287,7 @@ impl AgentTrace {
     let tool_calls = collect_tool_calls(&steps, &events);
 
     Some(Self {
+      context: TraceContext::default(),
       session_id,
       answer,
       stop_reason,
@@ -235,6 +296,36 @@ impl AgentTrace {
       tool_calls,
     })
   }
+
+  pub fn attach_context(&mut self, parent: &TraceContext) {
+    self.context = TraceContext::child(
+      parent,
+      format!("agent:{}", sanitize_span_component(&self.session_id)),
+    );
+    for (index, tool_call) in self.tool_calls.iter_mut().enumerate() {
+      tool_call.context = TraceContext::child(
+        &self.context,
+        format!(
+          "tool:{}:{}",
+          index,
+          sanitize_span_component(&tool_call.tool)
+        ),
+      );
+    }
+  }
+}
+
+fn sanitize_span_component(value: &str) -> String {
+  value
+    .chars()
+    .map(|ch| {
+      if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
+        ch
+      } else {
+        '_'
+      }
+    })
+    .collect()
 }
 
 fn collect_tool_calls(
@@ -253,6 +344,7 @@ fn collect_tool_calls(
       continue;
     };
     calls.push(ToolCallTrace {
+      context: TraceContext::default(),
       tool: tool.to_string(),
       params: kind.get("params").cloned(),
       is_error: None,
@@ -439,5 +531,46 @@ mod tests {
     let json = serde_json::to_string(&trace).expect("Failed to serialize");
     let deserialized: ExecutionTrace = serde_json::from_str(&json).expect("Failed to deserialize");
     assert_eq!(deserialized.workflow_id, "wf-test");
+    assert_eq!(deserialized.context.run_id, "wf-test");
+    assert_eq!(deserialized.context.span_id, "workflow");
+  }
+
+  #[test]
+  fn test_agent_trace_context_links_tool_calls() {
+    let mut agent = AgentTrace::from_agent_result(&serde_json::json!({
+      "session_id": "session-1",
+      "answer": "done",
+      "stop_reason": {"reason": "final_answer"},
+      "steps": [
+        {
+          "index": 0,
+          "kind": {
+            "type": "tool_call",
+            "tool": "mcp_fixture_echo",
+            "params": {"message": "hello"}
+          }
+        }
+      ],
+      "events": []
+    }))
+    .expect("agent trace");
+    let workflow = TraceContext::workflow("run-1".to_string());
+    let node = TraceContext::child(&workflow, "node:agent_node");
+
+    agent.attach_context(&node);
+
+    assert_eq!(agent.context.run_id, "run-1");
+    assert_eq!(
+      agent.context.parent_span_id.as_deref(),
+      Some("node:agent_node")
+    );
+    assert_eq!(
+      agent.tool_calls[0].context.parent_span_id.as_deref(),
+      Some("agent:session-1")
+    );
+    assert_eq!(
+      agent.tool_calls[0].context.span_id,
+      "tool:0:mcp_fixture_echo"
+    );
   }
 }

@@ -579,12 +579,14 @@ mod tests {
     node.completed_at = Some(node.started_at + chrono::Duration::milliseconds(24));
     node.duration_ms = Some(24);
     node.agent_details = Some(AgentTrace {
+      context: Default::default(),
       session_id: "session-1".to_string(),
       answer: Some("done".to_string()),
       stop_reason: serde_json::json!({"reason": "final_answer"}),
       steps: vec![serde_json::json!({"index": 0})],
       events: vec![serde_json::json!({"event": "tool_call_completed"})],
       tool_calls: vec![ToolCallTrace {
+        context: Default::default(),
         tool: "mcp_fixture_echo".to_string(),
         params: Some(serde_json::json!({"message": "hello"})),
         is_error: Some(false),

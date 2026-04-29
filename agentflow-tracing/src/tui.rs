@@ -276,6 +276,7 @@ mod tests {
     let mut node = NodeTrace::new("agent".to_string(), "agent".to_string());
     node.status = NodeStatus::Completed;
     node.agent_details = Some(AgentTrace {
+      context: Default::default(),
       session_id: "session-1".to_string(),
       answer: Some("done".to_string()),
       stop_reason: serde_json::json!({"reason": "final_answer"}),
@@ -283,6 +284,7 @@ mod tests {
       events: vec![],
       tool_calls: vec![
         ToolCallTrace {
+          context: Default::default(),
           tool: "local_tool".to_string(),
           params: Some(serde_json::json!({"value": "ok"})),
           is_error: Some(false),
@@ -290,6 +292,7 @@ mod tests {
           is_mcp: false,
         },
         ToolCallTrace {
+          context: Default::default(),
           tool: "mcp_echo".to_string(),
           params: Some(serde_json::json!({"api_key": "secret", "message": "hello"})),
           is_error: Some(false),
