@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowValidationReport {
   pub issues: Vec<String>,
   pub warnings: Vec<String>,

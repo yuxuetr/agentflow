@@ -234,6 +234,28 @@ fn cli_workflow_run_validates_required_node_parameters_before_execution() {
     .stdout(predicate::str::contains("requires 'prompt'"));
 }
 
+#[test]
+fn cli_workflow_validate_outputs_machine_readable_json() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_invalid_llm_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("\"valid\": false"))
+    .stdout(predicate::str::contains("requires 'prompt'"));
+}
+
 #[cfg(not(feature = "mcp"))]
 #[test]
 fn cli_workflow_run_reports_feature_gated_mcp_node() {
