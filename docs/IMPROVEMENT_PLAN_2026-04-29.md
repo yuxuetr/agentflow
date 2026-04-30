@@ -279,6 +279,8 @@ cargo test -p agentflow-tracing --target-dir /tmp/agentflow-target
 
 ### P1-1. 引入通用 DAG 并发 scheduler
 
+状态: 进行中
+
 目标:
 
 - 从拓扑顺序串行执行升级到“依赖就绪即可调度”。
@@ -302,6 +304,21 @@ cargo test -p agentflow-tracing --target-dir /tmp/agentflow-target
 - 独立分支 DAG 并发执行耗时低于串行执行。
 - failure/skip/checkpoint 行为有测试覆盖。
 - 事件顺序可解释，trace 能显示并发节点。
+
+已完成:
+
+- `agentflow-core` 新增 `FlowExecutionConfig` / `FlowExecutionMode`，保留 `Flow::run()` 默认串行兼容路径。
+- 新增 `execute_from_inputs_with_config`，显式 `Concurrent` 模式会按依赖 ready 状态并发调度节点。
+- concurrent scheduler 支持 `max_concurrency`、`fail_fast`、`continue_on_skip`，并复用现有 node started/completed/failed/skipped/output events。
+- concurrent scheduler 会在节点完成后唤醒下游 ready nodes，并保留 checkpoint 保存路径。
+- 单元测试覆盖独立分支并发耗时低于串行、依赖节点等待上游输出。
+- 已通过 `cargo test -p agentflow-core --target-dir /tmp/agentflow-target` 和 workspace `cargo check`。
+
+剩余:
+
+- 将 CLI/config-first workflow 暴露并发执行开关。
+- 扩展 failure/skip/checkpoint 的并发端到端测试。
+- 让 trace UI 更明确展示并发节点重叠关系。
 
 ### P1-2. Agent tool call 幂等与恢复策略
 

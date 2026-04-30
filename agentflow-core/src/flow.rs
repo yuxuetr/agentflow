@@ -3,14 +3,17 @@ use crate::{
   checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus},
   error::AgentFlowError,
   events::{EventListener, WorkflowEvent},
+  scheduler::{FlowExecutionConfig, FlowExecutionMode},
   value::FlowValue,
 };
 use dirs;
+use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::future::Future;
 use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -132,7 +135,17 @@ impl Flow {
     initial_inputs: AsyncNodeInputs,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None, None)
+      .execute_with_workflow_id(None, initial_inputs, None, None, None, None)
+      .await
+  }
+
+  pub async fn execute_from_inputs_with_config(
+    &self,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    self
+      .execute_with_workflow_id(None, initial_inputs, None, None, None, Some(config))
       .await
   }
 
@@ -144,6 +157,7 @@ impl Flow {
     skip_until: Option<String>,
     restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
     restored_last_completed_node: Option<String>,
+    execution_config: Option<FlowExecutionConfig>,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let workflow_started_at = Instant::now();
@@ -161,6 +175,23 @@ impl Flow {
     fs::create_dir_all(&run_dir).map_err(|e| AgentFlowError::PersistenceError {
       message: e.to_string(),
     })?;
+
+    let execution_config = execution_config.unwrap_or_default();
+    if execution_config.mode == FlowExecutionMode::Concurrent
+      && skip_until.is_none()
+      && restored_state_pool.is_none()
+      && restored_last_completed_node.is_none()
+    {
+      return self
+        .execute_concurrently(
+          run_id,
+          workflow_started_at,
+          run_dir,
+          initial_inputs,
+          execution_config,
+        )
+        .await;
+    }
 
     let sorted_nodes = self.topological_sort()?;
     let mut state_pool: HashMap<String, AsyncNodeResult> = restored_state_pool.unwrap_or_default();
@@ -406,6 +437,7 @@ impl Flow {
           Some(next_node_id),
           Some(state_pool),
           Some(checkpoint.last_completed_node),
+          None,
         )
         .await
     } else {
@@ -492,6 +524,270 @@ impl Flow {
         (node_id.clone(), Ok(outputs))
       })
       .collect()
+  }
+
+  async fn execute_concurrently(
+    &self,
+    run_id: String,
+    workflow_started_at: Instant,
+    run_dir: PathBuf,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    let sorted_nodes = self.topological_sort()?;
+    let mut pending: HashSet<String> = sorted_nodes.iter().cloned().collect();
+    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    let mut running: FuturesUnordered<BoxFuture<'_, (String, Instant, AsyncNodeResult)>> =
+      FuturesUnordered::new();
+    let mut last_completed_node = None;
+    let mut fail_fast_triggered = false;
+
+    while !pending.is_empty() || !running.is_empty() {
+      while running.len() < config.max_concurrency {
+        let Some(node_id) = sorted_nodes
+          .iter()
+          .find(|node_id| {
+            pending.contains(*node_id)
+              && self
+                .nodes
+                .get(*node_id)
+                .map(|node| {
+                  node
+                    .dependencies
+                    .iter()
+                    .all(|dep| state_pool.contains_key(dep))
+                })
+                .unwrap_or(false)
+          })
+          .cloned()
+        else {
+          break;
+        };
+
+        pending.remove(&node_id);
+        let graph_node = self
+          .nodes
+          .get(&node_id)
+          .ok_or_else(|| AgentFlowError::FlowDefinitionError {
+            message: format!("Node '{}' not found in flow definition", node_id),
+          })?
+          .clone();
+
+        let should_run = match &graph_node.run_if {
+          Some(condition) => self.evaluate_condition(condition, &state_pool)?,
+          None => true,
+        };
+
+        if !should_run {
+          println!("⏭️  Skipping node '{}' due to condition.", node_id);
+          let result = Err(AgentFlowError::NodeSkipped);
+          self.persist_step_result(&run_dir, &node_id, &result)?;
+          self.emit_event(WorkflowEvent::NodeSkipped {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            reason: "run_if evaluated to false".to_string(),
+            timestamp: Instant::now(),
+          });
+          state_pool.insert(node_id, result);
+          if !config.continue_on_skip {
+            fail_fast_triggered = true;
+            break;
+          }
+          continue;
+        }
+
+        let mut inputs = match &graph_node.input_mapping {
+          Some(mapping) => match self.gather_inputs(&node_id, mapping, &state_pool) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+              let result = Err(error);
+              self.persist_step_result(&run_dir, &node_id, &result)?;
+              self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
+              state_pool.insert(node_id, result);
+              if config.fail_fast {
+                fail_fast_triggered = true;
+                break;
+              }
+              continue;
+            }
+          },
+          None => HashMap::new(),
+        };
+        inputs.extend(graph_node.initial_inputs.clone());
+        inputs.extend(initial_inputs.clone());
+
+        println!("▶️  Executing node '{}'", node_id);
+        let node_started_at = Instant::now();
+        self.emit_event(WorkflowEvent::NodeStarted {
+          workflow_id: run_id.clone(),
+          node_id: node_id.clone(),
+          timestamp: node_started_at,
+        });
+
+        running.push(
+          async move {
+            let result = self.execute_node_type(&graph_node.node_type, &inputs).await;
+            (node_id, node_started_at, result)
+          }
+          .boxed(),
+        );
+      }
+
+      if fail_fast_triggered {
+        break;
+      }
+
+      if running.is_empty() {
+        if pending.is_empty() {
+          break;
+        }
+        return Err(AgentFlowError::FlowExecutionFailed {
+          message: "No schedulable workflow nodes remain; dependency state is incomplete"
+            .to_string(),
+        });
+      }
+
+      if let Some((node_id, node_started_at, result)) = running.next().await {
+        self.persist_step_result(&run_dir, &node_id, &result)?;
+        self.record_node_result_events(&run_id, &node_id, node_started_at, &result);
+
+        if result.is_ok() {
+          last_completed_node = Some(node_id.clone());
+        } else if config.fail_fast {
+          fail_fast_triggered = true;
+        }
+
+        state_pool.insert(node_id.clone(), result);
+
+        if self.checkpoint_enabled
+          && state_pool
+            .get(&node_id)
+            .map(|result| result.is_ok())
+            .unwrap_or(false)
+        {
+          if let Some(ref manager) = self.checkpoint_manager {
+            let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+            if let Err(e) = manager
+              .save_checkpoint(&run_id, &node_id, &checkpoint_state)
+              .await
+            {
+              eprintln!(
+                "⚠️  Warning: Failed to save checkpoint after node '{}': {}",
+                node_id, e
+              );
+            }
+          }
+        }
+      }
+    }
+
+    let workflow_failed = state_pool.values().any(Result::is_err) || fail_fast_triggered;
+    if workflow_failed {
+      let error = state_pool
+        .values()
+        .find_map(|result| result.as_ref().err().map(ToString::to_string))
+        .unwrap_or_else(|| "workflow failed".to_string());
+      self.emit_event(WorkflowEvent::WorkflowFailed {
+        workflow_id: run_id.clone(),
+        error,
+        duration: workflow_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
+    } else {
+      self.emit_event(WorkflowEvent::WorkflowCompleted {
+        workflow_id: run_id.clone(),
+        duration: workflow_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
+    }
+
+    if self.checkpoint_enabled {
+      if let Some(ref manager) = self.checkpoint_manager {
+        let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+        let status = if !workflow_failed {
+          WorkflowStatus::Completed
+        } else {
+          WorkflowStatus::Failed
+        };
+        let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
+        if let Err(e) = manager
+          .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
+          .await
+        {
+          eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
+        }
+      }
+    }
+
+    Ok(state_pool)
+  }
+
+  async fn execute_node_type(
+    &self,
+    node_type: &NodeType,
+    inputs: &AsyncNodeInputs,
+  ) -> AsyncNodeResult {
+    match node_type {
+      NodeType::Standard(node) => node.execute(inputs).await,
+      NodeType::Map { template, parallel } => {
+        if *parallel {
+          self.execute_map_node_parallel(inputs, template).await
+        } else {
+          self.execute_map_node_sequential(inputs, template).await
+        }
+      }
+      NodeType::While {
+        condition,
+        max_iterations,
+        template,
+      } => {
+        self
+          .execute_while_node(inputs, condition, *max_iterations, template)
+          .await
+      }
+    }
+  }
+
+  fn record_node_result_events(
+    &self,
+    run_id: &str,
+    node_id: &str,
+    node_started_at: Instant,
+    result: &AsyncNodeResult,
+  ) {
+    match result {
+      Ok(outputs) => {
+        self.emit_event(WorkflowEvent::NodeOutputCaptured {
+          workflow_id: run_id.to_string(),
+          node_id: node_id.to_string(),
+          output: Self::outputs_to_json(outputs),
+          timestamp: Instant::now(),
+        });
+        self.emit_event(WorkflowEvent::NodeCompleted {
+          workflow_id: run_id.to_string(),
+          node_id: node_id.to_string(),
+          duration: node_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+      }
+      Err(AgentFlowError::NodeSkipped) => {
+        self.emit_event(WorkflowEvent::NodeSkipped {
+          workflow_id: run_id.to_string(),
+          node_id: node_id.to_string(),
+          reason: "run_if evaluated to false".to_string(),
+          timestamp: Instant::now(),
+        });
+      }
+      Err(err) => {
+        self.emit_event(WorkflowEvent::NodeFailed {
+          workflow_id: run_id.to_string(),
+          node_id: node_id.to_string(),
+          error: err.to_string(),
+          duration: node_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+      }
+    }
   }
 
   fn execute_while_node<'a>(
@@ -1095,6 +1391,120 @@ mod tests {
     assert!(events.contains(&"node.output.captured"));
     assert!(events.contains(&"node.completed"));
     assert!(events.contains(&"workflow.completed"));
+  }
+
+  #[tokio::test]
+  async fn concurrent_execution_runs_independent_branches_together() {
+    use_writable_home();
+
+    struct SleepNode {
+      millis: u64,
+    }
+
+    #[async_trait]
+    impl AsyncNode for SleepNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(self.millis)).await;
+        let mut outputs = HashMap::new();
+        outputs.insert("done".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let left = GraphNode {
+      id: "left".to_string(),
+      node_type: NodeType::Standard(Arc::new(SleepNode { millis: 120 })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let right = GraphNode {
+      id: "right".to_string(),
+      node_type: NodeType::Standard(Arc::new(SleepNode { millis: 120 })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let serial_started = Instant::now();
+    let serial_state = Flow::new(vec![left.clone(), right.clone()])
+      .run()
+      .await
+      .unwrap();
+    let serial_elapsed = serial_started.elapsed();
+    assert_eq!(serial_state.len(), 2);
+
+    let concurrent_started = Instant::now();
+    let concurrent_state = Flow::new(vec![left, right])
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+    let concurrent_elapsed = concurrent_started.elapsed();
+
+    assert_eq!(concurrent_state.len(), 2);
+    assert!(
+      concurrent_elapsed < serial_elapsed,
+      "concurrent {:?} should be faster than serial {:?}",
+      concurrent_elapsed,
+      serial_elapsed
+    );
+  }
+
+  #[tokio::test]
+  async fn concurrent_execution_waits_for_dependencies() {
+    use_writable_home();
+
+    struct EchoInputNode;
+
+    #[async_trait]
+    impl AsyncNode for EchoInputNode {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        let value = inputs
+          .get("value")
+          .cloned()
+          .unwrap_or_else(|| FlowValue::Json(json!("root")));
+        outputs.insert("value".to_string(), value);
+        Ok(outputs)
+      }
+    }
+
+    let root = GraphNode {
+      id: "root".to_string(),
+      node_type: NodeType::Standard(Arc::new(EchoInputNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("value".to_string(), FlowValue::Json(json!("from-root")));
+        inputs
+      },
+    };
+    let child = GraphNode {
+      id: "child".to_string(),
+      node_type: NodeType::Standard(Arc::new(EchoInputNode)),
+      dependencies: vec!["root".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "value".to_string(),
+        ("root".to_string(), "value".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let state = Flow::new(vec![root, child])
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+
+    let child_outputs = state.get("child").unwrap().as_ref().unwrap();
+    assert_eq!(
+      child_outputs.get("value"),
+      Some(&FlowValue::Json(json!("from-root")))
+    );
   }
 
   #[tokio::test]

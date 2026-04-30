@@ -21,6 +21,7 @@ pub mod timeout;
 pub mod checkpoint;
 pub mod resource_limits;
 pub mod resource_manager;
+pub mod scheduler;
 pub mod state_monitor;
 
 // Observability (lightweight events only)
@@ -40,5 +41,6 @@ pub use resource_limits::ResourceLimits;
 pub use resource_manager::{CombinedResourceStats, ResourceManager, ResourceManagerConfig};
 pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
 pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
+pub use scheduler::{FlowExecutionConfig, FlowExecutionMode};
 pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
 pub use value::FlowValue;
