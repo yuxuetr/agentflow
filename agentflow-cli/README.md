@@ -55,6 +55,11 @@ agentflow workflow run path/to/your/workflow.yml \
   --model mock-model \
   --output result.json
 
+# Run ready workflow nodes concurrently
+agentflow workflow run path/to/your/workflow.yml \
+  --execution-mode concurrent \
+  --max-concurrency 4
+
 # Inspect validation, structure, analysis, and execution plan
 agentflow workflow debug path/to/your/workflow.yml --validate --plan --analyze
 ```

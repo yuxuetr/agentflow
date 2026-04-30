@@ -105,6 +105,12 @@ enum WorkflowCommands {
     timeout: String,
     #[arg(long, default_value_t = 0)]
     max_retries: u32,
+    /// Workflow execution mode: serial or concurrent
+    #[arg(long, default_value = "serial", value_parser = ["serial", "concurrent"])]
+    execution_mode: String,
+    /// Maximum concurrently running workflow nodes when --execution-mode concurrent
+    #[arg(long, default_value_t = 4)]
+    max_concurrency: usize,
   },
   /// Validate workflow schema and dependencies without execution
   Validate {
@@ -574,6 +580,8 @@ async fn main() {
         dry_run,
         timeout,
         max_retries,
+        execution_mode,
+        max_concurrency,
       } => {
         if input.len() % 2 != 0 {
           eprintln!("Error: Input must be provided in key-value pairs. Got {} arguments (expected even number).", input.len());
@@ -592,6 +600,8 @@ async fn main() {
           dry_run,
           timeout,
           max_retries,
+          execution_mode,
+          max_concurrency,
         )
         .await
       }

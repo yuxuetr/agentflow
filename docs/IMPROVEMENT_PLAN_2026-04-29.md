@@ -311,12 +311,13 @@ cargo test -p agentflow-tracing --target-dir /tmp/agentflow-target
 - 新增 `execute_from_inputs_with_config`，显式 `Concurrent` 模式会按依赖 ready 状态并发调度节点。
 - concurrent scheduler 支持 `max_concurrency`、`fail_fast`、`continue_on_skip`，并复用现有 node started/completed/failed/skipped/output events。
 - concurrent scheduler 会在节点完成后唤醒下游 ready nodes，并保留 checkpoint 保存路径。
+- CLI `workflow run` 新增 `--execution-mode serial|concurrent` 和 `--max-concurrency`，默认仍为 serial。
 - 单元测试覆盖独立分支并发耗时低于串行、依赖节点等待上游输出。
+- CLI 测试覆盖 concurrent 执行模式和非法 `--max-concurrency 0`。
 - 已通过 `cargo test -p agentflow-core --target-dir /tmp/agentflow-target` 和 workspace `cargo check`。
 
 剩余:
 
-- 将 CLI/config-first workflow 暴露并发执行开关。
 - 扩展 failure/skip/checkpoint 的并发端到端测试。
 - 让 trace UI 更明确展示并发节点重叠关系。
 

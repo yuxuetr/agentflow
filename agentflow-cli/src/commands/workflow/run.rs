@@ -4,7 +4,9 @@ use crate::redaction::redact_cli_value;
 use crate::{
   commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
 };
-use agentflow_core::{async_node::AsyncNodeInputs, flow::Flow, value::FlowValue};
+use agentflow_core::{
+  async_node::AsyncNodeInputs, flow::Flow, value::FlowValue, FlowExecutionConfig,
+};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::fs;
@@ -19,6 +21,8 @@ pub async fn execute(
   dry_run: bool,
   timeout: String,
   max_retries: u32,
+  execution_mode: String,
+  max_concurrency: usize,
 ) -> Result<()> {
   if watch {
     bail!("--watch is not implemented yet; run without --watch or use workflow debug --dry-run");
@@ -72,11 +76,25 @@ pub async fn execute(
 
   let timeout_duration =
     parse_duration(&timeout).with_context(|| format!("Invalid --timeout value '{}'", timeout))?;
+  let execution_config = parse_execution_config(&execution_mode, max_concurrency)?;
+  if execution_config.mode == agentflow_core::FlowExecutionMode::Concurrent {
+    println!(
+      "⚙️  Execution mode: concurrent (max_concurrency={})",
+      execution_config.max_concurrency
+    );
+  }
 
   // 3. Execute the flow
   println!("\n▶️  Running flow...");
   let start_time = std::time::Instant::now();
-  let final_state = run_with_retries(flow, initial_inputs, timeout_duration, max_retries).await?;
+  let final_state = run_with_retries(
+    flow,
+    initial_inputs,
+    timeout_duration,
+    max_retries,
+    execution_config,
+  )
+  .await?;
   let duration = start_time.elapsed();
   println!("\n✅ Workflow completed in {:.2?}.", duration);
 
@@ -180,11 +198,28 @@ fn parse_duration(raw: &str) -> Result<Duration> {
   Ok(Duration::from_millis(amount.saturating_mul(multiplier)))
 }
 
+fn parse_execution_config(
+  execution_mode: &str,
+  max_concurrency: usize,
+) -> Result<FlowExecutionConfig> {
+  match execution_mode {
+    "serial" => Ok(FlowExecutionConfig::serial()),
+    "concurrent" => {
+      if max_concurrency == 0 {
+        bail!("--max-concurrency must be greater than zero");
+      }
+      Ok(FlowExecutionConfig::concurrent(max_concurrency))
+    }
+    other => bail!("unsupported execution mode '{}'", other),
+  }
+}
+
 async fn run_with_retries(
   flow: Flow,
   initial_inputs: AsyncNodeInputs,
   timeout_duration: Duration,
   max_retries: u32,
+  execution_config: FlowExecutionConfig,
 ) -> Result<std::collections::HashMap<String, agentflow_core::async_node::AsyncNodeResult>> {
   let attempts = max_retries.saturating_add(1);
   let mut last_error = None;
@@ -194,7 +229,7 @@ async fn run_with_retries(
       println!("🔁 Workflow attempt {}/{}", attempt, attempts);
     }
 
-    let run = flow.execute_from_inputs(initial_inputs.clone());
+    let run = flow.execute_from_inputs_with_config(initial_inputs.clone(), execution_config);
     match tokio::time::timeout(timeout_duration, run).await {
       Ok(Ok(state)) => return Ok(state),
       Ok(Err(err)) => {

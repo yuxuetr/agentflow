@@ -222,6 +222,58 @@ fn cli_workflow_run_accepts_inputs_and_writes_output_file() {
 }
 
 #[test]
+fn cli_workflow_run_accepts_concurrent_execution_mode() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--input",
+      "topic",
+      "AgentFlow",
+      "--execution-mode",
+      "concurrent",
+      "--max-concurrency",
+      "2",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Execution mode: concurrent"))
+    .stdout(predicate::str::contains("Hello AgentFlow"));
+}
+
+#[test]
+fn cli_workflow_run_rejects_zero_max_concurrency() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--execution-mode",
+      "concurrent",
+      "--max-concurrency",
+      "0",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "--max-concurrency must be greater than zero",
+    ));
+}
+
+#[test]
 fn cli_workflow_run_rejects_unimplemented_watch_flag() {
   let home = TempDir::new().unwrap();
   let work = TempDir::new().unwrap();
