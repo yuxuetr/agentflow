@@ -142,6 +142,8 @@ cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
 
 ### P0-3. 补齐 MCP tool JSON Schema validation
 
+状态: 已完成
+
 问题:
 
 - `agentflow-mcp/src/client/tools.rs` 当前只检查 arguments 是 object。
@@ -167,6 +169,14 @@ cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
 - 缺少 required field、类型不匹配、enum 不合法都在 client 侧失败。
 - 错误包含 tool name、argument path、schema reason。
 - MCP integration tests 增加成功/失败 schema case。
+
+已完成:
+
+- `agentflow-mcp` 复用 `jsonschema`，对 `Tool.inputSchema` 做 client-side 参数校验。
+- `call_tool_validated`、CLI `mcp call-tool` 和 Skill MCP adapter 均在远程调用前执行 schema validation。
+- 错误区分 invalid input schema 与 invalid arguments，并包含 tool name 和参数路径上下文。
+- 单元测试覆盖 required、type、enum、invalid schema，以及 Skill adapter 调用前失败路径。
+- 已通过 `cargo test -p agentflow-mcp -p agentflow-skills --target-dir /tmp/agentflow-target`。
 
 建议验证:
 

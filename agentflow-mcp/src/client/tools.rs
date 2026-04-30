@@ -4,6 +4,7 @@
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult, ResultExt};
 use crate::protocol::types::{JsonRpcRequest, JsonRpcResponse};
+use jsonschema::JSONSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -350,35 +351,65 @@ impl MCPClient {
     arguments: Value,
   ) -> MCPResult<CallToolResult> {
     // Validate arguments against schema
-    self
-      .validate_tool_arguments(tool, &arguments)
+    validate_tool_call_arguments(tool, &arguments)
       .context(format!("Validation failed for tool '{}'", tool.name))?;
 
     // Call tool
     self.call_tool(&tool.name, arguments).await
   }
+}
 
-  /// Validate tool arguments against JSON Schema
-  ///
-  /// This performs basic validation. For production use, consider using
-  /// a full JSON Schema validator like `jsonschema` crate.
-  fn validate_tool_arguments(&self, tool: &Tool, arguments: &Value) -> MCPResult<()> {
-    // Basic validation: check if arguments is an object
-    if !arguments.is_object() {
-      return Err(MCPError::validation(
-        format!(
-          "Tool '{}' expects arguments to be an object, got {}",
-          tool.name,
-          arguments.type_name()
-        ),
-        None,
-      ));
-    }
+/// Validate tool arguments against a tool's declared JSON Schema.
+pub fn validate_tool_call_arguments(tool: &Tool, arguments: &Value) -> MCPResult<()> {
+  validate_tool_arguments(&tool.name, &tool.input_schema, arguments)
+}
 
-    // TODO: Implement full JSON Schema validation
-    // For now, we rely on the server to validate
-    Ok(())
+/// Validate tool arguments against a JSON Schema.
+pub fn validate_tool_arguments(
+  tool_name: &str,
+  input_schema: &Value,
+  arguments: &Value,
+) -> MCPResult<()> {
+  if !arguments.is_object() {
+    return Err(MCPError::validation(
+      format!(
+        "Tool '{}' expects arguments to be an object, got {}",
+        tool_name,
+        arguments.type_name()
+      ),
+      Some(tool_name.to_string()),
+    ));
   }
+
+  let compiled_schema = JSONSchema::options().compile(input_schema).map_err(|e| {
+    MCPError::validation(
+      format!("Tool '{}' has invalid input schema: {}", tool_name, e),
+      Some(tool_name.to_string()),
+    )
+  })?;
+
+  if let Err(errors) = compiled_schema.validate(arguments) {
+    let error_messages = errors
+      .map(|error| {
+        let path = error.instance_path.to_string();
+        if path.is_empty() {
+          error.to_string()
+        } else {
+          format!("{}: {}", path, error)
+        }
+      })
+      .collect::<Vec<_>>();
+    return Err(MCPError::validation(
+      format!(
+        "Tool '{}' arguments failed JSON Schema validation: {}",
+        tool_name,
+        error_messages.join(", ")
+      ),
+      Some(tool_name.to_string()),
+    ));
+  }
+
+  Ok(())
 }
 
 /// Extension trait for Value to get type name
@@ -493,5 +524,67 @@ mod tests {
       is_error: None,
     };
     assert!(!result2.is_error());
+  }
+
+  #[test]
+  fn validates_tool_arguments_against_json_schema() {
+    let tool = Tool {
+      name: "search".to_string(),
+      description: None,
+      input_schema: serde_json::json!({
+        "type": "object",
+        "required": ["query", "limit", "mode"],
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1 },
+          "mode": { "type": "string", "enum": ["fast", "full"] }
+        }
+      }),
+    };
+
+    validate_tool_call_arguments(
+      &tool,
+      &serde_json::json!({"query": "agentflow", "limit": 3, "mode": "fast"}),
+    )
+    .unwrap();
+
+    let missing = validate_tool_call_arguments(
+      &tool,
+      &serde_json::json!({"query": "agentflow", "mode": "fast"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(missing.contains("search"));
+    assert!(missing.contains("limit"));
+
+    let wrong_type = validate_tool_call_arguments(
+      &tool,
+      &serde_json::json!({"query": "agentflow", "limit": "3", "mode": "fast"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(wrong_type.contains("limit"));
+
+    let bad_enum = validate_tool_call_arguments(
+      &tool,
+      &serde_json::json!({"query": "agentflow", "limit": 3, "mode": "slow"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(bad_enum.contains("mode"));
+  }
+
+  #[test]
+  fn reports_invalid_tool_input_schema_separately() {
+    let error = validate_tool_arguments(
+      "broken",
+      &serde_json::json!({"type": "definitely-not-a-json-schema-type"}),
+      &serde_json::json!({}),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("invalid input schema"));
+    assert!(error.contains("broken"));
   }
 }

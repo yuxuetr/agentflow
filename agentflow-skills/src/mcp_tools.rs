@@ -1,4 +1,6 @@
-use agentflow_mcp::client::{ClientBuilder, Content, MCPClient, Tool as McpTool};
+use agentflow_mcp::client::{
+  validate_tool_arguments, ClientBuilder, Content, MCPClient, Tool as McpTool,
+};
 use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -203,6 +205,15 @@ impl Tool for McpToolAdapter {
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
+    validate_tool_arguments(&self.remote_name, &self.input_schema, &params).map_err(|e| {
+      ToolError::InvalidParams {
+        message: format!(
+          "MCP tool '{}' parameter validation failed: {}",
+          self.remote_name, e
+        ),
+      }
+    })?;
+
     self.pool.call_tool(&self.remote_name, params).await
   }
 }
@@ -402,5 +413,38 @@ mod tests {
       definition.metadata.mcp_tool_name.as_deref(),
       Some("echo/raw")
     );
+  }
+
+  #[tokio::test]
+  async fn mcp_adapter_rejects_invalid_params_before_remote_call() {
+    let pool = Arc::new(McpClientPool::new(McpServerConfig {
+      name: "local-demo".to_string(),
+      command: "python3".to_string(),
+      args: vec![],
+      env: Default::default(),
+      timeout_secs: None,
+      max_concurrent_calls: None,
+    }));
+    let adapter = McpToolAdapter::new(
+      pool,
+      McpTool {
+        name: "search".to_string(),
+        description: Some("Search".to_string()),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "required": ["query"],
+          "properties": {
+            "query": { "type": "string" }
+          }
+        }),
+      },
+    );
+
+    let result = adapter.execute(serde_json::json!({"query": 42})).await;
+    let error = result.unwrap_err().to_string();
+
+    assert!(error.contains("Invalid parameters"));
+    assert!(error.contains("search"));
+    assert!(error.contains("query"));
   }
 }

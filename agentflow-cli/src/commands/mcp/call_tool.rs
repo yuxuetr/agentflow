@@ -55,6 +55,15 @@ pub async fn execute(
 
   println!("{}", "✅ Connected to MCP server".green());
 
+  let tools = client
+    .list_tools()
+    .await
+    .context("Failed to list MCP tools before call")?;
+  let tool = tools
+    .iter()
+    .find(|tool| tool.name == tool_name)
+    .with_context(|| format!("MCP tool '{}' was not found on this server", tool_name))?;
+
   // Call the tool
   println!();
   println!(
@@ -65,7 +74,7 @@ pub async fn execute(
   );
 
   let result = client
-    .call_tool(&tool_name, params)
+    .call_tool_validated(tool, params)
     .await
     .context(format!("Failed to call tool '{}'", tool_name))?;
 

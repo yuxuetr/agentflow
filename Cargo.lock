@@ -170,6 +170,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "jsonschema",
  "proptest",
  "serde",
  "serde_json",
