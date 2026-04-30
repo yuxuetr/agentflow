@@ -214,22 +214,16 @@ agentflow llm prompt "Write a Python function to sort a list" \
   --output code_example.py
 ```
 
-### `agentflow llm chat`
+### Agent-first interaction
 
-Start an interactive chat session.
+The standalone `agentflow llm chat` command has been retired. AgentFlow
+interactions should go through Skills, Agents, or workflows:
 
-#### Syntax
 ```bash
-agentflow llm chat [OPTIONS]
+agentflow skill chat ./skills/code-reviewer --model step-2-16k
+agentflow skill run ./skills/code-reviewer --message "Review this" --model step-2-16k
+agentflow workflow run flow.yml --model step-2-16k
 ```
-
-#### Optional Parameters
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--model`, `-m` | Auto | Model name |
-| `--system` | None | System prompt |
-| `--save` | None | Save conversation to file |
-| `--load` | None | Load conversation from file |
 
 ## ⚙️ Configuration Commands
 
@@ -382,7 +376,6 @@ For faster usage, many commands have shorter aliases:
 | `audio speech-to-text` | `audio asr` |
 | `audio voice-clone` | `audio clone` |
 | `llm prompt` | `llm p` |
-| `llm chat` | `llm c` |
 
 ## 💡 Usage Tips
 

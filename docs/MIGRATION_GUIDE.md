@@ -399,8 +399,8 @@ agentflow config migrate old.yml --output new.yml
 # Direct LLM interaction
 agentflow llm prompt "Analyze this text" --model gpt-4o
 
-# Interactive chat mode
-agentflow llm chat --model claude-3-sonnet
+# Agent-first interaction
+agentflow skill chat ./skills/code-reviewer --model claude-3-sonnet
 
 # List available models
 agentflow llm models

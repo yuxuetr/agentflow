@@ -26,7 +26,7 @@ enum Commands {
   Config(ConfigArgs),
   /// Image generation and understanding commands
   Image(ImageArgs),
-  /// LLM interaction commands
+  /// LLM model discovery commands
   Llm(LlmArgs),
   /// Model Context Protocol (MCP) commands
   Mcp(McpArgs),
@@ -228,6 +228,8 @@ enum LlmCommands {
     #[arg(short, long)]
     detailed: bool,
   },
+  /// Deprecated compatibility stub. Use `skill chat`, `skill run`, or workflow `skill_agent`.
+  #[command(hide = true)]
   Chat {
     #[arg(short, long)]
     model: Option<String>,
@@ -676,11 +678,13 @@ async fn main() {
     Commands::Llm(args) => match args.command {
       LlmCommands::Models { provider, detailed } => llm::models::execute(provider, detailed).await,
       LlmCommands::Chat {
-        model,
-        system,
-        save,
-        load,
-      } => llm::chat::execute(model, system, save, load).await,
+        model: _,
+        system: _,
+        save: _,
+        load: _,
+      } => Err(anyhow::anyhow!(
+        "`agentflow llm chat` has been retired. AgentFlow interactions are agent-first: use `agentflow skill chat`, `agentflow skill run`, or a workflow `skill_agent` node. Use `agentflow llm models` only for model discovery."
+      )),
     },
     Commands::Mcp(args) => match args.command {
       McpCommands::ListTools {

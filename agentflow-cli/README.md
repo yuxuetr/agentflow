@@ -98,11 +98,11 @@ agentflow image understand --image path/to/your/image.jpg --text "What is the ma
 
 ### `llm`
 
-Directly interact with language models.
+Inspect configured language models. AgentFlow's interactive path is agent-first;
+use `skill chat`, `skill run`, or workflow `skill_agent` nodes for conversations.
 
 **Subcommands:**
 
--   `chat`: Start an interactive chat session.
 -   `models`: List available models.
 
 **Usage Examples:**
@@ -113,9 +113,6 @@ agentflow llm models
 
 # List models from a specific provider
 agentflow llm models --provider openai
-
-# Chat with an explicit model from ~/.agentflow/models.yml
-agentflow llm chat --model gpt-4o-mini
 ```
 
 ### `config`

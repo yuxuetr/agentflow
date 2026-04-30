@@ -28,7 +28,6 @@ agentflow config show models
 agentflow config show providers
 agentflow config validate
 agentflow llm models --provider openai --detailed
-agentflow llm chat --model gpt-4o-mini
 ```
 
 Runtime model override precedence is:
@@ -40,11 +39,14 @@ Runtime model override precedence is:
 The override is supported consistently across:
 
 ```bash
-agentflow llm chat --model mock-model
 agentflow workflow run flow.yml --model mock-model
 agentflow skill run ./skills/code-reviewer --message "review" --model mock-model
 agentflow skill chat ./skills/code-reviewer --model mock-model
 ```
+
+`agentflow llm` is intentionally limited to model discovery and diagnostics.
+Interactive use should go through Skills, Agents, or workflows rather than a
+bare model chat command.
 
 ### Model Alias Design
 

@@ -85,10 +85,9 @@ agentflow-cli/
 │   │   │   ├── run.rs       # agentflow run
 │   │   │   ├── validate.rs  # agentflow validate
 │   │   │   └── list.rs      # agentflow list
-│   │   ├── llm/            # LLM interaction commands
+│   │   ├── llm/            # LLM model discovery and diagnostics
 │   │   │   ├── mod.rs
 │   │   │   ├── prompt.rs    # agentflow llm prompt
-│   │   │   ├── chat.rs      # agentflow llm chat
 │   │   │   └── models.rs    # agentflow llm models
 │   │   └── config/         # Configuration commands
 │   │       ├── mod.rs
@@ -141,9 +140,12 @@ agentflow list workflows                # List available workflow templates
 #### LLM Commands
 ```bash
 agentflow llm prompt <text> [OPTIONS]   # Send prompt to LLM
-agentflow llm chat [OPTIONS]            # Interactive chat session
 agentflow llm models [OPTIONS]          # List available models
 ```
+
+Standalone `agentflow llm chat` has been retired. Interactive usage should be
+agent-first through `agentflow skill chat`, `agentflow skill run`, or workflow
+`skill_agent` nodes.
 
 #### Configuration Commands
 ```bash
@@ -174,14 +176,6 @@ agentflow config validate               # Validate configuration
 --output, -o <path>     # Output file
 --stream                # Enable streaming output
 --system <text>         # System prompt
-```
-
-#### LLM Chat Options
-```bash
---model, -m <model>     # Specify model name
---system <text>         # System prompt
---save <file>           # Save conversation to file
---load <file>           # Load conversation from file
 ```
 
 ## Workflow Configuration Format

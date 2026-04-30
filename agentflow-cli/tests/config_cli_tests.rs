@@ -26,25 +26,6 @@ defaults:
   .unwrap();
 }
 
-fn write_mock_config(home: &TempDir) {
-  let config_dir = home.path().join(".agentflow");
-  fs::create_dir_all(&config_dir).unwrap();
-  fs::write(
-    config_dir.join("models.yml"),
-    r#"
-models:
-  mock-model:
-    vendor: mock
-    type: text
-    model_id: mock-model
-providers:
-  mock:
-    api_key_env: MOCK_API_KEY
-"#,
-  )
-  .unwrap();
-}
-
 #[test]
 fn config_show_redacts_secret_values_but_keeps_env_names() {
   let home = TempDir::new().unwrap();
@@ -96,18 +77,26 @@ fn llm_models_reads_user_model_config() {
 }
 
 #[test]
-fn llm_chat_uses_selected_model() {
-  let home = TempDir::new().unwrap();
-  write_mock_config(&home);
-
+fn llm_chat_is_retired_with_agent_first_guidance() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
     .args(["llm", "chat", "--model", "mock-model"])
-    .env("HOME", home.path())
-    .env("AGENTFLOW_MOCK_RESPONSE", "mocked chat answer")
-    .write_stdin("hello\n/exit\n")
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "`agentflow llm chat` has been retired",
+    ))
+    .stderr(predicate::str::contains("agentflow skill chat"))
+    .stderr(predicate::str::contains("skill_agent"));
+}
+
+#[test]
+fn llm_help_hides_chat_subcommand() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["llm", "--help"])
     .assert()
     .success()
-    .stdout(predicate::str::contains("Model: mock-model"))
-    .stdout(predicate::str::contains("Agent: mocked chat answer"));
+    .stdout(predicate::str::contains("models"))
+    .stdout(predicate::str::contains("chat").not());
 }
