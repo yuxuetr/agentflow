@@ -57,14 +57,14 @@
 - `workflow run` 在构建 graph 前执行 schema validation，`--dry-run` 也会提前失败。
 - 新增 `workflow validate <file>` 独立入口。
 - `workflow validate <file> --format json` 输出机器可读 schema report，包含 workflow、valid、issues、warnings。
+- unknown parameters 默认保持兼容性 warning，`workflow validate --strict` 可升级为 error 供 CI 使用。
 - `workflow debug --validate` 复用 schema validation。
 - 对未启用 feature 的 `mcp` / `rag` 节点输出明确 feature gate 提示。
-- CLI 测试已覆盖缺失 required 参数、feature-gated MCP 节点和 JSON report 输出。
+- CLI 测试已覆盖缺失 required 参数、feature-gated MCP 节点、JSON report 输出和 unknown parameter 严格模式。
 
 剩余:
 
 - 扩展 schema 文档和更多节点参数测试。
-- 决定 unknown parameters 是 warning 还是 strict error，并提供兼容策略。
 
 涉及模块:
 

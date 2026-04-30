@@ -1,14 +1,28 @@
-use crate::config::{schema::validate_flow_definition, v2::FlowDefinitionV2};
+use crate::config::{
+  schema::{
+    validate_flow_definition_with_options, UnknownParameterMode, WorkflowValidationOptions,
+  },
+  v2::FlowDefinitionV2,
+};
 use anyhow::{bail, Context, Result};
 use std::fs;
 
-pub async fn execute(workflow_file: String, format: String) -> Result<()> {
+pub async fn execute(workflow_file: String, format: String, strict: bool) -> Result<()> {
   let yaml_content = fs::read_to_string(&workflow_file)
     .with_context(|| format!("Failed to read workflow file: {}", workflow_file))?;
   let flow_def: FlowDefinitionV2 =
     serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse workflow YAML")?;
 
-  let report = validate_flow_definition(&flow_def);
+  let report = validate_flow_definition_with_options(
+    &flow_def,
+    WorkflowValidationOptions {
+      unknown_parameters: if strict {
+        UnknownParameterMode::Error
+      } else {
+        UnknownParameterMode::Warning
+      },
+    },
+  );
   match format.as_str() {
     "json" => {
       let payload = serde_json::json!({

@@ -46,6 +46,9 @@ agentflow workflow run path/to/your/workflow.yml --dry-run
 # Validate schema and dependencies without execution
 agentflow workflow validate path/to/your/workflow.yml
 
+# Emit machine-readable validation output and fail on unknown parameters
+agentflow workflow validate path/to/your/workflow.yml --format json --strict
+
 # Inject CLI inputs, override LLM/skill-agent models, and save final state
 agentflow workflow run path/to/your/workflow.yml \
   --input topic AgentFlow \

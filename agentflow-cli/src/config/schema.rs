@@ -64,7 +64,26 @@ impl ParamSpec {
   }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkflowValidationOptions {
+  pub unknown_parameters: UnknownParameterMode,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum UnknownParameterMode {
+  #[default]
+  Warning,
+  Error,
+}
+
 pub fn validate_flow_definition(flow_def: &FlowDefinitionV2) -> WorkflowValidationReport {
+  validate_flow_definition_with_options(flow_def, WorkflowValidationOptions::default())
+}
+
+pub fn validate_flow_definition_with_options(
+  flow_def: &FlowDefinitionV2,
+  options: WorkflowValidationOptions,
+) -> WorkflowValidationReport {
   let mut report = WorkflowValidationReport::default();
   let mut seen_ids = HashSet::new();
 
@@ -84,7 +103,7 @@ pub fn validate_flow_definition(flow_def: &FlowDefinitionV2) -> WorkflowValidati
         .push(format!("{}.id '{}' is duplicated", path, node.id));
     }
 
-    validate_node_schema(node, &path, &mut report);
+    validate_node_schema(node, &path, options, &mut report);
   }
 
   let valid_ids: HashSet<_> = flow_def.nodes.iter().map(|node| node.id.as_str()).collect();
@@ -121,6 +140,7 @@ pub fn validate_flow_definition(flow_def: &FlowDefinitionV2) -> WorkflowValidati
 fn validate_node_schema(
   node: &NodeDefinitionV2,
   path: &str,
+  options: WorkflowValidationOptions,
   report: &mut WorkflowValidationReport,
 ) {
   let specs = match specs_for_node_type(node.node_type.as_str()) {
@@ -162,16 +182,20 @@ fn validate_node_schema(
 
   for key in node.parameters.keys() {
     if !known.contains(key.as_str()) {
-      report.warnings.push(format!(
+      let message = format!(
         "{}.{}.parameters.{} is not defined in the CLI schema for node type '{}'",
         path, node.id, key, node.node_type
-      ));
+      );
+      match options.unknown_parameters {
+        UnknownParameterMode::Warning => report.warnings.push(message),
+        UnknownParameterMode::Error => report.issues.push(message),
+      }
     }
   }
 
   match node.node_type.as_str() {
-    "map" => validate_nested_nodes(node, path, "template", report),
-    "while" => validate_nested_nodes(node, path, "do", report),
+    "map" => validate_nested_nodes(node, path, "template", options, report),
+    "while" => validate_nested_nodes(node, path, "do", options, report),
     _ => {}
   }
 }
@@ -315,6 +339,7 @@ fn validate_nested_nodes(
   node: &NodeDefinitionV2,
   path: &str,
   key: &str,
+  options: WorkflowValidationOptions,
   report: &mut WorkflowValidationReport,
 ) {
   let Some(value) = node.parameters.get(key) else {
@@ -332,6 +357,7 @@ fn validate_nested_nodes(
     validate_node_schema(
       nested,
       &format!("{}.parameters.{}[{}]", path, key, idx),
+      options,
       report,
     );
   }

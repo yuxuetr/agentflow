@@ -93,6 +93,24 @@ nodes:
   workflow
 }
 
+fn write_unknown_parameter_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("unknown_parameter_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Unknown Parameter Workflow
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello"
+      typo_param: true
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
 #[cfg(not(feature = "mcp"))]
 fn write_mcp_workflow(dir: &TempDir) -> std::path::PathBuf {
   let workflow = dir.path().join("mcp_workflow.yml");
@@ -254,6 +272,46 @@ fn cli_workflow_validate_outputs_machine_readable_json() {
     .failure()
     .stdout(predicate::str::contains("\"valid\": false"))
     .stdout(predicate::str::contains("requires 'prompt'"));
+}
+
+#[test]
+fn cli_workflow_validate_warns_for_unknown_parameters_by_default() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_unknown_parameter_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Schema warnings"))
+    .stdout(predicate::str::contains("typo_param"));
+}
+
+#[test]
+fn cli_workflow_validate_strict_rejects_unknown_parameters() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_unknown_parameter_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--strict",
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("\"valid\": false"))
+    .stdout(predicate::str::contains("\"issues\""))
+    .stdout(predicate::str::contains("typo_param"));
 }
 
 #[cfg(not(feature = "mcp"))]

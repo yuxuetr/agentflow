@@ -112,6 +112,9 @@ enum WorkflowCommands {
     /// Output format: text or json
     #[arg(long, default_value = "text", value_parser = ["text", "json"])]
     format: String,
+    /// Treat schema warnings for unknown node parameters as validation errors
+    #[arg(long)]
+    strict: bool,
   },
   /// Debug and inspect workflow structure
   Debug {
@@ -595,7 +598,8 @@ async fn main() {
       WorkflowCommands::Validate {
         workflow_file,
         format,
-      } => workflow::validate::execute(workflow_file, format).await,
+        strict,
+      } => workflow::validate::execute(workflow_file, format, strict).await,
       WorkflowCommands::Debug {
         workflow_file,
         visualize,
