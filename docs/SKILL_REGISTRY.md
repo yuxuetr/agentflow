@@ -1,7 +1,7 @@
 # Skill Registry
 
 Skill registry indexes let a team share local Skill packages without requiring
-remote downloads or a marketplace. The current implementation is intentionally
+remote downloads or a plugin marketplace. The current implementation is intentionally
 local-first: an index resolves a skill directory that already exists beside the
 index file or at an absolute path.
 
@@ -125,12 +125,12 @@ without changing local semantics:
   for a remote validation mode.
 
 This preserves the current no-network CI path while leaving room for Git-backed
-or marketplace-backed distribution.
+or Skill-catalog-backed distribution.
 
 ## Marketplace Manifest
 
-A marketplace manifest groups one or more registry indexes into a browsable
-catalog. It does not replace `skills.index.toml`; instead it points at local,
+A marketplace manifest is a Skill catalog that groups one or more registry
+indexes into a browsable list. It does not replace `skills.index.toml`; instead it points at local,
 organization, or future remote indexes and lets the CLI show install commands
 that still use `agentflow skill install <index_file> <skill>`.
 
@@ -180,4 +180,5 @@ cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/example
 
 `marketplace resolve` prints the exact `agentflow skill install ...` command.
 The install path remains unchanged, so marketplace browsing does not add a new
-trust or overwrite model.
+trust or overwrite model. This is not a general plugin marketplace; it catalogs
+Skills only.

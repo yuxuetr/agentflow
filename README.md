@@ -28,6 +28,7 @@ AgentFlow now treats workflows and agents as complementary execution strategies:
 - Use `WorkflowTool` when an agent should call a stable DAG workflow as a normal tool.
 - Use Skills to package instructions, manifests, script tools, MCP server declarations, and runtime constraints.
 - Use MCP integration to expose external tool servers through the same tool interface as local tools.
+- Use Skill registry and marketplace files as local-first Skill catalogs. AgentFlow does not currently provide a general plugin runtime.
 
 The intended dependency direction is:
 
@@ -307,6 +308,7 @@ All features meet strict performance targets:
 - **[V2 Architecture](docs/ARCHITECTURE.md)**: Technical design for the DAG workflow architecture.
 - **[Skills](docs/SKILLS.md)**: User-facing guide for packaging agent instructions, tools, MCP servers, knowledge, and memory.
 - **[Skill Format](docs/SKILL_FORMAT.md)**: `SKILL.md` and `skill.toml` behavior for reusable capabilities.
+- **[Extensibility Model](docs/EXTENSIBILITY_MODEL.md)**: Boundaries between Rust nodes, Tools, MCP, Skills, Skill catalogs, and future plugins.
 - **[MCP Skills](docs/MCP_SKILLS.md)**: Operational guide for exposing MCP server tools through Skills.
 - **[MCP Skills Integration](docs/MCP_SKILLS_INTEGRATION.md)**: Skills, MCP server configuration, and tool discovery.
 - **[Hybrid Workflow](docs/HYBRID_WORKFLOW.md)**: Guide for embedding agents in DAGs and exposing workflows as tools.

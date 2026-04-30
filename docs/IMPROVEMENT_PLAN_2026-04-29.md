@@ -246,6 +246,8 @@ cargo test -p agentflow-tracing --target-dir /tmp/agentflow-target
 
 ### P0-5. 明确 plugin / skill / MCP / tool 边界
 
+状态: 已完成
+
 问题:
 
 - 当前项目具备 Skills、MCP、Tools、Marketplace，但还没有正式 plugin runtime。
@@ -266,6 +268,12 @@ cargo test -p agentflow-tracing --target-dir /tmp/agentflow-target
 
 - 用户能根据文档判断应该写 Rust node、Tool、MCP server 还是 Skill。
 - 不再把 marketplace 描述为完整 plugin marketplace。
+
+已完成:
+
+- 新增 `docs/EXTENSIBILITY_MODEL.md`，明确 Rust node、Tool、MCP、Skill、Skill registry/marketplace catalog、未来 Plugin 的边界。
+- README 增加扩展模型入口，并说明 Skill registry / marketplace 是 local-first Skill catalog，不是通用 plugin runtime。
+- `docs/SKILLS.md` 和 `docs/SKILL_REGISTRY.md` 已将 marketplace 相关措辞收敛为 Skill catalog，并明确 Skills 不是动态加载插件。
 
 ## 4. P1: Runtime、观测与恢复深化
 

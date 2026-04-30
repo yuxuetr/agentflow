@@ -238,14 +238,14 @@ cargo run -p agentflow-cli -- skill validate /tmp/agentflow-skills/mcp-basic
 
 `skill install` copies the resolved local skill directory into the target skills directory using the canonical skill name as the destination directory. It refuses to overwrite an existing skill unless `--force` is passed. The default target is `~/.agentflow/skills`.
 
-Browse a marketplace that groups one or more registry indexes:
+Browse a Skill catalog that groups one or more registry indexes:
 
 ```bash
 cargo run -p agentflow-cli -- skill marketplace list agentflow-skills/examples/marketplace.toml
 cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/examples/marketplace.toml mcp-demo
 ```
 
-Marketplace files are catalogs only. They point at registry indexes and print
+Marketplace files are Skill catalogs only. They point at registry indexes and print
 the matching `agentflow skill install <index_file> <skill>` command; install
 still validates and copies from the resolved registry index.
 
@@ -286,7 +286,7 @@ cargo run -p agentflow-cli -- skill chat agentflow-skills/examples/skills/mcp-ba
 
 ## Current Boundaries
 
-The current Skill path covers packaging, validation, tool registry construction, MCP tool discovery, MCP tool execution, prompt-time references, and agent runtime execution.
+The current Skill path covers packaging, validation, tool registry construction, MCP tool discovery, MCP tool execution, prompt-time references, and agent runtime execution. Skills are capability packages, not dynamically loaded plugins. See [EXTENSIBILITY_MODEL.md](EXTENSIBILITY_MODEL.md) for the boundary between Rust nodes, Tools, MCP, Skills, Skill catalogs, and future plugins.
 
 Known follow-up work is tracked in `TODOs.md` and `RoadMap.md`, including:
 
