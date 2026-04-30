@@ -5,7 +5,7 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
-use agentflow_tools::{SandboxPolicy, ToolRegistry};
+use agentflow_tools::{SandboxPolicy, ToolPolicy, ToolRegistry};
 use tracing::info;
 
 use crate::{
@@ -56,7 +56,7 @@ impl SkillBuilder {
     manifest: &SkillManifest,
     skill_dir: &Path,
   ) -> Result<ToolRegistry, SkillError> {
-    let mut registry = build_tool_registry(&manifest.tools, skill_dir);
+    let mut registry = build_tool_registry(&manifest.tools, &manifest.security, skill_dir);
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
     Ok(registry)
   }
@@ -142,8 +142,18 @@ fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, S
 
 // ── ToolRegistry builder ────────────────────────────────────────────────────────
 
-fn build_tool_registry(tool_configs: &[ToolConfig], skill_dir: &Path) -> ToolRegistry {
-  let mut registry = ToolRegistry::new();
+fn build_tool_registry(
+  tool_configs: &[ToolConfig],
+  security: &SecurityConfig,
+  skill_dir: &Path,
+) -> ToolRegistry {
+  let mut registry = if security.tool_permission_allowlist.is_empty() {
+    ToolRegistry::new()
+  } else {
+    ToolRegistry::new().with_policy(ToolPolicy::allow_permissions(
+      security.tool_permission_allowlist.clone(),
+    ))
+  };
 
   if tool_configs.is_empty() {
     // No tools declared — return an empty registry.
@@ -632,6 +642,47 @@ mod tests {
     ];
     // Build must succeed (tools are registered, no LLM called).
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn build_registry_enforces_security_tool_permission_allowlist() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("policy-skill");
+    manifest.security.tool_permission_allowlist = vec![
+      agentflow_tools::ToolPermission::FilesystemRead,
+      agentflow_tools::ToolPermission::FilesystemWrite,
+    ];
+    manifest.tools = vec![
+      ToolConfig {
+        name: "file".to_string(),
+        ..ToolConfig::default()
+      },
+      ToolConfig {
+        name: "shell".to_string(),
+        ..ToolConfig::default()
+      },
+    ];
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+
+    let file_decision = registry
+      .evaluate_policy(
+        "file",
+        &serde_json::json!({"operation": "read", "path": "README.md"}),
+      )
+      .unwrap();
+    assert!(file_decision.allowed);
+
+    let shell = registry
+      .execute("shell", serde_json::json!({"command": "echo ok"}))
+      .await
+      .unwrap_err();
+    assert!(matches!(
+      shell,
+      agentflow_tools::ToolError::PolicyDenied { .. }
+    ));
   }
 
   /// build() with script tool uses the scripts/ directory from skill_dir.

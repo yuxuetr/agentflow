@@ -167,6 +167,8 @@ Relative MCP command parts such as `./server.py` are resolved from the skill dir
 
 MCP startup is governed by `[security]` in `skill.toml` or matching frontmatter fields in `SKILL.md`. By default, AgentFlow allows only common stdio server launchers (`python`, `python3`, `node`, `npx`, `uvx`), limits a skill to 4 MCP servers, clamps MCP timeouts to 1-120 seconds, and admits at most 4 concurrent calls per server. If an MCP server forwards environment variables, list their names in `mcp_env_allowlist`; audit logs record command names and env keys, never env values.
 
+Tool execution is also governed at call time. Set `tool_permission_allowlist` under `[security]` to restrict registered tools by permission category such as `filesystem_read`, `filesystem_write`, `process_exec`, `network`, `mcp`, or `workflow`. Empty means all registered tool permissions are allowed.
+
 See [MCP_SKILLS.md](MCP_SKILLS.md) for the MCP Skills usage guide and [MCP_SKILLS_INTEGRATION.md](MCP_SKILLS_INTEGRATION.md) for the deeper design notes.
 
 ## Knowledge And References

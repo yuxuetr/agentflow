@@ -82,6 +82,19 @@
       "timestamp": "<timestamp>"
     },
     {
+      "event": "tool_policy_decision",
+      "session_id": "golden-session",
+      "step_index": 2,
+      "tool": "echo",
+      "allowed": true,
+      "matched_rule": "allow_all",
+      "source": "builtin",
+      "params_summary": {
+        "text": "string"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
       "event": "tool_call_started",
       "session_id": "golden-session",
       "step_index": 2,

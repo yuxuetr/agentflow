@@ -243,6 +243,20 @@ impl PlanExecuteAgent {
       let tool_step_index = step_index;
       let metadata = self.tools.tool_metadata(&tool);
       let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
+      if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
+        events.push(AgentEvent::ToolPolicyDecision {
+          session_id: self.session_id.clone(),
+          step_index: tool_step_index,
+          tool: tool.clone(),
+          allowed: decision.allowed,
+          matched_rule: decision.matched_rule,
+          deny_reason: decision.deny_reason,
+          source: decision.source,
+          permissions: decision.permissions,
+          params_summary: decision.params_summary,
+          timestamp: Utc::now(),
+        });
+      }
       events.push(AgentEvent::ToolCallStarted {
         session_id: self.session_id.clone(),
         step_index: tool_step_index,

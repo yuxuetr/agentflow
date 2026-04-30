@@ -11,6 +11,9 @@ pub enum ToolError {
   #[error("Invalid parameters: {message}")]
   InvalidParams { message: String },
 
+  #[error("Tool policy denied: {message}")]
+  PolicyDenied { message: String },
+
   #[error("Sandbox violation: {message}")]
   SandboxViolation { message: String },
 

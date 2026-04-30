@@ -267,6 +267,12 @@ pub struct ToolCallTrace {
   pub is_error: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub duration_ms: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub policy_allowed: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub policy_rule: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub policy_deny_reason: Option<String>,
   pub is_mcp: bool,
 }
 
@@ -355,11 +361,31 @@ fn collect_tool_calls(
       params: kind.get("params").cloned(),
       is_error: None,
       duration_ms: None,
+      policy_allowed: None,
+      policy_rule: None,
+      policy_deny_reason: None,
       is_mcp: tool.starts_with("mcp_"),
     });
   }
 
   for event in events {
+    if event.get("event").and_then(|value| value.as_str()) == Some("tool_policy_decision") {
+      let Some(tool) = event.get("tool").and_then(|value| value.as_str()) else {
+        continue;
+      };
+      if let Some(call) = calls.iter_mut().rev().find(|call| call.tool == tool) {
+        call.policy_allowed = event.get("allowed").and_then(|value| value.as_bool());
+        call.policy_rule = event
+          .get("matched_rule")
+          .and_then(|value| value.as_str())
+          .map(ToString::to_string);
+        call.policy_deny_reason = event
+          .get("deny_reason")
+          .and_then(|value| value.as_str())
+          .map(ToString::to_string);
+      }
+      continue;
+    }
     if event.get("event").and_then(|value| value.as_str()) == Some("tool_call_started") {
       let Some(tool) = event.get("tool").and_then(|value| value.as_str()) else {
         continue;

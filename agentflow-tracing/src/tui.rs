@@ -228,6 +228,16 @@ fn append_agent_details(out: &mut String, agent: &AgentTrace, options: TraceTuiO
 }
 
 fn append_tool_details(out: &mut String, tool_call: &ToolCallTrace, options: TraceTuiOptions) {
+  if let Some(allowed) = tool_call.policy_allowed {
+    out.push_str(&format!(
+      "    policy: {} rule={}\n",
+      if allowed { "allowed" } else { "denied" },
+      tool_call.policy_rule.as_deref().unwrap_or("unknown")
+    ));
+    if let Some(reason) = &tool_call.policy_deny_reason {
+      out.push_str(&format!("    policy_reason: {reason}\n"));
+    }
+  }
   if let Some(params) = &tool_call.params {
     out.push_str(&format!(
       "    params: {}\n",
@@ -294,6 +304,9 @@ mod tests {
           params: Some(serde_json::json!({"value": "ok"})),
           is_error: Some(false),
           duration_ms: Some(5),
+          policy_allowed: Some(true),
+          policy_rule: Some("allow_all".to_string()),
+          policy_deny_reason: None,
           is_mcp: false,
         },
         ToolCallTrace {
@@ -304,6 +317,9 @@ mod tests {
           params: Some(serde_json::json!({"api_key": "secret", "message": "hello"})),
           is_error: Some(false),
           duration_ms: Some(12),
+          policy_allowed: Some(false),
+          policy_rule: Some("permission_allowlist".to_string()),
+          policy_deny_reason: Some("permission 'mcp' is not allowed".to_string()),
           is_mcp: true,
         },
       ],

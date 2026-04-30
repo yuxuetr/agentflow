@@ -593,6 +593,9 @@ mod tests {
         params: Some(serde_json::json!({"message": "hello"})),
         is_error: Some(false),
         duration_ms: Some(7),
+        policy_allowed: Some(true),
+        policy_rule: Some("allow_all".to_string()),
+        policy_deny_reason: None,
         is_mcp: true,
       }],
     });

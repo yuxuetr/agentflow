@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use agentflow_tools::ToolPermission;
+
 /// Top-level structure of a `skill.toml` file.
 ///
 /// # Example
@@ -158,6 +160,9 @@ pub struct SecurityConfig {
   /// Maximum MCP server declarations in one skill.
   #[serde(default = "default_mcp_max_servers")]
   pub mcp_max_servers: usize,
+  /// Allowed tool permission categories. Empty = allow all registered tools.
+  #[serde(default)]
+  pub tool_permission_allowlist: Vec<ToolPermission>,
 }
 
 impl Default for SecurityConfig {
@@ -169,6 +174,7 @@ impl Default for SecurityConfig {
       mcp_default_timeout_secs: DEFAULT_MCP_TIMEOUT_SECS,
       mcp_max_concurrent_calls: DEFAULT_MCP_MAX_CONCURRENT_CALLS,
       mcp_max_servers: DEFAULT_MCP_MAX_SERVERS,
+      tool_permission_allowlist: Vec::new(),
     }
   }
 }

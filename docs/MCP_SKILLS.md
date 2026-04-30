@@ -64,9 +64,12 @@ mcp_env_allowlist = ["MCP_TOKEN"]
 mcp_default_timeout_secs = 30
 mcp_max_concurrent_calls = 4
 mcp_max_servers = 4
+tool_permission_allowlist = ["mcp", "network"]
 ```
 
 Empty `mcp_server_allowlist` allows all declared server names. `mcp_command_allowlist` defaults to `python`, `python3`, `node`, `npx`, and `uvx`. Environment variables are denied unless their keys are listed in `mcp_env_allowlist`.
+
+Empty `tool_permission_allowlist` allows every registered tool permission. When set, every tool call is checked before execution; for MCP tools include both `mcp` and `network`.
 
 ## skill.toml Equivalent
 

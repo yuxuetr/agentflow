@@ -340,6 +340,9 @@ mod tests {
         })),
         is_error: Some(false),
         duration_ms: Some(10),
+        policy_allowed: Some(true),
+        policy_rule: Some("allow_all".to_string()),
+        policy_deny_reason: None,
         is_mcp: false,
       }],
     });

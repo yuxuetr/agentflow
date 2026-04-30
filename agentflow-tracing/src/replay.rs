@@ -217,6 +217,16 @@ fn append_tool_call(out: &mut String, tool_call: &ToolCallTrace, options: Replay
       tool_call.permissions.join(",")
     ));
   }
+  if let Some(allowed) = tool_call.policy_allowed {
+    out.push_str(&format!(
+      "        policy: {} rule={}\n",
+      if allowed { "allowed" } else { "denied" },
+      tool_call.policy_rule.as_deref().unwrap_or("unknown")
+    ));
+    if let Some(reason) = &tool_call.policy_deny_reason {
+      out.push_str(&format!("        policy_reason: {reason}\n"));
+    }
+  }
   if let Some(duration_ms) = tool_call.duration_ms {
     out.push_str(&format!("        duration: {duration_ms}ms\n"));
   }
@@ -298,6 +308,9 @@ mod tests {
         params: Some(serde_json::json!({"message": "hello"})),
         is_error: Some(false),
         duration_ms: Some(12),
+        policy_allowed: Some(true),
+        policy_rule: Some("allow_all".to_string()),
+        policy_deny_reason: None,
         is_mcp: true,
       }],
     });

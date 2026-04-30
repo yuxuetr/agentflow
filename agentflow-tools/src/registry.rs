@@ -1,9 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermission};
+use crate::{
+  Tool, ToolError, ToolMetadata, ToolOutput, ToolPermission, ToolPolicy, ToolPolicyDecision,
+};
 
 /// Central registry for all available tools.
 ///
@@ -11,13 +13,22 @@ use crate::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermission};
 /// to look up and dispatch tool calls from LLM responses.
 pub struct ToolRegistry {
   tools: HashMap<String, Arc<dyn Tool>>,
+  policy: ToolPolicy,
+  policy_audit: Arc<Mutex<Vec<ToolPolicyDecision>>>,
 }
 
 impl ToolRegistry {
   pub fn new() -> Self {
     Self {
       tools: HashMap::new(),
+      policy: ToolPolicy::allow_all(),
+      policy_audit: Arc::new(Mutex::new(Vec::new())),
     }
+  }
+
+  pub fn with_policy(mut self, policy: ToolPolicy) -> Self {
+    self.policy = policy;
+    self
   }
 
   /// Register a tool.  A previously registered tool with the same name
@@ -60,6 +71,25 @@ impl ToolRegistry {
     self.tools.get(name).map(|tool| tool.metadata())
   }
 
+  pub fn evaluate_policy(
+    &self,
+    name: &str,
+    params: &Value,
+  ) -> Result<ToolPolicyDecision, ToolError> {
+    let tool = self.tools.get(name).ok_or_else(|| ToolError::NotFound {
+      name: name.to_string(),
+    })?;
+    Ok(self.policy.evaluate(name, &tool.metadata(), params))
+  }
+
+  pub fn policy_audit_log(&self) -> Vec<ToolPolicyDecision> {
+    self
+      .policy_audit
+      .lock()
+      .map(|audit| audit.clone())
+      .unwrap_or_default()
+  }
+
   /// Build an OpenAI-style `tools` array for use in API calls.
   pub fn openai_tools_array(&self) -> Vec<Value> {
     self
@@ -95,6 +125,20 @@ impl ToolRegistry {
     let tool = self.tools.get(name).ok_or_else(|| ToolError::NotFound {
       name: name.to_string(),
     })?;
+    let decision = self.policy.evaluate(name, &tool.metadata(), &params);
+    if let Ok(mut audit) = self.policy_audit.lock() {
+      audit.push(decision.clone());
+    }
+    if !decision.allowed {
+      return Err(ToolError::PolicyDenied {
+        message: decision.deny_reason.unwrap_or_else(|| {
+          format!(
+            "tool '{}' was denied by policy '{}'",
+            name, decision.matched_rule
+          )
+        }),
+      });
+    }
     tool.execute(params).await
   }
 }
@@ -196,5 +240,49 @@ mod tests {
 
     assert_eq!(metadata.source, ToolSource::Builtin);
     assert!(metadata.permissions.permissions.is_empty());
+  }
+
+  #[tokio::test]
+  async fn registry_denies_tool_when_policy_rejects_permission() {
+    let mut registry = ToolRegistry::new().with_policy(crate::ToolPolicy::allow_permissions([
+      ToolPermission::Network,
+    ]));
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let error = registry
+      .execute("shell", json!({"command": "echo ok"}))
+      .await
+      .unwrap_err();
+
+    assert!(matches!(error, ToolError::PolicyDenied { .. }));
+    let audit = registry.policy_audit_log();
+    assert_eq!(audit.len(), 1);
+    assert!(!audit[0].allowed);
+    assert_eq!(audit[0].matched_rule, "permission_allowlist");
+  }
+
+  #[tokio::test]
+  async fn registry_records_allowed_policy_decisions() {
+    let mut registry = ToolRegistry::new().with_policy(crate::ToolPolicy::allow_permissions([
+      ToolPermission::Network,
+    ]));
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+
+    let output = registry
+      .execute("http", json!({"url": "https://example.test"}))
+      .await
+      .unwrap();
+
+    assert_eq!(output.content, "ok");
+    let audit = registry.policy_audit_log();
+    assert_eq!(audit.len(), 1);
+    assert!(audit[0].allowed);
+    assert_eq!(audit[0].params_summary["url"], json!("string"));
   }
 }

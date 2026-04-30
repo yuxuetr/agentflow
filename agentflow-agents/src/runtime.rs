@@ -226,6 +226,21 @@ pub enum AgentEvent {
     permissions: Vec<String>,
     timestamp: DateTime<Utc>,
   },
+  ToolPolicyDecision {
+    session_id: String,
+    step_index: usize,
+    tool: String,
+    allowed: bool,
+    matched_rule: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deny_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    permissions: Vec<String>,
+    params_summary: Value,
+    timestamp: DateTime<Utc>,
+  },
   ToolCallCompleted {
     session_id: String,
     step_index: usize,

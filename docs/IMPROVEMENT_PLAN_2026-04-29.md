@@ -28,7 +28,7 @@
 
 ### P0-1. 统一 workflow YAML schema 和节点参数校验
 
-状态: 进行中
+状态: 已完成
 
 问题:
 
@@ -187,6 +187,8 @@ cargo test -p agentflow-skills --target-dir /tmp/agentflow-target
 
 ### P0-4. 建立 Tool Policy Decision 和审计记录
 
+状态: 已完成
+
 问题:
 
 - Tool permission/source metadata 已存在，但还不是统一强制策略。
@@ -222,6 +224,17 @@ cargo test -p agentflow-skills --target-dir /tmp/agentflow-target
 - 未授权 tool call 被拒绝，并返回结构化错误。
 - trace replay 能展示 tool policy allowed/denied。
 - Skill security allowlist 能实际影响 tool execution，不只是 metadata。
+
+已完成:
+
+- `agentflow-tools` 新增 `ToolPolicy` / `ToolPolicyDecision`，`ToolRegistry::execute` 在调用前统一评估并记录 audit log。
+- policy decision 包含 allow/deny、matched rule、deny reason、source、permissions 和参数类型摘要。
+- 未授权 tool call 返回结构化 `ToolError::PolicyDenied`。
+- `agentflow-skills` 新增 `security.tool_permission_allowlist`，可把 Skill 安全配置映射为执行期 permission allowlist。
+- ReAct / PlanExecute agent runtime 在每次 tool call 前写入 `tool_policy_decision` AgentEvent。
+- `agentflow-tracing` 的 `ToolCallTrace`、replay 和 TUI 已展示 policy allow/deny 与规则信息。
+- 已覆盖 registry allow/deny audit、Skill security allowlist、agent golden trace 和 tracing 展示测试。
+- 已通过 `cargo test -p agentflow-tools -p agentflow-skills -p agentflow-agents -p agentflow-tracing --target-dir /tmp/agentflow-target`。
 
 建议验证:
 
