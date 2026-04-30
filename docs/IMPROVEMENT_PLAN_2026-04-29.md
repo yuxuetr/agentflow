@@ -28,6 +28,8 @@
 
 ### P0-1. 统一 workflow YAML schema 和节点参数校验
 
+状态: 进行中
+
 问题:
 
 - `FlowDefinitionV2` 只定义了通用 YAML 结构，各节点参数仍由 factory 和节点实现分散解析。
@@ -48,6 +50,21 @@
 - `workflow validate` 和 `workflow run --dry-run` 先执行统一 schema validation。
 - 错误输出包含 workflow file、node id、node type、parameter path、expected type、actual value summary。
 - 增加 `--format json` 或等价机器可读输出，用于 CI 和 server 后续复用。
+
+已完成:
+
+- 新增 CLI workflow schema validation 模块，覆盖主要 factory 节点的 required/optional 参数和基础类型。
+- `workflow run` 在构建 graph 前执行 schema validation，`--dry-run` 也会提前失败。
+- 新增 `workflow validate <file>` 独立入口。
+- `workflow debug --validate` 复用 schema validation。
+- 对未启用 feature 的 `mcp` / `rag` 节点输出明确 feature gate 提示。
+- CLI 测试已覆盖缺失 required 参数和 feature-gated MCP 节点。
+
+剩余:
+
+- 为 schema report 增加 `--format json`。
+- 扩展 schema 文档和更多节点参数测试。
+- 决定 unknown parameters 是 warning 还是 strict error，并提供兼容策略。
 
 涉及模块:
 

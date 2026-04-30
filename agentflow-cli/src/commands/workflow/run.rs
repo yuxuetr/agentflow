@@ -1,6 +1,9 @@
 use crate::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
 use crate::executor::factory;
 use crate::redaction::redact_cli_value;
+use crate::{
+  commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
+};
 use agentflow_core::{async_node::AsyncNodeInputs, flow::Flow, value::FlowValue};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
@@ -33,6 +36,17 @@ pub async fn execute(
     serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse V2 workflow YAML.")?;
 
   println!("📄 Workflow '\'{}\'\' loaded.", flow_def.name);
+  let schema_report = validate_flow_definition(&flow_def);
+  if !schema_report.is_valid() || !schema_report.warnings.is_empty() {
+    print_schema_report(&flow_def.name, &schema_report);
+  }
+  if !schema_report.is_valid() {
+    bail!(
+      "workflow '{}' failed schema validation with {} issue(s)",
+      flow_def.name,
+      schema_report.issues.len()
+    );
+  }
 
   let flow = build_flow(&flow_def, model.as_deref())?;
   if let Some(model) = &model {

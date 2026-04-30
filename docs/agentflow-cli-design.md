@@ -131,10 +131,10 @@ agentflow-cli/
 
 #### Workflow Commands
 ```bash
-agentflow run <workflow_file>           # Execute workflow from file
-agentflow run <workflow_file> [OPTIONS] # Execute with options
-agentflow validate <workflow_file>      # Validate workflow configuration
-agentflow list workflows                # List available workflow templates
+agentflow workflow run <workflow_file>        # Execute workflow from file
+agentflow workflow run <workflow_file> [OPTIONS]
+agentflow workflow validate <workflow_file>   # Validate schema and dependencies
+agentflow workflow debug <workflow_file>      # Inspect workflow structure
 ```
 
 #### LLM Commands

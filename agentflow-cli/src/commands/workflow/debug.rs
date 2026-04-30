@@ -1,7 +1,7 @@
 //! Workflow debugging and inspection commands
 
-use crate::config::v2::FlowDefinitionV2;
-use anyhow::{Context, Result};
+use crate::config::{schema::validate_flow_definition, v2::FlowDefinitionV2};
+use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
@@ -112,6 +112,10 @@ fn validate_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> {
     issues.push(format!("Circular dependency detected: {}", e));
   }
 
+  let schema_report = validate_flow_definition(flow_def);
+  issues.extend(schema_report.issues);
+  warnings.extend(schema_report.warnings);
+
   // Check for unreachable nodes (warnings)
   let reachable = find_reachable_nodes(flow_def);
   for node in &flow_def.nodes {
@@ -154,6 +158,14 @@ fn validate_workflow(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()> {
     for (node_type, count) in type_counts {
       println!("  - {}: {}", node_type, count);
     }
+  }
+
+  if !issues.is_empty() {
+    bail!(
+      "workflow '{}' failed validation with {} issue(s)",
+      flow_def.name,
+      issues.len()
+    );
   }
 
   Ok(())

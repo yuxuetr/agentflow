@@ -43,6 +43,9 @@ agentflow workflow run path/to/your/workflow.yml
 # Preview the V2 DAG execution order without running nodes
 agentflow workflow run path/to/your/workflow.yml --dry-run
 
+# Validate schema and dependencies without execution
+agentflow workflow validate path/to/your/workflow.yml
+
 # Inject CLI inputs, override LLM/skill-agent models, and save final state
 agentflow workflow run path/to/your/workflow.yml \
   --input topic AgentFlow \

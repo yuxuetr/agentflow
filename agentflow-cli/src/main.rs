@@ -106,6 +106,8 @@ enum WorkflowCommands {
     #[arg(long, default_value_t = 0)]
     max_retries: u32,
   },
+  /// Validate workflow schema and dependencies without execution
+  Validate { workflow_file: String },
   /// Debug and inspect workflow structure
   Debug {
     workflow_file: String,
@@ -585,6 +587,7 @@ async fn main() {
         )
         .await
       }
+      WorkflowCommands::Validate { workflow_file } => workflow::validate::execute(workflow_file).await,
       WorkflowCommands::Debug {
         workflow_file,
         visualize,

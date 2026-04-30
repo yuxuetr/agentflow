@@ -76,6 +76,42 @@ nodes:
   workflow
 }
 
+fn write_invalid_llm_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("invalid_llm_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Invalid LLM Workflow
+nodes:
+  - id: answer
+    type: llm
+    parameters:
+      model: "mock-model"
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[cfg(not(feature = "mcp"))]
+fn write_mcp_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("mcp_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: MCP Workflow
+nodes:
+  - id: list_files
+    type: mcp
+    parameters:
+      server_command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      tool_name: list_directory
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
 fn write_basic_skill(dir: &TempDir) -> std::path::PathBuf {
   let skill_dir = dir.path().join("review-skill");
   fs::create_dir_all(&skill_dir).unwrap();
@@ -180,6 +216,39 @@ fn cli_workflow_run_rejects_unimplemented_watch_flag() {
     .assert()
     .failure()
     .stderr(predicate::str::contains("--watch is not implemented yet"));
+}
+
+#[test]
+fn cli_workflow_run_validates_required_node_parameters_before_execution() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_invalid_llm_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--dry-run"])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("failed schema validation"))
+    .stdout(predicate::str::contains("requires 'prompt'"));
+}
+
+#[cfg(not(feature = "mcp"))]
+#[test]
+fn cli_workflow_run_reports_feature_gated_mcp_node() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mcp_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--dry-run"])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("failed schema validation"))
+    .stdout(predicate::str::contains("enable the `mcp` feature"));
 }
 
 #[test]
