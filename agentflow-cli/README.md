@@ -63,6 +63,8 @@ Current `workflow run` uses the V2 `FlowDefinitionV2 -> GraphNode -> agentflow_c
 path. Public flags are wired to behavior; `--watch` currently returns an explicit
 not-implemented error instead of being ignored.
 
+See `docs/WORKFLOW_SCHEMA.md` for the current node parameter contract.
+
 ### `audio`
 
 Perform audio-related tasks like transcription and speech synthesis.

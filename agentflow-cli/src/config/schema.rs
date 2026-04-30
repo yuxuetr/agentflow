@@ -397,3 +397,146 @@ fn describe_param_type(kind: ParamType) -> &'static str {
     ParamType::SequenceOfStrings => "a sequence/list of strings",
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn parse_workflow(yaml: &str) -> FlowDefinitionV2 {
+    serde_yaml::from_str(yaml).unwrap()
+  }
+
+  #[test]
+  fn validates_representative_config_first_node_schemas() {
+    let flow = parse_workflow(
+      r#"
+name: Representative Nodes
+nodes:
+  - id: answer
+    type: llm
+    parameters:
+      prompt: "Say hello"
+      temperature: 0.2
+      max_tokens: 64
+  - id: render
+    type: template
+    parameters:
+      template: "Hello {{ topic }}"
+  - id: read_file
+    type: file
+    parameters:
+      operation: read
+      path: /tmp/input.txt
+  - id: request
+    type: http
+    parameters:
+      url: "https://example.test"
+      method: POST
+      headers:
+        accept: application/json
+  - id: review
+    type: skill_agent
+    parameters:
+      skill: ./skills/review
+      message: "Review this"
+  - id: paper
+    type: arxiv
+    parameters:
+      url: "https://arxiv.org/abs/2401.00001"
+  - id: image
+    type: text_to_image
+    parameters:
+      model: mock-image
+      prompt: "Diagram"
+  - id: speak
+    type: tts
+    parameters:
+      model: mock-tts
+      voice: alloy
+      input_template: "Hello"
+  - id: each_item
+    type: map
+    parameters:
+      parallel: false
+      template:
+        - id: map_render
+          type: template
+          parameters:
+            template: "{{ item }}"
+  - id: retry_loop
+    type: while
+    parameters:
+      condition: "{{ iteration < 2 }}"
+      max_iterations: 2
+      do:
+        - id: loop_render
+          type: template
+          parameters:
+            template: "{{ iteration }}"
+"#,
+    );
+
+    let report = validate_flow_definition(&flow);
+
+    assert_eq!(report.issues, Vec::<String>::new());
+    assert_eq!(report.warnings, Vec::<String>::new());
+  }
+
+  #[test]
+  fn input_mapping_can_satisfy_required_input_parameters() {
+    let flow = parse_workflow(
+      r#"
+name: Required Inputs
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello"
+  - id: answer
+    type: llm
+    dependencies: [render]
+    input_mapping:
+      prompt: "{{ nodes.render.outputs.output }}"
+    parameters:
+      model: mock
+"#,
+    );
+
+    let report = validate_flow_definition(&flow);
+
+    assert_eq!(report.issues, Vec::<String>::new());
+  }
+
+  #[test]
+  fn reports_parameter_type_mismatches_with_paths() {
+    let flow = parse_workflow(
+      r#"
+name: Type Errors
+nodes:
+  - id: request
+    type: http
+    parameters:
+      url: "https://example.test"
+      headers: "not a map"
+  - id: speak
+    type: tts
+    parameters:
+      model: mock
+      voice: alloy
+      input_template: ["not", "a", "string"]
+"#,
+    );
+
+    let report = validate_flow_definition(&flow);
+
+    assert_eq!(report.issues.len(), 2);
+    assert!(report
+      .issues
+      .iter()
+      .any(|issue| issue.contains("nodes[0].parameters.headers must be an object/map")));
+    assert!(report
+      .issues
+      .iter()
+      .any(|issue| issue.contains("nodes[1].parameters.input_template must be a string")));
+  }
+}

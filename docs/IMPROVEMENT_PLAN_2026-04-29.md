@@ -58,13 +58,14 @@
 - 新增 `workflow validate <file>` 独立入口。
 - `workflow validate <file> --format json` 输出机器可读 schema report，包含 workflow、valid、issues、warnings。
 - unknown parameters 默认保持兼容性 warning，`workflow validate --strict` 可升级为 error 供 CI 使用。
+- 新增 `docs/WORKFLOW_SCHEMA.md`，记录节点参数 contract、参数类型、input_mapping 规则和 nested node 校验规则。
 - `workflow debug --validate` 复用 schema validation。
 - 对未启用 feature 的 `mcp` / `rag` 节点输出明确 feature gate 提示。
-- CLI 测试已覆盖缺失 required 参数、feature-gated MCP 节点、JSON report 输出和 unknown parameter 严格模式。
+- CLI/单元测试已覆盖缺失 required 参数、feature-gated MCP 节点、JSON report 输出、unknown parameter 严格模式，以及 10 个代表性 config-first 节点。
 
 剩余:
 
-- 扩展 schema 文档和更多节点参数测试。
+- 继续随新增节点维护 schema 表和测试样例。
 
 涉及模块:
 
