@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` test(core): cover concurrent skip semantics
 - `本次提交` test(core): harden concurrent failure semantics
 - `e761e30 feat(cli): expose concurrent workflow execution`
 - `b67629f feat(core): add concurrent DAG scheduler`
@@ -50,6 +51,7 @@
   - CLI `workflow run` 已新增 `--execution-mode serial|concurrent` 和 `--max-concurrency`。
   - 已覆盖独立分支并发耗时低于串行、依赖节点等待上游输出、CLI concurrent mode、非法并发数测试。
   - 已补强并发 failure 语义: fail-fast 会停止调度新节点但保留 in-flight 结果；非 fail-fast 会继续独立 ready 分支，失败分支下游不被误调度。
+  - 已补强并发 skip / conditional 语义: `run_if=false` 会记录 `NodeSkipped`，独立分支继续执行，依赖 skipped 输出的 required input 会失败为 `DependencyNotMet`。
   - 下一步聚焦并发模式的 failure / skip / checkpoint 端到端语义，以及 trace 并发展示。
 
 当前任务清单:
@@ -61,10 +63,10 @@
   - [x] 断言 `WorkflowEvent::NodeFailed` 与 `WorkflowEvent::WorkflowFailed` 被触发。
 
 - P1-1.2 并发 skip / conditional 语义测试:
-  - [ ] 构造 `run_if=false` 的分支，确认并发 scheduler 写入 `NodeSkipped`。
-  - [ ] 覆盖 `continue_on_skip=true`: 不依赖 skipped 节点的独立分支继续执行。
-  - [ ] 覆盖依赖 skipped 节点的 required input 行为，确认不会把缺失输出当成成功输入。
-  - [ ] 断言 skip 事件和 final state 中 `NodeSkipped` 一致。
+  - [x] 构造 `run_if=false` 的分支，确认并发 scheduler 写入 `NodeSkipped`。
+  - [x] 覆盖 `continue_on_skip=true`: 不依赖 skipped 节点的独立分支继续执行。
+  - [x] 覆盖依赖 skipped 节点的 required input 行为，确认不会把缺失输出当成成功输入。
+  - [x] 断言 skip 事件和 final state 中 `NodeSkipped` 一致。
 
 - P1-1.3 并发 checkpoint 端到端测试:
   - [ ] 使用临时 checkpoint 目录开启 `with_checkpointing`。

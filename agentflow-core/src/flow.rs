@@ -1710,6 +1710,106 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn concurrent_skip_records_event_and_continues_independent_work() {
+    use_writable_home();
+
+    struct StaticNode {
+      key: &'static str,
+      value: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AsyncNode for StaticNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert(self.key.to_string(), FlowValue::Json(self.value.clone()));
+        Ok(outputs)
+      }
+    }
+
+    let guard = GraphNode {
+      id: "guard".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "enabled",
+        value: json!(false),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let skipped_branch = GraphNode {
+      id: "skipped_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("should-not-run"),
+      })),
+      dependencies: vec!["guard".to_string()],
+      input_mapping: None,
+      run_if: Some("{{ nodes.guard.outputs.enabled }}".to_string()),
+      initial_inputs: HashMap::new(),
+    };
+    let independent_branch = GraphNode {
+      id: "independent_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("independent"),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let requires_skipped_output = GraphNode {
+      id: "requires_skipped_output".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("blocked"),
+      })),
+      dependencies: vec!["skipped_branch".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "value".to_string(),
+        ("skipped_branch".to_string(), "value".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let state = Flow::new(vec![
+      guard,
+      skipped_branch,
+      independent_branch,
+      requires_skipped_output,
+    ])
+    .with_event_listener(listener)
+    .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+    .await
+    .unwrap();
+
+    assert!(matches!(
+      state.get("skipped_branch"),
+      Some(Err(AgentFlowError::NodeSkipped))
+    ));
+    assert!(state.get("independent_branch").unwrap().is_ok());
+    assert!(matches!(
+      state.get("requires_skipped_output"),
+      Some(Err(AgentFlowError::DependencyNotMet {
+        node_id,
+        dependency_id
+      })) if node_id == "requires_skipped_output" && dependency_id == "skipped_branch"
+    ));
+
+    let events = events.lock().unwrap().clone();
+    assert!(events.contains(&"node.skipped"));
+    assert!(events.contains(&"workflow.failed"));
+  }
+
+  #[tokio::test]
   async fn test_map_node_parallel_execution() {
     use_writable_home();
     struct MultiplyNode;
