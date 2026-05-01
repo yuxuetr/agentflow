@@ -1251,6 +1251,7 @@ mod tests {
   use async_trait::async_trait;
   use serde_json::json;
   use std::sync::Mutex;
+  use tempfile::TempDir;
 
   struct RecordingListener {
     events: Arc<Mutex<Vec<&'static str>>>,
@@ -1266,6 +1267,30 @@ mod tests {
     let home = std::env::temp_dir().join(format!("agentflow-flow-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("HOME", home);
+  }
+
+  async fn load_only_latest_checkpoint(temp_dir: &TempDir) -> Checkpoint {
+    let workflow_dirs = std::fs::read_dir(temp_dir.path())
+      .unwrap()
+      .collect::<Result<Vec<_>, _>>()
+      .unwrap();
+    assert_eq!(
+      workflow_dirs.len(),
+      1,
+      "expected exactly one checkpoint workflow directory"
+    );
+    let workflow_id = workflow_dirs[0].file_name().to_string_lossy().into_owned();
+    let manager = CheckpointManager::new(
+      CheckpointConfig::default()
+        .with_checkpoint_dir(temp_dir.path())
+        .with_auto_cleanup(false),
+    )
+    .unwrap();
+    manager
+      .load_latest_checkpoint(&workflow_id)
+      .await
+      .unwrap()
+      .unwrap()
   }
 
   #[test]
@@ -1807,6 +1832,214 @@ mod tests {
     let events = events.lock().unwrap().clone();
     assert!(events.contains(&"node.skipped"));
     assert!(events.contains(&"workflow.failed"));
+  }
+
+  #[tokio::test]
+  async fn concurrent_checkpoint_captures_successful_branch_outputs() {
+    use_writable_home();
+
+    struct OutputNode {
+      key: &'static str,
+      value: &'static str,
+    }
+
+    #[async_trait]
+    impl AsyncNode for OutputNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert(self.key.to_string(), FlowValue::Json(json!(self.value)));
+        Ok(outputs)
+      }
+    }
+
+    let left = GraphNode {
+      id: "left".to_string(),
+      node_type: NodeType::Standard(Arc::new(OutputNode {
+        key: "value",
+        value: "left",
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let right = GraphNode {
+      id: "right".to_string(),
+      node_type: NodeType::Standard(Arc::new(OutputNode {
+        key: "value",
+        value: "right",
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let temp_dir = TempDir::new().unwrap();
+    let config = CheckpointConfig::default()
+      .with_checkpoint_dir(temp_dir.path())
+      .with_auto_cleanup(false);
+
+    Flow::new(vec![left, right])
+      .with_checkpointing(config)
+      .unwrap()
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+
+    let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
+    assert_eq!(checkpoint.status, WorkflowStatus::Completed);
+    assert_eq!(checkpoint.state["left"]["value"], json!("left"));
+    assert_eq!(checkpoint.state["right"]["value"], json!("right"));
+  }
+
+  #[tokio::test]
+  async fn concurrent_checkpoint_marks_failed_run_and_keeps_completed_node() {
+    use_writable_home();
+
+    struct SlowOkNode;
+
+    #[async_trait]
+    impl AsyncNode for SlowOkNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!("ok")));
+        Ok(outputs)
+      }
+    }
+
+    struct FailingNode;
+
+    #[async_trait]
+    impl AsyncNode for FailingNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Err(AgentFlowError::NodeExecutionFailed {
+          message: "planned failure".to_string(),
+        })
+      }
+    }
+
+    let ok_branch = GraphNode {
+      id: "ok_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(SlowOkNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let fail_branch = GraphNode {
+      id: "fail_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(FailingNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let temp_dir = TempDir::new().unwrap();
+    let config = CheckpointConfig::default()
+      .with_checkpoint_dir(temp_dir.path())
+      .with_auto_cleanup(false);
+
+    Flow::new(vec![ok_branch, fail_branch])
+      .with_checkpointing(config)
+      .unwrap()
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+
+    let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
+    assert_eq!(checkpoint.status, WorkflowStatus::Failed);
+    assert_eq!(checkpoint.last_completed_node, "ok_branch");
+    assert_eq!(checkpoint.state["ok_branch"]["value"], json!("ok"));
+    assert!(!checkpoint.state.contains_key("fail_branch"));
+  }
+
+  #[tokio::test]
+  async fn checkpoint_resume_uses_serial_compatibility_path() {
+    use_writable_home();
+
+    struct OutputNode;
+
+    #[async_trait]
+    impl AsyncNode for OutputNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!("root")));
+        Ok(outputs)
+      }
+    }
+
+    struct SleepNode;
+
+    #[async_trait]
+    impl AsyncNode for SleepNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(90)).await;
+        let mut outputs = HashMap::new();
+        outputs.insert("done".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let root = GraphNode {
+      id: "root".to_string(),
+      node_type: NodeType::Standard(Arc::new(OutputNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let left = GraphNode {
+      id: "left".to_string(),
+      node_type: NodeType::Standard(Arc::new(SleepNode)),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let right = GraphNode {
+      id: "right".to_string(),
+      node_type: NodeType::Standard(Arc::new(SleepNode)),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let temp_dir = TempDir::new().unwrap();
+    let config = CheckpointConfig::default()
+      .with_checkpoint_dir(temp_dir.path())
+      .with_auto_cleanup(false);
+    let manager = CheckpointManager::new(config.clone()).unwrap();
+    manager
+      .save_checkpoint(
+        "resume-workflow",
+        "root",
+        &HashMap::from([(
+          "root".to_string(),
+          json!({
+            "value": "root"
+          }),
+        )]),
+      )
+      .await
+      .unwrap();
+
+    let started = Instant::now();
+    let state = Flow::new(vec![root, left, right])
+      .with_checkpointing(config)
+      .unwrap()
+      .resume("resume-workflow")
+      .await
+      .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(state.get("left").unwrap().is_ok());
+    assert!(state.get("right").unwrap().is_ok());
+    assert!(
+      elapsed >= std::time::Duration::from_millis(170),
+      "resume should execute sibling nodes serially, elapsed: {:?}",
+      elapsed
+    );
   }
 
   #[tokio::test]

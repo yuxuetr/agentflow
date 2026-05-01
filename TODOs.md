@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` test(core): cover concurrent checkpoint semantics
 - `本次提交` test(core): cover concurrent skip semantics
 - `本次提交` test(core): harden concurrent failure semantics
 - `e761e30 feat(cli): expose concurrent workflow execution`
@@ -52,6 +53,7 @@
   - 已覆盖独立分支并发耗时低于串行、依赖节点等待上游输出、CLI concurrent mode、非法并发数测试。
   - 已补强并发 failure 语义: fail-fast 会停止调度新节点但保留 in-flight 结果；非 fail-fast 会继续独立 ready 分支，失败分支下游不被误调度。
   - 已补强并发 skip / conditional 语义: `run_if=false` 会记录 `NodeSkipped`，独立分支继续执行，依赖 skipped 输出的 required input 会失败为 `DependencyNotMet`。
+  - 已补强并发 checkpoint 语义: 成功并发分支写入最终 checkpoint，失败 run 标记 `Failed` 并保留 last completed node，resume 仍走兼容串行路径。
   - 下一步聚焦并发模式的 failure / skip / checkpoint 端到端语义，以及 trace 并发展示。
 
 当前任务清单:
@@ -69,10 +71,10 @@
   - [x] 断言 skip 事件和 final state 中 `NodeSkipped` 一致。
 
 - P1-1.3 并发 checkpoint 端到端测试:
-  - [ ] 使用临时 checkpoint 目录开启 `with_checkpointing`。
-  - [ ] 并发执行两个独立成功分支，确认 checkpoint state 包含两个成功节点输出。
-  - [ ] 构造一个成功分支 + 一个失败分支，确认 final checkpoint status 为 `Failed`，且 last completed node 非空。
-  - [ ] 验证 resume 仍走兼容串行恢复路径，不隐式启用 concurrent resume。
+  - [x] 使用临时 checkpoint 目录开启 `with_checkpointing`。
+  - [x] 并发执行两个独立成功分支，确认 checkpoint state 包含两个成功节点输出。
+  - [x] 构造一个成功分支 + 一个失败分支，确认 final checkpoint status 为 `Failed`，且 last completed node 非空。
+  - [x] 验证 resume 仍走兼容串行恢复路径，不隐式启用 concurrent resume。
 
 - P1-1.4 CLI/config-first 并发测试补强:
   - [ ] 增加一个无外部 API 的多分支 workflow fixture，覆盖 `workflow run --execution-mode concurrent --max-concurrency 2`。
