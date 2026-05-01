@@ -227,6 +227,62 @@ fn cli_workflow_run_accepts_inputs_and_writes_output_file() {
 }
 
 #[test]
+fn cli_workflow_run_accepts_explicit_run_artifacts_directory() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+  let run_dir = work.path().join("runs");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--input",
+      "topic",
+      "AgentFlow",
+      "--run-dir",
+      run_dir.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Run artifacts directory"));
+
+  let run_dirs = fs::read_dir(&run_dir)
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+  assert_eq!(run_dirs.len(), 1);
+  assert!(run_dirs[0].path().join("render_outputs.json").exists());
+}
+
+#[test]
+fn cli_workflow_run_uses_env_run_artifacts_directory() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+  let run_dir = work.path().join("env-runs");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_RUN_DIR", &run_dir)
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Run artifacts directory"));
+
+  let run_dirs = fs::read_dir(&run_dir)
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+  assert_eq!(run_dirs.len(), 1);
+  assert!(run_dirs[0].path().join("render_outputs.json").exists());
+}
+
+#[test]
 fn cli_workflow_run_accepts_concurrent_execution_mode() {
   let home = TempDir::new().unwrap();
   let workflow = fixed_dag_multibranch_fixture();

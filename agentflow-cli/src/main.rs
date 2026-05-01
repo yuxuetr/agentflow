@@ -111,6 +111,9 @@ enum WorkflowCommands {
     /// Maximum concurrently running workflow nodes when --execution-mode concurrent
     #[arg(long, default_value_t = 4)]
     max_concurrency: usize,
+    /// Base directory for per-run workflow artifacts. Defaults to AGENTFLOW_RUN_DIR or ~/.agentflow/runs.
+    #[arg(long)]
+    run_dir: Option<String>,
   },
   /// Validate workflow schema and dependencies without execution
   Validate {
@@ -582,6 +585,7 @@ async fn main() {
         max_retries,
         execution_mode,
         max_concurrency,
+        run_dir,
       } => {
         if input.len() % 2 != 0 {
           eprintln!("Error: Input must be provided in key-value pairs. Got {} arguments (expected even number).", input.len());
@@ -602,6 +606,7 @@ async fn main() {
           max_retries,
           execution_mode,
           max_concurrency,
+          run_dir,
         )
         .await
       }

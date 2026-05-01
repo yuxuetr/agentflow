@@ -10,6 +10,7 @@ use agentflow_core::{
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub async fn execute(
@@ -23,6 +24,7 @@ pub async fn execute(
   max_retries: u32,
   execution_mode: String,
   max_concurrency: usize,
+  run_dir: Option<String>,
 ) -> Result<()> {
   if watch {
     bail!("--watch is not implemented yet; run without --watch or use workflow debug --dry-run");
@@ -76,12 +78,15 @@ pub async fn execute(
 
   let timeout_duration =
     parse_duration(&timeout).with_context(|| format!("Invalid --timeout value '{}'", timeout))?;
-  let execution_config = parse_execution_config(&execution_mode, max_concurrency)?;
+  let execution_config = parse_execution_config(&execution_mode, max_concurrency, run_dir)?;
   if execution_config.mode == agentflow_core::FlowExecutionMode::Concurrent {
     println!(
       "⚙️  Execution mode: concurrent (max_concurrency={})",
       execution_config.max_concurrency
     );
+  }
+  if let Some(run_base_dir) = &execution_config.run_base_dir {
+    println!("📁 Run artifacts directory: {}", run_base_dir.display());
   }
 
   // 3. Execute the flow
@@ -201,17 +206,27 @@ fn parse_duration(raw: &str) -> Result<Duration> {
 fn parse_execution_config(
   execution_mode: &str,
   max_concurrency: usize,
+  run_dir: Option<String>,
 ) -> Result<FlowExecutionConfig> {
-  match execution_mode {
-    "serial" => Ok(FlowExecutionConfig::serial()),
+  let mut config = match execution_mode {
+    "serial" => FlowExecutionConfig::serial(),
     "concurrent" => {
       if max_concurrency == 0 {
         bail!("--max-concurrency must be greater than zero");
       }
-      Ok(FlowExecutionConfig::concurrent(max_concurrency))
+      FlowExecutionConfig::concurrent(max_concurrency)
     }
     other => bail!("unsupported execution mode '{}'", other),
+  };
+
+  if let Some(run_dir) = run_dir.or_else(|| std::env::var("AGENTFLOW_RUN_DIR").ok()) {
+    if run_dir.trim().is_empty() {
+      bail!("--run-dir cannot be empty");
+    }
+    config = config.with_run_base_dir(PathBuf::from(run_dir));
   }
+
+  Ok(config)
 }
 
 async fn run_with_retries(
@@ -229,7 +244,8 @@ async fn run_with_retries(
       println!("🔁 Workflow attempt {}/{}", attempt, attempts);
     }
 
-    let run = flow.execute_from_inputs_with_config(initial_inputs.clone(), execution_config);
+    let run =
+      flow.execute_from_inputs_with_config(initial_inputs.clone(), execution_config.clone());
     match tokio::time::timeout(timeout_duration, run).await {
       Ok(Ok(state)) => return Ok(state),
       Ok(Err(err)) => {

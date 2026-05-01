@@ -135,7 +135,7 @@ agentflow workflow run workflow_v2.yml
 - **DAG Execution Engine**: Workflows are defined with explicit `dependencies` for clear, traceable execution.
 - **Explicit Input Mapping**: The `input_mapping` field provides full control over data flow between nodes.
 - **Powerful Control Flow**: Native support for conditional execution (`run_if`), `while` loops, and `map` iteration (with parallel execution support).
-- **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing.
+- **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing; `workflow run --run-dir` or `AGENTFLOW_RUN_DIR` can make the base path explicit.
 - **Agent Runtime**: ReAct-compatible runtime with structured steps/events, stop reasons, reflection hooks, runtime guards, and golden test coverage.
 - **Hybrid DAG + Agent Execution**: `AgentNode` embeds agents in DAGs; `WorkflowTool` lets agents call DAG workflows.
 - **Skills + MCP Tools**: Skills can declare MCP servers, discover tools, expose schemas, and call them through the unified tool registry.

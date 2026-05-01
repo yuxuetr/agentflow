@@ -44,6 +44,15 @@ agentflow skill run ./skills/code-reviewer --message "review" --model mock-model
 agentflow skill chat ./skills/code-reviewer --model mock-model
 ```
 
+Workflow run artifacts default to `~/.agentflow/runs`. Embedded runtimes,
+servers, and CI jobs can make that path explicit with either CLI or environment
+configuration:
+
+```bash
+agentflow workflow run flow.yml --run-dir /var/lib/agentflow/runs
+AGENTFLOW_RUN_DIR=/tmp/agentflow-runs agentflow workflow run flow.yml
+```
+
 `agentflow llm` is intentionally limited to model discovery and diagnostics.
 Interactive use should go through Skills, Agents, or workflows rather than a
 bare model chat command.

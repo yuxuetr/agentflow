@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` feat(core): configure workflow run artifacts dir
 - `dffcb69 feat(agent): add tool replay recovery metadata`
 - `df3957a docs: define agent tool recovery contract`
 - `9684916 feat(cli): show concurrent plan hint`
@@ -68,6 +69,11 @@
   - 已将恢复元数据落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 字段兼容。
   - 默认策略已明确并测试: recorded result 复用，read-only 可 replay，mutating/external 走 manual required。
 
+- P1-3 Runtime storage config hardening: 已完成
+  - `FlowExecutionConfig` 已支持显式 `run_base_dir`，默认仍兼容 `~/.agentflow/runs`。
+  - `agentflow workflow run` 已新增 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR` 作为环境默认值。
+  - 已覆盖 core 配置注入、CLI flag 和 env var 三条路径。
+
 当前任务清单:
 
 - P1-1.1 并发 failure 语义测试:
@@ -105,6 +111,12 @@
   - [x] 先写设计小节到 `docs/CHECKPOINT_RECOVERY.md` 或新增 runtime recovery 文档，再改代码。
   - [x] 将最小数据结构落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 兼容。
   - [x] 增加测试覆盖 recorded result、read-only replay、mutating/external manual 默认策略。
+
+- P1-3 Runtime storage config hardening:
+  - [x] 将 workflow run artifact base directory 从硬编码 home path 推进到 `FlowExecutionConfig`。
+  - [x] 为 CLI `workflow run` 增加 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR`。
+  - [x] 增加 core 与 CLI 测试，确认 run artifacts 写入显式目录。
+  - [x] 更新配置文档和 README，说明默认路径与覆盖方式。
 
 近期已完成但需长期维护:
 

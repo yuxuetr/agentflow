@@ -165,18 +165,23 @@ impl Flow {
       workflow_id: run_id.clone(),
       timestamp: workflow_started_at,
     });
-    let base_dir = dirs::home_dir()
-      .ok_or_else(|| AgentFlowError::ConfigurationError {
-        message: "Could not find home directory".to_string(),
-      })?
-      .join(".agentflow")
-      .join("runs");
+    let execution_config = execution_config.unwrap_or_default();
+    let base_dir = execution_config
+      .run_base_dir
+      .clone()
+      .map(Ok)
+      .unwrap_or_else(|| {
+        dirs::home_dir()
+          .ok_or_else(|| AgentFlowError::ConfigurationError {
+            message: "Could not find home directory".to_string(),
+          })
+          .map(|home| home.join(".agentflow").join("runs"))
+      })?;
     let run_dir = base_dir.join(&run_id);
     fs::create_dir_all(&run_dir).map_err(|e| AgentFlowError::PersistenceError {
       message: e.to_string(),
     })?;
 
-    let execution_config = execution_config.unwrap_or_default();
     if execution_config.mode == FlowExecutionMode::Concurrent
       && skip_until.is_none()
       && restored_state_pool.is_none()
@@ -1535,6 +1540,47 @@ mod tests {
       child_outputs.get("value"),
       Some(&FlowValue::Json(json!("from-root")))
     );
+  }
+
+  #[tokio::test]
+  async fn execution_config_can_override_run_base_directory() {
+    use_writable_home();
+
+    struct TestNode;
+
+    #[async_trait]
+    impl AsyncNode for TestNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!("ok")));
+        Ok(outputs)
+      }
+    }
+
+    let node = GraphNode {
+      id: "node".to_string(),
+      node_type: NodeType::Standard(Arc::new(TestNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let temp_dir = TempDir::new().unwrap();
+
+    Flow::new(vec![node])
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial().with_run_base_dir(temp_dir.path()),
+      )
+      .await
+      .unwrap();
+
+    let run_dirs = std::fs::read_dir(temp_dir.path())
+      .unwrap()
+      .collect::<Result<Vec<_>, _>>()
+      .unwrap();
+    assert_eq!(run_dirs.len(), 1);
+    assert!(run_dirs[0].path().join("node_outputs.json").exists());
   }
 
   #[tokio::test]
