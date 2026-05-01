@@ -305,6 +305,14 @@ agentflow trace tui workflow-001 --dir ./traces --filter mcp --details
 agentflow trace tui workflow-001 --dir ./traces --filter agent --max-field-chars 240
 ```
 
+If `--dir` is omitted, trace commands read `AGENTFLOW_TRACE_DIR` first and then
+fall back to `~/.agentflow/traces`:
+
+```bash
+AGENTFLOW_TRACE_DIR=./traces agentflow trace replay workflow-001
+AGENTFLOW_TRACE_DIR=./traces agentflow trace tui workflow-001 --filter agent
+```
+
 可用 filter:
 
 - `all`: workflow、node、agent、tool/MCP 调用。

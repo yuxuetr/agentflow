@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` feat(cli): support trace dir env default
 - `本次提交` feat(core): configure workflow run artifacts dir
 - `dffcb69 feat(agent): add tool replay recovery metadata`
 - `df3957a docs: define agent tool recovery contract`
@@ -74,6 +75,11 @@
   - `agentflow workflow run` 已新增 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR` 作为环境默认值。
   - 已覆盖 core 配置注入、CLI flag 和 env var 三条路径。
 
+- P1-4 Trace storage config hardening: 已完成
+  - `agentflow trace replay/tui` 已支持 `AGENTFLOW_TRACE_DIR` 作为 `--dir` 缺省值。
+  - trace CLI help 和 tracing 文档已说明 env/default 查找顺序。
+  - 已增加 CLI 测试覆盖 env trace dir。
+
 当前任务清单:
 
 - P1-1.1 并发 failure 语义测试:
@@ -117,6 +123,12 @@
   - [x] 为 CLI `workflow run` 增加 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR`。
   - [x] 增加 core 与 CLI 测试，确认 run artifacts 写入显式目录。
   - [x] 更新配置文档和 README，说明默认路径与覆盖方式。
+
+- P1-4 Trace storage config hardening:
+  - [x] 为 `agentflow trace replay/tui` 增加 `AGENTFLOW_TRACE_DIR` 缺省路径支持。
+  - [x] 保持显式 `--dir` 优先于环境变量，环境变量优先于 `~/.agentflow/traces`。
+  - [x] 增加 CLI 测试覆盖 env trace dir。
+  - [x] 更新 trace CLI help 和文档。
 
 近期已完成但需长期维护:
 

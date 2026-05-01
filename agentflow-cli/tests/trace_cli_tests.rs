@@ -76,6 +76,39 @@ fn trace_replay_prints_agent_and_mcp_timeline() {
 }
 
 #[test]
+fn trace_replay_uses_env_trace_dir() {
+  let traces = TempDir::new().unwrap();
+  fs::write(
+    traces.path().join("wf-env.json"),
+    serde_json::to_string_pretty(&json!({
+      "workflow_id": "wf-env",
+      "workflow_name": "Env Trace Test",
+      "started_at": "2026-04-27T00:00:00Z",
+      "completed_at": "2026-04-27T00:00:01Z",
+      "status": {"type": "completed"},
+      "nodes": [],
+      "metadata": {
+        "user_id": null,
+        "session_id": null,
+        "tags": [],
+        "environment": "test"
+      }
+    }))
+    .unwrap(),
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["trace", "replay", "wf-env"])
+    .env("AGENTFLOW_TRACE_DIR", traces.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Trace Replay: wf-env"))
+    .stdout(predicate::str::contains("Env Trace Test"));
+}
+
+#[test]
 fn trace_tui_filters_mcp_timeline_with_details() {
   let traces = TempDir::new().unwrap();
   fs::write(

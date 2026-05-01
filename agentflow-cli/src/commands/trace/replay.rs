@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 
+use super::resolve_trace_dir;
 use agentflow_tracing::{
   format_trace_replay, redact_trace, storage::file::FileTraceStorage, RedactionConfig,
   ReplayOptions, TraceStorage,
@@ -12,13 +12,7 @@ pub async fn execute(
   include_json: bool,
   max_field_chars: usize,
 ) -> Result<()> {
-  let trace_dir = match trace_dir {
-    Some(dir) => PathBuf::from(dir),
-    None => dirs::home_dir()
-      .context("Could not determine home directory for default trace path")?
-      .join(".agentflow")
-      .join("traces"),
-  };
+  let trace_dir = resolve_trace_dir(trace_dir)?;
 
   let storage = FileTraceStorage::new(trace_dir.clone())
     .with_context(|| format!("Failed to open trace directory '{}'", trace_dir.display()))?;

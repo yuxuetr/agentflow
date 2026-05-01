@@ -468,7 +468,7 @@ enum TraceCommands {
   Replay {
     /// Workflow run ID / trace ID to replay
     run_id: String,
-    /// Directory containing file-backed traces (default: ~/.agentflow/traces)
+    /// Directory containing file-backed traces (default: AGENTFLOW_TRACE_DIR or ~/.agentflow/traces)
     #[arg(long)]
     dir: Option<String>,
     /// Include raw trace JSON after the replay timeline
@@ -482,7 +482,7 @@ enum TraceCommands {
   Tui {
     /// Workflow run ID / trace ID to inspect
     run_id: String,
-    /// Directory containing file-backed traces (default: ~/.agentflow/traces)
+    /// Directory containing file-backed traces (default: AGENTFLOW_TRACE_DIR or ~/.agentflow/traces)
     #[arg(long)]
     dir: Option<String>,
     /// Timeline focus: all, workflow, agent, tool, or mcp
