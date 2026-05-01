@@ -176,6 +176,20 @@ pub async fn load_checkpoint(&self, workflow_id: &str, node_id: &str) -> Result<
 
 Load the latest or a specific checkpoint for a workflow.
 
+#### Concurrent Execution Note
+
+`agentflow workflow run --execution-mode concurrent` can create checkpoints
+during normal workflow execution. Independent ready nodes may complete in any
+order, and the final checkpoint stores every successfully completed node output.
+If a concurrent run fails, the final checkpoint status is `Failed` and
+`last_completed_node` remains the most recent successful node.
+
+Checkpoint resume intentionally uses the compatibility path today: `Flow::resume`
+continues from the saved checkpoint in serial topological order and does not
+implicitly re-enable concurrent scheduling. Use concurrent mode for fresh
+ordinary runs; resume behavior remains conservative until concurrent resume has
+its own recovery contract.
+
 **Example:**
 ```rust
 // Load latest checkpoint

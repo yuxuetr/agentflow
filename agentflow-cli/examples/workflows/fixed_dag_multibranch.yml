@@ -1,0 +1,49 @@
+# Fixed DAG Multibranch Example
+#
+# No external API keys required.
+#
+# Run with concurrent ready-node scheduling:
+#   agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_multibranch.yml \
+#     --input topic AgentFlow \
+#     --execution-mode concurrent \
+#     --max-concurrency 2
+#
+# Dry run still only shows the topological plan and does not execute nodes:
+#   agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_multibranch.yml \
+#     --dry-run \
+#     --execution-mode concurrent \
+#     --max-concurrency 2
+
+name: "Fixed DAG Multibranch"
+description: "A deterministic multibranch template workflow for concurrent scheduler smoke tests."
+
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Topic: {{ topic | default(value='AgentFlow') }}"
+
+  - id: branch_a
+    type: template
+    dependencies: ["prepare"]
+    input_mapping:
+      prepared: "{{ nodes.prepare.outputs.output }}"
+    parameters:
+      template: "Branch A saw {{ prepared }}"
+
+  - id: branch_b
+    type: template
+    dependencies: ["prepare"]
+    input_mapping:
+      prepared: "{{ nodes.prepare.outputs.output }}"
+    parameters:
+      template: "Branch B saw {{ prepared }}"
+
+  - id: join
+    type: template
+    dependencies: ["branch_a", "branch_b"]
+    input_mapping:
+      a: "{{ nodes.branch_a.outputs.output }}"
+      b: "{{ nodes.branch_b.outputs.output }}"
+    parameters:
+      template: "{{ a }} + {{ b }}"

@@ -40,6 +40,11 @@ nodes:
   workflow
 }
 
+fn fixed_dag_multibranch_fixture() -> std::path::PathBuf {
+  std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("examples/workflows/fixed_dag_multibranch.yml")
+}
+
 fn write_mock_models_config(home: &TempDir) {
   let config_dir = home.path().join(".agentflow");
   fs::create_dir_all(&config_dir).unwrap();
@@ -224,8 +229,7 @@ fn cli_workflow_run_accepts_inputs_and_writes_output_file() {
 #[test]
 fn cli_workflow_run_accepts_concurrent_execution_mode() {
   let home = TempDir::new().unwrap();
-  let work = TempDir::new().unwrap();
-  let workflow = write_template_workflow(&work);
+  let workflow = fixed_dag_multibranch_fixture();
 
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
@@ -245,7 +249,38 @@ fn cli_workflow_run_accepts_concurrent_execution_mode() {
     .assert()
     .success()
     .stdout(predicate::str::contains("Execution mode: concurrent"))
-    .stdout(predicate::str::contains("Hello AgentFlow"));
+    .stdout(predicate::str::contains("Branch A saw Topic: AgentFlow"))
+    .stdout(predicate::str::contains("Branch B saw Topic: AgentFlow"))
+    .stdout(predicate::str::contains("join"));
+}
+
+#[test]
+fn cli_workflow_run_dry_run_ignores_execution_mode_and_does_not_run_nodes() {
+  let home = TempDir::new().unwrap();
+  let workflow = fixed_dag_multibranch_fixture();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--dry-run",
+      "--execution-mode",
+      "concurrent",
+      "--max-concurrency",
+      "2",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Dry run complete"))
+    .stdout(predicate::str::contains("1. prepare"))
+    .stdout(predicate::str::contains("branch_a"))
+    .stdout(predicate::str::contains("branch_b"))
+    .stdout(predicate::str::contains("Final State Pool").not())
+    .stdout(predicate::str::contains("Execution mode: concurrent").not())
+    .stdout(predicate::str::contains("Branch A saw Topic").not());
 }
 
 #[test]

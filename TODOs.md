@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` test(cli): cover concurrent workflow fixtures
 - `本次提交` test(core): cover concurrent checkpoint semantics
 - `本次提交` test(core): cover concurrent skip semantics
 - `本次提交` test(core): harden concurrent failure semantics
@@ -54,6 +55,7 @@
   - 已补强并发 failure 语义: fail-fast 会停止调度新节点但保留 in-flight 结果；非 fail-fast 会继续独立 ready 分支，失败分支下游不被误调度。
   - 已补强并发 skip / conditional 语义: `run_if=false` 会记录 `NodeSkipped`，独立分支继续执行，依赖 skipped 输出的 required input 会失败为 `DependencyNotMet`。
   - 已补强并发 checkpoint 语义: 成功并发分支写入最终 checkpoint，失败 run 标记 `Failed` 并保留 last completed node，resume 仍走兼容串行路径。
+  - 已补强 CLI/config-first 并发路径: 新增无外部 API 多分支 fixture，覆盖 concurrent run 和 dry-run 不执行节点。
   - 下一步聚焦并发模式的 failure / skip / checkpoint 端到端语义，以及 trace 并发展示。
 
 当前任务清单:
@@ -77,9 +79,9 @@
   - [x] 验证 resume 仍走兼容串行恢复路径，不隐式启用 concurrent resume。
 
 - P1-1.4 CLI/config-first 并发测试补强:
-  - [ ] 增加一个无外部 API 的多分支 workflow fixture，覆盖 `workflow run --execution-mode concurrent --max-concurrency 2`。
-  - [ ] 对 `--dry-run` 行为保持不执行节点，仅展示拓扑顺序，不受 execution mode 影响。
-  - [ ] 文档中注明 concurrent mode 当前适用于普通执行，checkpoint resume 仍按兼容路径恢复。
+  - [x] 增加一个无外部 API 的多分支 workflow fixture，覆盖 `workflow run --execution-mode concurrent --max-concurrency 2`。
+  - [x] 对 `--dry-run` 行为保持不执行节点，仅展示拓扑顺序，不受 execution mode 影响。
+  - [x] 文档中注明 concurrent mode 当前适用于普通执行，checkpoint resume 仍按兼容路径恢复。
 
 - P1-1.5 trace / debug 并发展示:
   - [ ] 评估当前 `WorkflowEvent` 是否足够表达并发重叠: `NodeStarted.timestamp` / `NodeCompleted.duration`。
