@@ -28,13 +28,13 @@
 
 最近提交:
 
-- `本次提交` feat(agent): add tool replay recovery metadata
-- `本次提交` docs: define agent tool recovery contract
-- `本次提交` feat(cli): show concurrent plan hint
-- `本次提交` test(cli): cover concurrent workflow fixtures
-- `本次提交` test(core): cover concurrent checkpoint semantics
-- `本次提交` test(core): cover concurrent skip semantics
-- `本次提交` test(core): harden concurrent failure semantics
+- `dffcb69 feat(agent): add tool replay recovery metadata`
+- `df3957a docs: define agent tool recovery contract`
+- `9684916 feat(cli): show concurrent plan hint`
+- `e1a4fff test(cli): cover concurrent workflow fixtures`
+- `aa8c150 test(core): cover concurrent checkpoint semantics`
+- `d832b0d test(core): cover concurrent skip semantics`
+- `1fba2d4 test(core): harden concurrent failure semantics`
 - `e761e30 feat(cli): expose concurrent workflow execution`
 - `b67629f feat(core): add concurrent DAG scheduler`
 - `d2b29eb docs: clarify extensibility model`
@@ -50,7 +50,7 @@
 
 当前进行中:
 
-- P1-1 DAG concurrent scheduler hardening:
+- P1-1 DAG concurrent scheduler hardening: 已完成
   - 已新增 `FlowExecutionConfig` / `FlowExecutionMode`。
   - `Flow::run()` 保持默认串行，`execute_from_inputs_with_config(..., Concurrent)` 显式启用 ready-node 并发调度。
   - CLI `workflow run` 已新增 `--execution-mode serial|concurrent` 和 `--max-concurrency`。
@@ -61,6 +61,12 @@
   - 已补强 CLI/config-first 并发路径: 新增无外部 API 多分支 fixture，覆盖 concurrent run 和 dry-run 不执行节点。
   - 已补强 trace / debug 并发展示: 当前 `WorkflowEvent` 已具备 started timestamp + completed duration；`workflow debug --plan` 会提示 concurrent mode 下同层 ready nodes 可并发。
   - P1-1 当前子任务已完成；下一步可进入 P1-2 Agent tool call 幂等与恢复策略预备设计。
+
+- P1-2 Agent tool call 幂等与恢复策略预备设计: 已完成
+  - 已盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 的既有字段。
+  - 已在 `docs/CHECKPOINT_RECOVERY.md` 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小恢复契约。
+  - 已将恢复元数据落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 字段兼容。
+  - 默认策略已明确并测试: recorded result 复用，read-only 可 replay，mutating/external 走 manual required。
 
 当前任务清单:
 
