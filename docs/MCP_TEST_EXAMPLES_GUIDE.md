@@ -516,6 +516,6 @@ async fn test_retry_behavior() {
 **Document Author**: Claude (AgentFlow MCP Team)
 **Last Updated**: 2025-10-27
 **Related Documents**:
-- MCP_PHASE2_COMPLETION_REPORT.md
 - MCP_PRODUCTION_DESIGN.md
-- MCP_IMPLEMENTATION_TODOs.md
+- MCP_SKILLS.md
+- MCP_SKILLS_INTEGRATION.md

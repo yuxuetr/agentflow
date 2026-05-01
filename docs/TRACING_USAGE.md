@@ -596,7 +596,7 @@ cargo run --example simple_tracing -p agentflow-tracing
 ## 📖 相关文档
 
 - [追踪系统设计](./TRACING_DESIGN.md) - 详细架构设计
-- [架构重构总结](./REFACTORING_SUMMARY.md) - Core 纯粹性设计
+- [当前架构](./ARCHITECTURE.md) - workspace 和 runtime 边界
 - [API 文档](../agentflow-tracing/src/lib.rs) - 完整 API 参考
 
 ---

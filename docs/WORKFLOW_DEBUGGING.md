@@ -511,7 +511,7 @@ Planned improvements:
 
 - [Workflow Configuration Guide](./CONFIGURATION.md)
 - [Retry Mechanism](./RETRY_MECHANISM.md)
-- [Short-term Improvements](./SHORT_TERM_IMPROVEMENTS.md)
+- [Workflow Schema](./WORKFLOW_SCHEMA.md)
 
 ---
 

@@ -292,26 +292,27 @@ All features meet strict performance targets:
 - Checkpoint save: **< 10ms** small, **< 50ms** large ✅
 - Checkpoint load: **< 10ms** ✅
 
-### 🎯 Production-Ready Metrics
+### 🎯 Quality Gates
 
-- **87 tests** (54 unit + 17 integration + 12 benchmarks + 4 doc) - **100% passing**
-- **Zero breaking changes** - Fully backward compatible
-- **Zero compilation warnings**
-- **10,000+ lines** of comprehensive documentation
-- **5,200+ lines** of production-ready code
+Use the workspace tests and targeted crate checks as the source of truth for
+current quality status:
+
+```bash
+cargo test --workspace
+cargo check --workspace
+```
 
 ## 📚 Documentation
 
 ### Core Documentation
+- **[Docs Index](docs/README.md)**: Current documentation entry point.
 - **[RoadMap](RoadMap.md)**: Current direction for evolving AgentFlow into a DAG + agent framework.
+- **[Architecture](docs/ARCHITECTURE.md)**: Current workspace layout, runtime model, CLI surface, and persistence model.
+- **[Configuration](docs/CONFIGURATION.md)**: CLI config, secrets, workflow YAML, and run directories.
+- **[Workflow Schema](docs/WORKFLOW_SCHEMA.md)**: Implemented config-first workflow validation contract.
 - **[Agent Runtime](docs/AGENT_RUNTIME.md)**: Runtime boundary, core types, ReAct trace contract, and DAG interop.
-- **[V2 Architecture](docs/ARCHITECTURE.md)**: Technical design for the DAG workflow architecture.
 - **[Skills](docs/SKILLS.md)**: User-facing guide for packaging agent instructions, tools, MCP servers, knowledge, and memory.
-- **[Skill Format](docs/SKILL_FORMAT.md)**: `SKILL.md` and `skill.toml` behavior for reusable capabilities.
 - **[Extensibility Model](docs/EXTENSIBILITY_MODEL.md)**: Boundaries between Rust nodes, Tools, MCP, Skills, Skill catalogs, and future plugins.
-- **[MCP Skills](docs/MCP_SKILLS.md)**: Operational guide for exposing MCP server tools through Skills.
-- **[MCP Skills Integration](docs/MCP_SKILLS_INTEGRATION.md)**: Skills, MCP server configuration, and tool discovery.
-- **[Hybrid Workflow](docs/HYBRID_WORKFLOW.md)**: Guide for embedding agents in DAGs and exposing workflows as tools.
 - **[Release Checklist](docs/RELEASE_CHECKLIST.md)**: Manual quality gate before tagging or publishing.
 
 ### v0.2.0 Feature Guides
@@ -352,4 +353,4 @@ agentflow --help
 
 ## 🛣️ Development Plan
 
-See the current framework direction in [RoadMap.md](RoadMap.md). The local short-term execution queue is tracked in `TODOs.md`; the older `TODO.md` plan has been retired.
+See the current framework direction in [RoadMap.md](RoadMap.md). Keep active docs tied to implemented behavior; time-boxed plans and TODO trackers should stay outside `docs/` unless they have been folded into stable guides.

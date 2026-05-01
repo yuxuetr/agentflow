@@ -397,4 +397,4 @@ See [API docs](https://docs.rs/agentflow-core) for complete reference:
 
 ---
 
-**Next Steps**: See [SHORT_TERM_IMPROVEMENTS.md](./SHORT_TERM_IMPROVEMENTS.md) for planned enhancements.
+**Related**: See [WORKFLOW_DEBUGGING.md](./WORKFLOW_DEBUGGING.md) and [RESOURCE_MANAGEMENT.md](./RESOURCE_MANAGEMENT.md) for adjacent workflow reliability features.

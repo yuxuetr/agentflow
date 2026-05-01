@@ -288,7 +288,7 @@ cargo run -p agentflow-cli -- skill chat agentflow-skills/examples/skills/mcp-ba
 
 The current Skill path covers packaging, validation, tool registry construction, MCP tool discovery, MCP tool execution, prompt-time references, and agent runtime execution. Skills are capability packages, not dynamically loaded plugins. See [EXTENSIBILITY_MODEL.md](EXTENSIBILITY_MODEL.md) for the boundary between Rust nodes, Tools, MCP, Skills, Skill catalogs, and future plugins.
 
-Known follow-up work is tracked in `TODOs.md` and `RoadMap.md`, including:
+Known follow-up work is tracked in the project roadmap and local task queue, including:
 
 - Agent runtime disable switch.
 - Semantic memory query APIs and agent loop memory hooks.
