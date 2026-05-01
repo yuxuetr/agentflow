@@ -302,6 +302,9 @@ fn show_execution_plan(flow_def: &FlowDefinitionV2, verbose: bool) -> Result<()>
 
   println!("Estimated Execution Plan:");
   println!("(Nodes at the same level can execute in parallel)\n");
+  println!(
+    "Concurrent mode hint: `workflow run --execution-mode concurrent` may run same-level ready nodes at the same time, bounded by `--max-concurrency`.\n"
+  );
 
   for (level, nodes) in levels.iter().enumerate() {
     println!(

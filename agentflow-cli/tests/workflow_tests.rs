@@ -284,6 +284,25 @@ fn cli_workflow_run_dry_run_ignores_execution_mode_and_does_not_run_nodes() {
 }
 
 #[test]
+fn cli_workflow_debug_plan_mentions_concurrent_ready_nodes() {
+  let home = TempDir::new().unwrap();
+  let workflow = fixed_dag_multibranch_fixture();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "debug", workflow.to_str().unwrap(), "--plan"])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("EXECUTION PLAN"))
+    .stdout(predicate::str::contains("Concurrent mode hint"))
+    .stdout(predicate::str::contains(
+      "workflow run --execution-mode concurrent",
+    ))
+    .stdout(predicate::str::contains("Level 1 (2 nodes):"));
+}
+
+#[test]
 fn cli_workflow_run_rejects_zero_max_concurrency() {
   let home = TempDir::new().unwrap();
   let work = TempDir::new().unwrap();

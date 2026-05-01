@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` feat(cli): show concurrent plan hint
 - `本次提交` test(cli): cover concurrent workflow fixtures
 - `本次提交` test(core): cover concurrent checkpoint semantics
 - `本次提交` test(core): cover concurrent skip semantics
@@ -56,7 +57,8 @@
   - 已补强并发 skip / conditional 语义: `run_if=false` 会记录 `NodeSkipped`，独立分支继续执行，依赖 skipped 输出的 required input 会失败为 `DependencyNotMet`。
   - 已补强并发 checkpoint 语义: 成功并发分支写入最终 checkpoint，失败 run 标记 `Failed` 并保留 last completed node，resume 仍走兼容串行路径。
   - 已补强 CLI/config-first 并发路径: 新增无外部 API 多分支 fixture，覆盖 concurrent run 和 dry-run 不执行节点。
-  - 下一步聚焦并发模式的 failure / skip / checkpoint 端到端语义，以及 trace 并发展示。
+  - 已补强 trace / debug 并发展示: 当前 `WorkflowEvent` 已具备 started timestamp + completed duration；`workflow debug --plan` 会提示 concurrent mode 下同层 ready nodes 可并发。
+  - P1-1 当前子任务已完成；下一步可进入 P1-2 Agent tool call 幂等与恢复策略预备设计。
 
 当前任务清单:
 
@@ -84,9 +86,9 @@
   - [x] 文档中注明 concurrent mode 当前适用于普通执行，checkpoint resume 仍按兼容路径恢复。
 
 - P1-1.5 trace / debug 并发展示:
-  - [ ] 评估当前 `WorkflowEvent` 是否足够表达并发重叠: `NodeStarted.timestamp` / `NodeCompleted.duration`。
-  - [ ] 在 `trace replay` 或 `workflow debug --plan` 中增加简洁提示: concurrent mode 下同层 ready nodes 可并发。
-  - [ ] 若需要更强展示，再扩展 trace TUI 的 node row 输出 started/duration。
+  - [x] 评估当前 `WorkflowEvent` 是否足够表达并发重叠: `NodeStarted.timestamp` / `NodeCompleted.duration`。
+  - [x] 在 `trace replay` 或 `workflow debug --plan` 中增加简洁提示: concurrent mode 下同层 ready nodes 可并发。
+  - [x] 若需要更强展示，再扩展 trace TUI 的 node row 输出 started/duration。
 
 - P1-2 预备设计: Agent tool call 幂等与恢复策略:
   - [ ] 盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 中已有字段。
