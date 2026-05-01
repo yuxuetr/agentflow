@@ -543,7 +543,7 @@ impl Flow {
     let mut fail_fast_triggered = false;
 
     while !pending.is_empty() || !running.is_empty() {
-      while running.len() < config.max_concurrency {
+      while !fail_fast_triggered && running.len() < config.max_concurrency {
         let Some(node_id) = sorted_nodes
           .iter()
           .find(|node_id| {
@@ -552,10 +552,12 @@ impl Flow {
                 .nodes
                 .get(*node_id)
                 .map(|node| {
-                  node
-                    .dependencies
-                    .iter()
-                    .all(|dep| state_pool.contains_key(dep))
+                  node.dependencies.iter().all(|dep| {
+                    matches!(
+                      state_pool.get(dep),
+                      Some(Ok(_)) | Some(Err(AgentFlowError::NodeSkipped))
+                    )
+                  })
                 })
                 .unwrap_or(false)
           })
@@ -633,12 +635,15 @@ impl Flow {
         );
       }
 
-      if fail_fast_triggered {
+      if fail_fast_triggered && running.is_empty() {
         break;
       }
 
       if running.is_empty() {
         if pending.is_empty() {
+          break;
+        }
+        if state_pool.values().any(Result::is_err) {
           break;
         }
         return Err(AgentFlowError::FlowExecutionFailed {
@@ -1505,6 +1510,203 @@ mod tests {
       child_outputs.get("value"),
       Some(&FlowValue::Json(json!("from-root")))
     );
+  }
+
+  #[tokio::test]
+  async fn concurrent_fail_fast_stops_new_work_but_records_in_flight_results() {
+    use_writable_home();
+
+    struct DelayedOkNode {
+      millis: u64,
+      value: &'static str,
+    }
+
+    #[async_trait]
+    impl AsyncNode for DelayedOkNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(self.millis)).await;
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!(self.value)));
+        Ok(outputs)
+      }
+    }
+
+    struct FailingNode;
+
+    #[async_trait]
+    impl AsyncNode for FailingNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Err(AgentFlowError::NodeExecutionFailed {
+          message: "planned failure".to_string(),
+        })
+      }
+    }
+
+    let root = GraphNode {
+      id: "root".to_string(),
+      node_type: NodeType::Standard(Arc::new(DelayedOkNode {
+        millis: 20,
+        value: "root",
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let ok_branch = GraphNode {
+      id: "ok_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(DelayedOkNode {
+        millis: 1,
+        value: "ok",
+      })),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let fail_branch = GraphNode {
+      id: "fail_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(FailingNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let after_failure = GraphNode {
+      id: "after_failure".to_string(),
+      node_type: NodeType::Standard(Arc::new(DelayedOkNode {
+        millis: 1,
+        value: "after",
+      })),
+      dependencies: vec!["fail_branch".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "value".to_string(),
+        ("fail_branch".to_string(), "value".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let state = Flow::new(vec![root, ok_branch, fail_branch, after_failure])
+      .with_event_listener(listener)
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+
+    assert!(state.get("root").unwrap().is_ok());
+    assert!(matches!(
+      state.get("fail_branch"),
+      Some(Err(AgentFlowError::NodeExecutionFailed { .. }))
+    ));
+    assert!(
+      !state.contains_key("ok_branch"),
+      "fail_fast should not schedule nodes that were not ready when failure occurred"
+    );
+    assert!(
+      !state.contains_key("after_failure"),
+      "downstream nodes of failed branches must not execute"
+    );
+
+    let events = events.lock().unwrap().clone();
+    assert!(events.contains(&"node.failed"));
+    assert!(events.contains(&"workflow.failed"));
+  }
+
+  #[tokio::test]
+  async fn concurrent_non_fail_fast_continues_independent_ready_work() {
+    use_writable_home();
+
+    struct OkNode {
+      value: &'static str,
+    }
+
+    #[async_trait]
+    impl AsyncNode for OkNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!(self.value)));
+        Ok(outputs)
+      }
+    }
+
+    struct FailingNode;
+
+    #[async_trait]
+    impl AsyncNode for FailingNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Err(AgentFlowError::NodeExecutionFailed {
+          message: "planned failure".to_string(),
+        })
+      }
+    }
+
+    let root = GraphNode {
+      id: "root".to_string(),
+      node_type: NodeType::Standard(Arc::new(OkNode { value: "root" })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let ok_branch = GraphNode {
+      id: "ok_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(OkNode { value: "ok" })),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let fail_branch = GraphNode {
+      id: "fail_branch".to_string(),
+      node_type: NodeType::Standard(Arc::new(FailingNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let after_failure = GraphNode {
+      id: "after_failure".to_string(),
+      node_type: NodeType::Standard(Arc::new(OkNode { value: "after" })),
+      dependencies: vec!["fail_branch".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "value".to_string(),
+        ("fail_branch".to_string(), "value".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+    let mut config = FlowExecutionConfig::concurrent(2);
+    config.fail_fast = false;
+
+    let state = Flow::new(vec![root, ok_branch, fail_branch, after_failure])
+      .with_event_listener(listener)
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    assert!(state.get("root").unwrap().is_ok());
+    assert!(state.get("ok_branch").unwrap().is_ok());
+    assert!(matches!(
+      state.get("fail_branch"),
+      Some(Err(AgentFlowError::NodeExecutionFailed { .. }))
+    ));
+    assert!(
+      !state.contains_key("after_failure"),
+      "nodes depending on failed branches should remain unscheduled"
+    );
+
+    let events = events.lock().unwrap().clone();
+    assert!(events.contains(&"node.failed"));
+    assert!(events.contains(&"workflow.failed"));
   }
 
   #[tokio::test]
