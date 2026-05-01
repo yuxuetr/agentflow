@@ -28,8 +28,8 @@
 
 最近提交:
 
-- `本次提交` feat(cli): support trace dir env default
-- `本次提交` feat(core): configure workflow run artifacts dir
+- `cbd83f3 feat(cli): support trace dir env default`
+- `20701b8 feat(core): configure workflow run artifacts dir`
 - `dffcb69 feat(agent): add tool replay recovery metadata`
 - `df3957a docs: define agent tool recovery contract`
 - `9684916 feat(cli): show concurrent plan hint`
