@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` docs: define agent tool recovery contract
 - `本次提交` feat(cli): show concurrent plan hint
 - `本次提交` test(cli): cover concurrent workflow fixtures
 - `本次提交` test(core): cover concurrent checkpoint semantics
@@ -91,10 +92,12 @@
   - [x] 若需要更强展示，再扩展 trace TUI 的 node row 输出 started/duration。
 
 - P1-2 预备设计: Agent tool call 幂等与恢复策略:
-  - [ ] 盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 中已有字段。
-  - [ ] 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小数据结构。
-  - [ ] 明确默认策略: read-only 可 replay，mutating/external 默认 manual 或 reuse recorded result。
-  - [ ] 先写设计小节到 `docs/CHECKPOINT_RECOVERY.md` 或新增 runtime recovery 文档，再改代码。
+  - [x] 盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 中已有字段。
+  - [x] 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小数据结构。
+  - [x] 明确默认策略: read-only 可 replay，mutating/external 默认 manual 或 reuse recorded result。
+  - [x] 先写设计小节到 `docs/CHECKPOINT_RECOVERY.md` 或新增 runtime recovery 文档，再改代码。
+  - [ ] 将最小数据结构落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 兼容。
+  - [ ] 增加测试覆盖 recorded result、read-only replay、mutating/external manual 默认策略。
 
 近期已完成但需长期维护:
 

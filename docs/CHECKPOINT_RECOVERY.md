@@ -328,6 +328,46 @@ For tool calls, `agent_resume.tool_calls[].replay_policy` is either
 `requires_idempotent_retry` when a restart would call the tool again. This makes
 idempotency requirements explicit before enabling finer-grained agent resume.
 
+#### Agent Tool Call Idempotency Contract
+
+Current inventory:
+
+- `AgentStepKind::ToolCall` records `tool` and `params` in the durable
+  `agent_result.steps` list.
+- `AgentStepKind::ToolResult` records `tool`, textual content, error status,
+  and typed output parts when available.
+- `ToolCallTrace` records trace-facing metadata: `tool`, source, permissions,
+  params, policy decision, duration, and MCP classification.
+- `agent_resume.tool_calls[]` is the checkpoint-facing recovery summary. It
+  records the call step, params, matching result step, result error status, and
+  replay policy.
+
+The minimal durable identity for each agent tool call is:
+
+- `call_id`: stable per-agent-run identifier derived from session id, step
+  index, and tool name. This is for correlation across `agent_result`,
+  `agent_resume`, and traces; it is not a cross-run deduplication key.
+- `idempotency_key`: optional caller/runtime-supplied key for tools that can
+  safely deduplicate retries across process crashes or workflow restarts.
+- `side_effect_class`: one of `read_only`, `idempotent`, `mutating`, or
+  `external`, used to choose the conservative replay default.
+- `replay_policy`: `reuse_recorded_result`, `replay_allowed`, or
+  `manual_required`.
+
+Default replay policy:
+
+- Calls with a recorded `ToolResult` always use `reuse_recorded_result`; resume
+  should inject the recorded observation and must not call the tool again.
+- `read_only` calls without a result use `replay_allowed`.
+- `idempotent` calls without a result use `replay_allowed` only when an
+  `idempotency_key` is present; otherwise they use `manual_required`.
+- `mutating` and `external` calls without a result default to `manual_required`.
+
+These defaults deliberately prefer manual recovery over hidden side effects.
+Future tool manifests can make the side-effect class and idempotency key
+explicit at registration time; until then unknown tools are treated as
+`external`.
+
 `AgentNode` can consume a previous `agent_result` as input. If the trace has no
 unresolved tool calls, it restores the prior observations into memory and asks
 the runtime to continue. If a tool call has no recorded result, resume is
