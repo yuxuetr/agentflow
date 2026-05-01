@@ -256,6 +256,8 @@ pub struct AgentTrace {
 pub struct ToolCallTrace {
   #[serde(default)]
   pub context: TraceContext,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub call_id: Option<String>,
   pub tool: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub source: Option<String>,
@@ -263,6 +265,12 @@ pub struct ToolCallTrace {
   pub permissions: Vec<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub params: Option<serde_json::Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub idempotency_key: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub side_effect_class: Option<ToolCallSideEffectClass>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub replay_policy: Option<ToolCallReplayPolicy>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub is_error: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -274,6 +282,25 @@ pub struct ToolCallTrace {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub policy_deny_reason: Option<String>,
   pub is_mcp: bool,
+}
+
+/// Side-effect classification for a tool call in trace output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallSideEffectClass {
+  ReadOnly,
+  Idempotent,
+  Mutating,
+  External,
+}
+
+/// Conservative replay policy exposed in trace output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallReplayPolicy {
+  ReuseRecordedResult,
+  ReplayAllowed,
+  ManualRequired,
 }
 
 impl AgentTrace {
@@ -294,7 +321,7 @@ impl AgentTrace {
       .and_then(|value| value.as_array())
       .cloned()
       .unwrap_or_default();
-    let tool_calls = collect_tool_calls(&steps, &events);
+    let tool_calls = collect_tool_calls(&session_id, &steps, &events);
 
     Some(Self {
       context: TraceContext::default(),
@@ -339,6 +366,7 @@ fn sanitize_span_component(value: &str) -> String {
 }
 
 fn collect_tool_calls(
+  session_id: &str,
   steps: &[serde_json::Value],
   events: &[serde_json::Value],
 ) -> Vec<ToolCallTrace> {
@@ -353,12 +381,25 @@ fn collect_tool_calls(
     let Some(tool) = kind.get("tool").and_then(|value| value.as_str()) else {
       continue;
     };
+    let step_index = step
+      .get("index")
+      .and_then(|value| value.as_u64())
+      .unwrap_or(calls.len() as u64) as usize;
+    let params = kind.get("params").cloned();
+    let idempotency_key = params.as_ref().and_then(tool_idempotency_key);
+    let side_effect_class = params.as_ref().map(tool_side_effect_class);
     calls.push(ToolCallTrace {
       context: TraceContext::default(),
+      call_id: Some(tool_call_id(session_id, step_index, tool)),
       tool: tool.to_string(),
       source: None,
       permissions: Vec::new(),
-      params: kind.get("params").cloned(),
+      params,
+      idempotency_key: idempotency_key.clone(),
+      side_effect_class: side_effect_class.clone(),
+      replay_policy: side_effect_class
+        .as_ref()
+        .map(|class| tool_replay_policy(false, class, idempotency_key.as_deref())),
       is_error: None,
       duration_ms: None,
       policy_allowed: None,
@@ -416,6 +457,7 @@ fn collect_tool_calls(
     };
     if let Some(call) = calls.iter_mut().rev().find(|call| call.tool == tool) {
       call.is_error = event.get("is_error").and_then(|value| value.as_bool());
+      call.replay_policy = Some(ToolCallReplayPolicy::ReuseRecordedResult);
       call.duration_ms = event.get("duration_ms").and_then(|value| value.as_u64());
       if call.source.is_none() {
         call.source = event
@@ -439,6 +481,56 @@ fn collect_tool_calls(
   }
 
   calls
+}
+
+fn tool_call_id(session_id: &str, step_index: usize, tool: &str) -> String {
+  format!("{}:{}:{}", session_id, step_index, tool)
+}
+
+fn tool_idempotency_key(params: &serde_json::Value) -> Option<String> {
+  params
+    .get("_agentflow")
+    .and_then(|value| value.get("idempotency_key"))
+    .or_else(|| params.get("idempotency_key"))
+    .and_then(serde_json::Value::as_str)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
+}
+
+fn tool_side_effect_class(params: &serde_json::Value) -> ToolCallSideEffectClass {
+  let raw = params
+    .get("_agentflow")
+    .and_then(|value| value.get("side_effect_class"))
+    .or_else(|| params.get("side_effect_class"))
+    .and_then(serde_json::Value::as_str);
+
+  match raw {
+    Some("read_only") => ToolCallSideEffectClass::ReadOnly,
+    Some("idempotent") => ToolCallSideEffectClass::Idempotent,
+    Some("mutating") => ToolCallSideEffectClass::Mutating,
+    Some("external") => ToolCallSideEffectClass::External,
+    _ => ToolCallSideEffectClass::External,
+  }
+}
+
+fn tool_replay_policy(
+  has_recorded_result: bool,
+  side_effect_class: &ToolCallSideEffectClass,
+  idempotency_key: Option<&str>,
+) -> ToolCallReplayPolicy {
+  if has_recorded_result {
+    return ToolCallReplayPolicy::ReuseRecordedResult;
+  }
+
+  match side_effect_class {
+    ToolCallSideEffectClass::ReadOnly => ToolCallReplayPolicy::ReplayAllowed,
+    ToolCallSideEffectClass::Idempotent if idempotency_key.is_some() => {
+      ToolCallReplayPolicy::ReplayAllowed
+    }
+    ToolCallSideEffectClass::Idempotent
+    | ToolCallSideEffectClass::Mutating
+    | ToolCallSideEffectClass::External => ToolCallReplayPolicy::ManualRequired,
+  }
 }
 
 /// Node execution status
@@ -619,7 +711,13 @@ mod tests {
           "kind": {
             "type": "tool_call",
             "tool": "mcp_fixture_echo",
-            "params": {"message": "hello"}
+            "params": {
+              "message": "hello",
+              "_agentflow": {
+                "side_effect_class": "read_only",
+                "idempotency_key": "idem-1"
+              }
+            }
           }
         }
       ],
@@ -631,6 +729,22 @@ mod tests {
 
     agent.attach_context(&node);
 
+    assert_eq!(
+      agent.tool_calls[0].call_id.as_deref(),
+      Some("session-1:0:mcp_fixture_echo")
+    );
+    assert_eq!(
+      agent.tool_calls[0].idempotency_key.as_deref(),
+      Some("idem-1")
+    );
+    assert_eq!(
+      agent.tool_calls[0].side_effect_class,
+      Some(ToolCallSideEffectClass::ReadOnly)
+    );
+    assert_eq!(
+      agent.tool_calls[0].replay_policy,
+      Some(ToolCallReplayPolicy::ReplayAllowed)
+    );
     assert_eq!(agent.context.run_id, "run-1");
     assert_eq!(
       agent.context.parent_span_id.as_deref(),

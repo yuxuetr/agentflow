@@ -323,10 +323,11 @@ When a workflow node is an `AgentNode`, its checkpointed output includes:
   continue from the middle of the agent loop.
 - `restart_required`: no reusable partial state is available.
 
-For tool calls, `agent_resume.tool_calls[].replay_policy` is either
-`reuse_recorded_result` when a tool result step exists, or
-`requires_idempotent_retry` when a restart would call the tool again. This makes
-idempotency requirements explicit before enabling finer-grained agent resume.
+For tool calls, `agent_resume.tool_calls[].replay_policy` is
+`reuse_recorded_result` when a tool result step exists, `replay_allowed` when an
+unresolved call is known to be safe to repeat, or `manual_required` when a
+restart needs an explicit recovery decision. This makes idempotency requirements
+visible before enabling finer-grained agent resume.
 
 #### Agent Tool Call Idempotency Contract
 

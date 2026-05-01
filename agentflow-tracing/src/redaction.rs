@@ -332,12 +332,16 @@ mod tests {
       })],
       tool_calls: vec![ToolCallTrace {
         context: Default::default(),
+        call_id: Some("session-1:1:http".to_string()),
         tool: "http".to_string(),
         source: Some("builtin".to_string()),
         permissions: vec!["network".to_string()],
         params: Some(serde_json::json!({
           "headers": {"Authorization": "Bearer abc"}
         })),
+        idempotency_key: None,
+        side_effect_class: None,
+        replay_policy: None,
         is_error: Some(false),
         duration_ms: Some(10),
         policy_allowed: Some(true),

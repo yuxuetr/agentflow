@@ -28,6 +28,7 @@
 
 最近提交:
 
+- `本次提交` feat(agent): add tool replay recovery metadata
 - `本次提交` docs: define agent tool recovery contract
 - `本次提交` feat(cli): show concurrent plan hint
 - `本次提交` test(cli): cover concurrent workflow fixtures
@@ -96,8 +97,8 @@
   - [x] 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小数据结构。
   - [x] 明确默认策略: read-only 可 replay，mutating/external 默认 manual 或 reuse recorded result。
   - [x] 先写设计小节到 `docs/CHECKPOINT_RECOVERY.md` 或新增 runtime recovery 文档，再改代码。
-  - [ ] 将最小数据结构落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 兼容。
-  - [ ] 增加测试覆盖 recorded result、read-only replay、mutating/external manual 默认策略。
+  - [x] 将最小数据结构落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 兼容。
+  - [x] 增加测试覆盖 recorded result、read-only replay、mutating/external manual 默认策略。
 
 近期已完成但需长期维护:
 

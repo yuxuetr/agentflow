@@ -58,16 +58,36 @@ pub enum AgentNodeToolReplayPolicy {
   /// A result was recorded; resume should reuse that observation instead of
   /// calling the tool again.
   ReuseRecordedResult,
-  /// No result was recorded; restarting requires the tool to be idempotent.
+  /// No result was recorded, and the tool is safe to call again.
+  ReplayAllowed,
+  /// No result was recorded, and a human or explicit recovery policy must
+  /// decide whether the side effect is safe to repeat.
+  ManualRequired,
+  /// Legacy name retained for older serialized contracts.
+  #[serde(alias = "requires_idempotent_retry")]
   RequiresIdempotentRetry,
+}
+
+/// Side-effect classification for an agent tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNodeToolSideEffectClass {
+  ReadOnly,
+  Idempotent,
+  Mutating,
+  External,
 }
 
 /// Tool call information extracted from the runtime trace for resume review.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentNodeToolResumeRecord {
+  pub call_id: String,
   pub step_index: usize,
   pub tool: String,
   pub params: Value,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub idempotency_key: Option<String>,
+  pub side_effect_class: AgentNodeToolSideEffectClass,
   pub result_step_index: Option<usize>,
   pub result_is_error: Option<bool>,
   pub replay_policy: AgentNodeToolReplayPolicy,
@@ -323,21 +343,77 @@ fn extract_tool_resume_records(result: &AgentRunResult) -> Vec<AgentNodeToolResu
         None
       }
     });
+    let idempotency_key = tool_idempotency_key(params);
+    let side_effect_class = tool_side_effect_class(params);
+    let replay_policy = tool_replay_policy(
+      result_step.is_some(),
+      &side_effect_class,
+      idempotency_key.as_deref(),
+    );
 
     records.push(AgentNodeToolResumeRecord {
+      call_id: tool_call_id(&result.session_id, step.index, tool),
       step_index: step.index,
       tool: tool.clone(),
       params: params.clone(),
+      idempotency_key,
+      side_effect_class,
       result_step_index: result_step.map(|step| step.index),
       result_is_error,
-      replay_policy: if result_step.is_some() {
-        AgentNodeToolReplayPolicy::ReuseRecordedResult
-      } else {
-        AgentNodeToolReplayPolicy::RequiresIdempotentRetry
-      },
+      replay_policy,
     });
   }
   records
+}
+
+fn tool_replay_policy(
+  has_recorded_result: bool,
+  side_effect_class: &AgentNodeToolSideEffectClass,
+  idempotency_key: Option<&str>,
+) -> AgentNodeToolReplayPolicy {
+  if has_recorded_result {
+    return AgentNodeToolReplayPolicy::ReuseRecordedResult;
+  }
+
+  match side_effect_class {
+    AgentNodeToolSideEffectClass::ReadOnly => AgentNodeToolReplayPolicy::ReplayAllowed,
+    AgentNodeToolSideEffectClass::Idempotent if idempotency_key.is_some() => {
+      AgentNodeToolReplayPolicy::ReplayAllowed
+    }
+    AgentNodeToolSideEffectClass::Idempotent
+    | AgentNodeToolSideEffectClass::Mutating
+    | AgentNodeToolSideEffectClass::External => AgentNodeToolReplayPolicy::ManualRequired,
+  }
+}
+
+fn tool_call_id(session_id: &str, step_index: usize, tool: &str) -> String {
+  format!("{}:{}:{}", session_id, step_index, tool)
+}
+
+fn tool_idempotency_key(params: &Value) -> Option<String> {
+  params
+    .get("_agentflow")
+    .and_then(|value| value.get("idempotency_key"))
+    .or_else(|| params.get("idempotency_key"))
+    .and_then(Value::as_str)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
+}
+
+fn tool_side_effect_class(params: &Value) -> AgentNodeToolSideEffectClass {
+  let raw = params
+    .get("_agentflow")
+    .and_then(|value| value.get("side_effect_class"))
+    .or_else(|| params.get("side_effect_class"))
+    .and_then(Value::as_str);
+
+  match raw {
+    Some("read_only") => AgentNodeToolSideEffectClass::ReadOnly,
+    Some("idempotent") => AgentNodeToolSideEffectClass::Idempotent,
+    Some("mutating") => AgentNodeToolSideEffectClass::Mutating,
+    Some("external") => AgentNodeToolSideEffectClass::External,
+    _ => AgentNodeToolSideEffectClass::External,
+  }
 }
 
 fn has_unresolved_tool_call(result: &AgentRunResult) -> bool {
@@ -512,6 +588,11 @@ mod tests {
     assert!(contract.completed_run_replay_safe);
     assert!(!contract.partial_run_resume_supported);
     assert_eq!(contract.tool_calls.len(), 1);
+    assert_eq!(contract.tool_calls[0].call_id, "session-1:1:echo");
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::External
+    );
     assert_eq!(
       contract.tool_calls[0].replay_policy,
       AgentNodeToolReplayPolicy::ReuseRecordedResult
@@ -519,7 +600,7 @@ mod tests {
   }
 
   #[test]
-  fn resume_contract_requires_idempotent_tools_for_partial_restart() {
+  fn resume_contract_requires_manual_recovery_for_unknown_partial_restart() {
     let result = AgentRunResult {
       session_id: "session-1".to_string(),
       answer: None,
@@ -544,8 +625,80 @@ mod tests {
     );
     assert!(contract.restart_requires_idempotent_tools);
     assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::External
+    );
+    assert_eq!(
       contract.tool_calls[0].replay_policy,
-      AgentNodeToolReplayPolicy::RequiresIdempotentRetry
+      AgentNodeToolReplayPolicy::ManualRequired
+    );
+  }
+
+  #[test]
+  fn resume_contract_allows_unresolved_read_only_tool_replay() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "search".to_string(),
+          params: json!({
+            "query": "agentflow",
+            "_agentflow": {
+              "side_effect_class": "read_only"
+            }
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::ReadOnly
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReplayAllowed
+    );
+  }
+
+  #[test]
+  fn resume_contract_requires_manual_recovery_for_mutating_tool_without_result() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "write_file".to_string(),
+          params: json!({
+            "path": "/tmp/out",
+            "side_effect_class": "mutating"
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::Mutating
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ManualRequired
     );
   }
 
