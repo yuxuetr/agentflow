@@ -7,10 +7,10 @@
 
 use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use agentflow_core::health::{HealthChecker, HealthStatus};
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use agentflow_core::timeout::{TimeoutConfig, with_timeout};
 use agentflow_core::{
-  execute_with_retry, execute_with_retry_and_context, AgentFlowError, ErrorContext, ResourceLimits,
-  RetryPolicy, RetryStrategy, StateMonitor,
+  AgentFlowError, ErrorContext, ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor,
+  execute_with_retry, execute_with_retry_and_context,
 };
 use std::time::{Duration, Instant};
 
@@ -94,8 +94,8 @@ async fn benchmark_retry_overhead() {
     .strategy(RetryStrategy::Fixed { delay_ms: 1 })
     .build();
 
-  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
 
   let counter = Arc::new(AtomicUsize::new(0));
   let counter_clone = counter.clone();

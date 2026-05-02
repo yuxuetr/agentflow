@@ -1,7 +1,7 @@
 [package]
 name = "agentflow-skills"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["AgentFlow Contributors"]
 description = "Skill system for AgentFlow — declarative skill manifests that wire LLM persona, tools, knowledge and memory into a runnable agent"
 license = "MIT"

@@ -5,14 +5,15 @@ use crate::{
   commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
 };
 use agentflow_core::{
-  async_node::AsyncNodeInputs, flow::Flow, value::FlowValue, FlowExecutionConfig,
+  FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow, value::FlowValue,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   workflow_file: String,
   watch: bool,

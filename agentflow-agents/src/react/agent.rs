@@ -6,7 +6,7 @@ use agentflow_memory::{MemoryStore, Message, Role};
 use agentflow_tools::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use crate::react::parser::AgentResponse;
@@ -711,28 +711,28 @@ impl ReActAgent {
           params,
         } => {
           info!(iteration, tool = %tool, thought = %thought, "Tool call");
-          if let Some(max_tool_calls) = max_tool_calls {
-            if tool_calls >= max_tool_calls {
-              self
-                .record_reflection(
-                  ReflectionContext::failure(
-                    &self.session_id,
-                    step_index,
-                    format!("max tool calls ({}) reached", max_tool_calls),
-                  ),
-                  &mut step_index,
-                  &mut steps,
-                  &mut events,
-                )
-                .await?;
-              return Ok(Self::stopped_result(
-                &self.session_id,
-                None,
-                AgentStopReason::MaxToolCalls { max_tool_calls },
-                steps,
-                events,
-              ));
-            }
+          if let Some(max_tool_calls) = max_tool_calls
+            && tool_calls >= max_tool_calls
+          {
+            self
+              .record_reflection(
+                ReflectionContext::failure(
+                  &self.session_id,
+                  step_index,
+                  format!("max tool calls ({}) reached", max_tool_calls),
+                ),
+                &mut step_index,
+                &mut steps,
+                &mut events,
+              )
+              .await?;
+            return Ok(Self::stopped_result(
+              &self.session_id,
+              None,
+              AgentStopReason::MaxToolCalls { max_tool_calls },
+              steps,
+              events,
+            ));
           }
 
           if !thought.trim().is_empty() {
@@ -1309,11 +1309,11 @@ impl ReActAgent {
 
     let tools_section = if has_tools {
       format!(
-                "\n\n## Available Tools\n{}\n\n\
+        "\n\n## Available Tools\n{}\n\n\
                 To call a tool, respond ONLY with this JSON:\n\
                 {{\"thought\": \"<your reasoning>\", \"action\": {{\"tool\": \"<tool_name>\", \"params\": {{<parameters>}}}}}}\n",
-                tools_desc
-            )
+        tools_desc
+      )
     } else {
       String::new()
     };
@@ -1610,7 +1610,7 @@ mod tests {
   use agentflow_memory::SessionMemory;
   use agentflow_tools::{Tool, ToolError, ToolOutput};
   use async_trait::async_trait;
-  use serde_json::{json, Value};
+  use serde_json::{Value, json};
   use std::fs;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::{Arc, Mutex};
@@ -1749,14 +1749,17 @@ providers:
   async fn run_with_context_records_steps_events_and_reflection_with_mock_llm() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
     let model = format!("mock-runtime-{}", uuid::Uuid::new_v4());
-    std::env::set_var(
-      "AGENTFLOW_MOCK_RESPONSES",
-      serde_json::to_string(&vec![
-        r#"{"thought":"use tool","action":{"tool":"echo","params":{"text":"hi"}}}"#,
-        r#"{"thought":"done","answer":"final: echo: hi"}"#,
-      ])
-      .unwrap(),
-    );
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"use tool","action":{"tool":"echo","params":{"text":"hi"}}}"#,
+          r#"{"thought":"done","answer":"final: echo: hi"}"#,
+        ])
+        .unwrap(),
+      );
+    }
     init_mock_model(&model).await;
 
     let mut registry = ToolRegistry::new();
@@ -1777,26 +1780,36 @@ providers:
 
     assert_eq!(result.answer.as_deref(), Some("final: echo: hi"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
-    assert!(result
-      .steps
-      .iter()
-      .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. })));
-    assert!(result
-      .steps
-      .iter()
-      .any(|step| matches!(step.kind, AgentStepKind::ToolResult { .. })));
-    assert!(result
-      .steps
-      .iter()
-      .any(|step| matches!(step.kind, AgentStepKind::Reflect { .. })));
-    assert!(result
-      .events
-      .iter()
-      .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. })));
-    assert!(result
-      .events
-      .iter()
-      .any(|event| matches!(event, AgentEvent::ReflectionAdded { .. })));
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+    );
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolResult { .. }))
+    );
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::Reflect { .. }))
+    );
+    assert!(
+      result
+        .events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
+    );
+    assert!(
+      result
+        .events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ReflectionAdded { .. }))
+    );
 
     let memory_events = memory_hook.events.lock().unwrap();
     let read_sizes: Vec<usize> = memory_events
@@ -1831,11 +1844,14 @@ providers:
   async fn resume_with_context_reuses_recorded_tool_result_without_replay() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
     let model = format!("mock-resume-runtime-{}", uuid::Uuid::new_v4());
-    std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
-    std::env::set_var(
-      "AGENTFLOW_MOCK_RESPONSE",
-      r#"{"thought":"use recovered observation","answer":"final: echo: hi"}"#,
-    );
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSE",
+        r#"{"thought":"use recovered observation","answer":"final: echo: hi"}"#,
+      );
+    }
     init_mock_model(&model).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1900,11 +1916,14 @@ providers:
   async fn resume_with_context_replays_unresolved_idempotent_tool_call() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
     let model = format!("mock-resume-replay-{}", uuid::Uuid::new_v4());
-    std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
-    std::env::set_var(
-      "AGENTFLOW_MOCK_RESPONSE",
-      r#"{"thought":"use recovered replay","answer":"final: echo: hi"}"#,
-    );
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSE",
+        r#"{"thought":"use recovered replay","answer":"final: echo: hi"}"#,
+      );
+    }
     init_mock_model(&model).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
@@ -2043,12 +2062,16 @@ providers:
 
     assert_eq!(hits.len(), 1);
     let events = hook.events.lock().unwrap();
-    assert!(events
-      .iter()
-      .any(|event| event.kind == MemoryHookKind::Write && event.messages.len() == 1));
-    assert!(events
-      .iter()
-      .any(|event| event.kind == MemoryHookKind::ReadHistory && event.messages.len() == 1));
+    assert!(
+      events
+        .iter()
+        .any(|event| event.kind == MemoryHookKind::Write && event.messages.len() == 1)
+    );
+    assert!(
+      events
+        .iter()
+        .any(|event| event.kind == MemoryHookKind::ReadHistory && event.messages.len() == 1)
+    );
     assert!(events.iter().any(|event| {
       event.kind == MemoryHookKind::Search
         && event.query.as_deref() == Some("semantic")

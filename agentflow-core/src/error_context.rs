@@ -184,13 +184,13 @@ impl ErrorContext {
       }
     }
 
-    if let Some(inputs) = &self.inputs {
-      if !inputs.is_empty() {
-        report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
-        report.push_str("  NODE INPUTS:\n");
-        for (key, value) in inputs.iter() {
-          report.push_str(&format!("    {}: {}\n", key, value));
-        }
+    if let Some(inputs) = &self.inputs
+      && !inputs.is_empty()
+    {
+      report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
+      report.push_str("  NODE INPUTS:\n");
+      for (key, value) in inputs.iter() {
+        report.push_str(&format!("    {}: {}\n", key, value));
       }
     }
 

@@ -6,7 +6,7 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{providers::stepfun::Image2ImageRequest, AgentFlow};
+use agentflow_llm::{AgentFlow, providers::stepfun::Image2ImageRequest};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

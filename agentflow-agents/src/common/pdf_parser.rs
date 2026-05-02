@@ -1,6 +1,6 @@
 //! Common PDF parsing utilities using StepFun API
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// PDF parser using StepFun Document Parser API

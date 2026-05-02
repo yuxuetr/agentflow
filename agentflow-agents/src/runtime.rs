@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -379,15 +379,19 @@ mod tests {
   #[test]
   fn stop_reason_marks_success_only_for_terminal_answers() {
     assert!(AgentStopReason::FinalAnswer.is_success());
-    assert!(AgentStopReason::StopCondition {
-      condition: "done".to_string(),
-    }
-    .is_success());
+    assert!(
+      AgentStopReason::StopCondition {
+        condition: "done".to_string(),
+      }
+      .is_success()
+    );
     assert!(!AgentStopReason::MaxSteps { max_steps: 3 }.is_success());
-    assert!(!AgentStopReason::Cancelled {
-      message: "cancelled".to_string(),
-    }
-    .is_success());
+    assert!(
+      !AgentStopReason::Cancelled {
+        message: "cancelled".to_string(),
+      }
+      .is_success()
+    );
   }
 
   #[test]

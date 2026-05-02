@@ -1,6 +1,6 @@
 //! Model fetcher implementation for retrieving model lists from vendors
 
-use super::{create_http_client, DiscoveredModel, ModelListResponse, VendorConfig};
+use super::{DiscoveredModel, ModelListResponse, VendorConfig, create_http_client};
 use crate::{LLMError, Result};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -202,12 +202,18 @@ mod tests {
 
   #[test]
   fn test_get_api_key_present() {
-    env::set_var("TEST_API_KEY", "test-key-value");
+    // SAFETY: this unit test mutates a dedicated test env var before reading it.
+    unsafe {
+      env::set_var("TEST_API_KEY", "test-key-value");
+    }
     let fetcher = ModelFetcher::new().unwrap();
     let result = fetcher.get_api_key("TEST_API_KEY");
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test-key-value");
-    env::remove_var("TEST_API_KEY");
+    // SAFETY: cleanup of the dedicated test env var after the test read.
+    unsafe {
+      env::remove_var("TEST_API_KEY");
+    }
   }
 
   // Integration tests require API keys - only run if environment variables are set

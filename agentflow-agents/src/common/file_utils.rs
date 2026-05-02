@@ -13,10 +13,10 @@ pub async fn discover_files_with_extensions<P: AsRef<Path>>(
 
   while let Some(entry) = dir.next_entry().await? {
     let path = entry.path();
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-      if extensions.contains(&ext) {
-        files.push(path);
-      }
+    if let Some(ext) = path.extension().and_then(|s| s.to_str())
+      && extensions.contains(&ext)
+    {
+      files.push(path);
     }
   }
 

@@ -84,12 +84,11 @@ fn extract_json(text: &str) -> String {
     }
   }
   // Find the outermost { … } span
-  if let Some(start) = text.find('{') {
-    if let Some(end) = text.rfind('}') {
-      if end > start {
-        return text[start..=end].to_string();
-      }
-    }
+  if let Some(start) = text.find('{')
+    && let Some(end) = text.rfind('}')
+    && end > start
+  {
+    return text[start..=end].to_string();
   }
   text.to_string()
 }

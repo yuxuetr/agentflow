@@ -240,11 +240,7 @@ pub fn resolve_knowledge_path(pattern: &str, skill_dir: &Path) -> Vec<PathBuf> {
     Err(_) => {
       // Fall back to exact path check.
       let p = PathBuf::from(&base);
-      if p.exists() {
-        vec![p]
-      } else {
-        vec![]
-      }
+      if p.exists() { vec![p] } else { vec![] }
     }
   }
 }
@@ -580,9 +576,9 @@ env = { API_KEY = "secret" }
   fn loads_skill_md_when_no_toml() {
     let dir = TempDir::new().unwrap();
     write_skill_md(
-            dir.path(),
-            "---\nname: my-skill\ndescription: A test skill loaded from SKILL.md.\n---\n\nInstructions here.\n",
-        );
+      dir.path(),
+      "---\nname: my-skill\ndescription: A test skill loaded from SKILL.md.\n---\n\nInstructions here.\n",
+    );
     let m = SkillLoader::load(dir.path()).unwrap();
     assert_eq!(m.skill.name, "my-skill");
     assert!(m.persona.role.contains("Instructions here."));
@@ -594,9 +590,9 @@ env = { API_KEY = "secret" }
     fs::create_dir(dir.path().join("scripts")).unwrap();
     write_file(&dir.path().join("scripts").join("run.py"), "print('ok')");
     write_skill_md(
-            dir.path(),
-            "---\nname: scripted\ndescription: Has a script tool.\nallowed-tools: script\n---\n\nUse the script tool to run things.\n",
-        );
+      dir.path(),
+      "---\nname: scripted\ndescription: Has a script tool.\nallowed-tools: script\n---\n\nUse the script tool to run things.\n",
+    );
     let m = SkillLoader::load(dir.path()).unwrap();
     assert_eq!(m.tools.len(), 1);
     assert_eq!(m.tools[0].name, "script");
@@ -608,9 +604,9 @@ env = { API_KEY = "secret" }
   fn skill_md_with_script_tool_but_no_scripts_dir_fails_validation() {
     let dir = TempDir::new().unwrap();
     write_skill_md(
-            dir.path(),
-            "---\nname: broken\ndescription: Declares script tool without scripts dir.\nallowed-tools: script\n---\n\nBody.\n",
-        );
+      dir.path(),
+      "---\nname: broken\ndescription: Declares script tool without scripts dir.\nallowed-tools: script\n---\n\nBody.\n",
+    );
     let m = SkillLoader::load(dir.path()).unwrap();
     let result = SkillLoader::validate(&m, dir.path());
     assert!(matches!(result, Err(SkillError::ValidationError { .. })));

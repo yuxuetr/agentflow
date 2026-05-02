@@ -76,10 +76,10 @@ pub use prompts::{
   GetPromptResult, Prompt, PromptArgument, PromptMessage, PromptMessageContent, PromptMessageRole,
 };
 pub use resources::{ReadResourceResult, Resource, ResourceContent};
-pub use retry::{retry_with_backoff, RetryConfig};
+pub use retry::{RetryConfig, retry_with_backoff};
 pub use session::{MCPClient, SessionState};
 pub use tools::{
-  validate_tool_arguments, validate_tool_call_arguments, CallToolResult, Content, Tool,
+  CallToolResult, Content, Tool, validate_tool_arguments, validate_tool_call_arguments,
 };
 
 // Note: Internal types (ClientConfig, etc.) are kept private

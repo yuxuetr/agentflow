@@ -170,10 +170,10 @@ impl GraphRenderer for DotRenderer {
 
       let mut attrs = vec![format!("style={}", style), format!("color=\"{}\"", color)];
 
-      if self.config.show_edge_labels {
-        if let Some(ref label) = edge.label {
-          attrs.push(format!("label=\"{}\"", Self::escape_label(label)));
-        }
+      if self.config.show_edge_labels
+        && let Some(ref label) = edge.label
+      {
+        attrs.push(format!("label=\"{}\"", Self::escape_label(label)));
       }
 
       output.push_str(&format!(

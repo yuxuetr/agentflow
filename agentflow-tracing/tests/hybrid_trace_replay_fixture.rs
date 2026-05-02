@@ -1,4 +1,4 @@
-use agentflow_tracing::{format_trace_replay, ExecutionTrace, ReplayOptions};
+use agentflow_tracing::{ExecutionTrace, ReplayOptions, format_trace_replay};
 
 #[test]
 fn hybrid_trace_replay_fixture_shows_workflow_agent_tool_chain() {

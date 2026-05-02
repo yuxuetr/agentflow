@@ -82,7 +82,7 @@ impl ExecutionTrace {
 
 /// Correlation identifiers that link workflow, node, agent, tool, MCP, and LLM
 /// records in a single persisted trace.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TraceContext {
   pub run_id: String,
   pub trace_id: String,
@@ -107,17 +107,6 @@ impl TraceContext {
       trace_id: parent.trace_id.clone(),
       span_id: span_id.into(),
       parent_span_id: Some(parent.span_id.clone()),
-    }
-  }
-}
-
-impl Default for TraceContext {
-  fn default() -> Self {
-    Self {
-      run_id: String::new(),
-      trace_id: String::new(),
-      span_id: String::new(),
-      parent_span_id: None,
     }
   }
 }

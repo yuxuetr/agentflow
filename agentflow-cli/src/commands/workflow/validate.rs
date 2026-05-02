@@ -1,10 +1,10 @@
 use crate::config::{
   schema::{
-    validate_flow_definition_with_options, UnknownParameterMode, WorkflowValidationOptions,
+    UnknownParameterMode, WorkflowValidationOptions, validate_flow_definition_with_options,
   },
   v2::FlowDefinitionV2,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 
 pub async fn execute(workflow_file: String, format: String, strict: bool) -> Result<()> {

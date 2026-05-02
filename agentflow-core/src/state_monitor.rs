@@ -270,12 +270,11 @@ impl StateMonitor {
           self
             .current_size
             .fetch_sub(size_delta as usize, Ordering::Relaxed);
-          if self.detailed_tracking {
-            if let Ok(mut allocations) =
+          if self.detailed_tracking
+            && let Ok(mut allocations) =
               lock_mutex_monitor(&self.allocations, "record_allocation::rollback")
-            {
-              allocations.remove(key);
-            }
+          {
+            allocations.remove(key);
           }
           return false;
         }
@@ -406,7 +405,7 @@ impl StateMonitor {
     let mut entries: Vec<_> = access_times.iter().collect();
 
     // Sort by access time (ascending = oldest first)
-    entries.sort_by_key(|(_, &time)| time);
+    entries.sort_by_key(|&(_, &time)| time);
 
     entries
       .into_iter()

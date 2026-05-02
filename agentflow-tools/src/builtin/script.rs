@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox::SandboxPolicy};
 
 /// Execute a named script from the skill's `scripts/` directory.
 ///
@@ -205,15 +205,15 @@ impl Tool for ScriptTool {
     })?;
 
     // Write args to stdin if present.
-    if !stdin_json.is_empty() {
-      if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        stdin
-          .write_all(stdin_json.as_bytes())
-          .await
-          .map_err(ToolError::IoError)?;
-        // stdin is dropped here, signalling EOF to the child.
-      }
+    if !stdin_json.is_empty()
+      && let Some(mut stdin) = child.stdin.take()
+    {
+      use tokio::io::AsyncWriteExt;
+      stdin
+        .write_all(stdin_json.as_bytes())
+        .await
+        .map_err(ToolError::IoError)?;
+      // stdin is dropped here, signalling EOF to the child.
     }
 
     let output = tokio::time::timeout(timeout, child.wait_with_output())

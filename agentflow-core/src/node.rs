@@ -46,7 +46,7 @@ mod tests {
         None => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'a' is missing or not an integer".to_string(),
-          })
+          });
         }
       };
 
@@ -58,7 +58,7 @@ mod tests {
         None => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'b' is missing or not an integer".to_string(),
-          })
+          });
         }
       };
 

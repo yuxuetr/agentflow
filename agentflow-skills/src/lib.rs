@@ -49,7 +49,7 @@ pub mod skill_md;
 pub use builder::SkillBuilder;
 pub use error::SkillError;
 pub use index::{
-  ResolvedSkillRegistryEntry, SkillRegistryEntry, SkillRegistryIndex, DEFAULT_INDEX_FILE,
+  DEFAULT_INDEX_FILE, ResolvedSkillRegistryEntry, SkillRegistryEntry, SkillRegistryIndex,
 };
 pub use loader::SkillLoader;
 pub use manifest::{
@@ -60,5 +60,5 @@ pub use marketplace::{
   FeaturedSkill, MarketplaceResolvedSkill, MarketplaceSkillListing, SkillMarketplace,
   SkillMarketplaceIndex,
 };
-pub use mcp_tools::{public_tool_name, McpClientPool, McpToolAdapter};
+pub use mcp_tools::{McpClientPool, McpToolAdapter, public_tool_name};
 pub use skill_md::SkillMd;

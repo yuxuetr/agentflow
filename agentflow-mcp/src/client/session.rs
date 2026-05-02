@@ -11,8 +11,8 @@ use crate::protocol::types::{
 };
 use crate::transport_new::Transport;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -146,7 +146,7 @@ impl MCPClient {
         return Err(MCPError::timeout(
           format!("Connection timeout after {:?}", timeout),
           Some(timeout.as_millis() as u64),
-        ))
+        ));
       }
     }
 
@@ -311,7 +311,7 @@ impl MCPClient {
   /// - Retry logic with exponential backoff (for transient errors)
   /// - Timeout enforcement from client configuration
   pub(super) async fn send_request(&mut self, request: JsonRpcRequest) -> MCPResult<Value> {
-    use crate::client::retry::{retry_with_backoff, RetryConfig};
+    use crate::client::retry::{RetryConfig, retry_with_backoff};
 
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;

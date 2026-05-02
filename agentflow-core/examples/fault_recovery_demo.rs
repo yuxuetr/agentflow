@@ -32,9 +32,9 @@
 //! ```
 
 use agentflow_core::{
+  Result,
   checkpoint::{CheckpointConfig, CheckpointManager, WorkflowStatus},
   timeout::with_timeout_context,
-  Result,
 };
 use std::collections::HashMap;
 use std::env;

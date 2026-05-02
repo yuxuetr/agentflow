@@ -1,5 +1,5 @@
 use agentflow_core::{error::AgentFlowError, value::FlowValue};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
 pub fn flow_value_to_string(value: &FlowValue) -> String {

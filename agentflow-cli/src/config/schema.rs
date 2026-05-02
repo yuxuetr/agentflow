@@ -530,13 +530,17 @@ nodes:
     let report = validate_flow_definition(&flow);
 
     assert_eq!(report.issues.len(), 2);
-    assert!(report
-      .issues
-      .iter()
-      .any(|issue| issue.contains("nodes[0].parameters.headers must be an object/map")));
-    assert!(report
-      .issues
-      .iter()
-      .any(|issue| issue.contains("nodes[1].parameters.input_template must be a string")));
+    assert!(
+      report
+        .issues
+        .iter()
+        .any(|issue| issue.contains("nodes[0].parameters.headers must be an object/map"))
+    );
+    assert!(
+      report
+        .issues
+        .iter()
+        .any(|issue| issue.contains("nodes[1].parameters.input_template must be a string"))
+    );
   }
 }

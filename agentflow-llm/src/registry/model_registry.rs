@@ -1,7 +1,7 @@
 use crate::{
-  config::{LLMConfig, ModelConfig},
-  providers::{create_provider, LLMProvider},
   LLMError, Result,
+  config::{LLMConfig, ModelConfig},
+  providers::{LLMProvider, create_provider},
 };
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -309,7 +309,10 @@ mod tests {
 
   #[tokio::test]
   async fn test_load_config_from_yaml() {
-    env::set_var("TEST_OPENAI_API_KEY", "test-key");
+    // SAFETY: this unit test mutates a dedicated test env var before reading it.
+    unsafe {
+      env::set_var("TEST_OPENAI_API_KEY", "test-key");
+    }
 
     let yaml = r#"
 models:
@@ -336,7 +339,10 @@ providers:
     assert_eq!(model_info.vendor, "openai");
     assert_eq!(model_info.temperature, Some(0.7));
 
-    env::remove_var("TEST_OPENAI_API_KEY");
+    // SAFETY: cleanup of the dedicated test env var after the test read.
+    unsafe {
+      env::remove_var("TEST_OPENAI_API_KEY");
+    }
   }
 
   #[tokio::test]

@@ -6,7 +6,7 @@ use agentflow_agents::agentflow_tools::{Tool, ToolError, ToolOutput, ToolRegistr
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::{AgentContext, AgentFlow, AgentStepKind, FinalReflection};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct EchoTool;
 
@@ -39,10 +39,14 @@ impl Tool for EchoTool {
 }
 
 async fn init_mock_model(model: &str, responses: &[&str]) {
-  std::env::set_var(
-    "AGENTFLOW_MOCK_RESPONSES",
-    serde_json::to_string(responses).unwrap(),
-  );
+  // SAFETY: this test holds LLM_TEST_LOCK while configuring process-wide mock
+  // responses.
+  unsafe {
+    std::env::set_var(
+      "AGENTFLOW_MOCK_RESPONSES",
+      serde_json::to_string(responses).unwrap(),
+    );
+  }
 
   let config_path = std::env::temp_dir().join(format!(
     "agentflow-agents-golden-{}.yml",

@@ -588,7 +588,10 @@ async fn main() {
         run_dir,
       } => {
         if input.len() % 2 != 0 {
-          eprintln!("Error: Input must be provided in key-value pairs. Got {} arguments (expected even number).", input.len());
+          eprintln!(
+            "Error: Input must be provided in key-value pairs. Got {} arguments (expected even number).",
+            input.len()
+          );
           std::process::exit(1);
         }
         let input_pairs = input

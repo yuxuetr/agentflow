@@ -105,11 +105,11 @@ fn redact_option_value(value: &mut Option<Value>, config: &RedactionConfig) {
 }
 
 fn redact_value_at_key(value: &mut Value, key: Option<&str>, config: &RedactionConfig) {
-  if let Some(key) = key {
-    if is_sensitive_key(key, config) {
-      *value = Value::String(config.replacement.clone());
-      return;
-    }
+  if let Some(key) = key
+    && is_sensitive_key(key, config)
+  {
+    *value = Value::String(config.replacement.clone());
+    return;
   }
 
   match value {
@@ -136,10 +136,10 @@ fn redact_string(value: &mut Option<String>, config: &RedactionConfig) {
 
 fn redact_plain_string(value: &mut String, config: &RedactionConfig) {
   *value = redact_text(value, config);
-  if let Some(max_value_bytes) = config.max_value_bytes {
-    if value.len() > max_value_bytes {
-      *value = format!("[TRUNCATED: {} bytes]", value.len());
-    }
+  if let Some(max_value_bytes) = config.max_value_bytes
+    && value.len() > max_value_bytes
+  {
+    *value = format!("[TRUNCATED: {} bytes]", value.len());
   }
 }
 

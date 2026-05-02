@@ -9,8 +9,8 @@
 
 use agentflow_core::events::{EventListener, TokenUsage, WorkflowEvent};
 use agentflow_tracing::{
-  format_trace_human_readable, storage::file::FileTraceStorage, TraceCollector, TraceConfig,
-  TraceStorage,
+  TraceCollector, TraceConfig, TraceStorage, format_trace_human_readable,
+  storage::file::FileTraceStorage,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -147,13 +147,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("   - Total nodes executed: {}", trace.nodes.len());
   println!("   - Duration: {}ms", trace.duration_ms().unwrap_or(0));
 
-  if let Some(node) = trace.nodes.iter().find(|n| n.llm_details.is_some()) {
-    if let Some(ref llm) = node.llm_details {
-      if let Some(ref usage) = llm.usage {
-        println!("   - Total tokens used: {}", usage.total_tokens);
-        println!("   - LLM latency: {}ms", llm.latency_ms);
-      }
-    }
+  if let Some(node) = trace.nodes.iter().find(|n| n.llm_details.is_some())
+    && let Some(ref llm) = node.llm_details
+    && let Some(ref usage) = llm.usage
+  {
+    println!("   - Total tokens used: {}", usage.total_tokens);
+    println!("   - LLM latency: {}ms", llm.latency_ms);
   }
 
   println!("\n✅ Example completed successfully!");

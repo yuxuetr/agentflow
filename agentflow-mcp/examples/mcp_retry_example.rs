@@ -12,12 +12,12 @@
 //! cargo run --example mcp_retry_example
 //! ```
 
-use agentflow_mcp::client::retry::{retry_with_backoff, RetryConfig};
 use agentflow_mcp::client::ClientBuilder;
+use agentflow_mcp::client::retry::{RetryConfig, retry_with_backoff};
 use agentflow_mcp::error::{MCPError, MCPResult};
 use agentflow_mcp::transport_new::MockTransport;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

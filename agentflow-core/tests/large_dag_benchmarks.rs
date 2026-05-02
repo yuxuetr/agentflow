@@ -7,9 +7,9 @@
 //! ```
 
 use agentflow_core::{
+  Flow,
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   flow::{GraphNode, NodeType},
-  Flow,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;

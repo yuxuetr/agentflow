@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentflow_core::{async_node::AsyncNodeInputs, Flow, FlowValue};
+use agentflow_core::{Flow, FlowValue, async_node::AsyncNodeInputs};
 use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -220,7 +220,11 @@ mod tests {
       uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&home).unwrap();
-    std::env::set_var("HOME", home);
+    // SAFETY: this test helper sets HOME before the workflow code reads it and
+    // does not race with another environment mutation in the same test.
+    unsafe {
+      std::env::set_var("HOME", home);
+    }
   }
 
   #[tokio::test]

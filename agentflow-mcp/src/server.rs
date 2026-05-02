@@ -2,7 +2,7 @@
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 

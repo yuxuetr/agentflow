@@ -3,11 +3,11 @@
 //! Run with: cargo run --example retry_example
 
 use agentflow_core::{
-  execute_with_retry, execute_with_retry_and_context, AgentFlowError, ErrorPattern, RetryPolicy,
-  RetryStrategy,
+  AgentFlowError, ErrorPattern, RetryPolicy, RetryStrategy, execute_with_retry,
+  execute_with_retry_and_context,
 };
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), AgentFlowError> {

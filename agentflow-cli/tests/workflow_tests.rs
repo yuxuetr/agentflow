@@ -7,7 +7,7 @@ use agentflow_nodes::nodes::llm::LlmNode;
 use agentflow_nodes::nodes::template::TemplateNode;
 use assert_cmd::Command;
 use predicates::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;

@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 
 use super::resolve_trace_dir;
 use agentflow_tracing::{
-  format_trace_replay, redact_trace, storage::file::FileTraceStorage, RedactionConfig,
-  ReplayOptions, TraceStorage,
+  RedactionConfig, ReplayOptions, TraceStorage, format_trace_replay, redact_trace,
+  storage::file::FileTraceStorage,
 };
 
 pub async fn execute(

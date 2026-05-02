@@ -1,9 +1,8 @@
 //! Terminal debugger formatting for persisted execution traces.
 
 use crate::{
-  redact_trace,
+  RedactionConfig, redact_trace,
   types::{AgentTrace, ExecutionTrace, NodeStatus, NodeTrace, ToolCallTrace, TraceStatus},
-  RedactionConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

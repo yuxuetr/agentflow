@@ -5,14 +5,14 @@ use crate::{
   error::{RAGError, Result},
 };
 use async_trait::async_trait;
-use governor::{clock::DefaultClock, state::InMemoryState, state::NotKeyed, Quota, RateLimiter};
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::InMemoryState, state::NotKeyed};
 use nonzero_ext::nonzero;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_retry::{strategy::ExponentialBackoff, Retry};
+use tokio_retry::{Retry, strategy::ExponentialBackoff};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/embeddings";
 const MAX_BATCH_SIZE: usize = 2048; // OpenAI limit
@@ -319,7 +319,7 @@ impl OpenAIEmbeddingBuilder {
         return Err(RAGError::configuration(format!(
           "Unknown OpenAI model: {}. Supported: text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002",
           self.model
-        )))
+        )));
       }
     };
 
@@ -383,10 +383,12 @@ mod tests {
       .build();
 
     assert!(result.is_err());
-    assert!(result
-      .unwrap_err()
-      .to_string()
-      .contains("Unknown OpenAI model"));
+    assert!(
+      result
+        .unwrap_err()
+        .to_string()
+        .contains("Unknown OpenAI model")
+    );
   }
 
   #[test]

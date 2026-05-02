@@ -1,6 +1,6 @@
 use agentflow_llm::{
-  registry::{model_registry::ModelInfo, ModelRegistry},
   AgentFlow, LLMConfig,
+  registry::{ModelRegistry, model_registry::ModelInfo},
 };
 use anyhow::{Context, Result};
 use colored::*;

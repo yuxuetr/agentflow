@@ -1,7 +1,7 @@
 [package]
 name = "agentflow-rag"
 version = "0.3.0-alpha"
-edition = "2021"
+edition = "2024"
 authors = ["AgentFlow Contributors"]
 description = "Retrieval-Augmented Generation (RAG) system for AgentFlow"
 repository = "https://github.com/agentflow/agentflow"

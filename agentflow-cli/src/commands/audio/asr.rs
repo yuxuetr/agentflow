@@ -104,8 +104,10 @@ pub async fn execute(
     let output_content = match format.as_str() {
       "json" | "srt" | "vtt" => transcription,
       "text" => transcription,
-      _ => format!("# Speech Transcription Results\n\n**Model:** {}\n**Audio:** {}\n**Format:** {}\n\n**Transcription:**\n{}\n", 
-                   model, audio_path, format, transcription),
+      _ => format!(
+        "# Speech Transcription Results\n\n**Model:** {}\n**Audio:** {}\n**Format:** {}\n\n**Transcription:**\n{}\n",
+        model, audio_path, format, transcription
+      ),
     };
 
     fs::write(&output_path, &output_content).await?;

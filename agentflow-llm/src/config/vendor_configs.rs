@@ -4,8 +4,8 @@
 //! for better organization and performance.
 
 use crate::{
-  config::{LLMConfig, ModelConfig},
   LLMError, Result,
+  config::{LLMConfig, ModelConfig},
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

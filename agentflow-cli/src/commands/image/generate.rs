@@ -1,6 +1,6 @@
 use agentflow_llm::{AgentFlow, ImageGenerationResponse, Text2ImageBuilder};
 use anyhow::Result;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use std::env;
 use tokio::fs;
 
@@ -59,7 +59,9 @@ pub async fn execute(
   // Note: strength and input_image parameters are for image-to-image generation
   // which requires a separate API endpoint not yet implemented in the Text2ImageBuilder
   if strength.is_some() || input_image.is_some() {
-    println!("⚠️  Warning: image-to-image generation (strength, input_image) not yet implemented in Text2ImageBuilder");
+    println!(
+      "⚠️  Warning: image-to-image generation (strength, input_image) not yet implemented in Text2ImageBuilder"
+    );
     println!("    Only text-to-image generation is currently supported");
   }
 
@@ -80,7 +82,9 @@ pub async fn execute(
       anyhow::anyhow!("Image generation failed: {}", e)
     })?,
     Err(_) => {
-      return Err(anyhow::anyhow!("Image generation timed out after 2 minutes. This may be due to:\n  - Network connectivity issues\n  - API server overload\n  - Complex prompt requiring more processing time\n\nTry again with a simpler prompt or check your internet connection."));
+      return Err(anyhow::anyhow!(
+        "Image generation timed out after 2 minutes. This may be due to:\n  - Network connectivity issues\n  - API server overload\n  - Complex prompt requiring more processing time\n\nTry again with a simpler prompt or check your internet connection."
+      ));
     }
   };
 

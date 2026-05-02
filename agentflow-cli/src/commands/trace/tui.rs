@@ -1,9 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::str::FromStr;
 
 use super::resolve_trace_dir;
 use agentflow_tracing::{
-  format_trace_tui, storage::file::FileTraceStorage, TraceStorage, TraceTuiFilter, TraceTuiOptions,
+  TraceStorage, TraceTuiFilter, TraceTuiOptions, format_trace_tui, storage::file::FileTraceStorage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

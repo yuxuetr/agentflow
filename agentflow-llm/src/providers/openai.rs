@@ -1,13 +1,13 @@
 use crate::{
+  LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
-  LLMError, Result,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -36,7 +36,7 @@ impl OpenAIProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+    use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -308,28 +308,27 @@ impl OpenAIStreamingResponse {
       });
     }
 
-    if let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data) {
-      if let Some(choice) = chunk.choices.first() {
-        if let Some(content) = &choice.delta.content {
-          // Handle both string and array content in streaming
-          let content_text = match content {
-            serde_json::Value::String(text) => text.clone(),
-            _ => content.to_string(), // Convert other types to string
-          };
+    if let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data)
+      && let Some(choice) = chunk.choices.first()
+      && let Some(content) = &choice.delta.content
+    {
+      // Handle both string and array content in streaming
+      let content_text = match content {
+        serde_json::Value::String(text) => text.clone(),
+        _ => content.to_string(), // Convert other types to string
+      };
 
-          return Some(StreamChunk {
-            content: content_text,
-            is_final: choice.finish_reason.is_some(),
-            metadata: Some(serde_json::to_value(&chunk).ok()?),
-            usage: chunk.usage.map(|u| TokenUsage {
-              prompt_tokens: Some(u.prompt_tokens),
-              completion_tokens: Some(u.completion_tokens),
-              total_tokens: Some(u.total_tokens),
-            }),
-            content_type: Some("text".to_string()),
-          });
-        }
-      }
+      return Some(StreamChunk {
+        content: content_text,
+        is_final: choice.finish_reason.is_some(),
+        metadata: Some(serde_json::to_value(&chunk).ok()?),
+        usage: chunk.usage.map(|u| TokenUsage {
+          prompt_tokens: Some(u.prompt_tokens),
+          completion_tokens: Some(u.completion_tokens),
+          total_tokens: Some(u.total_tokens),
+        }),
+        content_type: Some("text".to_string()),
+      });
     }
 
     None
@@ -356,13 +355,13 @@ impl StreamingResponse for OpenAIStreamingResponse {
               let line = buffer[..newline_pos].trim().to_string();
               buffer.drain(..=newline_pos);
 
-              if !line.is_empty() {
-                if let Some(chunk) = Self::parse_sse_chunk(&line) {
-                  if chunk.is_final {
-                    self.finished = true;
-                  }
-                  return Ok(Some(chunk));
+              if !line.is_empty()
+                && let Some(chunk) = Self::parse_sse_chunk(&line)
+              {
+                if chunk.is_final {
+                  self.finished = true;
                 }
+                return Ok(Some(chunk));
               }
             }
           }

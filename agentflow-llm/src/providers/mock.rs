@@ -73,10 +73,10 @@ impl MockProvider {
   }
 
   fn next_response(&self, request: &ProviderRequest) -> String {
-    if let Ok(mut queue) = self.response_queue.lock() {
-      if let Some(response) = queue.pop_front() {
-        return response;
-      }
+    if let Ok(mut queue) = self.response_queue.lock()
+      && let Some(response) = queue.pop_front()
+    {
+      return response;
     }
 
     self

@@ -228,15 +228,15 @@ impl PlanExecuteAgent {
         continue;
       };
 
-      if let Some(max_tool_calls) = max_tool_calls {
-        if tool_calls >= max_tool_calls {
-          return Ok(self.stopped_result(
-            None,
-            AgentStopReason::MaxToolCalls { max_tool_calls },
-            steps,
-            events,
-          ));
-        }
+      if let Some(max_tool_calls) = max_tool_calls
+        && tool_calls >= max_tool_calls
+      {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::MaxToolCalls { max_tool_calls },
+          steps,
+          events,
+        ));
       }
 
       let params = planned_step.params;
@@ -723,14 +723,18 @@ mod tests {
 
     assert_eq!(result.answer.as_deref(), Some("echo: hi"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
-    assert!(result
-      .steps
-      .iter()
-      .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. })));
-    assert!(result
-      .events
-      .iter()
-      .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. })));
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+    );
+    assert!(
+      result
+        .events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
+    );
   }
 
   #[tokio::test]
@@ -767,7 +771,10 @@ mod tests {
   }
 
   async fn init_mock_model(model: &str, response: &str) {
-    std::env::set_var("AGENTFLOW_MOCK_RESPONSE", response);
+    // SAFETY: tests serialize LLM config/env mutation with LLM_TEST_LOCK.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_RESPONSE", response);
+    }
 
     let config_path = std::env::temp_dir().join(format!(
       "agentflow-plan-execute-{}.yml",

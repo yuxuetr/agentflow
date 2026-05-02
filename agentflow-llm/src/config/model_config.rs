@@ -1,6 +1,6 @@
 use crate::{
-  model_types::{InputType, ModelCapabilities, ModelType},
   LLMError, Result,
+  model_types::{InputType, ModelCapabilities, ModelType},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -304,10 +304,10 @@ impl LLMConfig {
     }
 
     // First try provider-specific config
-    if let Some(provider_config) = self.get_provider(provider_name) {
-      if let Ok(api_key) = env::var(&provider_config.api_key_env) {
-        return Ok(api_key);
-      }
+    if let Some(provider_config) = self.get_provider(provider_name)
+      && let Ok(api_key) = env::var(&provider_config.api_key_env)
+    {
+      return Ok(api_key);
     }
 
     // Fallback to common environment variable patterns
@@ -360,45 +360,45 @@ impl LLMConfig {
       }
 
       // Validate model-specific configuration
-      if let Some(temp) = model_config.temperature {
-        if !(0.0..=2.0).contains(&temp) {
-          return Err(LLMError::InvalidModelConfig {
-            message: format!(
-              "Temperature for model '{}' must be between 0.0 and 2.0",
-              model_name
-            ),
-          });
-        }
+      if let Some(temp) = model_config.temperature
+        && !(0.0..=2.0).contains(&temp)
+      {
+        return Err(LLMError::InvalidModelConfig {
+          message: format!(
+            "Temperature for model '{}' must be between 0.0 and 2.0",
+            model_name
+          ),
+        });
       }
 
-      if let Some(top_p) = model_config.top_p {
-        if !(0.0..=1.0).contains(&top_p) {
-          return Err(LLMError::InvalidModelConfig {
-            message: format!(
-              "top_p for model '{}' must be between 0.0 and 1.0",
-              model_name
-            ),
-          });
-        }
+      if let Some(top_p) = model_config.top_p
+        && !(0.0..=1.0).contains(&top_p)
+      {
+        return Err(LLMError::InvalidModelConfig {
+          message: format!(
+            "top_p for model '{}' must be between 0.0 and 1.0",
+            model_name
+          ),
+        });
       }
 
-      if let Some(freq_penalty) = model_config.frequency_penalty {
-        if !(0.0..=2.0).contains(&freq_penalty) {
-          return Err(LLMError::InvalidModelConfig {
-            message: format!(
-              "frequency_penalty for model '{}' must be between 0.0 and 2.0",
-              model_name
-            ),
-          });
-        }
+      if let Some(freq_penalty) = model_config.frequency_penalty
+        && !(0.0..=2.0).contains(&freq_penalty)
+      {
+        return Err(LLMError::InvalidModelConfig {
+          message: format!(
+            "frequency_penalty for model '{}' must be between 0.0 and 2.0",
+            model_name
+          ),
+        });
       }
 
-      if let Some(n) = model_config.n {
-        if n == 0 || n > 10 {
-          return Err(LLMError::InvalidModelConfig {
-            message: format!("n for model '{}' must be between 1 and 10", model_name),
-          });
-        }
+      if let Some(n) = model_config.n
+        && (n == 0 || n > 10)
+      {
+        return Err(LLMError::InvalidModelConfig {
+          message: format!("n for model '{}' must be between 1 and 10", model_name),
+        });
       }
     }
 
@@ -462,7 +462,10 @@ defaults:
 
   #[test]
   fn test_api_key_resolution() {
-    env::set_var("TEST_OPENAI_KEY", "test-key");
+    // SAFETY: this unit test mutates a dedicated test env var before reading it.
+    unsafe {
+      env::set_var("TEST_OPENAI_KEY", "test-key");
+    }
 
     let yaml = r#"
 models:
@@ -478,7 +481,10 @@ providers:
     let api_key = config.get_api_key("openai").unwrap();
     assert_eq!(api_key, "test-key");
 
-    env::remove_var("TEST_OPENAI_KEY");
+    // SAFETY: cleanup of the dedicated test env var after the test read.
+    unsafe {
+      env::remove_var("TEST_OPENAI_KEY");
+    }
   }
 
   #[test]

@@ -4,7 +4,7 @@ use agentflow_core::{
   value::FlowValue,
 };
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
@@ -28,7 +28,7 @@ impl AsyncNode for HttpNode {
       _ => {
         return Err(AgentFlowError::NodeInputError {
           message: format!("Unsupported HTTP method: {}", method),
-        })
+        });
       }
     };
 
@@ -120,8 +120,8 @@ fn get_optional_map_input(
 mod tests {
   use super::*;
   use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
   };
 
   #[tokio::test]

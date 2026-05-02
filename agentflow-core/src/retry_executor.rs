@@ -193,8 +193,8 @@ where
 mod tests {
   use super::*;
   use crate::retry::RetryStrategy;
-  use std::sync::atomic::{AtomicU32, Ordering};
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicU32, Ordering};
 
   #[tokio::test]
   async fn test_execute_with_retry_success_first_attempt() {

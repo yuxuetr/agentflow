@@ -446,14 +446,18 @@ mod tests {
     let capabilities = ModelCapabilities::from_model_type(ModelType::ImageUnderstand);
 
     // Should accept text + image
-    assert!(capabilities
-      .validate_request(true, true, false, false, false, false)
-      .is_ok());
+    assert!(
+      capabilities
+        .validate_request(true, true, false, false, false, false)
+        .is_ok()
+    );
 
     // Should reject audio for image understanding model
-    assert!(capabilities
-      .validate_request(true, false, true, false, false, false)
-      .is_err());
+    assert!(
+      capabilities
+        .validate_request(true, false, true, false, false, false)
+        .is_err()
+    );
   }
 
   #[test]

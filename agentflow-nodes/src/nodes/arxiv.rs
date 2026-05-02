@@ -237,20 +237,20 @@ impl ArxivNode {
         .map_err(|e| AgentFlowError::AsyncExecutionError {
           message: e.to_string(),
         })?;
-      if let Some(ext) = path.extension() {
-        if ext == "tex" {
-          let mut content = String::new();
-          entry
-            .read_to_string(&mut content)
-            .map_err(|e| AgentFlowError::AsyncExecutionError {
-              message: e.to_string(),
-            })?;
-          all_tex_files.push_str(&content);
-          all_tex_files.push_str("\n\n"); // Separator
+      if let Some(ext) = path.extension()
+        && ext == "tex"
+      {
+        let mut content = String::new();
+        entry
+          .read_to_string(&mut content)
+          .map_err(|e| AgentFlowError::AsyncExecutionError {
+            message: e.to_string(),
+          })?;
+        all_tex_files.push_str(&content);
+        all_tex_files.push_str("\n\n"); // Separator
 
-          if content.contains(r"\\begin{document}") {
-            main_content = content;
-          }
+        if content.contains(r"\\begin{document}") {
+          main_content = content;
         }
       }
     }

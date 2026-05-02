@@ -43,7 +43,7 @@ use agentflow_core::{
   value::FlowValue,
 };
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[cfg(feature = "rag")]
@@ -240,7 +240,7 @@ impl RAGNode {
       _ => {
         return Err(AgentFlowError::NodeInputError {
           message: format!("Unknown search type: {}", search_type),
-        })
+        });
       }
     };
 
@@ -355,7 +355,7 @@ impl RAGNode {
       _ => {
         return Err(AgentFlowError::NodeInputError {
           message: format!("Unknown distance metric: {}", distance),
-        })
+        });
       }
     };
 
@@ -592,10 +592,12 @@ mod tests {
 
     let result = node.execute(&inputs).await;
     assert!(result.is_err());
-    assert!(result
-      .unwrap_err()
-      .to_string()
-      .contains("RAG feature not enabled"));
+    assert!(
+      result
+        .unwrap_err()
+        .to_string()
+        .contains("RAG feature not enabled")
+    );
   }
 
   #[test]

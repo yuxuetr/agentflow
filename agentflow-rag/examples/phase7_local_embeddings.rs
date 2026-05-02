@@ -45,7 +45,9 @@ async fn main() -> anyhow::Result<()> {
     println!("\n📥 To download and convert the model:");
     println!("   1. Install optimum: pip install optimum[exporters]");
     println!("   2. Export model:");
-    println!("      optimum-cli export onnx --model sentence-transformers/all-MiniLM-L6-v2 models/all-MiniLM-L6-v2");
+    println!(
+      "      optimum-cli export onnx --model sentence-transformers/all-MiniLM-L6-v2 models/all-MiniLM-L6-v2"
+    );
     println!("\nAlternatively, download pre-converted models from Hugging Face.");
     return Ok(());
   }

@@ -14,7 +14,7 @@ use agentflow_nodes::nodes::{
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[cfg(feature = "mcp")]
 use agentflow_nodes::nodes::mcp::MCPNode;
@@ -22,7 +22,7 @@ use agentflow_nodes::nodes::mcp::MCPNode;
 #[cfg(feature = "rag")]
 use agentflow_nodes::nodes::rag::RAGNode;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -231,7 +231,9 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       // Extract operation (required)
       let operation = get_string_param_optional(&node_def.parameters, "operation");
       if operation.is_empty() {
-        return Err(anyhow!("RAG node requires 'operation' parameter (search, index, create_collection, delete_collection, stats)"));
+        return Err(anyhow!(
+          "RAG node requires 'operation' parameter (search, index, create_collection, delete_collection, stats)"
+        ));
       }
 
       // Extract collection (required)

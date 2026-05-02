@@ -114,7 +114,7 @@ impl AsyncNode for BatchNode {
       _ => {
         return Err(AgentFlowError::NodeInputError {
           message: format!("Input '{}' is missing or not an array", self.items_key),
-        })
+        });
       }
     };
 

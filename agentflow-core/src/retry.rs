@@ -428,10 +428,12 @@ mod tests {
     };
 
     assert!(ErrorPattern::NetworkError.matches(&network_error));
-    assert!(ErrorPattern::MessageContains {
-      text: "connection".to_string()
-    }
-    .matches(&network_error));
+    assert!(
+      ErrorPattern::MessageContains {
+        text: "connection".to_string()
+      }
+      .matches(&network_error)
+    );
   }
 
   #[test]

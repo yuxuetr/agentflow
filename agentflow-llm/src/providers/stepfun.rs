@@ -1,13 +1,13 @@
 use crate::{
+  LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
-  LLMError, Result,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -60,7 +60,7 @@ impl StepFunProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+    use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -448,28 +448,27 @@ impl StepFunStreamingResponse {
       });
     }
 
-    if let Ok(chunk) = serde_json::from_str::<StepFunStreamingChunk>(data) {
-      if let Some(choice) = chunk.choices.first() {
-        if let Some(content) = &choice.delta.content {
-          // Handle both string and array content in streaming
-          let content_text = match content {
-            serde_json::Value::String(text) => text.clone(),
-            _ => content.to_string(), // Convert other types to string
-          };
+    if let Ok(chunk) = serde_json::from_str::<StepFunStreamingChunk>(data)
+      && let Some(choice) = chunk.choices.first()
+      && let Some(content) = &choice.delta.content
+    {
+      // Handle both string and array content in streaming
+      let content_text = match content {
+        serde_json::Value::String(text) => text.clone(),
+        _ => content.to_string(), // Convert other types to string
+      };
 
-          return Some(StreamChunk {
-            content: content_text,
-            is_final: choice.finish_reason.is_some(),
-            metadata: Some(serde_json::to_value(&chunk).ok()?),
-            usage: chunk.usage.map(|u| TokenUsage {
-              prompt_tokens: Some(u.prompt_tokens),
-              completion_tokens: Some(u.completion_tokens),
-              total_tokens: Some(u.total_tokens),
-            }),
-            content_type: Some("text".to_string()),
-          });
-        }
-      }
+      return Some(StreamChunk {
+        content: content_text,
+        is_final: choice.finish_reason.is_some(),
+        metadata: Some(serde_json::to_value(&chunk).ok()?),
+        usage: chunk.usage.map(|u| TokenUsage {
+          prompt_tokens: Some(u.prompt_tokens),
+          completion_tokens: Some(u.completion_tokens),
+          total_tokens: Some(u.total_tokens),
+        }),
+        content_type: Some("text".to_string()),
+      });
     }
 
     None
@@ -496,13 +495,13 @@ impl StreamingResponse for StepFunStreamingResponse {
               let line = buffer[..newline_pos].trim().to_string();
               buffer.drain(..=newline_pos);
 
-              if !line.is_empty() {
-                if let Some(chunk) = Self::parse_sse_chunk(&line) {
-                  if chunk.is_final {
-                    self.finished = true;
-                  }
-                  return Ok(Some(chunk));
+              if !line.is_empty()
+                && let Some(chunk) = Self::parse_sse_chunk(&line)
+              {
+                if chunk.is_final {
+                  self.finished = true;
                 }
+                return Ok(Some(chunk));
               }
             }
           }
@@ -711,7 +710,7 @@ impl StepFunSpecializedClient {
   }
 
   fn build_auth_headers(&self) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+    use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     // Note: API key is validated in new(), so this should always succeed
@@ -725,7 +724,7 @@ impl StepFunSpecializedClient {
 
   /// Generate image from text prompt
   pub async fn text_to_image(&self, request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
-    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderValue};
 
     let url = format!("{}/images/generations", self.base_url);
 
@@ -758,7 +757,7 @@ impl StepFunSpecializedClient {
     &self,
     request: Image2ImageRequest,
   ) -> Result<ImageGenerationResponse> {
-    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderValue};
 
     let url = format!("{}/images/image2image", self.base_url);
 
@@ -853,7 +852,7 @@ impl StepFunSpecializedClient {
 
   /// Convert text to speech
   pub async fn text_to_speech(&self, request: TTSRequest) -> Result<Vec<u8>> {
-    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderValue};
 
     let url = format!("{}/audio/speech", self.base_url);
 
@@ -883,7 +882,7 @@ impl StepFunSpecializedClient {
 
   /// Create voice clone from audio sample
   pub async fn clone_voice(&self, request: VoiceCloningRequest) -> Result<VoiceCloningResponse> {
-    use reqwest::header::{HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderValue};
 
     let url = format!("{}/audio/voices", self.base_url);
 

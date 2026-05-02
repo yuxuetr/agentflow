@@ -10,7 +10,9 @@ pub async fn execute(
   max_retries: Option<u32>,
 ) -> Result<()> {
   if server_command.is_empty() {
-    anyhow::bail!("Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp");
+    anyhow::bail!(
+      "Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp"
+    );
   }
 
   println!(
@@ -78,27 +80,26 @@ pub async fn execute(
       .input_schema
       .get("properties")
       .and_then(|p| p.as_object())
+      && !properties.is_empty()
     {
-      if !properties.is_empty() {
-        println!("    {}:", "Parameters:".italic());
-        for (param_name, param_schema) in properties {
-          let param_type = param_schema
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("unknown");
+      println!("    {}:", "Parameters:".italic());
+      for (param_name, param_schema) in properties {
+        let param_type = param_schema
+          .get("type")
+          .and_then(|t| t.as_str())
+          .unwrap_or("unknown");
 
-          let param_desc = param_schema
-            .get("description")
-            .and_then(|d| d.as_str())
-            .unwrap_or("");
+        let param_desc = param_schema
+          .get("description")
+          .and_then(|d| d.as_str())
+          .unwrap_or("");
 
-          println!(
-            "      - {} ({}): {}",
-            param_name.cyan(),
-            param_type.yellow(),
-            param_desc.dimmed()
-          );
-        }
+        println!(
+          "      - {} ({}): {}",
+          param_name.cyan(),
+          param_type.yellow(),
+          param_desc.dimmed()
+        );
       }
     }
 

@@ -1,13 +1,13 @@
 use crate::{
+  LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
-  LLMError, Result,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -36,7 +36,7 @@ impl AnthropicProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -55,20 +55,20 @@ impl AnthropicProvider {
     let mut anthropic_messages = Vec::new();
 
     for message in &request.messages {
-      if let Some(msg_obj) = message.as_object() {
-        if let (Some(role), Some(content)) = (msg_obj.get("role"), msg_obj.get("content")) {
-          match role.as_str() {
-            Some("system") => {
-              system_message = content.as_str().map(|s| s.to_string());
-            }
-            Some("user") | Some("assistant") => {
-              anthropic_messages.push(json!({
-                "role": role,
-                "content": content
-              }));
-            }
-            _ => {}
+      if let Some(msg_obj) = message.as_object()
+        && let (Some(role), Some(content)) = (msg_obj.get("role"), msg_obj.get("content"))
+      {
+        match role.as_str() {
+          Some("system") => {
+            system_message = content.as_str().map(|s| s.to_string());
           }
+          Some("user") | Some("assistant") => {
+            anthropic_messages.push(json!({
+              "role": role,
+              "content": content
+            }));
+          }
+          _ => {}
         }
       }
     }
@@ -319,44 +319,43 @@ impl AnthropicStreamingResponse {
 
     let data = &line[6..]; // Remove "data: " prefix
 
-    if let Ok(event) = serde_json::from_str::<Value>(data) {
-      if let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
-        match event_type {
-          "content_block_delta" => {
-            if let Some(delta) = event.get("delta") {
-              if let Some(text) = delta.get("text") {
-                if let Some(text_str) = text.as_str() {
-                  return Some(StreamChunk {
-                    content: text_str.to_string(),
-                    is_final: false,
-                    metadata: Some(event.clone()),
-                    usage: None,
-                    content_type: Some("text".to_string()),
-                  });
-                }
-              }
-            }
-          }
-          "message_stop" => {
+    if let Ok(event) = serde_json::from_str::<Value>(data)
+      && let Some(event_type) = event.get("type").and_then(|t| t.as_str())
+    {
+      match event_type {
+        "content_block_delta" => {
+          if let Some(delta) = event.get("delta")
+            && let Some(text) = delta.get("text")
+            && let Some(text_str) = text.as_str()
+          {
             return Some(StreamChunk {
-              content: String::new(),
-              is_final: true,
+              content: text_str.to_string(),
+              is_final: false,
               metadata: Some(event.clone()),
               usage: None,
               content_type: Some("text".to_string()),
             });
           }
-          "content_block_stop" => {
-            return Some(StreamChunk {
-              content: String::new(),
-              is_final: true,
-              metadata: Some(event.clone()),
-              usage: None,
-              content_type: Some("text".to_string()),
-            });
-          }
-          _ => {}
         }
+        "message_stop" => {
+          return Some(StreamChunk {
+            content: String::new(),
+            is_final: true,
+            metadata: Some(event.clone()),
+            usage: None,
+            content_type: Some("text".to_string()),
+          });
+        }
+        "content_block_stop" => {
+          return Some(StreamChunk {
+            content: String::new(),
+            is_final: true,
+            metadata: Some(event.clone()),
+            usage: None,
+            content_type: Some("text".to_string()),
+          });
+        }
+        _ => {}
       }
     }
 
@@ -382,13 +381,13 @@ impl StreamingResponse for AnthropicStreamingResponse {
               let line = buffer[..newline_pos].trim().to_string();
               buffer.drain(..=newline_pos);
 
-              if !line.is_empty() {
-                if let Some(chunk) = Self::parse_sse_event(&line) {
-                  if chunk.is_final {
-                    self.finished = true;
-                  }
-                  return Ok(Some(chunk));
+              if !line.is_empty()
+                && let Some(chunk) = Self::parse_sse_event(&line)
+              {
+                if chunk.is_final {
+                  self.finished = true;
                 }
+                return Ok(Some(chunk));
               }
             }
           }

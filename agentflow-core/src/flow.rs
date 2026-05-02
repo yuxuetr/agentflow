@@ -7,7 +7,7 @@ use crate::{
   value::FlowValue,
 };
 use dirs;
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -219,20 +219,18 @@ impl Flow {
 
     for node_id in &sorted_nodes {
       // Check if we should resume from this node
-      if should_skip {
-        if let Some(ref resume_node) = skip_until {
-          if node_id == resume_node {
-            should_skip = false;
-            println!("▶️  Resuming execution from node '{}'", node_id);
-          } else {
-            println!(
-              "⏭️  Skipping node '{}' (already completed in checkpoint)",
-              node_id
-            );
-            // For skipped nodes, we don't execute but mark them as complete
-            // Their outputs should be restored from checkpoint
-            continue;
-          }
+      if should_skip && let Some(ref resume_node) = skip_until {
+        if node_id == resume_node {
+          should_skip = false;
+          println!("▶️  Resuming execution from node '{}'", node_id);
+        } else {
+          println!(
+            "⏭️  Skipping node '{}' (already completed in checkpoint)",
+            node_id
+          );
+          // For skipped nodes, we don't execute but mark them as complete
+          // Their outputs should be restored from checkpoint
+          continue;
         }
       }
 
@@ -344,20 +342,19 @@ impl Flow {
           .get(node_id)
           .map(|result| result.is_ok())
           .unwrap_or(false)
+        && let Some(ref manager) = self.checkpoint_manager
       {
-        if let Some(ref manager) = self.checkpoint_manager {
-          let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
-          if let Err(e) = manager
-            .save_checkpoint(&run_id, node_id, &checkpoint_state)
-            .await
-          {
-            eprintln!(
-              "⚠️  Warning: Failed to save checkpoint after node '{}': {}",
-              node_id, e
-            );
-          } else {
-            println!("💾 Checkpoint saved after node '{}'", node_id);
-          }
+        let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+        if let Err(e) = manager
+          .save_checkpoint(&run_id, node_id, &checkpoint_state)
+          .await
+        {
+          eprintln!(
+            "⚠️  Warning: Failed to save checkpoint after node '{}': {}",
+            node_id, e
+          );
+        } else {
+          println!("💾 Checkpoint saved after node '{}'", node_id);
         }
       }
     }
@@ -383,22 +380,22 @@ impl Flow {
     }
 
     // Mark workflow as completed or failed
-    if self.checkpoint_enabled {
-      if let Some(ref manager) = self.checkpoint_manager {
-        let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
-        let status = if state_pool.values().all(|r| r.is_ok()) {
-          WorkflowStatus::Completed
-        } else {
-          WorkflowStatus::Failed
-        };
-        let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
+    if self.checkpoint_enabled
+      && let Some(ref manager) = self.checkpoint_manager
+    {
+      let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+      let status = if state_pool.values().all(|r| r.is_ok()) {
+        WorkflowStatus::Completed
+      } else {
+        WorkflowStatus::Failed
+      };
+      let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
 
-        if let Err(e) = manager
-          .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
-          .await
-        {
-          eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
-        }
+      if let Err(e) = manager
+        .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
+        .await
+      {
+        eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
       }
     }
 
@@ -459,11 +456,8 @@ impl Flow {
     state_pool
       .iter()
       .filter_map(|(node_id, result)| {
-        if let Some(outputs) = Self::checkpointable_outputs(result) {
-          Some((node_id.clone(), Self::outputs_to_json(outputs)))
-        } else {
-          None
-        }
+        Self::checkpointable_outputs(result)
+          .map(|outputs| (node_id.clone(), Self::outputs_to_json(outputs)))
       })
       .collect()
   }
@@ -482,8 +476,7 @@ impl Flow {
     let json_outputs: HashMap<String, serde_json::Value> = outputs
       .iter()
       .map(|(key, value)| {
-        let checkpoint_value =
-          serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!(null));
+        let checkpoint_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
         (key.clone(), checkpoint_value)
       })
       .collect();
@@ -663,18 +656,17 @@ impl Flow {
             .get(&node_id)
             .map(|result| result.is_ok())
             .unwrap_or(false)
+          && let Some(ref manager) = self.checkpoint_manager
         {
-          if let Some(ref manager) = self.checkpoint_manager {
-            let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
-            if let Err(e) = manager
-              .save_checkpoint(&run_id, &node_id, &checkpoint_state)
-              .await
-            {
-              eprintln!(
-                "⚠️  Warning: Failed to save checkpoint after node '{}': {}",
-                node_id, e
-              );
-            }
+          let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+          if let Err(e) = manager
+            .save_checkpoint(&run_id, &node_id, &checkpoint_state)
+            .await
+          {
+            eprintln!(
+              "⚠️  Warning: Failed to save checkpoint after node '{}': {}",
+              node_id, e
+            );
           }
         }
       }
@@ -700,21 +692,21 @@ impl Flow {
       });
     }
 
-    if self.checkpoint_enabled {
-      if let Some(ref manager) = self.checkpoint_manager {
-        let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
-        let status = if !workflow_failed {
-          WorkflowStatus::Completed
-        } else {
-          WorkflowStatus::Failed
-        };
-        let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
-        if let Err(e) = manager
-          .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
-          .await
-        {
-          eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
-        }
+    if self.checkpoint_enabled
+      && let Some(ref manager) = self.checkpoint_manager
+    {
+      let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
+      let status = if !workflow_failed {
+        WorkflowStatus::Completed
+      } else {
+        WorkflowStatus::Failed
+      };
+      let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
+      if let Err(e) = manager
+        .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
+        .await
+      {
+        eprintln!("⚠️  Warning: Failed to save final checkpoint: {}", e);
       }
     }
 
@@ -890,7 +882,7 @@ impl Flow {
         _ => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'input_list' must be a JSON array for a Map node".to_string(),
-          })
+          });
         }
       };
 
@@ -925,7 +917,7 @@ impl Flow {
         _ => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'input_list' must be a JSON array for a Map node".to_string(),
-          })
+          });
         }
       };
 
@@ -953,7 +945,7 @@ impl Flow {
           Err(e) => {
             return Err(AgentFlowError::FlowExecutionFailed {
               message: e.to_string(),
-            })
+            });
           }
         }
       }
@@ -1214,7 +1206,7 @@ impl Flow {
 
     let mut queue: VecDeque<String> = in_degree
       .iter()
-      .filter(|(_, &d)| d == 0)
+      .filter(|&(_, &d)| d == 0)
       .map(|(id, _)| id.clone())
       .collect();
 
@@ -1260,7 +1252,11 @@ mod tests {
   fn use_writable_home() {
     let home = std::env::temp_dir().join(format!("agentflow-flow-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).unwrap();
-    std::env::set_var("HOME", home);
+    // SAFETY: tests set HOME before invoking code that reads it; no other
+    // thread in these tests concurrently mutates the process environment.
+    unsafe {
+      std::env::set_var("HOME", home);
+    }
   }
 
   async fn load_only_latest_checkpoint(temp_dir: &TempDir) -> Checkpoint {

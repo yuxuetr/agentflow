@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use agentflow_tracing::{redact_text, redact_value, RedactionConfig};
+use agentflow_tracing::{RedactionConfig, redact_text, redact_value};
 
 pub fn redact_cli_text(value: impl AsRef<str>) -> String {
   redact_text(value.as_ref(), &RedactionConfig::default())

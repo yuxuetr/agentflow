@@ -9,8 +9,8 @@ use agentflow_core::{
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 
 fn checkpoint_json_payload<'a>(
@@ -27,7 +27,11 @@ fn use_writable_home() {
     uuid::Uuid::new_v4()
   ));
   std::fs::create_dir_all(&home).unwrap();
-  std::env::set_var("HOME", home);
+  // SAFETY: each test sets HOME before constructing AgentFlow state and does
+  // not concurrently mutate the process environment.
+  unsafe {
+    std::env::set_var("HOME", home);
+  }
 }
 
 /// Simple test node
@@ -612,8 +616,7 @@ async fn test_resume_reexecutes_failed_agent_node_with_checkpointed_partial_trac
   assert_eq!(failed_checkpoint.last_completed_node, "");
   assert!(failed_checkpoint.state.contains_key("agent"));
   assert_eq!(
-    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_result")["steps"][2]["kind"]
-      ["type"],
+    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_result")["steps"][2]["kind"]["type"],
     "tool_result"
   );
   assert_eq!(

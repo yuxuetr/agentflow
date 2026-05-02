@@ -14,7 +14,7 @@ use agentflow_agents::{AgentContext, AgentRuntime, PlanExecuteAgent, PlanExecute
 use agentflow_memory::SessionMemory;
 use agentflow_tools::{Tool, ToolError, ToolOutput, ToolRegistry};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct EchoTool;
 
@@ -48,10 +48,14 @@ impl Tool for EchoTool {
 }
 
 async fn init_mock_model(model: &str) -> anyhow::Result<()> {
-  std::env::set_var(
-    "AGENTFLOW_MOCK_RESPONSE",
-    r#"{"plan":[{"id":"1","description":"Echo the requested phrase","tool":"echo","params":{"text":"plan-execute"}}]}"#,
-  );
+  // SAFETY: this standalone example configures mock responses before running
+  // the agent loop.
+  unsafe {
+    std::env::set_var(
+      "AGENTFLOW_MOCK_RESPONSE",
+      r#"{"plan":[{"id":"1","description":"Echo the requested phrase","tool":"echo","params":{"text":"plan-execute"}}]}"#,
+    );
+  }
 
   let config_path = std::env::temp_dir().join(format!(
     "agentflow-plan-execute-example-{}.yml",

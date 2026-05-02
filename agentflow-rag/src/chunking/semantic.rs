@@ -262,25 +262,25 @@ impl SemanticChunker {
     }
 
     // Handle last segment
-    if let Some(&last_boundary) = boundaries.last() {
-      if last_boundary < sentences.len() {
-        let chunk_text = sentences[last_boundary..].join(" ");
+    if let Some(&last_boundary) = boundaries.last()
+      && last_boundary < sentences.len()
+    {
+      let chunk_text = sentences[last_boundary..].join(" ");
 
-        if chunk_text.len() > self.chunk_size {
-          let sub_chunks = self.split_large_chunk(&chunk_text, char_offset);
-          chunks.extend(sub_chunks);
-        } else {
-          let start_idx = char_offset;
-          let end_idx = start_idx + chunk_text.len();
-          chunks.push(TextChunk {
-            content: chunk_text,
-            start_idx,
-            end_idx,
-            metadata: std::collections::HashMap::new(),
-            chunk_index: chunks.len(),
-            total_chunks: 0,
-          });
-        }
+      if chunk_text.len() > self.chunk_size {
+        let sub_chunks = self.split_large_chunk(&chunk_text, char_offset);
+        chunks.extend(sub_chunks);
+      } else {
+        let start_idx = char_offset;
+        let end_idx = start_idx + chunk_text.len();
+        chunks.push(TextChunk {
+          content: chunk_text,
+          start_idx,
+          end_idx,
+          metadata: std::collections::HashMap::new(),
+          chunk_index: chunks.len(),
+          total_chunks: 0,
+        });
       }
     }
 

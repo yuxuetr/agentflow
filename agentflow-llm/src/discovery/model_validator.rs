@@ -1,7 +1,7 @@
 //! Model validation functionality for verifying user-specified models
 
 use super::{ModelFetcher, VendorConfig};
-use crate::{config::LLMConfig, Result};
+use crate::{Result, config::LLMConfig};
 use std::collections::HashSet;
 use tracing::{info, warn};
 

@@ -256,7 +256,7 @@ pub enum LLMError {
 - `Tool` idempotency metadata for partial-resume auto-replay
 - `FlowValue::File` / `Url` checkpoint round-trip type fidelity
 - Expression engine upgrade for `run_if` / `while.condition`
-- Workspace edition unification (currently 2024 vs 2021 split)
+- Workspace edition unified on Rust 2024
 
 **N9 — Multi-agent collaboration + ecosystem (v0.4.0 candidate):**
 - Handoff / blackboard / debate collaboration patterns in `agentflow-agents/supervisor`
@@ -740,10 +740,10 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ---
 
-**Last Updated**: 2026-05-01
+**Last Updated**: 2026-05-02
 **AgentFlow Version**: 0.2.0+ (Phase 1.5 + N1–N7 complete; targeting v0.3.0 candidate)
 **agentflow-mcp Version**: 0.1.0-alpha (Fully Integrated)
 **agentflow-rag Version**: 0.3.0-alpha
-**Rust Edition**: 2021 (mixed: `agentflow-server` / `agentflow-db` use 2024 — to be unified in N8)
+**Rust Edition**: 2024 (all workspace members)
 **Test Status**: ✅ 479/479 passing (100%, verified 2025-11-17)
 **Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-01.md`)

@@ -396,26 +396,32 @@ mod tests {
 
   #[test]
   fn test_is_retryable() {
-    assert!(AgentFlowError::NetworkError {
-      message: "test".into()
-    }
-    .is_retryable());
+    assert!(
+      AgentFlowError::NetworkError {
+        message: "test".into()
+      }
+      .is_retryable()
+    );
     assert!(AgentFlowError::TimeoutExceeded { duration_ms: 1000 }.is_retryable());
-    assert!(!AgentFlowError::ConfigurationError {
-      message: "test".into()
-    }
-    .is_retryable());
+    assert!(
+      !AgentFlowError::ConfigurationError {
+        message: "test".into()
+      }
+      .is_retryable()
+    );
     assert!(!AgentFlowError::ValidationError("test".into()).is_retryable());
   }
 
   #[test]
   fn test_is_transient() {
     assert!(AgentFlowError::TimeoutExceeded { duration_ms: 1000 }.is_transient());
-    assert!(AgentFlowError::RateLimitExceeded {
-      limit: 100,
-      window_ms: 1000
-    }
-    .is_transient());
+    assert!(
+      AgentFlowError::RateLimitExceeded {
+        limit: 100,
+        window_ms: 1000
+      }
+      .is_transient()
+    );
     assert!(!AgentFlowError::ValidationError("test".into()).is_transient());
   }
 

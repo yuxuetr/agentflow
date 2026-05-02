@@ -14,7 +14,9 @@ pub async fn execute(
   output_file: Option<String>,
 ) -> Result<()> {
   if server_command.is_empty() {
-    anyhow::bail!("Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp");
+    anyhow::bail!(
+      "Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp"
+    );
   }
 
   // Parse tool parameters from JSON string

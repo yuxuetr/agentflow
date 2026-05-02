@@ -18,7 +18,7 @@ use agentflow_core::{
   value::FlowValue,
 };
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct ValidateOrderNode;
 struct CalculateSubtotalNode;

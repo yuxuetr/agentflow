@@ -2,9 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox::SandboxPolicy};
 
 /// Read, write, and list filesystem entries with sandbox path enforcement.
 pub struct FileTool {
@@ -118,12 +118,12 @@ impl Tool for FileTool {
             message: "Parameter 'content' is required for 'write' operation".to_string(),
           })?;
 
-        if let Some(parent) = path.parent() {
-          if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
-              .await
-              .map_err(ToolError::IoError)?;
-          }
+        if let Some(parent) = path.parent()
+          && !parent.as_os_str().is_empty()
+        {
+          tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(ToolError::IoError)?;
         }
 
         tokio::fs::write(path, content)

@@ -372,22 +372,22 @@ impl CheckpointManager {
       .join("checkpoint_latest.json");
     if latest_path.exists() {
       // Load the latest checkpoint to check if it was the one we deleted
-      if let Ok(checkpoint) = self.load_checkpoint_from_path(&latest_path).await {
-        if checkpoint.created_at == created_at {
-          // The latest was deleted, find the next most recent one
-          let checkpoints = self.load_all_checkpoints(workflow_id).await?;
-          if let Some(newest) = checkpoints.first() {
-            // Update latest symlink to point to the next checkpoint
-            let timestamp = newest.created_at.format("%Y%m%d_%H%M%S_%3f");
-            let filename = format!("checkpoint_{}.json", timestamp);
-            let checkpoint_path = self.get_workflow_dir(workflow_id).join(filename);
+      if let Ok(checkpoint) = self.load_checkpoint_from_path(&latest_path).await
+        && checkpoint.created_at == created_at
+      {
+        // The latest was deleted, find the next most recent one
+        let checkpoints = self.load_all_checkpoints(workflow_id).await?;
+        if let Some(newest) = checkpoints.first() {
+          // Update latest symlink to point to the next checkpoint
+          let timestamp = newest.created_at.format("%Y%m%d_%H%M%S_%3f");
+          let filename = format!("checkpoint_{}.json", timestamp);
+          let checkpoint_path = self.get_workflow_dir(workflow_id).join(filename);
 
-            let _ = fs::remove_file(&latest_path).await;
-            fs::copy(&checkpoint_path, &latest_path).await.ok();
-          } else {
-            // No more checkpoints, delete the latest symlink
-            let _ = fs::remove_file(&latest_path).await;
-          }
+          let _ = fs::remove_file(&latest_path).await;
+          fs::copy(&checkpoint_path, &latest_path).await.ok();
+        } else {
+          // No more checkpoints, delete the latest symlink
+          let _ = fs::remove_file(&latest_path).await;
         }
       }
     }

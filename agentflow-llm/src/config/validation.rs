@@ -1,4 +1,4 @@
-use crate::{config::LLMConfig, LLMError, Result};
+use crate::{LLMError, Result, config::LLMConfig};
 use std::collections::HashSet;
 use std::env;
 
@@ -75,21 +75,21 @@ impl ConfigValidator {
     }
 
     // Validate temperature range
-    if let Some(temp) = model_config.temperature {
-      if !(0.0..=2.0).contains(&temp) {
-        return Err(LLMError::InvalidModelConfig {
-          message: "Temperature must be between 0.0 and 2.0".to_string(),
-        });
-      }
+    if let Some(temp) = model_config.temperature
+      && !(0.0..=2.0).contains(&temp)
+    {
+      return Err(LLMError::InvalidModelConfig {
+        message: "Temperature must be between 0.0 and 2.0".to_string(),
+      });
     }
 
     // Validate top_p range
-    if let Some(top_p) = model_config.top_p {
-      if !(0.0..=1.0).contains(&top_p) {
-        return Err(LLMError::InvalidModelConfig {
-          message: "top_p must be between 0.0 and 1.0".to_string(),
-        });
-      }
+    if let Some(top_p) = model_config.top_p
+      && !(0.0..=1.0).contains(&top_p)
+    {
+      return Err(LLMError::InvalidModelConfig {
+        message: "top_p must be between 0.0 and 1.0".to_string(),
+      });
     }
 
     // Validate max_tokens
@@ -117,12 +117,13 @@ impl ConfigValidator {
     }
 
     // Validate base_url format
-    if let Some(base_url) = &model_config.base_url {
-      if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        return Err(LLMError::InvalidModelConfig {
-          message: "base_url must start with http:// or https://".to_string(),
-        });
-      }
+    if let Some(base_url) = &model_config.base_url
+      && !base_url.starts_with("http://")
+      && !base_url.starts_with("https://")
+    {
+      return Err(LLMError::InvalidModelConfig {
+        message: "base_url must start with http:// or https://".to_string(),
+      });
     }
 
     Ok(())
@@ -141,21 +142,21 @@ impl ConfigValidator {
     }
 
     // Validate timeout
-    if let Some(timeout) = provider_config.timeout_seconds {
-      if timeout == 0 || timeout > 300 {
-        return Err(LLMError::InvalidModelConfig {
-          message: "Timeout must be between 1 and 300 seconds".to_string(),
-        });
-      }
+    if let Some(timeout) = provider_config.timeout_seconds
+      && (timeout == 0 || timeout > 300)
+    {
+      return Err(LLMError::InvalidModelConfig {
+        message: "Timeout must be between 1 and 300 seconds".to_string(),
+      });
     }
 
     // Validate rate limits
-    if let Some(rate_limit) = &provider_config.rate_limit {
-      if rate_limit.requests_per_minute == 0 {
-        return Err(LLMError::InvalidModelConfig {
-          message: "requests_per_minute must be greater than 0".to_string(),
-        });
-      }
+    if let Some(rate_limit) = &provider_config.rate_limit
+      && rate_limit.requests_per_minute == 0
+    {
+      return Err(LLMError::InvalidModelConfig {
+        message: "requests_per_minute must be greater than 0".to_string(),
+      });
     }
 
     Ok(())
@@ -293,7 +294,10 @@ mod tests {
 
   #[test]
   fn test_config_validation_success() {
-    env::set_var("TEST_OPENAI_API_KEY", "test-key");
+    // SAFETY: this unit test mutates a dedicated test env var before reading it.
+    unsafe {
+      env::set_var("TEST_OPENAI_API_KEY", "test-key");
+    }
 
     let yaml = r#"
 models:
@@ -315,7 +319,10 @@ providers:
     assert!(!report.has_errors());
     assert!(!report.successes.is_empty());
 
-    env::remove_var("TEST_OPENAI_API_KEY");
+    // SAFETY: cleanup of the dedicated test env var after the test read.
+    unsafe {
+      env::remove_var("TEST_OPENAI_API_KEY");
+    }
   }
 
   #[test]

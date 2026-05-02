@@ -21,7 +21,7 @@ use agentflow_rag::{
   chunking::{ChunkingStrategy, FixedSizeChunker, RecursiveChunker, SentenceChunker},
   embeddings::{EmbeddingProvider, OpenAIEmbedding},
   indexing::IndexingPipeline,
-  sources::{csv::CsvLoader, text::TextLoader, DocumentLoader},
+  sources::{DocumentLoader, csv::CsvLoader, text::TextLoader},
   types::{CollectionConfig, DistanceMetric, Document},
   vectorstore::{QdrantStore, VectorStore},
 };

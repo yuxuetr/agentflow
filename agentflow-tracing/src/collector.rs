@@ -1,9 +1,9 @@
 //! Trace collector - implements EventListener to collect workflow traces
 
-use crate::redaction::{redact_trace, redact_value, RedactionConfig};
+use crate::TraceExporter;
+use crate::redaction::{RedactionConfig, redact_trace, redact_value};
 use crate::storage::TraceStorage;
 use crate::types::*;
-use crate::TraceExporter;
 use agentflow_core::events::{EventListener, WorkflowEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -195,11 +195,11 @@ impl TraceCollector {
         timestamp: _,
       } => {
         let mut traces_guard = traces.write().await;
-        if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
-            node.complete();
-            node.duration_ms = Some(duration.as_millis() as u64);
-          }
+        if let Some(trace) = traces_guard.get_mut(&workflow_id)
+          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+        {
+          node.complete();
+          node.duration_ms = Some(duration.as_millis() as u64);
         }
       }
 
@@ -209,10 +209,10 @@ impl TraceCollector {
         mut output,
         timestamp: _,
       } => {
-        if config.capture_io {
-          if let Err(e) = Self::limit_value_size(&mut output, config.max_io_size_bytes) {
-            Self::handle_storage_error(&config, e);
-          }
+        if config.capture_io
+          && let Err(e) = Self::limit_value_size(&mut output, config.max_io_size_bytes)
+        {
+          Self::handle_storage_error(&config, e);
         }
 
         let mut agent_details = output
@@ -220,16 +220,16 @@ impl TraceCollector {
           .and_then(AgentTrace::from_agent_result);
 
         let mut traces_guard = traces.write().await;
-        if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
-            if config.capture_io {
-              node.output = Some(output);
-            }
-            if let Some(agent) = &mut agent_details {
-              agent.attach_context(&node.context);
-            }
-            node.agent_details = agent_details;
+        if let Some(trace) = traces_guard.get_mut(&workflow_id)
+          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+        {
+          if config.capture_io {
+            node.output = Some(output);
           }
+          if let Some(agent) = &mut agent_details {
+            agent.attach_context(&node.context);
+          }
+          node.agent_details = agent_details;
         }
       }
 
@@ -241,11 +241,11 @@ impl TraceCollector {
         timestamp: _,
       } => {
         let mut traces_guard = traces.write().await;
-        if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
-            node.fail(error);
-            node.duration_ms = Some(duration.as_millis() as u64);
-          }
+        if let Some(trace) = traces_guard.get_mut(&workflow_id)
+          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+        {
+          node.fail(error);
+          node.duration_ms = Some(duration.as_millis() as u64);
         }
       }
 
@@ -256,11 +256,11 @@ impl TraceCollector {
         timestamp: _,
       } => {
         let mut traces_guard = traces.write().await;
-        if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-          if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
-            node.status = NodeStatus::Skipped;
-            node.error = Some(format!("Skipped: {}", reason));
-          }
+        if let Some(trace) = traces_guard.get_mut(&workflow_id)
+          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+        {
+          node.status = NodeStatus::Skipped;
+          node.error = Some(format!("Skipped: {}", reason));
         }
       }
 
@@ -331,10 +331,10 @@ impl TraceCollector {
 
           // Attach to node trace
           let mut traces_guard = traces.write().await;
-          if let Some(trace) = traces_guard.get_mut(&workflow_id) {
-            if let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id) {
-              node.llm_details = Some(llm_trace);
-            }
+          if let Some(trace) = traces_guard.get_mut(&workflow_id)
+            && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+          {
+            node.llm_details = Some(llm_trace);
           }
         }
       }

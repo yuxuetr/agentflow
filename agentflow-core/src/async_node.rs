@@ -32,7 +32,7 @@ mod tests {
   use super::*;
   use crate::value::FlowValue;
   use serde_json::json;
-  use tokio::time::{sleep, Duration};
+  use tokio::time::{Duration, sleep};
 
   // A mock async node for testing.
   struct AsyncAdderNode {
@@ -54,7 +54,7 @@ mod tests {
         None => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'a' is missing or not an integer".to_string(),
-          })
+          });
         }
       };
 
@@ -66,7 +66,7 @@ mod tests {
         None => {
           return Err(AgentFlowError::NodeInputError {
             message: "Input 'b' is missing or not an integer".to_string(),
-          })
+          });
         }
       };
 

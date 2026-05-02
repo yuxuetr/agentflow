@@ -8,6 +8,6 @@ pub mod types;
 // Re-export commonly used types
 pub use types::{
   ClientCapabilities, Implementation, InitializeParams, InitializeResult, JsonRpcError,
-  JsonRpcRequest, JsonRpcResponse, PromptsCapability, RequestId, ResourcesCapability,
-  RootsCapability, SamplingCapability, ServerCapabilities, ToolsCapability, MCP_PROTOCOL_VERSION,
+  JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, PromptsCapability, RequestId,
+  ResourcesCapability, RootsCapability, SamplingCapability, ServerCapabilities, ToolsCapability,
 };

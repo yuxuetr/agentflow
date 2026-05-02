@@ -1,6 +1,6 @@
 use serde::{
-  de::{self, MapAccess, Visitor},
   Deserialize, Deserializer, Serialize, Serializer,
+  de::{self, MapAccess, Visitor},
 };
 use serde_json::{Map, Value};
 use std::path::PathBuf;

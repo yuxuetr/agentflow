@@ -1,7 +1,7 @@
 //! Workflow debugging and inspection commands
 
 use crate::config::{schema::validate_flow_definition, v2::FlowDefinitionV2};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 

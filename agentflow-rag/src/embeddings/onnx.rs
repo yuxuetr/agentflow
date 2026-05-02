@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "local-embeddings")]
 use ort::{
-  session::{builder::GraphOptimizationLevel, builder::SessionBuilder, Session},
+  session::{Session, builder::GraphOptimizationLevel, builder::SessionBuilder},
   value::Value,
 };
 

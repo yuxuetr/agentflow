@@ -1,13 +1,13 @@
 use crate::{
+  LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
-  LLMError, Result,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -37,7 +37,7 @@ impl GoogleProvider {
   }
 
   fn build_headers(&self) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+    use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -50,30 +50,30 @@ impl GoogleProvider {
     let mut gemini_contents = Vec::new();
 
     for message in &request.messages {
-      if let Some(msg_obj) = message.as_object() {
-        if let (Some(role), Some(content)) = (msg_obj.get("role"), msg_obj.get("content")) {
-          match role.as_str() {
-            Some("system") => {
-              system_instruction = content.as_str().map(|s| {
-                json!({
-                  "parts": [{"text": s}]
-                })
-              });
-            }
-            Some("user") => {
-              gemini_contents.push(json!({
-                "role": "user",
-                "parts": [{"text": content}]
-              }));
-            }
-            Some("assistant") => {
-              gemini_contents.push(json!({
-                "role": "model",
-                "parts": [{"text": content}]
-              }));
-            }
-            _ => {}
+      if let Some(msg_obj) = message.as_object()
+        && let (Some(role), Some(content)) = (msg_obj.get("role"), msg_obj.get("content"))
+      {
+        match role.as_str() {
+          Some("system") => {
+            system_instruction = content.as_str().map(|s| {
+              json!({
+                "parts": [{"text": s}]
+              })
+            });
           }
+          Some("user") => {
+            gemini_contents.push(json!({
+              "role": "user",
+              "parts": [{"text": content}]
+            }));
+          }
+          Some("assistant") => {
+            gemini_contents.push(json!({
+              "role": "model",
+              "parts": [{"text": content}]
+            }));
+          }
+          _ => {}
         }
       }
     }
@@ -324,40 +324,40 @@ impl GoogleStreamingResponse {
       return None;
     }
 
-    if let Ok(response) = serde_json::from_str::<GoogleResponse>(line) {
-      if let Some(candidate) = response.candidates.first() {
-        if let Some(part) = candidate.content.parts.first() {
-          if let Some(text) = &part.text {
-            let is_final = candidate.finish_reason.is_some();
+    if let Ok(response) = serde_json::from_str::<GoogleResponse>(line)
+      && let Some(candidate) = response.candidates.first()
+    {
+      if let Some(part) = candidate.content.parts.first()
+        && let Some(text) = &part.text
+      {
+        let is_final = candidate.finish_reason.is_some();
 
-            return Some(StreamChunk {
-              content: text.clone(),
-              is_final,
-              metadata: Some(serde_json::to_value(&response).ok()?),
-              usage: response.usage_metadata.map(|u| TokenUsage {
-                prompt_tokens: Some(u.prompt_token_count),
-                completion_tokens: Some(u.candidates_token_count),
-                total_tokens: Some(u.total_token_count),
-              }),
-              content_type: Some("text".to_string()),
-            });
-          }
-        }
+        return Some(StreamChunk {
+          content: text.clone(),
+          is_final,
+          metadata: Some(serde_json::to_value(&response).ok()?),
+          usage: response.usage_metadata.map(|u| TokenUsage {
+            prompt_tokens: Some(u.prompt_token_count),
+            completion_tokens: Some(u.candidates_token_count),
+            total_tokens: Some(u.total_token_count),
+          }),
+          content_type: Some("text".to_string()),
+        });
+      }
 
-        // Check if this is a final chunk without text
-        if candidate.finish_reason.is_some() {
-          return Some(StreamChunk {
-            content: String::new(),
-            is_final: true,
-            metadata: Some(serde_json::to_value(&response).ok()?),
-            usage: response.usage_metadata.map(|u| TokenUsage {
-              prompt_tokens: Some(u.prompt_token_count),
-              completion_tokens: Some(u.candidates_token_count),
-              total_tokens: Some(u.total_token_count),
-            }),
-            content_type: Some("text".to_string()),
-          });
-        }
+      // Check if this is a final chunk without text
+      if candidate.finish_reason.is_some() {
+        return Some(StreamChunk {
+          content: String::new(),
+          is_final: true,
+          metadata: Some(serde_json::to_value(&response).ok()?),
+          usage: response.usage_metadata.map(|u| TokenUsage {
+            prompt_tokens: Some(u.prompt_token_count),
+            completion_tokens: Some(u.candidates_token_count),
+            total_tokens: Some(u.total_token_count),
+          }),
+          content_type: Some("text".to_string()),
+        });
       }
     }
 
@@ -383,13 +383,13 @@ impl StreamingResponse for GoogleStreamingResponse {
               let line = buffer[..newline_pos].trim().to_string();
               buffer.drain(..=newline_pos);
 
-              if !line.is_empty() {
-                if let Some(chunk) = Self::parse_json_chunk(&line) {
-                  if chunk.is_final {
-                    self.finished = true;
-                  }
-                  return Ok(Some(chunk));
+              if !line.is_empty()
+                && let Some(chunk) = Self::parse_json_chunk(&line)
+              {
+                if chunk.is_final {
+                  self.finished = true;
                 }
+                return Ok(Some(chunk));
               }
             }
           }

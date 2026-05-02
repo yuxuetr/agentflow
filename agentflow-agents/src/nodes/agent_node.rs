@@ -19,14 +19,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentflow_core::{
+  AsyncNode,
   async_node::{AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
   value::FlowValue,
-  AsyncNode,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::react::agent::ReActAgent;

@@ -5,11 +5,10 @@
 //! MCP servers, workflows, or LLM providers again.
 
 use crate::{
-  redact_trace,
+  RedactionConfig, redact_trace,
   types::{
     AgentTrace, ExecutionTrace, LLMTrace, NodeStatus, NodeTrace, ToolCallTrace, TraceStatus,
   },
-  RedactionConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

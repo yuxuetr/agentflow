@@ -436,10 +436,12 @@ mod tests {
     let result_with_context = result.context("operation failed");
 
     assert!(result_with_context.is_err());
-    assert!(result_with_context
-      .unwrap_err()
-      .to_string()
-      .contains("operation failed"));
+    assert!(
+      result_with_context
+        .unwrap_err()
+        .to_string()
+        .contains("operation failed")
+    );
   }
 
   #[test]

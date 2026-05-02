@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox::SandboxPolicy};
 
 /// Make HTTP GET / POST requests with domain sandbox enforcement.
 pub struct HttpTool {
@@ -115,7 +115,7 @@ impl Tool for HttpTool {
       other => {
         return Err(ToolError::InvalidParams {
           message: format!("Unsupported HTTP method '{}'. Use GET or POST", other),
-        })
+        });
       }
     };
 
@@ -129,10 +129,10 @@ impl Tool for HttpTool {
     }
 
     // Attach body
-    if method == "POST" {
-      if let Some(body) = params["body"].as_str() {
-        builder = builder.body(body.to_string());
-      }
+    if method == "POST"
+      && let Some(body) = params["body"].as_str()
+    {
+      builder = builder.body(body.to_string());
     }
 
     let response = builder.send().await.map_err(|e| ToolError::HttpError {

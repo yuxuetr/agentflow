@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use agentflow_rag::embeddings::EmbeddingProvider;
 use async_trait::async_trait;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 
 use crate::{MemoryError, MemoryStore, Message, Role};
 
@@ -416,10 +416,9 @@ impl MemoryStore for SemanticMemory {
           .fetch_optional(&self.pool)
           .await
           .map_err(|e| MemoryError::StorageError(e.to_string()))?
+            && let Ok(msg) = row_to_message(&row)
           {
-            if let Ok(msg) = row_to_message(&row) {
-              messages.push(msg);
-            }
+            messages.push(msg);
           }
         }
         Ok(messages)

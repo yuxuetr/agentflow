@@ -233,7 +233,7 @@ impl ToolSource {
 }
 
 /// Replay safety classification for tool calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolIdempotency {
   /// Safe to repeat with the same parameters.
@@ -241,6 +241,7 @@ pub enum ToolIdempotency {
   /// Not safe to repeat automatically because it mutates state or triggers side effects.
   NonIdempotent,
   /// The tool has not declared replay semantics.
+  #[default]
   Unknown,
 }
 
@@ -312,12 +313,6 @@ impl ToolMetadata {
 impl Default for ToolMetadata {
   fn default() -> Self {
     Self::builtin()
-  }
-}
-
-impl Default for ToolIdempotency {
-  fn default() -> Self {
-    Self::Unknown
   }
 }
 

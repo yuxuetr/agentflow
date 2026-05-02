@@ -35,38 +35,38 @@ impl FileTraceStorage {
   /// Check if a trace matches query filters
   fn matches_query(trace: &ExecutionTrace, query: &TraceQuery) -> bool {
     // Filter by workflow IDs
-    if let Some(ref ids) = query.workflow_ids {
-      if !ids.contains(&trace.workflow_id) {
-        return false;
-      }
+    if let Some(ref ids) = query.workflow_ids
+      && !ids.contains(&trace.workflow_id)
+    {
+      return false;
     }
 
     // Filter by status
-    if let Some(ref status) = query.status {
-      if std::mem::discriminant(&trace.status) != std::mem::discriminant(status) {
-        return false;
-      }
+    if let Some(ref status) = query.status
+      && std::mem::discriminant(&trace.status) != std::mem::discriminant(status)
+    {
+      return false;
     }
 
     // Filter by user ID
-    if let Some(ref user_id) = query.user_id {
-      if trace.metadata.user_id.as_ref() != Some(user_id) {
-        return false;
-      }
+    if let Some(ref user_id) = query.user_id
+      && trace.metadata.user_id.as_ref() != Some(user_id)
+    {
+      return false;
     }
 
     // Filter by tags (any match)
-    if let Some(ref tags) = query.tags {
-      if !tags.iter().any(|t| trace.metadata.tags.contains(t)) {
-        return false;
-      }
+    if let Some(ref tags) = query.tags
+      && !tags.iter().any(|t| trace.metadata.tags.contains(t))
+    {
+      return false;
     }
 
     // Filter by time range
-    if let Some(ref range) = query.time_range {
-      if !range.contains(trace.started_at) {
-        return false;
-      }
+    if let Some(ref range) = query.time_range
+      && !range.contains(trace.started_at)
+    {
+      return false;
     }
 
     true
@@ -107,12 +107,12 @@ impl TraceStorage for FileTraceStorage {
       }
 
       // Read and parse trace
-      if let Ok(json) = fs::read_to_string(&path).await {
-        if let Ok(trace) = serde_json::from_str::<ExecutionTrace>(&json) {
-          // Apply filters
-          if Self::matches_query(&trace, &query) {
-            traces.push(trace);
-          }
+      if let Ok(json) = fs::read_to_string(&path).await
+        && let Ok(trace) = serde_json::from_str::<ExecutionTrace>(&json)
+      {
+        // Apply filters
+        if Self::matches_query(&trace, &query) {
+          traces.push(trace);
         }
       }
     }
@@ -145,13 +145,12 @@ impl TraceStorage for FileTraceStorage {
       }
 
       // Read trace to check timestamp
-      if let Ok(json) = fs::read_to_string(&path).await {
-        if let Ok(trace) = serde_json::from_str::<ExecutionTrace>(&json) {
-          if trace.started_at < older_than {
-            fs::remove_file(&path).await?;
-            count += 1;
-          }
-        }
+      if let Ok(json) = fs::read_to_string(&path).await
+        && let Ok(trace) = serde_json::from_str::<ExecutionTrace>(&json)
+        && trace.started_at < older_than
+      {
+        fs::remove_file(&path).await?;
+        count += 1;
       }
     }
 

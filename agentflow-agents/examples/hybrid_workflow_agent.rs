@@ -15,9 +15,9 @@ use std::sync::Arc;
 use agentflow_agents::nodes::AgentNode;
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::tools::WorkflowTool;
+use agentflow_core::FlowValue;
 use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
 use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::FlowValue;
 use agentflow_memory::SessionMemory;
 use agentflow_tools::ToolRegistry;
 use async_trait::async_trait;
@@ -75,7 +75,11 @@ fn setup_mock_model() -> anyhow::Result<String> {
   let home =
     std::env::temp_dir().join(format!("agentflow-hybrid-example-{}", uuid::Uuid::new_v4()));
   fs::create_dir_all(home.join(".agentflow"))?;
-  std::env::set_var("HOME", &home);
+  // SAFETY: this standalone example configures its process environment before
+  // starting any concurrent work that reads AgentFlow config.
+  unsafe {
+    std::env::set_var("HOME", &home);
+  }
 
   let model = "mock-hybrid-model";
   fs::write(
@@ -94,13 +98,17 @@ providers:
     ),
   )?;
 
-  std::env::set_var(
-    "AGENTFLOW_MOCK_RESPONSES",
-    serde_json::to_string(&vec![
-      r#"{"thought":"delegate stable formatting to workflow","action":{"tool":"format_summary_workflow","params":{"topic":"hybrid DAG + agent runtime"}}}"#,
-      r#"{"thought":"workflow returned a summary","answer":"Hybrid answer: workflow summary for hybrid DAG + agent runtime"}"#,
-    ])?,
-  );
+  // SAFETY: this standalone example configures mock responses before running
+  // the agent loop.
+  unsafe {
+    std::env::set_var(
+      "AGENTFLOW_MOCK_RESPONSES",
+      serde_json::to_string(&vec![
+        r#"{"thought":"delegate stable formatting to workflow","action":{"tool":"format_summary_workflow","params":{"topic":"hybrid DAG + agent runtime"}}}"#,
+        r#"{"thought":"workflow returned a summary","answer":"Hybrid answer: workflow summary for hybrid DAG + agent runtime"}"#,
+      ])?,
+    );
+  }
 
   Ok(model.to_string())
 }

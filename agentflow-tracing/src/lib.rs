@@ -59,15 +59,15 @@ pub use format::{
   export_trace_json, export_trace_json_compact, format_trace_human_readable, format_trace_summary,
 };
 pub use otel::{
-  trace_to_spans, OtelAttribute, OtelExporterConfig, OtelSpan, OtelSpanEvent, OtelSpanKind,
-  OtelSpanSink, OtelStatus, OtelStatusCode, OtelTraceExporter, OtelValue, TraceExporter,
+  OtelAttribute, OtelExporterConfig, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelSpanSink,
+  OtelStatus, OtelStatusCode, OtelTraceExporter, OtelValue, TraceExporter, trace_to_spans,
 };
-pub use redaction::{redact_text, redact_trace, redact_value, RedactionConfig, REDACTED_VALUE};
-pub use replay::{format_trace_replay, ReplayOptions};
+pub use redaction::{REDACTED_VALUE, RedactionConfig, redact_text, redact_trace, redact_value};
+pub use replay::{ReplayOptions, format_trace_replay};
 pub use storage::schema::{
-  schema_for_dialect, TraceSchemaDialect, POSTGRES_TRACE_SCHEMA, SQLITE_TRACE_SCHEMA,
-  TRACE_SCHEMA_VERSION,
+  POSTGRES_TRACE_SCHEMA, SQLITE_TRACE_SCHEMA, TRACE_SCHEMA_VERSION, TraceSchemaDialect,
+  schema_for_dialect,
 };
 pub use storage::{TimeRange, TraceQuery, TraceStorage};
-pub use tui::{format_trace_tui, TraceTuiFilter, TraceTuiOptions};
+pub use tui::{TraceTuiFilter, TraceTuiOptions, format_trace_tui};
 pub use types::*;

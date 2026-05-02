@@ -441,11 +441,13 @@ fn skill_marketplace_install_resolves_and_installs_skill() {
       "Installed skill: sample-skill @ 1.2.3",
     ));
 
-  assert!(install_root
-    .path()
-    .join("sample-skill")
-    .join("skill.toml")
-    .is_file());
+  assert!(
+    install_root
+      .path()
+      .join("sample-skill")
+      .join("skill.toml")
+      .is_file()
+  );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use base64::Engine;
 use reqwest;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use tokio::fs;
 

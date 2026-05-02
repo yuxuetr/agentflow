@@ -1,6 +1,6 @@
 //! Formatting utilities for execution traces
 
-use crate::{redact_trace, types::*, RedactionConfig};
+use crate::{RedactionConfig, redact_trace, types::*};
 
 /// Format a trace as human-readable text
 pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {

@@ -10,7 +10,9 @@ pub async fn execute(
   max_retries: Option<u32>,
 ) -> Result<()> {
   if server_command.is_empty() {
-    anyhow::bail!("Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp");
+    anyhow::bail!(
+      "Server command cannot be empty. Example: npx -y @modelcontextprotocol/server-filesystem /tmp"
+    );
   }
 
   println!(

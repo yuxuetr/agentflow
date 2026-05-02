@@ -1,5 +1,5 @@
 use crate::redaction::redact_cli_value;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
 pub async fn execute(section: Option<String>) -> Result<()> {

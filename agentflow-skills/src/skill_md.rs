@@ -150,15 +150,15 @@ impl SkillMd {
     // Prefer structured SKILL.md frontmatter. Keep metadata.mcp_servers as a
     // compatibility fallback for older skills that stored JSON in metadata.
     let mut mcp_servers = self.mcp_servers;
-    if mcp_servers.is_empty() {
-      if let Some(mcp_str) = self.metadata.get("mcp_servers") {
-        if let Ok(parsed_servers) =
-          serde_json::from_str::<Vec<crate::manifest::McpServerConfig>>(mcp_str)
-        {
-          mcp_servers = parsed_servers;
-        } else {
-          tracing::warn!("Failed to parse mcp_servers from SKILL.md metadata");
-        }
+    if mcp_servers.is_empty()
+      && let Some(mcp_str) = self.metadata.get("mcp_servers")
+    {
+      if let Ok(parsed_servers) =
+        serde_json::from_str::<Vec<crate::manifest::McpServerConfig>>(mcp_str)
+      {
+        mcp_servers = parsed_servers;
+      } else {
+        tracing::warn!("Failed to parse mcp_servers from SKILL.md metadata");
       }
     }
 

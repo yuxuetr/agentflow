@@ -223,7 +223,7 @@ impl DocumentLoader for CsvLoader {
         _ => {
           return Err(crate::error::RAGError::DocumentError {
             message: format!("Unsupported file extension: {:?}", ext),
-          })
+          });
         }
       }
     } else {

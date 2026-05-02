@@ -8,12 +8,12 @@ use crate::{
 };
 use async_trait::async_trait;
 use qdrant_client::{
-  qdrant::{
-    vectors_config::Config, CreateCollectionBuilder, DeletePointsBuilder, Distance, PointId,
-    PointStruct, SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue, VectorParams,
-    VectorsConfig,
-  },
   Qdrant,
+  qdrant::{
+    CreateCollectionBuilder, DeletePointsBuilder, Distance, PointId, PointStruct,
+    SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue, VectorParams, VectorsConfig,
+    vectors_config::Config,
+  },
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -134,8 +134,8 @@ impl QdrantStore {
     condition: &crate::types::Condition,
   ) -> Result<qdrant_client::qdrant::Condition> {
     use qdrant_client::qdrant::{
-      condition::ConditionOneOf, r#match::MatchValue, Condition as QCondition, FieldCondition,
-      Match, Range,
+      Condition as QCondition, FieldCondition, Match, Range, condition::ConditionOneOf,
+      r#match::MatchValue,
     };
 
     match condition {
@@ -148,12 +148,12 @@ impl QdrantStore {
           MetadataValue::Float(_) => {
             return Err(RAGError::invalid_input(
               "Float values not supported in Match conditions. Use Range instead.",
-            ))
+            ));
           }
           MetadataValue::Array(_) => {
             return Err(RAGError::invalid_input(
               "Array values not supported in Match conditions. Use Contains instead.",
-            ))
+            ));
           }
         };
 

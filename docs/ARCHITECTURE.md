@@ -1,11 +1,13 @@
 # AgentFlow Architecture
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 AgentFlow is a Rust workspace for deterministic workflow execution and agent-native
 runtime loops. The project is organized around a small core engine and separate
 crates for nodes, LLM access, tools, Skills, MCP, memory, tracing, visualization,
 and the CLI/server surfaces.
+
+All workspace crates use Rust 2024 edition.
 
 ## Layered Mental Model
 

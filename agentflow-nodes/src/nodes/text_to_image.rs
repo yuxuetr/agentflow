@@ -3,7 +3,7 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{providers::stepfun::Text2ImageBuilder, AgentFlow};
+use agentflow_llm::{AgentFlow, providers::stepfun::Text2ImageBuilder};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -139,10 +139,10 @@ impl TextToImageNode {
     let mut resolved = self.prompt_template.clone();
     for (key, value) in inputs {
       let placeholder = format!("{{{{{}}}}}", key);
-      if resolved.contains(&placeholder) {
-        if let FlowValue::Json(Value::String(s)) = value {
-          resolved = resolved.replace(&placeholder, s);
-        }
+      if resolved.contains(&placeholder)
+        && let FlowValue::Json(Value::String(s)) = value
+      {
+        resolved = resolved.replace(&placeholder, s);
       }
     }
     Ok(resolved)
@@ -166,10 +166,10 @@ impl TextToImageNode {
       let mut resolved_negative = neg_prompt.clone();
       for (key, value) in inputs {
         let placeholder = format!("{{{{{}}}}}", key);
-        if resolved_negative.contains(&placeholder) {
-          if let FlowValue::Json(Value::String(s)) = value {
-            resolved_negative = resolved_negative.replace(&placeholder, s);
-          }
+        if resolved_negative.contains(&placeholder)
+          && let FlowValue::Json(Value::String(s)) = value
+        {
+          resolved_negative = resolved_negative.replace(&placeholder, s);
         }
       }
       config.insert(
@@ -282,10 +282,10 @@ impl TextToImageNode {
     }
 
     // Add style reference if present
-    if let Some(ref style) = self.style_reference {
-      if let Some(ref image_url) = style.image_url {
-        image_builder = image_builder.style_reference(image_url, style.style_weight);
-      }
+    if let Some(ref style) = self.style_reference
+      && let Some(ref image_url) = style.image_url
+    {
+      image_builder = image_builder.style_reference(image_url, style.style_weight);
     }
 
     let image_request = image_builder.build();
@@ -383,16 +383,15 @@ impl TextToImageNode {
 #[async_trait]
 impl AsyncNode for TextToImageNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    if let Some(ref condition) = self.condition {
-      if let Some(FlowValue::Json(Value::String(cond))) = inputs.get(condition) {
-        if cond != "true" {
-          println!(
-            "⏭️  Skipping TextToImage node '{}' due to condition: {}",
-            self.name, cond
-          );
-          return Ok(HashMap::new());
-        }
-      }
+    if let Some(ref condition) = self.condition
+      && let Some(FlowValue::Json(Value::String(cond))) = inputs.get(condition)
+      && cond != "true"
+    {
+      println!(
+        "⏭️  Skipping TextToImage node '{}' due to condition: {}",
+        self.name, cond
+      );
+      return Ok(HashMap::new());
     }
 
     let enriched_prompt = self.resolve_prompt(inputs)?;
@@ -426,14 +425,14 @@ impl AsyncNode for TextToImageNode {
             Err(_) => {
               return Err(AgentFlowError::TimeoutExceeded {
                 duration_ms: timeout_ms,
-              })
+              });
             }
           }
         }
         Err(_) => {
           return Err(AgentFlowError::TimeoutExceeded {
             duration_ms: timeout_ms,
-          })
+          });
         }
       }
     } else {

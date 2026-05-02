@@ -3,7 +3,7 @@
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use crate::transport::{Transport, TransportClient};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// MCP client for calling tools on external servers

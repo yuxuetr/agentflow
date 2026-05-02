@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use std::str::FromStr;
 
 use crate::{MemoryError, MemoryStore, Message, Role};

@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox::SandboxPolicy};
 
 /// Execute a shell command via `sh -c` with sandbox enforcement.
 pub struct ShellTool {

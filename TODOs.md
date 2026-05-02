@@ -240,23 +240,23 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 6. Workspace Edition 统一
 
-状态: 待开始
+状态: 已完成 (2026-05-02)
 
 目标:
 
-- 解决 `agentflow-server` / `agentflow-db` 使用 Rust 2024 edition、其他 crate 使用 2021 edition 的不一致。
+- 解决 `agentflow-server` / `agentflow-db` 使用 Rust 2024 edition、其他 workspace crate 使用 2021 edition 的不一致。
 
 子任务:
 
-- [ ] 评估两条路径: 全 workspace 升到 2024，或将 server/db 暂时回退到 2021。
-- [ ] 推荐路径: 全部升到 2024，一次性吸收 edition 差异。
-- [ ] 修复 edition 升级带来的 lint / warning。
-- [ ] 更新 `CLAUDE.md` 与 `docs/ARCHITECTURE.md` 中 Rust edition 说明。
+- [x] 评估两条路径: 全 workspace 升到 2024，或将 server/db 暂时回退到 2021。
+- [x] 推荐路径: 全部升到 2024，一次性吸收 edition 差异。
+- [x] 修复 edition 升级带来的 lint / warning。
+- [x] 更新 `CLAUDE.md` 与 `docs/ARCHITECTURE.md` 中 Rust edition 说明。
 
 验收标准:
 
-- `cargo metadata` 中所有 workspace member 的 `edition` 字段一致。
-- `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- [x] `cargo metadata` 中所有 workspace member 的 `edition` 字段一致。
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ---
 
