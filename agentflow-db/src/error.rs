@@ -12,4 +12,6 @@ pub enum DbError {
     entity_type: &'static str,
     id: String,
   },
+  #[error("Migration error: {message}")]
+  MigrationError { message: String },
 }

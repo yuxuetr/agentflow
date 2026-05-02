@@ -46,7 +46,7 @@
 
 ### 1. 平台服务端最小骨架
 
-状态: 待开始
+状态: 进行中 (2026-05-03 启动；schema 与 migrations 完成)
 
 目标:
 
@@ -60,13 +60,7 @@
 
 子任务:
 
-- [ ] `agentflow-db`: 引入 sqlx-migrate 或 refinery，落实 6 张表的 schema:
-  - `runs(id, workflow, status, started_at, finished_at, run_dir, tenant_id)`
-  - `steps(run_id, node_id, kind, status, started_at, duration_ms, payload)`
-  - `events(run_id, seq, kind, payload, ts)`
-  - `artifacts(run_id, node_id, name, path_or_url, mime_type)`
-  - `skill_installs(name, version, source, installed_at, checksum)`
-  - `mcp_sessions(id, server, started_at, ended_at, tool_calls)`
+- [x] `agentflow-db`: 引入 `sqlx::migrate!()` 嵌入式迁移 + 6 张表 schema (`migrations/0001_initial_schema.sql`)：runs / steps / events / artifacts / skill_installs / mcp_sessions，附加索引 (runs_tenant_started_idx / runs_status_idx / events_run_ts_idx / artifacts_run_idx / mcp_sessions_server_idx)。`Database::connect_and_migrate(...)` 一步连接 + 应用迁移；`run_migrations()` 幂等。集成测试 (`tests/migrations.rs`) 通过 `AGENTFLOW_DATABASE_TEST_URL` env 触发，CI 默认跳过。
 - [ ] `agentflow-db`: 建立 Repository trait（`RunRepo`/`StepRepo`/`EventRepo`/`ArtifactRepo`），给 `agentflow-server` 复用。
 - [ ] `agentflow-server`: 实现路由
   - `POST /v1/runs` 提交 workflow（接受 YAML body 或 workflow_id 引用）
