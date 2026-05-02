@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentflow_llm::{AgentFlow, MultimodalMessage};
+use agentflow_llm::{AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec};
 use agentflow_memory::{MemoryStore, Message, Role};
 use agentflow_tools::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
@@ -572,10 +572,13 @@ impl ReActAgent {
 
       // --- Call LLM ---
       debug!(iteration, "Calling LLM");
-      let llm_call = AgentFlow::model(&self.config.model)
-        .multimodal_messages(messages)
-        .execute();
-      let raw_response = match (
+      let tool_specs = self.collect_tool_specs();
+      let mut builder = AgentFlow::model(&self.config.model).multimodal_messages(messages);
+      if !tool_specs.is_empty() {
+        builder = builder.tools(tool_specs);
+      }
+      let llm_call = builder.execute_full();
+      let llm_response: LLMResponse = match (
         remaining_timeout(run_started_at, timeout_ms),
         cancellation_token.clone(),
       ) {
@@ -665,6 +668,7 @@ impl ReActAgent {
         (None, None) => llm_call.await?,
       };
 
+      let raw_response = llm_response.content.clone();
       debug!(response = %raw_response, "LLM responded");
 
       // --- Check stop conditions ---
@@ -696,8 +700,19 @@ impl ReActAgent {
         ));
       }
 
-      // --- Parse response ---
-      let parsed = AgentResponse::parse(&raw_response);
+      // --- Parse response: prefer native tool_calls when present ---
+      let parsed = if let Some(call) = llm_response.tool_calls.first() {
+        if llm_response.tool_calls.len() > 1 {
+          warn!(
+            tool_calls = llm_response.tool_calls.len(),
+            "Multiple native tool calls in one response; only the first is dispatched in this iteration. \
+             Provide a model with parallel-tool-call support or wait for v0.4.0 multi-call dispatch."
+          );
+        }
+        native_tool_call_to_agent_response(call)
+      } else {
+        AgentResponse::parse(&raw_response)
+      };
 
       // Store the assistant turn
       self
@@ -1166,6 +1181,18 @@ impl ReActAgent {
     Ok(())
   }
 
+  /// Build a `Vec<ToolSpec>` from the registered tools so it can be passed to
+  /// the LLM as a native `tools` field. Returns an empty vector when no
+  /// tools are registered, in which case the LLM call is unchanged.
+  fn collect_tool_specs(&self) -> Vec<ToolSpec> {
+    self
+      .tools
+      .list()
+      .into_iter()
+      .map(|tool| ToolSpec::new(tool.name(), tool.description(), tool.parameters_schema()))
+      .collect()
+  }
+
   async fn restore_trace_memory(&mut self, prior: &AgentRunResult) -> Result<(), ReActError> {
     self.memory.clear_session(&self.session_id).await?;
     for step in &prior.steps {
@@ -1460,6 +1487,20 @@ fn is_cancelled(token: &Option<AgentCancellationToken>) -> bool {
   token
     .as_ref()
     .is_some_and(AgentCancellationToken::is_cancelled)
+}
+
+/// Convert a provider-emitted native tool call into the existing
+/// `AgentResponse::Action` shape so the rest of the ReAct loop is unchanged.
+///
+/// `thought` is left empty: native tool calls don't carry a separate
+/// reasoning field. Tool result correlation still works because the tool
+/// name + arguments are preserved verbatim.
+fn native_tool_call_to_agent_response(call: &ToolCallRequest) -> AgentResponse {
+  AgentResponse::Action {
+    thought: String::new(),
+    tool: call.name.clone(),
+    params: call.arguments.clone(),
+  }
 }
 
 fn has_unresolved_tool_call(result: &AgentRunResult) -> bool {
@@ -1825,6 +1866,93 @@ providers:
         .count(),
       4
     );
+  }
+
+  #[tokio::test]
+  async fn run_with_context_consumes_native_tool_calls_when_available() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-native-tool-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    //
+    // Drives the ReAct loop through the native tool-calling path: iteration
+    // 0 emits a tool call (via AGENTFLOW_MOCK_TOOL_CALLS), iteration 1 emits
+    // an empty batch and a JSON answer (via AGENTFLOW_MOCK_RESPONSES). The
+    // first response would be malformed JSON for the prompt parser, so a
+    // successful tool call here proves the native path was actually taken.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({
+            "id": "call_0",
+            "name": "echo",
+            "arguments": {"text": "hi"}
+          })],
+          Vec::<serde_json::Value>::new(),
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          // Iteration 0 content is irrelevant; tool_calls drive the loop.
+          "(unused — native tool call)",
+          r#"{"thought":"done","answer":"final: echo: hi"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-native-tool", "say hi", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("final: echo: hi"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    let tool_call_count = result
+      .steps
+      .iter()
+      .filter(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+      .count();
+    assert_eq!(tool_call_count, 1, "expected exactly one ToolCall step");
+
+    // SAFETY: cleanup of the dedicated mock env vars after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  #[test]
+  fn native_tool_call_to_agent_response_preserves_name_and_args() {
+    let call = ToolCallRequest {
+      id: "call_0".into(),
+      name: "echo".into(),
+      arguments: serde_json::json!({"text": "hi"}),
+    };
+    match native_tool_call_to_agent_response(&call) {
+      AgentResponse::Action {
+        thought,
+        tool,
+        params,
+      } => {
+        assert!(thought.is_empty());
+        assert_eq!(tool, "echo");
+        assert_eq!(params["text"], "hi");
+      }
+      other => panic!("expected Action, got {:?}", other),
+    }
   }
 
   #[test]

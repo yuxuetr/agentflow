@@ -44,7 +44,7 @@ impl MockProvider {
       response_queue: Arc::new(Mutex::new(load_response_queue_from_env())),
       delay_ms: 0,
       simulate_error: false,
-      tool_call_queue: Arc::new(Mutex::new(VecDeque::new())),
+      tool_call_queue: Arc::new(Mutex::new(load_tool_call_queue_from_env())),
     })
   }
 
@@ -115,6 +115,22 @@ fn load_response_queue_from_env() -> VecDeque<String> {
 
   match serde_json::from_str::<Vec<String>>(&raw) {
     Ok(responses) => responses.into(),
+    Err(_) => VecDeque::new(),
+  }
+}
+
+/// Load `AGENTFLOW_MOCK_TOOL_CALLS` as a queue of tool-call batches.
+///
+/// Format: JSON `Vec<Vec<ToolCallRequest>>`. Each outer entry is consumed
+/// FIFO on subsequent requests; an empty inner vec means "no tool calls
+/// for this request" (the model emits plain text instead). Matches the
+/// `AGENTFLOW_MOCK_RESPONSES` pattern for consistency in agent tests.
+fn load_tool_call_queue_from_env() -> VecDeque<Vec<ToolCallRequest>> {
+  let Ok(raw) = std::env::var("AGENTFLOW_MOCK_TOOL_CALLS") else {
+    return VecDeque::new();
+  };
+  match serde_json::from_str::<Vec<Vec<ToolCallRequest>>>(&raw) {
+    Ok(batches) => batches.into(),
     Err(_) => VecDeque::new(),
   }
 }

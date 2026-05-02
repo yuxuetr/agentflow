@@ -102,7 +102,7 @@ docker-compose up agentflow-server postgres
 
 ### 2. LLM 原生 Tool Calling 一等公民化
 
-状态: 进行中 (2026-05-02 启动；类型层完成)
+状态: 已完成 (2026-05-03)
 
 目标:
 
@@ -128,9 +128,9 @@ docker-compose up agentflow-server postgres
   - StepFun / Moonshot 重用 OpenAI 编解码（`tool_spec_to_openai_value` / `tool_choice_to_openai_value` / `parse_openai_tool_calls`），透传 `tools` / `tool_choice`，解析 `tool_calls` + `finish_reason`。
   - Mock 新增 `with_tool_calls(...)` 注入入口；当队列非空时 `stop_reason: ToolCalls`，否则 `Stop`。
   - 4 条新单测覆盖 Moonshot / StepFun 直通 + Mock 注入。
-- [ ] `ReActAgent::next_step()` 优先消费 `LLMResponse::tool_calls`；若为空则回退到现有 prompt 解析。
-- [ ] `PlanExecuteAgent` 同样替换 plan→tool 过渡阶段。
-- [ ] 单测覆盖: 每个 provider 的 tool calling 请求/响应 fixture；ReAct 在原生与 fallback 两条路径下的 golden trace。
+- [x] `ReActAgent` 优先消费 `LLMResponse::tool_calls`：通过 `execute_full()` 拿到结构化响应，命中时合成 `AgentResponse::Action`；为空时回退原有 JSON prompt 解析。同时 `tools(self.collect_tool_specs())` 把已注册工具透传给 LLM。
+- [x] `PlanExecuteAgent` 同样替换 plan→tool 过渡阶段：`call_planner` 返回 `LLMResponse`，命中时把每个 tool_call 映射成 `PlanExecuteStep`，否则走 `parse_plan` JSON。
+- [x] 单测覆盖: 每个 provider 的 tool calling 请求/响应 fixture（OpenAI 5 + Anthropic 4 + Google 4 + Moonshot/StepFun/Mock 4 = 17 条）；ReAct 与 Plan-Execute 各一条 native-path 端到端 golden trace（通过新 `AGENTFLOW_MOCK_TOOL_CALLS` env-var 注入）；现有 fallback 路径测试维持原状未受影响。
 
 验收标准:
 

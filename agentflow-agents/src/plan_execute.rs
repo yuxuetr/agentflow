@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentflow_llm::{AgentFlow, MultimodalMessage};
+use agentflow_llm::{AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec};
 use agentflow_memory::{MemoryStore, Message};
 use agentflow_tools::{ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
@@ -192,12 +192,20 @@ impl PlanExecuteAgent {
       }
       Err(err) => return Err(err),
     };
-    debug!(response = %planner_response, "PlanExecute planner responded");
+    let planner_text = planner_response.content.clone();
+    debug!(response = %planner_text, "PlanExecute planner responded");
     self
-      .add_memory_message(Message::assistant(&self.session_id, &planner_response))
+      .add_memory_message(Message::assistant(&self.session_id, &planner_text))
       .await?;
 
-    let plan = parse_plan(&planner_response)?;
+    let plan = if !planner_response.tool_calls.is_empty() {
+      // Native tool calls drive the plan directly: each call becomes one
+      // sequential plan step. Falls back to JSON parsing only when the
+      // model emits no tool calls (legacy prompt protocol).
+      plan_from_tool_calls(&planner_response.tool_calls)
+    } else {
+      parse_plan(&planner_text)?
+    };
     if plan.plan.len() > max_steps {
       return Ok(self.stopped_result(None, AgentStopReason::MaxSteps { max_steps }, steps, events));
     }
@@ -381,7 +389,7 @@ impl PlanExecuteAgent {
     run_started_at: Instant,
     timeout_ms: Option<u64>,
     cancellation_token: Option<AgentCancellationToken>,
-  ) -> Result<String, PlanExecuteError> {
+  ) -> Result<LLMResponse, PlanExecuteError> {
     let mut user_prompt = String::new();
     if !history.is_empty() {
       user_prompt.push_str("Conversation history:\n");
@@ -400,9 +408,12 @@ impl PlanExecuteAgent {
       MultimodalMessage::text("system", self.system_prompt()),
       MultimodalMessage::text("user", user_prompt),
     ];
-    let llm_call = AgentFlow::model(&self.config.model)
-      .multimodal_messages(messages)
-      .execute();
+    let tool_specs = self.collect_tool_specs();
+    let mut builder = AgentFlow::model(&self.config.model).multimodal_messages(messages);
+    if !tool_specs.is_empty() {
+      builder = builder.tools(tool_specs);
+    }
+    let llm_call = builder.execute_full();
 
     match (
       remaining_timeout(run_started_at, timeout_ms),
@@ -509,6 +520,18 @@ impl PlanExecuteAgent {
     prompt
   }
 
+  /// Build a `Vec<ToolSpec>` from the registered tools so it can be passed
+  /// to the planner LLM as a native `tools` field. Returns an empty vector
+  /// when no tools are registered, leaving the LLM call unchanged.
+  fn collect_tool_specs(&self) -> Vec<ToolSpec> {
+    self
+      .tools
+      .list()
+      .into_iter()
+      .map(|tool| ToolSpec::new(tool.name(), tool.description(), tool.parameters_schema()))
+      .collect()
+  }
+
   async fn add_memory_message(&mut self, message: Message) -> Result<(), PlanExecuteError> {
     let context = MemoryHookContext {
       session_id: self.session_id.clone(),
@@ -605,6 +628,27 @@ impl AgentRuntime for PlanExecuteAgent {
 
   fn runtime_name(&self) -> &'static str {
     "plan_execute"
+  }
+}
+
+/// Convert a list of native tool calls into a `PlanExecutePlan`. Each call
+/// becomes a sequential step with empty `description` and the tool's
+/// arguments as `params`. Used when the planner emits provider-native tool
+/// calls instead of a JSON plan envelope.
+fn plan_from_tool_calls(calls: &[ToolCallRequest]) -> PlanExecutePlan {
+  let plan = calls
+    .iter()
+    .enumerate()
+    .map(|(idx, call)| PlanExecuteStep {
+      id: format!("{}", idx + 1),
+      description: String::new(),
+      tool: Some(call.name.clone()),
+      params: call.arguments.clone(),
+    })
+    .collect();
+  PlanExecutePlan {
+    plan,
+    final_answer: None,
   }
 }
 
@@ -735,6 +779,78 @@ mod tests {
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
     );
+  }
+
+  #[tokio::test]
+  async fn run_consumes_native_tool_calls_when_available() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = "mock-plan-execute-native";
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    //
+    // Drives Plan-Execute through the native tool-calling path. The text
+    // content is unparseable JSON, so a successful run proves the plan
+    // came from `tool_calls` rather than `parse_plan`.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![vec![serde_json::json!({
+          "id": "call_0",
+          "name": "echo",
+          "arguments": {"text": "hi"}
+        })]])
+        .unwrap(),
+      );
+    }
+    init_mock_model(model, "(unused — native tool call)").await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new(model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new("plan-execute-native", "say hi", model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("echo: hi"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+    );
+
+    // SAFETY: cleanup of the dedicated mock env var after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+    }
+  }
+
+  #[test]
+  fn plan_from_tool_calls_maps_each_call_to_a_step() {
+    let calls = vec![
+      ToolCallRequest {
+        id: "call_0".into(),
+        name: "echo".into(),
+        arguments: serde_json::json!({"text": "a"}),
+      },
+      ToolCallRequest {
+        id: "call_1".into(),
+        name: "shell".into(),
+        arguments: serde_json::json!({"command": "ls"}),
+      },
+    ];
+    let plan = plan_from_tool_calls(&calls);
+    assert_eq!(plan.plan.len(), 2);
+    assert_eq!(plan.plan[0].tool.as_deref(), Some("echo"));
+    assert_eq!(plan.plan[0].params["text"], "a");
+    assert_eq!(plan.plan[1].tool.as_deref(), Some("shell"));
+    assert!(plan.final_answer.is_none());
   }
 
   #[tokio::test]
