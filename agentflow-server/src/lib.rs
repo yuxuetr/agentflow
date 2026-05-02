@@ -6,7 +6,10 @@
 //! and SSE plumbing; persistence lives in `agentflow-db` and execution in
 //! `agentflow-core` / `agentflow-agents`.
 
-use axum::{Json, Router, middleware, routing::get};
+use axum::{
+  Json, Router, middleware,
+  routing::{get, post},
+};
 use serde::Serialize;
 use std::sync::Arc;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -15,12 +18,17 @@ use agentflow_db::{Database, Repositories};
 
 pub mod auth;
 pub mod error;
+pub mod runs;
 
 pub use auth::{AuthConfig, require_bearer_token};
 pub use error::ApiError;
+pub use runs::{
+  CreateRunRequest, CreateRunResponse, RunContext, RunExecutor, RunResponse, StubExecutor,
+  default_executor, get_run, submit_run,
+};
 
 /// Server-wide state injected into every handler.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppState {
   pub db: Database,
   pub repos: Repositories,
@@ -31,6 +39,22 @@ pub struct AppState {
   /// `Arc` so handlers can share it without cloning the inner vec on every
   /// request.
   pub skills: Arc<Vec<String>>,
+  /// Background executor for submitted runs. `Arc<dyn _>` so production
+  /// deployments can swap in a real Flow runner while tests use
+  /// [`StubExecutor`].
+  pub executor: Arc<dyn RunExecutor>,
+}
+
+impl std::fmt::Debug for AppState {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("AppState")
+      .field("db", &self.db)
+      .field("repos", &self.repos)
+      .field("auth", &self.auth)
+      .field("skills", &self.skills)
+      .field("executor", &"<dyn RunExecutor>")
+      .finish()
+  }
 }
 
 impl AppState {
@@ -41,12 +65,19 @@ impl AppState {
       repos,
       auth: None,
       skills: Arc::new(Vec::new()),
+      executor: default_executor(),
     }
   }
 
   /// Attach an auth configuration. `None` keeps auth disabled.
   pub fn with_auth(mut self, auth: Option<AuthConfig>) -> Self {
     self.auth = auth;
+    self
+  }
+
+  /// Attach a custom run executor (e.g. wired to `agentflow-core::Flow`).
+  pub fn with_executor(mut self, executor: Arc<dyn RunExecutor>) -> Self {
+    self.executor = executor;
     self
   }
 }
@@ -64,9 +95,10 @@ pub fn create_router(state: AppState) -> Router {
     .route("/health/live", get(liveness_check))
     .route("/health/ready", get(readiness_check));
 
-  // v1 routes are populated by subsequent commits in the N8 series. The
-  // skeleton lives here so the auth + tracing layers are wired up first.
-  let v1 = Router::new().route("/v1/whoami", get(whoami));
+  let v1 = Router::new()
+    .route("/v1/whoami", get(whoami))
+    .route("/v1/runs", post(submit_run))
+    .route("/v1/runs/:id", get(get_run));
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),
