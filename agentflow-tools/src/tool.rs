@@ -112,6 +112,14 @@ mod tests {
       }]
     );
   }
+
+  #[test]
+  fn metadata_builder_records_idempotency() {
+    let metadata =
+      ToolMetadata::builtin_named("file").with_idempotency(ToolIdempotency::Idempotent);
+
+    assert_eq!(metadata.idempotency, ToolIdempotency::Idempotent);
+  }
 }
 
 /// OpenAI-compatible function definition for use in prompts or API calls
@@ -224,12 +232,26 @@ impl ToolSource {
   }
 }
 
+/// Replay safety classification for tool calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolIdempotency {
+  /// Safe to repeat with the same parameters.
+  Idempotent,
+  /// Not safe to repeat automatically because it mutates state or triggers side effects.
+  NonIdempotent,
+  /// The tool has not declared replay semantics.
+  Unknown,
+}
+
 /// Metadata used for inspection, tracing, and tool registry diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolMetadata {
   pub source: ToolSource,
   #[serde(default)]
   pub permissions: ToolPermissionSet,
+  #[serde(default)]
+  pub idempotency: ToolIdempotency,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub mcp_server_name: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +267,7 @@ impl ToolMetadata {
     Self {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::builtin(tool_name.as_ref()),
+      idempotency: builtin_tool_idempotency(tool_name.as_ref()),
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -254,6 +277,7 @@ impl ToolMetadata {
     Self {
       source: ToolSource::Script,
       permissions: ToolPermissionSet::script(),
+      idempotency: ToolIdempotency::NonIdempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -263,15 +287,22 @@ impl ToolMetadata {
     Self {
       source: ToolSource::Mcp,
       permissions: ToolPermissionSet::mcp(),
+      idempotency: ToolIdempotency::Unknown,
       mcp_server_name: Some(server_name.into()),
       mcp_tool_name: Some(tool_name.into()),
     }
+  }
+
+  pub fn with_idempotency(mut self, idempotency: ToolIdempotency) -> Self {
+    self.idempotency = idempotency;
+    self
   }
 
   pub fn workflow() -> Self {
     Self {
       source: ToolSource::Workflow,
       permissions: ToolPermissionSet::workflow(),
+      idempotency: ToolIdempotency::Unknown,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -281,6 +312,20 @@ impl ToolMetadata {
 impl Default for ToolMetadata {
   fn default() -> Self {
     Self::builtin()
+  }
+}
+
+impl Default for ToolIdempotency {
+  fn default() -> Self {
+    Self::Unknown
+  }
+}
+
+fn builtin_tool_idempotency(tool_name: &str) -> ToolIdempotency {
+  match tool_name {
+    "shell" => ToolIdempotency::NonIdempotent,
+    "file" | "http" => ToolIdempotency::Unknown,
+    _ => ToolIdempotency::Unknown,
   }
 }
 
@@ -299,6 +344,14 @@ pub trait Tool: Send + Sync {
   /// Metadata for registry inspection and diagnostics.
   fn metadata(&self) -> ToolMetadata {
     ToolMetadata::builtin()
+  }
+
+  /// Replay safety for this concrete invocation.
+  ///
+  /// Tools whose safety depends on parameters can override this method while
+  /// still exposing a conservative default through metadata.
+  fn idempotency(&self, _params: &Value) -> ToolIdempotency {
+    self.metadata().idempotency
   }
 
   /// Execute the tool and return its output

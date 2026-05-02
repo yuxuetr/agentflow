@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::{MemoryStore, Message, Role};
-use agentflow_tools::{ToolMetadata, ToolRegistry};
+use agentflow_tools::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
+use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::react::parser::AgentResponse;
@@ -310,15 +311,18 @@ impl ReActAgent {
   pub async fn resume_with_context(
     &mut self,
     context: AgentContext,
-    prior: AgentRunResult,
+    mut prior: AgentRunResult,
   ) -> Result<AgentRunResult, ReActError> {
     if prior.stop_reason.is_success() {
       return Ok(prior);
     }
+    self
+      .replay_resume_safe_unresolved_tool_calls(&mut prior)
+      .await?;
     if has_unresolved_tool_call(&prior) {
       return Err(ReActError::ToolError {
         tool: "runtime".to_string(),
-        message: "cannot resume trace with unresolved tool call; restart requires idempotent tools"
+        message: "cannot resume trace with unresolved non-idempotent or unknown tool call"
           .to_string(),
       });
     }
@@ -343,6 +347,60 @@ impl ReActAgent {
       .await?;
 
     Ok(merge_resumed_result(prior, resumed))
+  }
+
+  async fn replay_resume_safe_unresolved_tool_calls(
+    &self,
+    prior: &mut AgentRunResult,
+  ) -> Result<(), ReActError> {
+    let unresolved_calls: Vec<(usize, String, Value)> = prior
+      .steps
+      .iter()
+      .filter_map(|step| {
+        let AgentStepKind::ToolCall { tool, params } = &step.kind else {
+          return None;
+        };
+        let has_result = prior.steps.iter().any(|candidate| {
+          matches!(
+            &candidate.kind,
+            AgentStepKind::ToolResult {
+              tool: result_tool,
+              ..
+            } if result_tool == tool && candidate.index > step.index
+          )
+        });
+        if has_result {
+          None
+        } else {
+          Some((step.index, tool.clone(), params.clone()))
+        }
+      })
+      .collect();
+
+    let mut next_index = prior.steps.iter().map(|step| step.index).max().unwrap_or(0) + 1;
+
+    for (_step_index, tool, params) in unresolved_calls {
+      if !is_resume_safe_tool_call(&params) {
+        continue;
+      }
+      let execute_params = strip_agentflow_metadata(params);
+      let output = match self.tools.execute(&tool, execute_params).await {
+        Ok(output) => output,
+        Err(error) => agentflow_tools::ToolOutput::error(error.to_string()),
+      };
+      prior.steps.push(AgentStep::new(
+        next_index,
+        AgentStepKind::ToolResult {
+          tool,
+          content: output.content,
+          is_error: output.is_error,
+          parts: output.parts,
+        },
+      ));
+      next_index += 1;
+    }
+
+    Ok(())
   }
 
   /// Query memory for this agent's current session.
@@ -699,6 +757,10 @@ impl ReActAgent {
           let tool_step_index = step_index;
           let metadata = self.tools.tool_metadata(&tool);
           let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
+          let trace_params = annotate_tool_params_for_resume(
+            params.clone(),
+            self.tools.tool_idempotency(&tool, &params),
+          );
           if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
             events.push(AgentEvent::ToolPolicyDecision {
               session_id: self.session_id.clone(),
@@ -717,7 +779,7 @@ impl ReActAgent {
             session_id: self.session_id.clone(),
             step_index: tool_step_index,
             tool: tool.clone(),
-            params: params.clone(),
+            params: trace_params.clone(),
             source: tool_source.clone(),
             permissions: tool_permissions.clone(),
             timestamp: Utc::now(),
@@ -726,7 +788,7 @@ impl ReActAgent {
             tool_step_index,
             AgentStepKind::ToolCall {
               tool: tool.clone(),
-              params: params.clone(),
+              params: trace_params,
             },
           ));
           step_index += 1;
@@ -1432,6 +1494,61 @@ fn tool_event_metadata(metadata: Option<&ToolMetadata>) -> (Option<String>, Vec<
   }
 }
 
+fn annotate_tool_params_for_resume(
+  mut params: Value,
+  idempotency: Option<ToolIdempotency>,
+) -> Value {
+  let Some(idempotency) = idempotency else {
+    return params;
+  };
+  let side_effect_class = match idempotency {
+    ToolIdempotency::Idempotent => "idempotent",
+    ToolIdempotency::NonIdempotent => "mutating",
+    ToolIdempotency::Unknown => return params,
+  };
+
+  let Value::Object(map) = &mut params else {
+    return json!({
+      "value": params,
+      "_agentflow": {
+        "side_effect_class": side_effect_class
+      }
+    });
+  };
+
+  let mut metadata = map.remove("_agentflow").unwrap_or_else(|| json!({}));
+  if !metadata.is_object() {
+    metadata = json!({});
+  }
+  if let Value::Object(metadata_map) = &mut metadata {
+    metadata_map
+      .entry("side_effect_class".to_string())
+      .or_insert_with(|| json!(side_effect_class));
+  }
+  map.insert("_agentflow".to_string(), metadata);
+  params
+}
+
+fn is_resume_safe_tool_call(params: &Value) -> bool {
+  matches!(
+    params
+      .get("_agentflow")
+      .and_then(|metadata| metadata.get("side_effect_class"))
+      .or_else(|| params.get("side_effect_class"))
+      .and_then(Value::as_str),
+    Some("read_only") | Some("idempotent")
+  )
+}
+
+fn strip_agentflow_metadata(mut params: Value) -> Value {
+  let Value::Object(map) = &mut params else {
+    return params;
+  };
+  map.remove("_agentflow");
+  map.remove("side_effect_class");
+  params
+}
+
 fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) -> AgentRunResult {
   let step_offset = prior
     .steps
@@ -1588,6 +1705,10 @@ mod tests {
       })
     }
 
+    fn idempotency(&self, _params: &Value) -> ToolIdempotency {
+      ToolIdempotency::Idempotent
+    }
+
     async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
       self.calls.fetch_add(1, Ordering::SeqCst);
       Ok(ToolOutput::success(format!(
@@ -1693,6 +1814,19 @@ providers:
     );
   }
 
+  #[test]
+  fn tool_params_annotation_maps_idempotency_to_resume_metadata() {
+    let params = annotate_tool_params_for_resume(
+      json!({"url": "https://example.test"}),
+      Some(ToolIdempotency::Idempotent),
+    );
+
+    assert_eq!(
+      params["_agentflow"]["side_effect_class"],
+      json!("idempotent")
+    );
+  }
+
   #[tokio::test]
   async fn resume_with_context_reuses_recorded_tool_result_without_replay() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
@@ -1760,6 +1894,67 @@ providers:
     assert_eq!(result.answer.as_deref(), Some("final: echo: hi"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
     assert!(result.steps.len() > 3);
+  }
+
+  #[tokio::test]
+  async fn resume_with_context_replays_unresolved_idempotent_tool_call() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-resume-replay-{}", uuid::Uuid::new_v4());
+    std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    std::env::set_var(
+      "AGENTFLOW_MOCK_RESPONSE",
+      r#"{"thought":"use recovered replay","answer":"final: echo: hi"}"#,
+    );
+    init_mock_model(&model).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: calls.clone(),
+    }));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let prior = AgentRunResult {
+      session_id: "resume-replay-session".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "counting_echo".to_string(),
+          params: json!({
+            "text": "hi",
+            "_agentflow": {
+              "side_effect_class": "idempotent"
+            }
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let result = agent
+      .resume_with_context(
+        AgentContext::new("resume-replay-session", "finish", &model),
+        prior,
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(result.steps.iter().any(|step| {
+      matches!(
+        &step.kind,
+        AgentStepKind::ToolResult { tool, .. } if tool == "counting_echo"
+      )
+    }));
+    assert_eq!(result.answer.as_deref(), Some("final: echo: hi"));
   }
 
   #[tokio::test]

@@ -1,7 +1,7 @@
 use agentflow_mcp::client::{
   validate_tool_arguments, ClientBuilder, Content, MCPClient, Tool as McpTool,
 };
-use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
+use agentflow_tools::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -202,6 +202,7 @@ impl Tool for McpToolAdapter {
 
   fn metadata(&self) -> ToolMetadata {
     ToolMetadata::mcp(self.pool.server_name(), &self.remote_name)
+      .with_idempotency(mcp_tool_idempotency(&self.description, &self.input_schema))
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
@@ -216,6 +217,35 @@ impl Tool for McpToolAdapter {
 
     self.pool.call_tool(&self.remote_name, params).await
   }
+}
+
+fn mcp_tool_idempotency(description: &str, input_schema: &Value) -> ToolIdempotency {
+  if has_idempotency_hint(input_schema, "idempotent")
+    || description_contains(description, "[idempotent]")
+  {
+    return ToolIdempotency::Idempotent;
+  }
+  if has_idempotency_hint(input_schema, "non_idempotent")
+    || has_idempotency_hint(input_schema, "non-idempotent")
+    || description_contains(description, "[non_idempotent]")
+    || description_contains(description, "[non-idempotent]")
+  {
+    return ToolIdempotency::NonIdempotent;
+  }
+  ToolIdempotency::Unknown
+}
+
+fn description_contains(description: &str, needle: &str) -> bool {
+  description.to_ascii_lowercase().contains(needle)
+}
+
+fn has_idempotency_hint(input_schema: &Value, expected: &str) -> bool {
+  input_schema
+    .get("x-agentflow-idempotency")
+    .or_else(|| input_schema.get("x_idempotency"))
+    .or_else(|| input_schema.get("idempotency"))
+    .and_then(Value::as_str)
+    .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
 pub fn public_tool_name(server_name: &str, tool_name: &str) -> String {
@@ -412,6 +442,31 @@ mod tests {
     assert_eq!(
       definition.metadata.mcp_tool_name.as_deref(),
       Some("echo/raw")
+    );
+  }
+
+  #[test]
+  fn mcp_adapter_metadata_reads_idempotency_hints() {
+    let pool = Arc::new(McpClientPool::new(McpServerConfig {
+      name: "local-demo".to_string(),
+      command: "python3".to_string(),
+      args: vec![],
+      env: Default::default(),
+      timeout_secs: None,
+      max_concurrent_calls: None,
+    }));
+    let adapter = McpToolAdapter::new(
+      pool,
+      McpTool {
+        name: "search".to_string(),
+        description: Some("Search docs [idempotent]".to_string()),
+        input_schema: serde_json::json!({"type": "object"}),
+      },
+    );
+
+    assert_eq!(
+      adapter.definition().metadata.idempotency,
+      ToolIdempotency::Idempotent
     );
   }
 

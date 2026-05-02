@@ -345,11 +345,7 @@ fn extract_tool_resume_records(result: &AgentRunResult) -> Vec<AgentNodeToolResu
     });
     let idempotency_key = tool_idempotency_key(params);
     let side_effect_class = tool_side_effect_class(params);
-    let replay_policy = tool_replay_policy(
-      result_step.is_some(),
-      &side_effect_class,
-      idempotency_key.as_deref(),
-    );
+    let replay_policy = tool_replay_policy(result_step.is_some(), &side_effect_class);
 
     records.push(AgentNodeToolResumeRecord {
       call_id: tool_call_id(&result.session_id, step.index, tool),
@@ -369,7 +365,6 @@ fn extract_tool_resume_records(result: &AgentRunResult) -> Vec<AgentNodeToolResu
 fn tool_replay_policy(
   has_recorded_result: bool,
   side_effect_class: &AgentNodeToolSideEffectClass,
-  idempotency_key: Option<&str>,
 ) -> AgentNodeToolReplayPolicy {
   if has_recorded_result {
     return AgentNodeToolReplayPolicy::ReuseRecordedResult;
@@ -377,12 +372,10 @@ fn tool_replay_policy(
 
   match side_effect_class {
     AgentNodeToolSideEffectClass::ReadOnly => AgentNodeToolReplayPolicy::ReplayAllowed,
-    AgentNodeToolSideEffectClass::Idempotent if idempotency_key.is_some() => {
-      AgentNodeToolReplayPolicy::ReplayAllowed
+    AgentNodeToolSideEffectClass::Idempotent => AgentNodeToolReplayPolicy::ReplayAllowed,
+    AgentNodeToolSideEffectClass::Mutating | AgentNodeToolSideEffectClass::External => {
+      AgentNodeToolReplayPolicy::ManualRequired
     }
-    AgentNodeToolSideEffectClass::Idempotent
-    | AgentNodeToolSideEffectClass::Mutating
-    | AgentNodeToolSideEffectClass::External => AgentNodeToolReplayPolicy::ManualRequired,
   }
 }
 
@@ -662,6 +655,41 @@ mod tests {
     assert_eq!(
       contract.tool_calls[0].side_effect_class,
       AgentNodeToolSideEffectClass::ReadOnly
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReplayAllowed
+    );
+  }
+
+  #[test]
+  fn resume_contract_allows_unresolved_idempotent_tool_replay() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "http".to_string(),
+          params: json!({
+            "url": "https://example.test",
+            "_agentflow": {
+              "side_effect_class": "idempotent"
+            }
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::Idempotent
     );
     assert_eq!(
       contract.tool_calls[0].replay_policy,

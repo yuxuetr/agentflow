@@ -150,7 +150,7 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 3. Tool 幂等性与 Partial Resume 自动重放
 
-状态: 待开始
+状态: 已完成
 
 目标:
 
@@ -159,11 +159,11 @@ cargo run -p agentflow-agents --example react_agent
 
 子任务:
 
-- [ ] 在 `agentflow-tools::ToolMetadata` 增加 `idempotency: Idempotency::{Idempotent, NonIdempotent, Unknown}`。
-- [ ] 内置工具默认值: `FileTool::read = Idempotent`, `FileTool::write = NonIdempotent`, `HttpTool::GET = Idempotent`, `HttpTool::POST = NonIdempotent`, `ShellTool = NonIdempotent`。
-- [ ] MCP tool adapter 通过约定 hint（如 `description` 中 `[idempotent]` 标签或 inputSchema 自定义字段）传递。
-- [ ] `AgentNodeResumeContract`: Idempotent 工具自动重放，NonIdempotent 拒绝并给出明确报错，Unknown 拒绝并提示用户显式标注。
-- [ ] 新增测试: partial resume 跨 Idempotent/NonIdempotent/Unknown 三种 tool 路径。
+- [x] 在 `agentflow-tools::ToolMetadata` 增加 `idempotency: ToolIdempotency::{Idempotent, NonIdempotent, Unknown}`。
+- [x] 内置工具默认值: `FileTool::read/list = Idempotent`, `FileTool::write = NonIdempotent`, `HttpTool::GET = Idempotent`, `HttpTool::POST = NonIdempotent`, `ShellTool = NonIdempotent`。
+- [x] MCP tool adapter 通过约定 hint（如 `description` 中 `[idempotent]` 标签或 inputSchema 自定义字段）传递。
+- [x] `AgentNodeResumeContract`: Idempotent 工具自动重放，NonIdempotent 拒绝并给出明确报错，Unknown 拒绝并提示用户显式标注。
+- [x] 新增测试: partial resume 跨 Idempotent/NonIdempotent/Unknown 三种 tool 路径。
 
 验收标准:
 

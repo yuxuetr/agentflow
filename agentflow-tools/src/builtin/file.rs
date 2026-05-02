@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolMetadata, ToolOutput};
+use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
 /// Read, write, and list filesystem entries with sandbox path enforcement.
 pub struct FileTool {
@@ -57,6 +57,14 @@ impl Tool for FileTool {
 
   fn metadata(&self) -> ToolMetadata {
     ToolMetadata::builtin_named(self.name())
+  }
+
+  fn idempotency(&self, params: &Value) -> ToolIdempotency {
+    match params["operation"].as_str() {
+      Some("read") | Some("list") => ToolIdempotency::Idempotent,
+      Some("write") => ToolIdempotency::NonIdempotent,
+      _ => ToolIdempotency::Unknown,
+    }
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

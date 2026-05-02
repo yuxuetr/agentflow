@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolMetadata, ToolOutput};
+use crate::{sandbox::SandboxPolicy, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
 /// Make HTTP GET / POST requests with domain sandbox enforcement.
 pub struct HttpTool {
@@ -79,6 +79,14 @@ impl Tool for HttpTool {
 
   fn metadata(&self) -> ToolMetadata {
     ToolMetadata::builtin_named(self.name())
+  }
+
+  fn idempotency(&self, params: &Value) -> ToolIdempotency {
+    match params["method"].as_str().unwrap_or("GET") {
+      "GET" => ToolIdempotency::Idempotent,
+      "POST" => ToolIdempotency::NonIdempotent,
+      _ => ToolIdempotency::Unknown,
+    }
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

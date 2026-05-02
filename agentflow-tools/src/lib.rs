@@ -30,6 +30,6 @@ pub use policy::{ToolPolicy, ToolPolicyDecision};
 pub use registry::ToolRegistry;
 pub use sandbox::SandboxPolicy;
 pub use tool::{
-  Tool, ToolCall, ToolDefinition, ToolMetadata, ToolOutput, ToolOutputPart, ToolPermission,
-  ToolPermissionSet, ToolSource,
+  Tool, ToolCall, ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,
+  ToolPermission, ToolPermissionSet, ToolSource,
 };

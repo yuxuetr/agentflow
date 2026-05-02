@@ -318,22 +318,24 @@ pub struct Checkpoint {
 
 ### FlowValue State
 
-Checkpoint state stores node outputs using the same stable JSON representation
-as workflow result serialization. `FlowValue::Json` is stored as its raw JSON
-value. File and URL references are stored as tagged JSON objects so resume can
-restore the original `FlowValue` type:
+Checkpoint state stores node outputs using a stable tagged `FlowValue`
+representation so resume can restore the original value variant:
 
 ```json
 {
   "artifact": {
-    "$type": "file",
+    "type": "file",
     "path": "/tmp/report.md",
     "mime_type": "text/markdown"
   },
   "source": {
-    "$type": "url",
+    "type": "url",
     "url": "https://example.com/data.json",
     "mime_type": "application/json"
+  },
+  "records": {
+    "type": "json",
+    "value": [1, 2, 3]
   }
 }
 ```
@@ -395,13 +397,16 @@ Default replay policy:
   should inject the recorded observation and must not call the tool again.
 - `read_only` calls without a result use `replay_allowed`.
 - `idempotent` calls without a result use `replay_allowed` only when an
-  `idempotency_key` is present; otherwise they use `manual_required`.
+  agent trace or tool metadata marks the concrete invocation as idempotent.
 - `mutating` and `external` calls without a result default to `manual_required`.
 
 These defaults deliberately prefer manual recovery over hidden side effects.
-Future tool manifests can make the side-effect class and idempotency key
-explicit at registration time; until then unknown tools are treated as
-`external`.
+`ToolMetadata.idempotency` and `Tool::idempotency(params)` provide the
+registration-time signal. Built-in HTTP `GET` and file `read` / `list`
+operations are idempotent; HTTP `POST`, file `write`, shell, and script tools
+are non-idempotent. MCP adapters can pass hints with `[idempotent]`,
+`[non-idempotent]`, or `x-agentflow-idempotency` in the input schema.
+Unknown tools are treated as `external`.
 
 `AgentNode` can consume a previous `agent_result` as input. If the trace has no
 unresolved tool calls, it restores the prior observations into memory and asks

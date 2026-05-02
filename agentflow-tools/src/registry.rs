@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::{
-  Tool, ToolError, ToolMetadata, ToolOutput, ToolPermission, ToolPolicy, ToolPolicyDecision,
+  Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolPermission, ToolPolicy,
+  ToolPolicyDecision,
 };
 
 /// Central registry for all available tools.
@@ -69,6 +70,11 @@ impl ToolRegistry {
   /// Return metadata for a registered tool.
   pub fn tool_metadata(&self, name: &str) -> Option<ToolMetadata> {
     self.tools.get(name).map(|tool| tool.metadata())
+  }
+
+  /// Return replay safety for a concrete tool invocation.
+  pub fn tool_idempotency(&self, name: &str, params: &Value) -> Option<ToolIdempotency> {
+    self.tools.get(name).map(|tool| tool.idempotency(params))
   }
 
   pub fn evaluate_policy(
@@ -152,7 +158,9 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{ToolDefinition, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
+  use crate::{
+    ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource,
+  };
   use async_trait::async_trait;
   use serde_json::json;
 
@@ -214,9 +222,24 @@ mod tests {
     let value = serde_json::to_value(definition).unwrap();
 
     assert_eq!(value["metadata"]["source"], json!("mcp"));
+    assert_eq!(value["metadata"]["idempotency"], json!("unknown"));
     assert_eq!(
       value["metadata"]["permissions"]["permissions"],
       json!(["mcp", "network"])
+    );
+  }
+
+  #[test]
+  fn registry_reports_invocation_idempotency() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "lookup",
+      metadata: ToolMetadata::builtin_named("lookup").with_idempotency(ToolIdempotency::Idempotent),
+    }));
+
+    assert_eq!(
+      registry.tool_idempotency("lookup", &json!({})),
+      Some(ToolIdempotency::Idempotent)
     );
   }
 
