@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-01
+最后更新: 2026-05-02
 
 维护约定:
 
@@ -208,7 +208,7 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 5. 表达式引擎升级
 
-状态: 待开始
+状态: 已完成 (2026-05-02)
 
 目标:
 
@@ -217,20 +217,20 @@ cargo run -p agentflow-agents --example react_agent
 
 子任务:
 
-- [ ] 评估 `evalexpr` (现成 crate) vs 自研 PEG: 对比表达力、依赖大小、错误信息、安全模型。
-- [ ] 选择方案后，在 `agentflow-core/src/expr.rs` 实现统一 `evaluate(expr: &str, state: &StatePool) -> Result<FlowValue>`。
-- [ ] 支持运算符: `&&`, `||`, `!`, `==`, `!=`, `>`, `<`, `>=`, `<=`, `+`, `-`, `*`, `/`。
-- [ ] 支持函数: `len(x)`, `contains(s, sub)`, `is_null(x)`, `is_empty(x)`, `to_number(x)`, `to_string(x)`。
-- [ ] 路径访问: `nodes.X.outputs.Y`, `inputs.Z`, `nodes.X.outputs.Y.0`（数组索引）。
-- [ ] 替换 `flow.rs::evaluate_condition` 调用点，保留旧行为兼容（仅当表达式不含新语法时）。
-- [ ] 文档: `docs/EXPRESSION_LANGUAGE.md` 给完整参考 + 示例。
-- [ ] CLI `workflow validate --strict` 校验所有 `run_if` / `while.condition` 表达式是否能编译。
+- [x] 评估 `evalexpr` (现成 crate) vs 自研 PEG: 对比表达力、依赖大小、错误信息、安全模型。
+- [x] 选择方案后，在 `agentflow-core/src/expr.rs` 实现统一 `evaluate(expr: &str, state: &StatePool) -> Result<FlowValue>`。
+- [x] 支持运算符: `&&`, `||`, `!`, `==`, `!=`, `>`, `<`, `>=`, `<=`, `+`, `-`, `*`, `/`。
+- [x] 支持函数: `len(x)`, `contains(s, sub)`, `is_null(x)`, `is_empty(x)`, `to_number(x)`, `to_string(x)`。
+- [x] 路径访问: `nodes.X.outputs.Y`, `inputs.Z`, `nodes.X.outputs.Y.0`（数组索引）。
+- [x] 替换 `flow.rs::evaluate_condition` 调用点，保留旧行为兼容（`{{ value }}` 与简单布尔路径继续可用）。
+- [x] 文档: `docs/EXPRESSION_LANGUAGE.md` 给完整参考 + 示例。
+- [x] CLI `workflow validate --strict` 校验所有 `run_if` / `while.condition` 表达式是否能编译。
 
 验收标准:
 
-- `run_if: "len(nodes.search.outputs.items) > 0 && nodes.classify.outputs.score > 0.7"` 能正确求值。
-- 错误表达式给出行列号与上下文提示，类似 `Error at col 5: unknown function 'lenn', did you mean 'len'?`。
-- 已有 workflow 在不修改 YAML 的前提下继续工作。
+- [x] `run_if: "len(nodes.search.outputs.items) > 0 && nodes.classify.outputs.score > 0.7"` 能正确求值。
+- [x] 错误表达式给出列号与上下文提示，类似 `Error at col 1: unknown function 'lenn', did you mean 'len'?`。
+- [x] 已有 workflow 在不修改 YAML 的前提下继续工作。
 
 涉及文件:
 

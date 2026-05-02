@@ -15,6 +15,8 @@ agentflow workflow validate path/to/workflow.yml --strict
 - `--format json` 输出 `workflow`、`valid`、`issues`、`warnings`，供脚本和 server 复用。
 - `workflow run` 和 `workflow run --dry-run` 会在构建 graph 前执行同一套 schema validation。
 - `workflow debug --validate` 会复用同一套 schema validation，并叠加依赖和结构分析。
+- `run_if` 与 `while.parameters.condition` 使用统一表达式语言；参考
+  `docs/EXPRESSION_LANGUAGE.md`。`--strict` 会编译这些表达式并报告列号。
 
 ## 通用规则
 
@@ -63,3 +65,17 @@ agentflow workflow validate path/to/workflow.yml --strict
 - `map.parameters.template` 必须是 workflow node definition 列表。
 - `while.parameters.do` 必须是 workflow node definition 列表。
 - 嵌套节点复用普通节点的 required 参数、类型和 unknown parameter 校验规则。
+
+## 条件表达式
+
+`run_if` 和 `while.parameters.condition` 支持布尔、比较、算术和函数调用:
+
+```yaml
+run_if: "len(nodes.search.outputs.items) > 0 && nodes.classify.outputs.score > 0.7"
+
+parameters:
+  condition: "{{ count < 3 }}"
+```
+
+支持的路径包括 `nodes.X.outputs.Y`、`inputs.Z`、数组索引
+`nodes.X.outputs.items.0`，以及 while loop 输入的简写形式 `count`。

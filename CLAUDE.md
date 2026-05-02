@@ -255,7 +255,7 @@ pub enum LLMError {
 - LLM `tool_calls` / `tool_choice` first-class in `agentflow-llm` (provider-native via OpenAI tools / Anthropic tool_use / Google function declarations, prompt fallback)
 - `Tool` idempotency metadata for partial-resume auto-replay
 - `FlowValue::File` / `Url` checkpoint round-trip type fidelity
-- Expression engine upgrade for `run_if` / `while.condition`
+- Expression engine upgrade for `run_if` / `while.condition` ✅
 - Workspace edition unified on Rust 2024
 
 **N9 — Multi-agent collaboration + ecosystem (v0.4.0 candidate):**

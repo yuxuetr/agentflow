@@ -6,6 +6,7 @@
 pub mod async_node;
 pub mod error;
 pub mod error_context;
+pub mod expr;
 pub mod flow;
 pub mod node;
 pub mod value;

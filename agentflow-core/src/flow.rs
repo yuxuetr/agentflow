@@ -3,6 +3,7 @@ use crate::{
   checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus},
   error::AgentFlowError,
   events::{EventListener, WorkflowEvent},
+  expr,
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
   value::FlowValue,
 };
@@ -791,6 +792,7 @@ impl Flow {
     Box::pin(async move {
       let mut loop_inputs = inputs.clone();
       let mut iteration_count = 0u32;
+      let empty_state_pool = HashMap::new();
 
       while iteration_count < max_iterations {
         println!(
@@ -798,22 +800,12 @@ impl Flow {
           iteration_count + 1,
           loop_inputs
         );
-        let mut resolved_condition = condition_template.to_string();
-        for (key, value) in &loop_inputs {
-          let placeholder = format!("{{{{{}}}}}", key);
-          if resolved_condition.contains(&placeholder) {
-            let replacement = match value {
-              FlowValue::Json(Value::String(s)) => s.clone(),
-              FlowValue::Json(Value::Bool(b)) => b.to_string(),
-              FlowValue::Json(v) => v.to_string().trim_matches('"').to_string(),
-              _ => "".to_string(),
-            };
-            resolved_condition = resolved_condition.replace(&placeholder, &replacement);
-          }
-        }
-        let condition_value = !resolved_condition.is_empty()
-          && resolved_condition.to_lowercase() != "false"
-          && resolved_condition.to_lowercase() != "0";
+        let condition_value =
+          expr::evaluate_bool(condition_template, &empty_state_pool, &loop_inputs).map_err(
+            |err| AgentFlowError::FlowDefinitionError {
+              message: format!("Invalid while.condition '{}': {}", condition_template, err),
+            },
+          )?;
 
         if !condition_value {
           break;
@@ -1045,130 +1037,13 @@ impl Flow {
     condition: &str,
     state_pool: &HashMap<String, AsyncNodeResult>,
   ) -> Result<bool, AgentFlowError> {
-    let expr = condition
-      .trim_start_matches("{{ ")
-      .trim_end_matches(" }}")
-      .trim();
-    println!("🔍 Evaluating condition: '{}'", expr);
-
-    // Check for comparison operators
-    if expr.contains("!=") {
-      let parts: Vec<&str> = expr.split("!=").map(|s| s.trim()).collect();
-      if parts.len() == 2 {
-        let left_val = self.evaluate_condition_value(parts[0], state_pool)?;
-        let right_val = self.evaluate_condition_literal(parts[1])?;
-        let result = left_val != right_val;
-        println!(
-          "🔍 Comparison: '{}' != '{}' = {}",
-          left_val, right_val, result
-        );
-        return Ok(result);
+    let normalized = expr::normalize_expression(condition);
+    println!("🔍 Evaluating condition: '{}'", normalized);
+    expr::evaluate_bool(condition, state_pool, &HashMap::new()).map_err(|err| {
+      AgentFlowError::FlowDefinitionError {
+        message: format!("Invalid run_if '{}': {}", condition, err),
       }
-    } else if expr.contains("==") {
-      let parts: Vec<&str> = expr.split("==").map(|s| s.trim()).collect();
-      if parts.len() == 2 {
-        let left_val = self.evaluate_condition_value(parts[0], state_pool)?;
-        let right_val = self.evaluate_condition_literal(parts[1])?;
-        let result = left_val == right_val;
-        println!(
-          "🔍 Comparison: '{}' == '{}' = {}",
-          left_val, right_val, result
-        );
-        return Ok(result);
-      }
-    }
-
-    // Simple path reference (no operators)
-    let parts: Vec<&str> = expr.split('.').collect();
-    if parts.len() != 4 || parts[0] != "nodes" || parts[2] != "outputs" {
-      return Err(AgentFlowError::FlowDefinitionError {
-        message: format!("Invalid run_if path: {}", expr),
-      });
-    }
-    let node_id = parts[1];
-    let output_name = parts[3];
-
-    let source_result =
-      state_pool
-        .get(node_id)
-        .ok_or_else(|| AgentFlowError::FlowDefinitionError {
-          message: format!(
-            "Node '{}' referenced in condition not found in state.",
-            node_id
-          ),
-        })?;
-
-    match source_result {
-      Ok(outputs) => {
-        let value = match outputs.get(output_name) {
-          Some(v) => v,
-          None => return Ok(false),
-        };
-        match value {
-          FlowValue::Json(Value::Bool(b)) => Ok(*b),
-          FlowValue::Json(Value::String(s)) => Ok(s.to_lowercase() == "true"),
-          _ => Ok(false),
-        }
-      }
-      Err(AgentFlowError::NodeSkipped) => Ok(false),
-      Err(e) => Err(e.clone()),
-    }
-  }
-
-  fn evaluate_condition_value(
-    &self,
-    path: &str,
-    state_pool: &HashMap<String, AsyncNodeResult>,
-  ) -> Result<String, AgentFlowError> {
-    let parts: Vec<&str> = path.split('.').collect();
-    if parts.len() != 4 || parts[0] != "nodes" || parts[2] != "outputs" {
-      return Err(AgentFlowError::FlowDefinitionError {
-        message: format!("Invalid path in condition: {}", path),
-      });
-    }
-    let node_id = parts[1];
-    let output_name = parts[3];
-
-    let source_result =
-      state_pool
-        .get(node_id)
-        .ok_or_else(|| AgentFlowError::FlowDefinitionError {
-          message: format!(
-            "Node '{}' referenced in condition not found in state.",
-            node_id
-          ),
-        })?;
-
-    match source_result {
-      Ok(outputs) => {
-        let value =
-          outputs
-            .get(output_name)
-            .ok_or_else(|| AgentFlowError::FlowDefinitionError {
-              message: format!("Output '{}' not found in node '{}'", output_name, node_id),
-            })?;
-        match value {
-          FlowValue::Json(Value::String(s)) => Ok(s.clone()),
-          FlowValue::Json(Value::Number(n)) => Ok(n.to_string()),
-          FlowValue::Json(Value::Bool(b)) => Ok(b.to_string()),
-          FlowValue::Json(v) => Ok(v.to_string()),
-          _ => Ok(String::new()),
-        }
-      }
-      Err(e) => Err(e.clone()),
-    }
-  }
-
-  fn evaluate_condition_literal(&self, literal: &str) -> Result<String, AgentFlowError> {
-    // Remove quotes from string literals
-    let trimmed = literal.trim();
-    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-      || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-    {
-      Ok(trimmed[1..trimmed.len() - 1].to_string())
-    } else {
-      Ok(trimmed.to_string())
-    }
+    })
   }
 
   fn find_exit_nodes(&self) -> Vec<String> {
@@ -2267,5 +2142,104 @@ mod tests {
     // Iteration 3: count=2, sets count=3, continue=false (2 < 2 = false)
     // Next iteration checks: continue=false, loop exits
     assert_eq!(count, 3);
+  }
+
+  #[tokio::test]
+  async fn run_if_supports_compound_expression_language() {
+    use_writable_home();
+
+    struct SearchNode;
+    #[async_trait]
+    impl AsyncNode for SearchNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::from([
+          (
+            "items".to_string(),
+            FlowValue::Json(json!(["alpha", "beta"])),
+          ),
+          ("score".to_string(), FlowValue::Json(json!(0.8))),
+        ]))
+      }
+    }
+
+    struct MarkerNode;
+    #[async_trait]
+    impl AsyncNode for MarkerNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::from([(
+          "ran".to_string(),
+          FlowValue::Json(json!(true)),
+        )]))
+      }
+    }
+
+    let search = GraphNode {
+      id: "search".to_string(),
+      node_type: NodeType::Standard(Arc::new(SearchNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let classify = GraphNode {
+      id: "classify".to_string(),
+      node_type: NodeType::Standard(Arc::new(MarkerNode)),
+      dependencies: vec!["search".to_string()],
+      input_mapping: None,
+      run_if: Some(
+        "len(nodes.search.outputs.items) > 0 && nodes.search.outputs.score > 0.7".to_string(),
+      ),
+      initial_inputs: HashMap::new(),
+    };
+
+    let state = Flow::new(vec![search, classify]).run().await.unwrap();
+    assert!(state.get("classify").unwrap().is_ok());
+  }
+
+  #[tokio::test]
+  async fn while_condition_supports_numeric_expression() {
+    use_writable_home();
+
+    struct IncrementNode;
+    #[async_trait]
+    impl AsyncNode for IncrementNode {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let count = match inputs.get("count") {
+          Some(FlowValue::Json(Value::Number(n))) => n.as_i64().unwrap(),
+          _ => 0,
+        };
+        Ok(HashMap::from([(
+          "count".to_string(),
+          FlowValue::Json(json!(count + 1)),
+        )]))
+      }
+    }
+
+    let increment_node = GraphNode {
+      id: "increment".to_string(),
+      node_type: NodeType::Standard(Arc::new(IncrementNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let while_node = GraphNode {
+      id: "while_loop".to_string(),
+      node_type: NodeType::While {
+        condition: "{{ count < 3 }}".to_string(),
+        max_iterations: 10,
+        template: vec![increment_node],
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::from([("count".to_string(), FlowValue::Json(json!(0)))]),
+    };
+
+    let final_state = Flow::new(vec![while_node]).run().await.unwrap();
+    let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
+    assert_eq!(while_result.get("count"), Some(&FlowValue::Json(json!(3))));
   }
 }

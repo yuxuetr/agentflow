@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
+use agentflow_core::expr;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -191,6 +192,27 @@ fn validate_node_schema(
         UnknownParameterMode::Error => report.issues.push(message),
       }
     }
+  }
+
+  if let Some(run_if) = &node.run_if
+    && let Err(err) = expr::compile(run_if)
+  {
+    report
+      .issues
+      .push(format!("{}.{}.run_if is invalid: {}", path, node.id, err));
+  }
+
+  if node.node_type == "while"
+    && let Some(condition) = node
+      .parameters
+      .get("condition")
+      .and_then(serde_yaml::Value::as_str)
+    && let Err(err) = expr::compile(condition)
+  {
+    report.issues.push(format!(
+      "{}.{}.parameters.condition is invalid: {}",
+      path, node.id, err
+    ));
   }
 
   match node.node_type.as_str() {
@@ -541,6 +563,35 @@ nodes:
         .issues
         .iter()
         .any(|issue| issue.contains("nodes[1].parameters.input_template must be a string"))
+    );
+  }
+
+  #[test]
+  fn strict_validation_compiles_condition_expressions() {
+    let flow = parse_workflow(
+      r#"
+name: Bad Condition
+nodes:
+  - id: answer
+    type: llm
+    run_if: "lenn(nodes.search.outputs.items) > 0"
+    parameters:
+      prompt: "Say hello"
+"#,
+    );
+
+    let report = validate_flow_definition_with_options(
+      &flow,
+      WorkflowValidationOptions {
+        unknown_parameters: UnknownParameterMode::Error,
+      },
+    );
+
+    assert!(
+      report
+        .issues
+        .iter()
+        .any(|issue| issue.contains("unknown function 'lenn'"))
     );
   }
 }
