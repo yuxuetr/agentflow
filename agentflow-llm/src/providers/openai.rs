@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -61,8 +62,78 @@ impl OpenAIProvider {
       body[key] = value.clone();
     }
 
+    if let Some(tools) = &request.tools {
+      body["tools"] = Value::Array(tools.iter().map(tool_spec_to_openai_value).collect());
+    }
+    if let Some(choice) = &request.tool_choice {
+      body["tool_choice"] = tool_choice_to_openai_value(choice);
+    }
+
     body
   }
+}
+
+/// Encode a `ToolSpec` as the OpenAI `{ "type": "function", "function": ... }`
+/// wire format.
+pub(crate) fn tool_spec_to_openai_value(spec: &ToolSpec) -> Value {
+  json!({
+    "type": "function",
+    "function": {
+      "name": spec.name,
+      "description": spec.description,
+      "parameters": spec.parameters,
+    }
+  })
+}
+
+/// Encode a `ToolChoice` as the OpenAI `tool_choice` wire format.
+pub(crate) fn tool_choice_to_openai_value(choice: &ToolChoice) -> Value {
+  match choice {
+    ToolChoice::Auto => Value::String("auto".to_string()),
+    ToolChoice::None => Value::String("none".to_string()),
+    ToolChoice::Required => Value::String("required".to_string()),
+    ToolChoice::Tool { name } => json!({
+      "type": "function",
+      "function": { "name": name }
+    }),
+  }
+}
+
+/// Decode OpenAI `tool_calls` array into typed `ToolCallRequest`s.
+///
+/// OpenAI returns `arguments` as a JSON-encoded string; we parse it eagerly so
+/// callers don't need to know the wire format. Malformed JSON falls back to a
+/// `Value::String` of the raw payload so the call can still surface in traces.
+pub(crate) fn parse_openai_tool_calls(value: &Value) -> Vec<ToolCallRequest> {
+  let Some(items) = value.as_array() else {
+    return Vec::new();
+  };
+  items
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, item)| {
+      let function = item.get("function")?;
+      let name = function.get("name")?.as_str()?.to_string();
+      let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("call_{}", idx));
+      let raw_args = function.get("arguments");
+      let arguments = match raw_args {
+        Some(Value::String(s)) => {
+          serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone()))
+        }
+        Some(other) => other.clone(),
+        None => Value::Object(serde_json::Map::new()),
+      };
+      Some(ToolCallRequest {
+        id,
+        name,
+        arguments,
+      })
+    })
+    .collect()
 }
 
 #[async_trait]
@@ -132,15 +203,21 @@ impl LLMProvider for OpenAIProvider {
         total_tokens: Some(u.total_tokens),
       });
 
+    let first_choice = openai_response.choices.first();
+    let tool_calls = first_choice
+      .and_then(|c| c.message.tool_calls.as_ref())
+      .map(parse_openai_tool_calls)
+      .unwrap_or_default();
+    let stop_reason = first_choice
+      .and_then(|c| c.finish_reason.as_deref())
+      .map(StopReason::from_openai_finish_reason);
+
     Ok(ProviderResponse {
       content,
       usage,
       metadata: Some(serde_json::to_value(&openai_response)?),
-      // Native tool_calls / stop_reason parsing arrives in the next task in
-      // this series; for now leave the typed fields empty so the loose JSON
-      // path keeps working.
-      tool_calls: Vec::new(),
-      stop_reason: None,
+      tool_calls,
+      stop_reason,
     })
   }
 
@@ -235,6 +312,8 @@ struct OpenAIChoice {
 struct OpenAIMessage {
   role: String,
   content: Option<serde_json::Value>, // Can be string or array of content objects
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  tool_calls: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -416,5 +495,133 @@ mod tests {
     assert_eq!(body["temperature"], 0.7);
     assert_eq!(body["max_tokens"], 100);
     assert_eq!(body["stream"], false);
+    assert!(body.get("tools").is_none());
+    assert!(body.get("tool_choice").is_none());
+  }
+
+  #[test]
+  fn build_request_body_serialises_tools() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather for a city",
+      json!({
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }),
+    );
+    let request = ProviderRequest {
+      model: "gpt-4o".to_string(),
+      messages: vec![json!({"role": "user", "content": "weather in Tokyo?"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: Some(ToolChoice::Required),
+    };
+
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "get_weather");
+    assert_eq!(tools[0]["function"]["parameters"]["required"][0], "city");
+    assert_eq!(body["tool_choice"], "required");
+  }
+
+  #[test]
+  fn build_request_body_tool_choice_specific() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gpt-4o".to_string(),
+      messages: vec![],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![ToolSpec::new("x", "", json!({}))]),
+      tool_choice: Some(ToolChoice::Tool {
+        name: "x".to_string(),
+      }),
+    };
+
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["tool_choice"]["type"], "function");
+    assert_eq!(body["tool_choice"]["function"]["name"], "x");
+  }
+
+  #[test]
+  fn parse_openai_tool_calls_decodes_arguments_json() {
+    let raw = json!([
+      {
+        "id": "call_abc",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"city\": \"Tokyo\"}"
+        }
+      },
+      {
+        "id": "call_def",
+        "type": "function",
+        "function": {
+          "name": "search",
+          "arguments": "not json"
+        }
+      }
+    ]);
+    let calls = parse_openai_tool_calls(&raw);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].id, "call_abc");
+    assert_eq!(calls[0].name, "get_weather");
+    assert_eq!(calls[0].arguments["city"], "Tokyo");
+    // Unparseable arguments fall back to a string so traces still see them.
+    assert_eq!(calls[1].arguments, Value::String("not json".to_string()));
+  }
+
+  #[test]
+  fn parse_openai_tool_calls_synthesises_id_when_missing() {
+    let raw = json!([
+      { "type": "function", "function": { "name": "ping", "arguments": "{}" } }
+    ]);
+    let calls = parse_openai_tool_calls(&raw);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call_0");
+  }
+
+  #[test]
+  fn openai_message_deserialises_tool_calls() {
+    let raw = json!({
+      "id": "x",
+      "object": "chat.completion",
+      "created": 0,
+      "model": "gpt-4o",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": "{\"city\": \"NYC\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": "tool_calls"
+        }
+      ],
+      "usage": null
+    });
+    let parsed: OpenAIResponse = serde_json::from_value(raw).unwrap();
+    let choice = &parsed.choices[0];
+    assert_eq!(choice.finish_reason.as_deref(), Some("tool_calls"));
+    let tool_calls = parse_openai_tool_calls(choice.message.tool_calls.as_ref().unwrap());
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments["city"], "NYC");
   }
 }
