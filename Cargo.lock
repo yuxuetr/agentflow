@@ -104,6 +104,7 @@ dependencies = [
  "humantime-serde",
  "num_cpus",
  "pin-project-lite",
+ "proptest",
  "rand 0.8.5",
  "regex",
  "serde",

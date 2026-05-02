@@ -13,6 +13,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
 
+fn checkpoint_json_payload<'a>(
+  checkpoint: &'a agentflow_core::checkpoint::Checkpoint,
+  node_id: &str,
+  output_name: &str,
+) -> &'a serde_json::Value {
+  &checkpoint.state[node_id][output_name]["value"]
+}
+
 fn use_writable_home() {
   let home = std::env::temp_dir().join(format!(
     "agentflow-checkpoint-test-{}",
@@ -49,6 +57,16 @@ struct RepeatedPartialResumeAgentLikeNode {
 
 #[derive(Clone)]
 struct FlakyNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct FileOutputNode {
+  path: std::path::PathBuf,
+}
+
+#[derive(Clone)]
+struct FileConsumerFailsOnce {
   calls: Arc<AtomicUsize>,
 }
 
@@ -244,6 +262,52 @@ impl AsyncNode for FlakyNode {
   }
 }
 
+#[async_trait]
+impl AsyncNode for FileOutputNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "asset".to_string(),
+      FlowValue::File {
+        path: self.path.clone(),
+        mime_type: Some("text/plain".to_string()),
+      },
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for FileConsumerFailsOnce {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let asset = inputs
+      .get("asset")
+      .expect("checkpointed file asset should be mapped into consumer");
+
+    match asset {
+      FlowValue::File { path, mime_type } => {
+        assert_eq!(
+          path.file_name().and_then(|name| name.to_str()),
+          Some("asset.txt")
+        );
+        assert_eq!(mime_type.as_deref(), Some("text/plain"));
+      }
+      other => panic!("expected FlowValue::File after checkpoint restore, got {other:?}"),
+    }
+
+    if call_count == 1 {
+      return Err(agentflow_core::error::AgentFlowError::NodeExecutionFailed {
+        message: "force resume after checkpoint".to_string(),
+      });
+    }
+
+    let mut outputs = HashMap::new();
+    outputs.insert("ok".to_string(), FlowValue::Json(serde_json::json!(true)));
+    Ok(outputs)
+  }
+}
+
 impl SimpleNode {
   fn new(id: &str, output_value: &str) -> Self {
     Self {
@@ -339,6 +403,64 @@ async fn test_checkpoint_saves_state() {
 }
 
 #[tokio::test]
+async fn test_checkpoint_resume_preserves_file_flowvalue() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let asset_path = temp_dir.path().join("asset.txt");
+  std::fs::write(&asset_path, "checkpoint asset").unwrap();
+
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path().join("checkpoints"))
+    .with_auto_cleanup(false);
+  let consumer_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![
+    GraphNode {
+      id: "producer".to_string(),
+      node_type: NodeType::Standard(Arc::new(FileOutputNode { path: asset_path })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "consumer".to_string(),
+      node_type: NodeType::Standard(Arc::new(FileConsumerFailsOnce {
+        calls: consumer_calls.clone(),
+      })),
+      dependencies: vec!["producer".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "asset".to_string(),
+        ("producer".to_string(), "asset".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["consumer"].is_err());
+  assert_eq!(consumer_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_id = std::fs::read_dir(temp_dir.path().join("checkpoints"))
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory")
+    .file_name()
+    .to_string_lossy()
+    .into_owned();
+
+  let resumed = flow.resume(&workflow_id).await.unwrap();
+  assert_eq!(consumer_calls.load(Ordering::SeqCst), 2);
+  assert_eq!(
+    resumed["consumer"].as_ref().unwrap()["ok"],
+    FlowValue::Json(serde_json::json!(true))
+  );
+}
+
+#[tokio::test]
 async fn test_checkpoint_preserves_agent_node_step_history() {
   use_writable_home();
   let temp_dir = TempDir::new().unwrap();
@@ -372,7 +494,7 @@ async fn test_checkpoint_preserves_agent_node_step_history() {
     .unwrap()
     .expect("latest checkpoint");
 
-  let agent_result = &checkpoint.state["agent"]["agent_result"];
+  let agent_result = checkpoint_json_payload(&checkpoint, "agent", "agent_result");
   assert_eq!(agent_result["session_id"], "session-1");
   assert_eq!(agent_result["steps"][0]["kind"]["type"], "observe");
   assert_eq!(agent_result["steps"][1]["kind"]["type"], "final_answer");
@@ -490,11 +612,12 @@ async fn test_resume_reexecutes_failed_agent_node_with_checkpointed_partial_trac
   assert_eq!(failed_checkpoint.last_completed_node, "");
   assert!(failed_checkpoint.state.contains_key("agent"));
   assert_eq!(
-    failed_checkpoint.state["agent"]["agent_result"]["steps"][2]["kind"]["type"],
+    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_result")["steps"][2]["kind"]
+      ["type"],
     "tool_result"
   );
   assert_eq!(
-    failed_checkpoint.state["agent"]["agent_resume"]["resume_mode"],
+    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_resume")["resume_mode"],
     "partial_run_supported"
   );
 
@@ -568,7 +691,7 @@ async fn test_repeated_partial_resume_keeps_checkpoint_at_last_completed_node() 
     .expect("latest checkpoint after second failure");
   assert_eq!(second_checkpoint.last_completed_node, "prep");
   assert_eq!(
-    second_checkpoint.state["agent"]["agent_resume"]["resume_mode"],
+    checkpoint_json_payload(&second_checkpoint, "agent", "agent_resume")["resume_mode"],
     "partial_run_supported"
   );
 

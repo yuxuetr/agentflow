@@ -482,20 +482,9 @@ impl Flow {
     let json_outputs: HashMap<String, serde_json::Value> = outputs
       .iter()
       .map(|(key, value)| {
-        let json = match value {
-          FlowValue::Json(json) => json.clone(),
-          FlowValue::File { path, mime_type } => serde_json::json!({
-            "$type": "file",
-            "path": path,
-            "mime_type": mime_type,
-          }),
-          FlowValue::Url { url, mime_type } => serde_json::json!({
-            "$type": "url",
-            "url": url,
-            "mime_type": mime_type,
-          }),
-        };
-        (key.clone(), json)
+        let checkpoint_value =
+          serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!(null));
+        (key.clone(), checkpoint_value)
       })
       .collect();
     serde_json::to_value(json_outputs).unwrap_or_else(|_| serde_json::json!({}))
@@ -1323,8 +1312,10 @@ mod tests {
       .and_then(serde_json::Value::as_object)
       .unwrap();
 
-    assert_eq!(raw_node["file"]["$type"], json!("file"));
-    assert_eq!(raw_node["url"]["$type"], json!("url"));
+    assert_eq!(raw_node["json"]["type"], json!("json"));
+    assert_eq!(raw_node["json"]["value"], json!({"ok": true}));
+    assert_eq!(raw_node["file"]["type"], json!("file"));
+    assert_eq!(raw_node["url"]["type"], json!("url"));
 
     let restored = Flow::checkpoint_state_to_state_pool(&checkpoint_state);
     let restored_outputs = restored.get("node").unwrap().as_ref().unwrap();
@@ -1934,8 +1925,14 @@ mod tests {
 
     let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
     assert_eq!(checkpoint.status, WorkflowStatus::Completed);
-    assert_eq!(checkpoint.state["left"]["value"], json!("left"));
-    assert_eq!(checkpoint.state["right"]["value"], json!("right"));
+    assert_eq!(
+      checkpoint.state["left"]["value"],
+      json!({"type": "json", "value": "left"})
+    );
+    assert_eq!(
+      checkpoint.state["right"]["value"],
+      json!({"type": "json", "value": "right"})
+    );
   }
 
   #[tokio::test]
@@ -1996,7 +1993,10 @@ mod tests {
     let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
     assert_eq!(checkpoint.status, WorkflowStatus::Failed);
     assert_eq!(checkpoint.last_completed_node, "ok_branch");
-    assert_eq!(checkpoint.state["ok_branch"]["value"], json!("ok"));
+    assert_eq!(
+      checkpoint.state["ok_branch"]["value"],
+      json!({"type": "json", "value": "ok"})
+    );
     assert!(!checkpoint.state.contains_key("fail_branch"));
   }
 

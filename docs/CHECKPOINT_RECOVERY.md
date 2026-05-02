@@ -190,6 +190,40 @@ implicitly re-enable concurrent scheduling. Use concurrent mode for fresh
 ordinary runs; resume behavior remains conservative until concurrent resume has
 its own recovery contract.
 
+#### FlowValue Persistence Schema
+
+Since v0.3.0, every checkpointed node output is stored as a tagged `FlowValue`
+object so `Json`, `File`, and `Url` outputs survive checkpoint round trips
+without losing their variant.
+
+```json
+{
+  "node_id": {
+    "json_output": {
+      "type": "json",
+      "value": { "records": 100 }
+    },
+    "file_output": {
+      "type": "file",
+      "path": "/data/report.md",
+      "mime_type": "text/markdown"
+    },
+    "url_output": {
+      "type": "url",
+      "url": "https://example.test/image.png",
+      "mime_type": "image/png"
+    }
+  }
+}
+```
+
+Compatibility:
+
+- Raw JSON values from older checkpoints are still read as `FlowValue::Json`.
+- Legacy file/url markers using `"$type": "file"` or `"$type": "url"` are still
+  accepted when loading existing 0.2.x checkpoints.
+- Newly written checkpoints always use the stable `"type"` field shown above.
+
 **Example:**
 ```rust
 // Load latest checkpoint
