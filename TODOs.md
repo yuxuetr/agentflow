@@ -61,7 +61,7 @@
 子任务:
 
 - [x] `agentflow-db`: 引入 `sqlx::migrate!()` 嵌入式迁移 + 6 张表 schema (`migrations/0001_initial_schema.sql`)：runs / steps / events / artifacts / skill_installs / mcp_sessions，附加索引 (runs_tenant_started_idx / runs_status_idx / events_run_ts_idx / artifacts_run_idx / mcp_sessions_server_idx)。`Database::connect_and_migrate(...)` 一步连接 + 应用迁移；`run_migrations()` 幂等。集成测试 (`tests/migrations.rs`) 通过 `AGENTFLOW_DATABASE_TEST_URL` env 触发，CI 默认跳过。
-- [ ] `agentflow-db`: 建立 Repository trait（`RunRepo`/`StepRepo`/`EventRepo`/`ArtifactRepo`），给 `agentflow-server` 复用。
+- [x] `agentflow-db`: Repository trait + Postgres 实现：`RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` (`src/repo.rs`)，`Repositories::from_pool` 一次性构造全套；模型层 `Run` / `Step` / `Event` / `Artifact` / `SkillInstall` / `McpSession` + `RunStatus` 枚举 (`src/models.rs`)。集成测试 `tests/repositories.rs` 覆盖 create/get/list/update_status 和 step/event round-trip（同样 `AGENTFLOW_DATABASE_TEST_URL` gate）。
 - [ ] `agentflow-server`: 实现路由
   - `POST /v1/runs` 提交 workflow（接受 YAML body 或 workflow_id 引用）
   - `GET /v1/runs/{id}` 返回当前状态 + 最后一步
