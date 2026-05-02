@@ -122,7 +122,7 @@ docker-compose up agentflow-server postgres
   - `LLMClient::execute_full() -> LLMResponse`、`LLMClientBuilder::tool_choice` / `tools_from_openai_json`
 - [x] 增加 capability flag `ModelCapabilities::native_tool_calling: bool`，`ModelConfig::native_tool_calling`，`ConfigUpdater` 自动判定。
 - [x] OpenAI provider: 把 `tools` 映射为 `tools` array、解析 `tool_calls` 字段（`build_request_body` 注入 `tools` / `tool_choice`，`execute` 解析 `OpenAIMessage::tool_calls` + `finish_reason`，5 条 fixture 单测）。
-- [ ] Anthropic provider: 把 `tools` 映射为 `tools` block，解析 `content` 中的 `tool_use` blocks。
+- [x] Anthropic provider: 把 `tools` 映射为 `tools` block (`name` / `description` / `input_schema`)，从 `content` 中提取 `tool_use` blocks，`stop_reason: tool_use` → `StopReason::ToolCalls`，4 条 fixture 单测。
 - [ ] Google provider: 映射 `function_declarations`，解析 `functionCall` parts。
 - [ ] StepFun / Moonshot / Mock: 至少实现 prompt-fallback 适配，保证降级路径可工作。
 - [ ] `ReActAgent::next_step()` 优先消费 `LLMResponse::tool_calls`；若为空则回退到现有 prompt 解析。

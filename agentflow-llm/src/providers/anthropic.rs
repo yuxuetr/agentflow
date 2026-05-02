@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -101,8 +102,56 @@ impl AnthropicProvider {
       body["max_tokens"] = json!(4096);
     }
 
+    if let Some(tools) = &request.tools {
+      body["tools"] = Value::Array(tools.iter().map(tool_spec_to_anthropic_value).collect());
+    }
+    if let Some(choice) = &request.tool_choice {
+      body["tool_choice"] = tool_choice_to_anthropic_value(choice);
+    }
+
     body
   }
+}
+
+/// Encode a `ToolSpec` as Anthropic's `{ name, description, input_schema }`.
+pub(crate) fn tool_spec_to_anthropic_value(spec: &ToolSpec) -> Value {
+  json!({
+    "name": spec.name,
+    "description": spec.description,
+    "input_schema": spec.parameters,
+  })
+}
+
+/// Encode `ToolChoice` as Anthropic's `tool_choice` object.
+pub(crate) fn tool_choice_to_anthropic_value(choice: &ToolChoice) -> Value {
+  match choice {
+    ToolChoice::Auto => json!({"type": "auto"}),
+    // Anthropic uses `none` since 2024-11; older revisions reject it. The
+    // value is sent verbatim because callers opting into ToolChoice::None
+    // know what they're doing.
+    ToolChoice::None => json!({"type": "none"}),
+    // Anthropic spells this `any` (model must call at least one tool).
+    ToolChoice::Required => json!({"type": "any"}),
+    ToolChoice::Tool { name } => json!({"type": "tool", "name": name}),
+  }
+}
+
+/// Pull `tool_use` content blocks out of an Anthropic response and convert
+/// them to typed `ToolCallRequest`s.
+pub(crate) fn parse_anthropic_tool_use_blocks(
+  content: &[AnthropicContent],
+) -> Vec<ToolCallRequest> {
+  content
+    .iter()
+    .filter_map(|block| match block {
+      AnthropicContent::ToolUse { id, name, input } => Some(ToolCallRequest {
+        id: id.clone(),
+        name: name.clone(),
+        arguments: input.clone(),
+      }),
+      AnthropicContent::Text { .. } => None,
+    })
+    .collect()
 }
 
 #[async_trait]
@@ -140,15 +189,18 @@ impl LLMProvider for AnthropicProvider {
 
     let anthropic_response: AnthropicResponse = response.json().await?;
 
+    // Concatenate all text blocks; tool_use blocks are surfaced via
+    // `tool_calls` instead of being stringified into content.
     let content_text = anthropic_response
       .content
-      .first()
-      .map(|content| match content {
-        AnthropicContent::Text { text } => text.clone(),
+      .iter()
+      .filter_map(|block| match block {
+        AnthropicContent::Text { text } => Some(text.as_str()),
+        AnthropicContent::ToolUse { .. } => None,
       })
-      .unwrap_or_default();
+      .collect::<Vec<_>>()
+      .join("");
 
-    // Convert to ContentType - Anthropic currently only returns text
     let content = ContentType::Text(content_text);
 
     let usage = anthropic_response
@@ -160,12 +212,18 @@ impl LLMProvider for AnthropicProvider {
         total_tokens: Some(u.input_tokens + u.output_tokens),
       });
 
+    let tool_calls = parse_anthropic_tool_use_blocks(&anthropic_response.content);
+    let stop_reason = anthropic_response
+      .stop_reason
+      .as_deref()
+      .map(StopReason::from_anthropic_stop_reason);
+
     Ok(ProviderResponse {
       content,
       usage,
       metadata: Some(serde_json::to_value(&anthropic_response)?),
-      tool_calls: Vec::new(),
-      stop_reason: None,
+      tool_calls,
+      stop_reason,
     })
   }
 
@@ -262,9 +320,15 @@ struct AnthropicResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
-enum AnthropicContent {
+pub(crate) enum AnthropicContent {
   #[serde(rename = "text")]
   Text { text: String },
+  #[serde(rename = "tool_use")]
+  ToolUse {
+    id: String,
+    name: String,
+    input: Value,
+  },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -443,5 +507,82 @@ mod tests {
     assert_eq!(body["max_tokens"], 100);
     assert_eq!(body["system"], "You are helpful");
     assert_eq!(body["messages"].as_array().unwrap().len(), 1); // Only user message
+    assert!(body.get("tools").is_none());
+  }
+
+  #[test]
+  fn build_request_body_serialises_tools() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather for a city",
+      json!({
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }),
+    );
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![json!({"role": "user", "content": "weather?"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: Some(ToolChoice::Required),
+    };
+
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "get_weather");
+    assert_eq!(tools[0]["input_schema"]["required"][0], "city");
+    // Anthropic spells Required as "any".
+    assert_eq!(body["tool_choice"]["type"], "any");
+  }
+
+  #[test]
+  fn tool_choice_specific_uses_tool_type() {
+    let body = tool_choice_to_anthropic_value(&ToolChoice::Tool {
+      name: "x".to_string(),
+    });
+    assert_eq!(body["type"], "tool");
+    assert_eq!(body["name"], "x");
+  }
+
+  #[test]
+  fn parse_anthropic_tool_use_blocks_extracts_calls() {
+    let raw = json!({
+      "id": "msg_x",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-3-5-sonnet-20241022",
+      "content": [
+        {"type": "text", "text": "I'll check the weather."},
+        {
+          "type": "tool_use",
+          "id": "toolu_abc",
+          "name": "get_weather",
+          "input": {"city": "Tokyo"}
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "usage": {"input_tokens": 5, "output_tokens": 3}
+    });
+    let parsed: AnthropicResponse = serde_json::from_value(raw).unwrap();
+    assert_eq!(parsed.stop_reason.as_deref(), Some("tool_use"));
+    let tool_calls = parse_anthropic_tool_use_blocks(&parsed.content);
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "toolu_abc");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments["city"], "Tokyo");
+  }
+
+  #[test]
+  fn parse_anthropic_text_only_returns_no_tool_calls() {
+    let content = vec![AnthropicContent::Text {
+      text: "hello".to_string(),
+    }];
+    assert!(parse_anthropic_tool_use_blocks(&content).is_empty());
   }
 }
