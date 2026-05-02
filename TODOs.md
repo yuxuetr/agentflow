@@ -8,811 +8,580 @@
 - `TODOs.md` 是本地短期执行队列。
 - 不再维护 `TODO.md`。
 - 本文件按 `RoadMap.md` 当前未完成项整理；完成后同步回写 `RoadMap.md`。
+- 任务条目模板: 状态 / 目标 / 关键路径 / 子任务 (checkbox) / 验收标准 / 验证命令 / 涉及文件。
 
 ## 当前基线
 
-已完成短期闭环:
+已完成短期闭环 (N1–N7):
 
-- Skills + MCP 基础打通。
-- Agent Runtime MVP。
-- DAG + Agent hybrid。
+- Skills + MCP 基础打通、Agent Runtime MVP、DAG + Agent hybrid。
 - trace 串联、checkpoint resume。
+- CLI 产品化闭环: workflow run flags、模型配置/切换、Skill 完整 CLI、agent/skill_agent YAML 节点、统一 trace replay。
 - 可运行教程和 Skill registry/index 示例。
 - CI 已覆盖 fmt、clippy `-D warnings`、核心 crates test matrix、workspace examples 编译和无外部 API smoke tests。
 
-最新评估结论:
+最新评估结论 (2026-05-01):
 
-- 已生成 `OVERALL_EVALUATION_REPORT.md`，结论是 DAG 核心成熟度高于 CLI/config-first 与 agent-native 产品化入口。
-- `cargo check --workspace --all-targets` 已通过，当前主要短板不是编译健康度，而是 CLI 参数兑现、模型配置体验、Skill/Agent 配置化和端到端用户路径。
-- 下一轮重点从“基础 runtime 闭环”切换到“CLI/config-first 产品化闭环”。
+- `PROJECT_EVALUATION_2026-05-01.md` 完成，HEAD `41ed3f8`。
+- 综合评级 B+: 架构 A-、DAG A-、agent-native B+、CLI B、可观测性 B+、平台化 C-。
+- 主要短板由"CLI 产品化"转向"平台化（server/db）+ LLM 原生 tool calling + checkpoint/表达式保真 + 多智能体协作"。
+
+下一阶段三档发布节奏 (RoadMap N8/N9/N10):
+
+- v0.3.0: 平台骨架 + 原生 tool calling + checkpoint/表达式保真 (P0)
+- v0.4.0: 多智能体协作 + 工具沙箱 + OTel 端到端 + RAG 评测 (P1)
+- v1.0.0-rc: 插件体系 + 分布式 + Web UI + Agent SDK 文档 (P2)
 
 最近提交:
 
+- `41ed3f8 docs: refresh active documentation`
+- `54f782e docs: sync runtime config task hashes`
 - `cbd83f3 feat(cli): support trace dir env default`
 - `20701b8 feat(core): configure workflow run artifacts dir`
-- `dffcb69 feat(agent): add tool replay recovery metadata`
-- `df3957a docs: define agent tool recovery contract`
-- `9684916 feat(cli): show concurrent plan hint`
-- `e1a4fff test(cli): cover concurrent workflow fixtures`
-- `aa8c150 test(core): cover concurrent checkpoint semantics`
-- `d832b0d test(core): cover concurrent skip semantics`
-- `1fba2d4 test(core): harden concurrent failure semantics`
-- `e761e30 feat(cli): expose concurrent workflow execution`
-- `b67629f feat(core): add concurrent DAG scheduler`
-- `d2b29eb docs: clarify extensibility model`
-- `ad31f64 feat(tools): add policy decisions and audit`
-- `e0af0f3 feat(mcp): validate tool arguments with json schema`
-- `9133e2a test(cli): cover workflow schema validation`
-- `e704243 feat(cli): support strict workflow validation`
-- `d9b2663 feat(cli): add json workflow validation output`
-- `8c9ce3f feat(cli): retire standalone llm chat`
-- `37bfb9e docs: add runnable AgentFlow tutorials`
-- `7c0b448 ci: add examples quality gate`
-- `6cd5d56 ci: enforce clippy warnings`
+- `18695e0 docs: sync p1 task status`
 
-当前进行中:
+---
 
-- P1-1 DAG concurrent scheduler hardening: 已完成
-  - 已新增 `FlowExecutionConfig` / `FlowExecutionMode`。
-  - `Flow::run()` 保持默认串行，`execute_from_inputs_with_config(..., Concurrent)` 显式启用 ready-node 并发调度。
-  - CLI `workflow run` 已新增 `--execution-mode serial|concurrent` 和 `--max-concurrency`。
-  - 已覆盖独立分支并发耗时低于串行、依赖节点等待上游输出、CLI concurrent mode、非法并发数测试。
-  - 已补强并发 failure 语义: fail-fast 会停止调度新节点但保留 in-flight 结果；非 fail-fast 会继续独立 ready 分支，失败分支下游不被误调度。
-  - 已补强并发 skip / conditional 语义: `run_if=false` 会记录 `NodeSkipped`，独立分支继续执行，依赖 skipped 输出的 required input 会失败为 `DependencyNotMet`。
-  - 已补强并发 checkpoint 语义: 成功并发分支写入最终 checkpoint，失败 run 标记 `Failed` 并保留 last completed node，resume 仍走兼容串行路径。
-  - 已补强 CLI/config-first 并发路径: 新增无外部 API 多分支 fixture，覆盖 concurrent run 和 dry-run 不执行节点。
-  - 已补强 trace / debug 并发展示: 当前 `WorkflowEvent` 已具备 started timestamp + completed duration；`workflow debug --plan` 会提示 concurrent mode 下同层 ready nodes 可并发。
-  - P1-1 当前子任务已完成；下一步可进入 P1-2 Agent tool call 幂等与恢复策略预备设计。
+## P0: N8 平台骨架 + 原生 Tool Calling + 保真度修复 (v0.3.0 候选)
 
-- P1-2 Agent tool call 幂等与恢复策略预备设计: 已完成
-  - 已盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 的既有字段。
-  - 已在 `docs/CHECKPOINT_RECOVERY.md` 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小恢复契约。
-  - 已将恢复元数据落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 字段兼容。
-  - 默认策略已明确并测试: recorded result 复用，read-only 可 replay，mutating/external 走 manual required。
+### 1. 平台服务端最小骨架
 
-- P1-3 Runtime storage config hardening: 已完成
-  - `FlowExecutionConfig` 已支持显式 `run_base_dir`，默认仍兼容 `~/.agentflow/runs`。
-  - `agentflow workflow run` 已新增 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR` 作为环境默认值。
-  - 已覆盖 core 配置注入、CLI flag 和 env var 三条路径。
-
-- P1-4 Trace storage config hardening: 已完成
-  - `agentflow trace replay/tui` 已支持 `AGENTFLOW_TRACE_DIR` 作为 `--dir` 缺省值。
-  - trace CLI help 和 tracing 文档已说明 env/default 查找顺序。
-  - 已增加 CLI 测试覆盖 env trace dir。
-
-当前任务清单:
-
-- P1-1.1 并发 failure 语义测试:
-  - [x] 在 `agentflow-core/src/flow.rs` tests 中新增并发 DAG: `root -> ok_branch` 与独立 `fail_branch`。
-  - [x] 覆盖默认 `fail_fast=true`: 失败后 workflow 标记 failed，已完成节点保留输出，未就绪下游不执行。
-  - [x] 覆盖 `fail_fast=false`: 独立 ready 分支继续执行，依赖失败节点的下游不被误调度。
-  - [x] 断言 `WorkflowEvent::NodeFailed` 与 `WorkflowEvent::WorkflowFailed` 被触发。
-
-- P1-1.2 并发 skip / conditional 语义测试:
-  - [x] 构造 `run_if=false` 的分支，确认并发 scheduler 写入 `NodeSkipped`。
-  - [x] 覆盖 `continue_on_skip=true`: 不依赖 skipped 节点的独立分支继续执行。
-  - [x] 覆盖依赖 skipped 节点的 required input 行为，确认不会把缺失输出当成成功输入。
-  - [x] 断言 skip 事件和 final state 中 `NodeSkipped` 一致。
-
-- P1-1.3 并发 checkpoint 端到端测试:
-  - [x] 使用临时 checkpoint 目录开启 `with_checkpointing`。
-  - [x] 并发执行两个独立成功分支，确认 checkpoint state 包含两个成功节点输出。
-  - [x] 构造一个成功分支 + 一个失败分支，确认 final checkpoint status 为 `Failed`，且 last completed node 非空。
-  - [x] 验证 resume 仍走兼容串行恢复路径，不隐式启用 concurrent resume。
-
-- P1-1.4 CLI/config-first 并发测试补强:
-  - [x] 增加一个无外部 API 的多分支 workflow fixture，覆盖 `workflow run --execution-mode concurrent --max-concurrency 2`。
-  - [x] 对 `--dry-run` 行为保持不执行节点，仅展示拓扑顺序，不受 execution mode 影响。
-  - [x] 文档中注明 concurrent mode 当前适用于普通执行，checkpoint resume 仍按兼容路径恢复。
-
-- P1-1.5 trace / debug 并发展示:
-  - [x] 评估当前 `WorkflowEvent` 是否足够表达并发重叠: `NodeStarted.timestamp` / `NodeCompleted.duration`。
-  - [x] 在 `trace replay` 或 `workflow debug --plan` 中增加简洁提示: concurrent mode 下同层 ready nodes 可并发。
-  - [x] 若需要更强展示，再扩展 trace TUI 的 node row 输出 started/duration。
-
-- P1-2 预备设计: Agent tool call 幂等与恢复策略:
-  - [x] 盘点 `AgentStepKind::ToolCall`、`ToolCallTrace`、checkpoint `agent_resume` 中已有字段。
-  - [x] 定义 `call_id`、`idempotency_key`、`side_effect_class`、`replay_policy` 的最小数据结构。
-  - [x] 明确默认策略: read-only 可 replay，mutating/external 默认 manual 或 reuse recorded result。
-  - [x] 先写设计小节到 `docs/CHECKPOINT_RECOVERY.md` 或新增 runtime recovery 文档，再改代码。
-  - [x] 将最小数据结构落到 `AgentNodeResumeContract` 和 trace `ToolCallTrace`，保持旧 trace 兼容。
-  - [x] 增加测试覆盖 recorded result、read-only replay、mutating/external manual 默认策略。
-
-- P1-3 Runtime storage config hardening:
-  - [x] 将 workflow run artifact base directory 从硬编码 home path 推进到 `FlowExecutionConfig`。
-  - [x] 为 CLI `workflow run` 增加 `--run-dir`，并支持 `AGENTFLOW_RUN_DIR`。
-  - [x] 增加 core 与 CLI 测试，确认 run artifacts 写入显式目录。
-  - [x] 更新配置文档和 README，说明默认路径与覆盖方式。
-
-- P1-4 Trace storage config hardening:
-  - [x] 为 `agentflow trace replay/tui` 增加 `AGENTFLOW_TRACE_DIR` 缺省路径支持。
-  - [x] 保持显式 `--dir` 优先于环境变量，环境变量优先于 `~/.agentflow/traces`。
-  - [x] 增加 CLI 测试覆盖 env trace dir。
-  - [x] 更新 trace CLI help 和文档。
-
-近期已完成但需长期维护:
-
-- P0-1 workflow YAML schema validation: 主体完成；后续随新增节点维护 schema 表和测试样例。
-- P0-3 MCP tool JSON Schema validation: 主体完成；后续随 MCP schema 兼容性需求补测试。
-- P0-4 Tool Policy Decision / audit: 主体完成；后续补更细粒度 runtime context 和 redaction hint。
-- P0-5 extensibility model: 主体完成；后续若引入 remote catalog 或 plugin runtime，需要同步边界文档。
-
-## P0: N6 CLI / config-first 产品化闭环
-
-### 1. 补齐 `agentflow workflow run` 运行参数
-
-状态: 已完成
+状态: 待开始
 
 目标:
 
-- 让 CLI flags 与实际行为一致，避免用户认为已支持但运行时被忽略。
-- 将 DAG workflow 的 config-first 使用体验提升到可作为主入口使用。
+- 把 `agentflow-server` / `agentflow-db` 从骨架推进到可独立部署的 control plane。
+- 让"提交一次 workflow run、订阅事件、查询状态"全部走 HTTP，而不是命令行。
 
-原问题（已修复）:
+关键路径:
 
-- `watch`、`output`、`input`、`dry_run`、`timeout`、`max_retries` 曾在 `workflow run` 执行路径中是占位参数。
-- 输出曾包含 debug 打印，缺少稳定 JSON / YAML / text 输出 contract。
+- 复用 `Flow::execute_*` 与 `agentflow-tracing` 已有能力，server 只承担 routing / persistence / streaming。
+- DB schema 与 `agentflow-tracing` Postgres backend 共享（避免双写）。
 
 子任务:
 
-- [x] 实现 `--input KEY VALUE` 注入到 `Flow::execute_from_inputs`，支持 string/number/bool/json 基础解析。
-- [x] 实现 `--dry-run`，只解析 YAML、构建 graph、输出 execution order，不执行节点。
-- [x] 实现 `--timeout`，对整次 workflow run 设置外层超时，并在错误中报告 workflow file、node context。
-- [x] 实现 `--max-retries`，先对 workflow run 做外层 retry；后续再细化到 node retry policy。
-- [x] 实现 `--output <path>`，保存最终 state pool，默认格式 JSON。
-- [x] 定义 stdout 输出策略: 默认人类可读，`--output -` 输出机器可读 JSON。
-- [x] 明确 `--watch` 的 MVP 行为；当前显式报错，不再静默忽略。
-- [x] 增加 CLI tests 覆盖 input、dry-run、output、watch 未实现失败路径。
+- [ ] `agentflow-db`: 引入 sqlx-migrate 或 refinery，落实 6 张表的 schema:
+  - `runs(id, workflow, status, started_at, finished_at, run_dir, tenant_id)`
+  - `steps(run_id, node_id, kind, status, started_at, duration_ms, payload)`
+  - `events(run_id, seq, kind, payload, ts)`
+  - `artifacts(run_id, node_id, name, path_or_url, mime_type)`
+  - `skill_installs(name, version, source, installed_at, checksum)`
+  - `mcp_sessions(id, server, started_at, ended_at, tool_calls)`
+- [ ] `agentflow-db`: 建立 Repository trait（`RunRepo`/`StepRepo`/`EventRepo`/`ArtifactRepo`），给 `agentflow-server` 复用。
+- [ ] `agentflow-server`: 实现路由
+  - `POST /v1/runs` 提交 workflow（接受 YAML body 或 workflow_id 引用）
+  - `GET /v1/runs/{id}` 返回当前状态 + 最后一步
+  - `GET /v1/runs/{id}/events` 通过 SSE 流式推送 trace events
+  - `POST /v1/skills/{name}:run` 触发 skill agent 单次运行
+  - `GET /v1/skills` 列出本地 skill registry
+- [ ] `agentflow-server`: 接 `agentflow-tracing` 的 `EventListener`，每个事件落库 + 推送给订阅者。
+- [ ] `agentflow-server`: 错误响应统一为 `{ "error": { "code", "message", "details" } }`。
+- [ ] 基础 AuthN: `Authorization: Bearer <token>` 简单匹配 env var；为后续 OAuth 留扩展点。
+- [ ] 增加端到端测试: `cargo test -p agentflow-server`，覆盖 run 提交、状态查询、SSE 订阅、skill run。
+- [ ] 更新 `docs/DEPLOYMENT.md`，给出最小 server + db docker-compose 示例。
 
-完成记录:
+验收标准:
 
-- `agentflow workflow run` 现在会解析 CLI inputs 并注入 V2 `Flow::execute_from_inputs`。
-- `--dry-run` 会构建 graph 并输出 `Flow::execution_order()`，不会执行节点。
-- `--timeout` 支持整数秒默认、`ms`、`s`、`m` 后缀，并包裹整次 workflow attempt。
-- `--max-retries` 支持 workflow 级重试，失败时报告 attempt context。
-- `--output <path>` 保存脱敏后的 final state JSON，`--output -` 打印 JSON。
-- `--watch` 当前明确返回未实现错误，避免 silent no-op。
-- 移除 workflow run 的临时 debug final state 打印。
+- `curl -X POST http://localhost:8080/v1/runs -H "Authorization: Bearer dev" -d @workflow.json` 提交成功并返回 run_id。
+- `curl -N http://localhost:8080/v1/runs/{id}/events` 能实时收到 NodeStarted / NodeCompleted 事件。
+- `psql -c "SELECT * FROM runs ORDER BY started_at DESC LIMIT 5"` 能看到最近 5 次 run。
+
+涉及文件:
+
+- `agentflow-server/src/{lib,main,routes,db}.rs`
+- `agentflow-db/src/{lib,schema,repo,migrations/}.rs`
+- `docs/DEPLOYMENT.md`、`docker-compose.yml`
 
 验证:
 
 ```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
+cargo check -p agentflow-server -p agentflow-db --target-dir /tmp/agentflow-target
+cargo test -p agentflow-server -p agentflow-db --target-dir /tmp/agentflow-target
+docker-compose up agentflow-server postgres
 ```
 
-验收标准:
+### 2. LLM 原生 Tool Calling 一等公民化
 
-- `agentflow workflow run examples.yml --input topic rust --dry-run` 不执行节点但展示执行计划。
-- `agentflow workflow run examples.yml --output /tmp/result.json` 能生成可解析 JSON。
-- 未实现的 flag 不再静默忽略。
-
-### 2. 强化模型配置和模型切换 CLI
-
-状态: 已完成
+状态: 待开始
 
 目标:
 
-- 让用户能通过 CLI 初始化、查看、验证、选择和临时覆盖模型。
-- 支持 LLM、workflow node、Skill agent 三条路径共享同一套模型配置体验。
+- 让 `agentflow-llm` 抽象层把工具调用作为请求/响应的一等字段，而不是依赖 prompt 解析。
+- ReAct / Plan-Execute 默认走 provider 原生 (`tool_calls` / `tool_use` / function declarations)，不支持的 provider 自动降级到 prompt。
 
-建议命令:
+关键路径:
 
-```bash
-agentflow config init
-agentflow config show models
-agentflow config validate
-agentflow llm models --provider openai --detailed
-agentflow workflow run flow.yml --model gpt-4o-mini
-agentflow skill run ./skills/code-reviewer --message "review this" --model gpt-4o-mini
-agentflow skill chat ./skills/code-reviewer --model gpt-4o-mini
-```
+- 不破坏当前 ReAct prompt 解析路径（保留为 fallback）。
+- 在 LLM 抽象层引入 `LLMRequest::tools` 和 `LLMResponse::tool_calls`，由 provider 客户端转换。
 
 子任务:
 
-- [x] 盘点 `agentflow-llm` 当前 `~/.agentflow/models.yml`、`.env`、builtin defaults 加载路径。
-- [x] 增强 `agentflow config show models`，展示 provider、model、api_key_env，默认脱敏。
-- [x] 增强 `agentflow config validate`，校验模型配置结构和必要 env var 是否存在。
-- [x] 为 `workflow run`、`skill run/chat` 统一增加或规范 `--model` 覆盖语义；`llm chat` 已退休，`llm` 命名空间只保留模型发现/诊断。
-- [x] 为 YAML workflow 支持 node-level `model`，并支持 CLI `--model` 覆盖 LLM 节点模型。
-- [x] 增加模型别名机制设计，例如 `default_chat_model`、`default_vision_model`、`default_embedding_model`。
-- [x] 增加文档: `docs/CONFIGURATION.md` 中补充模型切换和多 provider 示例。
+- [ ] 在 `agentflow-llm` 请求/响应类型新增:
+  - `LLMRequest { messages, tools: Option<Vec<ToolSpec>>, tool_choice: Option<ToolChoice>, ... }`
+  - `LLMResponse { content, tool_calls: Vec<ToolCallRequest>, stop_reason, ... }`
+- [ ] OpenAI provider: 把 `tools` 映射为 `tools` array、解析 `tool_calls` 字段。
+- [ ] Anthropic provider: 把 `tools` 映射为 `tools` block，解析 `content` 中的 `tool_use` blocks。
+- [ ] Google provider: 映射 `function_declarations`，解析 `functionCall` parts。
+- [ ] StepFun / Moonshot / Mock: 至少实现 prompt-fallback 适配，保证降级路径可工作。
+- [ ] `ReActAgent::next_step()` 优先消费 `LLMResponse::tool_calls`；若为空则回退到现有 prompt 解析。
+- [ ] `PlanExecuteAgent` 同样替换 plan→tool 过渡阶段。
+- [ ] 增加 capability flag `ModelCapabilities::native_tool_calling: bool`，model registry 据此选择路径。
+- [ ] 单测覆盖: 每个 provider 的 tool calling 请求/响应 fixture；ReAct 在原生与 fallback 两条路径下的 golden trace。
 
-完成记录:
+验收标准:
 
-- `agentflow llm models` 现在优先读取用户 `~/.agentflow/models.yml`，不会为了列模型而初始化 provider。
-- `agentflow llm chat` 已从产品入口退休；裸模型聊天不再作为 AgentFlow 交互路径。
-- `agentflow llm models` 保留为模型发现能力。
-- `agentflow workflow run --model <model>` 会覆盖 workflow 中 `llm` 节点的模型输入。
-- `agentflow skill run --model <model>` 和 `agentflow skill chat --model <model>` 会覆盖 Skill manifest 中声明的模型。
-- `skill run` 保留既有 `-m/--message`，模型覆盖只使用长参数 `--model`，避免 clap 短参数冲突。
-- `docs/CONFIGURATION.md` 已补充当前 CLI 模型配置、模型覆盖优先级和模型 alias 设计。
+- 在配置中切换到 GPT-4o / Claude Sonnet / Gemini Pro 后，ReAct 默认走原生 tool calling，trace 中 ToolCall step 来自 provider 而不是 prompt 解析。
+- Mock provider 仍能驱动 fallback 路径，离线 CI 不依赖外部 API。
+- token 使用对比基准下降（实际数值待测）。
+
+涉及文件:
+
+- `agentflow-llm/src/{client,request,response,providers/*}.rs`
+- `agentflow-agents/src/react/{agent,parser}.rs`
+- `agentflow-agents/src/plan_execute.rs`
 
 验证:
 
 ```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
+cargo test -p agentflow-llm --target-dir /tmp/agentflow-target
+cargo test -p agentflow-agents --target-dir /tmp/agentflow-target
+cargo run -p agentflow-agents --example react_agent
 ```
 
-验收标准:
+### 3. Tool 幂等性与 Partial Resume 自动重放
 
-- 用户可以不改 YAML，通过 `--model` 临时切换一次运行的模型。
-- 配置校验不会打印 API key，但能明确报告缺失的 env var 名称。
-- Skill、workflow LLM node 对模型选择的优先级一致；交互式使用统一走 Skill/Agent/Workflow。
-
-### 3. 提升 Skill CLI 的实际使用体验
-
-状态: 已完成核心闭环
+状态: 待开始
 
 目标:
 
-- 把 Skill 从“可验证/可安装”推进到“可发现、可运行、可调试、可复用”。
-- 让 Skill 成为 agent-native 应用的 config-first 主入口。
+- 在 `Tool` metadata 上增加幂等性标识，让 `AgentNode` partial resume 在 Idempotent 工具上自动重放。
+- 减少 partial resume 在保守拒绝场景下的人工介入。
 
 子任务:
 
-- [x] 完善 `agentflow skill list`，默认扫描 `~/.agentflow/skills`，显示 name、version、description、installed path。
-- [x] 增强 `agentflow skill run/chat` 参数: `--model`、`--trace`、`--session-id`。
-- [x] 增强 `agentflow skill run/chat` 参数: `--memory sqlite|session|none`。
-- [x] 增强 `agentflow skill list-tools`，展示工具来源 builtin/script/mcp/workflow、权限、参数 schema 摘要。
-- [x] 增强 `agentflow skill test`，支持无真实 LLM 的 dry-run: manifest 校验、MCP tool discovery。
-- [x] 增加 `agentflow skill inspect <path|name>`，输出 persona/model/tools/memory/knowledge/security 汇总。
-- [x] 将 marketplace resolve 输出和 install 命令串联，减少用户手动复制路径。
-- [x] 增加可运行教程: 安装 skill、列工具、切模型运行、查看 trace。
-
-完成记录:
-
-- 新增 `agentflow skill inspect <skill_dir>`，汇总 identity、persona、model、memory、tools、MCP、knowledge、security 和 validation status。
-- `agentflow skill test --dry-run` 现在只做 manifest validation 和 tool discovery，不执行 script regressions 或 smoke scripts。
-- `skill run/chat` 支持 `--model`，并为 `--session` 提供 `--session-id` alias。
-- `skill run` 打印实际使用模型，便于确认运行时覆盖是否生效。
-- `skill run/chat` 支持 `--memory session|sqlite|none`，运行前覆盖 Skill manifest memory backend。
-- 新增 `agentflow skill marketplace install <marketplace> <skill>`，直接 resolve marketplace 并复用本地 install 流程。
-- 新增 `docs/examples/cli_config_first_tutorial.md`，覆盖 mock 模型配置、固定 DAG、Skill inspect/list-tools/test、Skill run、skill-agent workflow、marketplace install 和 trace 查看。
-
-验证:
-
-```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
-```
+- [ ] 在 `agentflow-tools::ToolMetadata` 增加 `idempotency: Idempotency::{Idempotent, NonIdempotent, Unknown}`。
+- [ ] 内置工具默认值: `FileTool::read = Idempotent`, `FileTool::write = NonIdempotent`, `HttpTool::GET = Idempotent`, `HttpTool::POST = NonIdempotent`, `ShellTool = NonIdempotent`。
+- [ ] MCP tool adapter 通过约定 hint（如 `description` 中 `[idempotent]` 标签或 inputSchema 自定义字段）传递。
+- [ ] `AgentNodeResumeContract`: Idempotent 工具自动重放，NonIdempotent 拒绝并给出明确报错，Unknown 拒绝并提示用户显式标注。
+- [ ] 新增测试: partial resume 跨 Idempotent/NonIdempotent/Unknown 三种 tool 路径。
 
 验收标准:
 
-- 用户能完成 `install -> list -> inspect -> list-tools -> run --model ... --trace` 的完整链路。
-- 无 API key 环境也能运行 `skill test --dry-run`。
+- AgentNode partial resume 在 GET HTTP / read file 两条路径上能自动恢复并跳过重新调用。
+- POST HTTP / write file 路径仍要求显式人工干预，错误信息清晰。
 
-### 4. 在 workflow YAML 中暴露 agent / skill-agent 节点
+涉及文件:
+
+- `agentflow-tools/src/{tool,builtin/*}.rs`
+- `agentflow-agents/src/nodes/agent_node.rs`
+- `agentflow-mcp/src/tools.rs`
+
+### 4. FlowValue Checkpoint 类型保真
 
 状态: 已完成
 
 目标:
 
-- 补齐 Config-first 的 DAG + Agent hybrid 能力。
-- 让用户不写 Rust 也能在 DAG 中嵌入智能体节点。
-
-建议 YAML 形态:
-
-```yaml
-nodes:
-  - id: review
-    type: skill_agent
-    parameters:
-      skill: ./skills/code-reviewer
-      model: gpt-4o-mini
-      message: "Review {{ nodes.prepare.outputs.output }}"
-```
+- 修复 `state_after_N.json` 对 `FlowValue::File`/`Url` 的 round-trip 问题，保证失败重启后输出类型一致。
 
 子任务:
 
-- [x] 在 `agentflow-cli/src/executor/factory.rs` 增加 `agent` / `skill_agent` node type。
-- [x] 复用 `SkillLoader` + `SkillBuilder` 构建 ReActAgent。
-- [x] 支持 `message` 来自 parameters 或 input_mapping。
-- [x] 支持 node-level `model` 覆盖 Skill manifest model，并支持 `workflow run --model` 覆盖。
-- [x] 输出 `response`、`session_id`、`stop_reason`、`agent_result`、`agent_resume`。
-- [x] 增加 YAML CLI workflow 测试。
-
-完成记录:
-
-- 新增 CLI workflow 专用 `skill_agent` / `agent` 节点，执行时加载 Skill、构建 agent 并运行 ReAct loop。
-- `skill_agent` 支持 `skill`、`message`、`model` 输入，能从 `input_mapping` 接收上游节点输出。
-- 运行输出与 `AgentNode` 对齐，包含 `agent_result` 和 `agent_resume`，便于后续 checkpoint/recovery 继续增强。
-- `workflow run --model` 同时覆盖 `llm`、`skill_agent` 和 `agent` 节点。
-
-验证:
-
-```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
-```
+- [x] 在 `agentflow-core/src/value.rs` 给 `FlowValue` 实现 `serde::Serialize/Deserialize` 的稳定 schema:
+  - Json: `{"type": "json", "value": ...}`
+  - File: `{"type": "file", "path": "...", "mime_type": "..."}`
+  - Url: `{"type": "url", "url": "...", "mime_type": "..."}`
+- [x] `Flow::state_pool_to_checkpoint_state` 与 `state_pool_from_checkpoint` 使用上述 schema。
+- [x] 增加 property test: `for value in arbitrary FlowValue: assert_eq!(value, from_json(to_json(value)))`。
+- [x] 增加端到端测试: workflow 输出 `FlowValue::File`，checkpoint 写盘后重启，下游节点仍读到 `FlowValue::File`。
+- [x] 更新 `docs/CHECKPOINT_RECOVERY.md` 描述 schema 与兼容策略（已有数据如何迁移，必要时给 0.2.x → 0.3.0 转换工具）。
 
 验收标准:
 
-- 一个 YAML workflow 可以先用 template/file 节点准备输入，再调用 skill-agent 节点，最后将 agent response 传给后续节点。
-- checkpoint 后已完成的 agent 节点不会重复执行工具调用。
+- 在 `agentflow-core` 中 `cargo test --test checkpoint_*` 全绿，包括新的 property test。
+- 含 `text_to_image` 节点的 workflow，失败重启后下游 `image_understand` 仍能拿到 `FlowValue::File`。
 
-### 5. 清理旧 CLI runner 和文档错位
+涉及文件:
 
-状态: 已完成
+- `agentflow-core/src/{value,checkpoint,flow}.rs`
+- `agentflow-core/tests/checkpoint_*`
+- `docs/CHECKPOINT_RECOVERY.md`
+
+### 5. 表达式引擎升级
+
+状态: 待开始
 
 目标:
 
-- 降低维护者误判执行路径的概率。
-- 让 README/docs/CLI help 与当前实现一致。
+- 把 `run_if` / `while.condition` 从字符串简单解析升级为可读、可测的表达式语言。
+- 不引入完整脚本语言，避免成本和安全风险。
 
 子任务:
 
-- [x] 删除或隔离不再使用的旧 runner 代码，或明确标记为 legacy。
-- [x] 检查 README、docs、examples 中的 workflow YAML 是否符合 V2 parser。
-- [x] 更新 `agentflow workflow debug` 文档，明确 validate/plan/analyze/visualize 能力边界。
-- [x] 为尚未实现能力加 TODO 注释或 CLI 明确报错，避免 silent no-op。
-
-完成记录:
-
-- 删除未编译引用的 legacy `agentflow-cli/src/executor/runner.rs`，`executor/mod.rs` 只保留当前 V2 factory。
-- `agentflow-cli/README.md` 已更新 workflow run/debug、llm chat/models、config show/validate 和 skill inspect/test/run 使用说明。
-- README 明确当前 `workflow run` 走 `FlowDefinitionV2 -> GraphNode -> agentflow_core::Flow` 路径。
-- `--watch` 已在 P0-1 中改为显式未实现错误，不再 silent no-op。
-
-验证:
-
-```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
-```
+- [ ] 评估 `evalexpr` (现成 crate) vs 自研 PEG: 对比表达力、依赖大小、错误信息、安全模型。
+- [ ] 选择方案后，在 `agentflow-core/src/expr.rs` 实现统一 `evaluate(expr: &str, state: &StatePool) -> Result<FlowValue>`。
+- [ ] 支持运算符: `&&`, `||`, `!`, `==`, `!=`, `>`, `<`, `>=`, `<=`, `+`, `-`, `*`, `/`。
+- [ ] 支持函数: `len(x)`, `contains(s, sub)`, `is_null(x)`, `is_empty(x)`, `to_number(x)`, `to_string(x)`。
+- [ ] 路径访问: `nodes.X.outputs.Y`, `inputs.Z`, `nodes.X.outputs.Y.0`（数组索引）。
+- [ ] 替换 `flow.rs::evaluate_condition` 调用点，保留旧行为兼容（仅当表达式不含新语法时）。
+- [ ] 文档: `docs/EXPRESSION_LANGUAGE.md` 给完整参考 + 示例。
+- [ ] CLI `workflow validate --strict` 校验所有 `run_if` / `while.condition` 表达式是否能编译。
 
 验收标准:
 
-- 新贡献者能从 CLI command 直接追到当前 V2 Flow 执行路径。
-- 文档中 CLI 示例可在无外部 API 的 smoke test 中至少完成 dry-run/validate。
+- `run_if: "len(nodes.search.outputs.items) > 0 && nodes.classify.outputs.score > 0.7"` 能正确求值。
+- 错误表达式给出行列号与上下文提示，类似 `Error at col 5: unknown function 'lenn', did you mean 'len'?`。
+- 已有 workflow 在不修改 YAML 的前提下继续工作。
 
-## P1: N7 统一可观测、恢复和端到端样例
+涉及文件:
 
-### 6. 统一 workflow / agent / tool / MCP trace 关联
+- `agentflow-core/src/{expr,flow}.rs`
+- `agentflow-core/Cargo.toml` (新依赖)
+- `docs/EXPRESSION_LANGUAGE.md`、`docs/WORKFLOW_SCHEMA.md`
 
-状态: 已完成
+### 6. Workspace Edition 统一
+
+状态: 待开始
 
 目标:
 
-- 一次 mixed run 能用同一个 run id / trace id 串起 workflow node、agent step、tool call、MCP call、LLM call。
+- 解决 `agentflow-server` / `agentflow-db` 使用 Rust 2024 edition、其他 crate 使用 2021 edition 的不一致。
 
 子任务:
 
-- [x] 盘点当前 `WorkflowEvent`、`AgentEvent`、Tool/MCP tracing 字段。
-- [x] 定义统一 `run_id`、`span_id`、`parent_span_id` 或等价关联模型。
-- [x] 让 `AgentNode` 执行时继承 workflow run context。
-- [x] 让 `SkillBuilder`/ToolRegistry 调用可以记录 tool source、permission、duration、error。
-- [x] 增加 hybrid trace replay fixture。
-
-完成记录:
-
-- 在 `agentflow-tracing` 持久化模型中新增 `TraceContext`，包含 `run_id`、`trace_id`、`span_id`、`parent_span_id`。
-- `TraceCollector` 现在为 workflow、node、agent、tool/MCP call 写入层级 context: workflow -> node -> agent -> tool。
-- 新增 tracing 单元测试覆盖 agent/tool context 链接。
-- `docs/TRACING_USAGE.md` 已记录 context 字段和层级规则。
-- `ToolRegistry` 暴露 tool metadata 查询，ReAct 和 Plan-and-Execute runtime 的 tool events 现在记录 source、permissions、duration、error。
-- trace collector 会把 tool source、permissions、duration、error 汇总到 `ToolCallTrace`，replay/TUI 会展示 source 和权限。
-- 新增 `agentflow-tracing/tests/fixtures/hybrid_trace_replay.json` 和 replay fixture 测试，覆盖 DAG -> Agent -> Tool/MCP 的展示链路。
+- [ ] 评估两条路径: 全 workspace 升到 2024，或将 server/db 暂时回退到 2021。
+- [ ] 推荐路径: 全部升到 2024，一次性吸收 edition 差异。
+- [ ] 修复 edition 升级带来的 lint / warning。
+- [ ] 更新 `CLAUDE.md` 与 `docs/ARCHITECTURE.md` 中 Rust edition 说明。
 
 验收标准:
 
-- `agentflow trace replay <run_id>` 能展示 DAG -> Agent -> Tool/MCP 的层级关系。
+- `cargo metadata` 中所有 workspace member 的 `edition` 字段一致。
+- `cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
-### 7. 强化 checkpoint / resume 的 FlowValue 和 AgentNode 语义
+---
 
-状态: 已完成
+## P1: N9 多智能体协作 + 工具沙箱 + 端到端 OTel + RAG 评测 (v0.4.0 候选)
+
+### 7. 多智能体协作三种范式
+
+状态: 待开始
 
 目标:
 
-- 避免复杂输出、文件引用、agent partial output 在恢复时信息丢失。
+- 在 `agentflow-agents/supervisor` 沉淀 handoff / blackboard / debate 三种生产可用的协作范式，每种范式有权威示例与单测。
 
 子任务:
 
-- [x] 为 `FlowValue::File`、`FlowValue::Url` 设计稳定 checkpoint JSON 格式。
-- [x] 修复 checkpoint state 转换中非 JSON 输出可能退化为 `null` 的风险。
-- [x] 增加 checkpoint roundtrip tests 覆盖 Json/File/Url。
-- [x] 增加 AgentNode partial output checkpoint/recovery 测试。
-- [x] 文档化 unresolved tool call 的恢复边界和幂等要求。
-
-完成记录:
-
-- `Flow::state_pool_to_checkpoint_state` 现在复用稳定的 `FlowValue` JSON 表示，不再把 `File` / `Url` 输出退化为 `null`。
-- 新增 checkpoint roundtrip 单元测试，覆盖 `FlowValue::Json`、`FlowValue::File`、`FlowValue::Url` 的原始 checkpoint JSON 和恢复后类型和值。
-- 现有 checkpoint recovery 测试已覆盖 AgentNode 完成态恢复不重复执行工具、partial trace checkpoint/recovery、重复 partial resume 保持 last completed node。
-- `docs/CHECKPOINT_RECOVERY.md` 已补充 FlowValue checkpoint JSON 形态，并已记录 unresolved tool call 需要显式幂等重试策略。
-
-验证:
-
-```bash
-cargo fmt --all -- --check
-cargo test -p agentflow-core --target-dir /tmp/agentflow-target
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
-```
+- [ ] 设计 `Supervisor` 的三种 trait 实现:
+  - `HandoffSupervisor`: 角色切换式，由当前 agent 决定 handoff 给哪个 next agent；记录 handoff 链。
+  - `BlackboardSupervisor`: 共享状态板（同一 `MemoryStore` 切片），多 agent 顺序或并发读写。
+  - `DebateSupervisor`: 多 agent 各自给出方案 → 评审 agent 投票/合并。
+- [ ] 每种范式: 一个权威 example (`agentflow-agents/examples/`) + 一组 mock LLM 单测。
+- [ ] CLI/YAML 暴露: 增加 `multi_agent` 节点类型，`mode: handoff|blackboard|debate`，引用多个 skill。
+- [ ] 文档: `docs/MULTI_AGENT.md` 给三种范式的决策图与示例。
 
 验收标准:
 
-- checkpoint roundtrip 后 FlowValue 类型和值保持一致。
-- AgentNode 完成态恢复不会重复调用工具；partial 态恢复行为有明确错误或继续策略。
+- 一个"研究 + 写作 + 评审"三 agent 协作的 example 进入 CI smoke (mock LLM)。
+- 三种范式的单测覆盖关键路径，各自至少 5 个测试。
 
-### 8. 建立权威端到端示例集
+涉及文件:
 
-状态: 已完成
+- `agentflow-agents/src/supervisor/{mod,handoff,blackboard,debate}.rs`
+- `agentflow-agents/examples/`
+- `agentflow-cli/src/config/schema.rs`、`agentflow-cli/src/executor/factory.rs`
+- `docs/MULTI_AGENT.md`
+
+### 8. 工具进程级沙箱
+
+状态: 待开始
 
 目标:
 
-- 用少量高质量示例覆盖 DAG、agent-native、hybrid、Skill + MCP、RAG + Memory。
+- 把 `ShellTool` / `ScriptTool` 从声明式权限提升到进程级强 enforcement。
+- 让权限模型从"过滤"升级到"裁剪"。
 
 子任务:
 
-- [x] 新增 `examples/workflows/fixed_dag_basic.yml`，无外部 API。
-- [x] 新增 `examples/workflows/skill_agent_hybrid.yml`，可 dry-run，可用 mock skill。
-- [x] 新增 `examples/skills/model-switching` 或教程，展示 `--model` 覆盖。
-- [x] 新增 RAG + Skill 示例，区分需要 Qdrant/API key 的步骤。
-- [x] 将关键示例纳入 CI smoke test: validate/dry-run，不调用外部 API。
-
-完成记录:
-
-- 新增 `agentflow-cli/examples/workflows/rag_skill_assistant.yml`，覆盖 RAG search -> template -> skill_agent 的 config-first hybrid 路径。
-- 示例注释和文档明确 dry-run 不需要外部服务，完整运行需要 Qdrant、embedding credentials 和 chat model。
-- `.github/workflows/quality.yml` 的 examples smoke 新增固定 DAG dry-run、Skill-agent dry-run、RAG + Skill dry-run。
-- CI feature matrix 新增 `agentflow-cli --features rag` check。
-- `docs/examples/cli_config_first_tutorial.md`、`docs/examples/README.md`、`agentflow-cli/examples/workflows/RAG_EXAMPLES.md`、`docs/RELEASE_CHECKLIST.md` 已同步。
+- [ ] 在 `agentflow-tools/src/sandbox.rs` 引入平台抽象:
+  - macOS: `sandbox-exec` profile 模板。
+  - Linux: `seccomp-bpf` syscall whitelist + chroot/mount namespace 子集。
+  - 其他平台: 显式不支持，工具调用拒绝并给出可操作建议。
+- [ ] 在 `Tool` trait 增加 `requires_capabilities() -> Vec<Capability>`，枚举 `Capability::{FsRead, FsWrite, Net, Exec, Env}`。
+- [ ] 实现三方权限合并算法: SkillSecurity → ToolPolicy → CLI flag → effective capabilities，每一步可观察。
+- [ ] 在 trace 中固化 `ToolCapabilityDecision` 事件: 显式记录每个 capability 是否被允许、由哪条规则裁剪。
+- [ ] 文档: `docs/SKILL_PERMISSIONS.md` 写明三方决策合并算法与示例。
+- [ ] CLI: `agentflow skill inspect --explain-permissions <skill>` 展示一次实际运行的最终决策路径。
 
 验收标准:
 
-- 新用户按教程可以完成模型配置、Skill 安装、Skill 运行、workflow dry-run、trace 查看。
+- 在受限沙箱下运行的 `ShellTool` 越界访问被强制阻断 (sandbox 拒绝而非 policy 拒绝)。
+- 一次 skill run 产出的 trace 包含可读的 capability 决策链路。
+- macOS / Linux 两条路径各自有集成测试。
 
-## P0: N5 质量和发布门禁
+涉及文件:
 
-### 1. 扩展 test matrix: feature 组合和 doc tests
+- `agentflow-tools/src/{sandbox,policy,tool,builtin/shell,builtin/script}.rs`
+- `agentflow-skills/src/manifest.rs` (security 字段对接)
+- `docs/SKILL_PERMISSIONS.md`、`docs/TOOL_PERMISSIONS.md`
 
-状态: 已完成
+### 9. OpenTelemetry 端到端连续
+
+状态: 待开始
 
 目标:
 
-- CI 不只跑核心包单元测试，也覆盖文档示例和关键 feature 组合。
-- release checklist 中的人工检查与 CI job 对齐。
+- 解决一次 hybrid run 的 OTel trace 在 LLM hop 断裂的问题。
+- 统一 workflow / agent / tool / MCP / LLM 五层 span 的属性命名。
 
 子任务:
 
-- [x] 盘点 workspace 中实际存在的 feature flags。
-- [x] 增加 doc tests CI job，例如 `cargo test --workspace --doc`。
-- [x] 增加至少一组 feature 组合检查，避免拉满所有 feature 导致外部服务依赖。
-- [x] 更新 `docs/RELEASE_CHECKLIST.md` 的对应命令。
-- [x] 更新 `RoadMap.md` / 本文件状态。
-
-完成记录:
-
-- 新增 `.github/workflows/quality.yml` doctest job: `cargo test --workspace --doc`。
-- 新增 feature matrix job，覆盖 `agentflow-core/observability`、`agentflow-mcp/client,server,stdio`、`agentflow-cli/mcp`。
-- `docs/RELEASE_CHECKLIST.md` 已同步 feature inventory、doc test 和 CI-covered feature commands。
-
-建议验证:
-
-```bash
-cargo test --workspace --doc --target-dir /tmp/agentflow-target
-cargo check --workspace --target-dir /tmp/agentflow-target
-```
+- [ ] `agentflow-llm` HTTP 客户端注入 `traceparent` header (W3C Trace Context 格式)。
+- [ ] 统一 OTel 属性命名:
+  - `agentflow.run_id`, `agentflow.workflow_id`, `agentflow.agent_session_id`, `agentflow.tool_call_id`, `agentflow.mcp_server`
+  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` (复用 OTel GenAI semantic conventions)
+- [ ] 把 LLM 客户端封装成 OTel-aware: 入口创建 span，结束时记录 token 用量、HTTP 状态码、错误码。
+- [ ] 集成测试: 用 stdout exporter 采一次 hybrid run 的 trace，断言 span 链路完整 (no orphan spans)。
+- [ ] 文档: 更新 `docs/TRACING_DESIGN.md` 与 `docs/TRACING_USAGE.md`。
 
 验收标准:
 
-- CI 有明确 doc test job。
-- feature 组合命令能在无外部 API key 环境运行。
-- `git diff --check` 通过。
+- 一次 `agentflow workflow run` 产出的 OTel trace 在 Jaeger/Tempo 中显示为连续树状结构，从 workflow → agent → tool → LLM HTTP call 的根到叶都不断。
+- token 用量在 LLM span 上可见。
 
-### 2. 固化 release checklist 为 CI job / 发布模板
+涉及文件:
 
-状态: 已完成
+- `agentflow-llm/src/{client,providers/*}.rs`
+- `agentflow-tracing/src/otel.rs`
+- `docs/TRACING_*.md`
+
+### 10. RAG 评测 Harness
+
+状态: 待开始
 
 目标:
 
-- 把 `docs/RELEASE_CHECKLIST.md` 中已经自动化的部分放进 CI。
-- 保留需要人工判断的发布项，避免假装全自动。
+- 给 `agentflow-rag` 加上端到端评测能力，让知识库迭代可以被量化。
 
 子任务:
 
-- [x] 新增或扩展 GitHub Actions release gate job。
-- [x] 自动执行 fmt、clippy、核心 tests、examples compile/smoke、doc tests。
-- [x] 在 release checklist 中标注哪些已由 CI 覆盖，哪些仍需人工确认。
-- [x] 考虑是否增加 PR checklist / release issue template。
-
-完成记录:
-
-- `.github/workflows/quality.yml` 新增 `workflow_dispatch`、tag 触发和聚合 `release gate` job。
-- `release gate` 依赖 fmt、clippy、核心 test matrix、doctest、feature matrix、examples compile/smoke。
-- 新增 `.github/ISSUE_TEMPLATE/release.md` 记录仍需人工判断的发布项。
-- `docs/RELEASE_CHECKLIST.md` 已标注 CI covered 与 manual sections。
-
-建议验证:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --target-dir /tmp/agentflow-target -- -D warnings
-cargo test --workspace --examples --target-dir /tmp/agentflow-target
-```
+- [ ] 在 `agentflow-rag/eval/` 新增模块: `Dataset` / `Judgment` / `Metric`。
+- [ ] 支持指标: Recall@K (1, 3, 5, 10), MRR, nDCG@K, 平均延迟。
+- [ ] 支持 baseline 对比: 同一数据集跑两份配置（如 BM25 vs vector，或不同 embedding 模型）。
+- [ ] 标注集格式: TOML 或 JSONL `{ query, expected_doc_ids: [...], notes }`。
+- [ ] 新增 CLI: `agentflow rag eval <dataset> [--config <yaml>]`，输出表格 + JSON 报告。
+- [ ] 自带一个开源数据集（如 BEIR/SciFact 子集）作为 demo + CI smoke。
+- [ ] 文档: `docs/RAG_EVAL.md`。
 
 验收标准:
 
-- CI 配置和 release checklist 不再重复或互相矛盾。
-- 人工 release checklist 更短、更明确。
+- `agentflow rag eval examples/datasets/scifact_mini.toml` 能输出 Recall@K / MRR / nDCG。
+- baseline 对比有清晰的 winner 标注与显著性提示。
 
-## P1: Phase 5 / M4 标准化 Skills 生态
+涉及文件:
 
-### 3. `agentflow skill install` 最小本地 registry 安装路径
+- `agentflow-rag/src/eval/{mod,dataset,metrics}.rs`
+- `agentflow-cli/src/commands/rag/eval.rs`
+- `docs/RAG_EVAL.md`
 
-状态: 已完成
+### 11. 多 LLM provider 一致性回归套件
+
+状态: 待开始
 
 目标:
 
-- 从 `skills.index.toml` resolve 一个 skill。
-- 将本地 skill 安装到用户指定目录或默认 skill home。
-- 为后续 Git/repo/marketplace 安装预留接口，但先不做远程下载。
-
-建议最小行为:
-
-```bash
-agentflow skill install agentflow-skills/examples/skills.index.toml mcp-demo --dir /tmp/agentflow-skills
-agentflow skill validate /tmp/agentflow-skills/mcp-basic
-```
+- 给 5 个真实 provider (OpenAI / Anthropic / Google / StepFun / Moonshot) 建立"行为一致性矩阵"，避免 silent regression。
 
 子任务:
 
-- [x] 设计 CLI 参数: index file、skill name/alias、target dir、overwrite 策略。
-- [x] 复用 `SkillRegistryIndex::resolve_skill`。
-- [x] 复制 skill 目录，保留相对文件结构。
-- [x] 防止覆盖已有目录，除非显式 `--force`。
-- [x] 增加 CLI 测试，使用 `agentflow-skills/examples/skills.index.toml` 或临时 fixture。
-- [x] 更新 `docs/SKILLS.md` 和可运行教程。
-
-完成记录:
-
-- 新增 `agentflow skill install <index_file> <skill> [--dir <target>] [--force]`。
-- 默认安装目录为 `~/.agentflow/skills`，显式 `--dir` 时安装到目标目录下的 canonical skill name 子目录。
-- 安装前 resolve 并校验本地 skill，安装时递归复制目录，保留相对结构。
-- 目标目录存在时默认拒绝覆盖；`--force` 会先移除旧安装目录再复制。
-- CLI 测试覆盖安装、validate、重复安装拒绝和 `--force`。
+- [ ] 设计共用 fixture: 单轮 prompt、多模态 prompt、tool calling、streaming。
+- [ ] 单测使用 `wiremock` 或 `httpmock` 模拟 provider HTTP 响应（避免依赖真实 API）。
+- [ ] 集成测试 (gated by `AGENTFLOW_LIVE_LLM_TESTS=1`): 真实 API 调用，只在 nightly CI 跑。
+- [ ] 在每个 provider 下断言: 文本回答字段位置、token 用量字段、错误码到 `LLMError` 的映射。
+- [ ] 文档: `docs/LLM_PROVIDERS_MATRIX.md` 列出每个 provider 的支持矩阵。
 
 验收标准:
 
-- 能从本地 registry index 安装 mcp-basic skill。
-- 安装后 `skill validate` / `skill list-tools` 可运行。
-- 错误信息包含 index、skill name、目标目录。
+- 5 个 provider 各自有一组共用的 fixture 测试，回归时能定位到具体 provider。
+- nightly CI 有 live LLM smoke job（可选 enable）。
 
-### 4. registry/index 分发体验设计
+涉及文件:
 
-状态: 已完成
+- `agentflow-llm/tests/provider_consistency.rs`
+- `docs/LLM_PROVIDERS_MATRIX.md`
+
+---
+
+## P2: N10 Plugin / 分布式 / Web UI / Agent SDK (v1.0.0-rc 候选)
+
+### 12. Plugin / Custom Node 体系
+
+状态: 待开始
 
 目标:
 
-- 明确组织内共享 skill index 的版本锁定、校验、安装、升级体验。
+- 让第三方节点和 Skill 不修改主仓库即可发布、加载、运行。
 
 子任务:
 
-- [x] 记录 index schema 字段和兼容策略。
-- [x] 明确 `manifest_sha256` 的使用场景。
-- [x] 设计后续远程 registry / Git repo install 的边界。
-- [x] 将设计沉淀到 `docs/SKILLS.md` 或独立 `docs/SKILL_REGISTRY.md`。
-
-完成记录:
-
-- 新增 `docs/SKILL_REGISTRY.md`，覆盖 schema v1 字段、兼容策略、本地 validate/resolve/install workflow。
-- 明确 `manifest_sha256` 只锁 manifest 文件，不替代脚本/MCP/knowledge 文件审查。
-- 记录显式升级流程和未来 Git/remote registry 边界: 先下载到 cache，再复用本地 resolve/validate/copy 模型。
-- `docs/SKILLS.md` 已链接 registry 设计文档。
+- [ ] 评估文档 `docs/PLUGIN_DESIGN.md`: 对比 dlopen + abi_stable vs WASM (wasmtime/wasmer) vs subprocess + IPC 三条路径。决策依据: ABI 稳定性、跨平台、安全沙箱、调用开销、生态。
+- [ ] 选定方案后实现最小 PoC: 一个独立 cargo 项目编译产物能被 AgentFlow 加载，注册一个新的 `AsyncNode` 类型，并能在 workflow 中使用。
+- [ ] Plugin manifest 格式: 名称、版本、入口、声明的节点/工具、要求的 capabilities、签名（可选）。
+- [ ] 生命周期: load → register → execute → unload；崩溃隔离策略。
+- [ ] 权限模型: plugin 默认无 capabilities，必须显式声明并被用户批准。
+- [ ] CLI: `agentflow plugin install/list/inspect/uninstall`。
 
 验收标准:
 
-- 文档能指导用户创建、验证、resolve、install 一个本地 index。
-- 后续实现远程安装时不需要推翻本地模型。
+- 一个独立仓库的 plugin 节点能被 AgentFlow 加载并运行；签名/版本/权限校验有记录。
+- plugin 崩溃不影响主进程，错误信息可观察。
 
-## P1: N5 性能基准
+涉及文件:
 
-### 5. 大 DAG 调度 benchmark
+- `agentflow-core/src/plugin/` (新)
+- `agentflow-cli/src/commands/plugin/` (新)
+- `docs/PLUGIN_DESIGN.md`
 
-状态: 已完成
+### 13. 分布式调度
+
+状态: 待开始
 
 目标:
 
-- 衡量不同规模 DAG 的构建和调度开销。
-- 对 RoadMap 中生产化性能目标提供基线。
+- 让大型 DAG 可以分布式执行，跨多个 worker 节点。
 
 子任务:
 
-- [x] 确认 benchmark 工具选择，优先复用现有 test/benchmark 结构，必要时引入 criterion。
-- [x] 覆盖 100 / 1,000 / 10,000 节点 synthetic DAG。
-- [x] 记录本地基线和 CI 是否运行的策略。
-
-完成记录:
-
-- 复用现有 benchmark-style test 结构，不引入 criterion。
-- 新增 `agentflow-core/tests/large_dag_benchmarks.rs`，测 synthetic DAG 构建和 `Flow::execution_order()` 调度规划。
-- 覆盖 100 / 1,000 / 10,000 节点，无外部 API 依赖。
-- 本地命令: `cargo test -p agentflow-core --test large_dag_benchmarks --target-dir /tmp/agentflow-target -- --nocapture`。
-- 当前策略: 本地和按需 CI 可运行，不加入默认 quality gate，避免每个 PR 增加性能噪声。
+- [ ] 抽象 `WorkerProtocol` trait: 提交任务、领取任务、上报结果、心跳。
+- [ ] 选定一种传输: gRPC (tonic) / NATS / Redis Streams 之一，其他保留扩展点。
+- [ ] `agentflow-server` 进化为 control plane: 调度任务到 worker、聚合结果、维护 run state。
+- [ ] worker 二进制: `agentflow-worker`，启动时连接 control plane。
+- [ ] 跨 worker trace 拼接: worker 把本地 trace 通过协议回传，control plane 拼成完整 OTel trace。
+- [ ] 文档: `docs/DISTRIBUTED.md`，给 2-worker 集群部署示例。
 
 验收标准:
 
-- 有可重复运行的 benchmark 命令。
-- benchmark 不依赖外部 API。
+- 100+ 节点 workflow 能在 2 worker 集群上正确执行，trace 跨 worker 完整连续。
+- 单 worker 故障时任务能被重派或标记失败，control plane 不挂。
 
-### 6. ToolRegistry 调用 benchmark
+涉及文件:
 
-状态: 已完成
+- `agentflow-server/src/scheduler/` (新)
+- `agentflow-worker/` (新 crate)
+- `docs/DISTRIBUTED.md`
+
+### 14. Web UI 调试器
+
+状态: 待开始
 
 目标:
 
-- 衡量 tool lookup、schema metadata、执行 wrapper 的基础开销。
+- 让混合执行 (DAG × Agent × Tool × MCP) 有可视化调试界面。
+- TUI 保留作为 headless 替代。
 
 子任务:
 
-- [x] 构造内置 mock tool。
-- [x] 覆盖单工具、多工具、大 registry lookup。
-- [x] 覆盖成功和错误输出路径。
-
-完成记录:
-
-- 新增 `agentflow-tools/tests/tool_registry_benchmarks.rs`。
-- 覆盖 1 / 100 / 10,000 工具 registry lookup。
-- 覆盖 OpenAI schema metadata 生成、成功 execute wrapper、错误 execute wrapper。
-- 本地命令: `cargo test -p agentflow-tools --test tool_registry_benchmarks --target-dir /tmp/agentflow-target -- --nocapture`。
+- [ ] 选型: React/Svelte SPA + Vite，TypeScript。
+- [ ] 后端: 复用 `agentflow-server` 的 SSE 路由 + REST。
+- [ ] 视图:
+  - DAG 实时状态 (复用 `agentflow-viz` 的 Mermaid/DOT 输出 + 高亮当前节点)。
+  - Agent step timeline (Observe → Plan → ToolCall → ToolResult → Reflect → FinalAnswer)。
+  - Tool call 详情 (params / output / capability decision)。
+  - Trace replay 视图 (替换或补强 TUI)。
+- [ ] 部署: 静态资源打包到 `agentflow-server` 二进制（embed_files / rust-embed），单进程交付。
+- [ ] 文档: `docs/WEB_UI.md`。
 
 验收标准:
 
-- 输出能区分 registry lookup 和 tool execute 的开销。
+- 启动 `agentflow-server` 后访问 `http://localhost:8080/ui` 能看到 run 列表与实时 hybrid run 展开。
+- TUI 仍然可用，作为 SSH/CI 场景替代。
 
-### 7. MCP tool latency benchmark
+涉及文件:
 
-状态: 已完成
+- `agentflow-ui/` (新前端目录)
+- `agentflow-server/src/ui.rs` (静态资源 mount)
+- `docs/WEB_UI.md`
+
+### 15. Agent SDK 文档化
+
+状态: 待开始
 
 目标:
 
-- 衡量本地 stdio MCP server 的 connect、tools/list、tools/call latency。
+- 让第三方开发者能在 30 分钟内理解并扩展 AgentFlow agent runtime。
 
 子任务:
 
-- [x] 复用 `agentflow-skills/examples/skills/mcp-basic`。
-- [x] 区分首次连接、复用连接、shutdown/reconnect。
-- [x] 记录超时配置对失败路径的影响。
-
-完成记录:
-
-- 新增 `agentflow-mcp/tests/mcp_latency_benchmarks.rs`，直接使用本地 stdio MCP server。
-- 覆盖 first connect、first tools/list、复用连接 tools/list、复用连接 tools/call、shutdown/reconnect/list。
-- 输出 p50/p95/avg；client timeout 固定 5s、max_retries=0，用于后续失败路径对比。
-- 本地命令: `cargo test -p agentflow-mcp --test mcp_latency_benchmarks --target-dir /tmp/agentflow-target -- --nocapture`。
+- [ ] `docs/AGENT_SDK.md`: 五分钟入门 + 完整扩展点参考。
+  - 实现自定义 `AgentRuntime`
+  - 实现自定义 `ReflectionStrategy`
+  - 实现自定义 `MemorySummaryBackend`
+  - 实现自定义 `AgentStepKind` (extension variant) — 取决于是否在 N8 把 step 定义改为开放枚举
+  - 实现自定义 `Tool` 与 `MemoryStore`
+- [ ] 配套示例: 在 `agentflow-agents/examples/` 增加 `custom_runtime.rs`、`custom_reflection.rs`、`custom_memory_summary.rs`。
+- [ ] 把所有公开 trait 的 rustdoc 补齐 + doc tests。
 
 验收标准:
 
-- benchmark 无外部网络依赖。
-- 输出包含 p50/p95 或等价统计。
+- 一个外部开发者按 `docs/AGENT_SDK.md` 能在 30 分钟内跑通"自定义 reflection strategy" 示例。
+- `cargo doc --workspace --no-deps` 警告数 = 0（针对已选定的核心 trait）。
 
-### 8. agent loop prompt assembly benchmark
+涉及文件:
 
-状态: 已完成
+- `docs/AGENT_SDK.md`
+- `agentflow-agents/examples/custom_*.rs`
+- 所有 `pub trait` 的 doc 注释
+
+### 16. Plugin marketplace 远程化
+
+状态: 待开始（依赖 12）
 
 目标:
 
-- 衡量 ReAct prompt 组装、memory budget、summary backend 对延迟的影响。
+- 把当前的本地 Skill marketplace 与未来的 Plugin marketplace 统一为远程可分发的目录。
 
 子任务:
 
-- [x] 构造 mock memory 和 mock tools。
-- [x] 覆盖短上下文、长上下文、触发 summary 的上下文。
-- [x] 记录与 token/message 数量的关系。
-
-完成记录:
-
-- 新增 `ReActAgent::preview_llm_messages()`，用于不调用模型的 prompt preview/benchmark。
-- 新增 `agentflow-agents/tests/prompt_assembly_benchmarks.rs`。
-- 覆盖 20 条短上下文、1,000 条长上下文、1,000 条且触发 compact summary 的上下文。
-- 使用 `SessionMemory` 和 mock `ToolRegistry`，不调用真实 LLM。
-- 本地命令: `cargo test -p agentflow-agents --test prompt_assembly_benchmarks --target-dir /tmp/agentflow-target -- --nocapture`。
+- [ ] 设计 manifest schema: name / version / type (skill | plugin) / source (registry url + checksum) / signature。
+- [ ] 远程 registry HTTP 接口 (read-only)。
+- [ ] 本地缓存与签名校验。
+- [ ] CLI: `agentflow marketplace search/install/update/verify`。
+- [ ] 文档: `docs/MARKETPLACE.md`。
 
 验收标准:
 
-- benchmark 不调用真实 LLM。
-- 能帮助判断 memory budget 策略是否退化。
+- 从远程 registry 安装一个 Skill / Plugin 并验证签名通过。
+- 离线模式下仍能使用已缓存的 Skill / Plugin。
 
-## P2: Phase 6 / M5 生产化和生态工具
+---
 
-### 9. Web UI 或 TUI 调试器
+## 维护任务（持续）
 
-状态: 已完成
+### M1. 文档与 CLAUDE.md 同步
 
-目标:
+- [ ] 每完成一个 P0/P1 任务后立刻更新 `CLAUDE.md` "Recent Updates" + `RoadMap.md` 状态。
+- [ ] 当 docs/ 文件描述的特性落地或变更时同步该文档。
+- [ ] 每月一次 `docs/` 全量复查，移除过期描述。
 
-- 提供 workflow / agent / tool / MCP trace 的交互式查看入口。
+### M2. CI 健康度
 
-建议先做 TUI 或 CLI 增强，避免引入 Web 前端复杂度。
+- [ ] 保持 `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` 全绿。
+- [ ] 每个 P0 任务交付时同步增加最少一个集成测试。
+- [ ] 测试数当前 479，目标 v0.3.0 ≥ 600，v0.4.0 ≥ 750。
 
-子任务:
+### M3. 性能基准回归
 
-- [x] 评估现有 `agentflow trace replay` 输出。
-- [x] 设计最小 trace timeline 交互。
-- [x] 决定 TUI crate 或纯 CLI 分页输出。
+- [ ] 大 DAG 调度 / ToolRegistry / MCP latency / agent loop prompt assembly 已有 benchmark；每次 release 前对比上一次基准，回归 > 10% 必须给出原因。
 
-完成记录:
-
-- 新增 `agentflow trace tui <run_id>`，提供静态终端 timeline 入口。
-- 支持 `--filter all|workflow|agent|tool|mcp` 和 `--details` 聚焦查看 workflow、agent、tool、MCP trace。
-- 暂不引入 ratatui/crossterm；先用纯 CLI 输出降低依赖和维护成本。
-
-### 10. 配置加密和 secret 管理
-
-状态: 已完成
-
-目标:
-
-- 明确 API key、env secret、tool sensitive params 的存储和展示策略。
-
-子任务:
-
-- [x] 盘点当前配置加载路径和 `.env` 使用。
-- [x] 设计本地加密存储或外部 secret manager 集成边界。
-- [x] 确保 trace / CLI 输出默认脱敏。
-
-完成记录:
-
-- 新增 `docs/SECRET_MANAGEMENT.md`，明确 `~/.agentflow/models.yml` 只保存 env var 名称，密钥值来自环境变量或 `~/.agentflow/.env`。
-- 明确后续加密/外部 secret manager 应走 `env:`、`file:`、`keychain:`、`vault:` 等 resolver 边界。
-- 实现 `agentflow config show` 的默认脱敏输出，并保留 `api_key_env` 这类环境变量名可见。
-- 实现 `agentflow config validate`，只报告缺失 env var 名称，不打印密钥值。
-
-### 11. Docker / Helm 部署
-
-状态: 已完成
-
-目标:
-
-- 提供可部署的服务镜像和 Kubernetes 安装入口。
-
-子任务:
-
-- [x] 明确需要容器化的二进制: CLI、server、gateway 或 worker。
-- [x] 编写 Dockerfile。
-- [x] 编写 docker-compose 或 Helm chart 初版。
-- [x] 文档化 health checks、env、volume、secret。
-
-完成记录:
-
-- 主部署目标确定为 `agentflow-server` 长运行网关；`agentflow` CLI 可通过 Dockerfile build args 构建。
-- 新增多阶段 `Dockerfile` 和 `.dockerignore`。
-- 新增 `docker-compose.yml`，包含 PostgreSQL 和 `agentflow-server`。
-- 新增 `charts/agentflow` Helm chart 初版，支持 probes、env、existingSecret / chart-managed secret。
-- 新增 `docs/DEPLOYMENT.md`，记录 health checks、env、volume、secret 策略。
-
-### 12. Plugin / Skill marketplace 雏形
-
-状态: 已完成
-
-目标:
-
-- 在 Skill registry/index 基础上形成可浏览、可安装的 marketplace 雏形。
-
-子任务:
-
-- [x] 定义 marketplace metadata。
-- [x] 明确本地 index、组织 index、远程 marketplace 的关系。
-- [x] 与 `agentflow skill install` 对齐。
-
-完成记录:
-
-- 新增 `SkillMarketplace` schema，支持 `local`、`organization` 和预留 `remote` index kind。
-- 新增 `agentflow skill marketplace validate|list|resolve`，聚合本地/组织 registry index 并输出现有 `skill install` 命令。
-- 新增 `agentflow-skills/examples/marketplace.toml` 作为本地 marketplace 示例。
-- 更新 `docs/SKILL_REGISTRY.md` 和 `docs/SKILLS.md`，明确 marketplace 只是 catalog，安装仍走 registry index。
+---
 
 ## 已完成执行顺序
 
-1. P0-1: 已补齐 `agentflow workflow run` 的 input、dry-run、output、timeout、retry 行为。
-2. P0-2: 已强化模型配置和模型切换 CLI，统一 `llm chat`、`workflow run`、`skill run/chat` 的 `--model` 语义。
-3. P0-3: 已提升 Skill CLI 使用链路，完成 `install -> list -> inspect -> list-tools -> run --model --trace`。
-4. P0-4: 已在 workflow YAML 中暴露 `agent` / `skill_agent` 节点，补齐 config-first hybrid。
-5. P0-5: 已清理旧 CLI runner 和文档错位，避免 silent no-op。
-6. P1-6 到 P1-8: 已统一 trace/recovery，并建立权威端到端示例集。
+1. P0-1 (N6-1): 已补齐 `agentflow workflow run` 的 input、dry-run、output、timeout、retry 行为。
+2. P0-2 (N6-2): 已强化模型配置和模型切换 CLI，统一 `llm chat`、`workflow run`、`skill run/chat` 的 `--model` 语义。
+3. P0-3 (N6-3): 已提升 Skill CLI 使用链路，完成 `install -> list -> inspect -> list-tools -> run --model --trace`。
+4. P0-4 (N6-4): 已在 workflow YAML 中暴露 `agent` / `skill_agent` 节点，补齐 config-first hybrid。
+5. P0-5 (N6-5): 已清理旧 CLI runner 和文档错位，避免 silent no-op。
+6. P1-6 to P1-8 (N7): 已统一 trace/recovery，并建立权威端到端示例集。
+7. 评估 (2026-04-28): `OVERALL_EVALUATION_REPORT.md` 完成。
+8. 评估 (2026-05-01): `PROJECT_EVALUATION_2026-05-01.md` 完成；规划 N8/N9/N10 三档发布。

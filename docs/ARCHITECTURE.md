@@ -7,16 +7,47 @@ runtime loops. The project is organized around a small core engine and separate
 crates for nodes, LLM access, tools, Skills, MCP, memory, tracing, visualization,
 and the CLI/server surfaces.
 
+## Layered Mental Model
+
+The 14 active crates (plus 2 scaffold crates) fall into four layers:
+
+```text
++----------------------------------------------------------+
+| L4 Operations / Productization                          |
+|   tracing · viz · server (scaffold) · db (scaffold)     |
++----------------------------------------------------------+
+| L3 Agent / Orchestration                                 |
+|   agents · skills · cli                                  |
++----------------------------------------------------------+
+| L2 Capability Adapters                                   |
+|   nodes · llm · tools · mcp · rag · memory               |
++----------------------------------------------------------+
+| L1 Execution Core                                        |
+|   core (Flow / GraphNode / FlowValue / scheduler)        |
++----------------------------------------------------------+
+```
+
+L1 is the only execution kernel. L2 capabilities reach L3 either as
+`AsyncNode` implementations (DAG path) or as tools/clients consumed by
+`AgentRuntime` (agent-native path). L4 is observation/operation cross-cutting.
+
 ## Runtime Model
 
 AgentFlow supports two complementary execution styles:
 
 - **DAG workflows**: `agentflow-core::Flow` runs explicit graph nodes with declared
   dependencies, input mappings, optional conditions, checkpoints, retry, timeout,
-  resource limits, and health primitives.
+  resource limits, and health primitives. Two execution modes are available:
+  - `FlowExecutionMode::Serial` (default): topological order, one node at a time.
+  - `FlowExecutionMode::Concurrent`: dependency-ready dispatch via
+    `FuturesUnordered` with a configurable `max_concurrency` window. Nodes whose
+    dependencies are all `Ok(_)` or `NodeSkipped` are launched immediately.
 - **Agent loops**: `agentflow-agents::AgentRuntime` records observe, plan, tool
   call, tool result, reflection, and final answer steps. ReAct, plan/execute, and
-  multi-agent examples are built on this runtime.
+  multi-agent examples are built on this runtime. Each run produces an
+  `AgentRunResult` with a structured `AgentStopReason` (one of: final answer,
+  stop condition, max steps, max tool calls, timeout, cancelled, token budget,
+  error).
 
 The intended direction of composition is:
 
@@ -28,6 +59,10 @@ Use workflows for deterministic production automation. Use agents when the next
 step depends on model reasoning, tool feedback, memory, or reflection. Use
 `AgentNode` when a workflow needs one agent-driven step, and use workflow tools
 when an agent should call a stable DAG as a tool.
+
+YAML can declare both styles: `llm` / `template` / `http` / `file` / `map` /
+`while` and so on for DAG nodes; `agent` / `skill_agent` for agent-native
+nodes that build a `ReActAgent` from a Skill manifest at run time.
 
 ## Workspace Crates
 

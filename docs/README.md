@@ -27,6 +27,14 @@ working references.
 - Tracing internals: [TRACING_DESIGN.md](TRACING_DESIGN.md), [TRACE_PERSISTENCE_SCHEMA.md](TRACE_PERSISTENCE_SCHEMA.md)
 - Examples: [examples/README.md](examples/README.md)
 
+## Project Status And Roadmap
+
+These live at the repository root, not inside `docs/`:
+
+- [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md): latest module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
+- [`RoadMap.md`](../RoadMap.md): N1–N7 closed; next phases N8/N9/N10 (v0.3.0 → v0.4.0 → v1.0.0-rc).
+- [`TODOs.md`](../TODOs.md): active task queue derived from the evaluation and roadmap.
+
 ## Historical Release References
 
 These remain as release/migration references, not as current design documents:

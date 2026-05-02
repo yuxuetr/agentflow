@@ -2,11 +2,21 @@
 
 ## Project Overview
 
-AgentFlow is a Rust-based workflow orchestration platform with comprehensive LLM integration and Model Context Protocol (MCP) support. The project consists of three main crates with clear separation of concerns:
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace is organized as a layered framework with 14 active crates plus 2 scaffold crates (`agentflow-server`, `agentflow-db`).
 
-- **agentflow-core**: Workflow execution engine and core abstractions
-- **agentflow-llm**: Unified LLM provider interface and multimodal capabilities  
-- **agentflow-cli**: Command-line interface for workflow and LLM operations
+Recommended four-layer mental model:
+
+- **L1 Execution Core**: `agentflow-core` (DAG engine, `AsyncNode`, `FlowValue`, scheduler, retry, timeout, checkpoint, resource manager, health, events)
+- **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
+- **L3 Agent / Orchestration**: `agentflow-agents`, `agentflow-skills`, `agentflow-cli`
+- **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-viz`, `agentflow-server`, `agentflow-db`
+
+The framework supports two complementary execution styles:
+
+- **DAG workflows** via `agentflow-core::Flow` (sequential or `FlowExecutionMode::Concurrent` dependency-ready scheduling) with explicit I/O, checkpoints, retry, timeout, and conditional execution.
+- **Agent-native loops** via `agentflow-agents::AgentRuntime` (ReAct, Plan-Execute, Reflection, Supervisor) with structured `AgentStep` / `AgentEvent` / `AgentStopReason`, tool calling, memory, and cancellation.
+
+The two compose via `AgentNode` (agent embedded in DAG) and `WorkflowTool` (DAG exposed as agent tool). Config-first YAML supports `agent` / `skill_agent` node types so non-Rust users can build hybrid agents.
 
 ## Architecture Principles
 
@@ -18,35 +28,100 @@ AgentFlow is a Rust-based workflow orchestration platform with comprehensive LLM
 
 ### Crate Responsibilities
 
-#### agentflow-core
-**Primary Focus**: Workflow execution engine and orchestration
-- Core workflow execution engine (`workflow_runner.rs`)
-- Async node execution framework with concurrency control
-- Configuration-first workflow management (`config.rs`)
-- Robustness features: circuit breakers, rate limiting, timeout management
-- Observability infrastructure: metrics collection, event tracking
-- Shared state management across workflow execution
-- Base abstractions for nodes and flows (`node.rs`, `async_node.rs`, `flow.rs`)
+#### L1 — agentflow-core
+**Primary Focus**: DAG execution engine and core abstractions
+- `Flow` orchestrator with topological sort and `FlowExecutionMode::{Serial, Concurrent}` (dependency-ready dispatch via `FuturesUnordered` + `max_concurrency`)
+- `AsyncNode` trait + `GraphNode` (dependencies, `input_mapping`, `run_if`, `initial_inputs`)
+- `NodeType::{Standard, Map, While}` with parallel/sequential map and conditional loops
+- `FlowValue::{Json, File, Url}` for explicit, namespaced state pool
+- Production primitives: retry/retry_executor, timeout, checkpoint, resource_manager, resource_limits, health, state_monitor, events
 
-#### agentflow-llm  
-**Primary Focus**: LLM provider abstraction and multimodal capabilities
-- Unified LLM provider interface (OpenAI, Anthropic, Google, Moonshot, StepFun)
-- Model registry and configuration management (`registry/`, `config/`)
-- Multimodal capabilities (text, image, audio processing) (`multimodal.rs`)
-- Streaming response handling (`client/streaming.rs`)
-- API key management and authentication
-- Model discovery and validation (`discovery/`)
-- Provider-specific implementations (`providers/`)
+#### L2 — agentflow-nodes
+**Primary Focus**: Built-in `AsyncNode` library
+- 16+ node types: `llm`, `template`, `http`, `file`, `arxiv`, `markmap`, `batch`, `conditional`, `while`, `mcp`, `rag`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_edit`, `image_understand`
+- Feature-gated (mcp, rag, etc.) so optional capabilities don't pull dependencies
+- Factory pattern in `factory_traits.rs` for dynamic node instantiation
 
-#### agentflow-cli
-**Primary Focus**: User interface and command orchestration
-- Command-line interface and user interaction (`main.rs`)
-- Workflow orchestration commands (run, validate, list)
-- Direct LLM interaction commands (prompt, chat, models)
-- Image generation and analysis commands (`commands/image/`)
-- Audio processing commands (TTS, ASR, voice cloning) (`commands/audio/`)
-- Configuration management (`commands/config/`)
-- Output formatting and progress reporting (`utils/output.rs`)
+#### L2 — agentflow-llm
+**Primary Focus**: LLM provider abstraction
+- Unified fluent API: `AgentFlow::model(...).prompt(...).execute()`
+- 6 providers: OpenAI, Anthropic, Google, StepFun, Moonshot, Mock
+- Multimodal (text + image url/base64), streaming, model registry/discovery
+- Pending: native `tool_calls` / `tool_choice` first-class support (currently routed via prompt protocol)
+
+#### L2 — agentflow-tools
+**Primary Focus**: Unified tool abstraction
+- `Tool` trait + `ToolRegistry` + `SandboxPolicy` + `ToolPolicy`
+- `ToolMetadata` with `source: ToolSource::{Builtin, Script, Mcp, Workflow}`, permissions, original MCP server/tool names
+- Built-in `FileTool` / `HttpTool` / `ShellTool` (shell defaults to disabled)
+- `ToolOutputPart::{Text, Image, Resource}` for typed multimodal output
+
+#### L2 — agentflow-mcp
+**Primary Focus**: Model Context Protocol integration
+- Client + server + transport (stdio first), JSON-RPC 2.0
+- Retry, timeout, reconnect; latency benchmarks
+- Adapter into `agentflow-tools::ToolRegistry`
+
+#### L2 — agentflow-rag
+**Primary Focus**: Retrieval-Augmented Generation
+- Document chunking, embeddings (OpenAI / StepFun API or local ONNX), Qdrant vectorstore, retrieval, reranking
+- Document sources: PDF, HTML, CSV, text
+- Pending: end-to-end recall/precision evaluation harness
+
+#### L2 — agentflow-memory
+**Primary Focus**: Agent conversation memory
+- `MemoryStore` trait with `SessionMemory` (token-windowed in-memory) and `SqliteMemory` (persistent)
+- `SemanticMemory` for similarity search (interlocks with `agentflow-rag`)
+
+#### L3 — agentflow-agents
+**Primary Focus**: Agent-native runtime and patterns
+- `AgentRuntime` trait with `AgentContext`, `RuntimeLimits` (max_steps, max_tool_calls, timeout_ms, token_budget), `AgentCancellationToken`
+- `ReActAgent` (observe/plan/tool/result/reflect/final answer with memory summary)
+- `PlanExecuteAgent` (structured plan JSON + sequential execution)
+- `ReflectionStrategy` trait (`FailureReflection` / `FinalReflection` / `NoOpReflection`)
+- `MemorySummaryBackend` trait (`RecentOnlyMemorySummary` / `CompactMemorySummary`)
+- `AgentNode` (agent in DAG) + `WorkflowTool` (DAG as agent tool) + `AgentNodeResumeContract` (partial resume)
+- `Supervisor` multi-agent scaffold
+
+#### L3 — agentflow-skills
+**Primary Focus**: Declarative agent capability packages
+- `SKILL.md` (recommended) + `skill.toml` (compatibility) parsing
+- `SkillBuilder` wires persona / model / tools / knowledge / memory / mcp_servers / security into a runnable agent
+- Local registry (`skills.index.toml`) + marketplace catalog
+- CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
+
+#### L3 — agentflow-cli
+**Primary Focus**: Unified user interface
+- `workflow run|validate|debug` (with `--input`, `--dry-run`, `--output`, `--timeout`, `--max-retries`, `--model`, `--run-dir`, `--max-concurrency`)
+- `config init|show|validate`
+- `llm models` (model discovery only; interactive chat is via Skills/agents)
+- `skill *`, `mcp list-tools|call-tool|list-resources`, `trace replay|tui`
+- `audio asr|tts`, `image generate|understand`
+- `rag search|index|collections` (feature-gated)
+
+#### L4 — agentflow-tracing
+**Primary Focus**: Observability
+- Event collection via `EventListener` (non-invasive)
+- Persistence: JSONL (default) or SQLite/Postgres (feature-gated)
+- `agentflow trace replay` + TUI timeline
+- OpenTelemetry exporter (OTLP)
+- Redaction for API keys, env secrets, sensitive tool params
+- `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` for explicit storage roots
+
+#### L4 — agentflow-viz
+**Primary Focus**: DAG visualization
+- YAML → VisualGraph → Mermaid / DOT / JSON
+- Static visualization; not yet wired to live trace state
+
+#### L4 — agentflow-server (scaffold)
+**Primary Focus**: Axum gateway for platform mode
+- Currently health/live/ready only (130 LOC, 0 tests)
+- Pending: `/v1/runs`, `/v1/skills`, `/v1/runs/{id}/events` (SSE), AuthN/Z, tenant isolation
+
+#### L4 — agentflow-db (scaffold)
+**Primary Focus**: PostgreSQL persistence for the gateway
+- Currently 48 LOC: pool initialization only
+- Pending: run/step/event/artifact/skill_install/mcp_session schema + migration
 
 ## Development Guidelines
 
@@ -156,18 +231,48 @@ pub enum LLMError {
   - Comprehensive documentation (MCP_EXAMPLES.md)
 - **Voice cloning** - CLI command hidden, requires file upload API
 
-### 📋 Planned Features (Not Started)
-- **RAG system** - No implementation yet
-  - Requires: New `agentflow-rag` crate
-  - Vector store abstractions (Pinecone, Weaviate, Qdrant, Chroma)
-  - Embedding generation and document retrieval
-  - RAGNode for workflow integration
-- **Hybrid context strategies** - Depends on MCP + RAG completion
-  - RAGFirst, MCPFirst, Smart routing strategies
-  - Auto-discovery of tools and knowledge sources
-- **Distributed execution** - Multi-node workflow execution
-- **WebAssembly (WASM) nodes** - Sandboxed node execution
-- **Enhanced robustness** - Circuit breakers in production use, advanced retry logic
+### ✅ Agent-native Runtime (Production-Ready)
+- **AgentRuntime trait** - `AgentContext`, `RuntimeLimits` (max_steps / max_tool_calls / timeout_ms / token_budget), `AgentCancellationToken`
+- **ReAct loop** - structured Observe / Plan / ToolCall / ToolResult / Reflect / FinalAnswer steps with 8 typed `AgentStopReason` variants
+- **Plan-Execute** - structured plan JSON + sequential execution
+- **Reflection strategies** - pluggable `FailureReflection` / `FinalReflection` / `NoOpReflection`
+- **Memory summary backends** - pluggable `RecentOnlyMemorySummary` / `CompactMemorySummary` for context window management
+- **Memory hooks** - non-failing observers for memory read/search/write
+- **Hybrid composition** - `AgentNode` (agent in DAG), `WorkflowTool` (DAG as agent tool), `AgentNodeResumeContract` (partial resume)
+- **YAML config-first** - `agent` / `skill_agent` node types validated by schema and wired through factory
+
+### ✅ RAG System (alpha → 0.3.0)
+- **agentflow-rag** - Document chunking, embeddings (OpenAI/StepFun API or local ONNX), Qdrant vectorstore, retrieval, reranking
+- **Sources** - PDF, HTML, CSV, text
+- **CLI integration** - `agentflow rag search|index|collections` (feature-gated)
+- **Pending**: end-to-end recall/precision evaluation harness
+
+### 📋 Planned Features (Roadmap N8 / N9 / N10)
+
+**N8 — Platform skeleton + native tool calling (v0.3.0 candidate):**
+- Server gateway: `/v1/runs`, `/v1/skills`, SSE event streams, tenant-aware routing
+- DB schema + migration: run / step / event / artifact / skill_install / mcp_session
+- LLM `tool_calls` / `tool_choice` first-class in `agentflow-llm` (provider-native via OpenAI tools / Anthropic tool_use / Google function declarations, prompt fallback)
+- `Tool` idempotency metadata for partial-resume auto-replay
+- `FlowValue::File` / `Url` checkpoint round-trip type fidelity
+- Expression engine upgrade for `run_if` / `while.condition`
+- Workspace edition unification (currently 2024 vs 2021 split)
+
+**N9 — Multi-agent collaboration + ecosystem (v0.4.0 candidate):**
+- Handoff / blackboard / debate collaboration patterns in `agentflow-agents/supervisor`
+- Process-level sandbox (macOS sandbox-exec / Linux seccomp + chroot subset) for `ShellTool` / `ScriptTool`
+- `Tool::requires_capabilities()` (`fs.read` / `fs.write` / `net` / `exec`) + effective capabilities after three-way merge (Skill / ToolPolicy / CLI flag)
+- OpenTelemetry context propagation through LLM HTTP calls (`traceparent` headers)
+- `agentflow-rag/eval/` harness with Recall@K / MRR / nDCG; `agentflow rag eval <dataset>`
+- `docs/SKILL_PERMISSIONS.md` formalizes Skill/Tool/CLI permission merge algorithm
+
+**N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):**
+- Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)
+- Distributed scheduling: worker abstraction over gRPC / NATS / Redis Streams
+- Web UI: React/Svelte SPA + `agentflow-server` SSE for live DAG / Agent / Tool state
+- `docs/AGENT_SDK.md` five-minute extension tutorial
+
+See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the 2026-05-01 evaluation that drove the prioritization.
 
 ## Implementation Roadmap
 
@@ -475,7 +580,10 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
   - Tera template features (loops, conditionals, filters)
   - Complex report generation
 
-> **Note**: Examples for MCP/RAG hybrid workflows will be added once these features are implemented.
+- **Skill-agent hybrid** (`examples/workflows/skill_agent_hybrid.yml`) - DAG with `skill_agent` nodes, supports dry-run
+- **RAG + Skill assistant** (`examples/workflows/rag_skill_assistant.yml`) - RAG search → template → skill_agent
+- **Fixed DAG basic** (`examples/workflows/fixed_dag_basic.yml`) - DAG with no external API dependency
+- **Agent-native ReAct** + **Plan-Execute** examples - in `agentflow-agents/examples/`
 
 ## Common Development Tasks
 
@@ -564,6 +672,14 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 1, 2026 - Project Evaluation 2026-05-01 ✅
+- ✅ **`PROJECT_EVALUATION_2026-05-01.md`** completed against HEAD `41ed3f8`
+- ✅ **Composite rating: B+** — 架构 A-, DAG 内核 A-, agent-native B+, CLI/config-first B, 可观测性 B+, 平台化 C-
+- ✅ **N1–N7 fully closed** — agent runtime productionization, observability/replay, security/tool governance, Skill CLI, CI quality gates, CLI productionization, unified trace/recovery
+- ✅ **Confirmed dual-paradigm support** — DAG with concurrent dependency-ready scheduler + agent-native ReAct/Plan-Execute/Reflection + hybrid via `AgentNode`/`WorkflowTool`
+- ✅ **YAML config-first agent now first-class** — `agent` / `skill_agent` node types in CLI factory + schema validation
+- 📋 **Next phases (RoadMap N8/N9/N10)** — platform skeleton (server/db), LLM native tool calling, FlowValue checkpoint type fidelity, expression engine upgrade, multi-agent collaboration, plugin system
+
 ### November 17, 2025 - Compilation Fixes & Test Verification ✅
 - ✅ **Fixed CLI compilation errors** - RAG command feature gate issues resolved
   - Added `#[cfg(feature = "rag")]` to Commands::Rag enum variant
@@ -624,8 +740,10 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ---
 
-**Last Updated**: 2025-11-17
-**AgentFlow Version**: 0.2.0+ (Phase 1.5 Complete)
+**Last Updated**: 2026-05-01
+**AgentFlow Version**: 0.2.0+ (Phase 1.5 + N1–N7 complete; targeting v0.3.0 candidate)
 **agentflow-mcp Version**: 0.1.0-alpha (Fully Integrated)
-**Rust Edition**: 2021
-**Test Status**: ✅ 479/479 passing (100%)
+**agentflow-rag Version**: 0.3.0-alpha
+**Rust Edition**: 2021 (mixed: `agentflow-server` / `agentflow-db` use 2024 — to be unified in N8)
+**Test Status**: ✅ 479/479 passing (100%, verified 2025-11-17)
+**Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-01.md`)
