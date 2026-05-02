@@ -69,8 +69,8 @@
   - `POST /v1/skills/{name}:run` 触发 skill agent 单次运行
   - `GET /v1/skills` 列出本地 skill registry
 - [ ] `agentflow-server`: 接 `agentflow-tracing` 的 `EventListener`，每个事件落库 + 推送给订阅者。
-- [ ] `agentflow-server`: 错误响应统一为 `{ "error": { "code", "message", "details" } }`。
-- [ ] 基础 AuthN: `Authorization: Bearer <token>` 简单匹配 env var；为后续 OAuth 留扩展点。
+- [x] `agentflow-server`: 错误响应统一为 `{ "error": { "code", "message", "details" } }`：`ApiError` 全面重写，每个 variant 映射稳定 `code` (not_found / bad_request / unauthorized / forbidden / database_error / internal_error / server_misconfigured)；3 条单测覆盖序列化。
+- [x] 基础 AuthN: `Authorization: Bearer <token>` 中间件 (`src/auth.rs`)，常量时间比对，`AuthConfig::from_env()` 从 `AGENTFLOW_API_TOKEN` 读取，留 OAuth 扩展点；`/health*` 路由不需要 auth；5 条 e2e 测试覆盖缺失/错误/空格/正确 token + 401/403 envelope。
 - [ ] 增加端到端测试: `cargo test -p agentflow-server`，覆盖 run 提交、状态查询、SSE 订阅、skill run。
 - [ ] 更新 `docs/DEPLOYMENT.md`，给出最小 server + db docker-compose 示例。
 
