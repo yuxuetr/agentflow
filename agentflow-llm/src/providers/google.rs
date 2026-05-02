@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -103,6 +104,18 @@ impl GoogleProvider {
       body["generationConfig"] = generation_config;
     }
 
+    if let Some(tools) = &request.tools {
+      // Gemini wraps every function declaration list in a single `tools`
+      // entry — we send one entry containing all functions.
+      let declarations: Vec<Value> = tools.iter().map(tool_spec_to_google_value).collect();
+      body["tools"] = json!([
+        { "functionDeclarations": declarations }
+      ]);
+    }
+    if let Some(choice) = &request.tool_choice {
+      body["toolConfig"] = tool_choice_to_google_value(choice, request.tools.as_deref());
+    }
+
     body
   }
 
@@ -117,6 +130,59 @@ impl GoogleProvider {
       self.base_url, model, method, self.api_key
     )
   }
+}
+
+/// Encode a `ToolSpec` as a Gemini `functionDeclaration` entry.
+pub(crate) fn tool_spec_to_google_value(spec: &ToolSpec) -> Value {
+  json!({
+    "name": spec.name,
+    "description": spec.description,
+    "parameters": spec.parameters,
+  })
+}
+
+/// Encode `ToolChoice` as Gemini's `toolConfig.functionCallingConfig` block.
+///
+/// Specific-tool selection requires `allowedFunctionNames` to contain the
+/// target name (mode is `ANY` so the model is forced to use a tool).
+pub(crate) fn tool_choice_to_google_value(
+  choice: &ToolChoice,
+  _tools: Option<&[ToolSpec]>,
+) -> Value {
+  match choice {
+    ToolChoice::Auto => json!({"functionCallingConfig": {"mode": "AUTO"}}),
+    ToolChoice::None => json!({"functionCallingConfig": {"mode": "NONE"}}),
+    ToolChoice::Required => json!({"functionCallingConfig": {"mode": "ANY"}}),
+    ToolChoice::Tool { name } => json!({
+      "functionCallingConfig": {
+        "mode": "ANY",
+        "allowedFunctionNames": [name],
+      }
+    }),
+  }
+}
+
+/// Pull `functionCall` parts out of the first candidate and convert them to
+/// typed `ToolCallRequest`s. Gemini does not include ids — we synthesise
+/// stable `call_<index>` ids so downstream tool-result correlation works.
+pub(crate) fn parse_google_function_calls(parts: &[GooglePart]) -> Vec<ToolCallRequest> {
+  parts
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, part)| {
+      let call = part.function_call.as_ref()?;
+      let name = call.get("name").and_then(Value::as_str)?.to_string();
+      let arguments = call
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+      Some(ToolCallRequest {
+        id: format!("call_{}", idx),
+        name,
+        arguments,
+      })
+    })
+    .collect()
 }
 
 #[async_trait]
@@ -154,15 +220,20 @@ impl LLMProvider for GoogleProvider {
 
     let google_response: GoogleResponse = response.json().await?;
 
-    let content_text = google_response
-      .candidates
-      .first()
-      .and_then(|candidate| candidate.content.parts.first())
-      .and_then(|part| part.text.as_ref())
-      .unwrap_or(&String::new())
-      .clone();
+    let first_candidate = google_response.candidates.first();
+    // Concatenate all text parts; functionCall parts are surfaced via
+    // `tool_calls` instead of being stringified into content.
+    let content_text = first_candidate
+      .map(|c| {
+        c.content
+          .parts
+          .iter()
+          .filter_map(|p| p.text.as_deref())
+          .collect::<Vec<_>>()
+          .join("")
+      })
+      .unwrap_or_default();
 
-    // Convert to ContentType - Google currently only returns text
     let content = ContentType::Text(content_text);
 
     let usage = google_response
@@ -174,12 +245,29 @@ impl LLMProvider for GoogleProvider {
         total_tokens: Some(u.total_token_count),
       });
 
+    let tool_calls = first_candidate
+      .map(|c| parse_google_function_calls(&c.content.parts))
+      .unwrap_or_default();
+
+    // Gemini emits no dedicated tool-call finish reason; presence of
+    // functionCall parts is the signal. Override `STOP` to `ToolCalls` when
+    // tool calls are present so callers branch correctly.
+    let stop_reason = first_candidate.and_then(|c| {
+      let raw = c.finish_reason.as_deref()?;
+      let mapped = StopReason::from_google_finish_reason(raw);
+      if !tool_calls.is_empty() && matches!(mapped, StopReason::Stop) {
+        Some(StopReason::ToolCalls)
+      } else {
+        Some(mapped)
+      }
+    });
+
     Ok(ProviderResponse {
       content,
       usage,
       metadata: Some(serde_json::to_value(&google_response)?),
-      tool_calls: Vec::new(),
-      stop_reason: None,
+      tool_calls,
+      stop_reason,
     })
   }
 
@@ -279,8 +367,15 @@ struct GoogleContent {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct GooglePart {
-  text: Option<String>,
+pub(crate) struct GooglePart {
+  pub text: Option<String>,
+  /// Native function call payload: `{ "name": "...", "args": { ... } }`.
+  #[serde(
+    rename = "functionCall",
+    default,
+    skip_serializing_if = "Option::is_none"
+  )]
+  pub function_call: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -455,5 +550,92 @@ mod tests {
 
     let streaming_endpoint = provider.get_model_endpoint("gemini-1.5-pro", true);
     assert!(streaming_endpoint.contains("streamGenerateContent"));
+  }
+
+  #[test]
+  fn build_request_body_serialises_tools() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather for a city",
+      json!({
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }),
+    );
+    let request = ProviderRequest {
+      model: "gemini-1.5-pro".to_string(),
+      messages: vec![json!({"role": "user", "content": "weather?"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: Some(ToolChoice::Required),
+    };
+
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    let decls = tools[0]["functionDeclarations"]
+      .as_array()
+      .expect("functionDeclarations");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0]["name"], "get_weather");
+    assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "ANY");
+  }
+
+  #[test]
+  fn tool_choice_specific_lists_allowed_function() {
+    let body = tool_choice_to_google_value(
+      &ToolChoice::Tool {
+        name: "x".to_string(),
+      },
+      None,
+    );
+    assert_eq!(body["functionCallingConfig"]["mode"], "ANY");
+    assert_eq!(
+      body["functionCallingConfig"]["allowedFunctionNames"][0],
+      "x"
+    );
+  }
+
+  #[test]
+  fn parse_google_function_calls_extracts_calls() {
+    let raw = json!({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {"text": "I'll check"},
+              {"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}
+            ],
+            "role": "model"
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 5,
+        "candidatesTokenCount": 3,
+        "totalTokenCount": 8
+      }
+    });
+    let parsed: GoogleResponse = serde_json::from_value(raw).unwrap();
+    let candidate = &parsed.candidates[0];
+    let calls = parse_google_function_calls(&candidate.content.parts);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "get_weather");
+    assert_eq!(calls[0].arguments["city"], "Tokyo");
+    // Synthesised id when Gemini doesn't provide one.
+    assert_eq!(calls[0].id, "call_1");
+  }
+
+  #[test]
+  fn parse_google_function_calls_text_only_returns_empty() {
+    let parts = vec![GooglePart {
+      text: Some("hi".to_string()),
+      function_call: None,
+    }];
+    assert!(parse_google_function_calls(&parts).is_empty());
   }
 }
