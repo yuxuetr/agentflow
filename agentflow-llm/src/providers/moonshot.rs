@@ -1,7 +1,11 @@
 use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
-  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  providers::{
+    ContentType, LLMProvider, ProviderRequest, ProviderResponse,
+    openai::{parse_openai_tool_calls, tool_choice_to_openai_value, tool_spec_to_openai_value},
+  },
+  tool_calling::StopReason,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -59,6 +63,14 @@ impl MoonshotProvider {
     // Add additional parameters
     for (key, value) in &request.parameters {
       body[key] = value.clone();
+    }
+
+    // Moonshot speaks the OpenAI tools wire format directly.
+    if let Some(tools) = &request.tools {
+      body["tools"] = Value::Array(tools.iter().map(tool_spec_to_openai_value).collect());
+    }
+    if let Some(choice) = &request.tool_choice {
+      body["tool_choice"] = tool_choice_to_openai_value(choice);
     }
 
     body
@@ -119,12 +131,21 @@ impl LLMProvider for MoonshotProvider {
         total_tokens: Some(u.total_tokens),
       });
 
+    let first_choice = moonshot_response.choices.first();
+    let tool_calls = first_choice
+      .and_then(|c| c.message.tool_calls.as_ref())
+      .map(parse_openai_tool_calls)
+      .unwrap_or_default();
+    let stop_reason = first_choice
+      .and_then(|c| c.finish_reason.as_deref())
+      .map(StopReason::from_openai_finish_reason);
+
     Ok(ProviderResponse {
       content,
       usage,
       metadata: Some(serde_json::to_value(&moonshot_response)?),
-      tool_calls: Vec::new(),
-      stop_reason: None,
+      tool_calls,
+      stop_reason,
     })
   }
 
@@ -217,6 +238,8 @@ struct MoonshotChoice {
 struct MoonshotMessage {
   role: String,
   content: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  tool_calls: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -392,6 +415,26 @@ mod tests {
     assert_eq!(body["temperature"], 0.7);
     assert_eq!(body["max_tokens"], 100);
     assert_eq!(body["stream"], false);
+    assert!(body.get("tools").is_none());
+  }
+
+  #[test]
+  fn build_request_body_passes_tools_through_openai_format() {
+    use crate::tool_calling::{ToolChoice, ToolSpec};
+    let provider = MoonshotProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new("ping", "Ping a host", json!({"type": "object"}));
+    let request = ProviderRequest {
+      model: "moonshot-v1-8k".to_string(),
+      messages: vec![],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: Some(ToolChoice::Auto),
+    };
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools[0]["function"]["name"], "ping");
+    assert_eq!(body["tool_choice"], "auto");
   }
 
   #[test]

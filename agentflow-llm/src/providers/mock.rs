@@ -9,6 +9,7 @@
 
 use super::{ContentType, LLMProvider, ProviderRequest, ProviderResponse, TokenUsage};
 use crate::client::streaming::{StreamChunk, StreamingResponse};
+use crate::tool_calling::{StopReason, ToolCallRequest};
 use crate::{LLMError, Result};
 use async_trait::async_trait;
 use std::collections::VecDeque;
@@ -25,6 +26,14 @@ pub struct MockProvider {
   delay_ms: u64,
   /// Whether to simulate an error
   simulate_error: bool,
+  /// Tool calls to surface on the next response (consumed FIFO).
+  ///
+  /// Each entry is a vector of tool calls returned for a single request.
+  /// When this queue is non-empty, `stop_reason` is set to `ToolCalls`,
+  /// matching native-provider behaviour. Used by ReAct/Plan-Execute
+  /// fallback tests to drive the typed tool-calling path without a real
+  /// network round-trip.
+  tool_call_queue: Arc<Mutex<VecDeque<Vec<ToolCallRequest>>>>,
 }
 
 impl MockProvider {
@@ -35,7 +44,20 @@ impl MockProvider {
       response_queue: Arc::new(Mutex::new(load_response_queue_from_env())),
       delay_ms: 0,
       simulate_error: false,
+      tool_call_queue: Arc::new(Mutex::new(VecDeque::new())),
     })
+  }
+
+  /// Queue a single batch of tool calls to be surfaced on the next request.
+  ///
+  /// Tests use this to drive the native tool-calling code path through the
+  /// Mock provider without making a real network call. Calling this multiple
+  /// times queues additional batches in FIFO order.
+  pub fn with_tool_calls(self, calls: Vec<ToolCallRequest>) -> Self {
+    if let Ok(mut queue) = self.tool_call_queue.lock() {
+      queue.push_back(calls);
+    }
+    self
   }
 
   /// Create a mock provider with custom response
@@ -154,6 +176,18 @@ impl LLMProvider for MockProvider {
 
     let word_count = content_text.split_whitespace().count() as u32;
 
+    let tool_calls = self
+      .tool_call_queue
+      .lock()
+      .ok()
+      .and_then(|mut q| q.pop_front())
+      .unwrap_or_default();
+    let stop_reason = if tool_calls.is_empty() {
+      Some(StopReason::Stop)
+    } else {
+      Some(StopReason::ToolCalls)
+    };
+
     Ok(ProviderResponse {
       content: ContentType::Text(content_text),
       usage: Some(TokenUsage {
@@ -163,10 +197,10 @@ impl LLMProvider for MockProvider {
       }),
       metadata: Some(serde_json::json!({
           "model": request.model,
-          "finish_reason": "stop"
+          "finish_reason": if tool_calls.is_empty() { "stop" } else { "tool_calls" }
       })),
-      tool_calls: Vec::new(),
-      stop_reason: None,
+      tool_calls,
+      stop_reason,
     })
   }
 
@@ -301,6 +335,48 @@ mod tests {
     let duration = start.elapsed();
 
     assert!(duration.as_millis() >= 50);
+  }
+
+  #[tokio::test]
+  async fn mock_provider_surfaces_queued_tool_calls() {
+    let call = ToolCallRequest {
+      id: "call_0".to_string(),
+      name: "get_weather".to_string(),
+      arguments: serde_json::json!({"city": "Tokyo"}),
+    };
+    let provider = MockProvider::new("", None)
+      .unwrap()
+      .with_tool_calls(vec![call.clone()]);
+
+    let request = ProviderRequest {
+      model: "mock-model".to_string(),
+      messages: vec![serde_json::json!({"role": "user", "content": "weather?"})],
+      stream: false,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+    };
+
+    let response = provider.execute(&request).await.unwrap();
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0], call);
+    assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+  }
+
+  #[tokio::test]
+  async fn mock_provider_no_tool_calls_yields_stop() {
+    let provider = MockProvider::new("", None).unwrap();
+    let request = ProviderRequest {
+      model: "mock-model".to_string(),
+      messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+      stream: false,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+    };
+    let response = provider.execute(&request).await.unwrap();
+    assert!(response.tool_calls.is_empty());
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
   }
 
   #[tokio::test]

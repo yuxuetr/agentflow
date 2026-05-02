@@ -124,7 +124,10 @@ docker-compose up agentflow-server postgres
 - [x] OpenAI provider: 把 `tools` 映射为 `tools` array、解析 `tool_calls` 字段（`build_request_body` 注入 `tools` / `tool_choice`，`execute` 解析 `OpenAIMessage::tool_calls` + `finish_reason`，5 条 fixture 单测）。
 - [x] Anthropic provider: 把 `tools` 映射为 `tools` block (`name` / `description` / `input_schema`)，从 `content` 中提取 `tool_use` blocks，`stop_reason: tool_use` → `StopReason::ToolCalls`，4 条 fixture 单测。
 - [x] Google provider: 映射 `tools[0].functionDeclarations` + `toolConfig.functionCallingConfig` (AUTO/ANY/NONE/specific via `allowedFunctionNames`)，从 `parts` 中抽 `functionCall`，合成 `call_<idx>` id；当 `finishReason: STOP` 但出现 functionCall 时改写为 `StopReason::ToolCalls`。4 条 fixture 单测。
-- [ ] StepFun / Moonshot / Mock: 至少实现 prompt-fallback 适配，保证降级路径可工作。
+- [x] StepFun / Moonshot / Mock:
+  - StepFun / Moonshot 重用 OpenAI 编解码（`tool_spec_to_openai_value` / `tool_choice_to_openai_value` / `parse_openai_tool_calls`），透传 `tools` / `tool_choice`，解析 `tool_calls` + `finish_reason`。
+  - Mock 新增 `with_tool_calls(...)` 注入入口；当队列非空时 `stop_reason: ToolCalls`，否则 `Stop`。
+  - 4 条新单测覆盖 Moonshot / StepFun 直通 + Mock 注入。
 - [ ] `ReActAgent::next_step()` 优先消费 `LLMResponse::tool_calls`；若为空则回退到现有 prompt 解析。
 - [ ] `PlanExecuteAgent` 同样替换 plan→tool 过渡阶段。
 - [ ] 单测覆盖: 每个 provider 的 tool calling 请求/响应 fixture；ReAct 在原生与 fallback 两条路径下的 golden trace。
