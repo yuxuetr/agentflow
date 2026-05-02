@@ -672,6 +672,29 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 3, 2026 - LLM Native Tool Calling (P0 #2 closed) ✅
+- ✅ **`agentflow-llm/src/tool_calling.rs`** — typed `ToolSpec` / `ToolChoice` /
+  `ToolCallRequest` / `StopReason` / `LLMResponse`, with provider-specific
+  `StopReason` mapping helpers.
+- ✅ **`ProviderRequest::tools` + `tool_choice`**, **`ProviderResponse::tool_calls` +
+  `stop_reason`**, **`LLMClient::execute_full() -> LLMResponse`**, builder gains
+  `.tool_choice(..)` / `.tools_from_openai_json(..)`.
+- ✅ **`ModelCapabilities::native_tool_calling`** + `ModelConfig::native_tool_calling`,
+  auto-derived by `ConfigUpdater` for OpenAI / Anthropic / Google / Moonshot /
+  StepFun / DashScope.
+- ✅ **All 6 providers** wired to native tool calling:
+  - OpenAI: `tools` / `tool_choice` array, `tool_calls` parsing with JSON-arg decoding.
+  - Anthropic: `tools` block with `input_schema`, `tool_use` content blocks → typed calls; `Required` ↔ `any` mapping.
+  - Google: `tools[0].functionDeclarations` + `toolConfig.functionCallingConfig`; `functionCall` parts with synthesised `call_<idx>` ids; `STOP` rewritten to `ToolCalls` when calls present.
+  - Moonshot / StepFun: OpenAI-compatible passthrough via shared helpers.
+  - Mock: `with_tool_calls(..)` + `AGENTFLOW_MOCK_TOOL_CALLS` env-var queue.
+- ✅ **`ReActAgent` + `PlanExecuteAgent`** prefer native `tool_calls`; both forward
+  registered tools to the LLM via `collect_tool_specs()`. Empty `tool_calls` falls
+  back to the existing JSON prompt parser unchanged.
+- ✅ **+21 tests** (5 OpenAI, 4 Anthropic, 4 Google, 4 Moonshot/StepFun/Mock,
+  2 mapping helpers, 2 ReAct/Plan-Execute end-to-end golden traces). Workspace
+  test count: ≈500 (TTS env-dependent test still pending API key, unaffected).
+
 ### May 1, 2026 - Project Evaluation 2026-05-01 ✅
 - ✅ **`PROJECT_EVALUATION_2026-05-01.md`** completed against HEAD `41ed3f8`
 - ✅ **Composite rating: B+** — 架构 A-, DAG 内核 A-, agent-native B+, CLI/config-first B, 可观测性 B+, 平台化 C-
@@ -740,7 +763,7 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ---
 
-**Last Updated**: 2026-05-02
+**Last Updated**: 2026-05-03
 **AgentFlow Version**: 0.2.0+ (Phase 1.5 + N1–N7 complete; targeting v0.3.0 candidate)
 **agentflow-mcp Version**: 0.1.0-alpha (Fully Integrated)
 **agentflow-rag Version**: 0.3.0-alpha
