@@ -165,6 +165,8 @@ impl LLMProvider for MockProvider {
           "model": request.model,
           "finish_reason": "stop"
       })),
+      tool_calls: Vec::new(),
+      stop_reason: None,
     })
   }
 
@@ -228,6 +230,8 @@ mod tests {
       })],
       stream: false,
       parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -248,6 +252,8 @@ mod tests {
       })],
       stream: false,
       parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -266,6 +272,8 @@ mod tests {
       })],
       stream: false,
       parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
     };
 
     let result = provider.execute(&request).await;
@@ -284,6 +292,8 @@ mod tests {
       })],
       stream: false,
       parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
     };
 
     let start = std::time::Instant::now();
@@ -307,6 +317,8 @@ mod tests {
       })],
       stream: true,
       parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
     };
 
     let _stream = provider.execute_streaming(&request).await.unwrap();

@@ -136,6 +136,11 @@ impl LLMProvider for OpenAIProvider {
       content,
       usage,
       metadata: Some(serde_json::to_value(&openai_response)?),
+      // Native tool_calls / stop_reason parsing arrives in the next task in
+      // this series; for now leave the typed fields empty so the loose JSON
+      // path keeps working.
+      tool_calls: Vec::new(),
+      stop_reason: None,
     })
   }
 
@@ -402,6 +407,8 @@ mod tests {
       messages: vec![json!({"role": "user", "content": "test"})],
       stream: false,
       parameters: params,
+      tools: None,
+      tool_choice: None,
     };
 
     let body = provider.build_request_body(&request);

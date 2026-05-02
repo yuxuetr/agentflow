@@ -130,6 +130,7 @@ impl ConfigUpdater {
       n: None,
       supports_streaming: Some(true), // Assume streaming support
       supports_tools: Some(self.model_supports_tools(&model.id, vendor)),
+      native_tool_calling: Some(self.model_supports_native_tool_calling(&model.id, vendor)),
       supports_multimodal: Some(self.model_supports_multimodal(&model.id, vendor)),
       response_format: None,
       additional_params: HashMap::new(),
@@ -237,6 +238,11 @@ impl ConfigUpdater {
   /// Check if a model supports tools/function calling
   fn model_supports_tools(&self, model_id: &str, vendor: &str) -> bool {
     match vendor {
+      "openai" => {
+        !model_id.contains("embedding")
+          && !model_id.contains("whisper")
+          && !model_id.contains("tts")
+      }
       "anthropic" => true, // Most Claude models support tools
       "google" => {
         !model_id.contains("embedding") && !model_id.contains("imagen") && !model_id.contains("veo")
@@ -250,6 +256,20 @@ impl ConfigUpdater {
       }
       _ => false,
     }
+  }
+
+  /// Check whether a model supports provider-native tool calling
+  /// (`tool_calls` / `tool_use` / `functionCall`).
+  ///
+  /// All vendors that pass `model_supports_tools` currently emit a
+  /// provider-native protocol; the prompt-based ReAct fallback is reserved
+  /// for hand-rolled local models or unsupported vendors.
+  fn model_supports_native_tool_calling(&self, model_id: &str, vendor: &str) -> bool {
+    self.model_supports_tools(model_id, vendor)
+      && matches!(
+        vendor,
+        "openai" | "anthropic" | "google" | "moonshot" | "dashscope" | "step"
+      )
   }
 
   /// Check if a model supports multimodal input

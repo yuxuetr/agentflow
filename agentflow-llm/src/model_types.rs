@@ -287,8 +287,16 @@ pub struct ModelCapabilities {
   pub supports_streaming: bool,
   /// Whether the model requires streaming (no non-streaming mode)
   pub requires_streaming: bool,
-  /// Whether the model supports tool/function calling
+  /// Whether the model supports tool/function calling at all (any path).
   pub supports_tools: bool,
+  /// Whether the model supports provider-native tool calling
+  /// (OpenAI `tool_calls`, Anthropic `tool_use`, Google `functionCall`).
+  ///
+  /// When `false`, callers (e.g. ReAct) should fall back to prompt-based
+  /// tool-call protocols. Defaults are derived from the model type, but
+  /// individual models can override via `ModelConfig::supports_native_tool_calling`.
+  #[serde(default = "default_native_tool_calling")]
+  pub native_tool_calling: bool,
   /// Maximum context window size in tokens
   pub max_context_tokens: Option<u32>,
   /// Maximum output tokens per request
@@ -299,13 +307,22 @@ pub struct ModelCapabilities {
   pub custom_capabilities: std::collections::HashMap<String, serde_json::Value>,
 }
 
+fn default_native_tool_calling() -> bool {
+  false
+}
+
 impl ModelCapabilities {
-  /// Create capabilities from a model type with defaults
+  /// Create capabilities from a model type with defaults.
+  ///
+  /// `native_tool_calling` is left `false` here; callers configure it from
+  /// the model registry (most modern OpenAI / Anthropic / Google models opt
+  /// in via the YAML `native_tool_calling: true` field).
   pub fn from_model_type(model_type: ModelType) -> Self {
     Self {
       supports_streaming: model_type.supports_streaming(),
       requires_streaming: model_type.requires_streaming(),
       supports_tools: model_type.supports_tools(),
+      native_tool_calling: false,
       supports_system_messages: matches!(
         model_type,
         ModelType::Text

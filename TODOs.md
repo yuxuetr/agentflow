@@ -102,7 +102,7 @@ docker-compose up agentflow-server postgres
 
 ### 2. LLM 原生 Tool Calling 一等公民化
 
-状态: 待开始
+状态: 进行中 (2026-05-02 启动；类型层完成)
 
 目标:
 
@@ -116,16 +116,17 @@ docker-compose up agentflow-server postgres
 
 子任务:
 
-- [ ] 在 `agentflow-llm` 请求/响应类型新增:
-  - `LLMRequest { messages, tools: Option<Vec<ToolSpec>>, tool_choice: Option<ToolChoice>, ... }`
-  - `LLMResponse { content, tool_calls: Vec<ToolCallRequest>, stop_reason, ... }`
+- [x] 在 `agentflow-llm` 请求/响应类型新增:
+  - `ToolSpec` / `ToolChoice` / `ToolCallRequest` / `StopReason` / `LLMResponse` (`agentflow-llm/src/tool_calling.rs`)
+  - `ProviderRequest::tools` + `tool_choice`、`ProviderResponse::tool_calls` + `stop_reason`
+  - `LLMClient::execute_full() -> LLMResponse`、`LLMClientBuilder::tool_choice` / `tools_from_openai_json`
+- [x] 增加 capability flag `ModelCapabilities::native_tool_calling: bool`，`ModelConfig::native_tool_calling`，`ConfigUpdater` 自动判定。
 - [ ] OpenAI provider: 把 `tools` 映射为 `tools` array、解析 `tool_calls` 字段。
 - [ ] Anthropic provider: 把 `tools` 映射为 `tools` block，解析 `content` 中的 `tool_use` blocks。
 - [ ] Google provider: 映射 `function_declarations`，解析 `functionCall` parts。
 - [ ] StepFun / Moonshot / Mock: 至少实现 prompt-fallback 适配，保证降级路径可工作。
 - [ ] `ReActAgent::next_step()` 优先消费 `LLMResponse::tool_calls`；若为空则回退到现有 prompt 解析。
 - [ ] `PlanExecuteAgent` 同样替换 plan→tool 过渡阶段。
-- [ ] 增加 capability flag `ModelCapabilities::native_tool_calling: bool`，model registry 据此选择路径。
 - [ ] 单测覆盖: 每个 provider 的 tool calling 请求/响应 fixture；ReAct 在原生与 fallback 两条路径下的 golden trace。
 
 验收标准:

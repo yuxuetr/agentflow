@@ -89,6 +89,7 @@ pub mod model_types;
 pub mod multimodal;
 pub mod providers;
 pub mod registry;
+pub mod tool_calling;
 
 // Re-export main API components
 pub use client::{LLMClient, ResponseFormat, StreamingResponse};
@@ -105,6 +106,7 @@ pub use providers::stepfun::{
   VoiceCloningRequest, VoiceCloningResponse, VoiceListResponse,
 };
 pub use registry::ModelRegistry;
+pub use tool_calling::{LLMResponse, StopReason, ToolCallRequest, ToolChoice, ToolSpec};
 
 // Fluent API entry point
 use crate::client::LLMClientBuilder;

@@ -175,6 +175,8 @@ impl StepFunProvider {
       content,
       usage,
       metadata: Some(serde_json::to_value(&stepfun_response)?),
+      tool_calls: Vec::new(),
+      stop_reason: None,
     })
   }
 

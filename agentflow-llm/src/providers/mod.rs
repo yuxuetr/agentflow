@@ -1,4 +1,7 @@
-use crate::{LLMError, Result, StreamingResponse};
+use crate::{
+  LLMError, Result, StreamingResponse,
+  tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +28,31 @@ pub struct ProviderRequest {
   pub messages: Vec<Value>,
   pub stream: bool,
   pub parameters: HashMap<String, Value>,
+  /// Native tool / function-calling specification.
+  ///
+  /// When `Some`, providers that support native tool calling map this to their
+  /// own wire format (OpenAI `tools`, Anthropic `tools` block, Google
+  /// `function_declarations`). Providers without native support either pass it
+  /// through (OpenAI-compatible) or ignore it and rely on prompt-based ReAct.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tools: Option<Vec<ToolSpec>>,
+  /// Selection strategy for `tools`. Ignored when `tools` is `None`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tool_choice: Option<ToolChoice>,
+}
+
+impl ProviderRequest {
+  /// Construct a minimal `ProviderRequest` with no tool calling configured.
+  pub fn new(model: impl Into<String>, messages: Vec<Value>, stream: bool) -> Self {
+    Self {
+      model: model.into(),
+      messages,
+      stream,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+    }
+  }
 }
 
 /// Content types that can be returned by LLM providers
@@ -139,6 +167,16 @@ pub struct ProviderResponse {
   pub content: ContentType,
   pub usage: Option<TokenUsage>,
   pub metadata: Option<Value>,
+  /// Tool calls requested by the model in this response.
+  ///
+  /// Empty unless the provider parsed native tool calls from the response.
+  /// Consumers should prefer this over re-parsing `content` whenever
+  /// non-empty.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub tool_calls: Vec<ToolCallRequest>,
+  /// Reason the model stopped generating, normalised across providers.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub stop_reason: Option<StopReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

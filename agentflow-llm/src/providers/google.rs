@@ -178,6 +178,8 @@ impl LLMProvider for GoogleProvider {
       content,
       usage,
       metadata: Some(serde_json::to_value(&google_response)?),
+      tool_calls: Vec::new(),
+      stop_reason: None,
     })
   }
 
@@ -433,6 +435,8 @@ mod tests {
       ],
       stream: false,
       parameters: params,
+      tools: None,
+      tool_choice: None,
     };
 
     let body = provider.build_request_body(&request);

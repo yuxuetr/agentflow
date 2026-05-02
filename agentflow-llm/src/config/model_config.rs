@@ -49,8 +49,14 @@ pub struct ModelConfig {
   /// Whether streaming is supported for this model
   pub supports_streaming: Option<bool>,
 
-  /// Whether this model supports function calling/tools
+  /// Whether this model supports function calling/tools (any path).
   pub supports_tools: Option<bool>,
+
+  /// Whether this model supports provider-native tool calling
+  /// (OpenAI `tool_calls`, Anthropic `tool_use`, Google `functionCall`).
+  ///
+  /// When `false` or unset, callers fall back to prompt-based ReAct.
+  pub native_tool_calling: Option<bool>,
 
   /// Whether this model supports multimodal input (images)
   pub supports_multimodal: Option<bool>,
@@ -108,12 +114,22 @@ impl ModelConfig {
       if let Some(tools) = self.supports_tools {
         capabilities.supports_tools = tools;
       }
+      if let Some(native) = self.native_tool_calling {
+        capabilities.native_tool_calling = native;
+      }
       if let Some(max_tokens) = self.max_tokens {
         capabilities.max_output_tokens = Some(max_tokens);
       }
 
       capabilities
     }
+  }
+
+  /// Whether this model is configured for provider-native tool calling.
+  ///
+  /// `false` means callers must fall back to prompt-based ReAct.
+  pub fn supports_native_tool_calling(&self) -> bool {
+    self.get_capabilities().native_tool_calling
   }
 
   /// Check if this is a multimodal model (legacy method for backward compatibility)

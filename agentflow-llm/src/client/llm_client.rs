@@ -1,6 +1,10 @@
 use crate::{
-  LLMError, Result, StreamingResponse, config::ModelConfig, multimodal::MultimodalMessage,
-  providers::ProviderRequest, registry::ModelRegistry,
+  LLMError, Result, StreamingResponse,
+  config::ModelConfig,
+  multimodal::MultimodalMessage,
+  providers::ProviderRequest,
+  registry::ModelRegistry,
+  tool_calling::{LLMResponse, ToolChoice, ToolSpec},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,7 +42,10 @@ pub struct LLMClient {
   pub top_p: Option<f32>,
   pub frequency_penalty: Option<f32>,
   pub stop: Option<Vec<String>>,
-  pub tools: Option<Vec<Value>>,
+  /// Native tool / function-calling specification (typed).
+  pub tools: Option<Vec<ToolSpec>>,
+  /// Selection strategy when `tools` is set.
+  pub tool_choice: Option<ToolChoice>,
   pub response_format: Option<ResponseFormat>,
   pub enable_logging: bool,
   pub additional_params: HashMap<String, Value>,
@@ -57,13 +64,17 @@ impl LLMClient {
       frequency_penalty: None,
       stop: None,
       tools: None,
+      tool_choice: None,
       response_format: None,
       enable_logging: true,
       additional_params: HashMap::new(),
     }
   }
 
-  /// Execute the request and return a non-streaming response
+  /// Execute the request and return a non-streaming response.
+  ///
+  /// Returns only the model's text content. Use [`Self::execute_full`] when
+  /// you need access to native tool calls, stop reason, or token usage.
   pub async fn execute(&self) -> Result<String> {
     let start_time = Instant::now();
 
@@ -182,6 +193,50 @@ impl LLMClient {
     }
   }
 
+  /// Execute the request and return the full structured response, including
+  /// native tool calls, stop reason, and usage statistics.
+  ///
+  /// Agent runtimes (ReAct, Plan-Execute) call this to consume native
+  /// `tool_calls` instead of re-parsing JSON from `content`.
+  pub async fn execute_full(&self) -> Result<LLMResponse> {
+    let start_time = Instant::now();
+
+    if self.enable_logging {
+      self.log_request_start();
+    }
+
+    let registry = ModelRegistry::global();
+    let model_config = registry.get_model(&self.model_name)?;
+
+    let has_images = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
+      .unwrap_or(false);
+
+    model_config.validate_request(true, has_images, false, false, false, self.tools.is_some())?;
+    let provider = registry.get_provider(&model_config.vendor)?;
+
+    let request = self.build_request(&model_config, false)?;
+    let provider_response = provider.execute(&request).await?;
+    let duration = start_time.elapsed();
+
+    let content_text = provider_response.content.to_string();
+    let response = LLMResponse {
+      content: content_text.clone(),
+      tool_calls: provider_response.tool_calls.clone(),
+      stop_reason: provider_response.stop_reason.clone(),
+      usage: provider_response.usage.clone(),
+      raw_metadata: provider_response.metadata.clone(),
+    };
+
+    if self.enable_logging {
+      self.log_request_complete(&Ok(content_text), duration);
+    }
+
+    Ok(response)
+  }
+
   /// Execute the request and return a streaming response
   pub async fn execute_streaming(&self) -> Result<Box<dyn StreamingResponse>> {
     if self.enable_logging {
@@ -287,9 +342,10 @@ impl LLMClient {
       }
     }
 
-    if let Some(tools) = &self.tools {
-      params.insert("tools".to_string(), Value::Array(tools.clone()));
-    }
+    // Note: tools / tool_choice are no longer dropped into `parameters`. They
+    // travel as typed fields on `ProviderRequest::tools` / `tool_choice`, and
+    // each provider serialises them to its own native wire format
+    // (OpenAI/Moonshot/StepFun/Mock pass through; Anthropic / Google adapt).
 
     // Add response format
     if let Some(format) = &self.response_format {
@@ -347,6 +403,8 @@ impl LLMClient {
       messages,
       stream: streaming,
       parameters: params,
+      tools: self.tools.clone(),
+      tool_choice: self.tool_choice.clone(),
     })
   }
 
@@ -501,9 +559,31 @@ impl LLMClientBuilder {
     self
   }
 
-  pub fn tools(mut self, tools: Vec<Value>) -> Self {
+  /// Set the typed tool specifications the model can call.
+  ///
+  /// Provider adapters serialise these to their native format (OpenAI tools
+  /// array, Anthropic tools block, Google function_declarations).
+  pub fn tools(mut self, tools: Vec<ToolSpec>) -> Self {
     self.client.tools = Some(tools);
     self
+  }
+
+  /// Set the tool selection strategy. Has no effect when `tools` is unset.
+  pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+    self.client.tool_choice = Some(choice);
+    self
+  }
+
+  /// Set tools from raw JSON values in OpenAI tool format.
+  ///
+  /// Convenience for callers (notably MCP adapters) that already produce
+  /// OpenAI-shaped JSON. Errors if any entry fails to parse.
+  pub fn tools_from_openai_json(mut self, tools: Vec<Value>) -> Result<Self> {
+    let parsed: std::result::Result<Vec<ToolSpec>, String> =
+      tools.iter().map(ToolSpec::from_openai_value).collect();
+    let parsed = parsed.map_err(|message| LLMError::ConfigurationError { message })?;
+    self.client.tools = Some(parsed);
+    Ok(self)
   }
 
   pub fn response_format(mut self, format: ResponseFormat) -> Self {
@@ -570,6 +650,12 @@ impl LLMClientBuilder {
 
   pub async fn execute(self) -> Result<String> {
     self.client.execute().await
+  }
+
+  /// Execute and return the full structured `LLMResponse`, including native
+  /// tool calls and stop reason.
+  pub async fn execute_full(self) -> Result<LLMResponse> {
+    self.client.execute_full().await
   }
 
   pub async fn execute_streaming(self) -> Result<Box<dyn StreamingResponse>> {

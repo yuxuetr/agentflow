@@ -123,6 +123,8 @@ impl LLMProvider for MoonshotProvider {
       content,
       usage,
       metadata: Some(serde_json::to_value(&moonshot_response)?),
+      tool_calls: Vec::new(),
+      stop_reason: None,
     })
   }
 
@@ -381,6 +383,8 @@ mod tests {
       messages: vec![json!({"role": "user", "content": "test"})],
       stream: false,
       parameters: params,
+      tools: None,
+      tool_choice: None,
     };
 
     let body = provider.build_request_body(&request);
