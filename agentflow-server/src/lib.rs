@@ -20,6 +20,7 @@ pub mod auth;
 pub mod error;
 pub mod events_stream;
 pub mod runs;
+pub mod skills;
 
 pub use auth::{AuthConfig, require_bearer_token};
 pub use error::ApiError;
@@ -31,6 +32,9 @@ pub use runs::{
   CreateRunRequest, CreateRunResponse, RunContext, RunExecutor, RunResponse, StubExecutor,
   default_executor, get_run, submit_run,
 };
+pub use skills::{
+  ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,
+};
 
 /// Server-wide state injected into every handler.
 #[derive(Clone)]
@@ -40,10 +44,10 @@ pub struct AppState {
   /// Auth configuration. `None` means auth is disabled — used in tests and
   /// local dev. Production deployments should always populate this.
   pub auth: Option<AuthConfig>,
-  /// Optional list of installed skills exposed via `/v1/skills`. Wrapped in
-  /// `Arc` so handlers can share it without cloning the inner vec on every
-  /// request.
-  pub skills: Arc<Vec<String>>,
+  /// Catalog of installed skills exposed via `/v1/skills` and resolved by
+  /// `/v1/skills/{name}:run`. Empty when no `AGENTFLOW_SKILLS_INDEX` is
+  /// configured — the routes still work, they just return 404 on resolve.
+  pub skills: SkillCatalog,
   /// Background executor for submitted runs. `Arc<dyn _>` so production
   /// deployments can swap in a real Flow runner while tests use
   /// [`StubExecutor`].
@@ -72,7 +76,7 @@ impl AppState {
       db,
       repos,
       auth: None,
-      skills: Arc::new(Vec::new()),
+      skills: SkillCatalog::empty(),
       executor: default_executor(),
       event_broker: EventBroker::new(),
     }
@@ -87,6 +91,12 @@ impl AppState {
   /// Attach a custom run executor (e.g. wired to `agentflow-core::Flow`).
   pub fn with_executor(mut self, executor: Arc<dyn RunExecutor>) -> Self {
     self.executor = executor;
+    self
+  }
+
+  /// Attach a populated skill catalog. Defaults to empty.
+  pub fn with_skills(mut self, skills: SkillCatalog) -> Self {
+    self.skills = skills;
     self
   }
 }
@@ -108,7 +118,12 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/whoami", get(whoami))
     .route("/v1/runs", post(submit_run))
     .route("/v1/runs/:id", get(get_run))
-    .route("/v1/runs/:id/events", get(stream_events));
+    .route("/v1/runs/:id/events", get(stream_events))
+    .route("/v1/skills", get(list_skills))
+    // The `:run` suffix is part of the path. Axum's pattern can't match a
+    // literal segment containing `:`, so we capture the whole tail and
+    // strip the suffix in the handler.
+    .route("/v1/skills/:name_run", post(run_skill));
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),

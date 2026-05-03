@@ -1,5 +1,5 @@
 use agentflow_db::Database;
-use agentflow_server::{AppState, AuthConfig, create_router};
+use agentflow_server::{AppState, AuthConfig, SkillCatalog, create_router};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -32,7 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let state = AppState::new(db).with_auth(auth);
+  let state = AppState::new(db)
+    .with_auth(auth)
+    .with_skills(SkillCatalog::from_env());
   let app = create_router(state);
 
   let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
