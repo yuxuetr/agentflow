@@ -34,11 +34,11 @@
 
 最近提交:
 
-- `41ed3f8 docs: refresh active documentation`
-- `54f782e docs: sync runtime config task hashes`
-- `cbd83f3 feat(cli): support trace dir env default`
-- `20701b8 feat(core): configure workflow run artifacts dir`
-- `18695e0 docs: sync p1 task status`
+- `9dc4e35 feat(agents): land P1 #7 multi-agent collaboration patterns`
+- `b48f173 docs: close P0 #1 platform skeleton milestone`
+- `c1d4a04 feat(server): bridge agentflow-core EventListener to DB + SSE`
+- `210ac55 feat(server): GET /v1/skills + POST /v1/skills/{name}:run`
+- `9777650 feat(server): SSE event stream with broker + DB-backed replay`
 
 ---
 
@@ -272,6 +272,7 @@ cargo run -p agentflow-agents --example react_agent
 - [x] `BlackboardSupervisor` (`blackboard.rs`): `Blackboard { Arc<RwLock<HashMap>> }`、`bb_read`/`bb_write` 工具、`Sequential|Parallel` 调度、`AllAgentsCompleted|KeySet` 停止条件、`answer_from` 出口；12 条单测；example `multi_agent_blackboard.rs`。
 - [x] `DebateSupervisor` (`debate.rs`): N participants 并发提案 → 多轮可选修正 → judge 终裁；8 条单测；example `multi_agent_debate.rs`。
 - [x] CLI/YAML 暴露: `multi_agent` 节点 (`agentflow-cli/src/executor/multi_agent.rs`) 支持 `mode: handoff|blackboard|debate`、按 mode 解析 `agents`/`participants`/`judge`、`schedule` / `stop_when` / `answer_from` / `rounds` / `judge_prompt`；`SkillBuilder::build_with_extra_tools(...)` 让 supervisor 把协调工具注入 skill agents；`schema.rs` 接受 `multi_agent` 节点；`workflow run --model` 也覆盖 `multi_agent`；5 条 config 解析单测 + 1 条端到端 CLI smoke (`cli_workflow_run_supports_multi_agent_handoff_node`)。
+- [x] Trace replay 渲染: `agentflow-tracing/src/replay.rs` 增加 `handoff` / `blackboard_op` / `debate_proposal` / `debate_verdict` 4 个 step kind 的结构化输出分支，TUI 路径(`tui.rs::compact_json`)无需改动天然兼容；1 条新单测 (`replay_renders_multi_agent_step_kinds`) 覆盖 4 个变体的格式化。
 - [x] 文档: `docs/MULTI_AGENT.md` 三范式决策表、API 用法、YAML 参考、trace 形状。
 
 验收标准:
@@ -281,9 +282,12 @@ cargo run -p agentflow-agents --example react_agent
 
 涉及文件:
 
+- `agentflow-agents/src/runtime.rs` (新 step/event 变体), `agentflow-agents/src/react/agent.rs` (穷举 match 适配), `agentflow-agents/src/lib.rs` (re-export `BlackboardOpKind`)
 - `agentflow-agents/src/supervisor/{mod,handoff,blackboard,debate}.rs`
-- `agentflow-agents/examples/`
-- `agentflow-cli/src/config/schema.rs`、`agentflow-cli/src/executor/factory.rs`
+- `agentflow-agents/examples/multi_agent_{handoff,blackboard,debate}.rs`
+- `agentflow-skills/src/builder.rs` (新 `build_with_extra_tools`)
+- `agentflow-cli/src/executor/{mod,multi_agent,factory}.rs`、`agentflow-cli/src/config/schema.rs`、`agentflow-cli/src/commands/workflow/run.rs`、`agentflow-cli/tests/workflow_tests.rs`
+- `agentflow-tracing/src/replay.rs`
 - `docs/MULTI_AGENT.md`
 
 ### 8. 工具进程级沙箱
