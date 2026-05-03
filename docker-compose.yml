@@ -5,6 +5,8 @@ services:
       POSTGRES_DB: agentflow
       POSTGRES_USER: agentflow
       POSTGRES_PASSWORD: agentflow
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -23,6 +25,15 @@ services:
       DATABASE_URL: postgres://agentflow:agentflow@postgres:5432/agentflow
       PORT: "3000"
       RUST_LOG: info
+      # Bearer auth for /v1/* routes. Leave unset for local dev (the server
+      # will log a warning); set in production.
+      # AGENTFLOW_API_TOKEN: "<replace-me>"
+      # Path to a skills.index.toml on the container's filesystem. Mount
+      # the host directory under /skills if you want skill listing /
+      # invocation. Leaving this unset just means GET /v1/skills returns [].
+      # AGENTFLOW_SKILLS_INDEX: "/skills/skills.index.toml"
+    # volumes:
+    #   - ./skills:/skills:ro
     ports:
       - "3000:3000"
     depends_on:

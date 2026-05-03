@@ -672,6 +672,43 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 3, 2026 - Platform Skeleton (P0 #1 closed) ✅
+- ✅ **`agentflow-db` schema + migrations** — `migrations/0001_initial_schema.sql`
+  ships the 6-table v0.3.0 N8 control-plane schema (runs / steps / events /
+  artifacts / skill_installs / mcp_sessions) with appropriate indexes.
+  `Database::connect_and_migrate(...)` applies migrations idempotently via
+  `sqlx::migrate!()`.
+- ✅ **`agentflow-db` Repository layer** — `RunRepo` / `StepRepo` / `EventRepo` /
+  `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` traits + `Pg*Repo`
+  Postgres impls; `Repositories::from_pool` bundles all six. Models
+  (`Run` / `Step` / `Event` / `Artifact` / ...) derive `sqlx::FromRow` +
+  serde for direct HTTP serialisation.
+- ✅ **`agentflow-server` AuthN + unified error envelope** — `auth::require_bearer_token`
+  middleware (constant-time compare, `AGENTFLOW_API_TOKEN` env);
+  `ApiError` rewritten with stable `code` per variant
+  (`{ "error": { "code", "message", "details" } }`).
+- ✅ **`agentflow-server` v1 routes**:
+  - `POST /v1/runs` accepts `{workflow, workflow_id?, tenant_id?}`,
+    persists queued row, dispatches via `RunExecutor` trait.
+  - `GET /v1/runs/{id}` reads runs table.
+  - `GET /v1/runs/{id}/events` Server-Sent Events: per-run
+    `tokio::sync::broadcast` + DB backfill with `?after_seq=` resume.
+  - `GET /v1/skills` lists installed skills (via `AGENTFLOW_SKILLS_INDEX`
+    pointing at `skills.index.toml`).
+  - `POST /v1/skills/{name}:run` resolves skill, persists run with
+    `workflow = "@skill:<name>"`, dispatches via the same `RunExecutor`.
+- ✅ **EventListener bridge** — `WorkflowEventListener` adapts
+  `agentflow_core::events::WorkflowEvent` (sync) to async DB+broker via
+  unbounded mpsc + drain task. All 14 `WorkflowEvent` variants map to
+  stable JSON payloads. The real Flow runner that replaces `StubExecutor`
+  lands in v0.4.0; the bridge is ready.
+- ✅ **`docker-compose.yml` + `docs/DEPLOYMENT.md`** — local Postgres + server,
+  curl examples for submit / status / SSE / skills, unified error envelope.
+  `AGENTFLOW_DATABASE_TEST_URL` documented for running DB-gated integration
+  tests against the compose Postgres.
+- ✅ **+14 server tests** (5 auth/error + 4 run routes + 1 SSE + 2 skill +
+  2 listener bridge) — 7 are DB-gated and skip when env unset.
+
 ### May 3, 2026 - LLM Native Tool Calling (P0 #2 closed) ✅
 - ✅ **`agentflow-llm/src/tool_calling.rs`** — typed `ToolSpec` / `ToolChoice` /
   `ToolCallRequest` / `StopReason` / `LLMResponse`, with provider-specific

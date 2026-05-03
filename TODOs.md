@@ -46,7 +46,7 @@
 
 ### 1. 平台服务端最小骨架
 
-状态: 进行中 (2026-05-03 启动；schema 与 migrations 完成)
+状态: 已完成 (2026-05-03)
 
 目标:
 
@@ -68,8 +68,8 @@
 - [x] `agentflow-server`: 接 `agentflow-core::events::EventListener`，每个事件落库 + 推送给订阅者：`WorkflowEventListener` 把同步 `WorkflowEvent` 通过 unbounded mpsc 桥接到 async `EventSink::publish`，`workflow_event_payload` 把所有 14 个 variant 转成 JSON（drop `Instant`，`duration` → `duration_ms`），`WorkflowEventListener::from_state` 一行接入 `Repositories` + `EventBroker`；2 条单测覆盖完整 bridge + payload 序列化。真正的 Flow runner 替换 `StubExecutor` 留给 v0.4.0 集成（schema/路由/桥已就绪）。
 - [x] `agentflow-server`: 错误响应统一为 `{ "error": { "code", "message", "details" } }`：`ApiError` 全面重写，每个 variant 映射稳定 `code` (not_found / bad_request / unauthorized / forbidden / database_error / internal_error / server_misconfigured)；3 条单测覆盖序列化。
 - [x] 基础 AuthN: `Authorization: Bearer <token>` 中间件 (`src/auth.rs`)，常量时间比对，`AuthConfig::from_env()` 从 `AGENTFLOW_API_TOKEN` 读取，留 OAuth 扩展点；`/health*` 路由不需要 auth；5 条 e2e 测试覆盖缺失/错误/空格/正确 token + 401/403 envelope。
-- [ ] 增加端到端测试: `cargo test -p agentflow-server`，覆盖 run 提交、状态查询、SSE 订阅、skill run。
-- [ ] 更新 `docs/DEPLOYMENT.md`，给出最小 server + db docker-compose 示例。
+- [x] 端到端测试: `cargo test -p agentflow-server` 跑 14 个 tests（5 auth/error envelope + 4 run routes + 1 SSE + 2 skill routes + 2 listener bridge）。其中 7 条 DB-gated 通过 `AGENTFLOW_DATABASE_TEST_URL` 跳过保持 CI 干净，本地 `docker compose up -d postgres && export AGENTFLOW_DATABASE_TEST_URL=...` 即可全跑。
+- [x] `docs/DEPLOYMENT.md` 增补 v0.3.0 N8 章节：bearer auth / submit run / SSE 订阅（含 `?after_seq=` 续传） / skills 路由 / unified error envelope / 本地 Postgres 测试入口。`docker-compose.yml` 注释化的 `AGENTFLOW_API_TOKEN` 与 `AGENTFLOW_SKILLS_INDEX` env，给出 skill 卷挂载示例，对外暴露 `5432` 方便本地 `cargo test` 直连。
 
 验收标准:
 
