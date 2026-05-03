@@ -167,6 +167,14 @@ impl AgentStep {
   }
 }
 
+/// The kind of operation a [`AgentStepKind::BlackboardOp`] represents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlackboardOpKind {
+  Read,
+  Write,
+}
+
 /// The typed content of an [`AgentStep`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -193,6 +201,34 @@ pub enum AgentStepKind {
   },
   FinalAnswer {
     answer: String,
+  },
+
+  // ── Multi-agent collaboration steps (since 0.4.0) ──────────────────────────
+  /// One agent transferred control to another inside a HandoffSupervisor.
+  Handoff {
+    from: String,
+    to: String,
+    message: String,
+  },
+  /// A read or write against a shared blackboard inside a BlackboardSupervisor.
+  BlackboardOp {
+    op: BlackboardOpKind,
+    key: String,
+    agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+  },
+  /// A participant's proposal in one debate round.
+  DebateProposal {
+    round: usize,
+    agent: String,
+    proposal: String,
+  },
+  /// The judge's verdict that closes a debate.
+  DebateVerdict {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    winner: Option<String>,
+    rationale: String,
   },
 }
 
@@ -261,6 +297,40 @@ pub enum AgentEvent {
   RunStopped {
     session_id: String,
     reason: AgentStopReason,
+    timestamp: DateTime<Utc>,
+  },
+
+  // ── Multi-agent collaboration events (since 0.4.0) ─────────────────────────
+  /// Recorded each time a HandoffSupervisor switches the active agent.
+  HandoffOccurred {
+    session_id: String,
+    step_index: usize,
+    from: String,
+    to: String,
+    timestamp: DateTime<Utc>,
+  },
+  /// Recorded for every blackboard read or write inside a BlackboardSupervisor.
+  BlackboardWritten {
+    session_id: String,
+    step_index: usize,
+    op: BlackboardOpKind,
+    agent: String,
+    key: String,
+    timestamp: DateTime<Utc>,
+  },
+  /// Recorded at the start of each debate round before participants run.
+  DebateRoundStarted {
+    session_id: String,
+    round: usize,
+    participants: Vec<String>,
+    timestamp: DateTime<Utc>,
+  },
+  /// Recorded after the judge has produced the final verdict.
+  DebateVerdictRendered {
+    session_id: String,
+    step_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    winner: Option<String>,
     timestamp: DateTime<Utc>,
   },
 }
@@ -421,5 +491,182 @@ mod tests {
     assert_eq!(result.answer.as_deref(), Some("done"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
     assert_eq!(result.steps.len(), 1);
+  }
+
+  // ── Multi-agent step kinds (since 0.4.0) ───────────────────────────────────
+
+  #[test]
+  fn handoff_step_round_trips_through_serde() {
+    let step = AgentStep::new(
+      3,
+      AgentStepKind::Handoff {
+        from: "triage".to_string(),
+        to: "billing".to_string(),
+        message: "Please refund order #42.".to_string(),
+      },
+    );
+
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["kind"]["type"], "handoff");
+    assert_eq!(json["kind"]["from"], "triage");
+    assert_eq!(json["kind"]["to"], "billing");
+
+    let decoded: AgentStep = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, step);
+  }
+
+  #[test]
+  fn blackboard_op_step_round_trips_through_serde() {
+    let step = AgentStep::new(
+      1,
+      AgentStepKind::BlackboardOp {
+        op: BlackboardOpKind::Write,
+        key: "research/findings".to_string(),
+        agent: "researcher".to_string(),
+        value: Some(serde_json::json!({"score": 0.92})),
+      },
+    );
+
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["kind"]["type"], "blackboard_op");
+    assert_eq!(json["kind"]["op"], "write");
+    assert_eq!(json["kind"]["value"]["score"], 0.92);
+
+    let decoded: AgentStep = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, step);
+  }
+
+  #[test]
+  fn blackboard_read_step_omits_null_value() {
+    let step = AgentStep::new(
+      1,
+      AgentStepKind::BlackboardOp {
+        op: BlackboardOpKind::Read,
+        key: "topic".to_string(),
+        agent: "writer".to_string(),
+        value: None,
+      },
+    );
+
+    let json = serde_json::to_value(&step).unwrap();
+    assert!(
+      json["kind"].get("value").is_none(),
+      "None value field should be skipped by serde"
+    );
+    assert_eq!(json["kind"]["op"], "read");
+  }
+
+  #[test]
+  fn debate_proposal_step_round_trips_through_serde() {
+    let step = AgentStep::new(
+      0,
+      AgentStepKind::DebateProposal {
+        round: 1,
+        agent: "analyst-a".to_string(),
+        proposal: "We should ship.".to_string(),
+      },
+    );
+
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["kind"]["type"], "debate_proposal");
+    assert_eq!(json["kind"]["round"], 1);
+
+    let decoded: AgentStep = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, step);
+  }
+
+  #[test]
+  fn debate_verdict_without_winner_serializes_without_field() {
+    let step = AgentStep::new(
+      4,
+      AgentStepKind::DebateVerdict {
+        winner: None,
+        rationale: "Synthesised both proposals.".to_string(),
+      },
+    );
+
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["kind"]["type"], "debate_verdict");
+    assert!(json["kind"].get("winner").is_none());
+
+    let decoded: AgentStep = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, step);
+  }
+
+  // ── Multi-agent events (since 0.4.0) ───────────────────────────────────────
+
+  #[test]
+  fn handoff_event_round_trips_through_serde() {
+    let now = Utc::now();
+    let event = AgentEvent::HandoffOccurred {
+      session_id: "session-1".to_string(),
+      step_index: 5,
+      from: "triage".to_string(),
+      to: "billing".to_string(),
+      timestamp: now,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "handoff_occurred");
+    assert_eq!(json["from"], "triage");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn debate_round_started_event_round_trips_through_serde() {
+    let now = Utc::now();
+    let event = AgentEvent::DebateRoundStarted {
+      session_id: "debate-1".to_string(),
+      round: 2,
+      participants: vec!["alice".to_string(), "bob".to_string()],
+      timestamp: now,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "debate_round_started");
+    assert_eq!(json["participants"][1], "bob");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn debate_verdict_event_round_trips_through_serde() {
+    let now = Utc::now();
+    let event = AgentEvent::DebateVerdictRendered {
+      session_id: "debate-1".to_string(),
+      step_index: 7,
+      winner: Some("alice".to_string()),
+      timestamp: now,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "debate_verdict_rendered");
+    assert_eq!(json["winner"], "alice");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn blackboard_event_round_trips_through_serde() {
+    let now = Utc::now();
+    let event = AgentEvent::BlackboardWritten {
+      session_id: "bb-1".to_string(),
+      step_index: 3,
+      op: BlackboardOpKind::Write,
+      agent: "researcher".to_string(),
+      key: "facts".to_string(),
+      timestamp: now,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "blackboard_written");
+    assert_eq!(json["op"], "write");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
   }
 }

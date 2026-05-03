@@ -5,7 +5,7 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
-use agentflow_tools::{SandboxPolicy, ToolPolicy, ToolRegistry};
+use agentflow_tools::{SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
 use tracing::info;
 
 use crate::{
@@ -24,9 +24,25 @@ pub struct SkillBuilder;
 impl SkillBuilder {
   /// Build a [`ReActAgent`] ready to run.
   pub async fn build(manifest: &SkillManifest, skill_dir: &Path) -> Result<ReActAgent, SkillError> {
+    Self::build_with_extra_tools(manifest, skill_dir, Vec::new()).await
+  }
+
+  /// Build a [`ReActAgent`] and inject additional tools into its registry
+  /// before construction.
+  ///
+  /// Used by multi-agent supervisors (e.g. `HandoffSupervisor`,
+  /// `BlackboardSupervisor`) to give every participant access to a shared
+  /// coordination tool — the supervisor builds those tools once and passes
+  /// them in here.
+  pub async fn build_with_extra_tools(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+    extra_tools: Vec<Arc<dyn Tool>>,
+  ) -> Result<ReActAgent, SkillError> {
     info!(
         skill = %manifest.skill.name,
         version = %manifest.skill.version,
+        extra_tool_count = extra_tools.len(),
         "Building agent from skill manifest"
     );
 
@@ -39,8 +55,12 @@ impl SkillBuilder {
       .with_max_iterations(manifest.model.resolved_max_iterations())
       .with_budget_tokens(manifest.model.resolved_budget_tokens());
 
-    // 3. Build ToolRegistry
-    let registry = Self::build_registry(manifest, skill_dir).await?;
+    // 3. Build ToolRegistry, then inject extras (last write wins on name
+    // collision so callers can override defaults if desired).
+    let mut registry = Self::build_registry(manifest, skill_dir).await?;
+    for tool in extra_tools {
+      registry.register(tool);
+    }
 
     // 4. Build MemoryStore
     let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;

@@ -1233,6 +1233,13 @@ impl ReActAgent {
             .add_memory_message(Message::assistant(&self.session_id, answer))
             .await?;
         }
+        AgentStepKind::Handoff { .. }
+        | AgentStepKind::BlackboardOp { .. }
+        | AgentStepKind::DebateProposal { .. }
+        | AgentStepKind::DebateVerdict { .. } => {
+          // Multi-agent supervisor steps are not part of this ReActAgent's own
+          // conversation, so they are dropped when restoring its memory.
+        }
       }
     }
     Ok(())
@@ -1610,13 +1617,18 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       | AgentEvent::ToolCallStarted { step_index, .. }
       | AgentEvent::ToolPolicyDecision { step_index, .. }
       | AgentEvent::ToolCallCompleted { step_index, .. }
-      | AgentEvent::ReflectionAdded { step_index, .. } => {
+      | AgentEvent::ReflectionAdded { step_index, .. }
+      | AgentEvent::HandoffOccurred { step_index, .. }
+      | AgentEvent::BlackboardWritten { step_index, .. }
+      | AgentEvent::DebateVerdictRendered { step_index, .. } => {
         *step_index += event_offset;
       }
       AgentEvent::StepCompleted { step, .. } => {
         step.index += event_offset;
       }
-      AgentEvent::RunStarted { .. } | AgentEvent::RunStopped { .. } => {}
+      AgentEvent::RunStarted { .. }
+      | AgentEvent::RunStopped { .. }
+      | AgentEvent::DebateRoundStarted { .. } => {}
     }
   }
   prior.events.extend(resumed.events);

@@ -672,6 +672,46 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 3, 2026 - Multi-Agent Collaboration Patterns (P1 #7 closed) ✅
+- ✅ **`AgentStepKind` + `AgentEvent` extended** — added `Handoff`,
+  `BlackboardOp`, `DebateProposal`, `DebateVerdict` step kinds and matching
+  `HandoffOccurred`, `BlackboardWritten`, `DebateRoundStarted`,
+  `DebateVerdictRendered` events. `BlackboardOpKind::{Read, Write}` enum,
+  10 serde round-trip tests.
+- ✅ **`HandoffSupervisor`** (`agentflow-agents/src/supervisor/handoff.rs`)
+  — agents transfer control via a shared `HandoffTool` + `HandoffSignal`;
+  `HandoffSupervisorBuilder` with `add_agent(name, desc, factory)` /
+  `initial_agent` / `max_handoffs(n)` / `use_signal(sig)`. 14 tests
+  including 5 mock-LLM end-to-end (single handoff, no handoff, max cap,
+  invalid target, cancellation). Example: `multi_agent_handoff.rs`.
+- ✅ **`BlackboardSupervisor`** (`blackboard.rs`) — `Blackboard` shared
+  `Arc<RwLock<HashMap>>` with versioned entries + per-agent `bb_read` /
+  `bb_write` tools that replay through supervisor-level `BlackboardOp`
+  steps + `BlackboardWritten` events. Schedules:
+  `Sequential([..])` / `Parallel([..])`. Stops: `AllAgentsCompleted` /
+  `KeySet(key)`. Optional `answer_from(key)`. 12 tests. Example:
+  `multi_agent_blackboard.rs`.
+- ✅ **`DebateSupervisor`** (`debate.rs`) — N participants run concurrently
+  per round, optional revision rounds (each participant sees prior round's
+  proposals), then a judge synthesises the final answer. Failed
+  participants are recorded as empty proposals, judge still runs. 8 tests.
+  Example: `multi_agent_debate.rs`.
+- ✅ **`SkillBuilder::build_with_extra_tools(...)`** — new entry point that
+  injects supplemental tools (handoff/blackboard) into a skill's tool
+  registry before constructing the `ReActAgent`. Original `build()` is now
+  a thin wrapper.
+- ✅ **`multi_agent` YAML node** — `agentflow-cli/src/executor/multi_agent.rs`
+  parses `mode: handoff|blackboard|debate` plus mode-specific YAML
+  (`agents` / `participants` / `judge` / `schedule` / `stop_when` /
+  `answer_from` / `rounds` / `judge_prompt`). `schema.rs` accepts the new
+  node, `workflow run --model` propagates through. 5 config-parsing unit
+  tests + 1 end-to-end CLI smoke (`cli_workflow_run_supports_multi_agent_handoff_node`).
+- ✅ **`docs/MULTI_AGENT.md`** — user-facing reference: pattern decision
+  table, Rust + YAML examples, trace shape, cancellation semantics,
+  legacy-`Supervisor` compatibility notes.
+- 📊 **Test counts**: agentflow-agents 119 (+34), agentflow-cli +1 CLI
+  smoke + 5 multi-agent unit tests. Workspace clippy `-D warnings` clean.
+
 ### May 3, 2026 - Platform Skeleton (P0 #1 closed) ✅
 - ✅ **`agentflow-db` schema + migrations** — `migrations/0001_initial_schema.sql`
   ships the 6-table v0.3.0 N8 control-plane schema (runs / steps / events /

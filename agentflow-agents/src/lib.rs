@@ -48,8 +48,8 @@ pub use reflection::{
 };
 pub use runtime::{
   AgentCancellationToken, AgentContext, AgentEvent, AgentMemoryHook, AgentRunResult, AgentRuntime,
-  AgentRuntimeError, AgentStep, AgentStepKind, AgentStopReason, MemoryHookContext, MemoryHookKind,
-  RuntimeLimits,
+  AgentRuntimeError, AgentStep, AgentStepKind, AgentStopReason, BlackboardOpKind,
+  MemoryHookContext, MemoryHookKind, RuntimeLimits,
 };
 pub use supervisor::{Supervisor, SupervisorBuilder};
 pub use tools::{AgentTool, WorkflowTool};

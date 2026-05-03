@@ -154,6 +154,66 @@ role = "Return a concise review."
   skill_dir
 }
 
+fn write_named_skill(dir: &TempDir, name: &str, role: &str) -> std::path::PathBuf {
+  let skill_dir = dir.path().join(name);
+  fs::create_dir_all(&skill_dir).unwrap();
+  fs::write(
+    skill_dir.join("skill.toml"),
+    format!(
+      r#"
+[skill]
+name = "{name}"
+version = "0.1.0"
+description = "Multi-agent test skill: {name}"
+
+[persona]
+role = "{role}"
+"#
+    ),
+  )
+  .unwrap();
+  skill_dir
+}
+
+fn write_multi_agent_handoff_workflow(
+  dir: &TempDir,
+  triage_dir: &std::path::Path,
+  billing_dir: &std::path::Path,
+) -> std::path::PathBuf {
+  let workflow = dir.path().join("multi_agent_handoff_workflow.yml");
+  fs::write(
+    &workflow,
+    format!(
+      r#"
+name: CLI Multi-Agent Handoff Workflow
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Refund my duplicate charge"
+  - id: pipeline
+    type: multi_agent
+    dependencies: ["prepare"]
+    input_mapping:
+      message: "{{{{ nodes.prepare.outputs.output }}}}"
+    parameters:
+      mode: handoff
+      initial_agent: triage
+      max_handoffs: 3
+      agents:
+        - name: triage
+          skill: {triage:?}
+        - name: billing
+          skill: {billing:?}
+"#,
+      triage = triage_dir.display().to_string(),
+      billing = billing_dir.display().to_string(),
+    ),
+  )
+  .unwrap();
+  workflow
+}
+
 fn write_skill_agent_workflow(dir: &TempDir, skill_dir: &std::path::Path) -> std::path::PathBuf {
   let workflow = dir.path().join("skill_agent_workflow.yml");
   fs::write(
@@ -520,6 +580,60 @@ fn cli_workflow_run_model_override_applies_to_llm_nodes() {
 
   let saved = fs::read_to_string(output).unwrap();
   assert!(saved.contains("mocked workflow answer"));
+}
+
+#[test]
+fn cli_workflow_run_supports_multi_agent_handoff_node() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(&home);
+  let work = TempDir::new().unwrap();
+  let triage = write_named_skill(&work, "triage", "Hand off to billing.");
+  let billing = write_named_skill(&work, "billing", "Resolve billing issues.");
+  let workflow = write_multi_agent_handoff_workflow(&work, &triage, &billing);
+  let output = work.path().join("multi-agent-result.json");
+
+  // Three responses driving the supervisor:
+  // 1) triage hands off to billing
+  // 2) triage's brief wrap-up (discarded by supervisor)
+  // 3) billing produces the final answer
+  let mock_responses = serde_json::to_string(&vec![
+    r#"{"thought":"this is billing","action":{"tool":"handoff","params":{"to":"billing","message":"refund duplicate charge"}}}"#,
+    r#"{"thought":"transferred","answer":"transferring to billing"}"#,
+    r#"{"thought":"approve","answer":"refund processed"}"#,
+  ]).unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--model",
+      "mock-model",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses)
+    // Fallback if the queue is exhausted unexpectedly — keeps the test
+    // from hanging on a generic mock response that the parser would treat
+    // as a final answer.
+    .env(
+      "AGENTFLOW_MOCK_RESPONSE",
+      r#"{"thought":"fallback","answer":"fallback"}"#,
+    )
+    .assert()
+    .success();
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(
+    saved.contains("refund processed"),
+    "expected billing's answer in output, got: {saved}"
+  );
+  assert!(
+    saved.contains("agent_result"),
+    "expected agent_result key in output"
+  );
 }
 
 #[test]

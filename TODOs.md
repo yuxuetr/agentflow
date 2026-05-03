@@ -259,7 +259,7 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 7. 多智能体协作三种范式
 
-状态: 待开始
+状态: 已完成 (2026-05-03)
 
 目标:
 
@@ -267,13 +267,12 @@ cargo run -p agentflow-agents --example react_agent
 
 子任务:
 
-- [ ] 设计 `Supervisor` 的三种 trait 实现:
-  - `HandoffSupervisor`: 角色切换式，由当前 agent 决定 handoff 给哪个 next agent；记录 handoff 链。
-  - `BlackboardSupervisor`: 共享状态板（同一 `MemoryStore` 切片），多 agent 顺序或并发读写。
-  - `DebateSupervisor`: 多 agent 各自给出方案 → 评审 agent 投票/合并。
-- [ ] 每种范式: 一个权威 example (`agentflow-agents/examples/`) + 一组 mock LLM 单测。
-- [ ] CLI/YAML 暴露: 增加 `multi_agent` 节点类型，`mode: handoff|blackboard|debate`，引用多个 skill。
-- [ ] 文档: `docs/MULTI_AGENT.md` 给三种范式的决策图与示例。
+- [x] 扩展 `AgentStepKind` / `AgentEvent`: `Handoff` / `BlackboardOp` / `DebateProposal` / `DebateVerdict` 步骤变体 + `HandoffOccurred` / `BlackboardWritten` / `DebateRoundStarted` / `DebateVerdictRendered` 事件变体；10 条 serde round-trip 单测。
+- [x] `HandoffSupervisor` (`agentflow-agents/src/supervisor/handoff.rs`): 共享 `HandoffSignal` + `HandoffTool`，支持 `max_handoffs` 上限和外部 `use_signal()` 注入；14 条单测覆盖 builder 校验、tool 行为、端到端 mock LLM 链路、cancellation；example `multi_agent_handoff.rs`。
+- [x] `BlackboardSupervisor` (`blackboard.rs`): `Blackboard { Arc<RwLock<HashMap>> }`、`bb_read`/`bb_write` 工具、`Sequential|Parallel` 调度、`AllAgentsCompleted|KeySet` 停止条件、`answer_from` 出口；12 条单测；example `multi_agent_blackboard.rs`。
+- [x] `DebateSupervisor` (`debate.rs`): N participants 并发提案 → 多轮可选修正 → judge 终裁；8 条单测；example `multi_agent_debate.rs`。
+- [x] CLI/YAML 暴露: `multi_agent` 节点 (`agentflow-cli/src/executor/multi_agent.rs`) 支持 `mode: handoff|blackboard|debate`、按 mode 解析 `agents`/`participants`/`judge`、`schedule` / `stop_when` / `answer_from` / `rounds` / `judge_prompt`；`SkillBuilder::build_with_extra_tools(...)` 让 supervisor 把协调工具注入 skill agents；`schema.rs` 接受 `multi_agent` 节点；`workflow run --model` 也覆盖 `multi_agent`；5 条 config 解析单测 + 1 条端到端 CLI smoke (`cli_workflow_run_supports_multi_agent_handoff_node`)。
+- [x] 文档: `docs/MULTI_AGENT.md` 三范式决策表、API 用法、YAML 参考、trace 形状。
 
 验收标准:
 

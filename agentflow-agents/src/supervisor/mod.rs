@@ -30,6 +30,19 @@ use agentflow_tools::ToolRegistry;
 use crate::react::{ReActAgent, ReActConfig};
 use crate::tools::AgentTool;
 
+pub mod blackboard;
+pub mod debate;
+pub mod handoff;
+
+pub use blackboard::{
+  Blackboard, BlackboardEntry, BlackboardReadTool, BlackboardSchedule, BlackboardStop,
+  BlackboardSupervisor, BlackboardSupervisorBuilder, BlackboardSupervisorError, BlackboardWriteTool,
+};
+pub use debate::{DebateSupervisor, DebateSupervisorBuilder, DebateSupervisorError};
+pub use handoff::{
+  HandoffSignal, HandoffSupervisor, HandoffSupervisorBuilder, HandoffSupervisorError, HandoffTool,
+};
+
 // ── Default orchestrator persona ──────────────────────────────────────────────
 
 const DEFAULT_ORCHESTRATOR_PERSONA: &str = "\

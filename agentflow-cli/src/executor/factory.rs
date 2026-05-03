@@ -42,6 +42,14 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       let node = SkillAgentWorkflowNode::new(&node_def.id);
       Ok(NodeType::Standard(Arc::new(node)))
     }
+    "multi_agent" => {
+      let node = crate::executor::multi_agent::MultiAgentNode::from_params(
+        &node_def.id,
+        &node_def.parameters,
+      )
+      .map_err(|err| anyhow!("multi_agent '{}': {}", node_def.id, err))?;
+      Ok(NodeType::Standard(Arc::new(node)))
+    }
     "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
     "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
     "template" => {

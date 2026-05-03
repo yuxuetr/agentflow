@@ -236,6 +236,24 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required_input("message", ParamType::String),
       ParamSpec::optional("model", ParamType::String),
     ]),
+    "multi_agent" => Some(vec![
+      ParamSpec::required("mode", ParamType::String),
+      ParamSpec::required_input("message", ParamType::String),
+      ParamSpec::optional("model", ParamType::String),
+      // Mode-specific shapes are validated when MultiAgentConfig is parsed
+      // by the factory; we accept the structured fields as Any here so the
+      // schema gate doesn't reject valid YAML it doesn't fully understand.
+      ParamSpec::optional("agents", ParamType::Any),
+      ParamSpec::optional("participants", ParamType::Any),
+      ParamSpec::optional("judge", ParamType::Any),
+      ParamSpec::optional("initial_agent", ParamType::String),
+      ParamSpec::optional("max_handoffs", ParamType::Integer),
+      ParamSpec::optional("schedule", ParamType::Any),
+      ParamSpec::optional("stop_when", ParamType::Any),
+      ParamSpec::optional("answer_from", ParamType::String),
+      ParamSpec::optional("rounds", ParamType::Integer),
+      ParamSpec::optional("judge_prompt", ParamType::String),
+    ]),
     "http" => Some(vec![
       ParamSpec::required_input("url", ParamType::String),
       ParamSpec::optional("method", ParamType::String),

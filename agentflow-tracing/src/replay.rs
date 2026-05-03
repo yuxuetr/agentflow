@@ -196,6 +196,74 @@ fn append_agent_step(out: &mut String, step: &serde_json::Value, options: Replay
         truncate(answer, options.max_field_chars)
       ));
     }
+    "handoff" => {
+      let from = kind
+        .get("from")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      let to = kind
+        .get("to")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      let message = kind
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+      out.push_str(&format!(
+        "      step {index}: handoff {from} -> {to} {}\n",
+        truncate(message, options.max_field_chars)
+      ));
+    }
+    "blackboard_op" => {
+      let op = kind
+        .get("op")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      let key = kind
+        .get("key")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      let agent = kind
+        .get("agent")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      out.push_str(&format!(
+        "      step {index}: blackboard_op {op} {key} by {agent}\n"
+      ));
+    }
+    "debate_proposal" => {
+      let round = kind
+        .get("round")
+        .and_then(|value| value.as_u64())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "?".to_string());
+      let agent = kind
+        .get("agent")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+      let proposal = kind
+        .get("proposal")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+      out.push_str(&format!(
+        "      step {index}: debate_proposal round={round} agent={agent} {}\n",
+        truncate(proposal, options.max_field_chars)
+      ));
+    }
+    "debate_verdict" => {
+      let winner = kind
+        .get("winner")
+        .and_then(|value| value.as_str())
+        .unwrap_or("(synthesis)");
+      let rationale = kind
+        .get("rationale")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+      out.push_str(&format!(
+        "      step {index}: debate_verdict winner={winner} {}\n",
+        truncate(rationale, options.max_field_chars)
+      ));
+    }
     other => out.push_str(&format!("      step {index}: {other}\n")),
   }
 }
@@ -324,6 +392,60 @@ mod tests {
     assert!(replay.contains("Trace Replay: wf-replay"));
     assert!(replay.contains("step 1: tool_call mcp_echo"));
     assert!(replay.contains("tool: mcp_echo source=mcp error=false"));
+  }
+
+  #[test]
+  fn replay_renders_multi_agent_step_kinds() {
+    let mut trace = ExecutionTrace::new("wf-multi".to_string());
+    trace.status = TraceStatus::Completed;
+    let mut node = NodeTrace::new("pipeline".to_string(), "multi_agent".to_string());
+    node.status = NodeStatus::Completed;
+    node.agent_details = Some(AgentTrace {
+      context: Default::default(),
+      session_id: "session-1".to_string(),
+      answer: Some("done".to_string()),
+      stop_reason: serde_json::json!({"reason": "final_answer"}),
+      steps: vec![
+        serde_json::json!({
+          "index": 0,
+          "kind": {"type": "handoff", "from": "triage", "to": "billing", "message": "refund order #42"}
+        }),
+        serde_json::json!({
+          "index": 1,
+          "kind": {"type": "blackboard_op", "op": "write", "key": "facts", "agent": "researcher"}
+        }),
+        serde_json::json!({
+          "index": 2,
+          "kind": {"type": "debate_proposal", "round": 1, "agent": "alpha", "proposal": "ship it"}
+        }),
+        serde_json::json!({
+          "index": 3,
+          "kind": {"type": "debate_verdict", "winner": null, "rationale": "synthesised"}
+        }),
+      ],
+      events: vec![],
+      tool_calls: vec![],
+    });
+    trace.nodes.push(node);
+
+    let replay = format_trace_replay(&trace, ReplayOptions::default());
+
+    assert!(
+      replay.contains("step 0: handoff triage -> billing"),
+      "handoff render missing in: {replay}"
+    );
+    assert!(
+      replay.contains("step 1: blackboard_op write facts by researcher"),
+      "blackboard_op render missing in: {replay}"
+    );
+    assert!(
+      replay.contains("step 2: debate_proposal round=1 agent=alpha"),
+      "debate_proposal render missing in: {replay}"
+    );
+    assert!(
+      replay.contains("step 3: debate_verdict winner=(synthesis)"),
+      "debate_verdict render missing in: {replay}"
+    );
   }
 
   #[test]
