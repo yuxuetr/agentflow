@@ -25,8 +25,8 @@ pub mod skills;
 pub use auth::{AuthConfig, require_bearer_token};
 pub use error::ApiError;
 pub use events_stream::{
-  EventBroker, EventSink, PersistingEventSink, StreamedEvent, list_events, publish_through,
-  stream_events,
+  EventBroker, EventSink, PersistingEventSink, StreamedEvent, WorkflowEventListener, list_events,
+  publish_through, stream_events,
 };
 pub use runs::{
   CreateRunRequest, CreateRunResponse, RunContext, RunExecutor, RunResponse, StubExecutor,

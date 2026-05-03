@@ -268,6 +268,236 @@ impl EventSink for PersistingEventSink {
   }
 }
 
+/// Bridge from `agentflow_core::events::WorkflowEvent` (synchronous, fired
+/// inside Flow execution) to the gateway's persisted + broadcast event
+/// pipeline (async).
+///
+/// `EventListener::on_event` is synchronous, but `EventSink::publish` is
+/// async — we bridge the two with an unbounded mpsc channel and a single
+/// drain task that keeps writes ordered. The listener buffers events
+/// while writes catch up; writes that fail (DB hiccup) are logged and
+/// dropped, since dropping a synthetic event is safer than blocking the
+/// Flow scheduler. SSE subscribers can reconnect with `?after_seq=` to
+/// refill from the DB if anything was dropped.
+pub struct WorkflowEventListener {
+  run_id: Uuid,
+  tx: tokio::sync::mpsc::UnboundedSender<NewEvent>,
+  seq: std::sync::atomic::AtomicI64,
+  start_seq: i64,
+}
+
+impl WorkflowEventListener {
+  /// Create a listener for `run_id`. The drain task owns `sink` for its
+  /// lifetime; closing the channel (drop the listener) ends the task.
+  ///
+  /// `start_seq` is the first event sequence number to assign — pass the
+  /// last seq already persisted so the listener picks up after any
+  /// pre-existing rows (avoids duplicate-key violations on the
+  /// `(run_id, seq)` PK).
+  pub fn new(run_id: Uuid, sink: Arc<dyn EventSink>, start_seq: i64) -> Self {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewEvent>();
+    tokio::spawn(async move {
+      while let Some(event) = rx.recv().await {
+        if let Err(e) = sink.publish(event).await {
+          tracing::warn!(error = %e, "WorkflowEventListener: persist failed");
+        }
+      }
+    });
+    Self {
+      run_id,
+      tx,
+      seq: std::sync::atomic::AtomicI64::new(start_seq),
+      start_seq,
+    }
+  }
+
+  /// Construct from the standard `Repositories` + `EventBroker` pair.
+  pub fn from_state(
+    run_id: Uuid,
+    repos: Repositories,
+    broker: EventBroker,
+    start_seq: i64,
+  ) -> Self {
+    let sink: Arc<dyn EventSink> = Arc::new(PersistingEventSink { repos, broker });
+    Self::new(run_id, sink, start_seq)
+  }
+
+  /// First sequence number this listener will assign. Useful for tests
+  /// that need to predict the persisted event seq range.
+  pub fn start_seq(&self) -> i64 {
+    self.start_seq
+  }
+}
+
+impl agentflow_core::events::EventListener for WorkflowEventListener {
+  fn on_event(&self, event: &agentflow_core::events::WorkflowEvent) {
+    let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let payload = workflow_event_payload(event);
+    let kind = event.event_type().to_string();
+    if let Err(e) = self.tx.send(NewEvent {
+      run_id: self.run_id,
+      seq,
+      kind,
+      payload,
+    }) {
+      // Drain task gone (listener was dropped). Synchronous on_event has
+      // no good way to surface this — log and move on so the Flow
+      // scheduler keeps making progress.
+      tracing::debug!(error = %e, "WorkflowEventListener: drain task closed");
+    }
+  }
+}
+
+/// Convert a `WorkflowEvent` to a JSON payload suitable for the `events`
+/// table. Drops `std::time::Instant` (not serialisable) and surfaces
+/// duration as milliseconds; keeps `node_id`, `error`, `model`, etc. so
+/// SSE subscribers can render meaningful UIs.
+fn workflow_event_payload(event: &agentflow_core::events::WorkflowEvent) -> serde_json::Value {
+  use agentflow_core::events::WorkflowEvent as W;
+  match event {
+    W::WorkflowStarted { workflow_id, .. } => serde_json::json!({"workflow_id": workflow_id}),
+    W::WorkflowCompleted {
+      workflow_id,
+      duration,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "duration_ms": duration.as_millis() as u64,
+    }),
+    W::WorkflowFailed {
+      workflow_id,
+      error,
+      duration,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "error": error,
+      "duration_ms": duration.as_millis() as u64,
+    }),
+    W::NodeStarted {
+      workflow_id,
+      node_id,
+      ..
+    } => serde_json::json!({"workflow_id": workflow_id, "node_id": node_id}),
+    W::NodeCompleted {
+      workflow_id,
+      node_id,
+      duration,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "duration_ms": duration.as_millis() as u64,
+    }),
+    W::NodeOutputCaptured {
+      workflow_id,
+      node_id,
+      output,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "output": output,
+    }),
+    W::NodeFailed {
+      workflow_id,
+      node_id,
+      error,
+      duration,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "error": error,
+      "duration_ms": duration.as_millis() as u64,
+    }),
+    W::NodeSkipped {
+      workflow_id,
+      node_id,
+      reason,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "reason": reason,
+    }),
+    W::CheckpointSaved {
+      workflow_id,
+      checkpoint_id,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "checkpoint_id": checkpoint_id,
+    }),
+    W::CheckpointRestored {
+      workflow_id,
+      checkpoint_id,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "checkpoint_id": checkpoint_id,
+    }),
+    W::RetryAttempt {
+      workflow_id,
+      node_id,
+      attempt,
+      max_attempts,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "attempt": attempt,
+      "max_attempts": max_attempts,
+    }),
+    W::ResourceWarning {
+      workflow_id,
+      resource_type,
+      usage,
+      limit,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "resource_type": resource_type,
+      "usage": usage,
+      "limit": limit,
+    }),
+    W::LLMPromptSent {
+      workflow_id,
+      node_id,
+      model,
+      provider,
+      temperature,
+      max_tokens,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "model": model,
+      "provider": provider,
+      "temperature": temperature,
+      "max_tokens": max_tokens,
+    }),
+    W::LLMResponseReceived {
+      workflow_id,
+      node_id,
+      model,
+      duration,
+      usage,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "model": model,
+      "duration_ms": duration.as_millis() as u64,
+      "usage": usage.as_ref().map(|u| serde_json::json!({
+        "prompt_tokens": u.prompt_tokens,
+        "completion_tokens": u.completion_tokens,
+        "total_tokens": u.total_tokens,
+      })),
+    }),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -314,5 +544,80 @@ mod tests {
     // After finalise the sender is dropped; recv eventually yields Closed.
     let result = rx.recv().await;
     assert!(matches!(result, Err(broadcast::error::RecvError::Closed)));
+  }
+
+  #[tokio::test]
+  async fn workflow_event_listener_bridges_to_sink() {
+    use agentflow_core::events::{EventListener, WorkflowEvent};
+    use std::time::{Duration, Instant};
+
+    /// In-memory sink that records every published event for assertions.
+    struct CapturingSink {
+      tx: tokio::sync::mpsc::UnboundedSender<NewEvent>,
+    }
+
+    #[async_trait]
+    impl EventSink for CapturingSink {
+      async fn publish(&self, event: NewEvent) -> Result<(), DbError> {
+        self.tx.send(event).expect("test channel closed");
+        Ok(())
+      }
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewEvent>();
+    let sink: Arc<dyn EventSink> = Arc::new(CapturingSink { tx });
+    let run_id = Uuid::new_v4();
+    let listener = WorkflowEventListener::new(run_id, sink, 0);
+
+    listener.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "demo".into(),
+      timestamp: Instant::now(),
+    });
+    listener.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: "demo".into(),
+      node_id: "n1".into(),
+      timestamp: Instant::now(),
+    });
+    listener.on_event(&WorkflowEvent::NodeCompleted {
+      workflow_id: "demo".into(),
+      node_id: "n1".into(),
+      duration: Duration::from_millis(7),
+      timestamp: Instant::now(),
+    });
+
+    // Drain task is async; give it a moment to flush all three events.
+    let mut events = Vec::new();
+    for _ in 0..3 {
+      let event = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("listener delivers events promptly")
+        .expect("listener channel still open");
+      events.push(event);
+    }
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].seq, 0);
+    assert_eq!(events[0].kind, "workflow.started");
+    assert_eq!(events[1].kind, "node.started");
+    assert_eq!(events[2].kind, "node.completed");
+    assert_eq!(events[2].payload["duration_ms"], 7);
+    assert_eq!(events[2].payload["node_id"], "n1");
+  }
+
+  #[test]
+  fn workflow_event_payload_preserves_error_text() {
+    use agentflow_core::events::WorkflowEvent;
+    use std::time::{Duration, Instant};
+
+    let event = WorkflowEvent::NodeFailed {
+      workflow_id: "demo".into(),
+      node_id: "n1".into(),
+      error: "boom".into(),
+      duration: Duration::from_millis(20),
+      timestamp: Instant::now(),
+    };
+    let payload = workflow_event_payload(&event);
+    assert_eq!(payload["error"], "boom");
+    assert_eq!(payload["node_id"], "n1");
+    assert_eq!(payload["duration_ms"], 20);
   }
 }
