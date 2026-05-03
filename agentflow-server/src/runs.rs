@@ -21,10 +21,11 @@ use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
+use agentflow_db::{NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::events_stream::{EventBroker, publish_through};
 
 /// JSON body for `POST /v1/runs`.
 ///
@@ -58,11 +59,15 @@ pub trait RunExecutor: Send + Sync {
 }
 
 /// Everything an executor needs to do its job. Owns its own copies of the
-/// repositories so the route handler can return immediately.
+/// repositories and broker so the route handler can return immediately.
 pub struct RunContext {
   pub run_id: Uuid,
   pub workflow: String,
   pub repos: Repositories,
+  /// Forwards events to live SSE subscribers. Persisting to the DB still
+  /// has to happen — use [`publish_through`](crate::events_stream::publish_through)
+  /// for the standard path.
+  pub broker: EventBroker,
 }
 
 /// Default no-op executor used until the real Flow runner lands. Marks runs
@@ -92,36 +97,41 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
     .runs
     .update_status(ctx.run_id, RunStatus::Running, None)
     .await?;
-  ctx
-    .repos
-    .events
-    .append(NewEvent {
+  publish_through(
+    &ctx.repos,
+    &ctx.broker,
+    NewEvent {
       run_id: ctx.run_id,
       seq: 0,
       kind: "run_started".into(),
       payload: serde_json::json!({"executor": "stub"}),
-    })
-    .await?;
+    },
+  )
+  .await?;
 
   // Brief delay so SSE subscribers have time to attach for tests that
   // race the spawn against the subscribe call.
   tokio::time::sleep(Duration::from_millis(50)).await;
 
-  ctx
-    .repos
-    .events
-    .append(NewEvent {
+  publish_through(
+    &ctx.repos,
+    &ctx.broker,
+    NewEvent {
       run_id: ctx.run_id,
       seq: 1,
       kind: "run_completed".into(),
       payload: serde_json::json!({"executor": "stub"}),
-    })
-    .await?;
+    },
+  )
+  .await?;
   ctx
     .repos
     .runs
     .update_status(ctx.run_id, RunStatus::Succeeded, None)
     .await?;
+  // Drop the per-run broadcast channel so live subscribers see EOF after
+  // any in-flight events drain.
+  ctx.broker.finalise(ctx.run_id);
   info!(run_id = %ctx.run_id, "stub executor finished");
   Ok(())
 }
@@ -164,12 +174,14 @@ pub async fn submit_run(
   // executor owns the entire run lifecycle from this point.
   let executor = state.executor.clone();
   let repos = state.repos.clone();
+  let broker = state.event_broker.clone();
   tokio::spawn(async move {
     executor
       .execute(RunContext {
         run_id,
         workflow,
         repos,
+        broker,
       })
       .await;
   });

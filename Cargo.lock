@@ -273,6 +273,7 @@ dependencies = [
  "agentflow-skills",
  "async-trait",
  "axum",
+ "chrono",
  "dotenvy",
  "futures",
  "serde",
@@ -280,6 +281,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
@@ -5067,6 +5069,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

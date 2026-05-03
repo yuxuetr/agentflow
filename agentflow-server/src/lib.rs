@@ -18,10 +18,15 @@ use agentflow_db::{Database, Repositories};
 
 pub mod auth;
 pub mod error;
+pub mod events_stream;
 pub mod runs;
 
 pub use auth::{AuthConfig, require_bearer_token};
 pub use error::ApiError;
+pub use events_stream::{
+  EventBroker, EventSink, PersistingEventSink, StreamedEvent, list_events, publish_through,
+  stream_events,
+};
 pub use runs::{
   CreateRunRequest, CreateRunResponse, RunContext, RunExecutor, RunResponse, StubExecutor,
   default_executor, get_run, submit_run,
@@ -43,6 +48,9 @@ pub struct AppState {
   /// deployments can swap in a real Flow runner while tests use
   /// [`StubExecutor`].
   pub executor: Arc<dyn RunExecutor>,
+  /// Process-local broker that fans persisted run events out to SSE
+  /// subscribers. Cloning is cheap (Arc-backed).
+  pub event_broker: EventBroker,
 }
 
 impl std::fmt::Debug for AppState {
@@ -66,6 +74,7 @@ impl AppState {
       auth: None,
       skills: Arc::new(Vec::new()),
       executor: default_executor(),
+      event_broker: EventBroker::new(),
     }
   }
 
@@ -98,7 +107,8 @@ pub fn create_router(state: AppState) -> Router {
   let v1 = Router::new()
     .route("/v1/whoami", get(whoami))
     .route("/v1/runs", post(submit_run))
-    .route("/v1/runs/:id", get(get_run));
+    .route("/v1/runs/:id", get(get_run))
+    .route("/v1/runs/:id/events", get(stream_events));
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),

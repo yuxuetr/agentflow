@@ -63,7 +63,7 @@
 - [x] `agentflow-db`: 引入 `sqlx::migrate!()` 嵌入式迁移 + 6 张表 schema (`migrations/0001_initial_schema.sql`)：runs / steps / events / artifacts / skill_installs / mcp_sessions，附加索引 (runs_tenant_started_idx / runs_status_idx / events_run_ts_idx / artifacts_run_idx / mcp_sessions_server_idx)。`Database::connect_and_migrate(...)` 一步连接 + 应用迁移；`run_migrations()` 幂等。集成测试 (`tests/migrations.rs`) 通过 `AGENTFLOW_DATABASE_TEST_URL` env 触发，CI 默认跳过。
 - [x] `agentflow-db`: Repository trait + Postgres 实现：`RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` (`src/repo.rs`)，`Repositories::from_pool` 一次性构造全套；模型层 `Run` / `Step` / `Event` / `Artifact` / `SkillInstall` / `McpSession` + `RunStatus` 枚举 (`src/models.rs`)。集成测试 `tests/repositories.rs` 覆盖 create/get/list/update_status 和 step/event round-trip（同样 `AGENTFLOW_DATABASE_TEST_URL` gate）。
 - [x] `POST /v1/runs` + `GET /v1/runs/{id}`：JSON body `{workflow, workflow_id?, tenant_id?}` → queued run record；`RunExecutor` trait 抽象后台执行（默认 `StubExecutor` 写入 run_started/run_completed 事件并切到 succeeded，task #14 替换为真正的 Flow runner）；4 条 e2e 测试覆盖提交+落库+异步状态切换、缺 workflow → 400、未知 id → 404、查询持久化行。
-- [ ] `GET /v1/runs/{id}/events` 通过 SSE 流式推送 trace events
+- [x] `GET /v1/runs/{id}/events` SSE：`EventBroker` (per-run-id `tokio::sync::broadcast` 通道) + `publish_through` 同时落库与推送；handler 先回放 DB 历史 (`?after_seq=` 续传)，再桥接 live stream，每 15s keep-alive；`Lagged` 转换为 SSE 注释让客户端基于 `after_seq` 续连；3 条 broker 单测 + 1 条 DB-gated e2e (验证 stub 写入的 run_started/run_completed 抵达订阅者)。
 - [ ] `POST /v1/skills/{name}:run` 触发 skill agent 单次运行
 - [ ] `GET /v1/skills` 列出本地 skill registry
 - [ ] `agentflow-server`: 接 `agentflow-tracing` 的 `EventListener`，每个事件落库 + 推送给订阅者。
