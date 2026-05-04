@@ -790,6 +790,20 @@ impl ReActAgent {
               timestamp: Utc::now(),
             });
           }
+          if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
+            events.push(AgentEvent::ToolCapabilityDecision {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.clone(),
+              allowed: effective.allowed,
+              required: effective.required,
+              effective: effective.effective,
+              denied: effective.denied,
+              deny_reason: effective.deny_reason,
+              trace: effective.trace,
+              timestamp: Utc::now(),
+            });
+          }
           events.push(AgentEvent::ToolCallStarted {
             session_id: self.session_id.clone(),
             step_index: tool_step_index,
@@ -1616,6 +1630,7 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       AgentEvent::StepStarted { step_index, .. }
       | AgentEvent::ToolCallStarted { step_index, .. }
       | AgentEvent::ToolPolicyDecision { step_index, .. }
+      | AgentEvent::ToolCapabilityDecision { step_index, .. }
       | AgentEvent::ToolCallCompleted { step_index, .. }
       | AgentEvent::ReflectionAdded { step_index, .. }
       | AgentEvent::HandoffOccurred { step_index, .. }

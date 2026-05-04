@@ -292,7 +292,7 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 8. 工具进程级沙箱
 
-状态: 待开始
+状态: 进行中 (PR-A 已完成 2026-05-04 / PR-B OS 沙箱待开始)
 
 目标:
 
@@ -301,27 +301,37 @@ cargo run -p agentflow-agents --example react_agent
 
 子任务:
 
-- [ ] 在 `agentflow-tools/src/sandbox.rs` 引入平台抽象:
+- [ ] 在 `agentflow-tools/src/sandbox.rs` 引入平台抽象 (PR-B):
   - macOS: `sandbox-exec` profile 模板。
   - Linux: `seccomp-bpf` syscall whitelist + chroot/mount namespace 子集。
   - 其他平台: 显式不支持，工具调用拒绝并给出可操作建议。
-- [ ] 在 `Tool` trait 增加 `requires_capabilities() -> Vec<Capability>`，枚举 `Capability::{FsRead, FsWrite, Net, Exec, Env}`。
-- [ ] 实现三方权限合并算法: SkillSecurity → ToolPolicy → CLI flag → effective capabilities，每一步可观察。
-- [ ] 在 trace 中固化 `ToolCapabilityDecision` 事件: 显式记录每个 capability 是否被允许、由哪条规则裁剪。
-- [ ] 文档: `docs/SKILL_PERMISSIONS.md` 写明三方决策合并算法与示例。
-- [ ] CLI: `agentflow skill inspect --explain-permissions <skill>` 展示一次实际运行的最终决策路径。
+- [x] 在 `Tool` trait 增加 `requires_capabilities() -> Vec<Capability>`，枚举 `Capability::{FsRead, FsWrite, Net, Exec, Env}`。`agentflow-tools/src/capability.rs` 新模块；`Capability::from_permission(s)` 提供 `ToolPermission → Vec<Capability>` 默认映射 (`FilesystemRead → FsRead` / `FilesystemWrite → FsWrite` / `ProcessExec → Exec` / `Network → Net` / `Mcp → {Net, Exec}` / `Workflow → []`)；`Tool` trait 默认 impl 由声明的 permissions 派生。
+- [x] 实现三方权限合并算法: SkillSecurity → ToolPolicy → CLI flag → effective capabilities，每一步可观察。`EffectiveCapabilities::resolve(tool, required, skill, policy, cli)` 做四层 (`tool_required` + 三层) 交集；`ToolRegistry::with_skill_capabilities` / `with_cli_capabilities` 安装层；`ToolPolicy::allowed_capabilities()` 把已有 permission allowlist 投影到 capability；`evaluate_capabilities(name)` 输出含 `trace: [CapabilityDecisionEntry]` 的 `EffectiveCapabilities`；`ToolRegistry::execute` 在策略层之后串入第二道 capability 裁剪 (返回 `PolicyDenied` + 写入 `capability_audit_log`)。`agentflow-skills::SkillBuilder` 改走 `with_skill_capabilities(Capability::from_permissions(...))` 并保留 `ToolPolicy` 兼容旧审计。
+- [x] 在 trace 中固化 `ToolCapabilityDecision` 事件: 显式记录每个 capability 是否被允许、由哪条规则裁剪。`AgentEvent::ToolCapabilityDecision { tool, allowed, required, effective, denied, deny_reason, trace, .. }` 新 variant；`ReActAgent` 与 `PlanExecuteAgent` 在 `ToolPolicyDecision` 之后立即发射；`react/agent.rs` + `supervisor/{handoff,blackboard,debate}.rs` 的 step_index merge match 全部覆盖；`agent_runtime_react_trace.json` golden fixture 同步。
+- [x] 文档: `docs/SKILL_PERMISSIONS.md` 写明三方决策合并算法与示例。新文件 178 行：capability 与 permission 的关系、四层交集语义、layer 顺序、permissive vs restrictive 的语义、worked example、向后兼容性说明。
+- [x] CLI: `agentflow skill inspect --explain-permissions <skill>` 展示一次实际运行的最终决策路径。`Inspect` arg 新增 `--explain-permissions` 布尔；`commands/skill/inspect.rs` 对每个 built-in tool 打印 `required` / `effective` / `denied` / 每层 (`tool_required` / `skill_security` / `tool_policy` / `cli_flag`) 的 `allowed` / `running` / `dropped`；`skill_inspect_explain_permissions_prints_capability_decision` 是端到端 CLI 烟雾测试 (走 `examples/skills/rust_expert`)。
+- 📊 PR-A 测试增量: agentflow-tools +12 单测 (capability 模块 9 + registry capability 集成 3)，agentflow-agents +1 (`tool_capability_decision_event_round_trips_through_serde`)，agentflow-cli +1 CLI smoke。`cargo test -p agentflow-tools -p agentflow-agents -p agentflow-skills -p agentflow-cli` 全绿；workspace `cargo clippy -- -D warnings` 干净。
 
 验收标准:
 
-- 在受限沙箱下运行的 `ShellTool` 越界访问被强制阻断 (sandbox 拒绝而非 policy 拒绝)。
-- 一次 skill run 产出的 trace 包含可读的 capability 决策链路。
-- macOS / Linux 两条路径各自有集成测试。
+- 在受限沙箱下运行的 `ShellTool` 越界访问被强制阻断 (sandbox 拒绝而非 policy 拒绝)。 (PR-B)
+- 一次 skill run 产出的 trace 包含可读的 capability 决策链路。 ✅ (PR-A)
+- macOS / Linux 两条路径各自有集成测试。 (PR-B)
 
 涉及文件:
 
-- `agentflow-tools/src/{sandbox,policy,tool,builtin/shell,builtin/script}.rs`
-- `agentflow-skills/src/manifest.rs` (security 字段对接)
-- `docs/SKILL_PERMISSIONS.md`、`docs/TOOL_PERMISSIONS.md`
+PR-A (已完成):
+
+- `agentflow-tools/src/{capability,policy,registry,tool,lib}.rs`
+- `agentflow-agents/src/{runtime,react/agent,plan_execute}.rs`、`agentflow-agents/src/supervisor/{handoff,blackboard,debate}.rs`、`agentflow-agents/tests/fixtures/agent_runtime_react_trace.json`
+- `agentflow-skills/src/builder.rs`
+- `agentflow-cli/src/main.rs`、`agentflow-cli/src/commands/skill/inspect.rs`、`agentflow-cli/tests/skill_cli_tests.rs`
+- `docs/SKILL_PERMISSIONS.md`
+
+PR-B (待开始):
+
+- `agentflow-tools/src/{sandbox,builtin/shell,builtin/script}.rs`
+- `docs/TOOL_PERMISSIONS.md` (链接到 SKILL_PERMISSIONS)
 
 ### 9. OpenTelemetry 端到端连续
 

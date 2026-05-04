@@ -246,10 +246,7 @@ impl AgentRuntime for HandoffSupervisor {
 
     events.push(AgentEvent::RunStarted {
       session_id: session_id.clone(),
-      model: format!(
-        "multi_agent:handoff(initial={})",
-        self.initial_agent
-      ),
+      model: format!("multi_agent:handoff(initial={})", self.initial_agent),
       timestamp: context.started_at,
     });
     steps.push(AgentStep::new(
@@ -293,12 +290,9 @@ impl AgentRuntime for HandoffSupervisor {
           })?;
 
       let child_session = format!("{}::{}", session_id, active);
-      let mut child_ctx = AgentContext::new(
-        child_session,
-        current_input.clone(),
-        context.model.clone(),
-      )
-      .with_limits(context.limits.clone());
+      let mut child_ctx =
+        AgentContext::new(child_session, current_input.clone(), context.model.clone())
+          .with_limits(context.limits.clone());
       if let Some(token) = cancellation.clone() {
         child_ctx = child_ctx.with_cancellation_token(token);
       }
@@ -399,6 +393,7 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
     AgentEvent::StepStarted { step_index, .. }
     | AgentEvent::ToolCallStarted { step_index, .. }
     | AgentEvent::ToolPolicyDecision { step_index, .. }
+    | AgentEvent::ToolCapabilityDecision { step_index, .. }
     | AgentEvent::ToolCallCompleted { step_index, .. }
     | AgentEvent::ReflectionAdded { step_index, .. }
     | AgentEvent::HandoffOccurred { step_index, .. }
@@ -577,14 +572,16 @@ mod tests {
   use agentflow_tools::ToolRegistry;
   use serde_json::json;
 
-  use crate::runtime::AgentCancellationToken;
   use crate::react::{ReActAgent, ReActConfig};
+  use crate::runtime::AgentCancellationToken;
 
   fn build_agent_with_handoff(handoff: Arc<HandoffTool>, model: &str, persona: &str) -> ReActAgent {
     let mut registry = ToolRegistry::new();
     registry.register(handoff);
     ReActAgent::new(
-      ReActConfig::new(model).with_persona(persona).with_max_iterations(4),
+      ReActConfig::new(model)
+        .with_persona(persona)
+        .with_max_iterations(4),
       Box::new(SessionMemory::default_window()),
       Arc::new(registry),
     )
@@ -642,7 +639,10 @@ providers:
       .initial_agent("billing")
       .build()
       .unwrap_err();
-    assert!(matches!(err, HandoffSupervisorError::UnknownInitialAgent(_)));
+    assert!(matches!(
+      err,
+      HandoffSupervisorError::UnknownInitialAgent(_)
+    ));
   }
 
   #[tokio::test]
@@ -700,7 +700,10 @@ providers:
       .await
       .unwrap_err();
     assert!(matches!(err, ToolError::InvalidParams { .. }));
-    assert!(signal.take().is_none(), "signal must remain empty on rejection");
+    assert!(
+      signal.take().is_none(),
+      "signal must remain empty on rejection"
+    );
   }
 
   #[tokio::test]
@@ -883,8 +886,7 @@ providers:
 
     let token = AgentCancellationToken::new();
     token.cancel();
-    let context = AgentContext::new("session-1", "anything", &model)
-      .with_cancellation_token(token);
+    let context = AgentContext::new("session-1", "anything", &model).with_cancellation_token(token);
     let result = AgentRuntime::run(&mut supervisor, context).await.unwrap();
 
     assert!(matches!(
@@ -960,12 +962,7 @@ providers:
       answer: Some("ans".into()),
       stop_reason: AgentStopReason::FinalAnswer,
       steps: vec![
-        AgentStep::new(
-          0,
-          AgentStepKind::Observe {
-            input: "in".into(),
-          },
-        ),
+        AgentStep::new(0, AgentStepKind::Observe { input: "in".into() }),
         AgentStep::new(
           1,
           AgentStepKind::FinalAnswer {
@@ -990,5 +987,4 @@ providers:
       panic!("expected ReflectionAdded");
     }
   }
-
 }

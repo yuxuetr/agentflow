@@ -343,6 +343,9 @@ enum SkillCommands {
   Inspect {
     /// Path to the skill directory (must contain skill.toml or SKILL.md)
     skill_dir: String,
+    /// Explain the capability decision for each declared tool
+    #[arg(long = "explain-permissions")]
+    explain_permissions: bool,
   },
   /// Run a skill with a single message and exit
   Run {
@@ -788,7 +791,10 @@ async fn main() {
         force,
       } => skill::install::execute(index_file, skill, dir, force).await,
       SkillCommands::Validate { skill_dir } => skill::validate::execute(skill_dir).await,
-      SkillCommands::Inspect { skill_dir } => skill::inspect::execute(skill_dir).await,
+      SkillCommands::Inspect {
+        skill_dir,
+        explain_permissions,
+      } => skill::inspect::execute(skill_dir, explain_permissions).await,
       SkillCommands::Run {
         skill_dir,
         message,

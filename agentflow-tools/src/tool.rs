@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::capability::Capability;
 use crate::error::ToolError;
 
 /// Result of a tool execution
@@ -347,6 +348,14 @@ pub trait Tool: Send + Sync {
   /// still exposing a conservative default through metadata.
   fn idempotency(&self, _params: &Value) -> ToolIdempotency {
     self.metadata().idempotency
+  }
+
+  /// OS-level capabilities the tool needs to execute.
+  ///
+  /// The default decomposes the declared [`ToolPermission`] set into
+  /// [`Capability`] values; tools can override to declare a tighter set.
+  fn requires_capabilities(&self) -> Vec<Capability> {
+    Capability::from_permissions(&self.metadata().permissions.permissions)
   }
 
   /// Execute the tool and return its output

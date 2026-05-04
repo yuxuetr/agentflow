@@ -95,6 +95,35 @@
       "timestamp": "<timestamp>"
     },
     {
+      "event": "tool_capability_decision",
+      "session_id": "golden-session",
+      "step_index": 2,
+      "tool": "echo",
+      "allowed": true,
+      "required": [],
+      "effective": [],
+      "trace": [
+        {
+          "source": "tool_required",
+          "allowed": [],
+          "running": []
+        },
+        {
+          "source": "skill_security",
+          "running": []
+        },
+        {
+          "source": "tool_policy",
+          "running": []
+        },
+        {
+          "source": "cli_flag",
+          "running": []
+        }
+      ],
+      "timestamp": "<timestamp>"
+    },
+    {
       "event": "tool_call_started",
       "session_id": "golden-session",
       "step_index": 2,

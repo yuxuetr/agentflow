@@ -5,7 +5,7 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
-use agentflow_tools::{SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
+use agentflow_tools::{Capability, SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
 use tracing::info;
 
 use crate::{
@@ -167,13 +167,21 @@ fn build_tool_registry(
   security: &SecurityConfig,
   skill_dir: &Path,
 ) -> ToolRegistry {
-  let mut registry = if security.tool_permission_allowlist.is_empty() {
-    ToolRegistry::new()
-  } else {
-    ToolRegistry::new().with_policy(ToolPolicy::allow_permissions(
-      security.tool_permission_allowlist.clone(),
-    ))
-  };
+  // SkillSecurity is the first layer of the three-way capability merge.
+  // We populate both the legacy permission-based ToolPolicy (for
+  // backward-compatible audit decisions) and the new capability layer that
+  // ToolRegistry::execute also enforces. Downstream policy / CLI layers
+  // remain unset and stay permissive by default.
+  let mut registry = ToolRegistry::new();
+  if !security.tool_permission_allowlist.is_empty() {
+    registry = registry
+      .with_policy(ToolPolicy::allow_permissions(
+        security.tool_permission_allowlist.clone(),
+      ))
+      .with_skill_capabilities(Capability::from_permissions(
+        &security.tool_permission_allowlist,
+      ));
+  }
 
   if tool_configs.is_empty() {
     // No tools declared — return an empty registry.

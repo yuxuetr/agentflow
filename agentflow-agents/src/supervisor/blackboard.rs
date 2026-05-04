@@ -96,7 +96,10 @@ impl Blackboard {
 
   fn write_internal(&self, key: &str, value: Value, agent: &str) {
     let version = {
-      let mut counter = self.next_version.lock().expect("blackboard version poisoned");
+      let mut counter = self
+        .next_version
+        .lock()
+        .expect("blackboard version poisoned");
       *counter += 1;
       *counter
     };
@@ -176,12 +179,13 @@ impl Tool for BlackboardReadTool {
     ToolMetadata::builtin_named("bb_read")
   }
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
-    let key = params
-      .get("key")
-      .and_then(Value::as_str)
-      .ok_or_else(|| ToolError::InvalidParams {
-        message: "bb_read: 'key' must be a string".into(),
-      })?;
+    let key =
+      params
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidParams {
+          message: "bb_read: 'key' must be a string".into(),
+        })?;
     self.blackboard.record_read(key, &self.agent_name);
     let payload = match self.blackboard.get(key) {
       Some(entry) => serde_json::to_string(&entry.value).unwrap_or_else(|_| "null".into()),
@@ -229,12 +233,13 @@ impl Tool for BlackboardWriteTool {
     ToolMetadata::builtin_named("bb_write")
   }
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
-    let key = params
-      .get("key")
-      .and_then(Value::as_str)
-      .ok_or_else(|| ToolError::InvalidParams {
-        message: "bb_write: 'key' must be a string".into(),
-      })?;
+    let key =
+      params
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidParams {
+          message: "bb_write: 'key' must be a string".into(),
+        })?;
     if key.trim().is_empty() {
       return Err(ToolError::InvalidParams {
         message: "bb_write: 'key' must be non-empty".into(),
@@ -350,10 +355,7 @@ impl BlackboardSupervisor {
       })
   }
 
-  fn agent_handle(
-    &self,
-    name: &str,
-  ) -> Result<Arc<AsyncMutex<ReActAgent>>, AgentRuntimeError> {
+  fn agent_handle(&self, name: &str) -> Result<Arc<AsyncMutex<ReActAgent>>, AgentRuntimeError> {
     self
       .agents
       .get(name)
@@ -370,8 +372,8 @@ impl BlackboardSupervisor {
     input: &str,
   ) -> AgentContext {
     let session = format!("{}::{}", parent.session_id, agent_name);
-    let mut ctx = AgentContext::new(session, input, parent.model.clone())
-      .with_limits(parent.limits.clone());
+    let mut ctx =
+      AgentContext::new(session, input, parent.model.clone()).with_limits(parent.limits.clone());
     if let Some(token) = parent.cancellation_token.clone() {
       ctx = ctx.with_cancellation_token(token);
     }
@@ -481,10 +483,7 @@ impl AgentRuntime for BlackboardSupervisor {
         condition: "all_agents_completed".into(),
       },
       BlackboardStop::KeySet(key) => AgentStopReason::StopCondition {
-        condition: format!(
-          "schedule exhausted without writing key '{}'",
-          key
-        ),
+        condition: format!("schedule exhausted without writing key '{}'", key),
       },
     });
 
@@ -589,6 +588,7 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
     AgentEvent::StepStarted { step_index, .. }
     | AgentEvent::ToolCallStarted { step_index, .. }
     | AgentEvent::ToolPolicyDecision { step_index, .. }
+    | AgentEvent::ToolCapabilityDecision { step_index, .. }
     | AgentEvent::ToolCallCompleted { step_index, .. }
     | AgentEvent::ReflectionAdded { step_index, .. }
     | AgentEvent::HandoffOccurred { step_index, .. }
@@ -723,14 +723,14 @@ impl BlackboardSupervisorBuilder {
       Some(s) => {
         for name in s.agents() {
           if !known_names.contains(name) {
-            return Err(BlackboardSupervisorError::UnknownScheduledAgent(name.clone()));
+            return Err(BlackboardSupervisorError::UnknownScheduledAgent(
+              name.clone(),
+            ));
           }
         }
         s
       }
-      None => BlackboardSchedule::Sequential(
-        self.pending.iter().map(|a| a.name.clone()).collect(),
-      ),
+      None => BlackboardSchedule::Sequential(self.pending.iter().map(|a| a.name.clone()).collect()),
     };
 
     let blackboard = Blackboard::new();
@@ -779,10 +779,7 @@ mod tests {
   }
 
   async fn init_mock_model(model: &str) {
-    let path = std::env::temp_dir().join(format!(
-      "agentflow-bb-mock-{}.yml",
-      uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("agentflow-bb-mock-{}.yml", uuid::Uuid::new_v4()));
     std::fs::write(
       &path,
       format!(
@@ -855,7 +852,10 @@ providers:
   #[tokio::test]
   async fn bb_write_tool_rejects_empty_key() {
     let tool = BlackboardWriteTool::new(Blackboard::new(), "x");
-    let err = tool.execute(json!({"key": "", "value": 1})).await.unwrap_err();
+    let err = tool
+      .execute(json!({"key": "", "value": 1}))
+      .await
+      .unwrap_err();
     assert!(matches!(err, ToolError::InvalidParams { .. }));
   }
 
@@ -1030,10 +1030,7 @@ providers:
         let model = model.clone();
         move |bb| build_agent(bb, "b", &model)
       })
-      .schedule(BlackboardSchedule::Parallel(vec![
-        "a".into(),
-        "b".into(),
-      ]))
+      .schedule(BlackboardSchedule::Parallel(vec!["a".into(), "b".into()]))
       .build()
       .unwrap();
 

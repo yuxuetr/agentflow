@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::capability::Capability;
 use crate::{ToolMetadata, ToolPermission, ToolPermissionSet};
 
 #[derive(Debug, Clone, Default)]
@@ -28,6 +29,20 @@ impl ToolPolicy {
       allowed_tools: None,
       allowed_permissions: Some(ToolPermissionSet::new(permissions)),
     }
+  }
+
+  /// Capabilities this policy permits, if it has a permission allow-list set.
+  ///
+  /// Returns `None` when the policy is permissive at the permission layer
+  /// (either fully open or constrained only by tool name). Tool-name allow-lists
+  /// are deliberately not collapsed into capabilities — they are a separate
+  /// dimension and capability-level decisions should treat the policy as
+  /// permissive when only tool names are being filtered.
+  pub fn allowed_capabilities(&self) -> Option<Vec<Capability>> {
+    self
+      .allowed_permissions
+      .as_ref()
+      .map(|set| Capability::from_permissions(&set.permissions))
   }
 
   pub fn evaluate(

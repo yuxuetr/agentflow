@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::Notify;
 
 use agentflow_memory::Message;
-use agentflow_tools::ToolOutputPart;
+use agentflow_tools::{Capability, CapabilityDecisionEntry, ToolOutputPart};
 
 /// Runtime limits shared by agent-native execution loops.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +275,26 @@ pub enum AgentEvent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     permissions: Vec<String>,
     params_summary: Value,
+    timestamp: DateTime<Utc>,
+  },
+  /// Outcome of the three-way capability merge for a tool invocation.
+  ///
+  /// Emitted alongside [`AgentEvent::ToolPolicyDecision`] but reflects a
+  /// finer-grained model: capabilities map onto OS-level sandbox primitives
+  /// (sandbox-exec / seccomp). The full per-layer trace lets operators see
+  /// which step (skill / tool policy / CLI flag) restricted each capability.
+  ToolCapabilityDecision {
+    session_id: String,
+    step_index: usize,
+    tool: String,
+    allowed: bool,
+    required: Vec<Capability>,
+    effective: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    denied: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deny_reason: Option<String>,
+    trace: Vec<CapabilityDecisionEntry>,
     timestamp: DateTime<Utc>,
   },
   ToolCallCompleted {
@@ -665,6 +685,39 @@ mod tests {
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["event"], "blackboard_written");
     assert_eq!(json["op"], "write");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn tool_capability_decision_event_round_trips_through_serde() {
+    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+      "shell",
+      &[Capability::Exec],
+      Some(&[Capability::Exec]),
+      None,
+      None,
+    );
+    let now = Utc::now();
+    let event = AgentEvent::ToolCapabilityDecision {
+      session_id: "session-cap".to_string(),
+      step_index: 2,
+      tool: "shell".to_string(),
+      allowed: effective.allowed,
+      required: effective.required.clone(),
+      effective: effective.effective.clone(),
+      denied: effective.denied.clone(),
+      deny_reason: effective.deny_reason.clone(),
+      trace: effective.trace.clone(),
+      timestamp: now,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "tool_capability_decision");
+    assert_eq!(json["allowed"], true);
+    assert_eq!(json["required"][0], "exec");
+    assert_eq!(json["trace"][0]["source"], "tool_required");
 
     let decoded: AgentEvent = serde_json::from_value(json).unwrap();
     assert_eq!(decoded, event);

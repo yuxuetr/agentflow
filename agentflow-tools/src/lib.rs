@@ -19,12 +19,14 @@
 //! ```
 
 pub mod builtin;
+pub mod capability;
 pub mod error;
 pub mod policy;
 pub mod registry;
 pub mod sandbox;
 pub mod tool;
 
+pub use capability::{Capability, CapabilityDecisionEntry, EffectiveCapabilities, GrantSource};
 pub use error::ToolError;
 pub use policy::{ToolPolicy, ToolPolicyDecision};
 pub use registry::ToolRegistry;

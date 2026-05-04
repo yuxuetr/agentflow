@@ -515,6 +515,32 @@ fn skill_inspect_summarizes_manifest_without_running_agent() {
 }
 
 #[test]
+fn skill_inspect_explain_permissions_prints_capability_decision() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--explain-permissions",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Capability decisions:"))
+    .stdout(predicate::str::contains("- shell [ALLOWED]"))
+    .stdout(predicate::str::contains("required:  [exec]"))
+    .stdout(predicate::str::contains("tool_required"))
+    .stdout(predicate::str::contains("skill_security"))
+    .stdout(predicate::str::contains("tool_policy"))
+    .stdout(predicate::str::contains("cli_flag"));
+}
+
+#[test]
 fn skill_list_tools_shows_mcp_tools_and_schema() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd

@@ -224,7 +224,8 @@ impl AgentRuntime for DebateSupervisor {
       for (name, handle) in handles {
         match handle.await {
           Ok(Ok(child_result)) => {
-            step_index = merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
+            step_index =
+              merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
             let proposal = child_result.answer.clone();
             let proposal_step_index = step_index;
             steps.push(AgentStep::new(
@@ -297,7 +298,10 @@ impl AgentRuntime for DebateSupervisor {
     let verdict_index = step_index;
     let answer = judge_result.answer.clone();
     let rationale = answer.clone().unwrap_or_else(|| {
-      format!("judge stopped without an answer: {:?}", judge_result.stop_reason)
+      format!(
+        "judge stopped without an answer: {:?}",
+        judge_result.stop_reason
+      )
     });
     steps.push(AgentStep::new(
       verdict_index,
@@ -368,6 +372,7 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
     AgentEvent::StepStarted { step_index, .. }
     | AgentEvent::ToolCallStarted { step_index, .. }
     | AgentEvent::ToolPolicyDecision { step_index, .. }
+    | AgentEvent::ToolCapabilityDecision { step_index, .. }
     | AgentEvent::ToolCallCompleted { step_index, .. }
     | AgentEvent::ReflectionAdded { step_index, .. }
     | AgentEvent::HandoffOccurred { step_index, .. }
@@ -477,7 +482,9 @@ impl DebateSupervisorBuilder {
     let mut seen = std::collections::HashSet::new();
     for spec in &self.participants {
       if !seen.insert(spec.name.clone()) {
-        return Err(DebateSupervisorError::DuplicateParticipant(spec.name.clone()));
+        return Err(DebateSupervisorError::DuplicateParticipant(
+          spec.name.clone(),
+        ));
       }
     }
     let judge = self.judge.ok_or(DebateSupervisorError::NoJudge)?;
@@ -581,7 +588,10 @@ providers:
       .judge(solo_agent("mock"))
       .build()
       .unwrap_err();
-    assert!(matches!(err, DebateSupervisorError::DuplicateParticipant(_)));
+    assert!(matches!(
+      err,
+      DebateSupervisorError::DuplicateParticipant(_)
+    ));
   }
 
   #[tokio::test]
@@ -652,10 +662,7 @@ providers:
     let context = AgentContext::new("session-1", "what is rust?", &model);
     let result = AgentRuntime::run(&mut supervisor, context).await.unwrap();
 
-    assert_eq!(
-      result.answer.as_deref(),
-      Some("final synthesised answer")
-    );
+    assert_eq!(result.answer.as_deref(), Some("final synthesised answer"));
     assert!(matches!(result.stop_reason, AgentStopReason::FinalAnswer));
 
     // Two DebateProposal steps + one DebateVerdict step expected.
@@ -753,8 +760,7 @@ providers:
 
     let token = crate::runtime::AgentCancellationToken::new();
     token.cancel();
-    let context = AgentContext::new("session-1", "x", &model)
-      .with_cancellation_token(token);
+    let context = AgentContext::new("session-1", "x", &model).with_cancellation_token(token);
     let result = AgentRuntime::run(&mut supervisor, context).await.unwrap();
     assert!(matches!(
       result.stop_reason,

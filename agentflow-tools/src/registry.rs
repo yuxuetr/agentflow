@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::capability::{Capability, EffectiveCapabilities};
 use crate::{
   Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolPermission, ToolPolicy,
   ToolPolicyDecision,
@@ -16,6 +17,9 @@ pub struct ToolRegistry {
   tools: HashMap<String, Arc<dyn Tool>>,
   policy: ToolPolicy,
   policy_audit: Arc<Mutex<Vec<ToolPolicyDecision>>>,
+  capability_audit: Arc<Mutex<Vec<EffectiveCapabilities>>>,
+  skill_capabilities: Option<Vec<Capability>>,
+  cli_capabilities: Option<Vec<Capability>>,
 }
 
 impl ToolRegistry {
@@ -24,12 +28,52 @@ impl ToolRegistry {
       tools: HashMap::new(),
       policy: ToolPolicy::allow_all(),
       policy_audit: Arc::new(Mutex::new(Vec::new())),
+      capability_audit: Arc::new(Mutex::new(Vec::new())),
+      skill_capabilities: None,
+      cli_capabilities: None,
     }
   }
 
   pub fn with_policy(mut self, policy: ToolPolicy) -> Self {
     self.policy = policy;
     self
+  }
+
+  /// Restrict the registry to the capabilities granted by the owning skill.
+  ///
+  /// Pass `None` to clear (the default), making the skill layer permissive.
+  pub fn with_skill_capabilities(
+    mut self,
+    capabilities: impl IntoIterator<Item = Capability>,
+  ) -> Self {
+    let mut caps: Vec<Capability> = capabilities.into_iter().collect();
+    caps.sort();
+    caps.dedup();
+    self.skill_capabilities = Some(caps);
+    self
+  }
+
+  /// Apply a CLI-level capability override on top of skill + policy layers.
+  ///
+  /// CLI overrides cannot grant capabilities that earlier layers denied;
+  /// the merge is an intersection.
+  pub fn with_cli_capabilities(
+    mut self,
+    capabilities: impl IntoIterator<Item = Capability>,
+  ) -> Self {
+    let mut caps: Vec<Capability> = capabilities.into_iter().collect();
+    caps.sort();
+    caps.dedup();
+    self.cli_capabilities = Some(caps);
+    self
+  }
+
+  pub fn skill_capabilities(&self) -> Option<&[Capability]> {
+    self.skill_capabilities.as_deref()
+  }
+
+  pub fn cli_capabilities(&self) -> Option<&[Capability]> {
+    self.cli_capabilities.as_deref()
   }
 
   /// Register a tool.  A previously registered tool with the same name
@@ -88,9 +132,36 @@ impl ToolRegistry {
     Ok(self.policy.evaluate(name, &tool.metadata(), params))
   }
 
+  /// Resolve the three-way capability merge for a registered tool.
+  ///
+  /// Layers, in order: tool requires → skill security → tool policy → CLI flag.
+  /// Each layer's contribution is recorded in [`EffectiveCapabilities::trace`].
+  pub fn evaluate_capabilities(&self, name: &str) -> Result<EffectiveCapabilities, ToolError> {
+    let tool = self.tools.get(name).ok_or_else(|| ToolError::NotFound {
+      name: name.to_string(),
+    })?;
+    let required = tool.requires_capabilities();
+    let policy_caps = self.policy.allowed_capabilities();
+    Ok(EffectiveCapabilities::resolve(
+      name,
+      &required,
+      self.skill_capabilities.as_deref(),
+      policy_caps.as_deref(),
+      self.cli_capabilities.as_deref(),
+    ))
+  }
+
   pub fn policy_audit_log(&self) -> Vec<ToolPolicyDecision> {
     self
       .policy_audit
+      .lock()
+      .map(|audit| audit.clone())
+      .unwrap_or_default()
+  }
+
+  pub fn capability_audit_log(&self) -> Vec<EffectiveCapabilities> {
+    self
+      .capability_audit
       .lock()
       .map(|audit| audit.clone())
       .unwrap_or_default()
@@ -127,6 +198,12 @@ impl ToolRegistry {
   }
 
   /// Execute a named tool with the given JSON parameters.
+  ///
+  /// Enforcement order:
+  /// 1. [`ToolPolicy`] permission/tool allow-list (records [`ToolPolicyDecision`]).
+  /// 2. Three-way capability merge (records [`EffectiveCapabilities`]).
+  ///
+  /// A denial at either layer short-circuits with [`ToolError::PolicyDenied`].
   pub async fn execute(&self, name: &str, params: Value) -> Result<ToolOutput, ToolError> {
     let tool = self.tools.get(name).ok_or_else(|| ToolError::NotFound {
       name: name.to_string(),
@@ -145,6 +222,28 @@ impl ToolRegistry {
         }),
       });
     }
+
+    let required = tool.requires_capabilities();
+    let policy_caps = self.policy.allowed_capabilities();
+    let effective = EffectiveCapabilities::resolve(
+      name,
+      &required,
+      self.skill_capabilities.as_deref(),
+      policy_caps.as_deref(),
+      self.cli_capabilities.as_deref(),
+    );
+    if let Ok(mut audit) = self.capability_audit.lock() {
+      audit.push(effective.clone());
+    }
+    if !effective.allowed {
+      return Err(ToolError::PolicyDenied {
+        message: effective
+          .deny_reason
+          .clone()
+          .unwrap_or_else(|| format!("tool '{}' was denied by capability check", name)),
+      });
+    }
+
     tool.execute(params).await
   }
 }
@@ -285,6 +384,71 @@ mod tests {
     assert_eq!(audit.len(), 1);
     assert!(!audit[0].allowed);
     assert_eq!(audit[0].matched_rule, "permission_allowlist");
+  }
+
+  #[tokio::test]
+  async fn evaluate_capabilities_traces_three_layer_merge() {
+    let mut registry = ToolRegistry::new()
+      .with_skill_capabilities([Capability::Exec, Capability::Net])
+      .with_cli_capabilities([Capability::Exec]);
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let effective = registry.evaluate_capabilities("shell").unwrap();
+
+    assert!(effective.allowed);
+    assert_eq!(effective.required, vec![Capability::Exec]);
+    assert_eq!(effective.effective, vec![Capability::Exec]);
+    assert_eq!(effective.trace.len(), 4);
+    assert_eq!(
+      effective.trace[1].source,
+      crate::capability::GrantSource::SkillSecurity
+    );
+    assert!(effective.trace[2].allowed.is_none()); // ToolPolicy is permissive
+  }
+
+  #[tokio::test]
+  async fn execute_denies_when_skill_blocks_capability() {
+    let mut registry = ToolRegistry::new().with_skill_capabilities([Capability::Net]);
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let error = registry
+      .execute("shell", json!({"command": "ls"}))
+      .await
+      .unwrap_err();
+
+    assert!(matches!(error, ToolError::PolicyDenied { .. }));
+    let audit = registry.capability_audit_log();
+    assert_eq!(audit.len(), 1);
+    assert!(!audit[0].allowed);
+    assert_eq!(audit[0].denied, vec![Capability::Exec]);
+  }
+
+  #[tokio::test]
+  async fn execute_denies_when_cli_overrides_to_empty() {
+    let mut registry = ToolRegistry::new().with_cli_capabilities([Capability::FsRead]);
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+
+    let error = registry
+      .execute("http", json!({"url": "https://example.test"}))
+      .await
+      .unwrap_err();
+
+    assert!(matches!(error, ToolError::PolicyDenied { .. }));
+    let audit = registry.capability_audit_log();
+    assert_eq!(audit[0].denied, vec![Capability::Net]);
+    assert_eq!(
+      audit[0].trace.last().map(|entry| entry.source),
+      Some(crate::capability::GrantSource::CliFlag)
+    );
   }
 
   #[tokio::test]
