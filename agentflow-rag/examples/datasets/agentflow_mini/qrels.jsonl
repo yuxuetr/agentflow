@@ -1,0 +1,12 @@
+{"query_id":"q_dag","relevances":{"doc_dag":2}}
+{"query_id":"q_react","relevances":{"doc_react":2,"doc_planexec":1}}
+{"query_id":"q_planexec","relevances":{"doc_planexec":2}}
+{"query_id":"q_supervisors","relevances":{"doc_supervisor":2}}
+{"query_id":"q_native_tools","relevances":{"doc_llm_native_tools":2}}
+{"query_id":"q_traceparent","relevances":{"doc_traceparent":2,"doc_otel_attrs":1}}
+{"query_id":"q_otel","relevances":{"doc_otel_attrs":2,"doc_traceparent":1}}
+{"query_id":"q_sandbox","relevances":{"doc_sandbox_macos":2,"doc_sandbox_linux":2}}
+{"query_id":"q_capability","relevances":{"doc_capability":2}}
+{"query_id":"q_checkpoint","relevances":{"doc_checkpoint":2}}
+{"query_id":"q_expression","relevances":{"doc_expression":2}}
+{"query_id":"q_mcp","relevances":{"doc_mcp":2}}

@@ -569,6 +569,24 @@ enum RagCommands {
     #[arg(short, long)]
     distance: Option<String>,
   },
+  /// Evaluate a retriever against a labeled dataset
+  Eval {
+    /// Dataset directory (must contain corpus.jsonl, queries.jsonl, qrels.jsonl)
+    #[arg(short, long)]
+    dataset: std::path::PathBuf,
+    /// Retriever backend (currently: bm25)
+    #[arg(short = 'r', long, default_value = "bm25")]
+    retriever: String,
+    /// K cutoffs for Recall@K and nDCG@K (default: 1, 3, 5, 10)
+    #[arg(short = 'k', long, value_delimiter = ',')]
+    k_values: Vec<usize>,
+    /// Compare baseline against a candidate retriever spec, e.g. "k1=1.5,b=0.6"
+    #[arg(long)]
+    compare_to: Option<String>,
+    /// Optional JSON report output path
+    #[arg(short, long)]
+    output: Option<std::path::PathBuf>,
+  },
 }
 
 #[tokio::main]
@@ -875,6 +893,13 @@ async fn main() {
       } => {
         rag::collections::execute(qdrant_url, operation, collection, vector_size, distance).await
       }
+      RagCommands::Eval {
+        dataset,
+        retriever,
+        k_values,
+        compare_to,
+        output,
+      } => rag::eval::execute(dataset, retriever, k_values, compare_to, output).await,
     },
   };
 

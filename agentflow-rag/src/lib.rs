@@ -52,6 +52,7 @@
 pub mod chunking;
 pub mod embeddings;
 pub mod error;
+pub mod eval;
 pub mod indexing;
 pub mod reranking;
 pub mod retrieval;

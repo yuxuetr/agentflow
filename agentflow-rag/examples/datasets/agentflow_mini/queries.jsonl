@@ -1,0 +1,12 @@
+{"id":"q_dag","text":"How does the DAG engine schedule async nodes concurrently?"}
+{"id":"q_react","text":"What does the ReAct agent runtime emit at each phase?"}
+{"id":"q_planexec","text":"How does the Plan-Execute agent decompose goals?"}
+{"id":"q_supervisors","text":"Which multi-agent collaboration patterns are built in?"}
+{"id":"q_native_tools","text":"Which LLM providers support native tool calling?"}
+{"id":"q_traceparent","text":"How is W3C trace context propagated to LLM HTTP calls?"}
+{"id":"q_otel","text":"Which GenAI OpenTelemetry attributes are emitted?"}
+{"id":"q_sandbox","text":"How are shell tool capabilities enforced on macOS and Linux?"}
+{"id":"q_capability","text":"How are effective capabilities merged across skill, policy, and CLI?"}
+{"id":"q_checkpoint","text":"How are FlowValue File and Url variants checkpointed?"}
+{"id":"q_expression","text":"What expressions can be used in run_if and while.condition?"}
+{"id":"q_mcp","text":"How does agentflow-mcp expose remote tools?"}

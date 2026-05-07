@@ -1,0 +1,5 @@
+name = "agentflow_mini"
+version = "0.1.0"
+source = "synthetic, hand-authored"
+license = "MIT"
+description = "Tiny offline RAG demo dataset built from AgentFlow architecture facts. Used as a CI smoke test for the eval harness; not intended as a benchmark."

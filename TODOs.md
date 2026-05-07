@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-02
+最后更新: 2026-05-07
 
 维护约定:
 
@@ -383,7 +383,7 @@ PR-B (已完成):
 
 ### 10. RAG 评测 Harness
 
-状态: 待开始
+状态: 已完成 (2026-05-07)
 
 目标:
 
@@ -391,23 +391,28 @@ PR-B (已完成):
 
 子任务:
 
-- [ ] 在 `agentflow-rag/eval/` 新增模块: `Dataset` / `Judgment` / `Metric`。
-- [ ] 支持指标: Recall@K (1, 3, 5, 10), MRR, nDCG@K, 平均延迟。
-- [ ] 支持 baseline 对比: 同一数据集跑两份配置（如 BM25 vs vector，或不同 embedding 模型）。
-- [ ] 标注集格式: TOML 或 JSONL `{ query, expected_doc_ids: [...], notes }`。
-- [ ] 新增 CLI: `agentflow rag eval <dataset> [--config <yaml>]`，输出表格 + JSON 报告。
-- [ ] 自带一个开源数据集（如 BEIR/SciFact 子集）作为 demo + CI smoke。
-- [ ] 文档: `docs/RAG_EVAL.md`。
+- [x] 在 `agentflow-rag/src/eval/` 新增模块: `Dataset` / `Judgment` / `Retriever` trait + `dataset` / `metrics` / `runner` / `compare` / `retrievers`。`Dataset::load_from_dir` 校验所有 judgment 引用的 query_id / doc_id 都已知，缺失立即报错而不是静默打 0 分。
+- [x] 支持指标: `Recall@K`, `MRR`, `nDCG@K`（标准 `(2^rel - 1) / log2(i+1)` 公式 + IDCG 归一化, 支持 graded relevance），`LatencyAggregate` mean/p50/p95；macro-average 仅基于"至少有一条 relevant doc"的 query，`queries_with_relevant` 暴露分母。
+- [x] 支持 baseline 对比: `eval::compare::compare(&baseline, &candidate)` 同 dataset paired sign-test，60% 阈值给 `CandidateWins` / `BaselineWins` / `Inconclusive` / `NotComparable { reason }` 四态判决；含 metric delta（abs + rel）和 paired wins/losses/ties。
+- [x] 标注集格式: 三 JSONL 文件（`corpus.jsonl` / `queries.jsonl` / `qrels.jsonl`） + 可选 `dataset.toml`（name/version/source/license/description 五个 flat key）。
+- [x] 新增 CLI: `agentflow rag eval --dataset <dir> [--retriever bm25] [-k 1,3,5,10] [--compare-to "k1=1.5,b=0.6"] [-o report.json]`。报告文本表 + 可选 JSON（含 dataset manifest / baseline / candidate / comparison）。
+- [x] 自带一个开源数据集: `agentflow-rag/examples/datasets/agentflow_mini/`（16 docs / 12 queries / graded relevance 0-2，MIT，synthetic hand-authored）。
+- [x] 文档: `docs/RAG_EVAL.md` 覆盖 dataset 格式 / metric 定义 / verdict 阈值 / JSON shape / 自定义 retriever。
+
+📊 测试增量: agentflow-rag +25 单测 (metrics 9 + dataset 4 + runner 4 + retrievers 3 + compare 5) + 4 集成测试 (`tests/eval_harness.rs` BM25 在 demo 数据集上 Recall@5 ≥ 0.7、MRR ≥ 0.5、self-compare 必为 ties only inconclusive、tuned vs default compare 结构完整)。`cargo test -p agentflow-rag --all-targets` 113 单测 + 4 集成测试全绿，`cargo clippy --workspace --all-targets -- -D warnings` 干净。
 
 验收标准:
 
-- `agentflow rag eval examples/datasets/scifact_mini.toml` 能输出 Recall@K / MRR / nDCG。
-- baseline 对比有清晰的 winner 标注与显著性提示。
+- ✅ `agentflow rag eval --dataset agentflow-rag/examples/datasets/agentflow_mini --retriever bm25 -k 1,3,5,10` 输出 Recall/nDCG/MRR/Latency 表，BM25 在 demo dataset 上 Recall@5 = 0.96, MRR = 0.96。
+- ✅ baseline 对比有清晰的 winner 标注（`candidate_wins` / `baseline_wins` / `inconclusive` / `not_comparable`），sign-test wins/losses/ties 明示，60% 阈值低于不下结论。
 
 涉及文件:
 
-- `agentflow-rag/src/eval/{mod,dataset,metrics}.rs`
-- `agentflow-cli/src/commands/rag/eval.rs`
+- `agentflow-rag/src/eval/{mod,dataset,metrics,runner,retrievers,compare}.rs`（新模块）
+- `agentflow-rag/src/lib.rs`（pub mod eval）
+- `agentflow-rag/tests/eval_harness.rs`（4 集成测试）
+- `agentflow-rag/examples/datasets/agentflow_mini/{dataset.toml,corpus.jsonl,queries.jsonl,qrels.jsonl}`
+- `agentflow-cli/src/commands/rag/{mod,eval}.rs`、`agentflow-cli/src/main.rs`（`RagCommands::Eval` 变体 + 路由）
 - `docs/RAG_EVAL.md`
 
 ### 11. 多 LLM provider 一致性回归套件
