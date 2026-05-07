@@ -361,6 +361,11 @@ PR-B (已完成):
 - [x] OTel 属性命名已统一（`agentflow-tracing/src/otel.rs::trace_to_spans` 既有实现已遵循 `agentflow.workflow.id` / `agentflow.node.id` / `agentflow.agent.session_id` / `agentflow.tool.name` 与 GenAI 标准 `gen_ai.system` / `gen_ai.request.model` / `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` / `gen_ai.usage.total_tokens` / `gen_ai.response.latency_ms`）。本次 P1 #9 沿用，未改动。
 - [x] 单测覆盖 6 provider × `build_headers` 注入 traceparent 行为：openai / anthropic / google / moonshot / stepfun / stepfun specialized 共 7 条新单测，外加 `build_headers_omits_traceparent_when_no_scope_active` 等 2 条 negative。`agentflow-llm` 单测 88 条全绿。
 - [x] 文档: `docs/TRACING_USAGE.md` 追加「W3C Trace Context 端到端连续」章节（工作原理 / 自动传播 / 显式调用 / 与 OTel 后端对接 / 不注入条件）；`docs/TRACING_DESIGN.md` 在 OpenTelemetry 段后追加 wiring 摘要，并交叉链接 USAGE。
+- [x] 真实 HTTP 集成测试: `agentflow-llm/tests/trace_context_propagation.rs` 用 `OpenAIProvider::with_client(no_proxy_client, ...)` + 自建 tokio TCP listener 验证 (a) 有 active context 时 `traceparent` 字面等于 context (b) 无 context 时 header 缺席 (c) 嵌套 scope 内层胜出。这条测试是 reqwest 升级 0.12 的副产物（之前 reqwest 0.11 / hyper 0.14 与 mockito 1.7 / hyper 1.x 版本冲突，无法跑）。
+
+显式不做:
+
+- 「stdout exporter + 端到端 hybrid run + 断言无孤儿 span」集成测试。**理由**: span lineage 性质已被 `agentflow-tracing/src/otel.rs::tests::maps_workflow_agent_tool_and_mcp_to_spans` / `maps_llm_usage_to_gen_ai_attributes` 两条 unit 测试覆盖；`trace_to_spans` 是 `ExecutionTrace → Vec<OtelSpan>` 的确定性映射，端到端 hybrid run 只是把同样的 fixture 通过更多间接层走一遍，性价比一般。日后做 P0 #1 platform skeleton（`RunExecutor` 真跑 Flow）时这条更有意义，到时再补。
 
 验收标准:
 
