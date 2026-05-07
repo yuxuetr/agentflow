@@ -20,13 +20,22 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
+    Self::with_client(Client::new(), api_key, base_url)
+  }
+
+  /// Construct with a caller-supplied [`reqwest::Client`].
+  ///
+  /// Useful when callers need a non-default client — for example tests that
+  /// must disable the system proxy (`.no_proxy()` on the builder) to reach a
+  /// localhost mock, or production deployments that share one HTTPS-pinned
+  /// client across providers.
+  pub fn with_client(client: Client, api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {
         provider: "anthropic".to_string(),
       });
     }
 
-    let client = Client::new();
     let base_url = base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string());
 
     Ok(Self {

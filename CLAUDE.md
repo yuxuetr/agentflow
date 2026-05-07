@@ -152,8 +152,8 @@ PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / 
 - Pending: `Tool` idempotency metadata for partial-resume auto-replay; `FlowValue::File`/`Url` checkpoint round-trip type fidelity
 
 **N9 — Multi-agent + ecosystem (v0.4.0 candidate):** mostly closed
-- ✅ Handoff/blackboard/debate; ✅ OS sandbox; ✅ OTel `traceparent` propagation; ✅ RAG eval harness
-- Pending: P1 #11 LLM provider consistency suite (optional follow-up)
+- ✅ Handoff/blackboard/debate; ✅ OS sandbox; ✅ OTel `traceparent` propagation; ✅ RAG eval harness; ✅ LLM provider consistency suite (foundation)
+- Pending: cross-provider streaming / multimodal / tool-calling consistency tests; live-LLM nightly CI
 
 **N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):**
 - Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)

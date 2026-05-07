@@ -1,0 +1,170 @@
+# LLM Providers Support Matrix
+
+> Status: foundation shipped in v0.4.0 (P1 #11). Streaming / multimodal /
+> live-LLM CI listed under Follow-ups.
+> Crate: `agentflow-llm`. Test entry: `agentflow-llm/tests/provider_consistency.rs`.
+
+AgentFlow's LLM abstraction targets six providers. This document is the
+authoritative reference for what works on each, what doesn't, and how the
+behavior is verified.
+
+## Capability matrix
+
+| Capability | OpenAI | Anthropic | Google | Moonshot | StepFun | Mock |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
+| Text completion | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Token usage in response | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Native tool calling (`tool_calls` / `tool_use` / `functionCall`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (injection) |
+| Multimodal text + image (URL or base64) | ✅ | ✅ | ✅ | partial | ✅ | n/a |
+| Audio TTS / ASR | – | – | – | – | ✅ | n/a |
+| Image generation | – | – | – | – | ✅ | n/a |
+| W3C `traceparent` injection | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `with_client(...)` for custom `reqwest::Client` | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+
+Key:
+
+- ✅ — supported, verified in unit + integration tests.
+- partial — works for text but not all multimodal corner cases.
+- – — not implemented. Most LLM providers don't ship the modality.
+- n/a — Mock provider doesn't make HTTP calls; capability is irrelevant.
+
+## Error mapping (verified contract)
+
+All five HTTP-based providers map non-2xx responses to a single
+`LLMError` variant — this is the consistency contract that downstream code
+(retry middleware, error reporting) depends on:
+
+```rust
+match err {
+  LLMError::HttpError { status_code, message } => {
+    // status_code is the actual HTTP status from the provider
+    // (401, 429, 500, 503, ...) — NOT remapped to a higher-level variant.
+  }
+  _ => unreachable!(),
+}
+```
+
+The `From<reqwest::Error>` impl in `agentflow-llm::error` does map 401 / 429 /
+503 to `AuthenticationError` / `RateLimitExceeded` / `ServiceUnavailable`, but
+this only fires when the **transport itself** signals a status (e.g.
+`response.error_for_status()?`). All providers inspect `response.status()`
+manually and emit `HttpError`, which is what the consistency test asserts.
+
+If a future provider needs richer error classification, the recommended path
+is a new `LLMError::ProviderError { provider, kind: ProviderErrorKind, … }`
+variant rather than reinterpreting status codes inconsistently across
+providers.
+
+## Verification
+
+### Unit tests (per-provider, JSON fixtures)
+
+Each provider has its own unit test suite that pins down request body
+construction and response parsing against representative JSON fixtures:
+
+```bash
+cargo test -p agentflow-llm --lib providers::openai     # 10 tests
+cargo test -p agentflow-llm --lib providers::anthropic  # 7 tests
+cargo test -p agentflow-llm --lib providers::google     # 8 tests
+cargo test -p agentflow-llm --lib providers::moonshot   # 5 tests
+cargo test -p agentflow-llm --lib providers::stepfun    # 8 tests
+```
+
+These tests don't make network calls — they construct `ProviderRequest` /
+`ProviderResponse` instances directly and assert wire-format invariants.
+
+### Cross-provider integration (`provider_consistency.rs`)
+
+The integration suite drives all five HTTP providers through a hand-rolled
+tokio TCP listener and asserts a uniform contract:
+
+```bash
+cargo test -p agentflow-llm --test provider_consistency  # 10 tests
+```
+
+Coverage:
+
+- **Success path** (5 tests): each provider, given a well-formed response
+  in its native shape, returns `ContentType::Text`, `StopReason::Stop`,
+  and populated `TokenUsage` (prompt / completion / total).
+- **Error mapping** (5 tests): each provider, given a 4xx / 5xx response,
+  returns `LLMError::HttpError` with the exact status code preserved.
+
+The mock server is hand-rolled (not `mockito` / `wiremock`) for the same
+reason as `trace_context_propagation.rs`: it lets us inspect raw request
+bytes and stays independent of HTTP-mock crate version churn. The reqwest
+client is built with `.no_proxy()` to avoid being routed through a system
+HTTP proxy on dev machines (a common source of `IncompleteMessage` / hang
+in localhost tests).
+
+### Trace context propagation (`trace_context_propagation.rs`)
+
+Verifies that an active `LlmTraceContext` injects a W3C `traceparent` header
+into outbound HTTP calls, and that no header is injected when no scope is
+active. See [`docs/TRACING_USAGE.md`](TRACING_USAGE.md) for usage.
+
+## Live-API tests (opt-in)
+
+By default, every provider test in this crate is offline / mocked. Live API
+calls are deliberately not part of the default `cargo test` run — they require
+real keys, cost money, and are non-deterministic (provider behavior shifts
+between model versions).
+
+Live tests are gated by:
+
+```bash
+AGENTFLOW_LIVE_LLM_TESTS=1 \
+OPENAI_API_KEY=sk-… \
+ANTHROPIC_API_KEY=sk-ant-… \
+GEMINI_API_KEY=… \
+MOONSHOT_API_KEY=… \
+STEPFUN_API_KEY=… \
+cargo test -p agentflow-llm --test provider_consistency_live
+```
+
+**Status**: the live-test harness is not yet implemented. Adding it is a
+follow-up to P1 #11 — the foundation (uniform `with_client`, shared mock
+server, error contract) is what makes a clean live-test layer possible.
+
+When added, live tests should:
+
+1. Skip cleanly when the env var is unset (no test failure, just `ignored`).
+2. Use minimum-cost models (e.g. `gpt-4o-mini`, `claude-3-5-haiku`,
+   `gemini-1.5-flash`).
+3. Be small (one request per provider, single-turn text).
+4. Run in nightly CI only — not on every PR.
+
+## Adding a new provider
+
+1. Implement `LLMProvider` in `agentflow-llm/src/providers/<name>.rs`.
+2. Provide both `new(...)` and `with_client(...)` constructors. The
+   `with_client` constructor is mandatory for the consistency suite to be
+   able to wire in a no-proxy test client.
+3. In `build_headers` / `build_auth_headers`, call
+   `crate::trace_context::inject_into_headers(&mut headers)` last so
+   `traceparent` propagation works automatically.
+4. Map non-success HTTP responses to `LLMError::HttpError { status_code,
+   message }`. Don't promote to `AuthenticationError` /
+   `RateLimitExceeded` directly — that's a downstream consumer concern.
+5. Add per-provider unit tests for request body shape + response parsing.
+6. Add a row to `provider_consistency.rs` covering the success path and
+   one error code.
+7. Update this document with the capability matrix entries.
+
+## Follow-ups (non-blocking)
+
+- **Streaming consistency tests**: each provider's streaming path
+  (`execute_streaming`) currently has only per-provider unit tests.
+  Cross-provider streaming consistency (chunk shape, end-of-stream signal,
+  usage delivery) is not yet covered by the consistency suite.
+- **Multimodal consistency tests**: image + text inputs and provider
+  responses with embedded image URLs.
+- **Tool-calling fixtures in the consistency suite**: each provider already
+  has tool-calling unit tests in its own module; the cross-provider
+  consistency layer can adopt the same approach with a shared fixture set.
+- **Live LLM nightly CI job**: gated by `AGENTFLOW_LIVE_LLM_TESTS=1`,
+  running once per day with minimum-cost models per provider.
+- **Quota / cost dashboards**: currently each provider exposes raw
+  `TokenUsage` on responses; a higher-level cost roll-up keyed by model is
+  not implemented.

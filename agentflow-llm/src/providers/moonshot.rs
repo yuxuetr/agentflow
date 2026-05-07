@@ -23,13 +23,18 @@ pub struct MoonshotProvider {
 
 impl MoonshotProvider {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
+    Self::with_client(Client::new(), api_key, base_url)
+  }
+
+  /// Construct with a caller-supplied [`reqwest::Client`]. See
+  /// [`OpenAIProvider::with_client`] for the rationale.
+  pub fn with_client(client: Client, api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {
         provider: "moonshot".to_string(),
       });
     }
 
-    let client = Client::new();
     let base_url = base_url.unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string());
 
     Ok(Self {

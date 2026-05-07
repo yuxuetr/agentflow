@@ -417,7 +417,7 @@ PR-B (已完成):
 
 ### 11. 多 LLM provider 一致性回归套件
 
-状态: 待开始
+状态: 基础已完成 (2026-05-07)；streaming / multimodal / live-CI 列为非阻塞 follow-up
 
 目标:
 
@@ -425,21 +425,29 @@ PR-B (已完成):
 
 子任务:
 
-- [ ] 设计共用 fixture: 单轮 prompt、多模态 prompt、tool calling、streaming。
-- [ ] 单测使用 `wiremock` 或 `httpmock` 模拟 provider HTTP 响应（避免依赖真实 API）。
-- [ ] 集成测试 (gated by `AGENTFLOW_LIVE_LLM_TESTS=1`): 真实 API 调用，只在 nightly CI 跑。
-- [ ] 在每个 provider 下断言: 文本回答字段位置、token 用量字段、错误码到 `LLMError` 的映射。
-- [ ] 文档: `docs/LLM_PROVIDERS_MATRIX.md` 列出每个 provider 的支持矩阵。
+- [x] 给 4 个 provider (Anthropic / Google / Moonshot / StepFun) 加 `with_client(client, api_key, base_url)` 构造函数，与 OpenAI 看齐；这是把 `.no_proxy()` 测试 client 注入 provider 的前置条件，也支持生产侧的 HTTPS pinning / 共享连接池。
+- [x] 设计共用 fixture: 单轮 prompt 已落地（每个 provider 的原生 wire format 各一个 success-fixture）。多模态 prompt / tool calling / streaming 留作 follow-up（per-provider 单测已覆盖，跨 provider 一致性未覆盖）。
+- [x] 单测改用 hand-rolled `tokio::net::TcpListener` + `.no_proxy()` reqwest client（与 `trace_context_propagation.rs` 同模式），避免 `mockito` / `wiremock` 版本churn 与 macOS 系统代理把 loopback 黑洞的坑。`agentflow-llm/tests/provider_consistency.rs` 一个文件覆盖 5 provider × 2 路径 = 10 测试。
+- [x] 在每个 provider 下断言: 文本回答字段位置 (`ContentType::Text` 含 `"ok"`)、token 用量字段 (prompt/completion/total tokens 三者皆 populated)、`StopReason::Stop` 收尾、错误码到 `LLMError` 的映射 (5 个 provider 各 1 条 error case 覆盖 401/429/500/503，统一 `LLMError::HttpError { status_code, .. }`)。
+- [x] 文档: `docs/LLM_PROVIDERS_MATRIX.md` capability 矩阵 + error mapping 契约 + 验证策略 + 加新 provider 的 checklist + follow-up 列表。
+- [ ] **Follow-up**: streaming consistency tests (跨 provider chunk shape / end-of-stream / usage delivery)。
+- [ ] **Follow-up**: multimodal consistency tests (image + text inputs 跨 provider)。
+- [ ] **Follow-up**: tool-calling fixtures 在 cross-provider consistency 层（per-provider 已有单测）。
+- [ ] **Follow-up**: 集成测试 gated by `AGENTFLOW_LIVE_LLM_TESTS=1`（真实 API 调用，nightly CI 触发；harness 设计已写入 `docs/LLM_PROVIDERS_MATRIX.md`）。
 
-验收标准:
+📊 测试增量: agentflow-llm `tests/provider_consistency.rs` +10 集成测试（5 success + 5 error mapping）；`cargo test -p agentflow-llm` 89 lib + 10 provider_consistency + 3 trace_context = 102 tests 全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
 
-- 5 个 provider 各自有一组共用的 fixture 测试，回归时能定位到具体 provider。
-- nightly CI 有 live LLM smoke job（可选 enable）。
+验收标准（基础部分）:
+
+- ✅ 5 个 provider 各自有一组共用的 fixture 测试，回归时能定位到具体 provider（10 测试都按 provider 名命名）。
+- ✅ Error-mapping 契约统一: 所有 HTTP provider 把非 2xx 映射成 `LLMError::HttpError { status_code, .. }`，下游消费者可信赖此契约不会被无声修改。
+- ⏳ nightly CI live LLM smoke job — harness 设计已记录，实际接线列为 follow-up。
 
 涉及文件:
 
-- `agentflow-llm/tests/provider_consistency.rs`
-- `docs/LLM_PROVIDERS_MATRIX.md`
+- `agentflow-llm/src/providers/{anthropic,google,moonshot,stepfun}.rs`（新增 `with_client` 构造函数）
+- `agentflow-llm/tests/provider_consistency.rs`（新文件，10 集成测试）
+- `docs/LLM_PROVIDERS_MATRIX.md`（新文件）
 
 ---
 
