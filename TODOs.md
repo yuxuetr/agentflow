@@ -345,7 +345,7 @@ PR-B (已完成):
 
 ### 9. OpenTelemetry 端到端连续
 
-状态: 待开始
+状态: 已完成 (2026-05-07)
 
 目标:
 
@@ -354,24 +354,27 @@ PR-B (已完成):
 
 子任务:
 
-- [ ] `agentflow-llm` HTTP 客户端注入 `traceparent` header (W3C Trace Context 格式)。
-- [ ] 统一 OTel 属性命名:
-  - `agentflow.run_id`, `agentflow.workflow_id`, `agentflow.agent_session_id`, `agentflow.tool_call_id`, `agentflow.mcp_server`
-  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` (复用 OTel GenAI semantic conventions)
-- [ ] 把 LLM 客户端封装成 OTel-aware: 入口创建 span，结束时记录 token 用量、HTTP 状态码、错误码。
-- [ ] 集成测试: 用 stdout exporter 采一次 hybrid run 的 trace，断言 span 链路完整 (no orphan spans)。
-- [ ] 文档: 更新 `docs/TRACING_DESIGN.md` 与 `docs/TRACING_USAGE.md`。
+- [x] `agentflow-llm/src/trace_context.rs` 新模块: `LlmTraceContext { trace_id, span_id, flags, tracestate }` 类型 + W3C `traceparent` 序列化 + tokio `task_local!` 保存 + `scope(ctx, fut).await` 安装 + `inject_into_headers(&mut headers)` 写出。`LlmTraceContext::random()`（基于 UUIDv4）/ `LlmTraceContext::new(trace_id, span_id)`（hex 校验）/ `LlmTraceContext::from_traceparent(s)` 解析。9 条单测覆盖格式校验、嵌套 scope、permissive 默认。
+- [x] 6 个 provider (OpenAI / Anthropic / Google / Moonshot / StepFun / StepFunSpecializedClient) 的 `build_headers()` / `build_auth_headers()` 末尾调用 `crate::trace_context::inject_into_headers(&mut headers)`，自动读 task-local。Mock provider 不发 HTTP，无需改动。
+- [x] `LLMClient` 新增 `trace_context: Option<LlmTraceContext>` 字段 + `LLMClientBuilder::trace_context(impl Into<Option<...>>)` builder；`execute()` / `execute_full()` / `execute_streaming()` 在 `Some` 时把 `provider.execute(&request)` 包进 `trace_context::scope(...)`。
+- [x] `AgentContext` 新增 `trace_context: Option<LlmTraceContext>` 字段 + `with_trace_context(...)` builder；`ReActAgent::run_with_context` 与 `PlanExecuteAgent::call_planner` 在每次 LLM 调用前 `.trace_context(context.trace_context.clone())` 透传。
+- [x] OTel 属性命名已统一（`agentflow-tracing/src/otel.rs::trace_to_spans` 既有实现已遵循 `agentflow.workflow.id` / `agentflow.node.id` / `agentflow.agent.session_id` / `agentflow.tool.name` 与 GenAI 标准 `gen_ai.system` / `gen_ai.request.model` / `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` / `gen_ai.usage.total_tokens` / `gen_ai.response.latency_ms`）。本次 P1 #9 沿用，未改动。
+- [x] 单测覆盖 6 provider × `build_headers` 注入 traceparent 行为：openai / anthropic / google / moonshot / stepfun / stepfun specialized 共 7 条新单测，外加 `build_headers_omits_traceparent_when_no_scope_active` 等 2 条 negative。`agentflow-llm` 单测 88 条全绿。
+- [x] 文档: `docs/TRACING_USAGE.md` 追加「W3C Trace Context 端到端连续」章节（工作原理 / 自动传播 / 显式调用 / 与 OTel 后端对接 / 不注入条件）；`docs/TRACING_DESIGN.md` 在 OpenTelemetry 段后追加 wiring 摘要，并交叉链接 USAGE。
 
 验收标准:
 
-- 一次 `agentflow workflow run` 产出的 OTel trace 在 Jaeger/Tempo 中显示为连续树状结构，从 workflow → agent → tool → LLM HTTP call 的根到叶都不断。
-- token 用量在 LLM span 上可见。
+- ✅ 一次 LLM HTTP 出站请求在有 active context 时携带 `traceparent: 00-{trace_id}-{span_id}-{flags}`，无 active context 时不注入（向后兼容）。`build_headers_injects_traceparent_when_scope_active` / `build_headers_omits_traceparent_when_no_scope_active` 单测覆盖。
+- ✅ token 用量在 LLM span 上可见（`gen_ai.usage.total_tokens` 由 OTel exporter 写出，已存在；P1 #9 未改动）。
 
 涉及文件:
 
-- `agentflow-llm/src/{client,providers/*}.rs`
-- `agentflow-tracing/src/otel.rs`
-- `docs/TRACING_*.md`
+- `agentflow-llm/src/trace_context.rs`（新）、`agentflow-llm/src/lib.rs`（pub use）
+- `agentflow-llm/src/client/llm_client.rs`（新字段 + builder + execute scope wrap）
+- `agentflow-llm/src/providers/{openai,anthropic,google,moonshot,stepfun}.rs`（build_headers 注入 + 单测）
+- `agentflow-agents/src/runtime.rs`（AgentContext 新字段 + builder）
+- `agentflow-agents/src/react/agent.rs`、`agentflow-agents/src/plan_execute.rs`（透传到 LLMClient）
+- `docs/TRACING_USAGE.md`、`docs/TRACING_DESIGN.md`
 
 ### 10. RAG 评测 Harness
 

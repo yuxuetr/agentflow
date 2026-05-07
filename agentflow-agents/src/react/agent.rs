@@ -573,7 +573,9 @@ impl ReActAgent {
       // --- Call LLM ---
       debug!(iteration, "Calling LLM");
       let tool_specs = self.collect_tool_specs();
-      let mut builder = AgentFlow::model(&self.config.model).multimodal_messages(messages);
+      let mut builder = AgentFlow::model(&self.config.model)
+        .multimodal_messages(messages)
+        .trace_context(context.trace_context.clone());
       if !tool_specs.is_empty() {
         builder = builder.tools(tool_specs);
       }

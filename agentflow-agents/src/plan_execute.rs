@@ -180,6 +180,7 @@ impl PlanExecuteAgent {
         run_started_at,
         timeout_ms,
         cancellation_token.clone(),
+        context.trace_context.clone(),
       )
       .await;
     let planner_response = match planner_response {
@@ -403,6 +404,7 @@ impl PlanExecuteAgent {
     run_started_at: Instant,
     timeout_ms: Option<u64>,
     cancellation_token: Option<AgentCancellationToken>,
+    trace_context: Option<agentflow_llm::LlmTraceContext>,
   ) -> Result<LLMResponse, PlanExecuteError> {
     let mut user_prompt = String::new();
     if !history.is_empty() {
@@ -423,7 +425,9 @@ impl PlanExecuteAgent {
       MultimodalMessage::text("user", user_prompt),
     ];
     let tool_specs = self.collect_tool_specs();
-    let mut builder = AgentFlow::model(&self.config.model).multimodal_messages(messages);
+    let mut builder = AgentFlow::model(&self.config.model)
+      .multimodal_messages(messages)
+      .trace_context(trace_context);
     if !tool_specs.is_empty() {
       builder = builder.tools(tool_specs);
     }

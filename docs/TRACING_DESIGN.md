@@ -803,6 +803,32 @@ pub fn export_trace_otel(trace: &ExecutionTrace) -> Result<Vec<u8>> {
 }
 ```
 
+### W3C Trace Context 出站传播 (v0.3.0+)
+
+**问题**：OTel exporter 把 AgentFlow 内部 trace 转成 span 树（workflow →
+node → agent → tool / LLM），但 LLM HTTP 一跳是出站调用 —— 接收方
+（OpenAI / Anthropic / 自建 LLM gateway）创建的 span 与发送方的 trace 不
+共享 trace_id，导致 trace 在 LLM 边界断裂。
+
+**解法**：W3C Trace Context（`traceparent` header）是 OTel 跨服务传播
+的标准。AgentFlow 现在在每个 LLM HTTP 出站请求上自动注入：
+
+```text
+traceparent: 00-{trace_id}-{span_id}-{flags}
+```
+
+**Wiring**：
+- `agentflow_llm::trace_context::LlmTraceContext { trace_id, span_id, flags, tracestate }` 是 W3C 包装。
+- tokio `task_local!` 持有当前 context；`scope(ctx, fut).await` 安装。
+- 每个 provider 的 `build_headers` 末尾调用 `inject_into_headers(&mut headers)`，读取 task-local 写出 traceparent。
+- `LLMClient::with_trace_context(ctx)` 让显式 LLM 调用安装 context。
+- `AgentContext::trace_context` 让 ReAct / Plan-Execute runtime 自动透传到底层 LLM 调用，无需用户手动 plumbing。
+
+**不影响 v0.2.0 行为**：context 默认 None；只有显式安装时才注入。
+向后兼容。
+
+详细使用见 [`TRACING_USAGE.md`](TRACING_USAGE.md#-w3c-trace-context-端到端连续)。
+
 ---
 
 ## 🔌 集成方式

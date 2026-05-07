@@ -44,6 +44,13 @@ pub struct AgentContext {
   pub started_at: DateTime<Utc>,
   #[serde(skip)]
   pub cancellation_token: Option<AgentCancellationToken>,
+  /// Optional W3C trace context. When set, the agent runtime propagates
+  /// it to every `LLMClient` call so the outbound HTTP request carries a
+  /// `traceparent` header and the OTel trace tree stays continuous across
+  /// the LLM hop. The session id alone is not enough — OpenTelemetry
+  /// requires a 16-byte trace id and 8-byte span id.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub trace_context: Option<agentflow_llm::LlmTraceContext>,
 }
 
 impl AgentContext {
@@ -62,6 +69,7 @@ impl AgentContext {
       metadata: Value::Object(Default::default()),
       started_at: Utc::now(),
       cancellation_token: None,
+      trace_context: None,
     }
   }
 
@@ -82,6 +90,16 @@ impl AgentContext {
 
   pub fn with_cancellation_token(mut self, token: AgentCancellationToken) -> Self {
     self.cancellation_token = Some(token);
+    self
+  }
+
+  /// Attach a W3C trace context that the runtime propagates to LLM HTTP
+  /// calls. Pass `None` to clear.
+  pub fn with_trace_context(
+    mut self,
+    context: impl Into<Option<agentflow_llm::LlmTraceContext>>,
+  ) -> Self {
+    self.trace_context = context.into();
     self
   }
 }

@@ -74,6 +74,7 @@ impl StepFunProvider {
       HeaderValue::from_str(&format!("Bearer {}", self.api_key))
         .expect("API key contains invalid characters"),
     );
+    crate::trace_context::inject_into_headers(&mut headers);
     headers
   }
 
@@ -745,6 +746,7 @@ impl StepFunSpecializedClient {
       HeaderValue::from_str(&format!("Bearer {}", self.api_key))
         .expect("API key contains invalid characters"),
     );
+    crate::trace_context::inject_into_headers(&mut headers);
     headers
   }
 
@@ -1191,6 +1193,42 @@ mod tests {
 
     let provider = StepFunProvider::new("", None);
     assert!(provider.is_err());
+  }
+
+  #[tokio::test]
+  async fn build_headers_injects_traceparent_when_scope_active() {
+    use crate::trace_context::{LlmTraceContext, scope};
+
+    let provider = StepFunProvider::new("test-key", None).unwrap();
+    let ctx = LlmTraceContext::new(
+      "0af7651916cd43dd8448eb211c80319c",
+      "b7ad6b7169203331",
+    )
+    .unwrap();
+
+    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    assert_eq!(
+      headers.get("traceparent").and_then(|v| v.to_str().ok()),
+      Some(ctx.to_traceparent().as_str()),
+    );
+  }
+
+  #[tokio::test]
+  async fn specialized_client_build_auth_headers_injects_traceparent() {
+    use crate::trace_context::{LlmTraceContext, scope};
+
+    let client = StepFunSpecializedClient::new("test-key", None).unwrap();
+    let ctx = LlmTraceContext::new(
+      "0af7651916cd43dd8448eb211c80319c",
+      "b7ad6b7169203331",
+    )
+    .unwrap();
+
+    let headers = scope(ctx.clone(), async { client.build_auth_headers() }).await;
+    assert_eq!(
+      headers.get("traceparent").and_then(|v| v.to_str().ok()),
+      Some(ctx.to_traceparent().as_str()),
+    );
   }
 
   #[test]

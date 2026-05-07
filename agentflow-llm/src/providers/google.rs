@@ -42,6 +42,7 @@ impl GoogleProvider {
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    crate::trace_context::inject_into_headers(&mut headers);
     headers
   }
 
@@ -512,6 +513,24 @@ mod tests {
 
     let provider = GoogleProvider::new("", None);
     assert!(provider.is_err());
+  }
+
+  #[tokio::test]
+  async fn build_headers_injects_traceparent_when_scope_active() {
+    use crate::trace_context::{LlmTraceContext, scope};
+
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let ctx = LlmTraceContext::new(
+      "0af7651916cd43dd8448eb211c80319c",
+      "b7ad6b7169203331",
+    )
+    .unwrap();
+
+    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    assert_eq!(
+      headers.get("traceparent").and_then(|v| v.to_str().ok()),
+      Some(ctx.to_traceparent().as_str()),
+    );
   }
 
   #[test]

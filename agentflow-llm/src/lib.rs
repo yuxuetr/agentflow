@@ -90,6 +90,7 @@ pub mod multimodal;
 pub mod providers;
 pub mod registry;
 pub mod tool_calling;
+pub mod trace_context;
 
 // Re-export main API components
 pub use client::{LLMClient, ResponseFormat, StreamingResponse};
@@ -107,6 +108,7 @@ pub use providers::stepfun::{
 };
 pub use registry::ModelRegistry;
 pub use tool_calling::{LLMResponse, StopReason, ToolCallRequest, ToolChoice, ToolSpec};
+pub use trace_context::LlmTraceContext;
 
 // Fluent API entry point
 use crate::client::LLMClientBuilder;

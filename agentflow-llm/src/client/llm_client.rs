@@ -5,6 +5,7 @@ use crate::{
   providers::ProviderRequest,
   registry::ModelRegistry,
   tool_calling::{LLMResponse, ToolChoice, ToolSpec},
+  trace_context::{LlmTraceContext, scope as trace_scope},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,6 +50,14 @@ pub struct LLMClient {
   pub response_format: Option<ResponseFormat>,
   pub enable_logging: bool,
   pub additional_params: HashMap<String, Value>,
+  /// Optional W3C trace context to propagate to the underlying HTTP call.
+  ///
+  /// When set, every `execute*` enters a [`trace_scope`] so all providers'
+  /// `build_headers` pick up the same context and emit a `traceparent`
+  /// header. When `None`, the LLM call inherits whatever context already
+  /// happens to be active (set by a higher layer such as the agent
+  /// runtime), or none at all.
+  pub trace_context: Option<LlmTraceContext>,
 }
 
 impl LLMClient {
@@ -68,6 +77,7 @@ impl LLMClient {
       response_format: None,
       enable_logging: true,
       additional_params: HashMap::new(),
+      trace_context: None,
     }
   }
 
@@ -103,7 +113,11 @@ impl LLMClient {
     let provider = registry.get_provider(&model_config.vendor)?;
 
     let request = self.build_request(&model_config, false)?;
-    let result = provider.execute(&request).await;
+    let provider = provider.clone();
+    let result = match self.trace_context.clone() {
+      Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await,
+      None => provider.execute(&request).await,
+    };
     let duration = start_time.elapsed();
 
     let final_result = result.map(|response| response.content.to_string());
@@ -218,7 +232,11 @@ impl LLMClient {
     let provider = registry.get_provider(&model_config.vendor)?;
 
     let request = self.build_request(&model_config, false)?;
-    let provider_response = provider.execute(&request).await?;
+    let provider = provider.clone();
+    let provider_response = match self.trace_context.clone() {
+      Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await?,
+      None => provider.execute(&request).await?,
+    };
     let duration = start_time.elapsed();
 
     let content_text = provider_response.content.to_string();
@@ -266,7 +284,13 @@ impl LLMClient {
 
     let request = self.build_request(&model_config, true)?;
 
-    let result = provider.execute_streaming(&request).await;
+    let provider = provider.clone();
+    let result = match self.trace_context.clone() {
+      Some(ctx) => {
+        trace_scope(ctx, async move { provider.execute_streaming(&request).await }).await
+      }
+      None => provider.execute_streaming(&request).await,
+    };
 
     if self.enable_logging {
       #[cfg(feature = "logging")]
@@ -607,6 +631,13 @@ impl LLMClientBuilder {
 
   pub fn enable_logging(mut self, enabled: bool) -> Self {
     self.client.enable_logging = enabled;
+    self
+  }
+
+  /// Propagate the given W3C trace context as a `traceparent` header on
+  /// the outbound HTTP call. Pass `None` to clear a previously set context.
+  pub fn trace_context(mut self, context: impl Into<Option<LlmTraceContext>>) -> Self {
+    self.client.trace_context = context.into();
     self
   }
 

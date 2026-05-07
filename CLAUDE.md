@@ -672,6 +672,45 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 7, 2026 - W3C Trace Context Propagation (P1 #9 closed) ✅
+- ✅ **`agentflow-llm/src/trace_context.rs`** — new `LlmTraceContext`
+  type (`trace_id` 32 hex / `span_id` 16 hex / flags / tracestate) with
+  W3C `traceparent` round-trip, `random()` / `new()` / `from_traceparent()`
+  constructors, tokio `task_local!` storage, `scope(ctx, fut).await`
+  installer, and `inject_into_headers(&mut headers)` writer. 9 unit tests
+  cover format validation, nested scopes, missing-context no-op,
+  optional `tracestate` propagation.
+- ✅ **All 6 providers wired** — OpenAI / Anthropic / Google / Moonshot /
+  StepFun / StepFunSpecializedClient `build_headers()` (and StepFun's
+  `build_auth_headers`) now call
+  `crate::trace_context::inject_into_headers(&mut headers)` at the end.
+  When a `LlmTraceContext` is in scope, the outbound HTTP request carries
+  `traceparent: 00-{trace_id}-{span_id}-01`; when none is active, headers
+  are unchanged (backwards-compatible).
+- ✅ **`LLMClient` plumbing** — new `trace_context: Option<LlmTraceContext>`
+  field + `LLMClientBuilder::trace_context(impl Into<Option<...>>)`
+  builder. `execute()` / `execute_full()` / `execute_streaming()` wrap the
+  inner provider call in `trace_context::scope(...)` when `Some`, so all
+  six providers' `build_headers` see the same context without explicit
+  plumbing.
+- ✅ **`AgentContext` plumbing** — new `trace_context: Option<LlmTraceContext>`
+  + `with_trace_context(...)` builder. `ReActAgent::run_with_context` and
+  `PlanExecuteAgent::call_planner` now propagate the context to every
+  `LLMClient` call via `.trace_context(context.trace_context.clone())`.
+  Default value is `None` (legacy behaviour).
+- ✅ **Unit tests** — 7 new provider-level tests
+  (`build_headers_injects_traceparent_when_scope_active` × 6 +
+  `specialized_client_build_auth_headers_injects_traceparent`) plus 2
+  negative tests. agentflow-llm now runs 88 unit tests, all green.
+- ✅ **Docs** — `docs/TRACING_USAGE.md` gains a "W3C Trace Context 端到端
+  连续" section (how it works / auto-propagation / explicit usage / OTel
+  backend integration / when injection is skipped); `docs/TRACING_DESIGN.md`
+  appends a wiring summary in the OpenTelemetry export section and
+  cross-links USAGE.
+- 📊 **Test counts**: agentflow-llm 88 unit tests (was 79); agentflow-agents
+  unchanged at 119; workspace `cargo test -p agentflow-llm -p
+  agentflow-agents` clean.
+
 ### May 7, 2026 - OS-Level Tool Sandbox (P1 #8 PR-B closed) ✅
 - ✅ **`agentflow-tools/src/sandbox/` module split** — `policy.rs` keeps the
   in-process allowlist; new `backend.rs` introduces `SandboxBackend` trait

@@ -584,6 +584,65 @@ cargo run --example simple_tracing -p agentflow-tracing
 
 ---
 
+## 🌐 W3C Trace Context 端到端连续
+
+> 自 v0.3.0 起，AgentFlow 在每个 LLM HTTP 出站调用上注入 W3C
+> [`traceparent`](https://www.w3.org/TR/trace-context/) header，让 OTel-aware
+> 服务器（Jaeger / Tempo / Honeycomb / 自建网关）能把 LLM 一跳作为
+> AgentFlow 的子 span 接进同一棵 trace，避免在 LLM 边界断开。
+
+### 工作原理
+
+1. `agentflow_llm::LlmTraceContext { trace_id, span_id, flags }` 是 W3C
+   wire 格式的 typed 包装。`trace_id` 32 hex / `span_id` 16 hex。
+2. 模块用 [tokio task-local](https://docs.rs/tokio/latest/tokio/macro.task_local.html)
+   保存当前 context；用 `agentflow_llm::trace_context::scope(ctx, fut).await`
+   设置一次，包裹的 future 内所有 LLM 调用都会自动看到。
+3. 每个 provider（OpenAI / Anthropic / Google / Moonshot / StepFun）的
+   `build_headers()` 末尾调用 `inject_into_headers(&mut headers)`，读取
+   task-local 并写出 `traceparent: 00-{trace_id}-{span_id}-{flags}`。
+
+### 自动传播
+
+`AgentContext::trace_context: Option<LlmTraceContext>` 默认为 None；当
+非空时，`ReActAgent` / `PlanExecuteAgent` 在每次 `LLMClient` 调用前
+通过 `.trace_context(ctx.trace_context.clone())` builder 透传。这样
+agent → LLM HTTP 这一跳的 trace 永远连贯。
+
+### 显式调用（不走 agent runtime）
+
+```rust
+use agentflow_llm::{AgentFlow, LlmTraceContext};
+
+let ctx = LlmTraceContext::random();
+let answer = AgentFlow::model("gpt-4o-mini")
+  .prompt("hello")
+  .trace_context(ctx)        // ← 出站 HTTP 现在带 traceparent
+  .execute()
+  .await?;
+```
+
+### 与 OTel 后端对接
+
+把 `LlmTraceContext::trace_id` / `span_id` 对齐到现有 OTel SDK：
+
+- 已经在用 `opentelemetry-rust` ：从 active span 取 `SpanContext`，
+  `LlmTraceContext::new(span_ctx.trace_id().to_string(), span_ctx.span_id().to_string())`。
+- 只用 `agentflow-tracing` 内置 exporter：`agentflow-tracing/src/otel.rs`
+  里的 `trace_id(workflow_id)` / `span_id(workflow_id, "llm:{node_id}:{model}")`
+  生成确定性 ID，这与 LLM 出站 traceparent 一致 —— 接收方按 traceparent
+  创建的 child span 会无缝挂回同一棵树。
+
+### 何时不会注入
+
+- `AgentContext::trace_context = None`（默认）：不注入。
+- 直接调用 provider 而未走 `LLMClient::with_trace_context`、也未在
+  task-local 中安装 context：不注入。
+
+不注入 = 行为与 v0.2.0 完全一致，向后兼容。
+
+---
+
 ## 🚀 下一步
 
 1. **查看示例**: `cargo run --example simple_tracing`
