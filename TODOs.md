@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-07
+最后更新: 2026-05-07（P2 #15 完成）
 
 维护约定:
 
@@ -34,11 +34,11 @@
 
 最近提交:
 
-- `9dc4e35 feat(agents): land P1 #7 multi-agent collaboration patterns`
-- `b48f173 docs: close P0 #1 platform skeleton milestone`
-- `c1d4a04 feat(server): bridge agentflow-core EventListener to DB + SSE`
-- `210ac55 feat(server): GET /v1/skills + POST /v1/skills/{name}:run`
-- `9777650 feat(server): SSE event stream with broker + DB-backed replay`
+- `b1f361f test(llm): land P1 #11 cross-provider consistency suite (foundation)`
+- `49b8b88 feat(rag): land P1 #10 RAG eval harness with Recall/MRR/nDCG and baseline compare`
+- `833cc22 docs(todos): record P1 #9 final integration-test scope`
+- `d667e11 test(llm): add real-HTTP integration test for traceparent propagation`
+- `5af1ee3 chore(deps): upgrade reqwest 0.11 → 0.12 across the workspace`
 
 ---
 
@@ -543,7 +543,7 @@ PR-B (已完成):
 
 ### 15. Agent SDK 文档化
 
-状态: 待开始
+状态: 已完成 (2026-05-07)
 
 目标:
 
@@ -551,25 +551,26 @@ PR-B (已完成):
 
 子任务:
 
-- [ ] `docs/AGENT_SDK.md`: 五分钟入门 + 完整扩展点参考。
-  - 实现自定义 `AgentRuntime`
-  - 实现自定义 `ReflectionStrategy`
-  - 实现自定义 `MemorySummaryBackend`
-  - 实现自定义 `AgentStepKind` (extension variant) — 取决于是否在 N8 把 step 定义改为开放枚举
-  - 实现自定义 `Tool` 与 `MemoryStore`
-- [ ] 配套示例: 在 `agentflow-agents/examples/` 增加 `custom_runtime.rs`、`custom_reflection.rs`、`custom_memory_summary.rs`。
-- [ ] 把所有公开 trait 的 rustdoc 补齐 + doc tests。
+- [x] `docs/AGENT_SDK.md`: 五分钟入门 + 完整扩展点参考。
+  - [x] 实现自定义 `AgentRuntime`（`agentflow-agents/examples/custom_runtime.rs`，无 LLM 的最小骨架）。
+  - [x] 实现自定义 `ReflectionStrategy`（`agentflow-agents/examples/custom_reflection.rs`，mock provider + ReActAgent）。
+  - [x] 实现自定义 `MemorySummaryBackend`（`agentflow-agents/examples/custom_memory_summary.rs`，直接调用 trait + 集成到 `ReActAgent`）。
+  - [N/A] 实现自定义 `AgentStepKind` (extension variant)：N8 期间未把 `AgentStepKind` 改为开放枚举，故文档中以 "Closed enums and stability" 一节明确该边界（继续 reuse 既有 variants，必要时开 issue 讨论）。
+  - [x] 实现自定义 `Tool` 与 `MemoryStore`：以扩展点表 + 内置实现指引覆盖（`agent_native_react.rs::EchoTool` / `SessionMemory` / `SqliteMemory` 作为参考实现）。
+- [x] 配套示例: 在 `agentflow-agents/examples/` 增加 `custom_runtime.rs`、`custom_reflection.rs`、`custom_memory_summary.rs`，全部使用 mock provider 或纯结构化骨架，无需 API key。
+- [x] 把核心扩展 trait 的 rustdoc 补齐：`AgentRuntime` / `AgentRuntimeError` / `RuntimeLimits` / `AgentContext` / `AgentStep(Kind)` / `AgentStopReason` / `AgentRunResult` / `AgentCancellationToken` / `AgentMemoryHook` / `MemoryHookKind` / `ReflectionStrategy` / `ReflectionContext` / `ReflectionTrigger` / `Reflection` / `ReflectionError` / `MemorySummaryBackend` / `MemorySummaryContext`；并修掉了 `agentflow-agents` / `agentflow-tools` / `agentflow-memory` / `agentflow-cli` 的 9 条 broken intra-doc / redundant link 警告（`registry.rs` / `sandbox/mod.rs` / `sandbox/backend.rs` / `react/agent.rs` / `supervisor/handoff.rs` / `supervisor/mod.rs` / `tools/agent_tool.rs` / `tools/workflow_tool.rs` / `executor/multi_agent.rs`）。
 
 验收标准:
 
-- 一个外部开发者按 `docs/AGENT_SDK.md` 能在 30 分钟内跑通"自定义 reflection strategy" 示例。
-- `cargo doc --workspace --no-deps` 警告数 = 0（针对已选定的核心 trait）。
+- [x] 一个外部开发者按 `docs/AGENT_SDK.md` 能在 30 分钟内跑通"自定义 reflection strategy" 示例：`cargo run -p agentflow-agents --example custom_reflection` 在 mock provider 下端到端走通 ReAct loop 并打印 `Reflect` step。
+- [x] `cargo doc --workspace --no-deps` 警告数 = 0（针对已选定的核心 trait）：`cargo doc -p agentflow-agents -p agentflow-tools -p agentflow-memory --no-deps` 0 warning（其余 crate 仍有 14 条与扩展点无关的 broken-link 警告，超出 #15 范围）。
 
 涉及文件:
 
-- `docs/AGENT_SDK.md`
-- `agentflow-agents/examples/custom_*.rs`
-- 所有 `pub trait` 的 doc 注释
+- `docs/AGENT_SDK.md`、`docs/AGENT_RUNTIME.md`（追加 SDK 链接）。
+- `agentflow-agents/examples/custom_runtime.rs`、`custom_reflection.rs`、`custom_memory_summary.rs`。
+- `agentflow-agents/src/runtime.rs`、`reflection.rs`、`react/agent.rs`、`supervisor/{mod,handoff}.rs`、`tools/{agent_tool,workflow_tool}.rs`。
+- `agentflow-tools/src/{registry,sandbox/mod,sandbox/backend}.rs`、`agentflow-cli/src/executor/multi_agent.rs`。
 
 ### 16. Plugin marketplace 远程化
 
@@ -624,3 +625,4 @@ PR-B (已完成):
 6. P1-6 to P1-8 (N7): 已统一 trace/recovery，并建立权威端到端示例集。
 7. 评估 (2026-04-28): `OVERALL_EVALUATION_REPORT.md` 完成。
 8. 评估 (2026-05-01): `PROJECT_EVALUATION_2026-05-01.md` 完成；规划 N8/N9/N10 三档发布。
+9. P2-15 (2026-05-07): `docs/AGENT_SDK.md` + `custom_runtime` / `custom_reflection` / `custom_memory_summary` 三个 mock-only 示例落地，核心扩展 trait rustdoc 补齐，相关 crate `cargo doc` 警告归零。

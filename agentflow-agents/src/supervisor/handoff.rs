@@ -48,8 +48,8 @@ struct HandoffRequest {
 
 /// Shared state between [`HandoffTool`] instances and a [`HandoffSupervisor`].
 ///
-/// The tool writes a [`HandoffRequest`] into the signal; the supervisor takes
-/// it after the active agent's run completes. Cloning is cheap (an `Arc`).
+/// The tool writes a request into the signal; the supervisor takes it after
+/// the active agent's run completes. Cloning is cheap (an `Arc`).
 #[derive(Debug, Clone, Default)]
 pub struct HandoffSignal {
   pending: Arc<Mutex<Option<HandoffRequest>>>,
@@ -71,7 +71,7 @@ impl HandoffSignal {
   }
 }
 
-/// A tool registered into each participant's [`ToolRegistry`] so the LLM can
+/// A tool registered into each participant's tool registry so the LLM can
 /// transfer control by calling `handoff(to=..., message=...)`.
 ///
 /// All instances within a single [`HandoffSupervisor`] share the same

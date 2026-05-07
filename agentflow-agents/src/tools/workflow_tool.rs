@@ -1,4 +1,4 @@
-//! Wrap a DAG [`Flow`](agentflow_core::Flow) as an agent-callable tool.
+//! Wrap a DAG [`Flow`] as an agent-callable tool.
 
 use std::sync::Arc;
 use std::time::Duration;

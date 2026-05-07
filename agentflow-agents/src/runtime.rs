@@ -11,15 +11,30 @@ use agentflow_memory::Message;
 use agentflow_tools::{Capability, CapabilityDecisionEntry, ToolOutputPart};
 
 /// Runtime limits shared by agent-native execution loops.
+///
+/// All four bounds are independent stop signals; whichever is hit first
+/// terminates the run with the corresponding [`AgentStopReason`]. `None`
+/// disables that bound.
+///
+/// `max_steps` counts every emitted [`AgentStep`] (observe / plan / tool
+/// call / tool result / reflect / final answer). `token_budget` is checked
+/// against the running estimated-token tally for the session memory and is
+/// the primary defence against runaway prompt growth.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeLimits {
+  /// Maximum total [`AgentStep`]s before the runtime stops.
   pub max_steps: Option<usize>,
+  /// Maximum number of `ToolCall` steps before the runtime stops.
   pub max_tool_calls: Option<usize>,
+  /// Wall-clock timeout in milliseconds.
   pub timeout_ms: Option<u64>,
+  /// Approximate token budget for the conversation memory.
   pub token_budget: Option<u32>,
 }
 
 impl RuntimeLimits {
+  /// Defaults considered safe for ReAct: 15 steps, 50 000-token budget,
+  /// no wall-clock timeout, no per-tool-call cap.
   pub fn react_defaults() -> Self {
     Self {
       max_steps: Some(15),
@@ -31,17 +46,35 @@ impl RuntimeLimits {
 }
 
 /// Per-run context passed into an agent runtime.
+///
+/// `AgentContext` carries everything a runtime needs to start a single
+/// invocation: session identity, user input, model selection, optional
+/// persona / skill identity, runtime bounds, and a cancellation token.
+/// Construct it via [`AgentContext::new`] and the `with_*` builders.
+///
+/// The context is intentionally serializable so platform code (server,
+/// trace replay) can persist and replay it; the cancellation token is
+/// `#[serde(skip)]` because cancellation is a process-local signal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentContext {
+  /// Stable identifier shared by all events and memory rows for one run.
   pub session_id: String,
+  /// Top-level user input that kicks off the agent loop.
   pub input: String,
+  /// LLM model identifier this run should use.
   pub model: String,
+  /// Optional persona / system-prompt fragment.
   pub persona: Option<String>,
+  /// Skill name when the agent was invoked through a `SKILL.md` package.
   pub skill_name: Option<String>,
+  /// Limits applied to this run; see [`RuntimeLimits`].
   pub limits: RuntimeLimits,
+  /// Free-form structured metadata attached to the run for observability.
   #[serde(default)]
   pub metadata: Value,
+  /// Wall-clock start time set by the runtime.
   pub started_at: DateTime<Utc>,
+  /// Optional cancellation token honored by the runtime.
   #[serde(skip)]
   pub cancellation_token: Option<AgentCancellationToken>,
   /// Optional W3C trace context. When set, the agent runtime propagates
@@ -54,6 +87,8 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+  /// Build a minimal context with no persona, no skill, no limits, and
+  /// `started_at = Utc::now()`.
   pub fn new(
     session_id: impl Into<String>,
     input: impl Into<String>,
@@ -73,21 +108,26 @@ impl AgentContext {
     }
   }
 
+  /// Attach a persona fragment that the runtime prepends to the system prompt.
   pub fn with_persona(mut self, persona: impl Into<String>) -> Self {
     self.persona = Some(persona.into());
     self
   }
 
+  /// Tag the run with the originating skill name (set by the skill CLI).
   pub fn with_skill_name(mut self, skill_name: impl Into<String>) -> Self {
     self.skill_name = Some(skill_name.into());
     self
   }
 
+  /// Replace the [`RuntimeLimits`] applied to this run.
   pub fn with_limits(mut self, limits: RuntimeLimits) -> Self {
     self.limits = limits;
     self
   }
 
+  /// Attach a shared cancellation token; cancelling it stops the loop with
+  /// [`AgentStopReason::Cancelled`].
   pub fn with_cancellation_token(mut self, token: AgentCancellationToken) -> Self {
     self.cancellation_token = Some(token);
     self
@@ -105,6 +145,11 @@ impl AgentContext {
 }
 
 /// Shared cancellation signal for long-running agent loops.
+///
+/// Cheap to clone (`Arc` internally). A typical caller gives one clone to
+/// the runtime via [`AgentContext::with_cancellation_token`] and keeps a
+/// second clone to call [`AgentCancellationToken::cancel`] from a UI button,
+/// timeout watchdog, or supervisor.
 #[derive(Debug, Clone, Default)]
 pub struct AgentCancellationToken {
   cancelled: Arc<AtomicBool>,
@@ -112,19 +157,23 @@ pub struct AgentCancellationToken {
 }
 
 impl AgentCancellationToken {
+  /// Create a fresh, not-yet-cancelled token.
   pub fn new() -> Self {
     Self::default()
   }
 
+  /// Mark the token as cancelled and wake all `cancelled()` waiters.
   pub fn cancel(&self) {
     self.cancelled.store(true, Ordering::SeqCst);
     self.notify.notify_waiters();
   }
 
+  /// Return whether the token has been cancelled.
   pub fn is_cancelled(&self) -> bool {
     self.cancelled.load(Ordering::SeqCst)
   }
 
+  /// Resolve once the token is cancelled. Useful inside `tokio::select!`.
   pub async fn cancelled(&self) {
     while !self.is_cancelled() {
       self.notify.notified().await;
@@ -155,21 +204,34 @@ pub enum AgentStopReason {
 }
 
 impl AgentStopReason {
+  /// Return `true` when the loop ended because the agent produced a
+  /// terminal answer or matched a stop condition. All other variants
+  /// (limits hit, cancelled, error) report `false`.
   pub fn is_success(&self) -> bool {
     matches!(self, Self::FinalAnswer | Self::StopCondition { .. })
   }
 }
 
 /// One durable step in an agent-native loop.
+///
+/// `AgentStep` is the persistence unit recorded by the runtime: each
+/// observation, plan, tool call, tool result, reflection, and final answer
+/// becomes one step. Steps are append-only and serialisable so that
+/// trace replay can faithfully reconstruct a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentStep {
+  /// Monotonically increasing index inside one run.
   pub index: usize,
+  /// Typed payload for this step.
   pub kind: AgentStepKind,
+  /// Wall-clock time the step was emitted.
   pub timestamp: DateTime<Utc>,
+  /// Duration of the underlying work, when measurable.
   pub duration_ms: Option<u64>,
 }
 
 impl AgentStep {
+  /// Create a new step with a fresh timestamp and no duration set.
   pub fn new(index: usize, kind: AgentStepKind) -> Self {
     Self {
       index,
@@ -179,6 +241,7 @@ impl AgentStep {
     }
   }
 
+  /// Attach a measured duration to a step.
   pub fn with_duration_ms(mut self, duration_ms: u64) -> Self {
     self.duration_ms = Some(duration_ms);
     self
@@ -194,30 +257,52 @@ pub enum BlackboardOpKind {
 }
 
 /// The typed content of an [`AgentStep`].
+///
+/// This enum is intentionally *closed*: custom agent runtimes should
+/// reuse the existing variants rather than invent new ones, so that all
+/// trace replay / event listeners / multi-agent supervisors work
+/// uniformly. If a new step kind is genuinely missing, open an issue
+/// rather than forking the enum locally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStepKind {
+  /// User input recorded at the start of a turn.
   Observe {
+    /// The raw text the runtime observed.
     input: String,
   },
+  /// Planning thought produced before a tool call or answer.
   Plan {
+    /// The model's reasoning text.
     thought: String,
   },
+  /// A tool invocation requested by the agent.
   ToolCall {
+    /// Registered tool name.
     tool: String,
+    /// JSON parameters matching the tool's schema.
     params: Value,
   },
+  /// The tool's output, structured or text.
   ToolResult {
+    /// Tool name that produced this result.
     tool: String,
+    /// String summary content (always populated).
     content: String,
+    /// Whether the tool reported a failure.
     is_error: bool,
+    /// Optional typed output parts (text / image / resource).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parts: Vec<ToolOutputPart>,
   },
+  /// A reflection produced by a [`crate::reflection::ReflectionStrategy`].
   Reflect {
+    /// The reflection text.
     content: String,
   },
+  /// Terminal answer returned to the caller.
   FinalAnswer {
+    /// The user-visible answer.
     answer: String,
   },
 
@@ -374,18 +459,30 @@ pub enum AgentEvent {
 }
 
 /// Final result returned by an agent runtime.
+///
+/// Carries the terminal answer (if any), the stop reason, the full step
+/// trace, and the captured event stream. Persistence layers usually store
+/// `steps` (compact, replayable) and stream `events` (richer per-tick
+/// detail) to separate sinks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentRunResult {
+  /// Run-scoped identifier matching [`AgentContext::session_id`].
   pub session_id: String,
+  /// User-visible answer when the run produced one.
   pub answer: Option<String>,
+  /// Why the loop stopped.
   pub stop_reason: AgentStopReason,
+  /// Append-only step trace.
   #[serde(default)]
   pub steps: Vec<AgentStep>,
+  /// Captured event stream (subset of [`AgentEvent`]s emitted during the run).
   #[serde(default)]
   pub events: Vec<AgentEvent>,
 }
 
 impl AgentRunResult {
+  /// Convenience constructor for runtimes that produce a one-step terminal
+  /// answer (no tool calls, no reflection).
   pub fn final_answer(session_id: impl Into<String>, answer: impl Into<String>) -> Self {
     let answer = answer.into();
     Self {
@@ -401,18 +498,26 @@ impl AgentRunResult {
 /// Memory operation observed by an agent runtime hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryHookKind {
+  /// `MemoryStore::get_history` (or equivalent) was invoked.
   ReadHistory,
+  /// `MemoryStore::search` was invoked.
   Search,
+  /// `MemoryStore::add_message` was invoked.
   Write,
 }
 
 /// Context passed to an [`AgentMemoryHook`].
 #[derive(Debug, Clone)]
 pub struct MemoryHookContext {
+  /// Session id of the run that triggered the hook.
   pub session_id: String,
+  /// Which memory operation was observed.
   pub kind: MemoryHookKind,
+  /// Search query when `kind == Search`; `None` otherwise.
   pub query: Option<String>,
+  /// Result limit when applicable.
   pub limit: Option<usize>,
+  /// Messages read or written.
   pub messages: Vec<Message>,
 }
 
@@ -422,27 +527,51 @@ pub struct MemoryHookContext {
 /// main agent run. Implementations can record metrics, build summaries, or feed
 /// another memory backend.
 pub trait AgentMemoryHook: Send + Sync {
+  /// Called after a successful memory read (history fetch or search).
   fn on_memory_read(&self, _context: &MemoryHookContext) {}
 
+  /// Called after a successful memory write.
   fn on_memory_write(&self, _context: &MemoryHookContext) {}
 }
 
 /// Common boundary for agent-native runtimes.
+///
+/// An `AgentRuntime` consumes an [`AgentContext`] and produces an
+/// [`AgentRunResult`]. Implementors are responsible for honouring
+/// [`RuntimeLimits`], the cancellation token, and emitting [`AgentStep`]s
+/// in chronological order. See `agentflow-agents/examples/custom_runtime.rs`
+/// for the smallest viable shell.
 #[async_trait]
 pub trait AgentRuntime: Send {
+  /// Execute one run for `context` and return the structured outcome.
+  ///
+  /// Implementations should map internal errors to
+  /// [`AgentRuntimeError::ExecutionFailed`] and reserve
+  /// [`AgentRuntimeError::InvalidContext`] for validation problems detected
+  /// before the loop starts.
   async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError>;
 
+  /// Stable, machine-readable runtime identifier (e.g. `"react"`).
   fn runtime_name(&self) -> &'static str;
 }
 
 /// Errors raised before a runtime can return a structured stop reason.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentRuntimeError {
+  /// The supplied [`AgentContext`] failed pre-flight validation.
   #[error("Invalid agent runtime context: {message}")]
-  InvalidContext { message: String },
+  InvalidContext {
+    /// Human-readable validation failure description.
+    message: String,
+  },
 
+  /// The runtime aborted with an internal error rather than a structured
+  /// [`AgentStopReason`].
   #[error("Agent runtime failed: {message}")]
-  ExecutionFailed { message: String },
+  ExecutionFailed {
+    /// Human-readable execution failure description.
+    message: String,
+  },
 }
 
 #[cfg(test)]

@@ -11,8 +11,9 @@ use crate::{
 
 /// Central registry for all available tools.
 ///
-/// Register tools once at startup; the [`ReActAgent`] uses the registry
-/// to look up and dispatch tool calls from LLM responses.
+/// Register tools once at startup; an agent runtime (e.g. the ReAct agent
+/// in `agentflow-agents`) uses the registry to look up and dispatch tool
+/// calls from LLM responses.
 pub struct ToolRegistry {
   tools: HashMap<String, Arc<dyn Tool>>,
   policy: ToolPolicy,

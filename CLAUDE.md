@@ -155,11 +155,12 @@ PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / 
 - ✅ Handoff/blackboard/debate; ✅ OS sandbox; ✅ OTel `traceparent` propagation; ✅ RAG eval harness; ✅ LLM provider consistency suite (foundation)
 - Pending: cross-provider streaming / multimodal / tool-calling consistency tests; live-LLM nightly CI
 
-**N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):**
-- Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)
-- Distributed scheduling: worker abstraction over gRPC / NATS / Redis Streams
-- Web UI: React/Svelte SPA + `agentflow-server` SSE
-- `docs/AGENT_SDK.md` extension tutorial
+**N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):** in progress
+- ✅ `docs/AGENT_SDK.md` extension guide + runnable examples (`custom_runtime` / `custom_reflection` / `custom_memory_summary`); core extension traits rustdoc-clean
+- Pending: Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)
+- Pending: Distributed scheduling: worker abstraction over gRPC / NATS / Redis Streams
+- Pending: Web UI: React/Svelte SPA + `agentflow-server` SSE
+- Pending: Plugin marketplace remote registry
 
 See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the evaluation that drove the prioritization. For change history, prefer `git log` over a doc summary.
 

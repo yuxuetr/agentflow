@@ -1,5 +1,5 @@
 //! Multi-agent supervisor: one orchestrator agent that delegates to sub-agents
-//! registered as [`AgentTool`](crate::tools::AgentTool)s.
+//! registered as [`AgentTool`]s.
 //!
 //! # Example
 //! ```rust,no_run

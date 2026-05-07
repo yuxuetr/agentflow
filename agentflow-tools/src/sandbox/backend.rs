@@ -97,7 +97,8 @@ pub trait SandboxBackend: Send + Sync {
 }
 
 /// Return the appropriate enforcing backend for the current platform, or a
-/// [`NoopSandboxBackend`] when no enforcing backend is available.
+/// [`NoopSandboxBackend`](crate::sandbox::NoopSandboxBackend) when no
+/// enforcing backend is available.
 ///
 /// Callers that require enforcement should check
 /// [`SandboxBackend::is_enforcing`] and refuse to spawn if it returns false.

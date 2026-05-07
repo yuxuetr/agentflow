@@ -7,9 +7,10 @@
 //! ```
 //!
 //! # Usage
-//! Register `AgentTool` in a parent agent's [`ToolRegistry`] just like any
-//! other tool.  The parent LLM will call it by name with a `message` argument,
-//! and the sub-agent's final answer is returned as the tool output.
+//! Register `AgentTool` in a parent agent's
+//! [`ToolRegistry`](agentflow_tools::ToolRegistry) just like any other tool.
+//! The parent LLM will call it by name with a `message` argument, and the
+//! sub-agent's final answer is returned as the tool output.
 
 use std::sync::Arc;
 

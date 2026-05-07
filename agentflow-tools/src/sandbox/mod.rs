@@ -8,10 +8,10 @@
 //!
 //! Backends are platform-specific:
 //!
-//! * macOS: [`MacosSandboxExecBackend`] generates a `sandbox-exec` profile
+//! * macOS: `MacosSandboxExecBackend` generates a `sandbox-exec` profile
 //!   from the policy + capability set and re-runs the inner command via
 //!   `sandbox-exec -f <profile> <cmd>`.
-//! * Linux: [`LinuxSeccompBackend`] installs a seccomp BPF filter through
+//! * Linux: `LinuxSeccompBackend` installs a seccomp BPF filter through
 //!   `Command::pre_exec` so the filter is active before `execve` returns.
 //! * Other platforms: [`NoopSandboxBackend`] is a pass-through. Callers can
 //!   detect this via [`SandboxBackend::is_enforcing`] and decide whether to

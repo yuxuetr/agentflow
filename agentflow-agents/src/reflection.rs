@@ -4,29 +4,49 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Why a reflection strategy was invoked.
+///
+/// Implementations of [`ReflectionStrategy`] should usually filter on
+/// `trigger` first and return `Ok(None)` for triggers they do not handle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReflectionTrigger {
+  /// Per-step trigger: emitted after every action / observation pair when
+  /// the runtime opts in.
   Step,
+  /// A tool call or model invocation failed.
   Failure,
+  /// The agent produced its final answer and is about to terminate.
   Final,
 }
 
 /// Input available to reflection strategies.
+///
+/// Strategies receive enough context to produce a short, free-form
+/// reflection without needing access to the full memory store. Use
+/// `metadata` for runtime-specific extensions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReflectionContext {
+  /// Session id for the run that produced this reflection point.
   pub session_id: String,
+  /// Step index at which the reflection was requested.
   pub step_index: usize,
+  /// The reason the reflection was invoked.
   pub trigger: ReflectionTrigger,
+  /// Most recent agent thought, when available.
   pub thought: Option<String>,
+  /// Most recent observation / tool result content, when available.
   pub observation: Option<String>,
+  /// Final answer text when `trigger == Final`.
   pub answer: Option<String>,
+  /// Error description when `trigger == Failure`.
   pub error: Option<String>,
+  /// Free-form structured metadata supplied by the runtime.
   #[serde(default)]
   pub metadata: Value,
 }
 
 impl ReflectionContext {
+  /// Build a context for a [`ReflectionTrigger::Failure`] reflection.
   pub fn failure(
     session_id: impl Into<String>,
     step_index: usize,
@@ -44,6 +64,7 @@ impl ReflectionContext {
     }
   }
 
+  /// Build a context for a [`ReflectionTrigger::Final`] reflection.
   pub fn final_answer(
     session_id: impl Into<String>,
     step_index: usize,
@@ -65,13 +86,18 @@ impl ReflectionContext {
 /// Reflection text produced by a strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reflection {
+  /// Stable strategy name (matches [`ReflectionStrategy::name`]).
   pub strategy: String,
+  /// Trigger this reflection was produced for.
   pub trigger: ReflectionTrigger,
+  /// Reflection text emitted by the strategy.
   pub content: String,
+  /// Wall-clock time the reflection was produced.
   pub timestamp: DateTime<Utc>,
 }
 
 impl Reflection {
+  /// Build a reflection record with a fresh `timestamp`.
   pub fn new(
     strategy: impl Into<String>,
     trigger: ReflectionTrigger,
@@ -86,17 +112,38 @@ impl Reflection {
   }
 }
 
+/// Errors a reflection strategy can return.
 #[derive(Debug, thiserror::Error)]
 pub enum ReflectionError {
+  /// The strategy could not produce a reflection (e.g. an LLM-backed
+  /// summariser failed). The runtime treats this as non-fatal: the run
+  /// continues without a reflection step.
   #[error("Reflection strategy failed: {message}")]
-  Failed { message: String },
+  Failed {
+    /// Human-readable failure description.
+    message: String,
+  },
 }
 
 /// Pluggable reflection boundary for agent runtimes.
+///
+/// A reflection strategy can be plugged into a runtime (e.g. the ReAct
+/// agent via `ReActAgent::with_reflection_strategy`) to inject short
+/// post-hoc summaries into the step trace. Strategies should:
+///
+/// - Filter on [`ReflectionContext::trigger`] and return `Ok(None)` for
+///   triggers they do not handle.
+/// - Avoid expensive blocking work; reflections run inline with the loop.
+/// - Treat their own failures as non-fatal (return `Err(ReflectionError)`
+///   only when the situation is genuinely actionable; the runtime will
+///   continue without inserting a reflection step).
 #[async_trait]
 pub trait ReflectionStrategy: Send + Sync {
+  /// Stable, machine-readable strategy name (e.g. `"failure"`, `"final"`).
   fn name(&self) -> &'static str;
 
+  /// Produce an optional [`Reflection`] for `context`. Return `Ok(None)`
+  /// to skip emitting a reflection for this trigger.
   async fn reflect(
     &self,
     context: &ReflectionContext,

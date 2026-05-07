@@ -1,7 +1,7 @@
 //! Workflow node for `type: multi_agent`.
 //!
-//! Dispatches to one of three multi-agent supervisors —
-//! [`HandoffSupervisor`], [`BlackboardSupervisor`], or [`DebateSupervisor`] —
+//! Dispatches to one of three multi-agent supervisors — `HandoffSupervisor`,
+//! `BlackboardSupervisor`, or `DebateSupervisor` (in `agentflow-agents`) —
 //! based on the YAML `mode` field. Each participant references a skill
 //! directory the same way `skill_agent` nodes do.
 

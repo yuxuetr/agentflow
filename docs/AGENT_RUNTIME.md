@@ -206,3 +206,10 @@ Run the mock example with:
 ```sh
 cargo run -p agentflow-agents --example plan_execute_agent
 ```
+
+## Extending the runtime
+
+Want to write a custom `AgentRuntime`, `ReflectionStrategy`,
+`MemorySummaryBackend`, `Tool`, or `MemoryStore`? See
+[`AGENT_SDK.md`](./AGENT_SDK.md) for the extension contract and runnable
+examples (`custom_runtime`, `custom_reflection`, `custom_memory_summary`).

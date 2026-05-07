@@ -43,20 +43,45 @@ pub enum ReActError {
 }
 
 /// Input passed to a pluggable memory summary backend.
+///
+/// The runtime hands the backend the messages it had to drop in order to
+/// fit the prompt budget along with the messages that were kept. Backends
+/// can use either or both to produce a single string summary that the
+/// runtime then prepends to the prompt as a synthetic system message.
 #[derive(Debug, Clone)]
 pub struct MemorySummaryContext {
+  /// Session id of the run requesting the summary.
   pub session_id: String,
+  /// Configured prompt-memory budget in approximate tokens.
   pub budget_tokens: u32,
+  /// Approximate token count of the dropped messages.
   pub omitted_tokens: u32,
+  /// Messages that did not fit and need summarising.
   pub omitted_messages: Vec<Message>,
+  /// Messages that were kept verbatim in the prompt.
   pub kept_messages: Vec<Message>,
 }
 
-/// Pluggable backend for summarizing prompt memory that exceeds a budget.
+/// Pluggable backend for summarising prompt memory that exceeds a budget.
+///
+/// A backend receives a [`MemorySummaryContext`] describing what was kept
+/// vs. dropped and returns:
+///
+/// - `Ok(Some(summary))` to inject `summary` as a synthetic system message
+///   ahead of the kept messages.
+/// - `Ok(None)` to skip the summary entirely (the runtime will silently
+///   continue with truncated history).
+/// - `Err(ReActError::MemorySummary { .. })` to surface a real failure.
+///
+/// Backends can be deterministic (rule-based) or LLM-backed; both should
+/// stay on the synchronous side of the ReAct loop, so heavy work belongs
+/// behind a separate task with a tight timeout.
 #[async_trait]
 pub trait MemorySummaryBackend: Send + Sync {
+  /// Stable backend name (e.g. `"recent_only"`, `"compact"`).
   fn name(&self) -> &'static str;
 
+  /// Produce an optional summary string for the omitted slice of memory.
   async fn summarize(&self, context: MemorySummaryContext) -> Result<Option<String>, ReActError>;
 }
 
@@ -198,7 +223,7 @@ impl ReActConfig {
 
 /// An autonomous ReAct (Reasoning + Acting) agent.
 ///
-/// On each call to [`run`], the agent:
+/// On each call to [`ReActAgent::run`], the agent:
 /// 1. Stores the user message in memory.
 /// 2. Iterates: builds a prompt from memory, calls the LLM, parses the response.
 /// 3. If the LLM returns a tool call, executes it and appends the result to memory.
