@@ -163,6 +163,12 @@ pub struct SecurityConfig {
   /// Allowed tool permission categories. Empty = allow all registered tools.
   #[serde(default)]
   pub tool_permission_allowlist: Vec<ToolPermission>,
+  /// Wrap `shell` and `script` invocations in the platform OS-level sandbox
+  /// (macOS `sandbox-exec` profile, Linux seccomp BPF). Defaults to `false`
+  /// to preserve current behaviour for skills authored before this flag
+  /// existed; new skills should opt in.
+  #[serde(default)]
+  pub os_sandbox: bool,
 }
 
 impl Default for SecurityConfig {
@@ -175,6 +181,7 @@ impl Default for SecurityConfig {
       mcp_max_concurrent_calls: DEFAULT_MCP_MAX_CONCURRENT_CALLS,
       mcp_max_servers: DEFAULT_MCP_MAX_SERVERS,
       tool_permission_allowlist: Vec::new(),
+      os_sandbox: false,
     }
   }
 }

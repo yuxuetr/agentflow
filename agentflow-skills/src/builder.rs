@@ -192,10 +192,15 @@ fn build_tool_registry(
   // Each built-in tool only checks its relevant policy field, so merging is safe.
   let policy = Arc::new(build_sandbox_policy(tool_configs, skill_dir));
 
+  let os_sandbox = security.os_sandbox;
   for tool_cfg in tool_configs {
     match tool_cfg.name.to_lowercase().as_str() {
       "shell" => {
-        registry.register(Arc::new(ShellTool::new(policy.clone())));
+        let mut tool = ShellTool::new(policy.clone());
+        if os_sandbox {
+          tool = tool.with_os_sandbox();
+        }
+        registry.register(Arc::new(tool));
       }
       "file" => {
         registry.register(Arc::new(FileTool::new(policy.clone())));
@@ -208,6 +213,9 @@ fn build_tool_registry(
         let mut tool = ScriptTool::new(scripts_dir, policy.clone());
         if let Some(schema) = &tool_cfg.parameters {
           tool = tool.with_parameters_schema(schema.clone());
+        }
+        if os_sandbox {
+          tool = tool.with_os_sandbox();
         }
         registry.register(Arc::new(tool));
       }

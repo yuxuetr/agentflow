@@ -44,3 +44,144 @@ Agent runtime traces copy known idempotency into `_agentflow.side_effect_class`.
 `AgentNode` uses that durable metadata during checkpoint resume: idempotent
 unresolved calls can be replayed, while non-idempotent or unknown unresolved
 calls require manual recovery.
+
+## OS-Level Sandbox Backends
+
+The permission model above is enforced **in-process** through `ToolPolicy`,
+`SandboxPolicy`, and the
+[three-way capability merge](SKILL_PERMISSIONS.md). On top of that, an
+optional **OS-level layer** wraps `ShellTool` and `ScriptTool` invocations
+in a kernel-enforced sandbox so that a bug in the in-process check still
+cannot grant a child more authority than the merge allowed.
+
+| Platform | Backend                             | Crate symbol |
+|----------|-------------------------------------|--------------|
+| macOS    | `sandbox-exec` SBPL profile         | `agentflow_tools::sandbox::MacosSandboxExecBackend` |
+| Linux    | seccomp-bpf via `pre_exec`          | `agentflow_tools::sandbox::LinuxSeccompBackend` |
+| other    | no-op (rejects when enforcement is required) | `agentflow_tools::sandbox::NoopSandboxBackend` |
+
+`agentflow_tools::sandbox::default_backend()` selects the right backend at
+runtime; callers that require real enforcement should check
+`SandboxBackend::is_enforcing()` before spawning.
+
+### macOS — `sandbox-exec`
+
+`MacosSandboxExecBackend::wrap_command` writes a TinyScheme (SBPL) profile
+to a tempfile and rewrites the command in place to:
+
+```text
+/usr/bin/sandbox-exec -f <profile.sb> <original_program> [args...]
+```
+
+The profile starts from `(deny default)` plus the minimum rules needed for
+any binary to start (dyld init, `process-info*`, root directory stat). It
+then layers per-capability grants:
+
+- `Capability::FsRead` → `(allow file-read* (subpath "<read_path>"))` for each scope path.
+- `Capability::FsWrite` → `(allow file-write* (subpath "<write_path>"))` for each scope path. Write paths also receive read so round-trip operations like edit-in-place work.
+- `Capability::Net` → `(allow network*)`.
+- `Capability::Exec` → `(allow process-exec)`.
+
+`SBPL` is officially deprecated by Apple but `/usr/bin/sandbox-exec` ships
+on every supported macOS release and is the same primitive Chromium and
+Firefox use. If a future macOS removes it, `MacosSandboxExecBackend::new`
+detects the missing binary and `wrap_command` returns `Unsupported`; the
+tool call fails fast rather than running unsandboxed.
+
+### Linux — seccomp BPF
+
+`LinuxSeccompBackend::wrap_command` compiles a BPF filter via the
+[`seccompiler`](https://crates.io/crates/seccompiler) crate, then installs
+it through `Command::pre_exec`. The filter runs in the forked child
+between `fork(2)` and `execve(2)`; from that point on, every syscall the
+child issues is checked.
+
+The default action is `Allow`; the filter only adds rules to **deny**
+syscalls that map to capabilities the merge withheld:
+
+| Missing capability | Denied syscalls |
+|--------------------|-----------------|
+| `Net`              | `socket`, `socketpair`, `connect`, `bind`, `listen`, `accept`, `accept4`, `sendto`, `sendmsg`, `recvfrom`, `recvmsg`, `setsockopt`, `getsockopt`, `getsockname`, `getpeername`, `shutdown` |
+| `FsWrite`          | `unlinkat`, `renameat`, `renameat2`, `mkdirat`, `mknodat`, `symlinkat`, `linkat`, `fchmodat`, `fchownat`, `truncate`, `ftruncate` |
+
+Denied syscalls return `EPERM`; the child sees a normal libc error. The
+filter targets `x86_64` and `aarch64`. On other Linux architectures the
+backend reports itself non-enforcing, and any tool requiring real
+enforcement should refuse to spawn.
+
+#### Why `Exec` cannot be a kernel-level deny
+
+The seccomp filter is installed before `execve(2)`, but the very first
+syscall the child issues *is* `execve` — to start the requested program.
+Globally denying it would block the child from starting at all. Tools that
+should not have `Exec` are already denied by the in-process capability
+merge before reaching the backend; the kernel does not need a redundant
+rule.
+
+#### Why path-scoped FS rules are not enforced
+
+seccomp checks syscall numbers and argument values, not file paths.
+Restricting `FsRead` to a specific subtree requires Landlock (Linux 5.13+)
+or an LSM. That is out of scope for v0.3.0 — path-prefix enforcement
+remains an in-process check via `SandboxPolicy::is_path_allowed`.
+
+### Scope
+
+`SandboxScope` is the per-invocation projection passed to the backend:
+
+```rust
+pub struct SandboxScope {
+  pub read_paths: Vec<PathBuf>,
+  pub write_paths: Vec<PathBuf>,
+  pub working_directory: Option<PathBuf>,
+}
+```
+
+Built-in tools build their own scope:
+
+- **`ShellTool`** uses the merged `SandboxPolicy.allowed_paths` for both
+  read and write. When the policy is permissive (empty allowlist) it falls
+  back to `/tmp` plus the current working directory; this keeps shell
+  builtins working without granting the entire filesystem.
+- **`ScriptTool`** always allows reading the skill's `scripts/` directory
+  (the script and its sibling resources live there). Additional
+  `allowed_paths` from the policy become read+write targets.
+
+### Opting in
+
+The OS layer is **off by default** so legacy skills are not affected. Opt
+in per skill:
+
+```toml
+# skill.toml
+[security]
+os_sandbox = true
+tool_permission_allowlist = ["filesystem_read", "process_exec"]
+```
+
+or in YAML front-matter on a `SKILL.md` file. `SecurityConfig.os_sandbox`
+defaults to `false`.
+
+In Rust code (programmatic use):
+
+```rust
+use std::sync::Arc;
+use agentflow_tools::SandboxPolicy;
+use agentflow_tools::builtin::ShellTool;
+
+let policy = Arc::new(SandboxPolicy::permissive());
+let tool = ShellTool::new(policy).with_os_sandbox();
+// every command is now wrapped via sandbox-exec or seccomp.
+```
+
+Tests can substitute a custom backend via `with_backend(...)`; this is how
+the integration tests in `agentflow-tools/tests/sandbox_macos.rs` and
+`agentflow-tools/tests/sandbox_linux.rs` exercise each path in isolation.
+
+### Failure modes
+
+| Symptom                                                | Likely cause                                |
+|--------------------------------------------------------|---------------------------------------------|
+| `SandboxViolation: OS sandbox preparation failed: ...` | Backend missing binary (`sandbox-exec` not present) or unsupported arch. Tool refuses to spawn — the in-process layer correctly fails closed. |
+| Child exits 134 (SIGABRT) on macOS                      | Profile is missing a baseline rule. The current baseline is sized for normal binary startup; file a bug if you hit this. |
+| Child returns `EPERM` from `socket`/`open*` on Linux    | Expected: the missing capability matches a denied syscall. |

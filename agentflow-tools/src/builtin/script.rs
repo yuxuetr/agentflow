@@ -5,7 +5,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox::SandboxPolicy};
+use crate::sandbox::{NoopSandboxBackend, SandboxBackend, SandboxPolicy, SandboxScope};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
 /// Execute a named script from the skill's `scripts/` directory.
 ///
@@ -28,6 +29,7 @@ pub struct ScriptTool {
   policy: Arc<SandboxPolicy>,
   /// Optional JSON schema for validating input parameters.
   parameters_schema: Option<Value>,
+  backend: Arc<dyn SandboxBackend>,
 }
 
 impl ScriptTool {
@@ -36,6 +38,9 @@ impl ScriptTool {
       scripts_dir,
       policy,
       parameters_schema: None,
+      backend: Arc::new(NoopSandboxBackend::new(
+        "ScriptTool default backend; opt in via with_os_sandbox()",
+      )),
     }
   }
 
@@ -47,6 +52,19 @@ impl ScriptTool {
   /// Sets the parameters schema for validation.
   pub fn with_parameters_schema(mut self, schema: Value) -> Self {
     self.parameters_schema = Some(schema);
+    self
+  }
+
+  /// Wrap subsequent invocations in the platform's enforcing sandbox backend.
+  /// On macOS this is `sandbox-exec`; on Linux this is a seccomp BPF filter.
+  pub fn with_os_sandbox(mut self) -> Self {
+    self.backend = crate::sandbox::default_backend();
+    self
+  }
+
+  /// Inject a custom backend (e.g. for tests).
+  pub fn with_backend(mut self, backend: Arc<dyn SandboxBackend>) -> Self {
+    self.backend = backend;
     self
   }
 }
@@ -200,6 +218,14 @@ impl Tool for ScriptTool {
       .stdout(std::process::Stdio::piped())
       .stderr(std::process::Stdio::piped());
 
+    let scope = build_script_scope(&canonical_scripts_dir, &self.policy);
+    let caps = self.requires_capabilities();
+    self.backend.wrap_command(&mut cmd, &caps, &scope).map_err(|err| {
+      ToolError::SandboxViolation {
+        message: format!("OS sandbox preparation failed: {err}"),
+      }
+    })?;
+
     let mut child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn '{}': {}", interpreter, e),
     })?;
@@ -268,6 +294,26 @@ fn default_script_parameters_schema() -> Value {
       },
       "required": ["script"]
   })
+}
+
+/// Build the OS-level sandbox scope for a script invocation.
+///
+/// The script directory is always read-allowed (the script and any sibling
+/// resources it imports live there). When the policy declares additional
+/// allowed paths we add them as both read- and write-targets so scripts can
+/// produce outputs in skill-managed scratch dirs without escaping.
+fn build_script_scope(scripts_dir: &std::path::Path, policy: &SandboxPolicy) -> SandboxScope {
+  let mut scope = SandboxScope::new()
+    .with_read_paths([scripts_dir.to_path_buf()])
+    .with_working_directory(scripts_dir.to_path_buf());
+  for path in &policy.allowed_paths {
+    scope.read_paths.push(path.clone());
+    scope.write_paths.push(path.clone());
+  }
+  if scope.write_paths.is_empty() {
+    scope.write_paths.push(std::path::PathBuf::from("/tmp"));
+  }
+  scope
 }
 
 /// Map a file extension to a known interpreter binary name.

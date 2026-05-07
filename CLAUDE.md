@@ -672,6 +672,50 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 
 ## Recent Updates
 
+### May 7, 2026 - OS-Level Tool Sandbox (P1 #8 PR-B closed) ✅
+- ✅ **`agentflow-tools/src/sandbox/` module split** — `policy.rs` keeps the
+  in-process allowlist; new `backend.rs` introduces `SandboxBackend` trait
+  + `SandboxScope` + `SandboxError` + `default_backend()` factory.
+- ✅ **`MacosSandboxExecBackend`** (`sandbox/macos.rs`) — generates a
+  TinyScheme (SBPL) profile from effective `Capability` set + scope,
+  persists it to a tempfile, rewrites the command as
+  `/usr/bin/sandbox-exec -f <profile.sb> <cmd>`. Profile baseline includes
+  `(deny default)`, dyld init rules (`process-info*`, `ipc-posix-shm`,
+  `(allow file-read* (literal "/"))`), and per-cap grants
+  (`file-read*` / `file-write*` for scope paths, `network*`, `process-exec`).
+- ✅ **`LinuxSeccompBackend`** (`sandbox/linux.rs`) — compiles a default-allow
+  + per-cap-deny BPF filter via `seccompiler`, installed in
+  `Command::pre_exec`. No `Net` → denies socket / connect / bind / accept /
+  sendto / recvfrom / sendmsg / recvmsg / setsockopt / getsockopt /
+  getsockname / getpeername / shutdown / socketpair / listen.
+  No `FsWrite` → denies unlinkat / renameat / renameat2 / mkdirat /
+  mknodat / symlinkat / linkat / fchmodat / fchownat / truncate /
+  ftruncate. x86_64 + aarch64; other arches fall through to non-enforcing.
+- ✅ **`ShellTool` / `ScriptTool` wire-through** — new `with_os_sandbox()`
+  builder + injectable `with_backend(...)`; `build_scope_from_policy`
+  projects `SandboxPolicy.allowed_paths` into `SandboxScope` (permissive
+  policy falls back to `/tmp` + cwd); `build_script_scope` always grants
+  read on the skill's `scripts/` directory. Default backend is still
+  `NoopSandboxBackend` so legacy callers are unaffected.
+- ✅ **`SecurityConfig::os_sandbox: bool`** (default false) — `SkillBuilder`
+  reads it in `build_tool_registry` and conditionally calls
+  `with_os_sandbox()` on `shell` / `script` tools. File / HTTP tools
+  unchanged (they don't spawn children).
+- ✅ **Integration tests**: `agentflow-tools/tests/sandbox_macos.rs` (cfg-gated
+  to macOS) covers baseline echo + write outside scope blocked by
+  sandbox-exec; `agentflow-tools/tests/sandbox_linux.rs` (cfg-gated to
+  Linux) covers baseline echo + Net-cap-absent → `python3 socket.socket()`
+  triggers `EPERM`.
+- ✅ **`docs/TOOL_PERMISSIONS.md`** — appended OS sandbox section: backend
+  matrix, macOS profile shape, Linux deny tables, why `Exec` and
+  path-scoped FS rules can't be kernel-enforced, scope semantics, opt-in
+  via `security.os_sandbox`, failure modes.
+- 📊 **Test counts**: agentflow-tools +2 macOS integ + 2 Linux integ + 5
+  unit (3 shell scope + 2 macos profile + 3 linux filter); workspace
+  `cargo clippy -p agentflow-tools -p agentflow-skills --all-targets -- -D warnings`
+  clean; `cargo test -p agentflow-tools -p agentflow-skills -p agentflow-agents`
+  all green.
+
 ### May 3, 2026 - Multi-Agent Collaboration Patterns (P1 #7 closed) ✅
 - ✅ **`AgentStepKind` + `AgentEvent` extended** — added `Handoff`,
   `BlackboardOp`, `DebateProposal`, `DebateVerdict` step kinds and matching

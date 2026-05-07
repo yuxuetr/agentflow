@@ -292,7 +292,7 @@ cargo run -p agentflow-agents --example react_agent
 
 ### 8. 工具进程级沙箱
 
-状态: 进行中 (PR-A 已完成 2026-05-04 / PR-B OS 沙箱待开始)
+状态: 已完成 (PR-A 2026-05-04 / PR-B 2026-05-07)
 
 目标:
 
@@ -301,10 +301,11 @@ cargo run -p agentflow-agents --example react_agent
 
 子任务:
 
-- [ ] 在 `agentflow-tools/src/sandbox.rs` 引入平台抽象 (PR-B):
-  - macOS: `sandbox-exec` profile 模板。
-  - Linux: `seccomp-bpf` syscall whitelist + chroot/mount namespace 子集。
-  - 其他平台: 显式不支持，工具调用拒绝并给出可操作建议。
+- [x] 在 `agentflow-tools/src/sandbox/` 引入平台抽象 (PR-B):
+  - 模块拆分: `sandbox/{mod,policy,backend,macos,linux,noop}.rs`。`SandboxBackend` trait + `SandboxScope` + `SandboxError` + `default_backend()` 工厂。
+  - macOS: `MacosSandboxExecBackend` 生成 SBPL profile（`(deny default)` 基线 + `process-info*` / `ipc-posix-shm` / `(allow file-read* (literal "/"))` 等启动期必需规则；按 capability 注入 `file-read*` / `file-write*` / `network*` / `process-exec`），并把命令重写为 `/usr/bin/sandbox-exec -f <profile.sb> <cmd>`。
+  - Linux: `LinuxSeccompBackend` 通过 `seccompiler` 编译 default-allow + per-cap deny 的 BPF filter，在 `Command::pre_exec` 内 `apply_filter`；缺 `Net` 拒 socket/connect/bind/...，缺 `FsWrite` 拒 unlinkat/renameat/mkdirat/...；x86_64 + aarch64。
+  - 其他平台: `NoopSandboxBackend` 返回 `is_enforcing()=false`，调用方可据此拒绝调度。
 - [x] 在 `Tool` trait 增加 `requires_capabilities() -> Vec<Capability>`，枚举 `Capability::{FsRead, FsWrite, Net, Exec, Env}`。`agentflow-tools/src/capability.rs` 新模块；`Capability::from_permission(s)` 提供 `ToolPermission → Vec<Capability>` 默认映射 (`FilesystemRead → FsRead` / `FilesystemWrite → FsWrite` / `ProcessExec → Exec` / `Network → Net` / `Mcp → {Net, Exec}` / `Workflow → []`)；`Tool` trait 默认 impl 由声明的 permissions 派生。
 - [x] 实现三方权限合并算法: SkillSecurity → ToolPolicy → CLI flag → effective capabilities，每一步可观察。`EffectiveCapabilities::resolve(tool, required, skill, policy, cli)` 做四层 (`tool_required` + 三层) 交集；`ToolRegistry::with_skill_capabilities` / `with_cli_capabilities` 安装层；`ToolPolicy::allowed_capabilities()` 把已有 permission allowlist 投影到 capability；`evaluate_capabilities(name)` 输出含 `trace: [CapabilityDecisionEntry]` 的 `EffectiveCapabilities`；`ToolRegistry::execute` 在策略层之后串入第二道 capability 裁剪 (返回 `PolicyDenied` + 写入 `capability_audit_log`)。`agentflow-skills::SkillBuilder` 改走 `with_skill_capabilities(Capability::from_permissions(...))` 并保留 `ToolPolicy` 兼容旧审计。
 - [x] 在 trace 中固化 `ToolCapabilityDecision` 事件: 显式记录每个 capability 是否被允许、由哪条规则裁剪。`AgentEvent::ToolCapabilityDecision { tool, allowed, required, effective, denied, deny_reason, trace, .. }` 新 variant；`ReActAgent` 与 `PlanExecuteAgent` 在 `ToolPolicyDecision` 之后立即发射；`react/agent.rs` + `supervisor/{handoff,blackboard,debate}.rs` 的 step_index merge match 全部覆盖；`agent_runtime_react_trace.json` golden fixture 同步。
@@ -312,11 +313,16 @@ cargo run -p agentflow-agents --example react_agent
 - [x] CLI: `agentflow skill inspect --explain-permissions <skill>` 展示一次实际运行的最终决策路径。`Inspect` arg 新增 `--explain-permissions` 布尔；`commands/skill/inspect.rs` 对每个 built-in tool 打印 `required` / `effective` / `denied` / 每层 (`tool_required` / `skill_security` / `tool_policy` / `cli_flag`) 的 `allowed` / `running` / `dropped`；`skill_inspect_explain_permissions_prints_capability_decision` 是端到端 CLI 烟雾测试 (走 `examples/skills/rust_expert`)。
 - 📊 PR-A 测试增量: agentflow-tools +12 单测 (capability 模块 9 + registry capability 集成 3)，agentflow-agents +1 (`tool_capability_decision_event_round_trips_through_serde`)，agentflow-cli +1 CLI smoke。`cargo test -p agentflow-tools -p agentflow-agents -p agentflow-skills -p agentflow-cli` 全绿；workspace `cargo clippy -- -D warnings` 干净。
 
+- [x] `ShellTool` / `ScriptTool` wire-through (PR-B): 新增 `with_os_sandbox()` builder + 可注入的 `with_backend(...)`；执行前调用 `backend.wrap_command(&mut cmd, &caps, &scope)`；`build_scope_from_policy` 把 `SandboxPolicy.allowed_paths` 投影成 `SandboxScope`（permissive 默认回落到 `/tmp` + cwd），`build_script_scope` 始终允许 `scripts/` 目录读；默认 backend 仍是 `NoopSandboxBackend` 以保持向后兼容。
+- [x] SkillBuilder 接线 (PR-B): `SecurityConfig::os_sandbox: bool`（默认 false）；`build_tool_registry` 在 `os_sandbox = true` 时对 `shell` / `script` 工具调用 `with_os_sandbox()`，文件 / HTTP 工具不变（无子进程）。
+- [x] 集成测试 (PR-B): `agentflow-tools/tests/sandbox_macos.rs` 覆盖 baseline echo 成功 + 范围外写入被 sandbox-exec 拒绝；`agentflow-tools/tests/sandbox_linux.rs` 覆盖 baseline echo + Net 缺失时 `python3 socket.socket()` 触发 EPERM。两个文件分别用 `#[cfg(target_os = ...)]` 门控。
+- 📊 PR-B 测试增量: agentflow-tools +6 (3 个 unit on shell scope + 3 个 macOS profile/linux filter unit)、+2 macOS 集成、+2 Linux 集成；workspace `cargo clippy -p agentflow-tools -p agentflow-skills --all-targets -- -D warnings` 干净；`cargo test -p agentflow-tools -p agentflow-skills` 全绿（含 sandbox_macos）。
+
 验收标准:
 
-- 在受限沙箱下运行的 `ShellTool` 越界访问被强制阻断 (sandbox 拒绝而非 policy 拒绝)。 (PR-B)
+- 在受限沙箱下运行的 `ShellTool` 越界访问被强制阻断 (sandbox 拒绝而非 policy 拒绝)。 ✅ (PR-B `macos_sandbox_blocks_write_outside_scope`)
 - 一次 skill run 产出的 trace 包含可读的 capability 决策链路。 ✅ (PR-A)
-- macOS / Linux 两条路径各自有集成测试。 (PR-B)
+- macOS / Linux 两条路径各自有集成测试。 ✅ (PR-B `tests/sandbox_macos.rs` + `tests/sandbox_linux.rs`)
 
 涉及文件:
 
@@ -328,10 +334,14 @@ PR-A (已完成):
 - `agentflow-cli/src/main.rs`、`agentflow-cli/src/commands/skill/inspect.rs`、`agentflow-cli/tests/skill_cli_tests.rs`
 - `docs/SKILL_PERMISSIONS.md`
 
-PR-B (待开始):
+PR-B (已完成):
 
-- `agentflow-tools/src/{sandbox,builtin/shell,builtin/script}.rs`
-- `docs/TOOL_PERMISSIONS.md` (链接到 SKILL_PERMISSIONS)
+- `agentflow-tools/src/sandbox/{mod,policy,backend,macos,linux,noop}.rs`（新模块拆分）
+- `agentflow-tools/src/builtin/{shell,script}.rs`（接线 backend + scope）
+- `agentflow-tools/Cargo.toml`（新增 `seccompiler` / `libc` 在 `cfg(target_os="linux")` 下的 dep）
+- `agentflow-tools/tests/sandbox_macos.rs`、`agentflow-tools/tests/sandbox_linux.rs`
+- `agentflow-skills/src/manifest.rs`（新 `os_sandbox: bool`）、`agentflow-skills/src/builder.rs`（接线）
+- `docs/TOOL_PERMISSIONS.md`（追加 OS sandbox 章节，链接 SKILL_PERMISSIONS）
 
 ### 9. OpenTelemetry 端到端连续
 
