@@ -48,7 +48,7 @@ serde_yaml = "0.9"
 tera = "1.19"
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "default-tls"] }
 
 # File handling and utilities
 walkdir = "2.4"

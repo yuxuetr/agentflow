@@ -27,7 +27,7 @@ anyhow = "1.0"
 tracing = "0.1"
 
 # HTTP client for API-based embeddings
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "default-tls"] }
 
 # Vector databases
 qdrant-client = { version = "1.11", optional = true }
