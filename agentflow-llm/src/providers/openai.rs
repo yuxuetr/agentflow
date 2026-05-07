@@ -20,13 +20,22 @@ pub struct OpenAIProvider {
 
 impl OpenAIProvider {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
+    Self::with_client(Client::new(), api_key, base_url)
+  }
+
+  /// Construct with a caller-supplied [`reqwest::Client`].
+  ///
+  /// Useful when callers need a non-default client — for example tests that
+  /// must disable the system proxy (`.no_proxy()` on the builder) to reach a
+  /// localhost mock, or production deployments that share one HTTPS-pinned
+  /// client across providers.
+  pub fn with_client(client: Client, api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {
         provider: "openai".to_string(),
       });
     }
 
-    let client = Client::new();
     let base_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
     Ok(Self {
@@ -472,6 +481,22 @@ mod tests {
 
     let provider = OpenAIProvider::new("", None);
     assert!(provider.is_err());
+  }
+
+  #[test]
+  fn with_client_validates_api_key_and_keeps_caller_supplied_client() {
+    let custom = reqwest::Client::builder()
+      .no_proxy()
+      .build()
+      .expect("custom client");
+
+    assert!(
+      OpenAIProvider::with_client(custom.clone(), "", Some("http://x".into())).is_err(),
+      "empty api key must error",
+    );
+    let provider = OpenAIProvider::with_client(custom, "test-key", Some("http://example".into()))
+      .expect("custom client provider");
+    assert_eq!(provider.base_url, "http://example");
   }
 
   #[tokio::test]
