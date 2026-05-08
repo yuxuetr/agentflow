@@ -1,8 +1,10 @@
 # LLM Providers Support Matrix
 
-> Status: foundation shipped in v0.4.0 (P1 #11). Streaming / multimodal /
-> live-LLM CI listed under Follow-ups.
-> Crate: `agentflow-llm`. Test entry: `agentflow-llm/tests/provider_consistency.rs`.
+> Status: foundation shipped in v0.4.0 (P1 #11). Streaming, multimodal, and
+> live-LLM nightly CI all closed (see Closed follow-ups).
+> Crates: `agentflow-llm`. Test entries:
+> `agentflow-llm/tests/provider_consistency.rs` (offline, mocked) and
+> `agentflow-llm/tests/provider_consistency_live.rs` (opt-in, real APIs).
 
 AgentFlow's LLM abstraction targets six providers. This document is the
 authoritative reference for what works on each, what doesn't, and how the
@@ -132,17 +134,26 @@ STEPFUN_API_KEY=… \
 cargo test -p agentflow-llm --test provider_consistency_live
 ```
 
-**Status**: the live-test harness is not yet implemented. Adding it is a
-follow-up to P1 #11 — the foundation (uniform `with_client`, shared mock
-server, error contract) is what makes a clean live-test layer possible.
+**Status**: live-test harness landed 2026-05-08. The default `cargo test`
+run is unaffected — without `AGENTFLOW_LIVE_LLM_TESTS` set, every test in
+`provider_consistency_live.rs` short-circuits before issuing a request and
+reports `ok` in milliseconds. With the gate set but a provider's API key
+env var missing, that single provider self-skips with a log line; the rest
+still run.
 
-When added, live tests should:
+Behavior of the harness:
 
-1. Skip cleanly when the env var is unset (no test failure, just `ignored`).
-2. Use minimum-cost models (e.g. `gpt-4o-mini`, `claude-3-5-haiku`,
-   `gemini-1.5-flash`).
-3. Be small (one request per provider, single-turn text).
-4. Run in nightly CI only — not on every PR.
+1. Skips cleanly when `AGENTFLOW_LIVE_LLM_TESTS` is unset (test passes,
+   prints `[live] <provider>: skipped`).
+2. Uses minimum-cost defaults per provider (`gpt-4o-mini`,
+   `claude-3-5-haiku-20241022`, `gemini-1.5-flash`, `moonshot-v1-8k`,
+   `step-1-8k`); each is overridable via
+   `AGENTFLOW_LIVE_<PROVIDER>_MODEL`.
+3. One single-turn text request per provider with `max_tokens = 16` and
+   `temperature = 0.0` for deterministic-as-possible cost.
+4. Runs nightly via `.github/workflows/llm-live.yml` (cron `30 9 * * *` UTC,
+   plus `workflow_dispatch` with an optional `providers` filter); not part
+   of the PR-blocking `release-gate` aggregate in `quality.yml`.
 
 ## Adding a new provider
 
@@ -163,8 +174,6 @@ When added, live tests should:
 
 ## Follow-ups (non-blocking)
 
-- **Live LLM nightly CI job**: gated by `AGENTFLOW_LIVE_LLM_TESTS=1`,
-  running once per day with minimum-cost models per provider.
 - **Quota / cost dashboards**: currently each provider exposes raw
   `TokenUsage` on responses; a higher-level cost roll-up keyed by model is
   not implemented.
@@ -181,3 +190,10 @@ When added, live tests should:
   Tests assert the captured request body preserves the base64 payload and
   that the response parses to the same `(text, Stop, populated usage)`
   contract as the text-only path.
+- **Live LLM nightly CI job** — landed 2026-05-08.
+  `agentflow-llm/tests/provider_consistency_live.rs` plus
+  `.github/workflows/llm-live.yml` (cron + `workflow_dispatch`). Tests
+  default to a clean skip; nightly CI sets `AGENTFLOW_LIVE_LLM_TESTS=1`
+  along with per-provider API keys from secrets. Each provider asserts the
+  same contract as the offline suite: non-empty text, populated
+  `TokenUsage`, `StopReason::Stop`.

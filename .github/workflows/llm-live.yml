@@ -1,0 +1,50 @@
+name: LLM Live Smoke
+
+# Nightly cross-provider smoke test against real LLM endpoints.
+#
+# Runs `cargo test -p agentflow-llm --test provider_consistency_live` with
+# `AGENTFLOW_LIVE_LLM_TESTS=1` and per-provider API keys from repository
+# secrets. Each provider test self-skips with a log line when its API key
+# secret is empty, so it's safe to flip on a single provider at a time.
+#
+# This workflow is **not** wired into the `release-gate` aggregate in
+# `quality.yml` — it issues real API calls, costs money, and is non-
+# deterministic (provider behaviour shifts with model versions). PRs are
+# never gated on it.
+
+on:
+  schedule:
+    # 09:30 UTC daily ≈ 02:30 PT / 17:30 CST. Pick an off-peak window.
+    - cron: "30 9 * * *"
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: "Comma-separated subset (openai,anthropic,google,moonshot,stepfun); empty = all"
+        required: false
+        default: ""
+
+jobs:
+  live-smoke:
+    name: provider_consistency_live
+    runs-on: ubuntu-latest
+    # Avoid stalling the runner if a provider hangs — each test also has its
+    # own 30s timeout in code.
+    timeout-minutes: 15
+    env:
+      AGENTFLOW_LIVE_LLM_TESTS: "1"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      STEPFUN_API_KEY: ${{ secrets.STEPFUN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run live LLM consistency suite
+        run: |
+          # cargo test treats positional args as substring filters (any-match).
+          # An empty `inputs.providers` runs the full suite; otherwise we feed
+          # each comma-separated token as its own filter token.
+          FILTERS="$(echo "${{ inputs.providers }}" | tr ',' ' ')"
+          cargo test -p agentflow-llm --test provider_consistency_live -- \
+            --nocapture --test-threads=1 ${FILTERS}

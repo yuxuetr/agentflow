@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-08（P1 #11 follow-up: 跨 provider multimodal 一致性 fixture 落地 + Google adapter 多模态 content 转换）
+最后更新: 2026-05-08（P1 #11 final follow-up: live-LLM nightly CI gate 落地，`provider_consistency_live.rs` + `.github/workflows/llm-live.yml`）
 
 维护约定:
 
@@ -34,11 +34,11 @@
 
 最近提交:
 
+- `a78c3ff test(llm): add cross-provider multimodal consistency fixtures`
 - `0848e0d test(llm): add cross-provider streaming consistency fixtures to consistency suite`
 - `3267640 test(llm): add cross-provider tool-calling fixtures to consistency suite`
 - `b1f361f test(llm): land P1 #11 cross-provider consistency suite (foundation)`
 - `49b8b88 feat(rag): land P1 #10 RAG eval harness with Recall/MRR/nDCG and baseline compare`
-- `833cc22 docs(todos): record P1 #9 final integration-test scope`
 
 ---
 
@@ -417,7 +417,7 @@ PR-B (已完成):
 
 ### 11. 多 LLM provider 一致性回归套件
 
-状态: 基础已完成 (2026-05-07)；streaming / tool-calling / multimodal follow-up 完成 (2026-05-08)；live-CI 仍为非阻塞 follow-up
+状态: 已完成 (2026-05-08)。基础 + streaming / tool-calling / multimodal / live-LLM nightly CI 全部落地；剩余 follow-up 仅为成本仪表板（与 P1 #11 解耦）
 
 目标:
 
@@ -433,22 +433,24 @@ PR-B (已完成):
 - [x] **Follow-up (2026-05-08)**: streaming consistency tests 跨 provider 落地。`agentflow-llm/tests/provider_consistency.rs` +5 集成测试 (`{openai,anthropic,google,moonshot,stepfun}_streaming_path`) 共用 `assert_stream_yields_hello_world(...)` helper，每个 provider 用自己 native streaming wire format (OpenAI/Moonshot/StepFun SSE `data: {chunk}` + `[DONE]`、Anthropic SSE `event: …`/`data: …` + `message_stop`、Google newline-delimited JSON + `finishReason`) 注入 "Hello"/" world" 增量。新增 `spawn_streaming_mock_server(events)` 用 `Transfer-Encoding: chunked` 把每个 event 作为单独 HTTP 帧交付，避免单 Content-Length 把 events 合并到一次 `bytes_stream` 派发后续 events 丢失（per-provider stream parser 是 one-chunk-per-call）。共用契约：≥2 个 content-bearing chunk 拼接成 `"Hello world"`、至少一个 chunk 有 `is_final = true`、终止后 `next_chunk()` 返回 `Ok(None)`、`content_type == Some("text")`。
 - [x] **Follow-up (2026-05-08)**: multimodal consistency tests (image + text inputs 跨 provider)。`agentflow-llm/tests/provider_consistency.rs` +5 集成测试 (`{openai,anthropic,google,moonshot,stepfun}_multimodal_path`) 共用 `run_multimodal(...)` helper：每个 provider 用自己 native multimodal wire format（OpenAI/Moonshot/StepFun 的 `image_url` part；Anthropic 的 `image` content block；Google 经 adapter 重写为 `inline_data`）注入同一份 marker base64 payload `"AAAA"`。共用契约: (a) 捕获到的请求体必须保留 marker payload; (b) provider-specific part-type 标识在请求体中存在 (`image_url` / `image` / `inline_data`); (c) 响应解析回退到与文本路径同一份 `(text, Stop, populated usage)` 契约。同时给 Google adapter 加了 `openai_content_to_gemini_parts()` —— 把 OpenAI-style `content: [{type:text}, {type:image_url, image_url:{url:"data:..."}}]` 翻译为 Gemini `parts[].inline_data` (data-URL) 或 `parts[].file_data` (remote URL)，配 5 条新 unit test。这之前 Google adapter 直接把整个 array 包进 `{"text": <array>}`，发到 Gemini 必然 400。
 - [x] **Follow-up (2026-05-08)**: tool-calling fixtures 在 cross-provider consistency 层。`agentflow-llm/tests/provider_consistency.rs` +5 集成测试 (`{openai,anthropic,google,moonshot,stepfun}_tool_call_path`) 共用 `assert_tool_call(...)` helper，每个 provider 用自己的 native wire format (`tool_calls` array / `tool_use` content block / `functionCall` parts / OpenAI-compatible passthrough) 注入 `get_weather(city="Tokyo")` 响应，断言：解析出唯一一条 `ToolCallRequest`，`name == "get_weather"`、`arguments.city == "Tokyo"`、`id` 非空（Google 合成 `call_<idx>`）、`stop_reason == StopReason::ToolCalls`（含 Google `finishReason: STOP` → `ToolCalls` 的归一化）。`provider_request_with_tools(...)` 同时把 `tools`/`tool_choice` 编入请求确保请求侧编码路径不 panic。`cargo test -p agentflow-llm --test provider_consistency` 现 15 测试全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
-- [ ] **Follow-up**: 集成测试 gated by `AGENTFLOW_LIVE_LLM_TESTS=1`（真实 API 调用，nightly CI 触发；harness 设计已写入 `docs/LLM_PROVIDERS_MATRIX.md`）。
+- [x] **Follow-up (2026-05-08)**: 集成测试 gated by `AGENTFLOW_LIVE_LLM_TESTS=1`。`agentflow-llm/tests/provider_consistency_live.rs` +6 测试 (5 provider × 单轮文本契约 + 1 条 gate-default-off 自检)，全部基于 `provider.execute(...)` 直接打公网 endpoint；当 gate 未开时 `eprintln!("[live] {provider}: skipped ({GATE_ENV} not set)")` 并立即返回，不发任何 HTTP 请求；当 gate 开但单个 provider 的 key 缺失时也只跳过该 provider，其他继续；每条测试 30s 内置超时。模型默认 `gpt-4o-mini` / `claude-3-5-haiku-20241022` / `gemini-1.5-flash` / `moonshot-v1-8k` / `step-1-8k`，可通过 `AGENTFLOW_LIVE_<PROVIDER>_MODEL` 覆盖。`.github/workflows/llm-live.yml`（cron `30 9 * * *` UTC + `workflow_dispatch` 接受可选 `providers` 子集 filter）独立于 `quality.yml::release-gate`，因此 PR 永远不会被 live 测试 gate；`max_tokens=16` + `temperature=0.0` 把每次 nightly 跑成本压到最低。`docs/LLM_PROVIDERS_MATRIX.md` 把 "Live LLM nightly CI job" 从 follow-ups 移到 closed follow-ups。
 
-📊 测试增量: agentflow-llm `tests/provider_consistency.rs` +25 集成测试（5 success + 5 tool-call + 5 error mapping + 5 streaming + 5 multimodal）；`agentflow-llm` lib +6 单测 (Google adapter 多模态 helper); `cargo test -p agentflow-llm` 94 lib + 25 provider_consistency + 3 trace_context = 122 tests 全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
+📊 测试增量: agentflow-llm `tests/provider_consistency.rs` +25 集成测试（5 success + 5 tool-call + 5 error mapping + 5 streaming + 5 multimodal）；`tests/provider_consistency_live.rs` +6 测试（5 provider live + 1 gate-default-off 自检，gate 关闭时全部毫秒级 ok）；`agentflow-llm` lib +6 单测 (Google adapter 多模态 helper)；`cargo test -p agentflow-llm` 94 lib + 25 provider_consistency + 3 trace_context + 6 provider_consistency_live = 128 tests 全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
 
-验收标准（基础部分）:
+验收标准:
 
 - ✅ 5 个 provider 各自有一组共用的 fixture 测试，回归时能定位到具体 provider（10 测试都按 provider 名命名）。
 - ✅ Error-mapping 契约统一: 所有 HTTP provider 把非 2xx 映射成 `LLMError::HttpError { status_code, .. }`，下游消费者可信赖此契约不会被无声修改。
-- ⏳ nightly CI live LLM smoke job — harness 设计已记录，实际接线列为 follow-up。
+- ✅ nightly CI live LLM smoke job — `.github/workflows/llm-live.yml` cron `30 9 * * *` UTC + `workflow_dispatch`；offline 默认运行毫秒级 skip，PR 永远不被 live 测试 gate。
 
 涉及文件:
 
 - `agentflow-llm/src/providers/{anthropic,google,moonshot,stepfun}.rs`（新增 `with_client` 构造函数）
 - `agentflow-llm/src/providers/google.rs`（`openai_content_to_gemini_parts` / `openai_content_to_text` / `parse_data_url` + `build_request_body` 多模态分支 + 5 新 unit test）
 - `agentflow-llm/tests/provider_consistency.rs`（25 集成测试：5 success + 5 tool-call + 5 error mapping + 5 streaming + 5 multimodal）
-- `docs/LLM_PROVIDERS_MATRIX.md`（基础 + follow-up 列表 — multimodal/streaming 落地后归入 "Closed follow-ups"）
+- `agentflow-llm/tests/provider_consistency_live.rs`（6 测试，gate 关闭时干净跳过）
+- `.github/workflows/llm-live.yml`（nightly + workflow_dispatch；独立于 `release-gate`）
+- `docs/LLM_PROVIDERS_MATRIX.md`（live-LLM CI 章节从 "not yet implemented" 改写为 closed follow-up）
 
 ---
 
@@ -662,4 +664,5 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 9. P2-15 (2026-05-07): `docs/AGENT_SDK.md` + `custom_runtime` / `custom_reflection` / `custom_memory_summary` 三个 mock-only 示例落地，核心扩展 trait rustdoc 补齐，相关 crate `cargo doc` 警告归零。
 10. P1-11 follow-up (2026-05-08): 跨 provider tool-calling 一致性 fixture 落地。`provider_consistency.rs` 15 集成测试 (5 success + 5 tool-call + 5 error mapping)，5 个 provider 各用自己 native wire format (`tool_calls` / `tool_use` / `functionCall`) 跑同一条 `get_weather(city="Tokyo")` 契约，覆盖 id 合成、stop_reason 归一化、arguments 结构化解析。
 11. P1-11 follow-up (2026-05-08): 跨 provider streaming 一致性 fixture 落地。`provider_consistency.rs` 现 20 集成测试 (+5 streaming)，每个 provider 用自己 native streaming wire format（OpenAI/Moonshot/StepFun SSE `data:` + `[DONE]`、Anthropic SSE event/data + `message_stop`、Google newline-delimited JSON + `finishReason`）跑同一条 `"Hello world"` 拼接契约。新增 `spawn_streaming_mock_server` 用 `Transfer-Encoding: chunked` 还原真实 LLM 流式语义，确保每个 event 走独立 HTTP 帧。
+12. P1-11 follow-up (2026-05-08): live-LLM nightly CI gate 落地。`agentflow-llm/tests/provider_consistency_live.rs` (5 provider × 单轮文本契约 + 1 gate-default-off 自检) + `.github/workflows/llm-live.yml`（cron `30 9 * * *` UTC + `workflow_dispatch` + 可选 `providers` 子集 filter）；`AGENTFLOW_LIVE_LLM_TESTS` 关闭时 6 条测试全部毫秒级跳过、不发任何 HTTP 请求；开启时单条 provider 缺 key 也只 skip 该 provider，其他继续。模型默认压在 `gpt-4o-mini` / `claude-3-5-haiku` / `gemini-1.5-flash` / `moonshot-v1-8k` / `step-1-8k`，可由 `AGENTFLOW_LIVE_<PROVIDER>_MODEL` 覆盖；`max_tokens=16` + `temperature=0` 把每次 nightly 跑成本压到最低。`docs/LLM_PROVIDERS_MATRIX.md` 把这条从 follow-up 移到 closed follow-up，header 状态行同步更新。P1 #11 整体闭环。
 12. P1-11 follow-up (2026-05-08): 跨 provider multimodal 一致性 fixture 落地。`provider_consistency.rs` 现 25 集成测试 (+5 multimodal)，每个 provider 用 native multimodal 格式（OpenAI/Moonshot/StepFun 的 `image_url`、Anthropic 的 `image` content block、Google 经 adapter 重写为 `inline_data`）注入 marker base64 payload 并断言请求体保留 + 响应解析回退到统一文本契约。同步给 Google adapter 实装 OpenAI-style multimodal content 翻译（`openai_content_to_gemini_parts`），把 data-URL 译成 `inline_data`、远程 URL 译成 `file_data`。修复了之前 Google adapter 把整个 content array 直接塞进 `{"text": <array>}` 的错误编码。
