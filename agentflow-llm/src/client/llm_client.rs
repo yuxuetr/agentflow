@@ -287,7 +287,11 @@ impl LLMClient {
     let provider = provider.clone();
     let result = match self.trace_context.clone() {
       Some(ctx) => {
-        trace_scope(ctx, async move { provider.execute_streaming(&request).await }).await
+        trace_scope(
+          ctx,
+          async move { provider.execute_streaming(&request).await },
+        )
+        .await
       }
       None => provider.execute_streaming(&request).await,
     };

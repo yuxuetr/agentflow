@@ -173,7 +173,10 @@ pub fn inject_context_into_headers(ctx: &LlmTraceContext, headers: &mut HeaderMa
 }
 
 fn is_lower_hex(s: &str, expected_len: usize) -> bool {
-  s.len() == expected_len && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+  s.len() == expected_len
+    && s
+      .bytes()
+      .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -201,19 +204,28 @@ mod tests {
     let ctx = LlmTraceContext::random();
     assert_eq!(ctx.trace_id.len(), 32);
     assert_eq!(ctx.span_id.len(), 16);
-    assert!(ctx.trace_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
-    assert!(ctx.span_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(
+      ctx
+        .trace_id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    );
+    assert!(
+      ctx
+        .span_id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    );
   }
 
   #[test]
   fn traceparent_round_trips() {
-    let ctx = LlmTraceContext::new(
-      "0af7651916cd43dd8448eb211c80319c",
-      "b7ad6b7169203331",
-    )
-    .unwrap();
+    let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
     let header = ctx.to_traceparent();
-    assert_eq!(header, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+    assert_eq!(
+      header,
+      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    );
 
     let parsed = LlmTraceContext::from_traceparent(&header).unwrap();
     assert_eq!(parsed, ctx);
@@ -222,10 +234,8 @@ mod tests {
   #[test]
   fn from_traceparent_rejects_unsupported_version() {
     assert!(
-      LlmTraceContext::from_traceparent(
-        "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-      )
-      .is_none()
+      LlmTraceContext::from_traceparent("ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+        .is_none()
     );
   }
 
@@ -258,11 +268,7 @@ mod tests {
 
   #[tokio::test]
   async fn inject_into_headers_writes_traceparent_when_active() {
-    let ctx = LlmTraceContext::new(
-      "0af7651916cd43dd8448eb211c80319c",
-      "b7ad6b7169203331",
-    )
-    .unwrap();
+    let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
     let header_value = scope(ctx.clone(), async {
       let mut headers = HeaderMap::new();
@@ -285,12 +291,9 @@ mod tests {
 
   #[test]
   fn tracestate_round_trips_when_present() {
-    let ctx = LlmTraceContext::new(
-      "0af7651916cd43dd8448eb211c80319c",
-      "b7ad6b7169203331",
-    )
-    .unwrap()
-    .with_tracestate("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE");
+    let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331")
+      .unwrap()
+      .with_tracestate("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE");
     let mut headers = HeaderMap::new();
     inject_context_into_headers(&ctx, &mut headers);
 

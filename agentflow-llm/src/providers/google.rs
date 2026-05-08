@@ -62,22 +62,24 @@ impl GoogleProvider {
       {
         match role.as_str() {
           Some("system") => {
-            system_instruction = content.as_str().map(|s| {
-              json!({
-                "parts": [{"text": s}]
-              })
-            });
+            // System messages stay text-only on Gemini; flatten any array parts
+            // to their concatenated text rather than dropping non-text content
+            // silently.
+            let text = openai_content_to_text(content);
+            if !text.is_empty() {
+              system_instruction = Some(json!({"parts": [{"text": text}]}));
+            }
           }
           Some("user") => {
             gemini_contents.push(json!({
               "role": "user",
-              "parts": [{"text": content}]
+              "parts": openai_content_to_gemini_parts(content),
             }));
           }
           Some("assistant") => {
             gemini_contents.push(json!({
               "role": "model",
-              "parts": [{"text": content}]
+              "parts": openai_content_to_gemini_parts(content),
             }));
           }
           _ => {}
@@ -136,6 +138,111 @@ impl GoogleProvider {
       self.base_url, model, method, self.api_key
     )
   }
+}
+
+/// Convert an OpenAI-shaped `content` field (string, or an array of typed
+/// parts) into a Gemini `parts` array.
+///
+/// Supported part types: `text` and `image_url`. An `image_url` value can be
+/// either a string or an object `{ "url": "..." }`. Data URLs of the form
+/// `data:<mime>;base64,<payload>` are decoded into Gemini's `inline_data`
+/// shape; remote `http(s)` URLs are passed through as `file_data` references.
+/// Unknown part shapes are dropped — multimodal flows should not crash on a
+/// single unrecognised part.
+pub(crate) fn openai_content_to_gemini_parts(content: &Value) -> Vec<Value> {
+  if let Some(text) = content.as_str() {
+    return vec![json!({"text": text})];
+  }
+  let Some(items) = content.as_array() else {
+    // Non-string, non-array content (e.g. number, null) becomes empty parts.
+    // Gemini rejects empty `parts`, so callers should ensure the content is
+    // populated; we don't synthesise placeholder text.
+    return Vec::new();
+  };
+  let mut parts = Vec::with_capacity(items.len());
+  for item in items {
+    let Some(obj) = item.as_object() else {
+      continue;
+    };
+    let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
+    match kind {
+      "text" => {
+        if let Some(text) = obj.get("text").and_then(Value::as_str) {
+          parts.push(json!({"text": text}));
+        }
+      }
+      "image_url" => {
+        let url = obj
+          .get("image_url")
+          .and_then(|v| match v {
+            Value::String(s) => Some(s.as_str()),
+            Value::Object(map) => map.get("url").and_then(Value::as_str),
+            _ => None,
+          })
+          .unwrap_or("");
+        if url.is_empty() {
+          continue;
+        }
+        if let Some((mime_type, data)) = parse_data_url(url) {
+          parts.push(json!({
+            "inline_data": {
+              "mime_type": mime_type,
+              "data": data,
+            }
+          }));
+        } else {
+          // Pass remote URLs through as `file_data`. Gemini's REST API accepts
+          // either `inline_data` (base64 payload) or `file_data` (uri+mime).
+          parts.push(json!({
+            "file_data": {
+              "mime_type": "image/jpeg",
+              "file_uri": url,
+            }
+          }));
+        }
+      }
+      _ => {}
+    }
+  }
+  parts
+}
+
+/// Concatenate the textual portion of an OpenAI-shaped `content`. Used for
+/// system instructions (Gemini's `systemInstruction` is text-only).
+pub(crate) fn openai_content_to_text(content: &Value) -> String {
+  if let Some(text) = content.as_str() {
+    return text.to_string();
+  }
+  let Some(items) = content.as_array() else {
+    return String::new();
+  };
+  let mut out = String::new();
+  for item in items {
+    if let Some(obj) = item.as_object()
+      && obj.get("type").and_then(Value::as_str) == Some("text")
+      && let Some(text) = obj.get("text").and_then(Value::as_str)
+    {
+      if !out.is_empty() {
+        out.push(' ');
+      }
+      out.push_str(text);
+    }
+  }
+  out
+}
+
+/// Parse `data:<mime>;base64,<payload>` URLs into `(mime, base64_payload)`.
+/// Returns `None` for non-`data:` URLs or malformed payloads.
+fn parse_data_url(url: &str) -> Option<(String, String)> {
+  let rest = url.strip_prefix("data:")?;
+  let (meta, data) = rest.split_once(',')?;
+  let meta = meta.strip_suffix(";base64")?;
+  let mime = if meta.is_empty() {
+    "application/octet-stream".to_string()
+  } else {
+    meta.to_string()
+  };
+  Some((mime, data.to_string()))
 }
 
 /// Encode a `ToolSpec` as a Gemini `functionDeclaration` entry.
@@ -525,11 +632,7 @@ mod tests {
     use crate::trace_context::{LlmTraceContext, scope};
 
     let provider = GoogleProvider::new("test-key", None).unwrap();
-    let ctx = LlmTraceContext::new(
-      "0af7651916cd43dd8448eb211c80319c",
-      "b7ad6b7169203331",
-    )
-    .unwrap();
+    let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
     let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
     assert_eq!(
@@ -661,5 +764,87 @@ mod tests {
       function_call: None,
     }];
     assert!(parse_google_function_calls(&parts).is_empty());
+  }
+
+  #[test]
+  fn openai_content_to_gemini_parts_handles_string() {
+    let parts = openai_content_to_gemini_parts(&json!("hello"));
+    assert_eq!(parts, vec![json!({"text": "hello"})]);
+  }
+
+  #[test]
+  fn openai_content_to_gemini_parts_handles_text_and_image_data_url() {
+    let content = json!([
+      {"type": "text", "text": "describe"},
+      {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}
+      }
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], json!({"text": "describe"}));
+    assert_eq!(
+      parts[1],
+      json!({
+        "inline_data": {
+          "mime_type": "image/png",
+          "data": "iVBORw0KGgo="
+        }
+      })
+    );
+  }
+
+  #[test]
+  fn openai_content_to_gemini_parts_handles_remote_image_url() {
+    let content = json!([
+      {"type": "image_url", "image_url": "https://example.com/cat.jpg"}
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(
+      parts[0]["file_data"]["file_uri"],
+      "https://example.com/cat.jpg"
+    );
+  }
+
+  #[test]
+  fn openai_content_to_gemini_parts_drops_unknown_part_kinds() {
+    let content = json!([
+      {"type": "text", "text": "ok"},
+      {"type": "voice_note", "audio": "..."}
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0], json!({"text": "ok"}));
+  }
+
+  #[test]
+  fn build_request_body_routes_multimodal_user_content_to_inline_data() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-1.5-pro".to_string(),
+      messages: vec![json!({
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "describe"},
+          {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,AAAA"}
+          }
+        ]
+      })],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+    };
+
+    let body = provider.build_request_body(&request);
+    let parts = body["contents"][0]["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["text"], "describe");
+    assert_eq!(parts[1]["inline_data"]["mime_type"], "image/png");
+    assert_eq!(parts[1]["inline_data"]["data"], "AAAA");
   }
 }

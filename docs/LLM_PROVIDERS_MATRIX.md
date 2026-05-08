@@ -163,14 +163,21 @@ When added, live tests should:
 
 ## Follow-ups (non-blocking)
 
-- **Streaming consistency tests**: each provider's streaming path
-  (`execute_streaming`) currently has only per-provider unit tests.
-  Cross-provider streaming consistency (chunk shape, end-of-stream signal,
-  usage delivery) is not yet covered by the consistency suite.
-- **Multimodal consistency tests**: image + text inputs and provider
-  responses with embedded image URLs.
 - **Live LLM nightly CI job**: gated by `AGENTFLOW_LIVE_LLM_TESTS=1`,
   running once per day with minimum-cost models per provider.
 - **Quota / cost dashboards**: currently each provider exposes raw
   `TokenUsage` on responses; a higher-level cost roll-up keyed by model is
   not implemented.
+
+## Closed follow-ups
+
+- **Streaming consistency tests** — landed 2026-05-08. Cross-provider
+  streaming wire formats covered in `provider_consistency.rs` via a
+  chunked-encoding mock server.
+- **Multimodal consistency tests** — landed 2026-05-08. Each provider
+  receives a text + image user message in its native format
+  (OpenAI/Moonshot/StepFun: `image_url`; Anthropic: `image` content block;
+  Google: OpenAI-style → translated to `inline_data` by the adapter).
+  Tests assert the captured request body preserves the base64 payload and
+  that the response parses to the same `(text, Stop, populated usage)`
+  contract as the text-only path.

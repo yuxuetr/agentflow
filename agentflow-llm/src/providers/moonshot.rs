@@ -404,11 +404,7 @@ mod tests {
     use crate::trace_context::{LlmTraceContext, scope};
 
     let provider = MoonshotProvider::new("test-key", None).unwrap();
-    let ctx = LlmTraceContext::new(
-      "0af7651916cd43dd8448eb211c80319c",
-      "b7ad6b7169203331",
-    )
-    .unwrap();
+    let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
     let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
     assert_eq!(

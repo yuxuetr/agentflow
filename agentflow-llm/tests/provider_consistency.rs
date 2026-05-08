@@ -745,3 +745,213 @@ async fn stepfun_streaming_path() {
     .expect("stream");
   assert_stream_yields_hello_world(stream).await;
 }
+
+// -----------------------------------------------------------------------------
+// Multimodal consistency
+//
+// Each test sends a `text + image` user message in the provider's native wire
+// format and asserts two cross-provider invariants:
+//
+//   1. Request-side encoding preserves the image payload (we look for the
+//      marker base64 payload `"AAAA"` in the captured request body — every
+//      provider shapes the bytes differently, but the bytes themselves must
+//      survive the round-trip).
+//   2. Response-side parsing is identical regardless of whether the request
+//      was text-only or multimodal: text content + `StopReason::Stop` +
+//      populated `TokenUsage` (same contract as the success-path tests).
+//
+// Native multimodal formats:
+//
+//   * OpenAI / Moonshot / StepFun: OpenAI v1/chat content array with
+//     `{type: "image_url", image_url: {url: "data:image/png;base64,AAAA"}}`.
+//   * Anthropic: content blocks with `{type: "image", source: {type: "base64",
+//     media_type: "image/png", data: "AAAA"}}`.
+//   * Google: OpenAI-style content array — the provider adapter translates it
+//     into Gemini's `parts[].inline_data` shape (see
+//     `openai_content_to_gemini_parts`).
+//
+// Marker payload `"AAAA"` is a 3-byte zero-padded base64 stub. It's invalid
+// PNG data — that's intentional. The mock server doesn't decode the image,
+// and using a known 4-char marker gives us a high-signal substring assertion
+// without bloating fixtures with realistic image bytes.
+// -----------------------------------------------------------------------------
+
+const IMAGE_DATA_URL: &str = "data:image/png;base64,AAAA";
+const IMAGE_MARKER: &str = "AAAA";
+
+fn provider_request_multimodal_openai_style(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What's in this image?"},
+        {"type": "image_url", "image_url": {"url": IMAGE_DATA_URL}}
+      ]
+    })],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+  }
+}
+
+fn provider_request_multimodal_anthropic_style(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What's in this image?"},
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": IMAGE_MARKER,
+          }
+        }
+      ]
+    })],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+  }
+}
+
+async fn run_multimodal<F, Fut>(fixture: &str, build_provider: F) -> String
+where
+  F: FnOnce(String) -> Fut,
+  Fut: std::future::Future<Output = ()>,
+{
+  let (base_url, captured) = spawn_mock_server(200, fixture.to_string()).await;
+  build_provider(base_url).await;
+  let captured = captured.lock().await;
+  captured.clone().expect("mock server received request")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_multimodal_path() {
+  let captured = run_multimodal(OPENAI_SUCCESS, |base_url| async move {
+    let provider =
+      OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    let response = provider
+      .execute(&provider_request_multimodal_openai_style("gpt-4o-mini"))
+      .await
+      .expect("ok");
+    assert_text(&response.content, "ok");
+    assert_usage(&response.usage);
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  })
+  .await;
+  assert!(
+    captured.contains(IMAGE_MARKER),
+    "OpenAI request body must preserve image payload, got: {captured}"
+  );
+  assert!(
+    captured.contains("image_url"),
+    "OpenAI request body must use the `image_url` part type, got: {captured}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_multimodal_path() {
+  let captured = run_multimodal(ANTHROPIC_SUCCESS, |base_url| async move {
+    let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let response = provider
+      .execute(&provider_request_multimodal_anthropic_style(
+        "claude-3-5-sonnet",
+      ))
+      .await
+      .expect("ok");
+    assert_text(&response.content, "ok");
+    assert_usage(&response.usage);
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  })
+  .await;
+  assert!(
+    captured.contains(IMAGE_MARKER),
+    "Anthropic request body must preserve base64 image payload, got: {captured}"
+  );
+  assert!(
+    captured.contains("\"type\":\"image\"") || captured.contains("\"type\": \"image\""),
+    "Anthropic request body must use the `image` content block type, got: {captured}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_multimodal_path() {
+  let captured = run_multimodal(GOOGLE_SUCCESS, |base_url| async move {
+    let provider =
+      GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    let response = provider
+      .execute(&provider_request_multimodal_openai_style("gemini-1.5-pro"))
+      .await
+      .expect("ok");
+    assert_text(&response.content, "ok");
+    assert_usage(&response.usage);
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  })
+  .await;
+  // Google adapter rewrites OpenAI-style multimodal content into Gemini's
+  // `inline_data` part. Both the marker bytes and the Gemini-specific key
+  // must be present.
+  assert!(
+    captured.contains(IMAGE_MARKER),
+    "Google request body must preserve base64 image payload, got: {captured}"
+  );
+  assert!(
+    captured.contains("inline_data"),
+    "Google request body must rewrite to `inline_data`, got: {captured}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_multimodal_path() {
+  let captured = run_multimodal(MOONSHOT_SUCCESS, |base_url| async move {
+    let provider = MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let response = provider
+      .execute(&provider_request_multimodal_openai_style("moonshot-v1-8k"))
+      .await
+      .expect("ok");
+    assert_text(&response.content, "ok");
+    assert_usage(&response.usage);
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  })
+  .await;
+  assert!(
+    captured.contains(IMAGE_MARKER),
+    "Moonshot request body must preserve image payload, got: {captured}"
+  );
+  assert!(
+    captured.contains("image_url"),
+    "Moonshot request body must use the `image_url` part type, got: {captured}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_multimodal_path() {
+  let captured = run_multimodal(STEPFUN_SUCCESS, |base_url| async move {
+    let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let response = provider
+      .execute(&provider_request_multimodal_openai_style("step-1-8k"))
+      .await
+      .expect("ok");
+    assert_text(&response.content, "ok");
+    assert_usage(&response.usage);
+    assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  })
+  .await;
+  assert!(
+    captured.contains(IMAGE_MARKER),
+    "StepFun request body must preserve image payload, got: {captured}"
+  );
+  assert!(
+    captured.contains("image_url"),
+    "StepFun request body must use the `image_url` part type, got: {captured}"
+  );
+}
