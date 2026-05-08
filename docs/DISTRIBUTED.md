@@ -78,6 +78,20 @@ It is not durable and must not be used as a multi-process scheduler. Its purpose
 is to lock down the protocol semantics before adding tonic service definitions
 and worker binaries.
 
+`WorkerControlPlane<P: WorkerProtocol>` is the server-side scheduling façade
+that sits above the protocol. It currently provides:
+
+- `schedule_task`: submit a task and mark the run queued.
+- `claim_task`: let a worker claim FIFO work and record the assignment.
+- `report_result`: validate ownership through the protocol, then aggregate
+  successful outputs, failed task counts, retryable failure counts, and worker
+  trace fragments on the run snapshot.
+- `heartbeat`: record worker liveness and free-slot capacity.
+
+This snapshot is still in-memory. The next persistence step is to project these
+state transitions into `runs`, `steps`, and `events` rows so `/v1/runs` and SSE
+streams can observe real distributed execution.
+
 ## Planned Control-Plane Flow
 
 1. `POST /v1/runs` persists a queued run as it does today.

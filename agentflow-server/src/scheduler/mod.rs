@@ -149,6 +149,208 @@ pub trait WorkerProtocol: Send + Sync {
   async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError>;
 }
 
+/// Lightweight control-plane façade over a [`WorkerProtocol`].
+///
+/// This is the first server-side scheduling layer: it dispatches tasks into
+/// the protocol, records which worker claimed each task, aggregates terminal
+/// results per run, and keeps worker trace fragments available for later DB /
+/// OTel persistence wiring.
+#[derive(Debug, Clone)]
+pub struct WorkerControlPlane<P> {
+  protocol: P,
+  state: Arc<Mutex<ControlPlaneState>>,
+}
+
+#[derive(Debug, Default)]
+struct ControlPlaneState {
+  runs: HashMap<Uuid, RunControlSnapshot>,
+  assignments: HashMap<Uuid, WorkerAssignment>,
+  heartbeats: HashMap<WorkerId, WorkerHeartbeat>,
+}
+
+impl<P> WorkerControlPlane<P>
+where
+  P: WorkerProtocol,
+{
+  pub fn new(protocol: P) -> Self {
+    Self {
+      protocol,
+      state: Arc::new(Mutex::new(ControlPlaneState::default())),
+    }
+  }
+
+  /// Queue a task and update the run-level control-plane counters.
+  pub async fn schedule_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
+    self.protocol.submit_task(task.clone()).await?;
+    let mut state = self.state.lock().await;
+    let run = state
+      .runs
+      .entry(task.run_id)
+      .or_insert_with(|| RunControlSnapshot::new(task.run_id));
+    run.queued_tasks += 1;
+    run.status = RunControlStatus::Queued;
+    Ok(())
+  }
+
+  /// Claim a task for a worker and mark it running in the control plane.
+  pub async fn claim_task(
+    &self,
+    worker_id: WorkerId,
+  ) -> Result<Option<WorkerTask>, SchedulerError> {
+    let Some(task) = self.protocol.claim_task(worker_id.clone()).await? else {
+      return Ok(None);
+    };
+    let mut state = self.state.lock().await;
+    state.assignments.insert(
+      task.task_id,
+      WorkerAssignment {
+        worker_id,
+        run_id: task.run_id,
+        node_id: task.node_id.clone(),
+        attempt: task.attempt,
+      },
+    );
+    let run = state
+      .runs
+      .entry(task.run_id)
+      .or_insert_with(|| RunControlSnapshot::new(task.run_id));
+    run.queued_tasks = run.queued_tasks.saturating_sub(1);
+    run.running_tasks += 1;
+    run.status = RunControlStatus::Running;
+    Ok(Some(task))
+  }
+
+  /// Submit a worker result, aggregate run counters, and append worker trace
+  /// fragments to the run snapshot.
+  pub async fn report_result(
+    &self,
+    worker_id: WorkerId,
+    task_id: Uuid,
+    result: WorkerTaskResult,
+  ) -> Result<(), SchedulerError> {
+    let assignment = {
+      let state = self.state.lock().await;
+      state
+        .assignments
+        .get(&task_id)
+        .cloned()
+        .ok_or(SchedulerError::TaskNotClaimed { task_id })?
+    };
+
+    self
+      .protocol
+      .report_result(worker_id, task_id, result.clone())
+      .await?;
+
+    let mut state = self.state.lock().await;
+    state.assignments.remove(&task_id);
+    let run = state
+      .runs
+      .entry(assignment.run_id)
+      .or_insert_with(|| RunControlSnapshot::new(assignment.run_id));
+    run.running_tasks = run.running_tasks.saturating_sub(1);
+    run.trace_events.extend(result.events().iter().cloned());
+    match result {
+      WorkerTaskResult::Succeeded { output, .. } => {
+        run.succeeded_tasks += 1;
+        run.outputs.insert(assignment.node_id, output);
+      }
+      WorkerTaskResult::Failed {
+        error, retryable, ..
+      } => {
+        run.failed_tasks += 1;
+        run.last_error = Some(error);
+        run.retryable_failures += usize::from(retryable);
+      }
+    }
+    run.status = run.derive_status();
+    Ok(())
+  }
+
+  /// Record a worker heartbeat in both the protocol and control-plane state.
+  pub async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
+    self.protocol.heartbeat(heartbeat.clone()).await?;
+    self
+      .state
+      .lock()
+      .await
+      .heartbeats
+      .insert(heartbeat.worker_id.clone(), heartbeat);
+    Ok(())
+  }
+
+  pub async fn run_snapshot(&self, run_id: Uuid) -> Option<RunControlSnapshot> {
+    self.state.lock().await.runs.get(&run_id).cloned()
+  }
+
+  pub async fn worker_heartbeat(&self, worker_id: &WorkerId) -> Option<WorkerHeartbeat> {
+    self.state.lock().await.heartbeats.get(worker_id).cloned()
+  }
+}
+
+/// Worker assignment tracked by the control plane after a claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerAssignment {
+  pub worker_id: WorkerId,
+  pub run_id: Uuid,
+  pub node_id: String,
+  pub attempt: u32,
+}
+
+/// Run status derived from distributed task counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunControlStatus {
+  Queued,
+  Running,
+  Succeeded,
+  Failed,
+}
+
+/// In-memory snapshot of one distributed run from the control-plane view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunControlSnapshot {
+  pub run_id: Uuid,
+  pub status: RunControlStatus,
+  pub queued_tasks: usize,
+  pub running_tasks: usize,
+  pub succeeded_tasks: usize,
+  pub failed_tasks: usize,
+  pub retryable_failures: usize,
+  pub last_error: Option<String>,
+  pub outputs: HashMap<String, serde_json::Value>,
+  pub trace_events: Vec<WorkerTraceEvent>,
+}
+
+impl RunControlSnapshot {
+  fn new(run_id: Uuid) -> Self {
+    Self {
+      run_id,
+      status: RunControlStatus::Queued,
+      queued_tasks: 0,
+      running_tasks: 0,
+      succeeded_tasks: 0,
+      failed_tasks: 0,
+      retryable_failures: 0,
+      last_error: None,
+      outputs: HashMap::new(),
+      trace_events: Vec::new(),
+    }
+  }
+
+  fn derive_status(&self) -> RunControlStatus {
+    if self.failed_tasks > 0 {
+      RunControlStatus::Failed
+    } else if self.running_tasks > 0 {
+      RunControlStatus::Running
+    } else if self.queued_tasks > 0 {
+      RunControlStatus::Queued
+    } else {
+      RunControlStatus::Succeeded
+    }
+  }
+}
+
 /// In-memory implementation used for unit tests and local control-plane
 /// prototyping. It is intentionally single-process and not durable.
 #[derive(Debug, Clone, Default)]
@@ -394,5 +596,164 @@ mod tests {
       .expect("heartbeat");
 
     assert_eq!(protocol.last_heartbeat(&worker).await, Some(heartbeat));
+  }
+
+  #[tokio::test]
+  async fn control_plane_schedules_claims_and_tracks_running_state() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let worker = WorkerId::new("worker-a").expect("valid worker");
+    let task = WorkerTask::new(run_id, "node_a", serde_json::json!({"input": 1}));
+
+    control.schedule_task(task.clone()).await.expect("schedule");
+    let queued = control.run_snapshot(run_id).await.expect("run snapshot");
+    assert_eq!(queued.status, RunControlStatus::Queued);
+    assert_eq!(queued.queued_tasks, 1);
+
+    let claimed = control
+      .claim_task(worker)
+      .await
+      .expect("claim")
+      .expect("task");
+    assert_eq!(claimed.task_id, task.task_id);
+
+    let running = control.run_snapshot(run_id).await.expect("run snapshot");
+    assert_eq!(running.status, RunControlStatus::Running);
+    assert_eq!(running.queued_tasks, 0);
+    assert_eq!(running.running_tasks, 1);
+  }
+
+  #[tokio::test]
+  async fn control_plane_aggregates_success_outputs_and_trace() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let worker = WorkerId::new("worker-a").expect("valid worker");
+    let task = WorkerTask::new(run_id, "node_a", serde_json::json!({"input": 1}));
+    let task_id = task.task_id;
+
+    control.schedule_task(task).await.expect("schedule");
+    control
+      .claim_task(worker.clone())
+      .await
+      .expect("claim")
+      .expect("task");
+    control
+      .report_result(
+        worker,
+        task_id,
+        WorkerTaskResult::Succeeded {
+          output: serde_json::json!({"answer": 42}),
+          events: vec![WorkerTraceEvent {
+            seq: 7,
+            kind: "node_completed".into(),
+            payload: serde_json::json!({"worker": "worker-a"}),
+          }],
+        },
+      )
+      .await
+      .expect("report");
+
+    let snapshot = control.run_snapshot(run_id).await.expect("run snapshot");
+    assert_eq!(snapshot.status, RunControlStatus::Succeeded);
+    assert_eq!(snapshot.running_tasks, 0);
+    assert_eq!(snapshot.succeeded_tasks, 1);
+    assert_eq!(
+      snapshot.outputs.get("node_a"),
+      Some(&serde_json::json!({"answer": 42}))
+    );
+    assert_eq!(snapshot.trace_events.len(), 1);
+    assert_eq!(snapshot.trace_events[0].kind, "node_completed");
+  }
+
+  #[tokio::test]
+  async fn control_plane_aggregates_failure_state() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let worker = WorkerId::new("worker-a").expect("valid worker");
+    let task = WorkerTask::new(run_id, "node_a", serde_json::json!({}));
+    let task_id = task.task_id;
+
+    control.schedule_task(task).await.expect("schedule");
+    control
+      .claim_task(worker.clone())
+      .await
+      .expect("claim")
+      .expect("task");
+    control
+      .report_result(
+        worker,
+        task_id,
+        WorkerTaskResult::Failed {
+          error: "node failed".into(),
+          retryable: true,
+          events: vec![WorkerTraceEvent {
+            seq: 2,
+            kind: "node_failed".into(),
+            payload: serde_json::json!({"retryable": true}),
+          }],
+        },
+      )
+      .await
+      .expect("report");
+
+    let snapshot = control.run_snapshot(run_id).await.expect("run snapshot");
+    assert_eq!(snapshot.status, RunControlStatus::Failed);
+    assert_eq!(snapshot.failed_tasks, 1);
+    assert_eq!(snapshot.retryable_failures, 1);
+    assert_eq!(snapshot.last_error.as_deref(), Some("node failed"));
+    assert_eq!(snapshot.trace_events[0].kind, "node_failed");
+  }
+
+  #[tokio::test]
+  async fn control_plane_rejects_wrong_worker_without_mutating_state() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let worker_a = WorkerId::new("worker-a").expect("valid worker");
+    let worker_b = WorkerId::new("worker-b").expect("valid worker");
+    let task = WorkerTask::new(run_id, "node_a", serde_json::json!({}));
+    let task_id = task.task_id;
+
+    control.schedule_task(task).await.expect("schedule");
+    control
+      .claim_task(worker_a)
+      .await
+      .expect("claim")
+      .expect("task");
+
+    let err = control
+      .report_result(
+        worker_b,
+        task_id,
+        WorkerTaskResult::Succeeded {
+          output: serde_json::json!({}),
+          events: Vec::new(),
+        },
+      )
+      .await
+      .expect_err("wrong worker must fail");
+
+    assert!(matches!(err, SchedulerError::WorkerMismatch { .. }));
+    let snapshot = control.run_snapshot(run_id).await.expect("run snapshot");
+    assert_eq!(snapshot.status, RunControlStatus::Running);
+    assert_eq!(snapshot.running_tasks, 1);
+  }
+
+  #[tokio::test]
+  async fn control_plane_records_heartbeats() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let worker = WorkerId::new("worker-a").expect("valid worker");
+    let heartbeat = WorkerHeartbeat::now(worker.clone(), None, 3);
+
+    control
+      .heartbeat(heartbeat.clone())
+      .await
+      .expect("heartbeat");
+
+    assert_eq!(control.worker_heartbeat(&worker).await, Some(heartbeat));
   }
 }

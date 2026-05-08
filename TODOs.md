@@ -519,7 +519,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 13. 分布式调度
 
-状态: 进行中 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + `docs/DISTRIBUTED.md` 初版)
+状态: 进行中 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + server control-plane façade + `docs/DISTRIBUTED.md` 初版)
 
 目标:
 
@@ -529,7 +529,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 - [x] 抽象 `WorkerProtocol` trait: 提交任务、领取任务、上报结果、心跳。`agentflow-server/src/scheduler/mod.rs` 新增 `WorkerTask` / `WorkerTaskResult` / `WorkerHeartbeat` / `WorkerTraceEvent` / `SchedulerError`，并提供 `InMemoryWorkerProtocol` 锁定 FIFO claim、claiming-worker result 校验和 heartbeat 语义。
 - [x] 选定一种传输: gRPC (tonic) / NATS / Redis Streams 之一，其他保留扩展点。当前选择 gRPC + tonic 作为 v1.0-rc 主路径，NATS / Redis Streams 作为后续 adapter 扩展点；`WorkerTransport` 记录选择，`docs/DISTRIBUTED.md` 写明 rationale。
-- [ ] `agentflow-server` 进化为 control plane: 调度任务到 worker、聚合结果、维护 run state。
+- [x] `agentflow-server` 进化为 control plane: 调度任务到 worker、聚合结果、维护 run state。`WorkerControlPlane<P: WorkerProtocol>` 已落地：`schedule_task` 提交任务并维护 run queued 状态，`claim_task` 记录 worker assignment 并切 running，`report_result` 聚合成功输出 / 失败错误 / retryable 计数 / worker trace fragments，`heartbeat` 记录 worker liveness。5 条单测覆盖 schedule→claim、success aggregation、failure aggregation、wrong-worker 不污染状态、heartbeat。
 - [ ] worker 二进制: `agentflow-worker`，启动时连接 control plane。
 - [ ] 跨 worker trace 拼接: worker 把本地 trace 通过协议回传，control plane 拼成完整 OTel trace。
 - [x] 文档: `docs/DISTRIBUTED.md`，给 2-worker 集群部署示例。当前为设计与目标部署形态；真实 `agentflow-worker` CLI 待后续子任务落地。
