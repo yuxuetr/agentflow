@@ -20,6 +20,7 @@ pub mod auth;
 pub mod error;
 pub mod events_stream;
 pub mod runs;
+pub mod scheduler;
 pub mod skills;
 
 pub use auth::{AuthConfig, require_bearer_token};
@@ -31,6 +32,10 @@ pub use events_stream::{
 pub use runs::{
   CreateRunRequest, CreateRunResponse, RunContext, RunExecutor, RunResponse, StubExecutor,
   default_executor, get_run, submit_run,
+};
+pub use scheduler::{
+  InMemoryWorkerProtocol, SELECTED_TRANSPORT, SchedulerError, WorkerHeartbeat, WorkerId,
+  WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
 };
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,
