@@ -62,18 +62,133 @@ pub struct NodeSpec {
   pub description: String,
 }
 
-/// OS capability declarations. The PoC only records these; actual sandbox
-/// enforcement is wired up in a follow-up task (see PLUGIN_DESIGN §8).
+/// OS capability declarations.
+///
+/// The translation rules consumed by sandbox backends live on this type
+/// itself ([`Capabilities::filesystem_entries`] / `requires_*`). A higher
+/// layer (the CLI plugin executor) bridges these into
+/// [`crate::plugin::CommandPreparer`] implementations that wrap the
+/// spawned plugin process in the platform sandbox.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Capabilities {
+  /// Filesystem grants. Each entry is either a bare path (defaults to
+  /// read access) or a `read:<path>` / `write:<path>` prefixed string.
   #[serde(default)]
   pub filesystem: Vec<String>,
+  /// Network grants. The current backend treats any non-empty list as
+  /// "allow outbound network"; future versions may parse domain rules.
   #[serde(default)]
   pub network: Vec<String>,
+  /// Process / exec grants. Non-empty grants the [`Exec`-equivalent] cap.
   #[serde(default)]
   pub processes: Vec<String>,
+  /// Allowed environment variable names. Non-empty grants the
+  /// [`Env`-equivalent] cap (the OS-sandbox layer cannot currently
+  /// scrub env vars at exec time on macOS / Linux, so this is recorded
+  /// for audit only).
   #[serde(default)]
   pub env_vars: Vec<String>,
+}
+
+/// Filesystem access mode declared by a `[plugin.capabilities].filesystem`
+/// entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsAccess {
+  Read,
+  Write,
+}
+
+/// One parsed filesystem grant from `[plugin.capabilities].filesystem`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemEntry {
+  pub access: FsAccess,
+  pub path: PathBuf,
+}
+
+impl FilesystemEntry {
+  /// Parse a single `filesystem = [...]` entry. Accepts:
+  ///
+  /// * `"./models"` — bare path, defaults to read access
+  /// * `"read:./models"` / `"write:/tmp/output"` — explicit access prefix
+  ///
+  /// Whitespace around the prefix is tolerated. An empty path or an
+  /// unknown prefix produces a [`ManifestError::InvalidCapability`].
+  pub fn parse(spec: &str) -> Result<Self, ManifestError> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+      return Err(ManifestError::InvalidCapability {
+        section: "filesystem",
+        value: spec.to_string(),
+        reason: "empty filesystem entry",
+      });
+    }
+    let (access, path_str) = match trimmed.split_once(':') {
+      Some((prefix, rest)) => match prefix.trim().to_ascii_lowercase().as_str() {
+        "read" => (FsAccess::Read, rest.trim()),
+        "write" => (FsAccess::Write, rest.trim()),
+        // No recognised prefix → treat the whole spec as a bare path
+        // (e.g. an absolute path on Windows like "C:\foo" or a path
+        // containing a literal colon). This mirrors the most common
+        // reading of unprefixed entries.
+        _ => (FsAccess::Read, trimmed),
+      },
+      None => (FsAccess::Read, trimmed),
+    };
+    if path_str.is_empty() {
+      return Err(ManifestError::InvalidCapability {
+        section: "filesystem",
+        value: spec.to_string(),
+        reason: "missing path after access prefix",
+      });
+    }
+    Ok(FilesystemEntry {
+      access,
+      path: PathBuf::from(path_str),
+    })
+  }
+}
+
+impl Capabilities {
+  /// Parse every `filesystem` entry into structured [`FilesystemEntry`].
+  /// Returns the first parse error if any entry is malformed.
+  pub fn filesystem_entries(&self) -> Result<Vec<FilesystemEntry>, ManifestError> {
+    self
+      .filesystem
+      .iter()
+      .map(|spec| FilesystemEntry::parse(spec))
+      .collect()
+  }
+
+  /// `true` when at least one filesystem entry requests read access.
+  pub fn requires_fs_read(&self) -> bool {
+    self
+      .filesystem_entries()
+      .map(|entries| entries.iter().any(|e| matches!(e.access, FsAccess::Read)))
+      .unwrap_or(false)
+  }
+
+  /// `true` when at least one filesystem entry requests write access.
+  pub fn requires_fs_write(&self) -> bool {
+    self
+      .filesystem_entries()
+      .map(|entries| entries.iter().any(|e| matches!(e.access, FsAccess::Write)))
+      .unwrap_or(false)
+  }
+
+  /// `true` when the manifest grants outbound network.
+  pub fn requires_net(&self) -> bool {
+    !self.network.is_empty()
+  }
+
+  /// `true` when the manifest grants child-process spawning.
+  pub fn requires_exec(&self) -> bool {
+    !self.processes.is_empty()
+  }
+
+  /// `true` when the manifest grants environment-variable access.
+  pub fn requires_env(&self) -> bool {
+    !self.env_vars.is_empty()
+  }
 }
 
 #[derive(Debug, Error)]
@@ -89,6 +204,12 @@ pub enum ManifestError {
   },
   #[error("plugin runtime '{runtime:?}' is not supported by this host")]
   UnsupportedRuntime { runtime: PluginRuntime },
+  #[error("invalid capability in [plugin.capabilities].{section}: '{value}' — {reason}")]
+  InvalidCapability {
+    section: &'static str,
+    value: String,
+    reason: &'static str,
+  },
 }
 
 impl PluginManifest {
@@ -213,5 +334,85 @@ description = "A demo node."
       manifest.resolve_entrypoint(Path::new("/tmp/foo")),
       PathBuf::from("/tmp/foo/bin/x")
     );
+  }
+
+  #[test]
+  fn filesystem_entry_parses_bare_path_as_read() {
+    let entry = FilesystemEntry::parse("./models").unwrap();
+    assert_eq!(entry.access, FsAccess::Read);
+    assert_eq!(entry.path, PathBuf::from("./models"));
+  }
+
+  #[test]
+  fn filesystem_entry_parses_explicit_access_prefix() {
+    let read = FilesystemEntry::parse("read:./inputs").unwrap();
+    assert_eq!(read.access, FsAccess::Read);
+    assert_eq!(read.path, PathBuf::from("./inputs"));
+
+    let write = FilesystemEntry::parse("write:/tmp/out").unwrap();
+    assert_eq!(write.access, FsAccess::Write);
+    assert_eq!(write.path, PathBuf::from("/tmp/out"));
+  }
+
+  #[test]
+  fn filesystem_entry_tolerates_whitespace() {
+    let entry = FilesystemEntry::parse("  write : /var/log  ").unwrap();
+    assert_eq!(entry.access, FsAccess::Write);
+    assert_eq!(entry.path, PathBuf::from("/var/log"));
+  }
+
+  #[test]
+  fn filesystem_entry_falls_back_to_bare_path_for_unknown_prefix() {
+    // Windows-style absolute paths contain a literal colon; treat as bare.
+    let entry = FilesystemEntry::parse("C:\\models").unwrap();
+    assert_eq!(entry.access, FsAccess::Read);
+    assert_eq!(entry.path, PathBuf::from("C:\\models"));
+  }
+
+  #[test]
+  fn filesystem_entry_rejects_empty_or_pathless() {
+    assert!(matches!(
+      FilesystemEntry::parse(""),
+      Err(ManifestError::InvalidCapability { .. })
+    ));
+    assert!(matches!(
+      FilesystemEntry::parse("read:"),
+      Err(ManifestError::InvalidCapability { .. })
+    ));
+    assert!(matches!(
+      FilesystemEntry::parse("write:   "),
+      Err(ManifestError::InvalidCapability { .. })
+    ));
+  }
+
+  #[test]
+  fn capabilities_classify_required_caps() {
+    let caps = Capabilities {
+      filesystem: vec!["read:./models".into(), "write:/tmp/output".into()],
+      network: vec!["api.example.com".into()],
+      processes: vec![],
+      env_vars: vec!["TESSDATA_PREFIX".into()],
+    };
+    assert!(caps.requires_fs_read());
+    assert!(caps.requires_fs_write());
+    assert!(caps.requires_net());
+    assert!(!caps.requires_exec());
+    assert!(caps.requires_env());
+
+    let entries = caps.filesystem_entries().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].access, FsAccess::Read);
+    assert_eq!(entries[1].access, FsAccess::Write);
+  }
+
+  #[test]
+  fn empty_capabilities_grant_nothing() {
+    let caps = Capabilities::default();
+    assert!(!caps.requires_fs_read());
+    assert!(!caps.requires_fs_write());
+    assert!(!caps.requires_net());
+    assert!(!caps.requires_exec());
+    assert!(!caps.requires_env());
+    assert!(caps.filesystem_entries().unwrap().is_empty());
   }
 }

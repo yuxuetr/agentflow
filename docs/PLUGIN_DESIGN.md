@@ -337,17 +337,84 @@ respawn for `Idempotent` workflows but is opt-in.
 
 ### 6.5 Permission model
 
-Reuses `agentflow-tools::sandbox::SandboxPolicy`. The plugin host translates
-`[plugin.capabilities]` into the existing `SandboxPolicy` and applies it to
-the spawned process via `SandboxedCommand::spawn` (already used by
-`ShellTool`). On macOS this becomes a `sandbox-exec` profile; on Linux a
-seccomp + namespace filter; on Windows a Job Object (TODO).
+Bridges to `agentflow-tools::sandbox` via the
+`agentflow_core::plugin::CommandPreparer` trait — `agentflow-core` itself
+takes no dependency on the platform sandbox crates, so an embedded host
+can opt into enforcement (or not) without dragging in libseccomp / a
+sandbox-exec profile generator. The CLI ships
+`OsSandboxPluginPreparer` (in `agentflow-cli/src/executor/plugin.rs`),
+which is an adapter that reads a plugin's `[plugin.capabilities]` block,
+calls `agentflow_tools::sandbox::default_backend()`, and runs the
+backend's `wrap_command` against the spawned subprocess.
+
+#### Translation rules
+
+`[plugin.capabilities]` → `(Vec<Capability>, SandboxScope)`:
+
+| Manifest entry              | Capability granted | Scope effect                                                                          |
+| --------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| `filesystem = ["read:X"]`   | `Capability::FsRead`  | `X` added to `scope.read_paths` (relative resolved against the manifest dir).      |
+| `filesystem = ["write:X"]`  | `Capability::FsWrite` | `X` added to **both** `read_paths` and `write_paths` (writable implies readable). |
+| `filesystem = ["X"]` (bare) | `Capability::FsRead`  | Same as `read:X`.                                                                  |
+| `network` non-empty         | `Capability::Net`     | No path effect.                                                                    |
+| `processes` non-empty       | `Capability::Exec`    | No path effect.                                                                    |
+| `env_vars` non-empty        | `Capability::Env`     | No OS-level effect (recorded for audit only — neither macOS sandbox-exec nor Linux seccomp can scrub the env passed to `execve`). |
+
+Two permissive defaults match
+`agentflow_tools::builtin::shell::build_scope_from_policy`:
+
+* The manifest directory is **always** added to `scope.read_paths` so the
+  plugin executable can be resolved and exec'd.
+* If `filesystem` is empty, `/tmp` is also added to `scope.read_paths` so
+  trivial plugins still have a working temp space.
+
+`scope.working_directory` is set to the manifest directory.
+
+Filesystem entries that fail to parse (e.g. `read:`) surface as
+`PluginError::PreparerRejected`; the plugin never spawns.
+
+#### Opt-in
+
+The CLI keeps the v0.3 PoC behaviour (no OS sandbox) by default. Set
+`AGENTFLOW_PLUGIN_SANDBOX=1` (any non-empty, non-`0` value) before
+`agentflow workflow run` to wrap plugin spawns in the platform backend:
+
+```bash
+AGENTFLOW_PLUGIN_SANDBOX=1 agentflow workflow run plugin_workflow.yml
+```
+
+On macOS this materialises a `sandbox-exec` profile derived from the
+capability set; on Linux it installs a seccomp BPF filter through
+`Command::pre_exec`. On other platforms the noop backend is used and the
+host logs that enforcement is unavailable.
+
+#### Embedding directly
+
+A library caller (not via CLI) attaches an arbitrary `CommandPreparer`
+through the new builder:
+
+```rust
+use std::sync::Arc;
+use agentflow_core::plugin::PluginHost;
+
+let host = PluginHost::builder()
+  .with_command_preparer(Arc::new(my_preparer))
+  .load("./plugin.toml")
+  .await?;
+```
+
+This is the seam the CLI uses; it is also the seam custom hosts and
+tests use to record / reject preparer invocations without touching the
+real OS sandbox (see `agentflow-core/tests/plugin_poc.rs`).
+
+#### Workflow-level allowlist
 
 The host enforces an additional **plugin allowlist** at the workflow level:
 `workflow.yml` must explicitly list `plugins: [name@version]` before its node
 types resolve, mirroring the Skill / MCP server allowlist. This prevents a
 workflow author from being surprised by a plugin transitively pulled in by a
-Skill.
+Skill. (Allowlist enforcement is tracked separately and is not part of the
+CommandPreparer wiring.)
 
 ### 6.6 Observability
 

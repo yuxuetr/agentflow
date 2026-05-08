@@ -26,10 +26,10 @@ pub mod node;
 pub mod protocol;
 pub mod registry;
 
-pub use host::{PluginError, PluginHost};
+pub use host::{CommandPreparer, NoopCommandPreparer, PluginError, PluginHost, PluginHostBuilder};
 pub use manifest::{
-  Capabilities, ManifestError, NodeSpec, PluginManifest, PluginRuntime, PluginSection,
-  SUPPORTED_PROTOCOL_VERSION,
+  Capabilities, FilesystemEntry, FsAccess, ManifestError, NodeSpec, PluginManifest, PluginRuntime,
+  PluginSection, SUPPORTED_PROTOCOL_VERSION,
 };
 pub use node::PluginNode;
 pub use protocol::{ExecuteParams, ExecuteResult, InitializeParams, InitializeResult};

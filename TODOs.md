@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-08（P2 #12 PoC 落地 + workflow YAML 接入 + `agentflow plugin` CLI 子命令）
+最后更新: 2026-05-08（P2 #12 PoC + workflow YAML 接入 + `agentflow plugin` CLI 子命令 + `[plugin.capabilities]` → `agentflow-tools::sandbox` 接线）
 
 维护约定:
 
@@ -467,7 +467,7 @@ PR-B (已完成):
 - [x] 选定方案后实现最小 PoC: `agentflow-core/src/plugin/`（manifest + protocol + host + node + registry），后端为 newline-delimited JSON-RPC 2.0 over stdio。`agentflow-core` 的 `[[bin]] agentflow-echo-plugin` 提供独立 entrypoint 作为参考插件，`examples/plugin_host_demo.rs` 可端到端运行；`tests/plugin_poc.rs` 4 个测试覆盖 load/handshake/execute/shutdown/未知节点类型/protocol 校验。
 - [x] Plugin manifest 格式: `plugin.toml` (`[plugin] name/version/runtime/entrypoint/protocol` + `[[plugin.nodes]]` + `[plugin.capabilities]`)。runtime = `subprocess` 已实现，`wasm` 留 v1.1+。`[plugin.signature]` 字段位置在设计文档中保留。
 - [x] 生命周期: `PluginHost::load → spawn child + handshake → register → execute (× N) → shutdown`。崩溃隔离来自 OS 进程边界；`shutdown` 幂等，`execute_node` after shutdown 返回结构化错误而不是 panic / hang；`Drop` 兜底 kill child。
-- [ ] 权限模型: PoC 阶段 manifest 解析 `[plugin.capabilities]` 但尚未挂到 `agentflow-tools::sandbox::SandboxPolicy`（设计文档 §6.5 已规划，留待后续 commit）。
+- [x] 权限模型: `[plugin.capabilities]` → `agentflow-tools::sandbox` 接线已落地。`agentflow-core::plugin` 引入 `CommandPreparer` trait + `NoopCommandPreparer` + `PluginHostBuilder::with_command_preparer(...)`，让外部层在不引入平台 sandbox crate 的前提下 hook spawn-time 命令。`Capabilities` 新增 `filesystem_entries` / `requires_fs_read|fs_write|net|exec|env`，`FilesystemEntry::parse` 接受 `read:<p>` / `write:<p>` / 裸路径。`agentflow-cli/src/executor/plugin.rs` 新 `OsSandboxPluginPreparer` 适配器把 manifest 转译为 `Vec<Capability>` + `SandboxScope`（manifest 目录始终 read-allowed；空 filesystem 块回退到 `/tmp`；relative 路径相对 manifest dir 解析；`write` 同时算 read），随后调 `SandboxBackend::wrap_command`。CLI 通过 `AGENTFLOW_PLUGIN_SANDBOX=1` 环境变量 opt-in；缺省保持 v0.3 PoC 行为不变。`agentflow-core/tests/plugin_poc.rs` +2 集成测试 (`builder_invokes_command_preparer_before_spawn` 用 `CountingPreparer` 断言 hook 调用次数；`builder_surfaces_preparer_rejection` 验证拒绝路径返回 `PluginError::PreparerRejected` 且不 spawn 子进程)。`agentflow-core` lib +7 单测覆盖 `FilesystemEntry::parse` 边界条件与 `Capabilities::requires_*`。`agentflow-cli` `executor::plugin` 模块 +6 单测覆盖 capability 集合 / scope 解析 / 错误传播 / env-var 默认。`docs/PLUGIN_DESIGN.md` §6.5 重写为完整翻译表 + opt-in 文档；`docs/TOOL_PERMISSIONS.md` 末尾追加 "Plugin runtime: same backend, different bridge" 章节交叉链接。`cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets -- -D warnings` 干净，default-features 构建未受影响。
 - [x] CLI: `agentflow plugin install/list/inspect/uninstall` (`agentflow-cli/src/commands/plugin/{mod,install,list,inspect,uninstall}.rs` + `Commands::Plugin` 路由)。所有命令 gated by `feature = "plugin"`，默认 plugins 目录为 `~/.agentflow/plugins/`，每个动词支持 `--dir` override。`install` 在拷贝前 validate manifest、防止递归拷贝、`--force` 覆盖、Unix 下保留可执行位、entrypoint 缺失只 warn 不 fail；`list` 扫描子目录列出 name/version/runtime/entrypoint 状态/declared nodes/capability 概要；`inspect` 接受 plugin 目录或 `plugin.toml` 路径，打印完整 manifest + 解析后的 entrypoint exists/executable 状态，**不** spawn 子进程；`uninstall` 删除 `<dir>/<name>/`，要求目标含 `plugin.toml` 才删（防误删），`--force` 让缺失场景幂等。`tests/plugin_cli_tests.rs` 6 条 e2e (round-trip / 无 manifest 拒绝 / `--force` 覆盖 / 未知插件失败 / 缺 manifest 拒删 / 空目录友好提示) 全绿；workspace `cargo clippy -p agentflow-cli --features plugin --all-targets -- -D warnings` 干净。docs/PLUGIN_DESIGN.md §10 给四个命令的 CLI Reference + 完整 build→install→list→inspect→uninstall 示例。
 - [x] CLI workflow 执行器接入: 新增 `agentflow-cli` `plugin` cargo feature；`executor/factory.rs::create_graph_node` 路由 `type: plugin`，`executor/plugin.rs::PluginWorkflowNode` 在每个 `workflow run` 进程内通过 `Mutex<HashMap<PathBuf, Arc<PluginHost>>>` 缓存按 manifest 路径复用 host；`config/schema.rs` 接受 `plugin` 节点 + 缺 `manifest`/`node_type` 时给出 schema 错误；CI `features` matrix 增加 `cli-plugin` (`cargo check --no-default-features --features plugin`) 和 `core-plugin` (`cargo check --features plugin --all-targets`) 两条新行。`tests/workflow_tests.rs::plugin_node_tests` 新增 2 条端到端 CLI 测试 (`cli_workflow_run_supports_plugin_node` / `cli_workflow_run_rejects_plugin_node_missing_manifest`)。`docs/PLUGIN_DESIGN.md` §9 给出 YAML schema、resolution 规则、生命周期、build/run 命令与失败模式。
 
@@ -475,6 +475,7 @@ PR-B (已完成):
 
 - [x] 内置参考 plugin (`agentflow-echo-plugin`) 能被 host 加载并执行；输入 `text:"hello plugin"` 返回 `text:"HELLO PLUGIN"`。
 - [x] plugin 崩溃 / shutdown 后再次 execute 不会让 host 进程 panic 或 hang，统一返回 `AgentFlowError::AsyncExecutionError` envelope。
+- [x] OS 沙箱接线已就绪（macOS sandbox-exec / Linux seccomp）—— `AGENTFLOW_PLUGIN_SANDBOX=1` opt-in，缺省保持 v0.3 PoC 行为不变。
 - [x] 一个独立仓库的 plugin（不在 workspace 内）端到端跑通——`type: plugin` workflow 节点 + `agentflow plugin install <source-dir>` CLI 已就绪。out-of-tree 流程：开发者在自己仓库 `cargo build` 生成 entrypoint → `agentflow plugin install ./my-plugin` 拷贝到 `~/.agentflow/plugins/` → workflow YAML `manifest:` 指向已安装路径即可。远程仓库拉取属于 P2 #16 marketplace 范畴。
 - [ ] 签名 / 版本校验有记录——manifest 字段已就绪，校验逻辑由 P2 #16 marketplace 任务承接。
 
@@ -505,7 +506,13 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - `agentflow-cli/src/main.rs` (`Commands::Plugin(PluginArgs)` + `PluginCommands` enum + dispatch)
 - `agentflow-cli/tests/plugin_cli_tests.rs` (6 条端到端测试)
 - `.github/workflows/quality.yml` (`cli-plugin` / `core-plugin` matrix)
-- 后续: `[plugin.capabilities]` → `agentflow-tools::sandbox::SandboxPolicy` 接线
+- `agentflow-core/src/plugin/manifest.rs` (`FsAccess` / `FilesystemEntry::parse` / `Capabilities::requires_*` + `ManifestError::InvalidCapability`)
+- `agentflow-core/src/plugin/host.rs` (`CommandPreparer` trait + `NoopCommandPreparer` + `PluginHostBuilder` + `Connection::spawn` 接受 preparer + `PluginError::PreparerRejected`)
+- `agentflow-core/src/plugin/mod.rs` (新 re-exports: `CommandPreparer` / `NoopCommandPreparer` / `PluginHostBuilder` / `FilesystemEntry` / `FsAccess`)
+- `agentflow-core/tests/plugin_poc.rs` (+2 集成测试覆盖 builder + preparer hook)
+- `agentflow-cli/src/executor/plugin.rs` (新 `OsSandboxPluginPreparer` 适配器 + `preparer_from_env` + 6 单测)
+- `docs/PLUGIN_DESIGN.md` §6.5 (重写为完整翻译表 + opt-in 文档)
+- `docs/TOOL_PERMISSIONS.md` (追加 "Plugin runtime: same backend, different bridge" 交叉链接章节)
 
 ### 13. 分布式调度
 

@@ -56,6 +56,58 @@ pub enum PluginError {
   DuplicateNodeType { plugin: String, node_type: String },
   #[error("no plugin registered for node type '{0}'")]
   UnknownNodeType(String),
+  #[error("command preparer rejected plugin '{plugin}': {reason}")]
+  PreparerRejected { plugin: String, reason: String },
+}
+
+/// Hook that lets a higher layer modify the plugin's spawn command before
+/// the child is created.
+///
+/// The primary use case is wrapping the command in an OS sandbox (macOS
+/// `sandbox-exec`, Linux seccomp). The preparer receives the [`Command`]
+/// already configured with `stdin`/`stdout`/`stderr` piped, plus the
+/// parsed [`PluginManifest`] so it can derive an enforcement scope from
+/// `[plugin.capabilities]`.
+///
+/// `agentflow-core` itself ships no enforcing implementation — it stays
+/// neutral and depends on no platform sandbox crate. The CLI binds an
+/// adapter that bridges into `agentflow-tools::sandbox`. Plugin authors
+/// embedding the host directly can supply their own preparer or leave
+/// the default (no-op), in which case behaviour is identical to v0.3
+/// PoC.
+pub trait CommandPreparer: Send + Sync + std::fmt::Debug {
+  /// Stable name (`"sandbox-exec"`, `"seccomp"`, `"noop-plugin"`, ...) for trace.
+  fn name(&self) -> &str;
+  /// Modify `command` in place so that, when spawned, the child runs
+  /// inside whatever enforcement layer the preparer provides. The
+  /// `manifest_dir` is the directory holding the plugin's `plugin.toml`
+  /// — backends that need a persistent profile path can scope their
+  /// temp files to this directory if they want.
+  fn prepare(
+    &self,
+    command: &mut Command,
+    manifest: &PluginManifest,
+    manifest_dir: &Path,
+  ) -> Result<(), PluginError>;
+}
+
+/// Default no-op preparer. Used when callers don't opt into sandboxing,
+/// preserving v0.3 PoC behaviour: bare `tokio::process::Command::spawn`.
+#[derive(Debug, Default)]
+pub struct NoopCommandPreparer;
+
+impl CommandPreparer for NoopCommandPreparer {
+  fn name(&self) -> &str {
+    "noop-plugin"
+  }
+  fn prepare(
+    &self,
+    _command: &mut Command,
+    _manifest: &PluginManifest,
+    _manifest_dir: &Path,
+  ) -> Result<(), PluginError> {
+    Ok(())
+  }
 }
 
 impl From<PluginError> for AgentFlowError {
@@ -106,13 +158,21 @@ struct Connection {
 }
 
 impl Connection {
-  async fn spawn(entrypoint: &Path, plugin_name: &str) -> Result<Self, PluginError> {
+  async fn spawn(
+    entrypoint: &Path,
+    plugin_name: &str,
+    manifest: &PluginManifest,
+    manifest_dir: &Path,
+    preparer: &dyn CommandPreparer,
+  ) -> Result<Self, PluginError> {
     let mut command = Command::new(entrypoint);
     command
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::piped())
       .kill_on_drop(true);
+
+    preparer.prepare(&mut command, manifest, manifest_dir)?;
 
     let mut child = command.spawn()?;
     let stdin = child.stdin.take().ok_or_else(|| {
@@ -394,14 +454,70 @@ pub struct PluginHost {
   conn: Connection,
 }
 
+/// Builder for [`PluginHost::load`] that lets callers attach a
+/// [`CommandPreparer`] before the plugin process is spawned.
+///
+/// Use [`PluginHost::builder`] to obtain one. The default preparer is
+/// [`NoopCommandPreparer`], which preserves v0.3 PoC behaviour (bare
+/// `Command::spawn` with no OS sandbox).
+pub struct PluginHostBuilder {
+  preparer: Arc<dyn CommandPreparer>,
+}
+
+impl Default for PluginHostBuilder {
+  fn default() -> Self {
+    Self {
+      preparer: Arc::new(NoopCommandPreparer),
+    }
+  }
+}
+
+impl PluginHostBuilder {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Attach a [`CommandPreparer`] (typically an OS-sandbox bridge).
+  pub fn with_command_preparer(mut self, preparer: Arc<dyn CommandPreparer>) -> Self {
+    self.preparer = preparer;
+    self
+  }
+
+  /// Load the plugin at `manifest_path` using the configured preparer.
+  pub async fn load(self, manifest_path: &Path) -> Result<PluginHost, PluginError> {
+    PluginHost::load_with_preparer(manifest_path, self.preparer.as_ref()).await
+  }
+}
+
 impl PluginHost {
   /// Load a plugin from its `plugin.toml` manifest path. Spawns the plugin
   /// executable and performs the initialize handshake.
+  ///
+  /// Equivalent to `PluginHost::builder().load(manifest_path)`.
   pub async fn load(manifest_path: &Path) -> Result<Self, PluginError> {
+    Self::load_with_preparer(manifest_path, &NoopCommandPreparer).await
+  }
+
+  /// Construct a new [`PluginHostBuilder`].
+  pub fn builder() -> PluginHostBuilder {
+    PluginHostBuilder::new()
+  }
+
+  async fn load_with_preparer(
+    manifest_path: &Path,
+    preparer: &dyn CommandPreparer,
+  ) -> Result<Self, PluginError> {
     let (manifest, manifest_dir) = PluginManifest::load_from_path(manifest_path)?;
     manifest.validate()?;
     let entrypoint = manifest.resolve_entrypoint(&manifest_dir);
-    let conn = Connection::spawn(&entrypoint, &manifest.plugin.name).await?;
+    let conn = Connection::spawn(
+      &entrypoint,
+      &manifest.plugin.name,
+      &manifest,
+      &manifest_dir,
+      preparer,
+    )
+    .await?;
 
     let init_value = conn
       .call(

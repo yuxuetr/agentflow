@@ -185,3 +185,18 @@ the integration tests in `agentflow-tools/tests/sandbox_macos.rs` and
 | `SandboxViolation: OS sandbox preparation failed: ...` | Backend missing binary (`sandbox-exec` not present) or unsupported arch. Tool refuses to spawn — the in-process layer correctly fails closed. |
 | Child exits 134 (SIGABRT) on macOS                      | Profile is missing a baseline rule. The current baseline is sized for normal binary startup; file a bug if you hit this. |
 | Child returns `EPERM` from `socket`/`open*` on Linux    | Expected: the missing capability matches a denied syscall. |
+
+## Plugin runtime: same backend, different bridge
+
+The subprocess plugin runtime in `agentflow-core::plugin` reuses the same
+backends (`MacosSandboxExecBackend`, `LinuxSeccompBackend`,
+`NoopSandboxBackend`) through a thin adapter (`OsSandboxPluginPreparer`,
+in `agentflow-cli/src/executor/plugin.rs`). The adapter translates a
+plugin manifest's `[plugin.capabilities]` block into the same
+`Vec<Capability> + SandboxScope` pair that built-in tools use, then calls
+`SandboxBackend::wrap_command` on the spawn `Command`. See
+[`docs/PLUGIN_DESIGN.md` §6.5](PLUGIN_DESIGN.md#65-permission-model) for
+the full translation table and the `AGENTFLOW_PLUGIN_SANDBOX=1` opt-in
+flag. The capability merge layer (skill / policy / CLI) does **not**
+apply to plugin spawns — plugins are governed by their own manifest
+declarations, not by the host workflow's skill security.

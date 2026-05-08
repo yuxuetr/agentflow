@@ -17,13 +17,16 @@
 #![cfg(feature = "plugin")]
 
 use agentflow_core::async_node::AsyncNode;
-use agentflow_core::plugin::{PluginHost, PluginRegistry};
+use agentflow_core::plugin::{
+  CommandPreparer, PluginError, PluginHost, PluginManifest, PluginRegistry,
+};
 use agentflow_core::value::FlowValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEMO_BIN_NAME: &str = "agentflow-echo-plugin";
 
@@ -207,6 +210,91 @@ async fn unknown_node_type_returns_protocol_error() {
     Err(agentflow_core::plugin::PluginError::RemoteError { .. })
   ));
   host.shutdown().await.expect("shutdown");
+}
+
+/// Recording preparer used to verify the host actually invokes the
+/// configured `CommandPreparer` before spawning the child process.
+#[derive(Debug, Default)]
+struct CountingPreparer {
+  calls: AtomicUsize,
+}
+
+impl CommandPreparer for CountingPreparer {
+  fn name(&self) -> &str {
+    "counting"
+  }
+  fn prepare(
+    &self,
+    _command: &mut tokio::process::Command,
+    _manifest: &PluginManifest,
+    _manifest_dir: &Path,
+  ) -> Result<(), PluginError> {
+    self.calls.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+  }
+}
+
+/// Preparer that always rejects, to confirm the host surfaces the rejection
+/// as a clean `PluginError` rather than spawning the child anyway.
+#[derive(Debug)]
+struct RejectingPreparer;
+
+impl CommandPreparer for RejectingPreparer {
+  fn name(&self) -> &str {
+    "rejecting"
+  }
+  fn prepare(
+    &self,
+    _command: &mut tokio::process::Command,
+    manifest: &PluginManifest,
+    _manifest_dir: &Path,
+  ) -> Result<(), PluginError> {
+    Err(PluginError::PreparerRejected {
+      plugin: manifest.plugin.name.clone(),
+      reason: "denied for test".to_string(),
+    })
+  }
+}
+
+#[tokio::test]
+async fn builder_invokes_command_preparer_before_spawn() {
+  let bin = ensure_demo_plugin_built();
+  let tmp = tempfile::tempdir().unwrap();
+  let manifest_path = write_manifest(tmp.path(), &bin);
+
+  let preparer = Arc::new(CountingPreparer::default());
+  let host = PluginHost::builder()
+    .with_command_preparer(preparer.clone())
+    .load(&manifest_path)
+    .await
+    .expect("load with preparer");
+  assert_eq!(
+    preparer.calls.load(Ordering::SeqCst),
+    1,
+    "preparer should be invoked exactly once during load"
+  );
+  // Sanity-check the spawn still went through.
+  assert_eq!(host.initialize_result().plugin_name, DEMO_BIN_NAME);
+  host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn builder_surfaces_preparer_rejection() {
+  let bin = ensure_demo_plugin_built();
+  let tmp = tempfile::tempdir().unwrap();
+  let manifest_path = write_manifest(tmp.path(), &bin);
+
+  let result = PluginHost::builder()
+    .with_command_preparer(Arc::new(RejectingPreparer))
+    .load(&manifest_path)
+    .await;
+  match result {
+    Err(PluginError::PreparerRejected { plugin, reason }) => {
+      assert_eq!(plugin, DEMO_BIN_NAME);
+      assert!(reason.contains("denied for test"));
+    }
+    other => panic!("expected PreparerRejected, got {other:?}"),
+  }
 }
 
 #[tokio::test]
