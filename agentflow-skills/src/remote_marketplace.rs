@@ -6,10 +6,12 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::SkillError;
 
@@ -77,6 +79,185 @@ impl RemoteMarketplaceClient {
     })?;
     RemoteMarketplaceManifest::parse_toml(&body)
   }
+
+  /// Fetch package bytes from an artifact URL. Callers should pass the bytes
+  /// through [`RemoteMarketplaceCache`] before using them.
+  pub async fn fetch_artifact_bytes(&self, url: &str) -> Result<Vec<u8>, SkillError> {
+    validate_registry_url(url)?;
+    let response = self
+      .client
+      .get(url)
+      .send()
+      .await
+      .map_err(|err| SkillError::HttpError(format!("failed to fetch '{}': {}", url, err)))?;
+    let status = response.status();
+    if !status.is_success() {
+      return Err(SkillError::HttpError(format!(
+        "failed to fetch '{}': HTTP {}",
+        url, status
+      )));
+    }
+    response
+      .bytes()
+      .await
+      .map(|bytes| bytes.to_vec())
+      .map_err(|err| {
+        SkillError::HttpError(format!(
+          "failed to read artifact body from '{}': {}",
+          url, err
+        ))
+      })
+  }
+}
+
+/// Local cache for downloaded marketplace artifacts.
+#[derive(Debug, Clone)]
+pub struct RemoteMarketplaceCache {
+  root: PathBuf,
+  client: RemoteMarketplaceClient,
+  signature_verifier: Arc<dyn MarketplaceSignatureVerifier>,
+}
+
+impl RemoteMarketplaceCache {
+  pub fn new(root: impl Into<PathBuf>) -> Self {
+    Self::with_client_and_verifier(
+      root,
+      RemoteMarketplaceClient::new(),
+      Arc::new(ChecksumSha256SignatureVerifier),
+    )
+  }
+
+  pub fn with_client_and_verifier(
+    root: impl Into<PathBuf>,
+    client: RemoteMarketplaceClient,
+    signature_verifier: Arc<dyn MarketplaceSignatureVerifier>,
+  ) -> Self {
+    Self {
+      root: root.into(),
+      client,
+      signature_verifier,
+    }
+  }
+
+  pub fn default_root() -> PathBuf {
+    dirs::home_dir()
+      .unwrap_or_else(|| PathBuf::from("."))
+      .join(".agentflow")
+      .join("marketplace")
+      .join("cache")
+  }
+
+  pub fn root(&self) -> &Path {
+    &self.root
+  }
+
+  pub fn artifact_path(&self, entry: &RemoteMarketplaceEntry) -> Result<PathBuf, SkillError> {
+    let checksum = entry.source.normalized_checksum()?;
+    Ok(
+      self
+        .root
+        .join("artifacts")
+        .join(entry.package_type.as_str())
+        .join(sanitize_path_segment(&entry.name))
+        .join(sanitize_path_segment(&entry.version))
+        .join(format!("{checksum}.pkg")),
+    )
+  }
+
+  pub fn is_cached(&self, entry: &RemoteMarketplaceEntry) -> Result<bool, SkillError> {
+    Ok(self.artifact_path(entry)?.is_file())
+  }
+
+  pub async fn fetch_and_cache_artifact(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+  ) -> Result<CachedMarketplaceArtifact, SkillError> {
+    let bytes = self
+      .client
+      .fetch_artifact_bytes(&entry.source.artifact_url)
+      .await?;
+    self.cache_artifact_bytes(entry, &bytes)
+  }
+
+  pub fn cache_artifact_bytes(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+    bytes: &[u8],
+  ) -> Result<CachedMarketplaceArtifact, SkillError> {
+    entry.validate()?;
+    let expected = entry.source.normalized_checksum()?;
+    let actual = sha256_bytes(bytes);
+    if actual != expected {
+      return Err(validation_error(format!(
+        "Artifact checksum mismatch for '{}@{}' (expected {}, got {})",
+        entry.name, entry.version, expected, actual
+      )));
+    }
+    self.signature_verifier.verify(entry, bytes)?;
+
+    let path = self.artifact_path(entry)?;
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("pkg.tmp");
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, &path)?;
+
+    Ok(CachedMarketplaceArtifact {
+      entry_name: entry.name.clone(),
+      version: entry.version.clone(),
+      package_type: entry.package_type,
+      path,
+      checksum_sha256: actual,
+      signature_checked: entry.signature.is_some(),
+    })
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedMarketplaceArtifact {
+  pub entry_name: String,
+  pub version: String,
+  pub package_type: MarketplacePackageType,
+  pub path: PathBuf,
+  pub checksum_sha256: String,
+  pub signature_checked: bool,
+}
+
+/// Pluggable marketplace signature verifier.
+///
+/// The built-in verifier below exists for deterministic local tests and
+/// bootstrap registries. Production registries should install a verifier for
+/// their chosen signature system (for example minisign or sigstore).
+pub trait MarketplaceSignatureVerifier: Send + Sync + std::fmt::Debug {
+  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChecksumSha256SignatureVerifier;
+
+impl MarketplaceSignatureVerifier for ChecksumSha256SignatureVerifier {
+  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError> {
+    let Some(signature) = &entry.signature else {
+      return Ok(());
+    };
+    let algorithm = signature.algorithm.trim().to_ascii_lowercase();
+    if algorithm != "checksum-sha256" && algorithm != "sha256" {
+      return Err(validation_error(format!(
+        "Unsupported signature algorithm '{}' for '{}@{}'",
+        signature.algorithm, entry.name, entry.version
+      )));
+    }
+    let expected = normalize_sha256(&signature.value)?;
+    let actual = sha256_bytes(artifact);
+    if actual != expected {
+      return Err(validation_error(format!(
+        "Signature checksum mismatch for '{}@{}' (expected {}, got {})",
+        entry.name, entry.version, expected, actual
+      )));
+    }
+    Ok(())
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +293,15 @@ pub struct RemoteMarketplaceEntry {
 pub enum MarketplacePackageType {
   Skill,
   Plugin,
+}
+
+impl MarketplacePackageType {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Skill => "skill",
+      Self::Plugin => "plugin",
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +501,25 @@ fn normalize_sha256(value: &str) -> Result<String, SkillError> {
   Ok(digest.to_ascii_lowercase())
 }
 
+fn sha256_bytes(bytes: &[u8]) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  format!("{:x}", hasher.finalize())
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+  value
+    .chars()
+    .map(|ch| {
+      if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+        ch
+      } else {
+        '_'
+      }
+    })
+    .collect()
+}
+
 fn validation_error(message: String) -> SkillError {
   SkillError::ValidationError { message }
 }
@@ -367,6 +576,26 @@ mod tests {
           description: None,
         },
       ],
+    }
+  }
+
+  fn signed_entry_for_bytes(bytes: &[u8]) -> RemoteMarketplaceEntry {
+    RemoteMarketplaceEntry {
+      name: "rust/expert".into(),
+      version: "1.0.0".into(),
+      package_type: MarketplacePackageType::Skill,
+      source: MarketplaceSource {
+        registry_url: "https://registry.example.com/marketplace.toml".into(),
+        artifact_url: "https://registry.example.com/rust-expert.tar.gz".into(),
+        checksum_sha256: sha256_bytes(bytes),
+      },
+      signature: Some(MarketplaceSignature {
+        algorithm: "checksum-sha256".into(),
+        key_id: "dev".into(),
+        value: sha256_bytes(bytes),
+      }),
+      aliases: Vec::new(),
+      description: None,
     }
   }
 
@@ -531,6 +760,61 @@ value = "abc"
       .await
       .unwrap_err();
     assert!(err.to_string().contains("must be an http(s) URL"));
+  }
+
+  #[test]
+  fn remote_marketplace_cache_writes_verified_artifact() {
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let bytes = b"package bytes";
+    let entry = signed_entry_for_bytes(bytes);
+
+    let cached = cache.cache_artifact_bytes(&entry, bytes).unwrap();
+
+    assert!(cached.path.is_file());
+    assert!(cached.signature_checked);
+    assert_eq!(fs::read(cached.path).unwrap(), bytes);
+    assert!(cache.is_cached(&entry).unwrap());
+    assert!(
+      cache
+        .artifact_path(&entry)
+        .unwrap()
+        .to_string_lossy()
+        .contains("rust_expert")
+    );
+  }
+
+  #[test]
+  fn remote_marketplace_cache_rejects_checksum_mismatch() {
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let mut entry = signed_entry_for_bytes(b"expected");
+    entry.source.checksum_sha256 = sha256_bytes(b"different");
+
+    let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
+    assert!(err.to_string().contains("Artifact checksum mismatch"));
+  }
+
+  #[test]
+  fn remote_marketplace_cache_rejects_signature_mismatch() {
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let mut entry = signed_entry_for_bytes(b"expected");
+    entry.signature.as_mut().unwrap().value = sha256_bytes(b"different");
+
+    let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
+    assert!(err.to_string().contains("Signature checksum mismatch"));
+  }
+
+  #[test]
+  fn remote_marketplace_cache_rejects_unsupported_signature_algorithm() {
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let mut entry = signed_entry_for_bytes(b"expected");
+    entry.signature.as_mut().unwrap().algorithm = "minisign".into();
+
+    let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
+    assert!(err.to_string().contains("Unsupported signature algorithm"));
   }
 
   async fn spawn_registry_server(status: u16, body: &str) -> (String, tokio::task::JoinHandle<()>) {

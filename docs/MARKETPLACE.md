@@ -101,12 +101,37 @@ the same schema validation as local `RemoteMarketplaceManifest::load`.
 
 It does not write cache state, install packages, or verify signatures yet.
 
+## Local Cache And Verification
+
+`RemoteMarketplaceCache` stores verified artifacts under:
+
+```text
+~/.agentflow/marketplace/cache/artifacts/<type>/<name>/<version>/<sha256>.pkg
+```
+
+Package names and versions are path-sanitized before they are used as
+directories. The cache API verifies the artifact before writing it:
+
+1. validate the marketplace entry;
+2. compute the artifact SHA-256 and compare it with
+   `entries[].source.checksum_sha256`;
+3. run the configured `MarketplaceSignatureVerifier`;
+4. write the artifact atomically via a temporary file and rename.
+
+The default verifier is `ChecksumSha256SignatureVerifier`. It accepts
+`signature.algorithm = "checksum-sha256"` or `"sha256"` and compares
+`signature.value` to the artifact SHA-256. This is useful for deterministic
+tests and bootstrap registries; production registries should plug in a verifier
+for a real signing system such as minisign or sigstore.
+
+Artifacts without a signature are still allowed at this layer because signature
+requirements are a CLI/policy decision. The cache records whether a signature
+was checked in `CachedMarketplaceArtifact::signature_checked`.
+
 ## Roadmap
 
 The following pieces are intentionally separate follow-up tasks:
 
-- local cache layout and offline lookup;
-- checksum and signature verification during install;
 - `agentflow marketplace search/install/update/verify` CLI;
 - migration path from local `agentflow skill marketplace` files to the unified
   remote marketplace command group.

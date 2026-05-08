@@ -63,7 +63,9 @@ pub use marketplace::{
 };
 pub use mcp_tools::{McpClientPool, McpToolAdapter, public_tool_name};
 pub use remote_marketplace::{
+  CachedMarketplaceArtifact, ChecksumSha256SignatureVerifier,
   DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, MarketplacePackageType, MarketplaceSignature,
-  MarketplaceSource, RemoteMarketplaceClient, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
+  MarketplaceSignatureVerifier, MarketplaceSource, RemoteMarketplaceCache, RemoteMarketplaceClient,
+  RemoteMarketplaceEntry, RemoteMarketplaceManifest,
 };
 pub use skill_md::SkillMd;
