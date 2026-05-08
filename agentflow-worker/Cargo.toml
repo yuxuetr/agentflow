@@ -1,0 +1,16 @@
+[package]
+name = "agentflow-worker"
+version = "0.1.0"
+edition = "2024"
+authors = ["AgentFlow Contributors"]
+description = "Distributed worker process for AgentFlow"
+license = "MIT"
+
+[dependencies]
+agentflow-server = { path = "../agentflow-server" }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }

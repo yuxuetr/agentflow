@@ -15,6 +15,7 @@ members = [
   "agentflow-skills",
   "agentflow-db",
   "agentflow-server",
+  "agentflow-worker",
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"

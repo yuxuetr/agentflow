@@ -75,8 +75,24 @@ local prototyping. It provides FIFO claims, claiming-worker validation on result
 submission, and heartbeat snapshots.
 
 It is not durable and must not be used as a multi-process scheduler. Its purpose
-is to lock down the protocol semantics before adding tonic service definitions
-and worker binaries.
+is to lock down the protocol semantics before adding tonic service definitions.
+
+`agentflow-worker` is now a minimal worker process and library runtime. The
+runtime is protocol-agnostic and performs one loop of:
+
+1. send heartbeat;
+2. claim a task;
+3. execute the current stub node runner;
+4. report a terminal result with worker-local trace fragments.
+
+The binary currently supports local smoke tests against `memory://local`:
+
+```bash
+cargo run -p agentflow-worker -- --once --worker-id worker-a
+```
+
+Remote control-plane connections remain the responsibility of the upcoming
+tonic adapter.
 
 `WorkerControlPlane<P: WorkerProtocol>` is the server-side scheduling façade
 that sits above the protocol. It currently provides:
@@ -109,13 +125,13 @@ The target deployment shape is one control plane plus N workers:
 
 ```bash
 agentflow-server --bind 0.0.0.0:8080
-agentflow-worker --server http://agentflow-server:8080 --worker-id worker-a --slots 4
-agentflow-worker --server http://agentflow-server:8080 --worker-id worker-b --slots 4
+agentflow-worker --control-plane http://agentflow-server:8080 --worker-id worker-a
+agentflow-worker --control-plane http://agentflow-server:8080 --worker-id worker-b
 ```
 
-The concrete `agentflow-worker` binary and tonic service are not implemented
-yet. The next implementation step is to add the worker crate and a gRPC adapter
-that implements the same `WorkerProtocol` semantics.
+The concrete `agentflow-worker` binary exists; remote `http://...` /
+`grpc://...` control-plane connectivity is not enabled until the tonic adapter
+implements the same `WorkerProtocol` semantics.
 
 ## Failure Semantics
 
