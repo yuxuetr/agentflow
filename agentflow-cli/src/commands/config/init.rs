@@ -52,7 +52,8 @@ pub async fn execute(force: bool) -> Result<()> {
       println!();
       println!("🧪 Test your setup:");
       println!("   agentflow llm models                 # List available models");
-      println!("   agentflow llm prompt \"Hello world\"   # Test a simple prompt");
+      println!("   agentflow doctor                     # Check local CLI readiness");
+      println!("   agentflow skill init my-skill        # Create an agent skill");
       println!();
     }
     Err(e) => {

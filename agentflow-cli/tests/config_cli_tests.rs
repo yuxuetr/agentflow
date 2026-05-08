@@ -100,3 +100,69 @@ fn llm_help_hides_chat_subcommand() {
     .stdout(predicate::str::contains("models"))
     .stdout(predicate::str::contains("chat").not());
 }
+
+#[test]
+fn top_level_help_exposes_diagnostics_and_feature_gated_commands() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .arg("--help")
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("doctor"))
+    .stdout(predicate::str::contains("plugin"))
+    .stdout(predicate::str::contains("rag"));
+}
+
+#[test]
+fn doctor_reports_missing_config_without_failing() {
+  let home = TempDir::new().unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .arg("doctor")
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("AgentFlow doctor"))
+    .stdout(predicate::str::contains("Status: warning"))
+    .stdout(predicate::str::contains("models.yml: missing"));
+}
+
+#[test]
+fn doctor_json_reports_enabled_feature_flags() {
+  let home = TempDir::new().unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--format", "json"])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"features\""))
+    .stdout(predicate::str::contains("\"rag\""))
+    .stdout(predicate::str::contains("\"plugin\""));
+}
+
+#[cfg(not(feature = "rag"))]
+#[test]
+fn rag_command_explains_missing_feature_in_default_build() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .arg("rag")
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("not available in this binary"))
+    .stderr(predicate::str::contains("--features rag"));
+}
+
+#[cfg(not(feature = "plugin"))]
+#[test]
+fn plugin_command_explains_missing_feature_in_default_build() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .arg("plugin")
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("not available in this binary"))
+    .stderr(predicate::str::contains("--features plugin"));
+}

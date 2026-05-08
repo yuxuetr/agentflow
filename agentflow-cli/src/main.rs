@@ -9,7 +9,7 @@ mod redaction;
 use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
-use commands::{audio, config as config_cmd, image, llm, mcp, skill, trace, workflow};
+use commands::{audio, config as config_cmd, doctor, image, llm, mcp, skill, trace, workflow};
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -36,12 +36,20 @@ enum Commands {
   Skill(SkillArgs),
   /// Trace inspection and replay commands
   Trace(TraceArgs),
+  /// Diagnose local AgentFlow configuration and runtime capabilities
+  Doctor(DoctorArgs),
   #[cfg(feature = "plugin")]
   /// Plugin management commands (subprocess plugins)
   Plugin(PluginArgs),
+  #[cfg(not(feature = "plugin"))]
+  /// Plugin management commands (disabled in this build)
+  Plugin(FeatureUnavailableArgs),
   #[cfg(feature = "rag")]
   /// RAG (Retrieval-Augmented Generation) commands
   Rag(RagArgs),
+  #[cfg(not(feature = "rag"))]
+  /// RAG commands (disabled in this build)
+  Rag(FeatureUnavailableArgs),
 }
 
 #[derive(Args)]
@@ -84,11 +92,26 @@ struct TraceArgs {
   #[command(subcommand)]
   command: TraceCommands,
 }
+#[derive(Args)]
+struct DoctorArgs {
+  /// Output format
+  #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+  format: String,
+}
 #[cfg(feature = "plugin")]
 #[derive(Args)]
 struct PluginArgs {
   #[command(subcommand)]
   command: PluginCommands,
+}
+#[cfg(any(not(feature = "plugin"), not(feature = "rag")))]
+#[derive(Args)]
+#[command(
+  after_help = "This command is not available in this binary. Rebuild with the matching Cargo feature, e.g. `cargo build -p agentflow-cli --features rag` or `--features plugin`."
+)]
+struct FeatureUnavailableArgs {
+  #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+  args: Vec<String>,
 }
 #[cfg(feature = "rag")]
 #[derive(Args)]
@@ -899,6 +922,10 @@ async fn main() {
         max_field_chars,
       } => trace::tui::execute(run_id, dir, filter, details, max_field_chars).await,
     },
+    Commands::Doctor(args) => match doctor::OutputFormat::parse(&args.format) {
+      Ok(format) => doctor::execute(format).await,
+      Err(err) => Err(err),
+    },
     #[cfg(feature = "plugin")]
     Commands::Plugin(args) => match args.command {
       PluginCommands::Install {
@@ -912,6 +939,10 @@ async fn main() {
         plugin::uninstall::execute(name, dir, force).await
       }
     },
+    #[cfg(not(feature = "plugin"))]
+    Commands::Plugin(_) => Err(anyhow::anyhow!(
+      "`agentflow plugin` is not available in this binary; rebuild with `cargo build -p agentflow-cli --features plugin`"
+    )),
     #[cfg(feature = "rag")]
     Commands::Rag(args) => match args.command {
       RagCommands::Search {
@@ -963,6 +994,10 @@ async fn main() {
         output,
       } => rag::eval::execute(dataset, retriever, k_values, compare_to, output).await,
     },
+    #[cfg(not(feature = "rag"))]
+    Commands::Rag(_) => Err(anyhow::anyhow!(
+      "`agentflow rag` is not available in this binary; rebuild with `cargo build -p agentflow-cli --features rag`"
+    )),
   };
 
   if let Err(e) = result {
