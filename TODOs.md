@@ -519,7 +519,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 13. 分布式调度
 
-状态: 进行中 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + server control-plane façade + `agentflow-worker` 最小 worker runtime/binary + `StitchedWorkerTraceEvent` 跨 worker trace ordering 基础 + `docs/DISTRIBUTED.md` 初版)
+状态: 已完成 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + server control-plane façade + `agentflow-worker` 最小 worker runtime/binary + `StitchedWorkerTraceEvent` 跨 worker trace ordering + `OtelSpan` 映射 + `docs/DISTRIBUTED.md` 初版)
 
 目标:
 
@@ -531,7 +531,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - [x] 选定一种传输: gRPC (tonic) / NATS / Redis Streams 之一，其他保留扩展点。当前选择 gRPC + tonic 作为 v1.0-rc 主路径，NATS / Redis Streams 作为后续 adapter 扩展点；`WorkerTransport` 记录选择，`docs/DISTRIBUTED.md` 写明 rationale。
 - [x] `agentflow-server` 进化为 control plane: 调度任务到 worker、聚合结果、维护 run state。`WorkerControlPlane<P: WorkerProtocol>` 已落地：`schedule_task` 提交任务并维护 run queued 状态，`claim_task` 记录 worker assignment 并切 running，`report_result` 聚合成功输出 / 失败错误 / retryable 计数 / worker trace fragments，`heartbeat` 记录 worker liveness。5 条单测覆盖 schedule→claim、success aggregation、failure aggregation、wrong-worker 不污染状态、heartbeat。
 - [x] worker 二进制: `agentflow-worker`，启动时连接 control plane。新增 workspace crate `agentflow-worker`，提供 protocol-agnostic `WorkerRuntime<P: WorkerProtocol>`，执行 heartbeat → claim → stub execute → report_result；binary 支持 `--worker-id` / `--control-plane` / `--once` / poll/heartbeat interval，当前 `memory://local` 用于本地 smoke test，远程 tonic adapter 留给跨进程连接子任务。
-- [ ] 跨 worker trace 拼接: worker 把本地 trace 通过协议回传，control plane 拼成完整 OTel trace。
+- [x] 跨 worker trace 拼接: worker 把本地 trace 通过协议回传，control plane 拼成完整 OTel trace。`StitchedWorkerTraceEvent` 为 worker-local fragments 加 global_seq / task_id / worker_id / run_id / node_id / attempt / local_seq / ts；`WorkerControlPlane::stitched_otel_spans(...)` 输出 `agentflow-tracing::OtelSpan`（distributed-run root span + 每个 task attempt 一个 child span，local fragments 作为 span events）。
 - [x] 文档: `docs/DISTRIBUTED.md`，给 2-worker 集群部署示例。当前记录设计、目标部署形态、`agentflow-worker` 本地 `memory://local` smoke test，以及远程 tonic adapter 待落地边界。
 
 验收标准:
