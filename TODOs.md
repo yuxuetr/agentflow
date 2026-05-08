@@ -547,7 +547,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 14. Web UI 调试器
 
-状态: 进行中 (2026-05-08: React + Vite + TypeScript SPA 骨架、`agentflow-server` 内嵌 `/ui` 静态资源、`GET /v1/runs` run list、基于现有 run REST/SSE 的单 run 调试视图、`docs/WEB_UI.md` 已落地；agentflow-viz DAG 高亮 / dedicated trace replay 仍待完成)
+状态: 进行中 (2026-05-08: React + Vite + TypeScript SPA 骨架、`agentflow-server` 内嵌 `/ui` 静态资源、`GET /v1/runs` run list、`GET /v1/runs/{id}/events/history` trace history、基于现有 run REST/SSE 的单 run 调试视图、`docs/WEB_UI.md` 已落地；agentflow-viz DAG 高亮 / dedicated trace replay 仍待完成)
 
 目标:
 
