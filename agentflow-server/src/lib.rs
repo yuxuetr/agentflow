@@ -22,6 +22,7 @@ pub mod events_stream;
 pub mod runs;
 pub mod scheduler;
 pub mod skills;
+pub mod ui;
 
 pub use auth::{AuthConfig, require_bearer_token};
 pub use error::ApiError;
@@ -41,6 +42,7 @@ pub use scheduler::{
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,
 };
+pub use ui::{asset_response, index_html, ui_router};
 
 /// Server-wide state injected into every handler.
 #[derive(Clone)]
@@ -139,6 +141,7 @@ pub fn create_router(state: AppState) -> Router {
   Router::new()
     .merge(health)
     .merge(v1)
+    .merge(ui_router())
     .layer(CorsLayer::permissive())
     .layer(TraceLayer::new_for_http())
     .with_state(state)
