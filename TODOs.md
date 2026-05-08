@@ -532,7 +532,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - [x] `agentflow-server` 进化为 control plane: 调度任务到 worker、聚合结果、维护 run state。`WorkerControlPlane<P: WorkerProtocol>` 已落地：`schedule_task` 提交任务并维护 run queued 状态，`claim_task` 记录 worker assignment 并切 running，`report_result` 聚合成功输出 / 失败错误 / retryable 计数 / worker trace fragments，`heartbeat` 记录 worker liveness。5 条单测覆盖 schedule→claim、success aggregation、failure aggregation、wrong-worker 不污染状态、heartbeat。
 - [x] worker 二进制: `agentflow-worker`，启动时连接 control plane。新增 workspace crate `agentflow-worker`，提供 protocol-agnostic `WorkerRuntime<P: WorkerProtocol>`，执行 heartbeat → claim → stub execute → report_result；binary 支持 `--worker-id` / `--control-plane` / `--once` / poll/heartbeat interval，当前 `memory://local` 用于本地 smoke test，远程 tonic adapter 留给跨进程连接子任务。
 - [ ] 跨 worker trace 拼接: worker 把本地 trace 通过协议回传，control plane 拼成完整 OTel trace。
-- [x] 文档: `docs/DISTRIBUTED.md`，给 2-worker 集群部署示例。当前为设计与目标部署形态；真实 `agentflow-worker` CLI 待后续子任务落地。
+- [x] 文档: `docs/DISTRIBUTED.md`，给 2-worker 集群部署示例。当前记录设计、目标部署形态、`agentflow-worker` 本地 `memory://local` smoke test，以及远程 tonic adapter 待落地边界。
 
 验收标准:
 
