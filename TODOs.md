@@ -519,7 +519,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 13. 分布式调度
 
-状态: 进行中 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + server control-plane façade + `agentflow-worker` 最小 worker runtime/binary + `docs/DISTRIBUTED.md` 初版)
+状态: 进行中 (2026-05-08: `WorkerProtocol` 抽象 + gRPC 选型 + server control-plane façade + `agentflow-worker` 最小 worker runtime/binary + `StitchedWorkerTraceEvent` 跨 worker trace ordering 基础 + `docs/DISTRIBUTED.md` 初版)
 
 目标:
 
