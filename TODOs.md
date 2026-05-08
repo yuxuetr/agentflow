@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-08（P2 #12 PoC 落地）
+最后更新: 2026-05-08（P2 #12 PoC 落地 + workflow YAML 接入）
 
 维护约定:
 
@@ -455,7 +455,7 @@ PR-B (已完成):
 
 ### 12. Plugin / Custom Node 体系
 
-状态: PoC 落地 (2026-05-08)；CLI / 沙箱 / 签名 / workflow 集成留作后续
+状态: PoC + workflow YAML 接入完成 (2026-05-08)；CLI 子命令 / 沙箱 / 签名留作后续
 
 目标:
 
@@ -469,21 +469,22 @@ PR-B (已完成):
 - [x] 生命周期: `PluginHost::load → spawn child + handshake → register → execute (× N) → shutdown`。崩溃隔离来自 OS 进程边界；`shutdown` 幂等，`execute_node` after shutdown 返回结构化错误而不是 panic / hang；`Drop` 兜底 kill child。
 - [ ] 权限模型: PoC 阶段 manifest 解析 `[plugin.capabilities]` 但尚未挂到 `agentflow-tools::sandbox::SandboxPolicy`（设计文档 §6.5 已规划，留待后续 commit）。
 - [ ] CLI: `agentflow plugin install/list/inspect/uninstall`（设计文档 §6.1 列出，PoC 不包含）。
-- [ ] CLI workflow 执行器接入: `agentflow-cli/src/executor/factory.rs::create_graph_node` 当前对 plugin 节点类型尚未路由；workflow YAML 还无法直接引用 plugin 节点。
+- [x] CLI workflow 执行器接入: 新增 `agentflow-cli` `plugin` cargo feature；`executor/factory.rs::create_graph_node` 路由 `type: plugin`，`executor/plugin.rs::PluginWorkflowNode` 在每个 `workflow run` 进程内通过 `Mutex<HashMap<PathBuf, Arc<PluginHost>>>` 缓存按 manifest 路径复用 host；`config/schema.rs` 接受 `plugin` 节点 + 缺 `manifest`/`node_type` 时给出 schema 错误；CI `features` matrix 增加 `cli-plugin` (`cargo check --no-default-features --features plugin`) 和 `core-plugin` (`cargo check --features plugin --all-targets`) 两条新行。`tests/workflow_tests.rs::plugin_node_tests` 新增 2 条端到端 CLI 测试 (`cli_workflow_run_supports_plugin_node` / `cli_workflow_run_rejects_plugin_node_missing_manifest`)。`docs/PLUGIN_DESIGN.md` §9 给出 YAML schema、resolution 规则、生命周期、build/run 命令与失败模式。
 
 验收标准:
 
 - [x] 内置参考 plugin (`agentflow-echo-plugin`) 能被 host 加载并执行；输入 `text:"hello plugin"` 返回 `text:"HELLO PLUGIN"`。
 - [x] plugin 崩溃 / shutdown 后再次 execute 不会让 host 进程 panic 或 hang，统一返回 `AgentFlowError::AsyncExecutionError` envelope。
-- [ ] 一个独立仓库的 plugin（不在 workspace 内）端到端跑通——PoC 用 in-tree `[[bin]]` 作为参考实现验证 wire 协议；out-of-tree repo 流程留作下一步（CLI install 命令 + workflow 接入后即可）。
+- [ ] 一个独立仓库的 plugin（不在 workspace 内）端到端跑通——`type: plugin` workflow 节点已就绪，只要把 manifest 指向 out-of-tree 编译产物即可；缺的最后一块是 `agentflow plugin install` 子命令把外部仓库拉到本地缓存目录。
 - [ ] 签名 / 版本校验有记录——manifest 字段已就绪，校验逻辑由 P2 #16 marketplace 任务承接。
 
 验证:
 
 ```bash
-cargo test -p agentflow-core --features plugin --test plugin_poc --target-dir /tmp/agentflow-target
-cargo run  -p agentflow-core --features plugin --example plugin_host_demo --target-dir /tmp/agentflow-target
-cargo clippy -p agentflow-core --features plugin --target-dir /tmp/agentflow-target -- -D warnings
+cargo test -p agentflow-core --features plugin --test plugin_poc
+cargo run  -p agentflow-core --features plugin --example plugin_host_demo
+cargo test -p agentflow-cli --features plugin --test workflow_tests plugin_node_tests
+cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets -- -D warnings
 ```
 
 涉及文件:
@@ -494,7 +495,12 @@ cargo clippy -p agentflow-core --features plugin --target-dir /tmp/agentflow-tar
 - `agentflow-core/examples/plugin_host_demo.rs` (新)
 - `agentflow-core/tests/plugin_poc.rs` (新)
 - `agentflow-core/Cargo.toml` (新增 `plugin` feature + 可选 `toml` dep)
-- 后续: `agentflow-cli/src/commands/plugin/` + `agentflow-cli/src/executor/factory.rs` 接入
+- `agentflow-cli/Cargo.toml` (新 `plugin` feature)
+- `agentflow-cli/src/executor/{mod,factory,plugin}.rs` (新 `plugin` 模块 + factory 路由)
+- `agentflow-cli/src/config/schema.rs` (`plugin` 节点 schema + feature_hint)
+- `agentflow-cli/tests/workflow_tests.rs` (`plugin_node_tests` 模块 2 条端到端测试)
+- `.github/workflows/quality.yml` (`cli-plugin` / `core-plugin` matrix)
+- 后续: `agentflow-cli/src/commands/plugin/` (install/list/inspect/uninstall) + sandbox::SandboxPolicy 接入
 
 ### 13. 分布式调度
 

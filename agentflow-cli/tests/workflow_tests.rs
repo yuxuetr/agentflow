@@ -988,3 +988,177 @@ async fn test_stateful_while_loop_workflow() {
 
   assert_eq!(final_count, &FlowValue::Json(json!("0")));
 }
+
+#[cfg(feature = "plugin")]
+mod plugin_node_tests {
+  use super::*;
+  use std::path::{Path, PathBuf};
+  use std::process::Command as StdCommand;
+  use std::sync::OnceLock;
+
+  const ECHO_PLUGIN_BIN: &str = "agentflow-echo-plugin";
+
+  /// Build the in-tree reference plugin binary on first call and cache the
+  /// resolved path. Mirrors the helper in
+  /// `agentflow-core/tests/plugin_poc.rs` so the CLI test does not have to
+  /// pre-build the plugin separately.
+  fn ensure_echo_plugin_built() -> PathBuf {
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    CACHED
+      .get_or_init(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        // The CLI test crate's manifest dir is agentflow-cli/. The echo
+        // plugin lives in agentflow-core/, so build it via -p selection.
+        let status = StdCommand::new(&cargo)
+          .args([
+            "build",
+            "--quiet",
+            "-p",
+            "agentflow-core",
+            "--features",
+            "plugin",
+            "--bin",
+            ECHO_PLUGIN_BIN,
+          ])
+          .status()
+          .expect("failed to invoke cargo build for echo plugin");
+        assert!(status.success(), "cargo build for echo plugin failed");
+
+        let exe_name = format!("{ECHO_PLUGIN_BIN}{}", std::env::consts::EXE_SUFFIX);
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for dir in candidate_target_dirs() {
+          for profile in ["debug", "release"] {
+            candidates.push(dir.join(profile).join(&exe_name));
+          }
+        }
+        candidates
+          .iter()
+          .find(|p| p.exists())
+          .cloned()
+          .unwrap_or_else(|| {
+            panic!("could not locate freshly-built '{exe_name}' in any of: {candidates:?}")
+          })
+      })
+      .clone()
+  }
+
+  fn candidate_target_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(custom) = std::env::var("CARGO_TARGET_DIR") {
+      dirs.push(PathBuf::from(custom));
+    }
+    if let Some(target_tmpdir) = option_env!("CARGO_TARGET_TMPDIR") {
+      let path = PathBuf::from(target_tmpdir);
+      if let Some(target) = path.parent() {
+        dirs.push(target.to_path_buf());
+      }
+    }
+    if let Ok(current) = std::env::current_exe()
+      && let Some(deps) = current.parent()
+      && let Some(profile) = deps.parent()
+      && let Some(target) = profile.parent()
+    {
+      dirs.push(target.to_path_buf());
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(workspace_root) = manifest_dir.parent() {
+      dirs.push(workspace_root.join("target"));
+    }
+    dirs
+  }
+
+  fn write_plugin_manifest(dir: &Path, entrypoint: &Path) -> PathBuf {
+    let manifest = format!(
+      r#"
+[plugin]
+name = "agentflow-echo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "{}"
+
+[[plugin.nodes]]
+type = "echo_uppercase"
+description = "Uppercase a JSON string."
+"#,
+      entrypoint.display()
+    );
+    let path = dir.join("plugin.toml");
+    fs::write(&path, manifest).unwrap();
+    path
+  }
+
+  fn write_plugin_workflow(dir: &Path, manifest_path: &Path) -> PathBuf {
+    let workflow = dir.join("plugin_workflow.yml");
+    fs::write(
+      &workflow,
+      format!(
+        r#"
+name: CLI Plugin Workflow
+nodes:
+  - id: shout
+    type: plugin
+    parameters:
+      manifest: {manifest:?}
+      node_type: echo_uppercase
+      text: "hello plugin"
+"#,
+        manifest = manifest_path.display().to_string(),
+      ),
+    )
+    .unwrap();
+    workflow
+  }
+
+  #[test]
+  fn cli_workflow_run_supports_plugin_node() {
+    let plugin_bin = ensure_echo_plugin_built();
+    let work = TempDir::new().unwrap();
+    let manifest = write_plugin_manifest(work.path(), &plugin_bin);
+    let workflow = write_plugin_workflow(work.path(), &manifest);
+    let output = work.path().join("plugin-result.json");
+
+    Command::cargo_bin("agentflow")
+      .unwrap()
+      .args([
+        "workflow",
+        "run",
+        workflow.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+      ])
+      .assert()
+      .success();
+
+    let saved = fs::read_to_string(&output).unwrap();
+    assert!(
+      saved.contains("HELLO PLUGIN"),
+      "expected uppercased plugin output in saved state, got: {saved}"
+    );
+  }
+
+  #[test]
+  fn cli_workflow_run_rejects_plugin_node_missing_manifest() {
+    let work = TempDir::new().unwrap();
+    let workflow = work.path().join("bad_plugin_workflow.yml");
+    fs::write(
+      &workflow,
+      r#"
+name: Bad Plugin Workflow
+nodes:
+  - id: missing_manifest
+    type: plugin
+    parameters:
+      node_type: echo_uppercase
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentflow")
+      .unwrap()
+      .args(["workflow", "run", workflow.to_str().unwrap()])
+      .assert()
+      .failure()
+      .stderr(predicate::str::contains("failed schema validation"))
+      .stdout(predicate::str::contains("requires 'manifest'"));
+  }
+}

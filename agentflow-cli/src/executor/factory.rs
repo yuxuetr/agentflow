@@ -50,6 +50,29 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       .map_err(|err| anyhow!("multi_agent '{}': {}", node_def.id, err))?;
       Ok(NodeType::Standard(Arc::new(node)))
     }
+    #[cfg(feature = "plugin")]
+    "plugin" => {
+      let manifest = get_string_param_optional(&node_def.parameters, "manifest");
+      if manifest.is_empty() {
+        return Err(anyhow!(
+          "plugin node '{}' requires a 'manifest' parameter (path to plugin.toml)",
+          node_def.id
+        ));
+      }
+      let plugin_node_type = get_string_param_optional(&node_def.parameters, "node_type");
+      if plugin_node_type.is_empty() {
+        return Err(anyhow!(
+          "plugin node '{}' requires a 'node_type' parameter (declared by the plugin)",
+          node_def.id
+        ));
+      }
+      let node = crate::executor::plugin::PluginWorkflowNode::new(
+        &node_def.id,
+        std::path::PathBuf::from(manifest),
+        plugin_node_type,
+      );
+      Ok(NodeType::Standard(Arc::new(node)))
+    }
     "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
     "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
     "template" => {
@@ -282,6 +305,11 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
   let mut initial_inputs = HashMap::new();
   for (k, v) in &node_def.parameters {
     if k == "do" || k == "template" {
+      continue;
+    }
+    // For `type: plugin`, `manifest` and `node_type` configure the wrapper
+    // itself; they must not leak into the inputs forwarded to the plugin.
+    if node_def.node_type == "plugin" && (k == "manifest" || k == "node_type") {
       continue;
     }
     let json_val: serde_json::Value = serde_yaml::from_value(v.clone())?;

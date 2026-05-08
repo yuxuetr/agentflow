@@ -404,9 +404,60 @@ the chosen path is viable:
 Out of PoC scope (deferred to follow-up tasks within #12):
 
 - `agentflow plugin install/list/inspect/uninstall` CLI.
-- Wiring the plugin registry into `agentflow-cli`'s `create_graph_node` so
-  `workflow.yml` can reference plugin nodes by type name.
 - OS sandbox enforcement (the `SandboxedCommand` integration is mechanical
   but adds platform branches; first prove the protocol).
 - Signature verification.
 - WASM runtime.
+
+## 9. Workflow YAML integration
+
+Once the host is in place, plugin nodes are addressable from `workflow.yml`
+via the dedicated `plugin` node type. The CLI exposes this behind the
+`plugin` cargo feature on `agentflow-cli` so the default build stays free
+of the subprocess runtime.
+
+```yaml
+name: Plugin Workflow
+nodes:
+  - id: shout
+    type: plugin
+    parameters:
+      manifest: ./plugins/echo/plugin.toml   # path to plugin.toml
+      node_type: echo_uppercase              # type declared by the plugin
+      text: "hello plugin"                   # forwarded as input
+```
+
+Resolution rules:
+
+- `manifest` is required; relative paths resolve against the current working
+  directory of the `agentflow workflow run` invocation.
+- `node_type` is required and must match one of the `[[plugin.nodes]]` types
+  declared in the manifest.
+- All other `parameters` keys (other than `manifest` and `node_type`) become
+  `initial_inputs` for the plugin call. `input_mapping` works the same way as
+  for built-in nodes.
+
+Lifecycle inside the CLI:
+
+- The first workflow node referencing a given manifest path causes the host
+  to spawn the plugin subprocess and run the `plugin/initialize` handshake.
+- Subsequent nodes that point at the same manifest path reuse the same
+  process via a per-run `Mutex<HashMap<PathBuf, Arc<PluginHost>>>` cache, so
+  spawn cost is paid once per `workflow run`.
+- The cache is process-wide; when the CLI process exits, child plugins are
+  cleaned up by `kill_on_drop(true)` on the underlying `tokio::process::Child`.
+
+Build and run:
+
+```bash
+cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
+cargo run  -p agentflow-cli  --features plugin -- workflow run plugin_workflow.yml
+```
+
+Failure modes surface as `AgentFlowError`:
+
+- Missing/invalid manifest path → `NodeInputError` at execute time.
+- Manifest parse / protocol mismatch / handshake failure →
+  `AsyncExecutionError` carrying the underlying `PluginError`.
+- Unknown plugin-declared node type → `RemoteError` from the plugin's own
+  protocol handler (surfaced as `AsyncExecutionError`).

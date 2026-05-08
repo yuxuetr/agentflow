@@ -323,6 +323,10 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("timeout_ms", ParamType::Integer),
       ParamSpec::optional("max_retries", ParamType::Integer),
     ]),
+    "plugin" if cfg!(feature = "plugin") => Some(vec![
+      ParamSpec::required("manifest", ParamType::String),
+      ParamSpec::required("node_type", ParamType::String),
+    ]),
     "rag" if cfg!(feature = "rag") => Some(vec![
       ParamSpec::required("operation", ParamType::String),
       ParamSpec::required("collection", ParamType::String),
@@ -421,6 +425,7 @@ fn feature_hint(node_type: &str) -> &'static str {
   match node_type {
     "mcp" => " (enable the `mcp` feature for MCP workflow nodes)",
     "rag" => " (enable the `rag` feature for RAG workflow nodes)",
+    "plugin" => " (enable the `plugin` feature for plugin workflow nodes)",
     _ => "",
   }
 }

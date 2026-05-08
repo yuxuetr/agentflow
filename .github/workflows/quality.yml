@@ -77,6 +77,10 @@ jobs:
             command: cargo check -p agentflow-cli --no-default-features --features mcp
           - name: cli-rag
             command: cargo check -p agentflow-cli --no-default-features --features rag
+          - name: cli-plugin
+            command: cargo check -p agentflow-cli --no-default-features --features plugin
+          - name: core-plugin
+            command: cargo check -p agentflow-core --features plugin --all-targets
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

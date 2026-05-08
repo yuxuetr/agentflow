@@ -18,6 +18,9 @@ path = "src/main.rs"
 default = []
 mcp = ["agentflow-nodes/mcp"]
 rag = ["agentflow-nodes/rag", "agentflow-rag"]
+# Enables the subprocess plugin runtime for `type: plugin` workflow nodes.
+# See docs/PLUGIN_DESIGN.md.
+plugin = ["agentflow-core/plugin"]
 
 [dependencies]
 # Core dependencies
