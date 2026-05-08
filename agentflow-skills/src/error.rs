@@ -30,6 +30,9 @@ pub enum SkillError {
   #[error("MCP error: {0}")]
   McpError(String),
 
+  #[error("HTTP error: {0}")]
+  HttpError(String),
+
   #[error("IO error: {0}")]
   IoError(String),
 }

@@ -64,6 +64,6 @@ pub use marketplace::{
 pub use mcp_tools::{McpClientPool, McpToolAdapter, public_tool_name};
 pub use remote_marketplace::{
   DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, MarketplacePackageType, MarketplaceSignature,
-  MarketplaceSource, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
+  MarketplaceSource, RemoteMarketplaceClient, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
 };
 pub use skill_md::SkillMd;

@@ -15,6 +15,70 @@ use crate::SkillError;
 
 pub const DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION: u32 = 1;
 
+/// Read-only HTTP client for remote marketplace registries.
+#[derive(Clone)]
+pub struct RemoteMarketplaceClient {
+  client: reqwest::Client,
+}
+
+impl std::fmt::Debug for RemoteMarketplaceClient {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RemoteMarketplaceClient")
+      .finish_non_exhaustive()
+  }
+}
+
+impl Default for RemoteMarketplaceClient {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl RemoteMarketplaceClient {
+  pub fn new() -> Self {
+    // Avoid platform proxy discovery. It can touch OS services that are not
+    // available in sandboxed CLI/test environments, and marketplace registry
+    // URLs are explicit.
+    let client = reqwest::Client::builder()
+      .no_proxy()
+      .build()
+      .expect("reqwest client builder with no_proxy should be infallible");
+    Self { client }
+  }
+
+  pub fn with_client(client: reqwest::Client) -> Self {
+    Self { client }
+  }
+
+  /// Fetch a remote marketplace manifest over HTTP(S), then parse and validate
+  /// it. This method is read-only: it never writes cache state or installs
+  /// packages.
+  pub async fn fetch_manifest(&self, url: &str) -> Result<RemoteMarketplaceManifest, SkillError> {
+    validate_registry_url(url)?;
+    let response = self
+      .client
+      .get(url)
+      .header(reqwest::header::ACCEPT, "application/toml, text/plain, */*")
+      .send()
+      .await
+      .map_err(|err| SkillError::HttpError(format!("failed to fetch '{}': {}", url, err)))?;
+    let status = response.status();
+    if !status.is_success() {
+      return Err(SkillError::HttpError(format!(
+        "failed to fetch '{}': HTTP {}",
+        url, status
+      )));
+    }
+    let body = response.text().await.map_err(|err| {
+      SkillError::HttpError(format!(
+        "failed to read response body from '{}': {}",
+        url, err
+      ))
+    })?;
+    RemoteMarketplaceManifest::parse_toml(&body)
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteMarketplaceManifest {
   #[serde(default = "default_schema_version")]
@@ -71,7 +135,11 @@ pub struct MarketplaceSignature {
 impl RemoteMarketplaceManifest {
   pub fn load(path: &Path) -> Result<Self, SkillError> {
     let content = fs::read_to_string(path)?;
-    let manifest: RemoteMarketplaceManifest = toml::from_str(&content)?;
+    Self::parse_toml(&content)
+  }
+
+  pub fn parse_toml(content: &str) -> Result<Self, SkillError> {
+    let manifest: RemoteMarketplaceManifest = toml::from_str(content)?;
     manifest.validate()?;
     Ok(manifest)
   }
@@ -217,6 +285,21 @@ fn validate_http_url(field: &str, entry_name: &str, value: &str) -> Result<(), S
   Ok(())
 }
 
+fn validate_registry_url(value: &str) -> Result<(), SkillError> {
+  let value = value.trim();
+  if value.is_empty() {
+    return Err(validation_error(
+      "Remote marketplace registry URL must not be empty".to_string(),
+    ));
+  }
+  if !(value.starts_with("https://") || value.starts_with("http://")) {
+    return Err(validation_error(
+      "Remote marketplace registry URL must be an http(s) URL".to_string(),
+    ));
+  }
+  Ok(())
+}
+
 fn normalize_sha256(value: &str) -> Result<String, SkillError> {
   let digest = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
   if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
@@ -241,6 +324,8 @@ mod tests {
   use super::*;
   use std::io::Write;
   use tempfile::TempDir;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokio::net::TcpListener;
 
   const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -283,6 +368,26 @@ mod tests {
         },
       ],
     }
+  }
+
+  fn valid_manifest_toml(registry_url: &str) -> String {
+    format!(
+      r#"
+schema_version = 1
+name = "remote"
+
+[[entries]]
+name = "rust-expert"
+version = "1.0.0"
+type = "skill"
+aliases = ["rust"]
+
+[entries.source]
+registry_url = "{registry_url}"
+artifact_url = "https://registry.example.com/rust-expert.tar.gz"
+checksum_sha256 = "sha256:{DIGEST}"
+"#
+    )
   }
 
   #[test]
@@ -391,5 +496,59 @@ value = "abc"
 
     let err = manifest.validate().unwrap_err();
     assert!(err.to_string().contains("must be an http(s) URL"));
+  }
+
+  #[tokio::test]
+  async fn remote_marketplace_client_fetches_read_only_manifest() {
+    let (url, server) =
+      spawn_registry_server(200, &valid_manifest_toml("http://127.0.0.1/index.toml")).await;
+    let client = RemoteMarketplaceClient::new();
+
+    let manifest = client.fetch_manifest(&url).await.unwrap();
+    server.await.unwrap();
+
+    assert_eq!(manifest.name, "remote");
+    assert_eq!(manifest.entries().len(), 1);
+    assert_eq!(manifest.entries()[0].name, "rust-expert");
+  }
+
+  #[tokio::test]
+  async fn remote_marketplace_client_rejects_non_success_status() {
+    let (url, server) = spawn_registry_server(404, "missing").await;
+    let client = RemoteMarketplaceClient::new();
+
+    let err = client.fetch_manifest(&url).await.unwrap_err();
+    server.await.unwrap();
+
+    assert!(err.to_string().contains("HTTP 404"));
+  }
+
+  #[tokio::test]
+  async fn remote_marketplace_client_rejects_non_http_url() {
+    let client = RemoteMarketplaceClient::new();
+    let err = client
+      .fetch_manifest("file:///tmp/marketplace.toml")
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("must be an http(s) URL"));
+  }
+
+  async fn spawn_registry_server(status: u16, body: &str) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = body.to_string();
+    let handle = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      let mut request = vec![0u8; 4096];
+      let _ = socket.read(&mut request).await.unwrap();
+      let reason = if status == 200 { "OK" } else { "Not Found" };
+      let response = format!(
+        "HTTP/1.1 {status} {reason}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    (format!("http://{addr}/marketplace.toml"), handle)
   }
 }

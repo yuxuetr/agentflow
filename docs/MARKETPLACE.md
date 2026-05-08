@@ -83,11 +83,28 @@ Skills and Plugins may share the same package name because their install
 targets and runtime surfaces are distinct. Within a package type, names and
 aliases are unique lookup keys.
 
+## Read-Only HTTP Registry
+
+Remote registries are plain HTTP(S) endpoints that serve the TOML manifest.
+The first client implementation is `RemoteMarketplaceClient`:
+
+```rust
+let client = agentflow_skills::RemoteMarketplaceClient::new();
+let manifest = client
+  .fetch_manifest("https://registry.example.com/marketplace.toml")
+  .await?;
+```
+
+The client is deliberately read-only. It validates that the registry URL is
+HTTP(S), sends a GET request, rejects non-2xx responses, parses TOML, and runs
+the same schema validation as local `RemoteMarketplaceManifest::load`.
+
+It does not write cache state, install packages, or verify signatures yet.
+
 ## Roadmap
 
 The following pieces are intentionally separate follow-up tasks:
 
-- read-only remote registry HTTP client;
 - local cache layout and offline lookup;
 - checksum and signature verification during install;
 - `agentflow marketplace search/install/update/verify` CLI;
