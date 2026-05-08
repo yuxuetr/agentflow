@@ -610,7 +610,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 16. Plugin marketplace 远程化
 
-状态: 进行中 (2026-05-08: unified remote manifest schema + read-only HTTP registry client + local cache/checksum/signature verifier + marketplace CLI 落地)
+状态: 基础闭环完成 (2026-05-08: unified remote manifest schema + read-only HTTP registry client + local cache/checksum/signature verifier + marketplace CLI + docs 落地；package-specific unpack/install handoff 留后续)
 
 目标:
 
@@ -622,7 +622,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - [x] 远程 registry HTTP 接口 (read-only)。`RemoteMarketplaceClient::fetch_manifest(url)` 通过 HTTP(S) GET 拉取 TOML registry，拒绝非 HTTP(S) URL 和非 2xx 响应，复用 `RemoteMarketplaceManifest::parse_toml` 完成 schema 校验；3 条 async 单测使用本地 `TcpListener` mock registry 覆盖成功、404、非 HTTP URL。
 - [x] 本地缓存与签名校验。`RemoteMarketplaceCache` 将 artifact 按 `~/.agentflow/marketplace/cache/artifacts/<type>/<name>/<version>/<sha256>.pkg` 布局缓存，写入前校验 entry、artifact SHA-256，并通过可插拔 `MarketplaceSignatureVerifier` 校验签名；默认 `ChecksumSha256SignatureVerifier` 支持 `signature.algorithm = "checksum-sha256" | "sha256"`，用于 deterministic tests / bootstrap registry，后续 CLI policy 可切换到 minisign/sigstore verifier。4 条单测覆盖 verified write、checksum mismatch、signature mismatch、unsupported algorithm。
 - [x] CLI: `agentflow marketplace search/install/update/verify`。新增顶层 `agentflow marketplace` 命令组：`search <registry> [query] [--type skill|plugin]` 列出远程 catalog；`install <registry> <package> [--type ...] [--cache-dir ...]` 下载并 verified-cache artifact；`update <registry> [--cache-dir ...]` 缓存 registry manifest；`verify <registry> [package] [--type ...] [--cache-dir ...]` 校验本地 cached artifact。3 条 CLI e2e 覆盖 search/update/verify（本地 manifest + 预填 cache，无公网依赖）。
-- [ ] 文档: `docs/MARKETPLACE.md`。
+- [x] 文档: `docs/MARKETPLACE.md`。覆盖 unified schema、字段说明、read-only HTTP registry client、本地 cache/checksum/signature verifier、CLI search/install/update/verify、offline verify flow、当前边界（已 verified-cache，尚未把 cached artifact 解包进 `~/.agentflow/skills` / `~/.agentflow/plugins`）。
 
 验收标准:
 

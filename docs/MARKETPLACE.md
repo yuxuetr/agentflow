@@ -60,9 +60,9 @@ checksum_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc
   repository snapshot to install.
 - `entries[].source.checksum_sha256`: SHA-256 digest of the artifact, either
   raw 64-char hex or `sha256:<hex>`.
-- `entries[].signature`: optional supply-chain signature metadata. Signature
-  verification is a follow-up task; the schema reserves `algorithm`, `key_id`,
-  and `value` now so catalogs can start publishing it.
+- `entries[].signature`: optional supply-chain signature metadata. The cache
+  layer verifies this block through `MarketplaceSignatureVerifier` before it
+  writes a downloaded artifact.
 
 ## Validation
 
@@ -95,11 +95,10 @@ let manifest = client
   .await?;
 ```
 
-The client is deliberately read-only. It validates that the registry URL is
-HTTP(S), sends a GET request, rejects non-2xx responses, parses TOML, and runs
-the same schema validation as local `RemoteMarketplaceManifest::load`.
-
-It does not write cache state, install packages, or verify signatures yet.
+The registry client is deliberately read-only. It validates that the registry
+URL is HTTP(S), sends a GET request, rejects non-2xx responses, parses TOML,
+and runs the same schema validation as local `RemoteMarketplaceManifest::load`.
+Artifact download and verification happen in `RemoteMarketplaceCache`.
 
 ## Local Cache And Verification
 
@@ -128,15 +127,6 @@ Artifacts without a signature are still allowed at this layer because signature
 requirements are a CLI/policy decision. The cache records whether a signature
 was checked in `CachedMarketplaceArtifact::signature_checked`.
 
-## Roadmap
-
-The following pieces are intentionally separate follow-up tasks:
-
-- package-specific unpack/install integration from a verified cached artifact
-  into `~/.agentflow/skills` or `~/.agentflow/plugins`;
-- migration path from local `agentflow skill marketplace` files to the unified
-  remote marketplace command group.
-
 ## CLI
 
 The top-level marketplace CLI works with either an HTTP(S) registry URL or a
@@ -149,7 +139,44 @@ agentflow marketplace install https://registry.example.com/marketplace.toml rust
 agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
 ```
 
-`install` currently downloads and verifies the artifact into the marketplace
-cache. It does not yet unpack a Skill into `~/.agentflow/skills` or a Plugin
-into `~/.agentflow/plugins`; that final package-specific handoff is the next
-installation integration step.
+Command behavior:
+
+- `search`: list matching entries from the remote marketplace catalog.
+- `update`: fetch or load the registry manifest and write it under
+  `<cache>/registries/<marketplace>.toml`.
+- `install`: resolve a package, download its artifact, verify checksum and
+  signature policy, then write the verified artifact into the local cache.
+- `verify`: verify one cached package, or all matching cached packages, without
+  contacting the artifact URL.
+
+`install` currently stops at the verified marketplace artifact cache. It does
+not yet unpack a Skill into `~/.agentflow/skills` or a Plugin into
+`~/.agentflow/plugins`; that package-specific handoff remains the next install
+integration step.
+
+## Offline Flow
+
+After an artifact has been cached, `verify` can run with a local copy of the
+marketplace TOML:
+
+```bash
+agentflow marketplace update https://registry.example.com/marketplace.toml
+agentflow marketplace verify ~/.agentflow/marketplace/cache/registries/agentflow-community.toml rust-expert --type skill
+```
+
+This checks the cached bytes against the catalog checksum and signature metadata
+without downloading the artifact again.
+
+## Current Boundaries
+
+The implemented remote marketplace layer covers catalog schema, read-only
+registry fetch, verified artifact caching, offline cache verification, and the
+top-level CLI entry points. It intentionally does not yet define a package
+archive layout or unpack cached artifacts into the runtime install locations.
+
+The package-specific handoff will reuse the existing local installers:
+
+- Skills: validated package contents should flow into `agentflow skill install`
+  semantics and land under `~/.agentflow/skills`.
+- Plugins: validated package contents should flow into `agentflow plugin install`
+  semantics and land under `~/.agentflow/plugins`.
