@@ -93,3 +93,51 @@ async fn sse_stream_yields_run_started_and_completed_events() {
     "did not receive both events. captured:\n{buf}"
   );
 }
+
+#[tokio::test]
+async fn event_history_returns_persisted_stream() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping event_history_returns_persisted_stream");
+    return;
+  };
+  let app = create_router(state);
+
+  let response = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"workflow": "demo"}).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let run_id: Uuid = body["run_id"].as_str().unwrap().parse().unwrap();
+
+  tokio::time::sleep(Duration::from_millis(100)).await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/runs/{}/events/history", run_id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 8192)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let events = body.as_array().unwrap();
+  assert!(events.iter().any(|event| event["kind"] == "run_started"));
+  assert!(events.iter().any(|event| event["kind"] == "run_completed"));
+}

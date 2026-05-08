@@ -21,6 +21,38 @@ const formatTime = (value) => {
 
 const runFromEnvelope = (value) => value.run ?? value;
 
+const knownSseEventKinds = [
+  "run_started",
+  "run_completed",
+  "workflow.started",
+  "workflow.completed",
+  "workflow.failed",
+  "node.started",
+  "node.completed",
+  "node.output.captured",
+  "node.failed",
+  "node.skipped",
+  "checkpoint.saved",
+  "checkpoint.restored",
+  "retry.attempt",
+  "resource.warning",
+  "llm.prompt.sent",
+  "llm.response.received",
+  "StepStarted",
+  "StepCompleted",
+  "ToolCallStarted",
+  "ToolCallCompleted",
+  "ToolPolicyDecision",
+  "ToolCapabilityDecision",
+  "ReflectionAdded",
+  "HandoffOccurred",
+  "BlackboardWritten",
+  "DebateRoundStarted",
+  "DebateVerdictRendered",
+  "RunStarted",
+  "RunStopped",
+];
+
 const eventTone = (kind) => {
   const lower = kind.toLowerCase();
   if (lower.includes("fail") || lower.includes("error")) return "danger";
@@ -84,8 +116,15 @@ const connect = async () => {
     });
     window.history.replaceState(null, "", `/ui?run=${encodeURIComponent(state.runId)}`);
 
+    const historyResponse = await fetch(`/v1/runs/${encodeURIComponent(state.runId)}/events/history`);
+    if (historyResponse.ok) {
+      state.events = await historyResponse.json();
+      state.selectedSeq = state.events.at(-1)?.seq ?? null;
+      render();
+    }
+
     const source = new EventSource(`/v1/runs/${encodeURIComponent(state.runId)}/events`);
-    source.onmessage = (message) => {
+    const handleMessage = (message) => {
       const event = JSON.parse(message.data);
       const exists = state.events.some((item) => item.seq === event.seq);
       if (!exists) {
@@ -94,6 +133,10 @@ const connect = async () => {
       state.selectedSeq ??= event.seq;
       render();
     };
+    source.onmessage = handleMessage;
+    for (const kind of knownSseEventKinds) {
+      source.addEventListener(kind, handleMessage);
+    }
     source.onerror = () => {
       source.close();
       if (state.connection === "streaming") {

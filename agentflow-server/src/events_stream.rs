@@ -233,6 +233,13 @@ pub async fn list_events(
   Path(run_id): Path<Uuid>,
   Query(params): Query<EventsQuery>,
 ) -> Result<Json<Vec<StreamedEvent>>, ApiError> {
+  let _run = state
+    .repos
+    .runs
+    .get(run_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
+
   let after_seq = params.after_seq.unwrap_or(-1);
   let events = state
     .repos

@@ -62,6 +62,38 @@ const eventTone = (kind: string) => {
 
 const prettyJson = (value: unknown) => JSON.stringify(value, null, 2);
 
+const knownSseEventKinds = [
+  'run_started',
+  'run_completed',
+  'workflow.started',
+  'workflow.completed',
+  'workflow.failed',
+  'node.started',
+  'node.completed',
+  'node.output.captured',
+  'node.failed',
+  'node.skipped',
+  'checkpoint.saved',
+  'checkpoint.restored',
+  'retry.attempt',
+  'resource.warning',
+  'llm.prompt.sent',
+  'llm.response.received',
+  'StepStarted',
+  'StepCompleted',
+  'ToolCallStarted',
+  'ToolCallCompleted',
+  'ToolPolicyDecision',
+  'ToolCapabilityDecision',
+  'ReflectionAdded',
+  'HandoffOccurred',
+  'BlackboardWritten',
+  'DebateRoundStarted',
+  'DebateVerdictRendered',
+  'RunStarted',
+  'RunStopped',
+];
+
 const findLatest = <T,>(items: T[], predicate: (item: T) => boolean) => {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     if (predicate(items[index])) {
@@ -154,8 +186,15 @@ function App() {
         setState('streaming');
         window.history.replaceState(null, '', `/ui?run=${encodeURIComponent(runId)}`);
 
+        const historyResponse = await fetch(`/v1/runs/${runId}/events/history`);
+        if (historyResponse.ok) {
+          const history = (await historyResponse.json()) as StreamedEvent[];
+          setEvents(history);
+          setSelectedSeq(history.at(-1)?.seq ?? null);
+        }
+
         source = new EventSource(`/v1/runs/${runId}/events`);
-        source.onmessage = (message) => {
+        const handleMessage = (message: MessageEvent<string>) => {
           const event = JSON.parse(message.data) as StreamedEvent;
           setEvents((current) => {
             if (current.some((item) => item.seq === event.seq)) {
@@ -165,6 +204,10 @@ function App() {
           });
           setSelectedSeq((current) => current ?? event.seq);
         };
+        source.onmessage = handleMessage;
+        for (const kind of knownSseEventKinds) {
+          source.addEventListener(kind, handleMessage);
+        }
         source.onerror = () => {
           source?.close();
           setState((current) => (current === 'streaming' ? 'closed' : current));

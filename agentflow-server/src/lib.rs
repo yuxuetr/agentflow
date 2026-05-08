@@ -126,6 +126,7 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/whoami", get(whoami))
     .route("/v1/runs", get(list_runs).post(submit_run))
     .route("/v1/runs/:id", get(get_run))
+    .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
     .route("/v1/skills", get(list_skills))
     // The `:run` suffix is part of the path. Axum's pattern can't match a

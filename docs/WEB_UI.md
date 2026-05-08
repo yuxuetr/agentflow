@@ -11,6 +11,7 @@ The first implementation is a React + Vite + TypeScript SPA embedded into
 - Server mount: `agentflow-server/src/ui.rs`
 - REST dependency: `GET /v1/runs/{id}`
 - Run list dependency: `GET /v1/runs?tenant_id=default&limit=20`
+- Trace history dependency: `GET /v1/runs/{id}/events/history`
 - Live stream dependency: `GET /v1/runs/{id}/events`
 
 The server embeds the `dist/` files with `include_str!`, so production
@@ -57,8 +58,9 @@ The Vite dev server should proxy or target an `agentflow-server` instance for
 - DAG layout currently infers node labels from event payloads. The follow-up
   milestone will consume `agentflow-viz` Mermaid/DOT output and highlight the
   active node from trace events.
-- Trace replay is represented by the persisted event stream for the active run;
-  a dedicated replay browser that replaces or complements the TUI remains open.
+- Trace replay is represented by `/events/history` plus the selected event
+  detail pane; a dedicated replay browser that replaces or complements the TUI
+  remains open.
 
 ## Verification
 
