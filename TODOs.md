@@ -610,7 +610,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 16. Plugin marketplace 远程化
 
-状态: 待开始（依赖 12）
+状态: 进行中 (2026-05-08: unified remote manifest schema 落地)
 
 目标:
 
@@ -618,7 +618,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 子任务:
 
-- [ ] 设计 manifest schema: name / version / type (skill | plugin) / source (registry url + checksum) / signature。
+- [x] 设计 manifest schema: name / version / type (skill | plugin) / source (registry url + checksum) / signature。`agentflow-skills/src/remote_marketplace.rs` 新增 `RemoteMarketplaceManifest` / `RemoteMarketplaceEntry` / `MarketplacePackageType::{Skill, Plugin}` / `MarketplaceSource` / `MarketplaceSignature`，支持 TOML load + validate；校验 schema version、semver、HTTP(S) source、sha256 checksum、签名字段非空、同 type 下 name/alias 唯一。`docs/MARKETPLACE.md` 记录 schema 与后续 HTTP/cache/CLI 路线。
 - [ ] 远程 registry HTTP 接口 (read-only)。
 - [ ] 本地缓存与签名校验。
 - [ ] CLI: `agentflow marketplace search/install/update/verify`。

@@ -44,6 +44,7 @@ pub mod loader;
 pub mod manifest;
 pub mod marketplace;
 pub mod mcp_tools;
+pub mod remote_marketplace;
 pub mod skill_md;
 
 pub use builder::SkillBuilder;
@@ -61,4 +62,8 @@ pub use marketplace::{
   SkillMarketplaceIndex,
 };
 pub use mcp_tools::{McpClientPool, McpToolAdapter, public_tool_name};
+pub use remote_marketplace::{
+  DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, MarketplacePackageType, MarketplaceSignature,
+  MarketplaceSource, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
+};
 pub use skill_md::SkillMd;
