@@ -132,6 +132,24 @@ was checked in `CachedMarketplaceArtifact::signature_checked`.
 
 The following pieces are intentionally separate follow-up tasks:
 
-- `agentflow marketplace search/install/update/verify` CLI;
+- package-specific unpack/install integration from a verified cached artifact
+  into `~/.agentflow/skills` or `~/.agentflow/plugins`;
 - migration path from local `agentflow skill marketplace` files to the unified
   remote marketplace command group.
+
+## CLI
+
+The top-level marketplace CLI works with either an HTTP(S) registry URL or a
+local remote marketplace TOML file:
+
+```bash
+agentflow marketplace search https://registry.example.com/marketplace.toml rust --type skill
+agentflow marketplace update https://registry.example.com/marketplace.toml
+agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill
+agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
+```
+
+`install` currently downloads and verifies the artifact into the marketplace
+cache. It does not yet unpack a Skill into `~/.agentflow/skills` or a Plugin
+into `~/.agentflow/plugins`; that final package-specific handoff is the next
+installation integration step.

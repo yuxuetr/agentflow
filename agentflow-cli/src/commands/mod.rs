@@ -3,6 +3,7 @@ pub mod config;
 pub mod doctor;
 pub mod image;
 pub mod llm;
+pub mod marketplace;
 pub mod mcp;
 #[cfg(feature = "plugin")]
 pub mod plugin;

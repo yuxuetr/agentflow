@@ -168,6 +168,37 @@ impl RemoteMarketplaceCache {
     Ok(self.artifact_path(entry)?.is_file())
   }
 
+  pub fn verify_cached_artifact(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+  ) -> Result<CachedMarketplaceArtifact, SkillError> {
+    let path = self.artifact_path(entry)?;
+    let bytes = fs::read(&path).map_err(|err| {
+      SkillError::IoError(format!(
+        "failed to read cached artifact '{}': {}",
+        path.display(),
+        err
+      ))
+    })?;
+    let expected = entry.source.normalized_checksum()?;
+    let actual = sha256_bytes(&bytes);
+    if actual != expected {
+      return Err(validation_error(format!(
+        "Cached artifact checksum mismatch for '{}@{}' (expected {}, got {})",
+        entry.name, entry.version, expected, actual
+      )));
+    }
+    self.signature_verifier.verify(entry, &bytes)?;
+    Ok(CachedMarketplaceArtifact {
+      entry_name: entry.name.clone(),
+      version: entry.version.clone(),
+      package_type: entry.package_type,
+      path,
+      checksum_sha256: actual,
+      signature_checked: entry.signature.is_some(),
+    })
+  }
+
   pub async fn fetch_and_cache_artifact(
     &self,
     entry: &RemoteMarketplaceEntry,
@@ -815,6 +846,20 @@ value = "abc"
 
     let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
     assert!(err.to_string().contains("Unsupported signature algorithm"));
+  }
+
+  #[test]
+  fn remote_marketplace_cache_verifies_existing_artifact() {
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let bytes = b"package bytes";
+    let entry = signed_entry_for_bytes(bytes);
+    cache.cache_artifact_bytes(&entry, bytes).unwrap();
+
+    let cached = cache.verify_cached_artifact(&entry).unwrap();
+
+    assert_eq!(cached.checksum_sha256, sha256_bytes(bytes));
+    assert!(cached.signature_checked);
   }
 
   async fn spawn_registry_server(status: u16, body: &str) -> (String, tokio::task::JoinHandle<()>) {

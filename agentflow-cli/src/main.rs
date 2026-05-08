@@ -9,7 +9,9 @@ mod redaction;
 use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
-use commands::{audio, config as config_cmd, doctor, image, llm, mcp, skill, trace, workflow};
+use commands::{
+  audio, config as config_cmd, doctor, image, llm, marketplace, mcp, skill, trace, workflow,
+};
 
 #[derive(Parser)]
 #[command(name = "agentflow", version, about = "AgentFlow V2 CLI")]
@@ -34,6 +36,8 @@ enum Commands {
   Mcp(McpArgs),
   /// Skill management commands
   Skill(SkillArgs),
+  /// Remote Skill / Plugin marketplace commands
+  Marketplace(RemoteMarketplaceArgs),
   /// Trace inspection and replay commands
   Trace(TraceArgs),
   /// Diagnose local AgentFlow configuration and runtime capabilities
@@ -86,6 +90,11 @@ struct McpArgs {
 struct SkillArgs {
   #[command(subcommand)]
   command: SkillCommands,
+}
+#[derive(Args)]
+struct RemoteMarketplaceArgs {
+  #[command(subcommand)]
+  command: RemoteMarketplaceCommands,
 }
 #[derive(Args)]
 struct TraceArgs {
@@ -500,6 +509,54 @@ enum SkillMarketplaceCommands {
 }
 
 #[derive(Subcommand)]
+enum RemoteMarketplaceCommands {
+  /// Search a remote marketplace manifest for Skills or Plugins
+  Search {
+    /// HTTP(S) registry URL or local remote marketplace TOML file
+    registry: String,
+    /// Optional text query matched against name, aliases, and description
+    query: Option<String>,
+    /// Restrict results to one package type
+    #[arg(long = "type", value_parser = ["skill", "plugin"])]
+    package_type: Option<String>,
+  },
+  /// Download and cache a verified package artifact
+  Install {
+    /// HTTP(S) registry URL or local remote marketplace TOML file
+    registry: String,
+    /// Package name or alias
+    package: String,
+    /// Disambiguate when the same name exists as both a Skill and Plugin
+    #[arg(long = "type", value_parser = ["skill", "plugin"])]
+    package_type: Option<String>,
+    /// Cache directory (default: ~/.agentflow/marketplace/cache)
+    #[arg(long)]
+    cache_dir: Option<String>,
+  },
+  /// Fetch and cache the registry manifest itself
+  Update {
+    /// HTTP(S) registry URL or local remote marketplace TOML file
+    registry: String,
+    /// Cache directory (default: ~/.agentflow/marketplace/cache)
+    #[arg(long)]
+    cache_dir: Option<String>,
+  },
+  /// Verify cached package artifacts against marketplace checksums/signatures
+  Verify {
+    /// HTTP(S) registry URL or local remote marketplace TOML file
+    registry: String,
+    /// Optional package name or alias. When omitted, verifies all matching entries.
+    package: Option<String>,
+    /// Restrict verification to one package type
+    #[arg(long = "type", value_parser = ["skill", "plugin"])]
+    package_type: Option<String>,
+    /// Cache directory (default: ~/.agentflow/marketplace/cache)
+    #[arg(long)]
+    cache_dir: Option<String>,
+  },
+}
+
+#[derive(Subcommand)]
 enum TraceCommands {
   /// Replay a persisted workflow/agent trace without re-executing tools or LLMs
   Replay {
@@ -906,6 +963,29 @@ async fn main() {
         dry_run,
         smoke,
       } => skill::test::execute(skill_dir, dry_run, smoke).await,
+    },
+    Commands::Marketplace(args) => match args.command {
+      RemoteMarketplaceCommands::Search {
+        registry,
+        query,
+        package_type,
+      } => marketplace::search(registry, query, package_type).await,
+      RemoteMarketplaceCommands::Install {
+        registry,
+        package,
+        package_type,
+        cache_dir,
+      } => marketplace::install(registry, package, package_type, cache_dir).await,
+      RemoteMarketplaceCommands::Update {
+        registry,
+        cache_dir,
+      } => marketplace::update(registry, cache_dir).await,
+      RemoteMarketplaceCommands::Verify {
+        registry,
+        package,
+        package_type,
+        cache_dir,
+      } => marketplace::verify(registry, package, package_type, cache_dir).await,
     },
     Commands::Trace(args) => match args.command {
       TraceCommands::Replay {
