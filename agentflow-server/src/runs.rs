@@ -21,7 +21,8 @@ use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use agentflow_db::{NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
+use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
+use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -213,6 +214,13 @@ pub struct ListRunsResponse {
   pub runs: Vec<Run>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RunGraphResponse {
+  pub graph: serde_json::Value,
+  pub mermaid: String,
+  pub active_node: Option<String>,
+}
+
 /// `GET /v1/runs` — list recent runs for a tenant, newest first.
 pub async fn list_runs(
   State(state): State<AppState>,
@@ -222,6 +230,60 @@ pub async fn list_runs(
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
   let runs = state.repos.runs.list(&tenant_id, limit).await?;
   Ok(Json(ListRunsResponse { runs }))
+}
+
+/// `GET /v1/runs/{id}/graph` — convert the stored workflow to
+/// `agentflow-viz` JSON/Mermaid and overlay status from persisted events.
+pub async fn get_run_graph(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+) -> Result<Json<RunGraphResponse>, ApiError> {
+  let run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+
+  let mut graph = from_yaml(&run.workflow)
+    .map_err(|e| ApiError::BadRequest(format!("workflow cannot be visualized: {}", e)))?;
+  let events = state.repos.events.list_after(id, -1, 1_000).await?;
+  let mut active_node = None;
+  for event in events {
+    let Some(node_id) = event
+      .payload
+      .get("node_id")
+      .and_then(|value| value.as_str())
+    else {
+      continue;
+    };
+    let status = match event.kind.as_str() {
+      "node.started" => Some(NodeStatus::Running),
+      "node.completed" => Some(NodeStatus::Completed),
+      "node.failed" => Some(NodeStatus::Failed),
+      "node.skipped" => Some(NodeStatus::Skipped),
+      _ => None,
+    };
+    if let Some(status) = status {
+      graph.update_node_status(node_id, status);
+      active_node = Some(node_id.to_string());
+    }
+  }
+
+  let graph_json = render(&graph, OutputFormat::Json)
+    .and_then(|json| {
+      serde_json::from_str(&json)
+        .map_err(|e| agentflow_viz::RenderError::InvalidGraph(e.to_string()))
+    })
+    .map_err(|e| ApiError::Internal(format!("failed to render graph json: {}", e)))?;
+  let mermaid = render(&graph, OutputFormat::Mermaid)
+    .map_err(|e| ApiError::Internal(format!("failed to render mermaid graph: {}", e)))?;
+
+  Ok(Json(RunGraphResponse {
+    graph: graph_json,
+    mermaid,
+    active_node,
+  }))
 }
 
 /// `GET /v1/runs/{id}` — return the current run state.

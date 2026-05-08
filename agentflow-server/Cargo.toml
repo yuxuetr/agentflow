@@ -27,6 +27,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 agentflow-db = { path = "../agentflow-db" }
 agentflow-core = { path = "../agentflow-core" }
 agentflow-skills = { path = "../agentflow-skills" }
+agentflow-viz = { path = "../agentflow-viz" }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

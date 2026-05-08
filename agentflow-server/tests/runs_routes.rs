@@ -5,7 +5,7 @@
 //! hermetic. Wires the [`StubExecutor`] so submission completes without
 //! depending on `agentflow-core`.
 
-use agentflow_db::{Database, RunRepo, RunStatus};
+use agentflow_db::{Database, EventRepo, NewEvent, RunRepo, RunStatus};
 use agentflow_server::{AppState, create_router};
 use axum::{
   body::Body,
@@ -227,4 +227,80 @@ async fn list_runs_returns_recent_rows_for_tenant() {
   assert!(runs.iter().any(|run| run["id"] == first_id.to_string()));
   assert!(runs.iter().any(|run| run["id"] == second_id.to_string()));
   assert!(runs.iter().all(|run| run["tenant_id"] == "tenant-a"));
+}
+
+#[tokio::test]
+async fn get_run_graph_returns_visualized_workflow_with_status() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping get_run_graph_returns_visualized_workflow_with_status");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(agentflow_db::NewRun {
+      id,
+      workflow: r#"
+name: Graph Demo
+nodes:
+  - id: start
+    type: template
+  - id: finish
+    type: template
+    dependencies: [start]
+"#
+      .into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      tenant_id: "default".into(),
+    })
+    .await
+    .unwrap();
+  state
+    .repos
+    .events
+    .append(NewEvent {
+      run_id: id,
+      seq: 0,
+      kind: "node.started".into(),
+      payload: json!({"node_id": "start"}),
+    })
+    .await
+    .unwrap();
+  state
+    .repos
+    .events
+    .append(NewEvent {
+      run_id: id,
+      seq: 1,
+      kind: "node.completed".into(),
+      payload: json!({"node_id": "start"}),
+    })
+    .await
+    .unwrap();
+
+  let app = create_router(state);
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/runs/{}/graph", id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 16384)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(body["active_node"], "start");
+  assert!(body["mermaid"].as_str().unwrap().contains("start"));
+  let nodes = body["graph"]["nodes"].as_array().unwrap();
+  let start = nodes
+    .iter()
+    .find(|node| node["id"] == "start")
+    .expect("start node");
+  assert_eq!(start["status"], "completed");
 }

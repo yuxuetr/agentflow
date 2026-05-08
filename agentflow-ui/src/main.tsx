@@ -28,6 +28,20 @@ type StreamedEvent = {
   ts: string;
 };
 
+type VisualNode = {
+  id: string;
+  label?: string;
+  status?: string;
+};
+
+type RunGraph = {
+  graph: {
+    nodes?: VisualNode[];
+  };
+  mermaid: string;
+  active_node?: string | null;
+};
+
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'closed' | 'error';
 
 const formatTime = (value?: string | null) => {
@@ -107,6 +121,7 @@ function App() {
   const [runId, setRunId] = useState('');
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
+  const [runGraph, setRunGraph] = useState<RunGraph | null>(null);
   const [events, setEvents] = useState<StreamedEvent[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [state, setState] = useState<ConnectionState>('idle');
@@ -118,11 +133,18 @@ function App() {
   );
 
   const nodeSummaries = useMemo(() => {
+    if (runGraph?.graph.nodes?.length) {
+      return runGraph.graph.nodes.map((node) => ({
+        name: node.id,
+        status: node.status ?? 'pending',
+        tone: eventTone(node.status ?? 'pending'),
+      }));
+    }
     const seen = new Map<string, { name: string; status: string; tone: string }>();
     for (const event of events) {
       const payload = event.payload as Record<string, unknown>;
       const name =
-        String(payload.node_name ?? payload.node ?? payload.step ?? event.kind).trim() ||
+        String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? event.kind).trim() ||
         event.kind;
       seen.set(name, {
         name,
@@ -131,7 +153,7 @@ function App() {
       });
     }
     return Array.from(seen.values()).slice(-8);
-  }, [events]);
+  }, [events, runGraph]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -181,6 +203,7 @@ function App() {
           return;
         }
         setActiveRun(runFromEnvelope(payload));
+        setRunGraph(null);
         setEvents([]);
         setSelectedSeq(null);
         setState('streaming');
@@ -191,6 +214,11 @@ function App() {
           const history = (await historyResponse.json()) as StreamedEvent[];
           setEvents(history);
           setSelectedSeq(history.at(-1)?.seq ?? null);
+        }
+
+        const graphResponse = await fetch(`/v1/runs/${runId}/graph`);
+        if (graphResponse.ok) {
+          setRunGraph((await graphResponse.json()) as RunGraph);
         }
 
         source = new EventSource(`/v1/runs/${runId}/events`);
@@ -321,7 +349,10 @@ function App() {
                   onClick={() => {
                     const match = findLatest(events, (event) => {
                       const payload = event.payload as Record<string, unknown>;
-                      return String(payload.node_name ?? payload.node ?? payload.step ?? event.kind) === node.name;
+                      return (
+                        String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? event.kind) ===
+                        node.name
+                      );
                     });
                     setSelectedSeq(match?.seq ?? null);
                   }}
@@ -332,6 +363,7 @@ function App() {
               ))
             )}
           </div>
+          {runGraph ? <pre className="mermaid-preview">{runGraph.mermaid}</pre> : null}
         </section>
 
         <aside className="timeline-pane" aria-label="Agent timeline">

@@ -11,6 +11,7 @@ The first implementation is a React + Vite + TypeScript SPA embedded into
 - Server mount: `agentflow-server/src/ui.rs`
 - REST dependency: `GET /v1/runs/{id}`
 - Run list dependency: `GET /v1/runs?tenant_id=default&limit=20`
+- DAG dependency: `GET /v1/runs/{id}/graph`
 - Trace history dependency: `GET /v1/runs/{id}/events/history`
 - Live stream dependency: `GET /v1/runs/{id}/events`
 
@@ -48,19 +49,17 @@ The Vite dev server should proxy or target an `agentflow-server` instance for
 
 - Run summary: status, tenant, event count, workflow body.
 - Run list: recent runs for the selected tenant.
-- DAG status: last observed nodes inferred from streamed event payloads.
+- DAG status: `agentflow-viz` graph JSON/Mermaid overlaid with persisted node status events.
 - Agent timeline: ordered event stream, with agent/tool/failure status tones.
 - Tool details: selected event payload rendered as JSON.
 
 ## Current Boundaries
 
 - The debugger streams one selected run at a time.
-- DAG layout currently infers node labels from event payloads. The follow-up
-  milestone will consume `agentflow-viz` Mermaid/DOT output and highlight the
-  active node from trace events.
+- DAG layout is generated from the stored workflow YAML. Runs submitted as
+  opaque workflow references or invalid YAML fall back to inferred event labels.
 - Trace replay is represented by `/events/history` plus the selected event
-  detail pane; a dedicated replay browser that replaces or complements the TUI
-  remains open.
+  detail pane. The TUI remains the headless SSH/CI alternative.
 
 ## Verification
 

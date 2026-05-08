@@ -32,7 +32,8 @@ pub use events_stream::{
 };
 pub use runs::{
   CreateRunRequest, CreateRunResponse, ListRunsQuery, ListRunsResponse, RunContext, RunExecutor,
-  RunResponse, StubExecutor, default_executor, get_run, list_runs, submit_run,
+  RunGraphResponse, RunResponse, StubExecutor, default_executor, get_run, get_run_graph, list_runs,
+  submit_run,
 };
 pub use scheduler::{
   InMemoryWorkerProtocol, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
@@ -126,6 +127,7 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/whoami", get(whoami))
     .route("/v1/runs", get(list_runs).post(submit_run))
     .route("/v1/runs/:id", get(get_run))
+    .route("/v1/runs/:id/graph", get(get_run_graph))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
     .route("/v1/skills", get(list_skills))

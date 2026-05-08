@@ -3,6 +3,7 @@ const state = {
   runId: "",
   runs: [],
   run: null,
+  graph: null,
   events: [],
   selectedSeq: null,
   connection: "idle",
@@ -71,10 +72,17 @@ const escapeHtml = (value) =>
 
 const eventNodeName = (event) => {
   const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
-  return String(payload.node_name ?? payload.node ?? payload.step ?? event.kind).trim() || event.kind;
+  return String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? event.kind).trim() || event.kind;
 };
 
 const nodeSummaries = () => {
+  if (state.graph?.graph?.nodes?.length) {
+    return state.graph.graph.nodes.map((node) => ({
+      name: node.id,
+      status: node.status ?? "pending",
+      tone: eventTone(node.status ?? "pending"),
+    }));
+  }
   const seen = new Map();
   for (const event of state.events) {
     const name = eventNodeName(event);
@@ -111,6 +119,7 @@ const connect = async () => {
     const payload = await response.json();
     setState({
       run: runFromEnvelope(payload),
+      graph: null,
       connection: "streaming",
       error: null,
     });
@@ -120,6 +129,12 @@ const connect = async () => {
     if (historyResponse.ok) {
       state.events = await historyResponse.json();
       state.selectedSeq = state.events.at(-1)?.seq ?? null;
+      render();
+    }
+
+    const graphResponse = await fetch(`/v1/runs/${encodeURIComponent(state.runId)}/graph`);
+    if (graphResponse.ok) {
+      state.graph = await graphResponse.json();
       render();
     }
 
@@ -228,6 +243,7 @@ const render = () => {
                     .join("")
             }
           </div>
+          ${state.graph ? `<pre class="mermaid-preview">${escapeHtml(state.graph.mermaid)}</pre>` : ""}
         </section>
         <aside class="timeline-pane" aria-label="Agent timeline">
           <div class="pane-heading"><span>Timeline</span><strong>${selected ? `#${selected.seq}` : "-"}</strong></div>

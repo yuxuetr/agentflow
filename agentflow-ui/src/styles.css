@@ -224,6 +224,21 @@ h1 {
   padding: 12px;
 }
 
+.mermaid-preview {
+  max-height: 120px;
+  margin: 0 12px 12px;
+  overflow: auto;
+  border: 1px solid #e1e6ed;
+  border-radius: 6px;
+  background: #fbfcfd;
+  color: #394756;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre;
+}
+
 .empty-node,
 .node {
   display: grid;
