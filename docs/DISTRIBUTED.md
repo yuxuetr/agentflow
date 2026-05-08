@@ -101,7 +101,10 @@ that sits above the protocol. It currently provides:
 - `claim_task`: let a worker claim FIFO work and record the assignment.
 - `report_result`: validate ownership through the protocol, then aggregate
   successful outputs, failed task counts, retryable failure counts, and worker
-  trace fragments on the run snapshot.
+  trace fragments on the run snapshot. The control plane also produces
+  `StitchedWorkerTraceEvent` entries with global sequence, worker id, task id,
+  node id, attempt, local sequence, kind, and payload so OTel export can consume
+  one ordered cross-worker stream.
 - `heartbeat`: record worker liveness and free-slot capacity.
 
 This snapshot is still in-memory. The next persistence step is to project these
@@ -143,6 +146,6 @@ The scheduler will distinguish three cases:
 - Worker stops heartbeating while holding a task: requeue or fail based on
   attempt budget and node idempotency.
 
-Trace fragments already travel in `WorkerTaskResult`; when retries are added,
-each attempt will be preserved so OTel export can show the full cross-worker
-lineage.
+Trace fragments already travel in `WorkerTaskResult` and are stitched by the
+control plane into a global per-run order. When retries are added, each attempt
+will be preserved so OTel export can show the full cross-worker lineage.

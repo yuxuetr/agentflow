@@ -37,8 +37,8 @@ pub use runs::{
 };
 pub use scheduler::{
   InMemoryWorkerProtocol, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
-  WorkerAssignment, WorkerControlPlane, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
-  WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
+  StitchedWorkerTraceEvent, WorkerAssignment, WorkerControlPlane, WorkerHeartbeat, WorkerId,
+  WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
 };
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,

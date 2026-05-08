@@ -108,6 +108,21 @@ pub struct WorkerTraceEvent {
   pub payload: serde_json::Value,
 }
 
+/// Worker trace event after the control plane assigns global ordering and
+/// execution ownership metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StitchedWorkerTraceEvent {
+  pub global_seq: i64,
+  pub task_id: Uuid,
+  pub worker_id: WorkerId,
+  pub run_id: Uuid,
+  pub node_id: String,
+  pub attempt: u32,
+  pub local_seq: i64,
+  pub kind: String,
+  pub payload: serde_json::Value,
+}
+
 /// Worker heartbeat payload. `active_task` is `None` when the worker is idle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerHeartbeat {
@@ -249,6 +264,26 @@ where
       .entry(assignment.run_id)
       .or_insert_with(|| RunControlSnapshot::new(assignment.run_id));
     run.running_tasks = run.running_tasks.saturating_sub(1);
+    let next_global_seq = run.stitched_trace_events.len() as i64;
+    run
+      .stitched_trace_events
+      .extend(
+        result
+          .events()
+          .iter()
+          .enumerate()
+          .map(|(idx, event)| StitchedWorkerTraceEvent {
+            global_seq: next_global_seq + idx as i64,
+            task_id,
+            worker_id: assignment.worker_id.clone(),
+            run_id: assignment.run_id,
+            node_id: assignment.node_id.clone(),
+            attempt: assignment.attempt,
+            local_seq: event.seq,
+            kind: event.kind.clone(),
+            payload: event.payload.clone(),
+          }),
+      );
     run.trace_events.extend(result.events().iter().cloned());
     match result {
       WorkerTaskResult::Succeeded { output, .. } => {
@@ -281,6 +316,18 @@ where
 
   pub async fn run_snapshot(&self, run_id: Uuid) -> Option<RunControlSnapshot> {
     self.state.lock().await.runs.get(&run_id).cloned()
+  }
+
+  /// Return the stitched cross-worker trace for one run.
+  pub async fn stitched_trace(&self, run_id: Uuid) -> Vec<StitchedWorkerTraceEvent> {
+    self
+      .state
+      .lock()
+      .await
+      .runs
+      .get(&run_id)
+      .map(|run| run.stitched_trace_events.clone())
+      .unwrap_or_default()
   }
 
   pub async fn worker_heartbeat(&self, worker_id: &WorkerId) -> Option<WorkerHeartbeat> {
@@ -320,6 +367,7 @@ pub struct RunControlSnapshot {
   pub last_error: Option<String>,
   pub outputs: HashMap<String, serde_json::Value>,
   pub trace_events: Vec<WorkerTraceEvent>,
+  pub stitched_trace_events: Vec<StitchedWorkerTraceEvent>,
 }
 
 impl RunControlSnapshot {
@@ -335,6 +383,7 @@ impl RunControlSnapshot {
       last_error: None,
       outputs: HashMap::new(),
       trace_events: Vec::new(),
+      stitched_trace_events: Vec::new(),
     }
   }
 
@@ -665,6 +714,15 @@ mod tests {
     );
     assert_eq!(snapshot.trace_events.len(), 1);
     assert_eq!(snapshot.trace_events[0].kind, "node_completed");
+    assert_eq!(snapshot.stitched_trace_events.len(), 1);
+    assert_eq!(snapshot.stitched_trace_events[0].global_seq, 0);
+    assert_eq!(snapshot.stitched_trace_events[0].local_seq, 7);
+    assert_eq!(snapshot.stitched_trace_events[0].task_id, task_id);
+    assert_eq!(snapshot.stitched_trace_events[0].worker_id.0, "worker-a");
+    assert_eq!(snapshot.stitched_trace_events[0].node_id, "node_a");
+
+    let stitched = control.stitched_trace(run_id).await;
+    assert_eq!(stitched, snapshot.stitched_trace_events);
   }
 
   #[tokio::test]
