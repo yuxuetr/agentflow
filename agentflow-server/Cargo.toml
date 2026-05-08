@@ -28,6 +28,7 @@ agentflow-db = { path = "../agentflow-db" }
 agentflow-core = { path = "../agentflow-core" }
 agentflow-skills = { path = "../agentflow-skills" }
 agentflow-viz = { path = "../agentflow-viz" }
+agentflow-tracing = { path = "../agentflow-tracing" }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

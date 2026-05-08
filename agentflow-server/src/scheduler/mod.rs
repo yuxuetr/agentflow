@@ -15,6 +15,8 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use agentflow_tracing::{OtelAttribute, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelStatus};
+
 /// Transport selected for the v1.0-rc distributed control plane.
 pub const SELECTED_TRANSPORT: WorkerTransport = WorkerTransport::Grpc;
 
@@ -121,6 +123,7 @@ pub struct StitchedWorkerTraceEvent {
   pub local_seq: i64,
   pub kind: String,
   pub payload: serde_json::Value,
+  pub ts: DateTime<Utc>,
 }
 
 /// Worker heartbeat payload. `active_task` is `None` when the worker is idle.
@@ -265,6 +268,7 @@ where
       .or_insert_with(|| RunControlSnapshot::new(assignment.run_id));
     run.running_tasks = run.running_tasks.saturating_sub(1);
     let next_global_seq = run.stitched_trace_events.len() as i64;
+    let stitched_at = Utc::now();
     run
       .stitched_trace_events
       .extend(
@@ -282,6 +286,7 @@ where
             local_seq: event.seq,
             kind: event.kind.clone(),
             payload: event.payload.clone(),
+            ts: stitched_at,
           }),
       );
     run.trace_events.extend(result.events().iter().cloned());
@@ -328,6 +333,12 @@ where
       .get(&run_id)
       .map(|run| run.stitched_trace_events.clone())
       .unwrap_or_default()
+  }
+
+  /// Return OpenTelemetry boundary spans derived from the stitched worker
+  /// trace for one run.
+  pub async fn stitched_otel_spans(&self, run_id: Uuid) -> Vec<OtelSpan> {
+    stitched_trace_to_otel_spans(run_id, &self.stitched_trace(run_id).await)
   }
 
   pub async fn worker_heartbeat(&self, worker_id: &WorkerId) -> Option<WorkerHeartbeat> {
@@ -398,6 +409,160 @@ impl RunControlSnapshot {
       RunControlStatus::Succeeded
     }
   }
+}
+
+/// Convert stitched worker trace events into OpenTelemetry boundary spans.
+///
+/// The output contains one distributed-run root span plus one child span per
+/// task attempt. Worker-local trace fragments are preserved as span events in
+/// global order.
+pub fn stitched_trace_to_otel_spans(
+  run_id: Uuid,
+  events: &[StitchedWorkerTraceEvent],
+) -> Vec<OtelSpan> {
+  let trace_id = hex_hash(&format!("distributed-run:{run_id}"), 16);
+  let root_span_id = hex_hash(&format!("distributed-run:{run_id}:root"), 8);
+  let start = events
+    .first()
+    .map(|event| unix_nanos(event.ts))
+    .unwrap_or_default();
+  let end = events
+    .last()
+    .map(|event| unix_nanos(event.ts))
+    .unwrap_or(start);
+  let mut spans = vec![OtelSpan {
+    trace_id: trace_id.clone(),
+    span_id: root_span_id.clone(),
+    parent_span_id: None,
+    name: format!("agentflow.distributed_run {run_id}"),
+    kind: OtelSpanKind::Internal,
+    start_time_unix_nano: start,
+    end_time_unix_nano: end,
+    attributes: vec![
+      OtelAttribute::string("agentflow.run.id", run_id.to_string()),
+      OtelAttribute::i64("agentflow.worker.event_count", events.len() as i64),
+    ],
+    events: Vec::new(),
+    status: otel_status_for_events(events),
+  }];
+
+  let mut groups: Vec<TaskTraceGroup> = Vec::new();
+  for event in events {
+    if let Some(group) = groups
+      .iter_mut()
+      .find(|group| group.task_id == event.task_id && group.attempt == event.attempt)
+    {
+      group.events.push(event.clone());
+    } else {
+      groups.push(TaskTraceGroup {
+        task_id: event.task_id,
+        worker_id: event.worker_id.clone(),
+        run_id: event.run_id,
+        node_id: event.node_id.clone(),
+        attempt: event.attempt,
+        events: vec![event.clone()],
+      });
+    }
+  }
+
+  for group in groups {
+    spans.push(group.into_otel_span(&trace_id, &root_span_id));
+  }
+
+  spans
+}
+
+#[derive(Debug)]
+struct TaskTraceGroup {
+  task_id: Uuid,
+  worker_id: WorkerId,
+  run_id: Uuid,
+  node_id: String,
+  attempt: u32,
+  events: Vec<StitchedWorkerTraceEvent>,
+}
+
+impl TaskTraceGroup {
+  fn into_otel_span(self, trace_id: &str, parent_span_id: &str) -> OtelSpan {
+    let start = self
+      .events
+      .first()
+      .map(|event| unix_nanos(event.ts))
+      .unwrap_or_default();
+    let end = self
+      .events
+      .last()
+      .map(|event| unix_nanos(event.ts))
+      .unwrap_or(start);
+    let span_events = self
+      .events
+      .iter()
+      .map(|event| OtelSpanEvent {
+        name: event.kind.clone(),
+        time_unix_nano: unix_nanos(event.ts),
+        attributes: vec![
+          OtelAttribute::i64("agentflow.worker.global_seq", event.global_seq),
+          OtelAttribute::i64("agentflow.worker.local_seq", event.local_seq),
+          OtelAttribute::string("agentflow.worker.payload", event.payload.to_string()),
+        ],
+      })
+      .collect();
+
+    OtelSpan {
+      trace_id: trace_id.to_string(),
+      span_id: hex_hash(
+        &format!("{}:{}:{}", self.task_id, self.worker_id.0, self.attempt),
+        8,
+      ),
+      parent_span_id: Some(parent_span_id.to_string()),
+      name: format!("agentflow.worker_task {}", self.node_id),
+      kind: OtelSpanKind::Internal,
+      start_time_unix_nano: start,
+      end_time_unix_nano: end,
+      attributes: vec![
+        OtelAttribute::string("agentflow.run.id", self.run_id.to_string()),
+        OtelAttribute::string("agentflow.worker.id", self.worker_id.0),
+        OtelAttribute::string("agentflow.task.id", self.task_id.to_string()),
+        OtelAttribute::string("agentflow.node.id", self.node_id),
+        OtelAttribute::i64("agentflow.task.attempt", i64::from(self.attempt)),
+      ],
+      events: span_events,
+      status: otel_status_for_events(&self.events),
+    }
+  }
+}
+
+fn otel_status_for_events(events: &[StitchedWorkerTraceEvent]) -> OtelStatus {
+  if let Some(event) = events.iter().find(|event| {
+    let kind = event.kind.to_ascii_lowercase();
+    kind.contains("failed") || kind.contains("error")
+  }) {
+    OtelStatus::error(event.kind.clone())
+  } else {
+    OtelStatus::ok()
+  }
+}
+
+fn unix_nanos(time: DateTime<Utc>) -> u64 {
+  time.timestamp_nanos_opt().unwrap_or_default() as u64
+}
+
+fn hex_hash(input: &str, bytes: usize) -> String {
+  let mut hash = 0xcbf29ce484222325u64;
+  for byte in input.as_bytes() {
+    hash ^= u64::from(*byte);
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+
+  let mut out = format!("{hash:016x}");
+  let required_len = bytes * 2;
+  while out.len() < required_len {
+    hash ^= hash.rotate_left(13);
+    hash = hash.wrapping_mul(0x100000001b3);
+    out.push_str(&format!("{hash:016x}"));
+  }
+  out.truncate(required_len);
+  out
 }
 
 /// In-memory implementation used for unit tests and local control-plane
@@ -723,6 +888,17 @@ mod tests {
 
     let stitched = control.stitched_trace(run_id).await;
     assert_eq!(stitched, snapshot.stitched_trace_events);
+    let spans = control.stitched_otel_spans(run_id).await;
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].parent_span_id, None);
+    assert_eq!(
+      spans[0].attributes[1],
+      OtelAttribute::i64("agentflow.worker.event_count", 1)
+    );
+    assert_eq!(spans[1].parent_span_id, Some(spans[0].span_id.clone()));
+    assert_eq!(spans[1].name, "agentflow.worker_task node_a");
+    assert_eq!(spans[1].events.len(), 1);
+    assert_eq!(spans[1].events[0].name, "node_completed");
   }
 
   #[tokio::test]

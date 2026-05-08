@@ -103,8 +103,11 @@ that sits above the protocol. It currently provides:
   successful outputs, failed task counts, retryable failure counts, and worker
   trace fragments on the run snapshot. The control plane also produces
   `StitchedWorkerTraceEvent` entries with global sequence, worker id, task id,
-  node id, attempt, local sequence, kind, and payload so OTel export can consume
-  one ordered cross-worker stream.
+  node id, attempt, local sequence, kind, payload, and stitch timestamp. The
+  same snapshot can be converted into `agentflow-tracing::OtelSpan` values with
+  `WorkerControlPlane::stitched_otel_spans(...)`: one distributed-run root span
+  plus one child span per task attempt, with worker-local fragments preserved as
+  span events.
 - `heartbeat`: record worker liveness and free-slot capacity.
 
 This snapshot is still in-memory. The next persistence step is to project these
@@ -147,5 +150,7 @@ The scheduler will distinguish three cases:
   attempt budget and node idempotency.
 
 Trace fragments already travel in `WorkerTaskResult` and are stitched by the
-control plane into a global per-run order. When retries are added, each attempt
-will be preserved so OTel export can show the full cross-worker lineage.
+control plane into a global per-run order. The OTel span mapping is available at
+the control-plane boundary; the remaining production step is wiring those spans
+to the configured OTLP exporter. When retries are added, each attempt will be
+preserved so OTel export can show the full cross-worker lineage.
