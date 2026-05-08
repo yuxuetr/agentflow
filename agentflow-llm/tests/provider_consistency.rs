@@ -7,12 +7,17 @@
 //!
 //! 1. **Success path**: text content, `StopReason::Stop`, populated
 //!    [`TokenUsage`] (prompt / completion / total).
-//! 2. **Authentication failure (401)**: all providers surface
+//! 2. **Tool-calling success path**: `tool_calls` array length 1, name /
+//!    arguments / id parsed identically regardless of provider wire format
+//!    (OpenAI `tool_calls`, Anthropic `tool_use` content blocks, Google
+//!    `functionCall` parts), `StopReason::ToolCalls`. id may be synthesised
+//!    when the provider doesn't supply one (Google), but must be non-empty.
+//! 3. **Authentication failure (401)**: all providers surface
 //!    [`LLMError::HttpError`] with `status_code = 401`, regardless of how
 //!    they label the error in the response body.
-//! 3. **Rate limit (429)**: all providers surface
+//! 4. **Rate limit (429)**: all providers surface
 //!    [`LLMError::HttpError`] with `status_code = 429`.
-//! 4. **Server error (500)**: all providers surface
+//! 5. **Server error (500)**: all providers surface
 //!    [`LLMError::HttpError`] with `status_code = 500`.
 //!
 //! These are mocked via a hand-rolled tokio TCP listener — same pattern as
@@ -29,7 +34,7 @@ use agentflow_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
   ProviderRequest, StepFunProvider,
 };
-use agentflow_llm::tool_calling::StopReason;
+use agentflow_llm::tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec};
 use agentflow_llm::LLMError;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -141,6 +146,31 @@ fn provider_request(model: &str) -> ProviderRequest {
   }
 }
 
+/// Build a `ProviderRequest` that advertises a single `get_weather` tool and
+/// requires the model to call it. The mock servers below ignore the request
+/// body and return canned tool-call responses, so the only thing this helper
+/// needs to do is exercise the request-side `tools` / `tool_choice` encode
+/// path without crashing the provider.
+fn provider_request_with_tools(model: &str) -> ProviderRequest {
+  let weather_tool = ToolSpec::new(
+    "get_weather",
+    "Return the weather for a city",
+    json!({
+      "type": "object",
+      "properties": {"city": {"type": "string"}},
+      "required": ["city"]
+    }),
+  );
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({"role": "user", "content": "weather in Tokyo?"})],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: Some(vec![weather_tool]),
+    tool_choice: Some(ToolChoice::Required),
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Per-provider success-path fixtures
 // -----------------------------------------------------------------------------
@@ -224,6 +254,99 @@ async fn stepfun_success_path() {
   assert_text(&response.content, "ok");
   assert_usage(&response.usage);
   assert_eq!(response.stop_reason, Some(StopReason::Stop));
+}
+
+// -----------------------------------------------------------------------------
+// Per-provider tool-calling fixtures
+//
+// Each fixture is the provider's *native* wire format for "model called
+// `get_weather(city='Tokyo')`". The cross-provider contract being tested is:
+// regardless of where in the response the tool call lives (OpenAI's
+// `tool_calls` array, Anthropic's `tool_use` content block, Google's
+// `functionCall` part), the parsed `ProviderResponse.tool_calls` is one entry
+// with `name = "get_weather"`, `arguments.city = "Tokyo"`, a non-empty `id`,
+// and `stop_reason = StopReason::ToolCalls`.
+// -----------------------------------------------------------------------------
+
+const OPENAI_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+const ANTHROPIC_TOOL_CALL: &str = r#"{"id":"msg_test","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"I'll check the weather."},{"type":"tool_use","id":"toolu_abc","name":"get_weather","input":{"city":"Tokyo"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":5}}"#;
+// Note: Google emits `finishReason: "STOP"` even when functionCall is present;
+// the provider adapter overrides to `ToolCalls` when functionCall parts exist.
+const GOOGLE_TOOL_CALL: &str = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#;
+const MOONSHOT_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"moonshot-v1-8k","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+const STEPFUN_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"step-1-8k","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+
+// -----------------------------------------------------------------------------
+// Tool-calling consistency: every provider parses a model-issued tool call
+// into a single `ToolCallRequest { name, arguments, id }` and reports
+// `StopReason::ToolCalls`, regardless of the underlying wire format.
+// -----------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_tool_call_path() {
+  let (base_url, _captured) = spawn_mock_server(200, OPENAI_TOOL_CALL.to_string()).await;
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let response = provider
+    .execute(&provider_request_with_tools("gpt-4o-mini"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_tool_call_path() {
+  let (base_url, _captured) = spawn_mock_server(200, ANTHROPIC_TOOL_CALL.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+    .expect("provider");
+  let response = provider
+    .execute(&provider_request_with_tools("claude-3-5-sonnet"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_tool_call_path() {
+  let (base_url, _captured) = spawn_mock_server(200, GOOGLE_TOOL_CALL.to_string()).await;
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let response = provider
+    .execute(&provider_request_with_tools("gemini-1.5-pro"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
+  // Google reports `STOP` on the wire even when emitting a functionCall;
+  // the provider adapter is responsible for normalising to `ToolCalls`.
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_tool_call_path() {
+  let (base_url, _captured) = spawn_mock_server(200, MOONSHOT_TOOL_CALL.to_string()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+    .expect("provider");
+  let response = provider
+    .execute(&provider_request_with_tools("moonshot-v1-8k"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_tool_call_path() {
+  let (base_url, _captured) = spawn_mock_server(200, STEPFUN_TOOL_CALL.to_string()).await;
+  let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+    .expect("provider");
+  let response = provider
+    .execute(&provider_request_with_tools("step-1-8k"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
 }
 
 // -----------------------------------------------------------------------------
@@ -313,6 +436,27 @@ fn assert_text(content: &ContentType, expected: &str) {
     ),
     other => panic!("expected ContentType::Text, got {:?}", other),
   }
+}
+
+fn assert_tool_call(calls: &[ToolCallRequest], expected_name: &str, expected_city: &str) {
+  assert_eq!(calls.len(), 1, "expected exactly one tool call, got {calls:?}");
+  let call = &calls[0];
+  assert_eq!(call.name, expected_name);
+  assert!(
+    !call.id.is_empty(),
+    "tool call id must be populated (synthesised if provider doesn't supply one)"
+  );
+  let city = call
+    .arguments
+    .get("city")
+    .and_then(|v| v.as_str())
+    .unwrap_or_else(|| {
+      panic!(
+        "expected `arguments.city` to be a string, got {}",
+        call.arguments
+      )
+    });
+  assert_eq!(city, expected_city);
 }
 
 fn assert_usage(usage: &Option<agentflow_llm::providers::TokenUsage>) {

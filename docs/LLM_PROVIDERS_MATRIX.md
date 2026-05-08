@@ -80,7 +80,7 @@ The integration suite drives all five HTTP providers through a hand-rolled
 tokio TCP listener and asserts a uniform contract:
 
 ```bash
-cargo test -p agentflow-llm --test provider_consistency  # 10 tests
+cargo test -p agentflow-llm --test provider_consistency  # 15 tests
 ```
 
 Coverage:
@@ -88,6 +88,15 @@ Coverage:
 - **Success path** (5 tests): each provider, given a well-formed response
   in its native shape, returns `ContentType::Text`, `StopReason::Stop`,
   and populated `TokenUsage` (prompt / completion / total).
+- **Tool-calling success path** (5 tests): each provider, given a response
+  carrying a model-issued `get_weather(city="Tokyo")` tool call in its
+  native shape (OpenAI `tool_calls`, Anthropic `tool_use` content blocks,
+  Google `functionCall` parts, Moonshot/StepFun OpenAI-compatible
+  passthrough), parses to a single `ToolCallRequest { name, arguments,
+  id }` with non-empty id (synthesised when the provider doesn't supply
+  one) and reports `StopReason::ToolCalls`. Google's adapter is
+  responsible for normalising `finishReason: STOP` to `ToolCalls` when
+  functionCall parts are present.
 - **Error mapping** (5 tests): each provider, given a 4xx / 5xx response,
   returns `LLMError::HttpError` with the exact status code preserved.
 
@@ -160,9 +169,6 @@ When added, live tests should:
   usage delivery) is not yet covered by the consistency suite.
 - **Multimodal consistency tests**: image + text inputs and provider
   responses with embedded image URLs.
-- **Tool-calling fixtures in the consistency suite**: each provider already
-  has tool-calling unit tests in its own module; the cross-provider
-  consistency layer can adopt the same approach with a shared fixture set.
 - **Live LLM nightly CI job**: gated by `AGENTFLOW_LIVE_LLM_TESTS=1`,
   running once per day with minimum-cost models per provider.
 - **Quota / cost dashboards**: currently each provider exposes raw

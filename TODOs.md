@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-08（P2 #12 PoC + workflow YAML 接入 + `agentflow plugin` CLI 子命令 + `[plugin.capabilities]` → `agentflow-tools::sandbox` 接线）
+最后更新: 2026-05-08（P1 #11 follow-up: 跨 provider tool-calling 一致性 fixture 落地）
 
 维护约定:
 
@@ -432,10 +432,10 @@ PR-B (已完成):
 - [x] 文档: `docs/LLM_PROVIDERS_MATRIX.md` capability 矩阵 + error mapping 契约 + 验证策略 + 加新 provider 的 checklist + follow-up 列表。
 - [ ] **Follow-up**: streaming consistency tests (跨 provider chunk shape / end-of-stream / usage delivery)。
 - [ ] **Follow-up**: multimodal consistency tests (image + text inputs 跨 provider)。
-- [ ] **Follow-up**: tool-calling fixtures 在 cross-provider consistency 层（per-provider 已有单测）。
+- [x] **Follow-up (2026-05-08)**: tool-calling fixtures 在 cross-provider consistency 层。`agentflow-llm/tests/provider_consistency.rs` +5 集成测试 (`{openai,anthropic,google,moonshot,stepfun}_tool_call_path`) 共用 `assert_tool_call(...)` helper，每个 provider 用自己的 native wire format (`tool_calls` array / `tool_use` content block / `functionCall` parts / OpenAI-compatible passthrough) 注入 `get_weather(city="Tokyo")` 响应，断言：解析出唯一一条 `ToolCallRequest`，`name == "get_weather"`、`arguments.city == "Tokyo"`、`id` 非空（Google 合成 `call_<idx>`）、`stop_reason == StopReason::ToolCalls`（含 Google `finishReason: STOP` → `ToolCalls` 的归一化）。`provider_request_with_tools(...)` 同时把 `tools`/`tool_choice` 编入请求确保请求侧编码路径不 panic。`cargo test -p agentflow-llm --test provider_consistency` 现 15 测试全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
 - [ ] **Follow-up**: 集成测试 gated by `AGENTFLOW_LIVE_LLM_TESTS=1`（真实 API 调用，nightly CI 触发；harness 设计已写入 `docs/LLM_PROVIDERS_MATRIX.md`）。
 
-📊 测试增量: agentflow-llm `tests/provider_consistency.rs` +10 集成测试（5 success + 5 error mapping）；`cargo test -p agentflow-llm` 89 lib + 10 provider_consistency + 3 trace_context = 102 tests 全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
+📊 测试增量: agentflow-llm `tests/provider_consistency.rs` +15 集成测试（5 success + 5 tool-call + 5 error mapping）；`cargo test -p agentflow-llm` 89 lib + 15 provider_consistency + 3 trace_context = 107 tests 全绿；`cargo clippy -p agentflow-llm --all-targets -- -D warnings` 干净。
 
 验收标准（基础部分）:
 
@@ -446,7 +446,7 @@ PR-B (已完成):
 涉及文件:
 
 - `agentflow-llm/src/providers/{anthropic,google,moonshot,stepfun}.rs`（新增 `with_client` 构造函数）
-- `agentflow-llm/tests/provider_consistency.rs`（新文件，10 集成测试）
+- `agentflow-llm/tests/provider_consistency.rs`（15 集成测试：5 success + 5 tool-call + 5 error mapping）
 - `docs/LLM_PROVIDERS_MATRIX.md`（新文件）
 
 ---
@@ -659,3 +659,4 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 7. 评估 (2026-04-28): `OVERALL_EVALUATION_REPORT.md` 完成。
 8. 评估 (2026-05-01): `PROJECT_EVALUATION_2026-05-01.md` 完成；规划 N8/N9/N10 三档发布。
 9. P2-15 (2026-05-07): `docs/AGENT_SDK.md` + `custom_runtime` / `custom_reflection` / `custom_memory_summary` 三个 mock-only 示例落地，核心扩展 trait rustdoc 补齐，相关 crate `cargo doc` 警告归零。
+10. P1-11 follow-up (2026-05-08): 跨 provider tool-calling 一致性 fixture 落地。`provider_consistency.rs` 现 15 集成测试 (5 success + 5 tool-call + 5 error mapping)，5 个 provider 各用自己 native wire format (`tool_calls` / `tool_use` / `functionCall`) 跑同一条 `get_weather(city="Tokyo")` 契约，覆盖 id 合成、stop_reason 归一化、arguments 结构化解析。
