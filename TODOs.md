@@ -547,7 +547,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 14. Web UI 调试器
 
-状态: 待开始
+状态: 进行中 (2026-05-08: React + Vite + TypeScript SPA 骨架、`agentflow-server` 内嵌 `/ui` 静态资源、基于现有 run REST/SSE 的单 run 调试视图、`docs/WEB_UI.md` 已落地；run list / agentflow-viz DAG 高亮 / dedicated trace replay 仍待完成)
 
 目标:
 
@@ -556,15 +556,15 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 子任务:
 
-- [ ] 选型: React/Svelte SPA + Vite，TypeScript。
-- [ ] 后端: 复用 `agentflow-server` 的 SSE 路由 + REST。
+- [x] 选型: React/Svelte SPA + Vite，TypeScript。
+- [x] 后端: 复用 `agentflow-server` 的 SSE 路由 + REST。
 - [ ] 视图:
   - DAG 实时状态 (复用 `agentflow-viz` 的 Mermaid/DOT 输出 + 高亮当前节点)。
   - Agent step timeline (Observe → Plan → ToolCall → ToolResult → Reflect → FinalAnswer)。
   - Tool call 详情 (params / output / capability decision)。
   - Trace replay 视图 (替换或补强 TUI)。
-- [ ] 部署: 静态资源打包到 `agentflow-server` 二进制（embed_files / rust-embed），单进程交付。
-- [ ] 文档: `docs/WEB_UI.md`。
+- [x] 部署: 静态资源打包到 `agentflow-server` 二进制（embed_files / rust-embed），单进程交付。
+- [x] 文档: `docs/WEB_UI.md`。
 
 验收标准:
 
