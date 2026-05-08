@@ -1,6 +1,7 @@
 const mount = document.getElementById("agentflow-debugger");
 const state = {
   runId: "",
+  runs: [],
   run: null,
   events: [],
   selectedSeq: null,
@@ -108,6 +109,25 @@ const connect = async () => {
   }
 };
 
+const loadRuns = async () => {
+  try {
+    const response = await fetch("/v1/runs?limit=20");
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.runs = payload.runs ?? [];
+    const shouldConnect = !state.runId && state.runs[0];
+    if (!state.runId && state.runs[0]) {
+      state.runId = state.runs[0].id;
+    }
+    render();
+    if (shouldConnect) {
+      connect();
+    }
+  } catch {
+    // Explicit run-id connection still works when listing is unavailable.
+  }
+};
+
 const render = () => {
   const nodes = nodeSummaries();
   const selected = selectedEvent();
@@ -132,7 +152,20 @@ const render = () => {
       ${state.error ? `<p class="error-line">${escapeHtml(state.error)}</p>` : ""}
       <section class="workspace">
         <aside class="run-pane">
-          <div class="pane-heading"><span>Run</span><strong>${escapeHtml(state.run ? formatTime(state.run.started_at) : "-")}</strong></div>
+          <div class="pane-heading"><span>Runs</span><strong>${escapeHtml(state.run ? formatTime(state.run.started_at) : "-")}</strong></div>
+          <ol class="run-list">
+            ${state.runs
+              .map(
+                (run) => `
+                  <li>
+                    <button class="${run.id === state.runId ? "selected" : ""}" type="button" data-run-id="${escapeHtml(run.id)}">
+                      <span>${escapeHtml((run.workflow ?? "").split("\n")[0] || run.id)}</span>
+                      <small>${escapeHtml(run.status)} · ${escapeHtml(formatTime(run.started_at))}</small>
+                    </button>
+                  </li>`,
+              )
+              .join("")}
+          </ol>
           <pre class="workflow-preview">${escapeHtml(state.run?.workflow ?? "No run loaded.")}</pre>
         </aside>
         <section class="graph-pane" aria-label="DAG status">
@@ -189,6 +222,12 @@ const render = () => {
   for (const button of mount.querySelectorAll("[data-seq]")) {
     button.addEventListener("click", () => setState({ selectedSeq: Number(button.dataset.seq) }));
   }
+  for (const button of mount.querySelectorAll("[data-run-id]")) {
+    button.addEventListener("click", () => {
+      state.runId = button.dataset.runId ?? "";
+      connect();
+    });
+  }
   for (const button of mount.querySelectorAll("[data-node]")) {
     button.addEventListener("click", () => {
       const match = findLatest(state.events, (event) => eventNodeName(event) === button.dataset.node);
@@ -200,6 +239,7 @@ const render = () => {
 const params = new URLSearchParams(window.location.search);
 state.runId = params.get("run") ?? "";
 render();
+loadRuns();
 if (state.runId) {
   connect();
 }

@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use axum::{
   Json,
-  extract::{Path, State},
+  extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -196,6 +196,32 @@ pub async fn submit_run(
 pub struct RunResponse {
   #[serde(flatten)]
   pub run: Run,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListRunsQuery {
+  /// Tenant to list. Defaults to the single-tenant local-dev bucket.
+  #[serde(default)]
+  pub tenant_id: Option<String>,
+  /// Max rows to return, clamped to 1..=100.
+  #[serde(default)]
+  pub limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListRunsResponse {
+  pub runs: Vec<Run>,
+}
+
+/// `GET /v1/runs` — list recent runs for a tenant, newest first.
+pub async fn list_runs(
+  State(state): State<AppState>,
+  Query(params): Query<ListRunsQuery>,
+) -> Result<Json<ListRunsResponse>, ApiError> {
+  let tenant_id = params.tenant_id.unwrap_or_else(|| "default".into());
+  let limit = params.limit.unwrap_or(25).clamp(1, 100);
+  let runs = state.repos.runs.list(&tenant_id, limit).await?;
+  Ok(Json(ListRunsResponse { runs }))
 }
 
 /// `GET /v1/runs/{id}` — return the current run state.

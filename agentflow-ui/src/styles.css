@@ -168,8 +168,53 @@ h1 {
 }
 
 .workflow-preview {
-  height: 376px;
+  height: 218px;
   padding: 12px;
+}
+
+.run-list {
+  display: grid;
+  gap: 4px;
+  height: 150px;
+  margin: 0;
+  overflow: auto;
+  border-bottom: 1px solid #e3e7ee;
+  padding: 8px;
+  list-style: none;
+}
+
+.run-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #223042;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.run-list button:hover,
+.run-list button.selected {
+  border-color: #cad2dd;
+  background: #f2f5f7;
+}
+
+.run-list span,
+.run-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-list span {
+  font-weight: 750;
+}
+
+.run-list small {
+  color: #697988;
 }
 
 .node-grid {
@@ -321,6 +366,10 @@ h1 {
   .workflow-preview,
   .timeline {
     height: 240px;
+  }
+
+  .run-list {
+    height: 160px;
   }
 }
 

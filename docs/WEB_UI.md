@@ -10,6 +10,7 @@ The first implementation is a React + Vite + TypeScript SPA embedded into
 - Embedded assets: `agentflow-ui/dist/`
 - Server mount: `agentflow-server/src/ui.rs`
 - REST dependency: `GET /v1/runs/{id}`
+- Run list dependency: `GET /v1/runs?tenant_id=default&limit=20`
 - Live stream dependency: `GET /v1/runs/{id}/events`
 
 The server embeds the `dist/` files with `include_str!`, so production
@@ -45,15 +46,14 @@ The Vite dev server should proxy or target an `agentflow-server` instance for
 ## Current Views
 
 - Run summary: status, tenant, event count, workflow body.
+- Run list: recent runs for the selected tenant.
 - DAG status: last observed nodes inferred from streamed event payloads.
 - Agent timeline: ordered event stream, with agent/tool/failure status tones.
 - Tool details: selected event payload rendered as JSON.
 
 ## Current Boundaries
 
-- The debugger connects to one run at a time by run id.
-- `/v1/runs` list support is still pending, so the acceptance target of a full
-  run list remains open.
+- The debugger streams one selected run at a time.
 - DAG layout currently infers node labels from event payloads. The follow-up
   milestone will consume `agentflow-viz` Mermaid/DOT output and highlight the
   active node from trace events.

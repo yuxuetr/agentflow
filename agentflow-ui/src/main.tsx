@@ -16,6 +16,10 @@ type RunEnvelope = RunRecord & {
   run?: RunRecord;
 };
 
+type ListRunsEnvelope = {
+  runs: RunRecord[];
+};
+
 type StreamedEvent = {
   run_id: string;
   seq: number;
@@ -69,6 +73,7 @@ const findLatest = <T,>(items: T[], predicate: (item: T) => boolean) => {
 
 function App() {
   const [runId, setRunId] = useState('');
+  const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<StreamedEvent[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
@@ -103,6 +108,27 @@ function App() {
       setRunId(id);
     }
   }, []);
+
+  useEffect(() => {
+    const loadRuns = async () => {
+      try {
+        const response = await fetch('/v1/runs?limit=20');
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as ListRunsEnvelope;
+        setRuns(payload.runs);
+        if (!runId && payload.runs[0]) {
+          setRunId(payload.runs[0].id);
+          setState('loading');
+        }
+      } catch {
+        // The UI can still connect by explicit run id when the list route is
+        // unavailable or auth denies the request.
+      }
+    };
+    void loadRuns();
+  }, [runId]);
 
   useEffect(() => {
     if (!runId || state !== 'loading') {
@@ -210,9 +236,28 @@ function App() {
       <section className="workspace">
         <aside className="run-pane">
           <div className="pane-heading">
-            <span>Run</span>
+            <span>Runs</span>
             <strong>{activeRun ? formatTime(activeRun.started_at) : '-'}</strong>
           </div>
+          <ol className="run-list">
+            {runs.map((run) => (
+              <li key={run.id}>
+                <button
+                  className={run.id === runId ? 'selected' : ''}
+                  type="button"
+                  onClick={() => {
+                    setRunId(run.id);
+                    setState('loading');
+                  }}
+                >
+                  <span>{run.workflow.split('\n')[0] || run.id}</span>
+                  <small>
+                    {run.status} · {formatTime(run.started_at)}
+                  </small>
+                </button>
+              </li>
+            ))}
+          </ol>
           <pre className="workflow-preview">{activeRun?.workflow ?? 'No run loaded.'}</pre>
         </aside>
 
