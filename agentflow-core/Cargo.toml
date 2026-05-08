@@ -18,6 +18,8 @@ license = "MIT"
 [features]
 default = []
 observability = ["tracing"]
+# Enables the subprocess plugin runtime (PluginHost, PluginNode, manifest loading).
+plugin = ["dep:toml"]
 
 [dependencies]
 # Core serialization and JSON support (for SharedState and node communication)
@@ -55,6 +57,22 @@ num_cpus = "1.16"
 
 # Directory utilities (for checkpoint paths)
 dirs = "5.0"
+
+# Plugin manifest parsing (subprocess plugin runtime, gated behind `plugin` feature)
+toml = { version = "0.8", optional = true }
+
+# Demo plugin executable shipped with this crate as a reference implementation
+# of the plugin protocol. Built only when the `plugin` feature is enabled to
+# avoid extra compile time for default consumers.
+[[bin]]
+name = "agentflow-echo-plugin"
+path = "src/bin/echo_plugin.rs"
+required-features = ["plugin"]
+
+[[example]]
+name = "plugin_host_demo"
+path = "examples/plugin_host_demo.rs"
+required-features = ["plugin"]
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

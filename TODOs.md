@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-07（P2 #15 完成）
+最后更新: 2026-05-08（P2 #12 PoC 落地）
 
 维护约定:
 
@@ -455,7 +455,7 @@ PR-B (已完成):
 
 ### 12. Plugin / Custom Node 体系
 
-状态: 待开始
+状态: PoC 落地 (2026-05-08)；CLI / 沙箱 / 签名 / workflow 集成留作后续
 
 目标:
 
@@ -463,23 +463,38 @@ PR-B (已完成):
 
 子任务:
 
-- [ ] 评估文档 `docs/PLUGIN_DESIGN.md`: 对比 dlopen + abi_stable vs WASM (wasmtime/wasmer) vs subprocess + IPC 三条路径。决策依据: ABI 稳定性、跨平台、安全沙箱、调用开销、生态。
-- [ ] 选定方案后实现最小 PoC: 一个独立 cargo 项目编译产物能被 AgentFlow 加载，注册一个新的 `AsyncNode` 类型，并能在 workflow 中使用。
-- [ ] Plugin manifest 格式: 名称、版本、入口、声明的节点/工具、要求的 capabilities、签名（可选）。
-- [ ] 生命周期: load → register → execute → unload；崩溃隔离策略。
-- [ ] 权限模型: plugin 默认无 capabilities，必须显式声明并被用户批准。
-- [ ] CLI: `agentflow plugin install/list/inspect/uninstall`。
+- [x] 评估文档 `docs/PLUGIN_DESIGN.md`: 对比 dlopen + abi_stable vs WASM (wasmtime/wasmer) vs subprocess + JSON-RPC 三条路径。结论: 选 subprocess + JSON-RPC 作为 v1.0.0-rc 主路径（OS 级崩溃隔离、复用 MCP/sandbox 设施、polyglot、零新主机重 dep），WASM 作为 v1.1+ 的 in-process tier 候选，dlopen 在开放生态中拒绝。
+- [x] 选定方案后实现最小 PoC: `agentflow-core/src/plugin/`（manifest + protocol + host + node + registry），后端为 newline-delimited JSON-RPC 2.0 over stdio。`agentflow-core` 的 `[[bin]] agentflow-echo-plugin` 提供独立 entrypoint 作为参考插件，`examples/plugin_host_demo.rs` 可端到端运行；`tests/plugin_poc.rs` 4 个测试覆盖 load/handshake/execute/shutdown/未知节点类型/protocol 校验。
+- [x] Plugin manifest 格式: `plugin.toml` (`[plugin] name/version/runtime/entrypoint/protocol` + `[[plugin.nodes]]` + `[plugin.capabilities]`)。runtime = `subprocess` 已实现，`wasm` 留 v1.1+。`[plugin.signature]` 字段位置在设计文档中保留。
+- [x] 生命周期: `PluginHost::load → spawn child + handshake → register → execute (× N) → shutdown`。崩溃隔离来自 OS 进程边界；`shutdown` 幂等，`execute_node` after shutdown 返回结构化错误而不是 panic / hang；`Drop` 兜底 kill child。
+- [ ] 权限模型: PoC 阶段 manifest 解析 `[plugin.capabilities]` 但尚未挂到 `agentflow-tools::sandbox::SandboxPolicy`（设计文档 §6.5 已规划，留待后续 commit）。
+- [ ] CLI: `agentflow plugin install/list/inspect/uninstall`（设计文档 §6.1 列出，PoC 不包含）。
+- [ ] CLI workflow 执行器接入: `agentflow-cli/src/executor/factory.rs::create_graph_node` 当前对 plugin 节点类型尚未路由；workflow YAML 还无法直接引用 plugin 节点。
 
 验收标准:
 
-- 一个独立仓库的 plugin 节点能被 AgentFlow 加载并运行；签名/版本/权限校验有记录。
-- plugin 崩溃不影响主进程，错误信息可观察。
+- [x] 内置参考 plugin (`agentflow-echo-plugin`) 能被 host 加载并执行；输入 `text:"hello plugin"` 返回 `text:"HELLO PLUGIN"`。
+- [x] plugin 崩溃 / shutdown 后再次 execute 不会让 host 进程 panic 或 hang，统一返回 `AgentFlowError::AsyncExecutionError` envelope。
+- [ ] 一个独立仓库的 plugin（不在 workspace 内）端到端跑通——PoC 用 in-tree `[[bin]]` 作为参考实现验证 wire 协议；out-of-tree repo 流程留作下一步（CLI install 命令 + workflow 接入后即可）。
+- [ ] 签名 / 版本校验有记录——manifest 字段已就绪，校验逻辑由 P2 #16 marketplace 任务承接。
+
+验证:
+
+```bash
+cargo test -p agentflow-core --features plugin --test plugin_poc --target-dir /tmp/agentflow-target
+cargo run  -p agentflow-core --features plugin --example plugin_host_demo --target-dir /tmp/agentflow-target
+cargo clippy -p agentflow-core --features plugin --target-dir /tmp/agentflow-target -- -D warnings
+```
 
 涉及文件:
 
-- `agentflow-core/src/plugin/` (新)
-- `agentflow-cli/src/commands/plugin/` (新)
-- `docs/PLUGIN_DESIGN.md`
+- `docs/PLUGIN_DESIGN.md` (新)
+- `agentflow-core/src/plugin/{mod,manifest,protocol,host,node,registry}.rs` (新)
+- `agentflow-core/src/bin/echo_plugin.rs` (新参考插件)
+- `agentflow-core/examples/plugin_host_demo.rs` (新)
+- `agentflow-core/tests/plugin_poc.rs` (新)
+- `agentflow-core/Cargo.toml` (新增 `plugin` feature + 可选 `toml` dep)
+- 后续: `agentflow-cli/src/commands/plugin/` + `agentflow-cli/src/executor/factory.rs` 接入
 
 ### 13. 分布式调度
 

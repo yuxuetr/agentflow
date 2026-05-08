@@ -28,6 +28,10 @@ pub mod state_monitor;
 // Observability (lightweight events only)
 pub mod events;
 
+// Plugin runtime (subprocess-based; gated behind the `plugin` feature)
+#[cfg(feature = "plugin")]
+pub mod plugin;
+
 // Core traits and types
 pub use async_node::AsyncNode;
 pub use checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus};
