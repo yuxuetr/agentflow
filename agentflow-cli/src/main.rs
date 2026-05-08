@@ -5,6 +5,8 @@ mod config;
 mod executor;
 mod redaction;
 
+#[cfg(feature = "plugin")]
+use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{audio, config as config_cmd, image, llm, mcp, skill, trace, workflow};
@@ -34,6 +36,9 @@ enum Commands {
   Skill(SkillArgs),
   /// Trace inspection and replay commands
   Trace(TraceArgs),
+  #[cfg(feature = "plugin")]
+  /// Plugin management commands (subprocess plugins)
+  Plugin(PluginArgs),
   #[cfg(feature = "rag")]
   /// RAG (Retrieval-Augmented Generation) commands
   Rag(RagArgs),
@@ -78,6 +83,12 @@ struct SkillArgs {
 struct TraceArgs {
   #[command(subcommand)]
   command: TraceCommands,
+}
+#[cfg(feature = "plugin")]
+#[derive(Args)]
+struct PluginArgs {
+  #[command(subcommand)]
+  command: PluginCommands,
 }
 #[cfg(feature = "rag")]
 #[derive(Args)]
@@ -500,6 +511,44 @@ enum TraceCommands {
   },
 }
 
+#[cfg(feature = "plugin")]
+#[derive(Subcommand)]
+enum PluginCommands {
+  /// Install a plugin from a local source directory containing plugin.toml
+  Install {
+    /// Path to the plugin source directory
+    source_dir: String,
+    /// Target plugins directory (default: ~/.agentflow/plugins)
+    #[arg(short, long)]
+    dir: Option<String>,
+    /// Overwrite an existing installed plugin directory
+    #[arg(long)]
+    force: bool,
+  },
+  /// List installed plugins and the node types each one declares
+  List {
+    /// Plugins directory (default: ~/.agentflow/plugins)
+    #[arg(short, long)]
+    dir: Option<String>,
+  },
+  /// Inspect a plugin manifest without spawning the subprocess
+  Inspect {
+    /// Path to a plugin directory or its plugin.toml file
+    plugin: String,
+  },
+  /// Remove an installed plugin
+  Uninstall {
+    /// Plugin name (matches the directory name under the plugins dir)
+    name: String,
+    /// Plugins directory (default: ~/.agentflow/plugins)
+    #[arg(short, long)]
+    dir: Option<String>,
+    /// Succeed even if the plugin is not installed
+    #[arg(long)]
+    force: bool,
+  },
+}
+
 #[cfg(feature = "rag")]
 #[derive(Subcommand)]
 enum RagCommands {
@@ -849,6 +898,19 @@ async fn main() {
         details,
         max_field_chars,
       } => trace::tui::execute(run_id, dir, filter, details, max_field_chars).await,
+    },
+    #[cfg(feature = "plugin")]
+    Commands::Plugin(args) => match args.command {
+      PluginCommands::Install {
+        source_dir,
+        dir,
+        force,
+      } => plugin::install::execute(source_dir, dir, force).await,
+      PluginCommands::List { dir } => plugin::list::execute(dir).await,
+      PluginCommands::Inspect { plugin } => plugin::inspect::execute(plugin).await,
+      PluginCommands::Uninstall { name, dir, force } => {
+        plugin::uninstall::execute(name, dir, force).await
+      }
     },
     #[cfg(feature = "rag")]
     Commands::Rag(args) => match args.command {

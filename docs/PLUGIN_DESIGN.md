@@ -461,3 +461,77 @@ Failure modes surface as `AgentFlowError`:
   `AsyncExecutionError` carrying the underlying `PluginError`.
 - Unknown plugin-declared node type → `RemoteError` from the plugin's own
   protocol handler (surfaced as `AsyncExecutionError`).
+
+## 10. CLI reference
+
+`agentflow plugin` ships behind the `plugin` cargo feature on
+`agentflow-cli`. It manages plugins on disk only — none of the four verbs
+spawn the plugin subprocess. The `workflow run` path (§9) is the only thing
+that talks JSON-RPC to plugins.
+
+The default plugins root is `~/.agentflow/plugins/`. Each verb accepts
+`--dir <path>` to override it (used by tests and by users with
+non-standard layouts).
+
+### `agentflow plugin install <source-dir> [--dir <plugins-dir>] [--force]`
+
+Validates the manifest at `<source-dir>/plugin.toml`, then copies the
+whole source tree into `<plugins-dir>/<name>/`. Refuses to copy if the
+target already exists unless `--force` is set, and refuses to install
+into the source's own subtree (defense-in-depth against `--dir` typos).
+Executable bits on Unix are preserved. Warns (does not fail) if the
+manifest's declared entrypoint is missing in the source — that is
+common for plugins that build the entrypoint via `cargo build` in a
+separate step.
+
+### `agentflow plugin list [--dir <plugins-dir>]`
+
+Scans every direct subdirectory of `<plugins-dir>` that contains a
+`plugin.toml`. For each one prints `name@version`, runtime, the
+resolved entrypoint and whether it exists, the declared node types,
+and a one-line capability summary (`fs:N net:N proc:N env:N`).
+Invalid manifests are surfaced as `❌ <path> — <error>` so a broken
+install doesn't hide the rest.
+
+### `agentflow plugin inspect <plugin-dir-or-manifest>`
+
+Accepts either a plugin directory or a `plugin.toml` path directly.
+Prints the full manifest in human form: name / version / runtime /
+protocol / resolved absolute entrypoint / `exists` / `executable`
+status, every declared node, and the four capability lists. Reports
+`Status: valid` or `Status: invalid — <reason>` at the end. This
+command never spawns the plugin; use it to diagnose a misbehaving
+install before reaching for `workflow run`.
+
+### `agentflow plugin uninstall <name> [--dir <plugins-dir>] [--force]`
+
+Removes `<plugins-dir>/<name>/`. Refuses to remove a directory that
+does not contain a `plugin.toml` (so a typoed `<name>` cannot wipe an
+unrelated tree). With `--force` the command is idempotent: missing
+plugins succeed silently rather than erroring.
+
+### Examples
+
+```bash
+# Build the in-tree reference plugin and install it under the default
+# plugins root (~/.agentflow/plugins/).
+cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
+mkdir -p ./echo-plugin/bin
+cp target/debug/agentflow-echo-plugin ./echo-plugin/bin/echo-plugin
+cat > ./echo-plugin/plugin.toml <<'TOML'
+[plugin]
+name = "echo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/echo-plugin"
+
+[[plugin.nodes]]
+type = "echo_uppercase"
+description = "Uppercase a JSON string."
+TOML
+
+agentflow plugin install ./echo-plugin
+agentflow plugin list
+agentflow plugin inspect ~/.agentflow/plugins/echo-plugin
+agentflow plugin uninstall echo-plugin
+```

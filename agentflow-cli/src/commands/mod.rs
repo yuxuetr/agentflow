@@ -3,6 +3,8 @@ pub mod config;
 pub mod image;
 pub mod llm;
 pub mod mcp;
+#[cfg(feature = "plugin")]
+pub mod plugin;
 pub mod rag;
 pub mod skill;
 pub mod trace;
