@@ -113,7 +113,7 @@ agentflow doctor --format json
 
 ### P0.2 Server 接入真实 FlowRunExecutor
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -131,15 +131,15 @@ agentflow doctor --format json
 
 子任务:
 
-- [ ] 梳理 `agentflow-cli/src/executor` 与 server 可复用边界。
-- [ ] 将 config-first workflow 构建逻辑抽成 library 级 API，避免 server 依赖 CLI main 层。
-- [ ] 实现 `FlowRunExecutor`。
-- [ ] 支持 `run_dir` 策略:
-  - [ ] server 默认使用 `AGENTFLOW_RUN_DIR` 或 DB/run-id 派生目录。
-  - [ ] 每个 run 的 artifacts 路径可查询。
-- [ ] 将 workflow event 持久化到 `events` 表。
-- [ ] 将 node 状态映射到 `/v1/runs/{id}/graph`。
-- [ ] 补充无外部 API 的 HTTP e2e 测试。
+- [x] 梳理 `agentflow-cli/src/executor` 与 server 可复用边界。
+- [x] 将 config-first workflow 构建逻辑抽成 library 级 API，避免 server 依赖 CLI main 层。
+- [x] 实现 `FlowRunExecutor`。
+- [x] 支持 `run_dir` 策略:
+  - [x] server 默认使用 `AGENTFLOW_RUN_DIR` 或 DB/run-id 派生目录。
+  - [x] 每个 run 的 artifacts 路径可查询。
+- [x] 将 workflow event 持久化到 `events` 表。
+- [x] 将 node 状态映射到 `/v1/runs/{id}/graph`。
+- [x] 补充无外部 API 的 HTTP e2e 测试。
 
 涉及文件:
 
