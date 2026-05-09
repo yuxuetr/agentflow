@@ -39,6 +39,7 @@ Compose sets:
 
 - `DATABASE_URL=postgres://agentflow:agentflow@postgres:5432/agentflow`
 - `PORT=3000`
+- `AGENTFLOW_RUN_DIR=/data/runs` can be set to control workflow artifact storage.
 - `RUST_LOG=info`
 
 ## Helm
@@ -112,12 +113,24 @@ load balancers / kubelet probes work without secrets.
 
 ### Submit and inspect a run
 
+`POST /v1/runs` executes config-first workflow YAML through
+`agentflow-core::Flow`. The server persists the queued row immediately,
+switches it to `running` in the background, stores workflow events in the
+`events` table, streams them over SSE, and sets the terminal status to
+`succeeded` or `failed`.
+
+Run artifacts are written under `AGENTFLOW_RUN_DIR/<run_id>` when
+`AGENTFLOW_RUN_DIR` is set; otherwise the default is
+`~/.agentflow/runs/<run_id>` (or a temp directory if the home directory cannot
+be resolved). The chosen per-run path is returned as `run_dir` from
+`GET /v1/runs/{id}`.
+
 ```bash
 # Submit a workflow body. Returns { "run_id": "...", "status": "queued" }.
 RUN=$(curl -sX POST http://localhost:3000/v1/runs \
   -H "Authorization: Bearer dev-secret" \
   -H "Content-Type: application/json" \
-  -d '{"workflow": "name: demo\nnodes: []"}')
+  -d @examples/server/fixed_dag_run.json)
 RUN_ID=$(echo "$RUN" | jq -r .run_id)
 
 # Poll for state.
@@ -127,6 +140,17 @@ curl -s -H "Authorization: Bearer dev-secret" \
 # Subscribe to live events (Server-Sent Events). Press Ctrl-C to detach.
 curl -N -H "Authorization: Bearer dev-secret" \
   http://localhost:3000/v1/runs/$RUN_ID/events
+```
+
+Expected event kinds for a successful fixed DAG include:
+`workflow.started`, `node.started`, `node.output.captured`, `node.completed`,
+and `workflow.completed`.
+
+To inspect graph status:
+
+```bash
+curl -s -H "Authorization: Bearer dev-secret" \
+  http://localhost:3000/v1/runs/$RUN_ID/graph | jq .
 ```
 
 To resume a stream after a network blip, pass the last seq the client saw:
@@ -149,10 +173,9 @@ curl -sX POST -H "Authorization: Bearer dev-secret" \
 ```
 
 Skill invocation creates a `runs` row with `workflow = "@skill:<name>"` and
-dispatches through the same executor used by `/v1/runs`. The actual skill
-agent invocation lives in the executor — v0.3.0 N8 ships a stub that
-flips the run to `succeeded` after a brief delay; v0.4.0 wires the real
-runtime via `WorkflowEventListener`.
+dispatches through the same executor used by `/v1/runs`. Direct skill run
+execution remains a separate integration path; config-first workflows can run
+skills today by using `skill_agent` / `agent` nodes in workflow YAML.
 
 ### Unified error envelope
 

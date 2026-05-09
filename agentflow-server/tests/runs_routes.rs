@@ -2,8 +2,8 @@
 //!
 //! Requires a live Postgres pointed to by `AGENTFLOW_DATABASE_TEST_URL`.
 //! Without it the tests exit early so workspace `cargo test` stays
-//! hermetic. Wires the [`StubExecutor`] so submission completes without
-//! depending on `agentflow-core`.
+//! hermetic. The default executor runs fixed config-first DAGs through
+//! `agentflow-core::Flow`.
 
 use agentflow_db::{Database, EventRepo, NewEvent, RunRepo, RunStatus};
 use agentflow_server::{AppState, create_router};
@@ -15,6 +15,15 @@ use serde_json::json;
 use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 use uuid::Uuid;
+
+const FIXED_DAG_WORKFLOW: &str = r#"
+name: Server Fixed DAG
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "hello server"
+"#;
 
 fn live_url() -> Option<String> {
   std::env::var("AGENTFLOW_DATABASE_TEST_URL").ok()
@@ -38,7 +47,7 @@ async fn submit_run_returns_run_id_and_persists_row() {
   };
   let app = create_router(state.clone());
 
-  let body = json!({"workflow": "name: demo\nnodes: []\n"}).to_string();
+  let body = json!({"workflow": FIXED_DAG_WORKFLOW}).to_string();
   let response = app
     .oneshot(
       Request::builder()
@@ -57,8 +66,16 @@ async fn submit_run_returns_run_id_and_persists_row() {
   let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
   let run_id: Uuid = body["run_id"].as_str().unwrap().parse().unwrap();
   assert_eq!(body["status"], "queued");
+  let row = state.repos.runs.get(run_id).await.unwrap().unwrap();
+  assert!(
+    row
+      .run_dir
+      .as_deref()
+      .unwrap_or_default()
+      .contains(&run_id.to_string())
+  );
 
-  // Stub executor flips the run to `succeeded` after a short delay.
+  // Flow executor flips the run to `succeeded` after executing the fixed DAG.
   for _ in 0..40 {
     sleep(Duration::from_millis(25)).await;
     let row = state.repos.runs.get(run_id).await.unwrap();
@@ -67,6 +84,103 @@ async fn submit_run_returns_run_id_and_persists_row() {
     }
   }
   panic!("run never reached succeeded status within 1s");
+}
+
+#[tokio::test]
+async fn submit_run_executes_fixed_dag_and_persists_workflow_events() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_executes_fixed_dag_and_persists_workflow_events");
+    return;
+  };
+  let app = create_router(state.clone());
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+          json!({"workflow": FIXED_DAG_WORKFLOW}).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let run_id: Uuid = body["run_id"].as_str().unwrap().parse().unwrap();
+
+  for _ in 0..40 {
+    sleep(Duration::from_millis(25)).await;
+    let row = state.repos.runs.get(run_id).await.unwrap().unwrap();
+    if row.status == "succeeded" {
+      let events = state
+        .repos
+        .events
+        .list_after(run_id, -1, 100)
+        .await
+        .unwrap();
+      assert!(events.iter().any(|event| event.kind == "workflow.started"));
+      assert!(events.iter().any(|event| event.kind == "node.started"));
+      assert!(events.iter().any(|event| event.kind == "node.completed"));
+      assert!(
+        events
+          .iter()
+          .any(|event| event.kind == "workflow.completed")
+      );
+      return;
+    }
+  }
+  panic!("fixed DAG run never reached succeeded status within 1s");
+}
+
+#[tokio::test]
+async fn submit_run_marks_invalid_workflow_failed() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_marks_invalid_workflow_failed");
+    return;
+  };
+  let app = create_router(state.clone());
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+          json!({"workflow": "name: broken\nnodes: []\n"}).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let run_id: Uuid = body["run_id"].as_str().unwrap().parse().unwrap();
+
+  for _ in 0..40 {
+    sleep(Duration::from_millis(25)).await;
+    let row = state.repos.runs.get(run_id).await.unwrap().unwrap();
+    if row.status == "failed" {
+      assert!(
+        row
+          .error
+          .as_deref()
+          .unwrap_or_default()
+          .contains("failed schema validation")
+      );
+      return;
+    }
+  }
+  panic!("invalid workflow run never reached failed status within 1s");
 }
 
 #[tokio::test]

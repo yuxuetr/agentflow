@@ -1,5 +1,5 @@
 //! End-to-end SSE check: submit a run, attach to `/v1/runs/{id}/events`,
-//! observe the stub executor's `run_started` / `run_completed` events.
+//! observe the Flow executor's workflow / node events.
 //!
 //! Gated by `AGENTFLOW_DATABASE_TEST_URL` like the rest of the
 //! agentflow-server e2e tests.
@@ -15,6 +15,15 @@ use serde_json::json;
 use tokio::time::{Duration, timeout};
 use tower::ServiceExt;
 use uuid::Uuid;
+
+const FIXED_DAG_WORKFLOW: &str = r#"
+name: Server SSE Demo
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "hello sse"
+"#;
 
 fn live_url() -> Option<String> {
   std::env::var("AGENTFLOW_DATABASE_TEST_URL").ok()
@@ -46,7 +55,9 @@ async fn sse_stream_yields_run_started_and_completed_events() {
         .method("POST")
         .uri("/v1/runs")
         .header(CONTENT_TYPE, "application/json")
-        .body(Body::from(json!({"workflow": "demo"}).to_string()))
+        .body(Body::from(
+          json!({"workflow": FIXED_DAG_WORKFLOW}).to_string(),
+        ))
         .unwrap(),
     )
     .await
@@ -58,7 +69,7 @@ async fn sse_stream_yields_run_started_and_completed_events() {
   let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
   let run_id: Uuid = body["run_id"].as_str().unwrap().parse().unwrap();
 
-  // Open the SSE stream and read until both stub events arrive (or 1s).
+  // Open the SSE stream and read until the workflow lifecycle arrives.
   let response = app
     .oneshot(
       Request::builder()
@@ -71,26 +82,28 @@ async fn sse_stream_yields_run_started_and_completed_events() {
   assert_eq!(response.status(), StatusCode::OK);
 
   // axum's Sse keeps the body open; read chunks with a deadline. The
-  // stub writes 2 named events plus periodic keep-alive comments.
+  // Flow executor writes named events plus periodic keep-alive comments.
   let mut body = response.into_body().into_data_stream();
   let mut buf = String::new();
   let deadline = Duration::from_secs(2);
   let read = timeout(deadline, async {
     while let Some(Ok(chunk)) = body.next().await {
       buf.push_str(&String::from_utf8_lossy(&chunk));
-      // Two `event: <name>` lines plus their data is enough to confirm
-      // the full lifecycle came through.
-      if buf.contains("event: run_started") && buf.contains("event: run_completed") {
+      if buf.contains("event: workflow.started")
+        && buf.contains("event: node.started")
+        && buf.contains("event: node.completed")
+        && buf.contains("event: workflow.completed")
+      {
         return Ok::<(), &'static str>(());
       }
     }
-    Err("stream closed before both events arrived")
+    Err("stream closed before workflow lifecycle arrived")
   })
   .await;
 
   assert!(
     matches!(read, Ok(Ok(()))),
-    "did not receive both events. captured:\n{buf}"
+    "did not receive workflow lifecycle events. captured:\n{buf}"
   );
 }
 
@@ -109,7 +122,9 @@ async fn event_history_returns_persisted_stream() {
         .method("POST")
         .uri("/v1/runs")
         .header(CONTENT_TYPE, "application/json")
-        .body(Body::from(json!({"workflow": "demo"}).to_string()))
+        .body(Body::from(
+          json!({"workflow": FIXED_DAG_WORKFLOW}).to_string(),
+        ))
         .unwrap(),
     )
     .await
@@ -138,6 +153,10 @@ async fn event_history_returns_persisted_stream() {
     .unwrap();
   let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
   let events = body.as_array().unwrap();
-  assert!(events.iter().any(|event| event["kind"] == "run_started"));
-  assert!(events.iter().any(|event| event["kind"] == "run_completed"));
+  assert!(
+    events
+      .iter()
+      .any(|event| event["kind"] == "workflow.started")
+  );
+  assert!(events.iter().any(|event| event["kind"] == "node.completed"));
 }

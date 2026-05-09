@@ -5,10 +5,9 @@
 //! stays oblivious to whether runs are dispatched in-process via
 //! `agentflow-core::Flow`, sent to a worker pool, or stubbed out for tests.
 //!
-//! v0.3.0 N8 ships [`StubExecutor`], which only flips the run from
-//! `queued` → `running` → `succeeded` and writes a couple of synthetic
-//! events so SSE subscribers see traffic. Task #14 in the v0.3.0 series
-//! replaces it with a real Flow runner.
+//! Production state uses [`FlowRunExecutor`] to run config-first workflows
+//! in-process. Tests can still inject [`StubExecutor`] when they only need
+//! route / persistence plumbing.
 
 use async_trait::async_trait;
 use axum::{
@@ -16,17 +15,20 @@ use axum::{
   extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use agentflow_core::{FlowExecutionConfig, async_node::AsyncNodeResult};
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::events_stream::{EventBroker, publish_through};
+use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
 
 /// JSON body for `POST /v1/runs`.
 ///
@@ -65,6 +67,7 @@ pub struct RunContext {
   pub run_id: Uuid,
   pub workflow: String,
   pub repos: Repositories,
+  pub run_base_dir: Option<PathBuf>,
   /// Forwards events to live SSE subscribers. Persisting to the DB still
   /// has to happen — use [`publish_through`](crate::events_stream::publish_through)
   /// for the standard path.
@@ -90,6 +93,102 @@ impl RunExecutor for StubExecutor {
         .await;
     }
   }
+}
+
+/// In-process executor for config-first DAG workflows.
+#[derive(Clone, Debug, Default)]
+pub struct FlowRunExecutor;
+
+#[async_trait]
+impl RunExecutor for FlowRunExecutor {
+  async fn execute(&self, ctx: RunContext) {
+    if let Err(e) = flow_execute(&ctx).await {
+      error!(run_id = %ctx.run_id, error = %e, "flow executor failed");
+      let _ = ctx
+        .repos
+        .runs
+        .update_status(ctx.run_id, RunStatus::Failed, Some(&e.to_string()))
+        .await;
+      ctx.broker.finalise(ctx.run_id);
+    }
+  }
+}
+
+async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError> {
+  ctx
+    .repos
+    .runs
+    .update_status(ctx.run_id, RunStatus::Running, None)
+    .await?;
+
+  let run_id = ctx.run_id.to_string();
+  let mut flow = agentflow_cli::executor::build_flow_from_yaml(&ctx.workflow, None)?;
+  let listener = Arc::new(WorkflowEventListener::from_state(
+    ctx.run_id,
+    ctx.repos.clone(),
+    ctx.broker.clone(),
+    0,
+  ));
+  flow = flow.with_event_listener(listener);
+
+  let execution_config = server_execution_config(ctx.run_base_dir.clone());
+  let state = flow
+    .execute_from_inputs_with_id_and_config(run_id, HashMap::new(), execution_config)
+    .await?;
+
+  // The listener bridges sync Flow events to async DB/SSE writes. Give the
+  // drain task a bounded chance to persist terminal workflow events before
+  // closing the broker channel for subscribers.
+  tokio::time::sleep(Duration::from_millis(50)).await;
+
+  if let Some(error) = first_state_error(&state) {
+    ctx
+      .repos
+      .runs
+      .update_status(ctx.run_id, RunStatus::Failed, Some(&error))
+      .await?;
+  } else {
+    ctx
+      .repos
+      .runs
+      .update_status(ctx.run_id, RunStatus::Succeeded, None)
+      .await?;
+  }
+
+  ctx.broker.finalise(ctx.run_id);
+  info!(run_id = %ctx.run_id, "flow executor finished");
+  Ok(())
+}
+
+fn server_execution_config(run_base_dir: Option<PathBuf>) -> FlowExecutionConfig {
+  let base_dir = run_base_dir.unwrap_or_else(default_run_base_dir);
+  FlowExecutionConfig::serial().with_run_base_dir(base_dir)
+}
+
+fn default_run_base_dir() -> PathBuf {
+  if let Ok(path) = std::env::var("AGENTFLOW_RUN_DIR")
+    && !path.trim().is_empty()
+  {
+    return PathBuf::from(path);
+  }
+
+  dirs::home_dir()
+    .map(|home| home.join(".agentflow").join("runs"))
+    .unwrap_or_else(|| std::env::temp_dir().join("agentflow-runs"))
+}
+
+fn run_base_dir_for_request() -> PathBuf {
+  default_run_base_dir()
+}
+
+fn run_dir_for_run(base_dir: &FsPath, run_id: Uuid) -> PathBuf {
+  base_dir.join(run_id.to_string())
+}
+
+fn first_state_error(state: &HashMap<String, AsyncNodeResult>) -> Option<String> {
+  state
+    .iter()
+    .find_map(|(node_id, result)| result.as_ref().err().map(|err| format!("{node_id}: {err}")))
 }
 
 async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
@@ -158,6 +257,8 @@ pub async fn submit_run(
 
   let run_id = Uuid::new_v4();
   let tenant_id = req.tenant_id.unwrap_or_else(|| "default".into());
+  let run_base_dir = run_base_dir_for_request();
+  let run_dir = run_dir_for_run(&run_base_dir, run_id);
 
   let run = state
     .repos
@@ -166,7 +267,7 @@ pub async fn submit_run(
       id: run_id,
       workflow: workflow.clone(),
       status: RunStatus::Queued,
-      run_dir: None,
+      run_dir: Some(run_dir.display().to_string()),
       tenant_id,
     })
     .await?;
@@ -182,6 +283,7 @@ pub async fn submit_run(
         run_id,
         workflow,
         repos,
+        run_base_dir: Some(run_base_dir),
         broker,
       })
       .await;
@@ -303,5 +405,17 @@ pub async fn get_run(
 /// Default executor used by [`AppState::new`]. Exposed so callers can wrap
 /// or replace it (tests use this to verify the route layer).
 pub fn default_executor() -> Arc<dyn RunExecutor> {
-  Arc::new(StubExecutor)
+  Arc::new(FlowRunExecutor)
+}
+
+mod anyhow_like {
+  #[derive(Debug, thiserror::Error)]
+  pub enum FlowRunError {
+    #[error(transparent)]
+    Db(#[from] agentflow_db::DbError),
+    #[error(transparent)]
+    Build(#[from] anyhow::Error),
+    #[error(transparent)]
+    Flow(#[from] agentflow_core::error::AgentFlowError),
+  }
 }

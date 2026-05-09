@@ -1,0 +1,4 @@
+{
+  "workflow": "name: Server Fixed DAG\nnodes:\n  - id: render\n    type: template\n    parameters:\n      template: \"hello from server\"\n  - id: finish\n    type: template\n    dependencies: [render]\n    input_mapping:\n      input: \"{{ nodes.render.outputs.output }}\"\n    parameters:\n      template: \"{{ input }}\"\n",
+  "tenant_id": "default"
+}

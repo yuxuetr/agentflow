@@ -31,9 +31,9 @@ pub use events_stream::{
   publish_through, stream_events,
 };
 pub use runs::{
-  CreateRunRequest, CreateRunResponse, ListRunsQuery, ListRunsResponse, RunContext, RunExecutor,
-  RunGraphResponse, RunResponse, StubExecutor, default_executor, get_run, get_run_graph, list_runs,
-  submit_run,
+  CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery, ListRunsResponse,
+  RunContext, RunExecutor, RunGraphResponse, RunResponse, StubExecutor, default_executor, get_run,
+  get_run_graph, list_runs, submit_run,
 };
 pub use scheduler::{
   InMemoryWorkerProtocol, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
@@ -58,9 +58,8 @@ pub struct AppState {
   /// `/v1/skills/{name}:run`. Empty when no `AGENTFLOW_SKILLS_INDEX` is
   /// configured — the routes still work, they just return 404 on resolve.
   pub skills: SkillCatalog,
-  /// Background executor for submitted runs. `Arc<dyn _>` so production
-  /// deployments can swap in a real Flow runner while tests use
-  /// [`StubExecutor`].
+  /// Background executor for submitted runs. Defaults to [`FlowRunExecutor`];
+  /// tests can swap in [`StubExecutor`] when they only need route plumbing.
   pub executor: Arc<dyn RunExecutor>,
   /// Process-local broker that fans persisted run events out to SSE
   /// subscribers. Cloning is cheap (Arc-backed).

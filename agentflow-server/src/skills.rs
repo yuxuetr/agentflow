@@ -217,6 +217,7 @@ pub async fn run_skill(
         run_id,
         workflow,
         repos,
+        run_base_dir: None,
         broker,
       })
       .await;

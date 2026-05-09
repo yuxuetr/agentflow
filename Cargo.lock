@@ -273,14 +273,17 @@ dependencies = [
 name = "agentflow-server"
 version = "0.1.0"
 dependencies = [
+ "agentflow-cli",
  "agentflow-core",
  "agentflow-db",
  "agentflow-skills",
  "agentflow-tracing",
  "agentflow-viz",
+ "anyhow",
  "async-trait",
  "axum",
  "chrono",
+ "dirs",
  "dotenvy",
  "futures",
  "serde",

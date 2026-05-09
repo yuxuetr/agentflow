@@ -1,8 +1,7 @@
-use crate::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
-use crate::executor::factory;
 use crate::redaction::redact_cli_value;
 use crate::{
   commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
+  config::v2::FlowDefinitionV2, executor::build_flow_from_definition,
 };
 use agentflow_core::{
   FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow, value::FlowValue,
@@ -55,7 +54,7 @@ pub async fn execute(
     );
   }
 
-  let flow = build_flow(&flow_def, model.as_deref())?;
+  let flow = build_flow_from_definition(&flow_def, model.as_deref())?;
   if let Some(model) = &model {
     println!("🤖 Model override: {}", model);
   }
@@ -127,45 +126,6 @@ pub async fn execute(
   }
 
   Ok(())
-}
-
-fn build_flow(flow_def: &FlowDefinitionV2, model_override: Option<&str>) -> Result<Flow> {
-  let mut flow = Flow::default();
-  println!(
-    "🔨 Building workflow graph with {} nodes...",
-    flow_def.nodes.len()
-  );
-  for node_def in &flow_def.nodes {
-    let mut graph_node = factory::create_graph_node(node_def)
-      .with_context(|| format!("Failed to create graph node for id: {}", node_def.id))?;
-    apply_model_override(node_def, &mut graph_node, model_override);
-    flow.add_node(graph_node);
-    println!(
-      "  - Added node '{}' (type: '{}')",
-      node_def.id, node_def.node_type
-    );
-  }
-
-  Ok(flow)
-}
-
-fn apply_model_override(
-  node_def: &NodeDefinitionV2,
-  graph_node: &mut agentflow_core::flow::GraphNode,
-  model_override: Option<&str>,
-) {
-  let Some(model) = model_override else {
-    return;
-  };
-  if matches!(
-    node_def.node_type.as_str(),
-    "llm" | "skill_agent" | "agent" | "multi_agent"
-  ) {
-    graph_node.initial_inputs.insert(
-      "model".to_string(),
-      FlowValue::Json(Value::String(model.to_string())),
-    );
-  }
 }
 
 fn parse_inputs(input: Vec<(String, String)>) -> Result<AsyncNodeInputs> {

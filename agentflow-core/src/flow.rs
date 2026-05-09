@@ -150,6 +150,28 @@ impl Flow {
       .await
   }
 
+  /// Execute workflow with an explicit workflow/run id and execution config.
+  ///
+  /// Server and platform integrations use this to keep emitted
+  /// [`WorkflowEvent`] ids aligned with their persisted run id.
+  pub async fn execute_from_inputs_with_id_and_config(
+    &self,
+    workflow_id: String,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    self
+      .execute_with_workflow_id(
+        Some(workflow_id),
+        initial_inputs,
+        None,
+        None,
+        None,
+        Some(config),
+      )
+      .await
+  }
+
   /// Execute workflow with optional checkpoint recovery
   async fn execute_with_workflow_id(
     &self,
