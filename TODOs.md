@@ -394,22 +394,22 @@ AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consisten
 
 ### P2.2 StepFun Live Tests
 
-状态: TODO
+状态: DONE
 
 测试能力:
 
-- [ ] 文本生成。
-- [ ] streaming。
-- [ ] native tool calling 或兼容 fallback。
-- [ ] 视觉理解。
-- [ ] 图像生成。
-- [ ] ASR。
-- [ ] TTS。
-- [ ] 视频生成，如果 API 支持。
+- [x] 文本生成。
+- [x] streaming。
+- [x] native tool calling 或兼容 fallback。
+- [x] 视觉理解。
+- [x] 图像生成。
+- [x] ASR。
+- [x] TTS。
+- [x] 视频生成，如果 API 支持（当前 StepFun provider 未实现，矩阵标记 `unsupported`）。
 
 验收标准:
 
-- StepFun provider matrix 标记每项能力:
+- [x] StepFun provider matrix 标记每项能力:
   - `supported`
   - `live_tested`
   - `mock_only`

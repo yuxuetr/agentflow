@@ -197,9 +197,13 @@ impl StepFunProvider {
       .and_then(|c| c.message.tool_calls.as_ref())
       .map(|calls| parse_openai_tool_calls(&Value::Array(calls.clone())))
       .unwrap_or_default();
-    let stop_reason = first_choice
-      .and_then(|c| c.finish_reason.as_deref())
-      .map(StopReason::from_openai_finish_reason);
+    let stop_reason = if tool_calls.is_empty() {
+      first_choice
+        .and_then(|c| c.finish_reason.as_deref())
+        .map(StopReason::from_openai_finish_reason)
+    } else {
+      Some(StopReason::ToolCalls)
+    };
 
     Ok(ProviderResponse {
       content,
@@ -725,13 +729,20 @@ pub struct StepFunSpecializedClient {
 
 impl StepFunSpecializedClient {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
+    Self::with_client(super::default_http_client()?, api_key, base_url)
+  }
+
+  /// Construct with a caller-supplied [`reqwest::Client`].
+  ///
+  /// This mirrors the chat providers and lets tests or embedded callers disable
+  /// system proxy discovery in constrained environments.
+  pub fn with_client(client: Client, api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {
         provider: "stepfun".to_string(),
       });
     }
 
-    let client = super::default_http_client()?;
     let base_url = base_url.unwrap_or_else(|| "https://api.stepfun.com/v1".to_string());
 
     Ok(Self {

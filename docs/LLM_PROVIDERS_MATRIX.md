@@ -44,6 +44,30 @@ Key:
 - – — not implemented. Most LLM providers don't ship the modality.
 - n/a — Mock provider doesn't make HTTP calls; capability is irrelevant.
 
+### StepFun live-test status
+
+Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
+`flaky`.
+
+| StepFun capability | Status | Verification |
+| --- | --- | --- |
+| Text generation | `live_tested` | `stepfun_live_text_path` |
+| Streaming | `live_tested` | `stepfun_live_streaming_path` |
+| Native tool calling / compatible fallback | `live_tested` | `stepfun_live_tool_calling_or_fallback_path`; adapter normalizes non-empty `tool_calls` to `StopReason::ToolCalls` even when StepFun returns `finish_reason: "stop"` |
+| Vision understanding | `live_tested` | `stepfun_live_vision_path` with a tiny base64 PNG |
+| Image generation | `live_tested` | `stepfun_live_image_generation_path` via `/images/generations` |
+| TTS | `live_tested` | `stepfun_live_tts_path` via `/audio/speech` |
+| ASR | `live_tested` | `stepfun_live_asr_path`; generates a tiny TTS fixture, then transcribes it |
+| Video generation | `unsupported` | No StepFun video API is implemented in `agentflow-llm` |
+
+StepFun live tests use deterministic model selection. Environment overrides
+still win (`AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL`,
+`AGENTFLOW_LIVE_STEPFUN_TOOLS_MODEL`, `AGENTFLOW_LIVE_STEPFUN_VISION_MODEL`,
+`AGENTFLOW_LIVE_STEPFUN_IMAGE_MODEL`, `AGENTFLOW_LIVE_STEPFUN_TTS_MODEL`,
+`AGENTFLOW_LIVE_STEPFUN_ASR_MODEL`); otherwise the harness picks from the
+loaded AgentFlow model config using a low-cost preference order before falling
+back to built-in defaults.
+
 ## Error mapping (verified contract)
 
 All five HTTP-based providers map non-2xx responses to a single
@@ -154,6 +178,16 @@ AGENTFLOW_LIVE_MULTIMODAL_TESTS=1
 AGENTFLOW_LIVE_IMAGE_TESTS=1
 AGENTFLOW_LIVE_AUDIO_TESTS=1
 AGENTFLOW_LIVE_VIDEO_TESTS=1
+```
+
+StepFun modality smoke tests are enabled by those gates:
+
+```bash
+AGENTFLOW_LIVE_LLM_TESTS=1 \
+AGENTFLOW_LIVE_MULTIMODAL_TESTS=1 \
+AGENTFLOW_LIVE_IMAGE_TESTS=1 \
+AGENTFLOW_LIVE_AUDIO_TESTS=1 \
+cargo test -p agentflow-llm --test provider_consistency_live stepfun_live
 ```
 
 **Status**: live-test harness landed 2026-05-08. The default `cargo test`

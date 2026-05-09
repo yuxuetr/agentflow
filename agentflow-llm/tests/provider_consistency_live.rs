@@ -19,12 +19,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use agentflow_llm::AgentFlow;
 use agentflow_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
   ProviderRequest, StepFunProvider, TokenUsage,
 };
-use agentflow_llm::tool_calling::StopReason;
+use agentflow_llm::tool_calling::{StopReason, ToolChoice, ToolSpec};
+use agentflow_llm::{
+  ASRRequest, AgentFlow, LLMConfig, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
+};
 use serde_json::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +91,13 @@ fn provider_supports_capability(provider_name: &str, capability: LiveCapability)
     .is_some_and(|profile| profile.capabilities.contains(&capability))
 }
 
+fn no_proxy_client() -> reqwest::Client {
+  reqwest::Client::builder()
+    .no_proxy()
+    .build()
+    .expect("no-proxy reqwest client")
+}
+
 fn env_truthy(value: &str) -> bool {
   let value = value.trim().to_ascii_lowercase();
   matches!(value.as_str(), "1" | "true" | "yes" | "on")
@@ -148,6 +157,74 @@ fn provider_request(model: &str) -> ProviderRequest {
   }
 }
 
+fn provider_streaming_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    stream: true,
+    ..provider_request(model)
+  }
+}
+
+fn provider_tool_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "Use the get_weather tool to look up the weather in Tokyo. Do not answer directly."
+    })],
+    stream: false,
+    parameters: HashMap::from([
+      ("temperature".to_string(), json!(0.0)),
+      ("max_tokens".to_string(), json!(64)),
+    ]),
+    tools: Some(vec![ToolSpec::new(
+      "get_weather",
+      "Get current weather for a city.",
+      json!({
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": ["city"]
+      }),
+    )]),
+    tool_choice: Some(ToolChoice::Tool {
+      name: "get_weather".to_string(),
+    }),
+  }
+}
+
+fn provider_vision_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Reply with one word naming the dominant color in this image."
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8BQDwAFgwJ/l1u37wAAAABJRU5ErkJggg=="
+          }
+        }
+      ]
+    })],
+    stream: false,
+    parameters: HashMap::from([
+      ("temperature".to_string(), json!(0.0)),
+      ("max_tokens".to_string(), json!(16)),
+    ]),
+    tools: None,
+    tool_choice: None,
+  }
+}
+
 fn assert_text_non_empty(content: &ContentType) {
   match content {
     ContentType::Text(t) => {
@@ -178,27 +255,176 @@ fn assert_usage_populated(usage: &Option<TokenUsage>, provider: &str) {
   );
 }
 
+async fn assert_live_stream_non_empty(mut stream: Box<dyn agentflow_llm::StreamingResponse>) {
+  let mut text = String::new();
+  let mut saw_final = false;
+
+  while let Some(chunk) = stream
+    .next_chunk()
+    .await
+    .expect("live streaming chunk must parse")
+  {
+    if !chunk.content.is_empty() {
+      text.push_str(&chunk.content);
+    }
+    if chunk.is_final {
+      saw_final = true;
+    }
+  }
+
+  assert!(
+    !text.trim().is_empty(),
+    "expected non-empty text from live streaming response"
+  );
+  assert!(
+    saw_final,
+    "expected live streaming response to include a final chunk"
+  );
+}
+
 /// Minimum-cost model per provider for live smoke tests.
 ///
 /// Override via the matching env var when a provider deprecates a model. The
 /// defaults are picked for low cost-per-call and broad availability rather
 /// than capability.
 fn live_text_model(provider: &str, default: &str) -> String {
+  live_model(provider, "TEXT", default)
+}
+
+fn live_model_override(provider: &str, capability: &str) -> Option<String> {
   let provider_upper = provider.to_ascii_uppercase();
-  let specific = format!("AGENTFLOW_LIVE_{provider_upper}_TEXT_MODEL");
+  let specific = format!("AGENTFLOW_LIVE_{provider_upper}_{capability}_MODEL");
   let legacy = format!("AGENTFLOW_LIVE_{provider_upper}_MODEL");
   for env_var in [&specific, &legacy] {
     if let Ok(value) = std::env::var(env_var) {
       let trimmed = value.trim();
       if !trimmed.is_empty() {
-        eprintln!("[live] {provider}: using text model override from {env_var}");
-        return trimmed.to_string();
+        eprintln!("[live] {provider}: using {capability} model override from {env_var}");
+        return Some(trimmed.to_string());
       }
     }
   }
+  None
+}
 
-  eprintln!("[live] {provider}: using default text model `{default}` (set {specific} to override)");
+fn live_model(provider: &str, capability: &str, default: &str) -> String {
+  if let Some(model) = live_model_override(provider, capability) {
+    return model;
+  }
+  let provider_upper = provider.to_ascii_uppercase();
+  let specific = format!("AGENTFLOW_LIVE_{provider_upper}_{capability}_MODEL");
+  eprintln!(
+    "[live] {provider}: using default {capability} model `{default}` (set {specific} to override)"
+  );
   default.to_string()
+}
+
+fn model_id_from_config(alias: &str, model: &agentflow_llm::ModelConfig) -> String {
+  model
+    .model_id
+    .clone()
+    .or_else(|| {
+      model
+        .additional_params
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+    })
+    .unwrap_or_else(|| alias.to_string())
+}
+
+async fn stepfun_configured_model<F>(
+  capability: &str,
+  preferred_models: &[&str],
+  accepts: F,
+) -> Option<String>
+where
+  F: Fn(&agentflow_llm::ModelConfig) -> bool,
+{
+  let Ok((config, _source)) = LLMConfig::from_default_source().await else {
+    return None;
+  };
+
+  let mut candidates = config
+    .models
+    .iter()
+    .filter(|(_, model)| {
+      matches!(
+        model.vendor.to_ascii_lowercase().as_str(),
+        "stepfun" | "step"
+      ) && accepts(model)
+    })
+    .map(|(alias, model)| (alias.as_str(), model_id_from_config(alias, model)))
+    .collect::<Vec<_>>();
+
+  candidates.sort_by(|(left_alias, left_model), (right_alias, right_model)| {
+    let left_rank = preferred_models
+      .iter()
+      .position(|preferred| preferred == left_alias || preferred == left_model)
+      .unwrap_or(usize::MAX);
+    let right_rank = preferred_models
+      .iter()
+      .position(|preferred| preferred == right_alias || preferred == right_model)
+      .unwrap_or(usize::MAX);
+    left_rank
+      .cmp(&right_rank)
+      .then_with(|| left_alias.cmp(right_alias))
+  });
+
+  let selected = candidates.into_iter().next().map(|(_alias, model)| model);
+
+  if let Some(model) = &selected {
+    eprintln!("[live] stepfun: using {capability} model `{model}` from AgentFlow models config");
+  }
+  selected
+}
+
+async fn stepfun_live_model<F>(
+  capability: &str,
+  default: &str,
+  preferred_models: &[&str],
+  accepts: F,
+) -> String
+where
+  F: Fn(&agentflow_llm::ModelConfig) -> bool,
+{
+  if let Some(env_model) = live_model_override("stepfun", capability) {
+    return env_model;
+  }
+
+  stepfun_configured_model(capability, preferred_models, accepts)
+    .await
+    .unwrap_or_else(|| {
+      eprintln!("[live] stepfun: using default {capability} model `{default}`");
+      default.to_string()
+    })
+}
+
+async fn stepfun_base_url() -> Option<String> {
+  let Ok((config, _source)) = LLMConfig::from_default_source().await else {
+    return None;
+  };
+
+  config
+    .get_provider("stepfun")
+    .or_else(|| config.get_provider("step"))
+    .and_then(|provider| provider.base_url.clone())
+}
+
+async fn stepfun_live_context(capability: LiveCapability) -> Option<(String, Option<String>)> {
+  if !prepare_live_provider("stepfun", capability).await {
+    return None;
+  }
+
+  let Some((env_used, api_key)) = pick_api_key(&["STEPFUN_API_KEY", "STEP_API_KEY"]) else {
+    eprintln!(
+      "[live] stepfun: skipped (none of STEPFUN_API_KEY / STEP_API_KEY set; live gate is on)"
+    );
+    return None;
+  };
+  eprintln!("[live] stepfun: using API key from {env_used}");
+
+  Some((api_key, stepfun_base_url().await))
 }
 
 async fn run_text_path<P, F>(provider_name: &str, key_envs: &[&str], build: F)
@@ -280,10 +506,276 @@ async fn moonshot_live_text_path() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stepfun_live_text_path() {
-  run_text_path::<StepFunProvider, _>("stepfun", &["STEPFUN_API_KEY", "STEP_API_KEY"], |key| {
-    StepFunProvider::new(key, None).expect("stepfun provider")
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = stepfun_live_model(
+    "TEXT",
+    "step-1-8k",
+    &[
+      "step-2-16k-202411",
+      "step-2-16k",
+      "step-2-mini",
+      "step-1-8k",
+    ],
+    |model| model.model_type() == "text",
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live text request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live text request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "stepfun");
+  assert_eq!(
+    response.stop_reason,
+    Some(StopReason::Stop),
+    "stepfun: expected StopReason::Stop on a single-turn text completion"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_streaming_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = stepfun_live_model(
+    "TEXT",
+    "step-1-8k",
+    &[
+      "step-2-16k-202411",
+      "step-2-16k",
+      "step-2-mini",
+      "step-1-8k",
+    ],
+    |model| model.model_type() == "text" && model.supports_streaming_capability(),
+  )
+  .await;
+
+  let stream = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute_streaming(&provider_streaming_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live streaming request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live streaming request failed: {e}"));
+
+  assert_live_stream_non_empty(stream).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_tool_calling_or_fallback_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = stepfun_live_model(
+    "TOOLS",
+    "step-1-8k",
+    &[
+      "step-2-16k-202411",
+      "step-2-16k",
+      "step-2-mini",
+      "step-1-8k",
+    ],
+    |model| model.model_type() == "text" && model.supports_tools_capability(),
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_tool_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live tool request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live tool request failed: {e}"));
+
+  if let Some(tool_call) = response.tool_calls.first() {
+    assert_eq!(tool_call.name, "get_weather");
+    assert!(
+      tool_call.arguments.get("city").is_some(),
+      "stepfun: tool call must include city argument"
+    );
+    assert_eq!(
+      response.stop_reason,
+      Some(StopReason::ToolCalls),
+      "stepfun: native tool calls should map to StopReason::ToolCalls"
+    );
+  } else {
+    assert_text_non_empty(&response.content);
+    eprintln!("[live] stepfun: model returned text fallback instead of native tool_calls");
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_vision_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Multimodal).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = stepfun_live_model(
+    "VISION",
+    "step-1o-turbo-vision",
+    &[
+      "step-1o-turbo-vision",
+      "step-1v-8k",
+      "step-1o-vision-32k",
+      "step-1v-32k",
+      "step-3",
+    ],
+    |model| matches!(model.model_type(), "imageunderstand" | "multimodal") || model.is_multimodal(),
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_vision_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live vision request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live vision request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_image_generation_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Image).await else {
+    return;
+  };
+  let client = StepFunSpecializedClient::with_client(no_proxy_client(), &api_key, base_url)
+    .expect("stepfun specialized client");
+  let model = stepfun_live_model(
+    "IMAGE",
+    "step-1x-medium",
+    &["step-1x-medium", "step-2x-large"],
+    |model| {
+      matches!(model.model_type(), "generateimage" | "text2image" | "image")
+        || model.is_image_model()
+    },
+  )
+  .await;
+
+  let request = Text2ImageBuilder::new(&model, "a tiny red square icon on a white background")
+    .size("512x512")
+    .response_format("b64_json")
+    .steps(1)
+    .build();
+
+  let response = tokio::time::timeout(Duration::from_secs(60), client.text_to_image(request))
+    .await
+    .unwrap_or_else(|_| panic!("stepfun: live image generation timed out after 60s"))
+    .unwrap_or_else(|e| panic!("stepfun: live image generation failed: {e}"));
+
+  let first = response
+    .data
+    .first()
+    .expect("stepfun: image generation response must contain at least one image");
+  assert!(
+    first.image.as_deref().is_some_and(|v| !v.is_empty())
+      || first.b64_json.as_deref().is_some_and(|v| !v.is_empty())
+      || first.url.as_deref().is_some_and(|v| !v.is_empty()),
+    "stepfun: image generation response must contain image, b64_json, or url"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_tts_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Audio).await else {
+    return;
+  };
+  let client = StepFunSpecializedClient::with_client(no_proxy_client(), &api_key, base_url)
+    .expect("stepfun specialized client");
+  let model = stepfun_live_model(
+    "TTS",
+    "step-tts-mini",
+    &["step-tts-mini", "step-tts-vivid"],
+    |model| model.model_type() == "tts",
+  )
+  .await;
+  let voice = std::env::var("AGENTFLOW_LIVE_STEPFUN_TTS_VOICE")
+    .ok()
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "cixingnansheng".to_string());
+
+  let request = TTSBuilder::new(&model, "ok", &voice)
+    .response_format("mp3")
+    .build();
+
+  let audio = tokio::time::timeout(Duration::from_secs(30), client.text_to_speech(request))
+    .await
+    .unwrap_or_else(|_| panic!("stepfun: live TTS request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("stepfun: live TTS request failed: {e}"));
+
+  assert!(
+    audio.len() > 128,
+    "stepfun: TTS response should contain audio bytes"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_asr_path() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Audio).await else {
+    return;
+  };
+  let client = StepFunSpecializedClient::with_client(no_proxy_client(), &api_key, base_url)
+    .expect("stepfun specialized client");
+  let tts_model = stepfun_live_model(
+    "TTS",
+    "step-tts-mini",
+    &["step-tts-mini", "step-tts-vivid"],
+    |model| model.model_type() == "tts",
+  )
+  .await;
+  let asr_model = stepfun_live_model("ASR", "step-asr", &["step-asr"], |model| {
+    model.model_type() == "asr"
   })
   .await;
+  let voice = std::env::var("AGENTFLOW_LIVE_STEPFUN_TTS_VOICE")
+    .ok()
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "cixingnansheng".to_string());
+
+  let speech = tokio::time::timeout(
+    Duration::from_secs(30),
+    client.text_to_speech(
+      TTSBuilder::new(&tts_model, "agentflow live test", &voice)
+        .response_format("mp3")
+        .build(),
+    ),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live ASR fixture TTS timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live ASR fixture TTS failed: {e}"));
+
+  let transcript = tokio::time::timeout(
+    Duration::from_secs(30),
+    client.speech_to_text(ASRRequest {
+      model: asr_model,
+      response_format: "text".to_string(),
+      audio_data: speech,
+      filename: "agentflow-live-test.mp3".to_string(),
+    }),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("stepfun: live ASR request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("stepfun: live ASR request failed: {e}"));
+
+  assert!(
+    !transcript.trim().is_empty(),
+    "stepfun: ASR transcript must be non-empty"
+  );
 }
 
 #[tokio::test]
