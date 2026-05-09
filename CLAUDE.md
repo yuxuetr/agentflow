@@ -157,10 +157,10 @@ PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / 
 
 **N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):** in progress
 - ✅ `docs/AGENT_SDK.md` extension guide + runnable examples (`custom_runtime` / `custom_reflection` / `custom_memory_summary`); core extension traits rustdoc-clean
-- Pending: Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)
-- Pending: Distributed scheduling: worker abstraction over gRPC / NATS / Redis Streams
-- Pending: Web UI: React/Svelte SPA + `agentflow-server` SSE
-- Pending: Plugin marketplace remote registry
+- ✅ Plugin / Custom Node foundation: subprocess JSON-RPC runtime, manifest/lifecycle, sandbox bridge, `type: plugin` workflow node, plugin CLI, and marketplace signature/version handoff
+- ✅ Distributed scheduling foundation: `WorkerProtocol`, gRPC transport choice, server control-plane façade, `agentflow-worker` runtime/binary, stitched worker traces mapped to OTel spans
+- ✅ Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates
+- ✅ Plugin marketplace remote registry foundation: unified Skill/Plugin manifest, read-only HTTP client, artifact cache, signature verifier, marketplace CLI, and docs
 
 See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the evaluation that drove the prioritization. For change history, prefer `git log` over a doc summary.
 

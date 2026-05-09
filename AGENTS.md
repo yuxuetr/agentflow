@@ -267,10 +267,10 @@ pub enum LLMError {
 - `docs/SKILL_PERMISSIONS.md` formalizes Skill/Tool/CLI permission merge algorithm
 
 **N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):**
-- Plugin / Custom Node system (dlopen+abi_stable or WASM via wasmtime/wasmer)
-- Distributed scheduling: worker abstraction over gRPC / NATS / Redis Streams
-- Web UI: React/Svelte SPA + `agentflow-server` SSE for live DAG / Agent / Tool state
-- `docs/AGENT_SDK.md` five-minute extension tutorial
+- Plugin / Custom Node foundation: subprocess JSON-RPC runtime, manifest/lifecycle, sandbox bridge, `type: plugin` workflow node, plugin CLI, and marketplace signature/version handoff ✅
+- Distributed scheduling foundation: `WorkerProtocol`, gRPC transport choice, server control-plane façade, `agentflow-worker` runtime/binary, stitched worker traces mapped to OTel spans ✅
+- Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates ✅
+- `docs/AGENT_SDK.md` five-minute extension tutorial ✅
 
 See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the 2026-05-01 evaluation that drove the prioritization.
 
@@ -671,6 +671,22 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 ---
 
 ## Recent Updates
+
+### May 9, 2026 - N10 Plugin / Distributed / Web UI Foundation ✅
+- ✅ **Plugin / Custom Node foundation** — subprocess JSON-RPC plugin runtime,
+  manifest/lifecycle, sandbox bridge, `type: plugin` workflow YAML,
+  `agentflow plugin install/list/inspect/uninstall`, and marketplace
+  signature/version handoff are complete.
+- ✅ **Remote marketplace foundation** — unified Skill/Plugin manifest schema,
+  read-only HTTP registry client, local artifact cache, pluggable signature
+  verifier, `agentflow marketplace search/install/update/verify`, and
+  `docs/MARKETPLACE.md`.
+- ✅ **Distributed scheduler foundation** — `WorkerProtocol`, gRPC transport
+  choice, `WorkerControlPlane`, `agentflow-worker` runtime/binary,
+  `StitchedWorkerTraceEvent`, and OTel span mapping.
+- ✅ **Web UI debugger** — React + Vite + TypeScript SPA embedded at `/ui`,
+  `GET /v1/runs`, `GET /v1/runs/{id}/graph`, event history replay, SSE live
+  updates, and `docs/WEB_UI.md`.
 
 ### May 3, 2026 - Multi-Agent Collaboration Patterns (P1 #7 closed) ✅
 - ✅ **`AgentStepKind` + `AgentEvent` extended** — added `Handoff`,

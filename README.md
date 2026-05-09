@@ -28,7 +28,7 @@ AgentFlow now treats workflows and agents as complementary execution strategies:
 - Use `WorkflowTool` when an agent should call a stable DAG workflow as a normal tool.
 - Use Skills to package instructions, manifests, script tools, MCP server declarations, and runtime constraints.
 - Use MCP integration to expose external tool servers through the same tool interface as local tools.
-- Use Skill registry and marketplace files as local-first Skill catalogs. AgentFlow does not currently provide a general plugin runtime.
+- Use Skill registry and marketplace files as local-first catalogs, and use the subprocess JSON-RPC plugin runtime for custom workflow nodes.
 
 The intended dependency direction is:
 
