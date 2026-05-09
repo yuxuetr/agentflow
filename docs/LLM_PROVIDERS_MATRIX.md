@@ -6,7 +6,7 @@
 > `agentflow-llm/tests/provider_consistency.rs` (offline, mocked) and
 > `agentflow-llm/tests/provider_consistency_live.rs` (opt-in, real APIs).
 
-AgentFlow's LLM abstraction targets six providers. This document is the
+AgentFlow's LLM abstraction targets seven providers/profiles. This document is the
 authoritative reference for what works on each, what doesn't, and how the
 behavior is verified.
 
@@ -25,17 +25,17 @@ show the selected config path/source and redact credential values.
 
 ## Capability matrix
 
-| Capability | OpenAI | Anthropic | Google | Moonshot | StepFun | Mock |
-| --- | :-: | :-: | :-: | :-: | :-: | :-: |
-| Text completion | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Token usage in response | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
-| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Native tool calling (`tool_calls` / `tool_use` / `functionCall`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (injection) |
-| Multimodal text + image (URL or base64) | ✅ | ✅ | ✅ | partial | ✅ | n/a |
-| Audio TTS / ASR | – | – | – | – | ✅ | n/a |
-| Image generation | – | – | – | – | ✅ | n/a |
-| W3C `traceparent` injection | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
-| `with_client(...)` for custom `reqwest::Client` | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| Capability | OpenAI | Anthropic | Google | Moonshot | StepFun | GLM | Mock |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| Text completion | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Token usage in response | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Native tool calling (`tool_calls` / `tool_use` / `functionCall`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (injection) |
+| Multimodal text + image (URL or base64) | ✅ | ✅ | ✅ | partial | ✅ | ✅ | n/a |
+| Audio TTS / ASR | – | – | – | – | ✅ | – | n/a |
+| Image generation | – | – | – | – | ✅ | – | n/a |
+| W3C `traceparent` injection | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `with_client(...)` for custom `reqwest::Client` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 
 Key:
 
@@ -68,9 +68,39 @@ still win (`AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL`,
 loaded AgentFlow model config using a low-cost preference order before falling
 back to built-in defaults.
 
+### GLM live-test status
+
+BigModel GLM is wired as an OpenAI-compatible profile over the official
+`https://open.bigmodel.cn/api/paas/v4` endpoint documented in
+[BigModel 使用概述](https://docs.bigmodel.cn/cn/api/introduction). Chat
+completion uses `/chat/completions`, which BigModel documents with Bearer auth,
+SSE streaming, function tools, and multimodal input in
+[对话补全](https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8).
+
+Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
+`flaky`.
+
+| GLM capability | Status | Verification |
+| --- | --- | --- |
+| Text generation | `live_tested` | `glm_live_text_path` via `OpenAIProvider` |
+| Streaming | `live_tested` | `glm_live_streaming_path`; GLM live tests are serialized to avoid account-level 429s |
+| OpenAI-compatible chat path | `live_tested` | `glm_live_openai_compatible_chat_path` |
+| Native tool calling / compatible fallback | `live_tested` | `glm_live_tool_calling_or_fallback_path`; OpenAI-compatible adapter normalizes non-empty `tool_calls` to `StopReason::ToolCalls` |
+| Vision understanding | `live_tested` | `glm_live_vision_path` using `glm-4.5v` and an HTTPS JPEG image URL |
+| Image generation | `unsupported` | BigModel exposes `/images/generations`, but AgentFlow has no GLM image-generation client/profile yet |
+| ASR | `unsupported` | BigModel exposes `/audio/transcriptions`, but AgentFlow has no GLM ASR client/profile yet |
+| TTS | `unsupported` | BigModel exposes `/audio/speech`, but AgentFlow has no GLM TTS client/profile yet |
+| Video generation | `unsupported` | BigModel exposes async `/videos/generations`, but AgentFlow has no GLM video client/profile yet |
+
+Environment overrides win for model selection:
+`AGENTFLOW_LIVE_GLM_TEXT_MODEL`, `AGENTFLOW_LIVE_GLM_TOOLS_MODEL`, and
+`AGENTFLOW_LIVE_GLM_VISION_MODEL`. Without overrides, the harness first checks
+the loaded AgentFlow model config and then falls back to low-cost defaults:
+`glm-4.5-flash` for text/tools and `glm-4.5v` for vision.
+
 ## Error mapping (verified contract)
 
-All five HTTP-based providers map non-2xx responses to a single
+All concrete HTTP-based providers and OpenAI-compatible profiles map non-2xx responses to a single
 `LLMError` variant — this is the consistency contract that downstream code
 (retry middleware, error reporting) depends on:
 
@@ -115,7 +145,7 @@ These tests don't make network calls — they construct `ProviderRequest` /
 
 ### Cross-provider integration (`provider_consistency.rs`)
 
-The integration suite drives all five HTTP providers through a hand-rolled
+The integration suite drives the concrete HTTP providers through a hand-rolled
 tokio TCP listener and asserts a uniform contract:
 
 ```bash
@@ -168,6 +198,7 @@ ANTHROPIC_API_KEY=sk-ant-… \
 GEMINI_API_KEY=… \
 MOONSHOT_API_KEY=… \
 STEPFUN_API_KEY=… \
+GLM_API_KEY=… \
 cargo test -p agentflow-llm --test provider_consistency_live
 ```
 
@@ -188,6 +219,16 @@ AGENTFLOW_LIVE_MULTIMODAL_TESTS=1 \
 AGENTFLOW_LIVE_IMAGE_TESTS=1 \
 AGENTFLOW_LIVE_AUDIO_TESTS=1 \
 cargo test -p agentflow-llm --test provider_consistency_live stepfun_live
+```
+
+GLM OpenAI-compatible smoke tests are enabled with:
+
+```bash
+AGENTFLOW_LIVE_LLM_TESTS=1 \
+cargo test -p agentflow-llm --test provider_consistency_live glm_live
+
+AGENTFLOW_LIVE_MULTIMODAL_TESTS=1 \
+cargo test -p agentflow-llm --test provider_consistency_live glm_live_vision_path
 ```
 
 **Status**: live-test harness landed 2026-05-08. The default `cargo test`

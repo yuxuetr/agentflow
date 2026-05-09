@@ -418,22 +418,22 @@ AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consisten
 
 ### P2.3 GLM Live Tests
 
-状态: TODO
+状态: DONE
 
 测试能力:
 
-- [ ] 文本生成。
-- [ ] streaming。
-- [ ] OpenAI-compatible chat path。
-- [ ] tool calling，如果支持。
-- [ ] 视觉理解，如果支持。
-- [ ] 图像生成，如果支持。
-- [ ] 音频或视频能力，如果当前 GLM 服务支持。
+- [x] 文本生成。
+- [x] streaming。
+- [x] OpenAI-compatible chat path。
+- [x] tool calling，如果支持。
+- [x] 视觉理解，如果支持。
+- [x] 图像生成，如果支持（BigModel 服务支持，当前 AgentFlow GLM profile 未接入，矩阵标记 `unsupported`）。
+- [x] 音频或视频能力，如果当前 GLM 服务支持（BigModel 服务支持独立音频/视频端点，当前 AgentFlow GLM profile 未接入，矩阵标记 `unsupported`）。
 
 验收标准:
 
-- GLM provider 或 OpenAI-compatible provider profile 可稳定调用。
-- base URL、model name、capability matrix 文档化。
+- [x] GLM provider 或 OpenAI-compatible provider profile 可稳定调用。
+- [x] base URL、model name、capability matrix 文档化。
 
 ### P2.4 你需要准备的内容
 

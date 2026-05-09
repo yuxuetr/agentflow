@@ -2882,6 +2882,58 @@ models:
     supports_tools: false
     supports_multimodal: true
     response_format: null
+
+  # BigModel GLM Text Models
+  glm-5.1:
+    vendor: glm
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  glm-4.5-flash:
+    vendor: glm
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+
+  # BigModel GLM Vision Models
+  glm-4.5v:
+    vendor: glm
+    type: imageunderstand
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: true
+    response_format: null
 providers:
   moonshot:
     api_key_env: MOONSHOT_API_KEY
@@ -2921,6 +2973,13 @@ providers:
   step:
     api_key_env: STEPFUN_API_KEY
     base_url: https://api.stepfun.com/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  glm:
+    api_key_env: GLM_API_KEY
+    base_url: https://open.bigmodel.cn/api/paas/v4
     timeout_seconds: 60
     rate_limit:
       requests_per_minute: 500

@@ -245,6 +245,7 @@ pub fn create_provider(
     "moonshot" => Ok(Box::new(MoonshotProvider::new(api_key, base_url)?)),
     "stepfun" | "step" => Ok(Box::new(StepFunProvider::new(api_key, base_url)?)), // Use dedicated StepFun provider
     "dashscope" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // Dashscope is OpenAI-compatible
+    "glm" | "bigmodel" | "zhipu" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // BigModel GLM is OpenAI-compatible
     _ => Err(LLMError::UnsupportedProvider {
       provider: provider_name.to_string(),
     }),

@@ -17,6 +17,7 @@
 //! from secrets. See `docs/LLM_PROVIDERS_MATRIX.md` for the full design.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use agentflow_llm::providers::{
@@ -82,6 +83,10 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
       LiveCapability::Audio,
     ],
   },
+  LiveProviderProfile {
+    name: "glm",
+    capabilities: &[LiveCapability::Llm, LiveCapability::Multimodal],
+  },
 ];
 
 fn provider_supports_capability(provider_name: &str, capability: LiveCapability) -> bool {
@@ -96,6 +101,11 @@ fn no_proxy_client() -> reqwest::Client {
     .no_proxy()
     .build()
     .expect("no-proxy reqwest client")
+}
+
+fn glm_live_lock() -> &'static tokio::sync::Mutex<()> {
+  static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+  LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn env_truthy(value: &str) -> bool {
@@ -165,6 +175,31 @@ fn provider_streaming_request(model: &str) -> ProviderRequest {
   }
 }
 
+fn glm_provider_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "Reply with exactly one word: ok"
+    })],
+    stream: false,
+    parameters: HashMap::from([
+      ("do_sample".to_string(), json!(false)),
+      ("max_tokens".to_string(), json!(64)),
+      ("thinking".to_string(), json!({ "type": "disabled" })),
+    ]),
+    tools: None,
+    tool_choice: None,
+  }
+}
+
+fn glm_provider_streaming_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    stream: true,
+    ..glm_provider_request(model)
+  }
+}
+
 fn provider_tool_request(model: &str) -> ProviderRequest {
   ProviderRequest {
     model: model.to_string(),
@@ -197,6 +232,37 @@ fn provider_tool_request(model: &str) -> ProviderRequest {
   }
 }
 
+fn glm_provider_tool_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "Use the get_weather tool to look up the weather in Tokyo. Do not answer directly."
+    })],
+    stream: false,
+    parameters: HashMap::from([
+      ("do_sample".to_string(), json!(false)),
+      ("max_tokens".to_string(), json!(128)),
+      ("thinking".to_string(), json!({ "type": "disabled" })),
+    ]),
+    tools: Some(vec![ToolSpec::new(
+      "get_weather",
+      "Get current weather for a city.",
+      json!({
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": ["city"]
+      }),
+    )]),
+    tool_choice: Some(ToolChoice::Auto),
+  }
+}
+
 fn provider_vision_request(model: &str) -> ProviderRequest {
   ProviderRequest {
     model: model.to_string(),
@@ -222,6 +288,32 @@ fn provider_vision_request(model: &str) -> ProviderRequest {
     ]),
     tools: None,
     tool_choice: None,
+  }
+}
+
+fn glm_provider_vision_request(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    messages: vec![json!({
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Reply with one word naming the dominant color in this image."
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://www.gstatic.com/webp/gallery/1.jpg"
+          }
+        }
+      ]
+    })],
+    parameters: HashMap::from([
+      ("do_sample".to_string(), json!(false)),
+      ("max_tokens".to_string(), json!(64)),
+      ("thinking".to_string(), json!({ "type": "disabled" })),
+    ]),
+    ..provider_vision_request(model)
   }
 }
 
@@ -425,6 +517,104 @@ async fn stepfun_live_context(capability: LiveCapability) -> Option<(String, Opt
   eprintln!("[live] stepfun: using API key from {env_used}");
 
   Some((api_key, stepfun_base_url().await))
+}
+
+async fn glm_configured_model<F>(
+  capability: &str,
+  preferred_models: &[&str],
+  accepts: F,
+) -> Option<String>
+where
+  F: Fn(&agentflow_llm::ModelConfig) -> bool,
+{
+  let Ok((config, _source)) = LLMConfig::from_default_source().await else {
+    return None;
+  };
+
+  let mut candidates = config
+    .models
+    .iter()
+    .filter(|(_, model)| {
+      matches!(
+        model.vendor.to_ascii_lowercase().as_str(),
+        "glm" | "bigmodel" | "zhipu"
+      ) && accepts(model)
+    })
+    .map(|(alias, model)| (alias.as_str(), model_id_from_config(alias, model)))
+    .collect::<Vec<_>>();
+
+  candidates.sort_by(|(left_alias, left_model), (right_alias, right_model)| {
+    let left_rank = preferred_models
+      .iter()
+      .position(|preferred| preferred == left_alias || preferred == left_model)
+      .unwrap_or(usize::MAX);
+    let right_rank = preferred_models
+      .iter()
+      .position(|preferred| preferred == right_alias || preferred == right_model)
+      .unwrap_or(usize::MAX);
+    left_rank
+      .cmp(&right_rank)
+      .then_with(|| left_alias.cmp(right_alias))
+  });
+
+  let selected = candidates.into_iter().next().map(|(_alias, model)| model);
+
+  if let Some(model) = &selected {
+    eprintln!("[live] glm: using {capability} model `{model}` from AgentFlow models config");
+  }
+  selected
+}
+
+async fn glm_live_model<F>(
+  capability: &str,
+  default: &str,
+  preferred_models: &[&str],
+  accepts: F,
+) -> String
+where
+  F: Fn(&agentflow_llm::ModelConfig) -> bool,
+{
+  if let Some(env_model) = live_model_override("glm", capability) {
+    return env_model;
+  }
+
+  glm_configured_model(capability, preferred_models, accepts)
+    .await
+    .unwrap_or_else(|| {
+      eprintln!("[live] glm: using default {capability} model `{default}`");
+      default.to_string()
+    })
+}
+
+async fn glm_base_url() -> Option<String> {
+  let Ok((config, _source)) = LLMConfig::from_default_source().await else {
+    return Some("https://open.bigmodel.cn/api/paas/v4".to_string());
+  };
+
+  config
+    .get_provider("glm")
+    .or_else(|| config.get_provider("bigmodel"))
+    .or_else(|| config.get_provider("zhipu"))
+    .and_then(|provider| provider.base_url.clone())
+    .or_else(|| Some("https://open.bigmodel.cn/api/paas/v4".to_string()))
+}
+
+async fn glm_live_context(capability: LiveCapability) -> Option<(String, Option<String>)> {
+  if !prepare_live_provider("glm", capability).await {
+    return None;
+  }
+
+  let Some((env_used, api_key)) =
+    pick_api_key(&["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"])
+  else {
+    eprintln!(
+      "[live] glm: skipped (none of GLM_API_KEY / BIGMODEL_API_KEY / ZHIPU_API_KEY set; live gate is on)"
+    );
+    return None;
+  };
+  eprintln!("[live] glm: using API key from {env_used}");
+
+  Some((api_key, glm_base_url().await))
 }
 
 async fn run_text_path<P, F>(provider_name: &str, key_envs: &[&str], build: F)
@@ -778,6 +968,168 @@ async fn stepfun_live_asr_path() {
   );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_live_text_path() {
+  let _guard = glm_live_lock().lock().await;
+  let Some((api_key, base_url)) = glm_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
+  let model = glm_live_model(
+    "TEXT",
+    "glm-4.5-flash",
+    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    |model| model.model_type() == "text",
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&glm_provider_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("glm: live text request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("glm: live text request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "glm");
+  assert_eq!(
+    response.stop_reason,
+    Some(StopReason::Stop),
+    "glm: expected StopReason::Stop on a single-turn text completion"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_live_openai_compatible_chat_path() {
+  let _guard = glm_live_lock().lock().await;
+  let Some((api_key, base_url)) = glm_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
+  let model = glm_live_model(
+    "TEXT",
+    "glm-4.5-flash",
+    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    |model| model.model_type() == "text",
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&ProviderRequest {
+      messages: vec![json!({
+        "role": "user",
+        "content": "Reply with exactly these two lowercase letters: ok"
+      })],
+      ..glm_provider_request(&model)
+    }),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("glm: OpenAI-compatible chat request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("glm: OpenAI-compatible chat request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "glm");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_live_streaming_path() {
+  let _guard = glm_live_lock().lock().await;
+  let Some((api_key, base_url)) = glm_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
+  let model = glm_live_model(
+    "TEXT",
+    "glm-4.5-flash",
+    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    |model| model.model_type() == "text" && model.supports_streaming_capability(),
+  )
+  .await;
+
+  let stream = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute_streaming(&glm_provider_streaming_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("glm: live streaming request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("glm: live streaming request failed: {e}"));
+
+  assert_live_stream_non_empty(stream).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_live_tool_calling_or_fallback_path() {
+  let _guard = glm_live_lock().lock().await;
+  let Some((api_key, base_url)) = glm_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
+  let model = glm_live_model(
+    "TOOLS",
+    "glm-4.5-flash",
+    &["glm-4.5-flash", "glm-5.1", "glm-4.7-flash"],
+    |model| model.model_type() == "text" && model.supports_tools_capability(),
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&glm_provider_tool_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("glm: live tool request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("glm: live tool request failed: {e}"));
+
+  if let Some(tool_call) = response.tool_calls.first() {
+    assert_eq!(tool_call.name, "get_weather");
+    assert!(
+      tool_call.arguments.get("city").is_some(),
+      "glm: tool call must include city argument"
+    );
+    assert_eq!(
+      response.stop_reason,
+      Some(StopReason::ToolCalls),
+      "glm: native tool calls should map to StopReason::ToolCalls"
+    );
+  } else {
+    assert_text_non_empty(&response.content);
+    eprintln!("[live] glm: model returned text fallback instead of native tool_calls");
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_live_vision_path() {
+  let _guard = glm_live_lock().lock().await;
+  let Some((api_key, base_url)) = glm_live_context(LiveCapability::Multimodal).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
+  let model = glm_live_model(
+    "VISION",
+    "glm-4.5v",
+    &["glm-4.5v", "glm-5v-turbo", "glm-4.1v-thinking"],
+    |model| matches!(model.model_type(), "imageunderstand" | "multimodal") || model.is_multimodal(),
+  )
+  .await;
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&glm_provider_vision_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("glm: live vision request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("glm: live vision request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+}
+
 #[tokio::test]
 async fn gate_disabled_by_default() {
   // Belt-and-suspenders: confirm that without the gate env var set, all
@@ -842,6 +1194,12 @@ fn live_provider_profiles_probe_supported_capabilities() {
     "openai",
     LiveCapability::Video
   ));
+  assert!(provider_supports_capability("glm", LiveCapability::Llm));
+  assert!(provider_supports_capability(
+    "glm",
+    LiveCapability::Multimodal
+  ));
+  assert!(!provider_supports_capability("glm", LiveCapability::Audio));
   assert!(!provider_supports_capability(
     "unknown",
     LiveCapability::Llm

@@ -218,9 +218,13 @@ impl LLMProvider for OpenAIProvider {
       .and_then(|c| c.message.tool_calls.as_ref())
       .map(parse_openai_tool_calls)
       .unwrap_or_default();
-    let stop_reason = first_choice
-      .and_then(|c| c.finish_reason.as_deref())
-      .map(StopReason::from_openai_finish_reason);
+    let stop_reason = if tool_calls.is_empty() {
+      first_choice
+        .and_then(|c| c.finish_reason.as_deref())
+        .map(StopReason::from_openai_finish_reason)
+    } else {
+      Some(StopReason::ToolCalls)
+    };
 
     Ok(ProviderResponse {
       content,

@@ -452,6 +452,7 @@ impl LLMConfig {
       "google" | "gemini" => vec!["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_AI_KEY"],
       "moonshot" => vec!["MOONSHOT_API_KEY", "MOONSHOT_KEY"],
       "stepfun" | "step" => vec!["STEPFUN_API_KEY", "STEP_API_KEY"],
+      "glm" | "bigmodel" | "zhipu" => vec!["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"],
       _ => vec![],
     };
 
