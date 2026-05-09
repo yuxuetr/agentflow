@@ -1,6 +1,6 @@
 # AgentFlow 当前执行计划
 
-最后更新: 2026-05-08（P1 #11 final follow-up: live-LLM nightly CI gate 落地，`provider_consistency_live.rs` + `.github/workflows/llm-live.yml`）
+最后更新: 2026-05-09（P2 #13/#14/#16 执行链闭环，分布式调度 / Web UI / remote marketplace 基础能力完成）
 
 维护约定:
 
@@ -34,11 +34,11 @@
 
 最近提交:
 
-- `a78c3ff test(llm): add cross-provider multimodal consistency fixtures`
-- `0848e0d test(llm): add cross-provider streaming consistency fixtures to consistency suite`
-- `3267640 test(llm): add cross-provider tool-calling fixtures to consistency suite`
-- `b1f361f test(llm): land P1 #11 cross-provider consistency suite (foundation)`
-- `49b8b88 feat(rag): land P1 #10 RAG eval harness with Recall/MRR/nDCG and baseline compare`
+- `f140c63 docs(todo): mark distributed scheduling complete`
+- `ee3e452 feat(server): map worker traces to otel spans`
+- `56db1be feat(ui): render workflow graph status`
+- `d8f0401 feat(ui): embed web debugger shell`
+- `d3368a3 docs: complete marketplace guide`
 
 ---
 
@@ -458,7 +458,7 @@ PR-B (已完成):
 
 ### 12. Plugin / Custom Node 体系
 
-状态: PoC + workflow YAML 接入完成 (2026-05-08)；CLI 子命令 / 沙箱 / 签名留作后续
+状态: 基础闭环完成 (2026-05-09: subprocess JSON-RPC PoC + workflow YAML + sandbox bridge + plugin CLI + marketplace signature/version handoff 均已落地)
 
 目标:
 
@@ -480,7 +480,7 @@ PR-B (已完成):
 - [x] plugin 崩溃 / shutdown 后再次 execute 不会让 host 进程 panic 或 hang，统一返回 `AgentFlowError::AsyncExecutionError` envelope。
 - [x] OS 沙箱接线已就绪（macOS sandbox-exec / Linux seccomp）—— `AGENTFLOW_PLUGIN_SANDBOX=1` opt-in，缺省保持 v0.3 PoC 行为不变。
 - [x] 一个独立仓库的 plugin（不在 workspace 内）端到端跑通——`type: plugin` workflow 节点 + `agentflow plugin install <source-dir>` CLI 已就绪。out-of-tree 流程：开发者在自己仓库 `cargo build` 生成 entrypoint → `agentflow plugin install ./my-plugin` 拷贝到 `~/.agentflow/plugins/` → workflow YAML `manifest:` 指向已安装路径即可。远程仓库拉取属于 P2 #16 marketplace 范畴。
-- [ ] 签名 / 版本校验有记录——manifest 字段已就绪，校验逻辑由 P2 #16 marketplace 任务承接。
+- [x] 签名 / 版本校验有记录——manifest 字段已就绪，校验逻辑由 P2 #16 marketplace 任务承接并完成基础闭环：remote manifest schema 校验 semver / checksum / signature fields，本地 cache 写入前校验 artifact SHA-256，通过可插拔 `MarketplaceSignatureVerifier` 校验签名，`agentflow marketplace verify` 支持离线缓存校验。
 
 验证:
 
