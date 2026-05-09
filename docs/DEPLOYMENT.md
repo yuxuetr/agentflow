@@ -153,6 +153,18 @@ curl -s -H "Authorization: Bearer dev-secret" \
   http://localhost:3000/v1/runs/$RUN_ID/graph | jq .
 ```
 
+To cancel a queued or running run:
+
+```bash
+curl -sX POST -H "Authorization: Bearer dev-secret" \
+  http://localhost:3000/v1/runs/$RUN_ID:cancel | jq .
+```
+
+Cancellation is idempotent. A queued or running run is marked `cancelled`, the
+background task receives a cancellation signal and is aborted, and a
+`run.cancelled` event is appended for SSE/history consumers. Cancelling an
+already terminal run returns its current status without error.
+
 To resume a stream after a network blip, pass the last seq the client saw:
 
 ```bash

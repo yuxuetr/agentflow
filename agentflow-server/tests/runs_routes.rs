@@ -5,6 +5,7 @@
 //! hermetic. The default executor runs fixed config-first DAGs through
 //! `agentflow-core::Flow`.
 
+use agentflow_core::FlowCancellationToken;
 use agentflow_db::{Database, EventRepo, NewEvent, RunRepo, RunStatus};
 use agentflow_server::{AppState, create_router};
 use axum::{
@@ -234,6 +235,178 @@ async fn get_run_returns_404_when_missing() {
     .unwrap();
   let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
   assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn cancel_unknown_run_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cancel_unknown_run_returns_404");
+    return;
+  };
+  let app = create_router(state);
+  let unknown = Uuid::new_v4();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/runs/{}:cancel", unknown))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cancel_running_run_marks_cancelled_and_emits_event() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cancel_running_run_marks_cancelled_and_emits_event");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(agentflow_db::NewRun {
+      id,
+      workflow: FIXED_DAG_WORKFLOW.into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      tenant_id: "default".into(),
+    })
+    .await
+    .unwrap();
+  let token = FlowCancellationToken::new();
+  let handle = tokio::spawn(async {
+    tokio::time::sleep(Duration::from_secs(30)).await;
+  });
+  state
+    .cancellation_registry
+    .register(id, token.clone(), handle.abort_handle());
+
+  let app = create_router(state.clone());
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/runs/{}:cancel", id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert!(token.is_cancelled());
+  assert!(
+    tokio::time::timeout(Duration::from_secs(1), handle)
+      .await
+      .is_ok(),
+    "registered run task was not aborted"
+  );
+  let bytes = axum::body::to_bytes(response.into_body(), 8192)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(body["status"], "cancelled");
+  assert_eq!(body["cancelled"], true);
+
+  let events = state.repos.events.list_after(id, -1, 100).await.unwrap();
+  assert!(events.iter().any(|event| event.kind == "run.cancelled"));
+}
+
+#[tokio::test]
+async fn cancel_completed_run_returns_current_terminal_state() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cancel_completed_run_returns_current_terminal_state");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(agentflow_db::NewRun {
+      id,
+      workflow: FIXED_DAG_WORKFLOW.into(),
+      status: RunStatus::Succeeded,
+      run_dir: None,
+      tenant_id: "default".into(),
+    })
+    .await
+    .unwrap();
+
+  let app = create_router(state);
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/runs/{}:cancel", id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 8192)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(body["status"], "succeeded");
+  assert_eq!(body["cancelled"], false);
+}
+
+#[tokio::test]
+async fn repeated_cancel_is_idempotent() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping repeated_cancel_is_idempotent");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(agentflow_db::NewRun {
+      id,
+      workflow: FIXED_DAG_WORKFLOW.into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      tenant_id: "default".into(),
+    })
+    .await
+    .unwrap();
+  let token = FlowCancellationToken::new();
+  let handle = tokio::spawn(async {
+    tokio::time::sleep(Duration::from_secs(30)).await;
+  });
+  state
+    .cancellation_registry
+    .register(id, token, handle.abort_handle());
+
+  let app = create_router(state);
+  for expected_cancelled in [true, false] {
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri(format!("/v1/runs/{}:cancel", id))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+      .await
+      .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["status"], "cancelled");
+    assert_eq!(body["cancelled"], expected_cancelled);
+  }
 }
 
 #[tokio::test]

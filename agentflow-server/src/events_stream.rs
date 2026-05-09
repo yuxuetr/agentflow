@@ -381,6 +381,16 @@ fn workflow_event_payload(event: &agentflow_core::events::WorkflowEvent) -> serd
       "error": error,
       "duration_ms": duration.as_millis() as u64,
     }),
+    W::WorkflowCancelled {
+      workflow_id,
+      reason,
+      duration,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "reason": reason,
+      "duration_ms": duration.as_millis() as u64,
+    }),
     W::NodeStarted {
       workflow_id,
       node_id,

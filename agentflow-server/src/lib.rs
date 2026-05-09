@@ -31,9 +31,10 @@ pub use events_stream::{
   publish_through, stream_events,
 };
 pub use runs::{
-  CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery, ListRunsResponse,
-  RunContext, RunExecutor, RunGraphResponse, RunResponse, StubExecutor, default_executor, get_run,
-  get_run_graph, list_runs, submit_run,
+  CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
+  ListRunsResponse, RunCancellationRegistry, RunContext, RunExecutor, RunGraphResponse,
+  RunResponse, StubExecutor, cancel_run, default_executor, get_run, get_run_graph, list_runs,
+  submit_run,
 };
 pub use scheduler::{
   InMemoryWorkerProtocol, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
@@ -64,6 +65,8 @@ pub struct AppState {
   /// Process-local broker that fans persisted run events out to SSE
   /// subscribers. Cloning is cheap (Arc-backed).
   pub event_broker: EventBroker,
+  /// Process-local cancellation registry for queued/running background runs.
+  pub cancellation_registry: RunCancellationRegistry,
 }
 
 impl std::fmt::Debug for AppState {
@@ -74,6 +77,7 @@ impl std::fmt::Debug for AppState {
       .field("auth", &self.auth)
       .field("skills", &self.skills)
       .field("executor", &"<dyn RunExecutor>")
+      .field("cancellation_registry", &self.cancellation_registry)
       .finish()
   }
 }
@@ -88,6 +92,7 @@ impl AppState {
       skills: SkillCatalog::empty(),
       executor: default_executor(),
       event_broker: EventBroker::new(),
+      cancellation_registry: RunCancellationRegistry::new(),
     }
   }
 
@@ -127,6 +132,7 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/whoami", get(whoami))
     .route("/v1/runs", get(list_runs).post(submit_run))
     .route("/v1/runs/:id", get(get_run))
+    .route("/v1/runs/:id_cancel", post(cancel_run))
     .route("/v1/runs/:id/graph", get(get_run_graph))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))

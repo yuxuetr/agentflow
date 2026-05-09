@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use agentflow_core::FlowCancellationToken;
 use agentflow_db::{NewRun, RunRepo, RunStatus};
 
 use crate::AppState;
@@ -211,17 +212,28 @@ pub async fn run_skill(
   let executor = state.executor.clone();
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
-  tokio::spawn(async move {
+  let cancellation_registry = state.cancellation_registry.clone();
+  let cancellation_token = FlowCancellationToken::new();
+  let task_token = cancellation_token.clone();
+  let handle = tokio::spawn(async move {
     executor
       .execute(RunContext {
         run_id,
         workflow,
         repos,
         run_base_dir: None,
+        cancellation_token: task_token,
         broker,
       })
       .await;
+    cancellation_registry.complete(run_id);
   });
+  state
+    .cancellation_registry
+    .register(run_id, cancellation_token, handle.abort_handle());
+  if handle.is_finished() {
+    state.cancellation_registry.complete(run_id);
+  }
 
   Ok(Json(CreateRunResponse {
     run_id: run.id,

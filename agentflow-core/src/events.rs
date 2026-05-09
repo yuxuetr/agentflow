@@ -60,6 +60,14 @@ pub enum WorkflowEvent {
     timestamp: Instant,
   },
 
+  /// Workflow execution was cancelled
+  WorkflowCancelled {
+    workflow_id: String,
+    reason: String,
+    duration: Duration,
+    timestamp: Instant,
+  },
+
   /// Node execution started
   NodeStarted {
     workflow_id: String,
@@ -172,6 +180,7 @@ impl WorkflowEvent {
       Self::WorkflowStarted { workflow_id, .. }
       | Self::WorkflowCompleted { workflow_id, .. }
       | Self::WorkflowFailed { workflow_id, .. }
+      | Self::WorkflowCancelled { workflow_id, .. }
       | Self::NodeStarted { workflow_id, .. }
       | Self::NodeCompleted { workflow_id, .. }
       | Self::NodeOutputCaptured { workflow_id, .. }
@@ -192,6 +201,7 @@ impl WorkflowEvent {
       Self::WorkflowStarted { timestamp, .. }
       | Self::WorkflowCompleted { timestamp, .. }
       | Self::WorkflowFailed { timestamp, .. }
+      | Self::WorkflowCancelled { timestamp, .. }
       | Self::NodeStarted { timestamp, .. }
       | Self::NodeCompleted { timestamp, .. }
       | Self::NodeOutputCaptured { timestamp, .. }
@@ -212,6 +222,7 @@ impl WorkflowEvent {
       Self::WorkflowStarted { .. } => "workflow.started",
       Self::WorkflowCompleted { .. } => "workflow.completed",
       Self::WorkflowFailed { .. } => "workflow.failed",
+      Self::WorkflowCancelled { .. } => "workflow.cancelled",
       Self::NodeStarted { .. } => "node.started",
       Self::NodeCompleted { .. } => "node.completed",
       Self::NodeOutputCaptured { .. } => "node.output.captured",
@@ -244,6 +255,13 @@ impl fmt::Display for WorkflowEvent {
         workflow_id, error, ..
       } => {
         write!(f, "Workflow '{}' failed: {}", workflow_id, error)
+      }
+      Self::WorkflowCancelled {
+        workflow_id,
+        reason,
+        ..
+      } => {
+        write!(f, "Workflow '{}' cancelled: {}", workflow_id, reason)
       }
       Self::NodeStarted { node_id, .. } => {
         write!(f, "Node '{}' started", node_id)

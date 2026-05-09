@@ -17,12 +17,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use agentflow_core::{FlowExecutionConfig, async_node::AsyncNodeResult};
+use agentflow_core::{FlowCancellationToken, FlowExecutionConfig, async_node::AsyncNodeResult};
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 
@@ -53,6 +53,13 @@ pub struct CreateRunResponse {
   pub status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CancelRunResponse {
+  #[serde(flatten)]
+  pub run: Run,
+  pub cancelled: bool,
+}
+
 /// Minimal run-execution contract. Implementations are responsible for
 /// every state transition after the route layer creates the row, including
 /// terminal status updates and event emission.
@@ -68,10 +75,74 @@ pub struct RunContext {
   pub workflow: String,
   pub repos: Repositories,
   pub run_base_dir: Option<PathBuf>,
+  pub cancellation_token: FlowCancellationToken,
   /// Forwards events to live SSE subscribers. Persisting to the DB still
   /// has to happen — use [`publish_through`](crate::events_stream::publish_through)
   /// for the standard path.
   pub broker: EventBroker,
+}
+
+#[derive(Clone, Default)]
+pub struct RunCancellationRegistry {
+  inner: Arc<Mutex<HashMap<Uuid, RunCancellationEntry>>>,
+}
+
+impl std::fmt::Debug for RunCancellationRegistry {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let len = self.inner.lock().map(|entries| entries.len()).unwrap_or(0);
+    f.debug_struct("RunCancellationRegistry")
+      .field("active_runs", &len)
+      .finish()
+  }
+}
+
+#[derive(Clone)]
+struct RunCancellationEntry {
+  token: FlowCancellationToken,
+  abort_handle: tokio::task::AbortHandle,
+}
+
+impl RunCancellationRegistry {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn register(
+    &self,
+    run_id: Uuid,
+    token: FlowCancellationToken,
+    abort_handle: tokio::task::AbortHandle,
+  ) {
+    let mut entries = self.inner.lock().expect("run cancellation mutex poisoned");
+    entries.insert(
+      run_id,
+      RunCancellationEntry {
+        token,
+        abort_handle,
+      },
+    );
+  }
+
+  pub fn cancel(&self, run_id: Uuid) -> bool {
+    let Some(entry) = self
+      .inner
+      .lock()
+      .expect("run cancellation mutex poisoned")
+      .get(&run_id)
+      .cloned()
+    else {
+      return false;
+    };
+
+    entry.token.cancel();
+    entry.abort_handle.abort();
+    true
+  }
+
+  pub fn complete(&self, run_id: Uuid) {
+    let mut entries = self.inner.lock().expect("run cancellation mutex poisoned");
+    entries.remove(&run_id);
+  }
 }
 
 /// Default no-op executor used until the real Flow runner lands. Marks runs
@@ -104,10 +175,15 @@ impl RunExecutor for FlowRunExecutor {
   async fn execute(&self, ctx: RunContext) {
     if let Err(e) = flow_execute(&ctx).await {
       error!(run_id = %ctx.run_id, error = %e, "flow executor failed");
+      let status = if e.is_cancelled() {
+        RunStatus::Cancelled
+      } else {
+        RunStatus::Failed
+      };
       let _ = ctx
         .repos
         .runs
-        .update_status(ctx.run_id, RunStatus::Failed, Some(&e.to_string()))
+        .update_status(ctx.run_id, status, Some(&e.to_string()))
         .await;
       ctx.broker.finalise(ctx.run_id);
     }
@@ -131,7 +207,8 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   ));
   flow = flow.with_event_listener(listener);
 
-  let execution_config = server_execution_config(ctx.run_base_dir.clone());
+  let execution_config =
+    server_execution_config(ctx.run_base_dir.clone(), ctx.cancellation_token.clone());
   let state = flow
     .execute_from_inputs_with_id_and_config(run_id, HashMap::new(), execution_config)
     .await?;
@@ -160,9 +237,14 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   Ok(())
 }
 
-fn server_execution_config(run_base_dir: Option<PathBuf>) -> FlowExecutionConfig {
+fn server_execution_config(
+  run_base_dir: Option<PathBuf>,
+  cancellation_token: FlowCancellationToken,
+) -> FlowExecutionConfig {
   let base_dir = run_base_dir.unwrap_or_else(default_run_base_dir);
-  FlowExecutionConfig::serial().with_run_base_dir(base_dir)
+  FlowExecutionConfig::serial()
+    .with_run_base_dir(base_dir)
+    .with_cancellation_token(cancellation_token)
 }
 
 fn default_run_base_dir() -> PathBuf {
@@ -277,17 +359,28 @@ pub async fn submit_run(
   let executor = state.executor.clone();
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
-  tokio::spawn(async move {
+  let cancellation_registry = state.cancellation_registry.clone();
+  let cancellation_token = FlowCancellationToken::new();
+  let task_token = cancellation_token.clone();
+  let handle = tokio::spawn(async move {
     executor
       .execute(RunContext {
         run_id,
         workflow,
         repos,
         run_base_dir: Some(run_base_dir),
+        cancellation_token: task_token,
         broker,
       })
       .await;
+    cancellation_registry.complete(run_id);
   });
+  state
+    .cancellation_registry
+    .register(run_id, cancellation_token, handle.abort_handle());
+  if handle.is_finished() {
+    state.cancellation_registry.complete(run_id);
+  }
 
   Ok(Json(CreateRunResponse {
     run_id: run.id,
@@ -332,6 +425,92 @@ pub async fn list_runs(
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
   let runs = state.repos.runs.list(&tenant_id, limit).await?;
   Ok(Json(ListRunsResponse { runs }))
+}
+
+/// `POST /v1/runs/{id}:cancel` — idempotently cancel a queued/running run.
+pub async fn cancel_run(
+  State(state): State<AppState>,
+  Path(id_cancel): Path<String>,
+) -> Result<Json<CancelRunResponse>, ApiError> {
+  let id_raw = id_cancel
+    .strip_suffix(":cancel")
+    .ok_or_else(|| ApiError::BadRequest("run cancellation route must end with :cancel".into()))?;
+  let id = Uuid::parse_str(id_raw)
+    .map_err(|_| ApiError::BadRequest(format!("invalid run id '{}'", id_raw)))?;
+
+  let run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+
+  if is_terminal_status(&run.status) {
+    return Ok(Json(CancelRunResponse {
+      run,
+      cancelled: false,
+    }));
+  }
+
+  state.cancellation_registry.cancel(id);
+  state
+    .repos
+    .runs
+    .update_status(id, RunStatus::Cancelled, Some("cancel requested"))
+    .await?;
+  publish_cancellation_event(&state.repos, &state.event_broker, id).await?;
+  state.event_broker.finalise(id);
+  state.cancellation_registry.complete(id);
+
+  let run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+  Ok(Json(CancelRunResponse {
+    run,
+    cancelled: true,
+  }))
+}
+
+fn is_terminal_status(status: &str) -> bool {
+  matches!(status, "succeeded" | "failed" | "cancelled")
+}
+
+async fn publish_cancellation_event(
+  repos: &Repositories,
+  broker: &EventBroker,
+  run_id: Uuid,
+) -> Result<(), ApiError> {
+  let seq = next_event_seq(repos, run_id).await?;
+  publish_through(
+    repos,
+    broker,
+    NewEvent {
+      run_id,
+      seq,
+      kind: "run.cancelled".to_string(),
+      payload: serde_json::json!({
+        "workflow_id": run_id.to_string(),
+        "reason": "cancel requested",
+      }),
+    },
+  )
+  .await?;
+  Ok(())
+}
+
+async fn next_event_seq(repos: &Repositories, run_id: Uuid) -> Result<i64, ApiError> {
+  let events = repos.events.list_after(run_id, -1, 10_000).await?;
+  Ok(
+    events
+      .iter()
+      .map(|event| event.seq)
+      .max()
+      .map(|seq| seq + 1)
+      .unwrap_or(0),
+  )
 }
 
 /// `GET /v1/runs/{id}/graph` — convert the stored workflow to
@@ -417,5 +596,14 @@ mod anyhow_like {
     Build(#[from] anyhow::Error),
     #[error(transparent)]
     Flow(#[from] agentflow_core::error::AgentFlowError),
+  }
+
+  impl FlowRunError {
+    pub fn is_cancelled(&self) -> bool {
+      matches!(
+        self,
+        Self::Flow(agentflow_core::error::AgentFlowError::TaskCancelled)
+      )
+    }
   }
 }

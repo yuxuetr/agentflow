@@ -189,6 +189,19 @@ impl Flow {
       timestamp: workflow_started_at,
     });
     let execution_config = execution_config.unwrap_or_default();
+    if execution_config
+      .cancellation_token
+      .as_ref()
+      .is_some_and(|token| token.is_cancelled())
+    {
+      self.emit_event(WorkflowEvent::WorkflowCancelled {
+        workflow_id: run_id.clone(),
+        reason: "cancellation token signalled".to_string(),
+        duration: workflow_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
+      return Err(AgentFlowError::TaskCancelled);
+    }
     let base_dir = execution_config
       .run_base_dir
       .clone()
@@ -241,6 +254,20 @@ impl Flow {
     let mut should_skip = skip_until.is_some();
 
     for node_id in &sorted_nodes {
+      if execution_config
+        .cancellation_token
+        .as_ref()
+        .is_some_and(|token| token.is_cancelled())
+      {
+        self.emit_event(WorkflowEvent::WorkflowCancelled {
+          workflow_id: run_id.clone(),
+          reason: "cancellation token signalled".to_string(),
+          duration: workflow_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+        return Err(AgentFlowError::TaskCancelled);
+      }
+
       // Check if we should resume from this node
       if should_skip && let Some(ref resume_node) = skip_until {
         if node_id == resume_node {
@@ -553,6 +580,20 @@ impl Flow {
     let mut fail_fast_triggered = false;
 
     while !pending.is_empty() || !running.is_empty() {
+      if config
+        .cancellation_token
+        .as_ref()
+        .is_some_and(|token| token.is_cancelled())
+      {
+        self.emit_event(WorkflowEvent::WorkflowCancelled {
+          workflow_id: run_id.clone(),
+          reason: "cancellation token signalled".to_string(),
+          duration: workflow_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+        return Err(AgentFlowError::TaskCancelled);
+      }
+
       while !fail_fast_triggered && running.len() < config.max_concurrency {
         let Some(node_id) = sorted_nodes
           .iter()
@@ -1216,6 +1257,46 @@ mod tests {
     assert_eq!(restored_outputs.get("json"), outputs.get("json"));
     assert_eq!(restored_outputs.get("file"), Some(&file_value));
     assert_eq!(restored_outputs.get("url"), Some(&url_value));
+  }
+
+  #[tokio::test]
+  async fn cancellation_token_stops_flow_before_first_node() {
+    use_writable_home();
+    struct NeverNode;
+    #[async_trait]
+    impl AsyncNode for NeverNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        panic!("cancelled flow should not execute nodes");
+      }
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let token = crate::scheduler::FlowCancellationToken::new();
+    token.cancel();
+    let mut flow = Flow::default().with_event_listener(Arc::new(RecordingListener {
+      events: events.clone(),
+    }));
+    flow.add_node(GraphNode {
+      id: "never".to_string(),
+      node_type: NodeType::Standard(Arc::new(NeverNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    });
+
+    let result = flow
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial().with_cancellation_token(token),
+      )
+      .await;
+
+    assert!(matches!(result, Err(AgentFlowError::TaskCancelled)));
+    assert_eq!(
+      *events.lock().unwrap(),
+      vec!["workflow.started", "workflow.cancelled"]
+    );
   }
 
   #[tokio::test]
