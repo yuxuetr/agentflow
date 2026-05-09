@@ -629,6 +629,31 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - 从远程 registry 安装一个 Skill / Plugin 并验证签名通过。
 - 离线模式下仍能使用已缓存的 Skill / Plugin。
 
+### 17. Marketplace package-specific install handoff
+
+状态: TODO
+
+目标:
+
+- 把 `agentflow marketplace install` 从 verified artifact cache 延伸到 package-specific install。
+- Skill package 解包后落到 `~/.agentflow/skills/<name>`；Plugin package 解包后落到 `~/.agentflow/plugins/<name>`。
+- 保留 `--cache-only` 以支持只下载/验证/缓存的离线准备流程。
+
+子任务:
+
+- [ ] CLI `marketplace install` 新增 `--dir` / `--force` / `--cache-only`。
+- [ ] 支持 `.tar` / `.tar.gz` artifact 安全解包，拒绝绝对路径、`..`、symlink/hardlink 等不安全 entry。
+- [ ] 按 package type 校验内容：Skill 必须可被 `SkillLoader` 解析并验证；Plugin 必须包含有效 `plugin.toml`（plugin feature 未启用时给出明确错误）。
+- [ ] 安装时复用现有本地目录语义：目标存在需 `--force`，防止递归安装，保留插件 entrypoint 可执行位。
+- [ ] 增加 CLI e2e：skill package install 成功、`--cache-only` 不安装、plugin package 在 feature build 下安装成功。
+- [ ] 更新 `docs/MARKETPLACE.md` 和 `RoadMap.md`，移除 package-specific handoff 仍待落地的描述。
+
+验收标准:
+
+- `agentflow marketplace install <registry> rust-expert --type skill --dir <tmp>` 会验证 artifact 并安装出可 `agentflow skill validate` 的目录。
+- `agentflow marketplace install <registry> echo-plugin --type plugin --dir <tmp> --force` 在 plugin feature build 下会安装出可 `agentflow plugin inspect` 的目录。
+- `agentflow marketplace install ... --cache-only` 只写 cache，不创建 skill/plugin install 目录。
+
 ---
 
 ## 维护任务（持续）
