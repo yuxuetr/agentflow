@@ -286,7 +286,7 @@ agentflow doctor --format json
 
 ### P1.2 Marketplace / Plugin 供应链安全测试
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -306,11 +306,11 @@ agentflow doctor --format json
 
 子任务:
 
-- [ ] 扩展 marketplace CLI tests。
-- [ ] 扩展 remote marketplace cache tests。
-- [ ] 增加 plugin install 安全校验。
-- [ ] `agentflow marketplace verify --strict` 设计或实现。
-- [ ] 文档写明签名策略与 bootstrap checksum verifier 边界。
+- [x] 扩展 marketplace CLI tests。
+- [x] 扩展 remote marketplace cache tests。
+- [x] 增加 plugin install 安全校验。
+- [x] `agentflow marketplace verify --strict` 设计或实现。
+- [x] 文档写明签名策略与 bootstrap checksum verifier 边界。
 
 涉及文件:
 
