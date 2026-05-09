@@ -532,6 +532,15 @@ enum RemoteMarketplaceCommands {
     /// Cache directory (default: ~/.agentflow/marketplace/cache)
     #[arg(long)]
     cache_dir: Option<String>,
+    /// Target install root. Defaults to ~/.agentflow/skills for Skills and ~/.agentflow/plugins for Plugins.
+    #[arg(long = "dir")]
+    install_dir: Option<String>,
+    /// Overwrite an existing installed package directory
+    #[arg(long)]
+    force: bool,
+    /// Only download/verify/cache the artifact; do not unpack it into the runtime install directory.
+    #[arg(long)]
+    cache_only: bool,
   },
   /// Fetch and cache the registry manifest itself
   Update {
@@ -975,7 +984,21 @@ async fn main() {
         package,
         package_type,
         cache_dir,
-      } => marketplace::install(registry, package, package_type, cache_dir).await,
+        install_dir,
+        force,
+        cache_only,
+      } => {
+        marketplace::install(
+          registry,
+          package,
+          package_type,
+          cache_dir,
+          install_dir,
+          force,
+          cache_only,
+        )
+        .await
+      }
       RemoteMarketplaceCommands::Update {
         registry,
         cache_dir,

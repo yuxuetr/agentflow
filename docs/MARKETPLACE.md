@@ -135,7 +135,7 @@ local remote marketplace TOML file:
 ```bash
 agentflow marketplace search https://registry.example.com/marketplace.toml rust --type skill
 agentflow marketplace update https://registry.example.com/marketplace.toml
-agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill
+agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --dir ~/.agentflow/skills
 agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
 ```
 
@@ -144,20 +144,35 @@ Command behavior:
 - `search`: list matching entries from the remote marketplace catalog.
 - `update`: fetch or load the registry manifest and write it under
   `<cache>/registries/<marketplace>.toml`.
-- `install`: resolve a package, download its artifact, verify checksum and
-  signature policy, then write the verified artifact into the local cache.
+- `install`: resolve a package, download or reuse its artifact, verify checksum
+  and signature policy, write the verified artifact into the local cache, and
+  unpack/install it into the package-specific runtime directory.
 - `verify`: verify one cached package, or all matching cached packages, without
   contacting the artifact URL.
 
-`install` currently stops at the verified marketplace artifact cache. It does
-not yet unpack a Skill into `~/.agentflow/skills` or a Plugin into
-`~/.agentflow/plugins`; that package-specific handoff remains the next install
-integration step.
+Install options:
+
+- `--dir <path>` overrides the install root. Defaults to `~/.agentflow/skills`
+  for Skills and `~/.agentflow/plugins` for Plugins.
+- `--force` overwrites an existing installed package directory.
+- `--cache-only` stops after verified cache write/verification and does not
+  unpack into the runtime install directory.
+
+Package artifacts are `.tar` or `.tar.gz` archives. The archive may contain the
+manifest at the root or inside a single top-level directory:
+
+- Skill packages must contain `SKILL.md` and pass `SkillLoader` validation.
+- Plugin packages must contain `plugin.toml` and pass plugin manifest
+  validation. Plugin install requires an `agentflow` binary built with the
+  `plugin` feature.
+
+Archive extraction rejects absolute paths, `..` traversal, symlinks, hardlinks,
+and other non-file/non-directory entries before copying into the install root.
 
 ## Offline Flow
 
-After an artifact has been cached, `verify` can run with a local copy of the
-marketplace TOML:
+After an artifact has been cached, `verify` or `install --cache-only` can run
+with a local copy of the marketplace TOML:
 
 ```bash
 agentflow marketplace update https://registry.example.com/marketplace.toml
@@ -170,13 +185,9 @@ without downloading the artifact again.
 ## Current Boundaries
 
 The implemented remote marketplace layer covers catalog schema, read-only
-registry fetch, verified artifact caching, offline cache verification, and the
-top-level CLI entry points. It intentionally does not yet define a package
-archive layout or unpack cached artifacts into the runtime install locations.
+registry fetch, verified artifact caching, offline cache verification, safe
+archive unpack, and package-specific install into Skill or Plugin roots.
 
-The package-specific handoff will reuse the existing local installers:
-
-- Skills: validated package contents should flow into `agentflow skill install`
-  semantics and land under `~/.agentflow/skills`.
-- Plugins: validated package contents should flow into `agentflow plugin install`
-  semantics and land under `~/.agentflow/plugins`.
+It does not yet implement background update jobs, dependency resolution between
+packages, or a production signing verifier beyond the pluggable verifier
+interface and checksum-based bootstrap verifier.

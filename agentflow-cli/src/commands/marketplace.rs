@@ -1,10 +1,17 @@
 use anyhow::{Context, Result, bail};
+use flate2::read::GzDecoder;
 use std::fs;
+use std::io::{Cursor, Read};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Component;
 use std::path::{Path, PathBuf};
+use tempfile::TempDir;
+use walkdir::WalkDir;
 
 use agentflow_skills::{
   MarketplacePackageType, RemoteMarketplaceCache, RemoteMarketplaceClient, RemoteMarketplaceEntry,
-  RemoteMarketplaceManifest,
+  RemoteMarketplaceManifest, SkillLoader,
 };
 
 pub async fn search(
@@ -41,15 +48,24 @@ pub async fn install(
   package: String,
   package_type: Option<String>,
   cache_dir: Option<String>,
+  install_dir: Option<String>,
+  force: bool,
+  cache_only: bool,
 ) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
   let package_type = parse_package_type_opt(package_type.as_deref())?;
   let entry = resolve_entry(&manifest, &package, package_type)?;
   let cache = cache_from_dir(cache_dir);
-  let cached = cache
-    .fetch_and_cache_artifact(entry)
-    .await
-    .with_context(|| format!("Failed to fetch and cache package '{}'", entry.name))?;
+  let cached = if cache.is_cached(entry)? {
+    cache
+      .verify_cached_artifact(entry)
+      .with_context(|| format!("Failed to verify cached package '{}'", entry.name))?
+  } else {
+    cache
+      .fetch_and_cache_artifact(entry)
+      .await
+      .with_context(|| format!("Failed to fetch and cache package '{}'", entry.name))?
+  };
 
   println!(
     "✅ Cached {} package: {}",
@@ -60,7 +76,21 @@ pub async fn install(
   println!("   path: {}", cached.path.display());
   println!("   checksum: sha256:{}", cached.checksum_sha256);
   println!("   signature_checked: {}", cached.signature_checked);
-  println!("   next: unpack/install integration lands in the package-specific installer");
+
+  if cache_only {
+    println!("   cache_only: true");
+    return Ok(());
+  }
+
+  let installed = install_cached_package(entry, &cached.path, install_dir, force)
+    .with_context(|| format!("Failed to install cached package '{}'", entry.name))?;
+  println!(
+    "✅ Installed {} package: {}",
+    entry.package_type.as_str(),
+    entry.name
+  );
+  println!("   version: {}", entry.version);
+  println!("   to: {}", installed.display());
   Ok(())
 }
 
@@ -221,6 +251,312 @@ fn print_entry(entry: &RemoteMarketplaceEntry) {
   if !entry.aliases.is_empty() {
     println!("     aliases: {}", entry.aliases.join(", "));
   }
+}
+
+fn install_cached_package(
+  entry: &RemoteMarketplaceEntry,
+  artifact_path: &Path,
+  install_dir: Option<String>,
+  force: bool,
+) -> Result<PathBuf> {
+  let package = extract_package_archive(artifact_path)?;
+  let package_root = find_package_root(package.path(), entry.package_type)?;
+  match entry.package_type {
+    MarketplacePackageType::Skill => {
+      install_skill_package(entry, &package_root, install_dir, force)
+    }
+    MarketplacePackageType::Plugin => {
+      install_plugin_package(entry, &package_root, install_dir, force)
+    }
+  }
+}
+
+fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
+  let bytes = fs::read(artifact_path)
+    .with_context(|| format!("Failed to read artifact '{}'", artifact_path.display()))?;
+  let reader: Box<dyn Read> = if bytes.starts_with(&[0x1f, 0x8b]) {
+    Box::new(GzDecoder::new(Cursor::new(bytes)))
+  } else {
+    Box::new(Cursor::new(bytes))
+  };
+  let temp_dir = TempDir::new().context("Failed to create marketplace unpack directory")?;
+  let mut archive = tar::Archive::new(reader);
+
+  for entry in archive.entries().with_context(|| {
+    format!(
+      "Failed to read tar entries from '{}'",
+      artifact_path.display()
+    )
+  })? {
+    let mut entry = entry.with_context(|| {
+      format!(
+        "Failed to read an archive entry from '{}'",
+        artifact_path.display()
+      )
+    })?;
+    let entry_type = entry.header().entry_type();
+    if !(entry_type.is_dir() || entry_type.is_file()) {
+      bail!(
+        "Refusing to unpack unsafe archive entry '{}' from '{}'",
+        entry.path()?.display(),
+        artifact_path.display()
+      );
+    }
+
+    let relative = safe_archive_path(&entry.path()?)?;
+    let target = temp_dir.path().join(relative);
+    if entry_type.is_dir() {
+      fs::create_dir_all(&target)
+        .with_context(|| format!("Failed to create unpacked directory '{}'", target.display()))?;
+      continue;
+    }
+
+    if let Some(parent) = target.parent() {
+      fs::create_dir_all(parent).with_context(|| {
+        format!(
+          "Failed to create unpacked parent directory '{}'",
+          parent.display()
+        )
+      })?;
+    }
+    entry
+      .unpack(&target)
+      .with_context(|| format!("Failed to unpack archive file '{}'", target.display()))?;
+  }
+
+  Ok(temp_dir)
+}
+
+fn safe_archive_path(path: &Path) -> Result<PathBuf> {
+  let mut safe = PathBuf::new();
+  for component in path.components() {
+    match component {
+      Component::Normal(value) => safe.push(value),
+      Component::CurDir => {}
+      Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+        bail!(
+          "Refusing to unpack unsafe archive path '{}'",
+          path.display()
+        )
+      }
+    }
+  }
+  if safe.as_os_str().is_empty() {
+    bail!("Refusing to unpack empty archive path");
+  }
+  Ok(safe)
+}
+
+fn find_package_root(unpack_root: &Path, package_type: MarketplacePackageType) -> Result<PathBuf> {
+  let manifest_name = match package_type {
+    MarketplacePackageType::Skill => "SKILL.md",
+    MarketplacePackageType::Plugin => "plugin.toml",
+  };
+  if unpack_root.join(manifest_name).is_file() {
+    return Ok(unpack_root.to_path_buf());
+  }
+
+  let directories = fs::read_dir(unpack_root)
+    .with_context(|| {
+      format!(
+        "Failed to inspect unpack directory '{}'",
+        unpack_root.display()
+      )
+    })?
+    .filter_map(|entry| entry.ok())
+    .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+    .map(|entry| entry.path())
+    .collect::<Vec<_>>();
+
+  match directories.as_slice() {
+    [dir] if dir.join(manifest_name).is_file() => Ok(dir.clone()),
+    _ => bail!(
+      "Marketplace package does not contain a {} at archive root or one top-level directory",
+      manifest_name
+    ),
+  }
+}
+
+fn install_skill_package(
+  entry: &RemoteMarketplaceEntry,
+  package_root: &Path,
+  install_dir: Option<String>,
+  force: bool,
+) -> Result<PathBuf> {
+  let manifest = SkillLoader::load(package_root).with_context(|| {
+    format!(
+      "Marketplace Skill package '{}' is invalid at '{}'",
+      entry.name,
+      package_root.display()
+    )
+  })?;
+  let warnings = SkillLoader::validate(&manifest, package_root).with_context(|| {
+    format!(
+      "Marketplace Skill package '{}' failed validation",
+      entry.name
+    )
+  })?;
+
+  let install_root = install_dir
+    .map(PathBuf::from)
+    .unwrap_or_else(default_skills_dir);
+  let destination = install_root.join(&entry.name);
+  install_directory(package_root, &destination, force, "skill")?;
+  if !warnings.is_empty() {
+    for warning in warnings {
+      println!("   ⚠  {}", warning);
+    }
+  }
+  Ok(destination)
+}
+
+fn install_plugin_package(
+  entry: &RemoteMarketplaceEntry,
+  package_root: &Path,
+  install_dir: Option<String>,
+  force: bool,
+) -> Result<PathBuf> {
+  #[cfg(not(feature = "plugin"))]
+  {
+    let _ = (entry, package_root, install_dir, force);
+    bail!(
+      "Installing marketplace plugin packages requires a binary built with the `plugin` feature"
+    );
+  }
+
+  #[cfg(feature = "plugin")]
+  {
+    use agentflow_core::plugin::PluginManifest;
+
+    let manifest_path = package_root.join("plugin.toml");
+    let (manifest, _manifest_dir) =
+      PluginManifest::load_from_path(&manifest_path).with_context(|| {
+        format!(
+          "Failed to parse plugin manifest '{}'",
+          manifest_path.display()
+        )
+      })?;
+    manifest.validate().with_context(|| {
+      format!(
+        "Marketplace Plugin package '{}' failed validation",
+        entry.name
+      )
+    })?;
+
+    let install_root = install_dir
+      .map(PathBuf::from)
+      .unwrap_or_else(default_plugins_dir);
+    let destination = install_root.join(&manifest.plugin.name);
+    install_directory(package_root, &destination, force, "plugin")?;
+    Ok(destination)
+  }
+}
+
+fn install_directory(source: &Path, destination: &Path, force: bool, label: &str) -> Result<()> {
+  fs::create_dir_all(destination.parent().unwrap_or_else(|| Path::new("."))).with_context(
+    || {
+      format!(
+        "Failed to create {} install parent for '{}'",
+        label,
+        destination.display()
+      )
+    },
+  )?;
+  prevent_recursive_install(source, destination, label)?;
+
+  if destination.exists() {
+    if !force {
+      bail!(
+        "Target {} directory '{}' already exists; pass --force to overwrite",
+        label,
+        destination.display()
+      );
+    }
+    fs::remove_dir_all(destination).with_context(|| {
+      format!(
+        "Failed to remove existing {} directory '{}'",
+        label,
+        destination.display()
+      )
+    })?;
+  }
+
+  copy_dir_recursive(source, destination)
+}
+
+fn prevent_recursive_install(source: &Path, destination: &Path, label: &str) -> Result<()> {
+  let source = fs::canonicalize(source)?;
+  let destination_parent = destination
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| PathBuf::from("."));
+  fs::create_dir_all(&destination_parent)?;
+  let destination_parent = fs::canonicalize(destination_parent)?;
+
+  if destination_parent.starts_with(&source) {
+    bail!(
+      "Refusing to install {} '{}' into its own source tree '{}'",
+      label,
+      source.display(),
+      destination.display()
+    );
+  }
+  Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+  for entry in WalkDir::new(source) {
+    let entry = entry?;
+    let relative = entry.path().strip_prefix(source)?;
+    if relative.as_os_str().is_empty() {
+      continue;
+    }
+
+    let target = destination.join(relative);
+    if entry.file_type().is_dir() {
+      fs::create_dir_all(&target)?;
+    } else if entry.file_type().is_file() {
+      if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+      }
+      fs::copy(entry.path(), &target)?;
+      copy_executable_bit(entry.path(), &target)?;
+    } else {
+      bail!(
+        "Unsupported package entry '{}' while copying '{}'",
+        entry.path().display(),
+        source.display()
+      );
+    }
+  }
+  Ok(())
+}
+
+#[cfg(unix)]
+fn copy_executable_bit(source: &Path, destination: &Path) -> Result<()> {
+  let perms = fs::metadata(source)?.permissions();
+  fs::set_permissions(destination, fs::Permissions::from_mode(perms.mode()))?;
+  Ok(())
+}
+
+#[cfg(not(unix))]
+fn copy_executable_bit(_source: &Path, _destination: &Path) -> Result<()> {
+  Ok(())
+}
+
+fn default_skills_dir() -> PathBuf {
+  dirs::home_dir()
+    .unwrap_or_else(|| PathBuf::from("."))
+    .join(".agentflow")
+    .join("skills")
+}
+
+#[cfg(feature = "plugin")]
+fn default_plugins_dir() -> PathBuf {
+  dirs::home_dir()
+    .unwrap_or_else(|| PathBuf::from("."))
+    .join(".agentflow")
+    .join("plugins")
 }
 
 fn sanitize_path_segment(value: &str) -> String {

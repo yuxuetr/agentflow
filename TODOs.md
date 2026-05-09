@@ -631,7 +631,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 17. Marketplace package-specific install handoff
 
-状态: TODO
+状态: 已完成 (2026-05-09)
 
 目标:
 
@@ -641,12 +641,12 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 子任务:
 
-- [ ] CLI `marketplace install` 新增 `--dir` / `--force` / `--cache-only`。
-- [ ] 支持 `.tar` / `.tar.gz` artifact 安全解包，拒绝绝对路径、`..`、symlink/hardlink 等不安全 entry。
-- [ ] 按 package type 校验内容：Skill 必须可被 `SkillLoader` 解析并验证；Plugin 必须包含有效 `plugin.toml`（plugin feature 未启用时给出明确错误）。
-- [ ] 安装时复用现有本地目录语义：目标存在需 `--force`，防止递归安装，保留插件 entrypoint 可执行位。
-- [ ] 增加 CLI e2e：skill package install 成功、`--cache-only` 不安装、plugin package 在 feature build 下安装成功。
-- [ ] 更新 `docs/MARKETPLACE.md` 和 `RoadMap.md`，移除 package-specific handoff 仍待落地的描述。
+- [x] CLI `marketplace install` 新增 `--dir` / `--force` / `--cache-only`。
+- [x] 支持 `.tar` / `.tar.gz` artifact 安全解包，拒绝绝对路径、`..`、symlink/hardlink 等不安全 entry。
+- [x] 按 package type 校验内容：Skill 必须可被 `SkillLoader` 解析并验证；Plugin 必须包含有效 `plugin.toml`（plugin feature 未启用时给出明确错误）。
+- [x] 安装时复用现有本地目录语义：目标存在需 `--force`，防止递归安装，保留插件 entrypoint 可执行位。
+- [x] 增加 CLI e2e：skill package install 成功、`--cache-only` 不安装、plugin package 在 feature build 下安装成功。
+- [x] 更新 `docs/MARKETPLACE.md` 和 `RoadMap.md`，移除 package-specific handoff 仍待落地的描述。
 
 验收标准:
 
