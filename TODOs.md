@@ -647,7 +647,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### M3. 性能基准回归
 
-- [ ] 大 DAG 调度 / ToolRegistry / MCP latency / agent loop prompt assembly 已有 benchmark；每次 release 前对比上一次基准，回归 > 10% 必须给出原因。
+- [x] 大 DAG 调度 / ToolRegistry / MCP latency / agent loop prompt assembly 已有 benchmark；每次 release 前对比上一次基准，回归 > 10% 必须给出原因。2026-05-09 benchmark smoke verified。
 
 ---
 
