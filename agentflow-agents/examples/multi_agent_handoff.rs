@@ -106,11 +106,12 @@ async fn main() {
   let task = "Hi, I was charged twice for last month's subscription. Can you \
               refund the duplicate charge?";
 
-  let context = AgentContext::new(supervisor.session_id().to_string(), task, model)
-    .with_limits(RuntimeLimits {
+  let context = AgentContext::new(supervisor.session_id().to_string(), task, model).with_limits(
+    RuntimeLimits {
       max_steps: Some(20),
       ..RuntimeLimits::default()
-    });
+    },
+  );
 
   match AgentRuntime::run(&mut supervisor, context).await {
     Ok(result) => {

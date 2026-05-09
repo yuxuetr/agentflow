@@ -90,9 +90,10 @@ impl SandboxBackend for LinuxSeccompBackend {
       ),
     })?;
 
-    let bpf = compile_filter(effective_capabilities, arch).map_err(|err| SandboxError::Prepare {
-      message: format!("failed to compile seccomp filter: {err}"),
-    })?;
+    let bpf =
+      compile_filter(effective_capabilities, arch).map_err(|err| SandboxError::Prepare {
+        message: format!("failed to compile seccomp filter: {err}"),
+      })?;
 
     // Share one Arc across all closure invocations (one per spawn).
     let bpf = Arc::new(bpf);
@@ -118,10 +119,7 @@ fn detect_target_arch() -> Option<TargetArch> {
 
 /// Build a default-allow filter that denies a curated syscall set per
 /// missing capability.
-fn compile_filter(
-  caps: &[Capability],
-  arch: TargetArch,
-) -> Result<BpfProgram, seccompiler::Error> {
+fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, seccompiler::Error> {
   let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
   let allow_net = caps.contains(&Capability::Net);
   let allow_fs_write = caps.contains(&Capability::FsWrite);

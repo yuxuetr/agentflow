@@ -221,12 +221,7 @@ fn load_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
       continue;
     }
     let item: T = serde_json::from_str(&line).map_err(|err| {
-      RAGError::invalid_input(format!(
-        "{}:line {}: {}",
-        path.display(),
-        lineno + 1,
-        err
-      ))
+      RAGError::invalid_input(format!("{}:line {}: {}", path.display(), lineno + 1, err))
     })?;
     out.push(item);
   }
@@ -339,11 +334,7 @@ mod tests {
 
     let corpus_path = dir.join("corpus.jsonl");
     let mut f = File::create(&corpus_path).unwrap();
-    writeln!(
-      f,
-      r#"{{"id":"d1","text":"the quick brown fox"}}"#
-    )
-    .unwrap();
+    writeln!(f, r#"{{"id":"d1","text":"the quick brown fox"}}"#).unwrap();
     writeln!(f, r#"{{"id":"d2","text":"the lazy dog"}}"#).unwrap();
     drop(f);
 
@@ -354,11 +345,7 @@ mod tests {
 
     let qrels_path = dir.join("qrels.jsonl");
     let mut f = File::create(&qrels_path).unwrap();
-    writeln!(
-      f,
-      r#"{{"query_id":"q1","relevances":{{"d1":1}}}}"#
-    )
-    .unwrap();
+    writeln!(f, r#"{{"query_id":"q1","relevances":{{"d1":1}}}}"#).unwrap();
     drop(f);
 
     let manifest_path = dir.join("dataset.toml");

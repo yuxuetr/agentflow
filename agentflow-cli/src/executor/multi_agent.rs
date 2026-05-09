@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 
 use agentflow_agents::supervisor::{
   Blackboard, BlackboardReadTool, BlackboardSchedule, BlackboardStop, BlackboardSupervisorBuilder,
-  BlackboardWriteTool, DebateSupervisorBuilder, HandoffSignal, HandoffSupervisorBuilder, HandoffTool,
+  BlackboardWriteTool, DebateSupervisorBuilder, HandoffSignal, HandoffSupervisorBuilder,
+  HandoffTool,
 };
 use agentflow_agents::{AgentContext, AgentRunResult, AgentRuntime};
 use agentflow_core::{
@@ -138,9 +139,8 @@ impl MultiAgentNode {
     skill_path: &str,
   ) -> Result<(std::path::PathBuf, SkillManifest), AgentFlowError> {
     let dir = std::path::PathBuf::from(skill_path);
-    let manifest = SkillLoader::load(&dir).map_err(|err| {
-      self.input_error(format!("failed to load skill '{}': {}", skill_path, err))
-    })?;
+    let manifest = SkillLoader::load(&dir)
+      .map_err(|err| self.input_error(format!("failed to load skill '{}': {}", skill_path, err)))?;
     SkillLoader::validate(&manifest, &dir).map_err(|err| {
       self.input_error(format!(
         "skill validation failed for '{}': {}",
@@ -157,17 +157,16 @@ impl AsyncNode for MultiAgentNode {
     let message = get_required_string(inputs, "message")
       .map_err(|m| self.input_error(m))?
       .to_string();
-    let model_override =
-      get_optional_string(inputs, "model").map_err(|m| self.input_error(m))?;
+    let model_override = get_optional_string(inputs, "model").map_err(|m| self.input_error(m))?;
 
-    AgentFlow::init().await.map_err(|err| {
-      AgentFlowError::ConfigurationError {
+    AgentFlow::init()
+      .await
+      .map_err(|err| AgentFlowError::ConfigurationError {
         message: format!(
           "multi_agent '{}': failed to initialize LLM: {}",
           self.name, err
         ),
-      }
-    })?;
+      })?;
 
     let result = match &self.config {
       MultiAgentConfig::Handoff {
@@ -264,7 +263,10 @@ impl MultiAgentNode {
       let agent = SkillBuilder::build_with_extra_tools(&manifest, &dir, vec![extra_tool])
         .await
         .map_err(|err| {
-          self.execution_error(format!("failed to build agent for '{}': {}", spec.name, err))
+          self.execution_error(format!(
+            "failed to build agent for '{}': {}",
+            spec.name, err
+          ))
         })?;
       let name = spec.name.clone();
       let description = manifest.skill.description.clone();
@@ -305,7 +307,10 @@ impl MultiAgentNode {
       let agent = SkillBuilder::build_with_extra_tools(&manifest, &dir, extras)
         .await
         .map_err(|err| {
-          self.execution_error(format!("failed to build agent for '{}': {}", spec.name, err))
+          self.execution_error(format!(
+            "failed to build agent for '{}': {}",
+            spec.name, err
+          ))
         })?;
       let description = manifest.skill.description.clone();
       builder = builder.add_agent(agent_name, description, move |_bb| agent);
@@ -334,9 +339,10 @@ impl MultiAgentNode {
       let stop = match stop.kind.as_str() {
         "all_completed" => BlackboardStop::AllAgentsCompleted,
         "key_set" => {
-          let key = stop.key.as_ref().ok_or_else(|| {
-            self.input_error("blackboard stop_when type=key_set requires 'key'")
-          })?;
+          let key = stop
+            .key
+            .as_ref()
+            .ok_or_else(|| self.input_error("blackboard stop_when type=key_set requires 'key'"))?;
           BlackboardStop::KeySet(key.clone())
         }
         other => {
@@ -402,7 +408,10 @@ impl MultiAgentNode {
       manifest.model.name = Some(model.to_string());
     }
     SkillBuilder::build(&manifest, &dir).await.map_err(|err| {
-      self.execution_error(format!("failed to build agent for '{}': {}", spec.name, err))
+      self.execution_error(format!(
+        "failed to build agent for '{}': {}",
+        spec.name, err
+      ))
     })
   }
 }
@@ -434,14 +443,13 @@ fn build_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
       ),
     }
   })?;
-  let agent_result = serde_json::to_value(result).map_err(|err| {
-    AgentFlowError::NodeExecutionFailed {
+  let agent_result =
+    serde_json::to_value(result).map_err(|err| AgentFlowError::NodeExecutionFailed {
       message: format!(
         "multi_agent '{}': failed to serialize runtime result: {}",
         node_name, err
       ),
-    }
-  })?;
+    })?;
 
   let mut outputs: HashMap<String, FlowValue> = HashMap::new();
   outputs.insert("response".to_string(), FlowValue::Json(json!(response)));
@@ -476,10 +484,7 @@ mod tests {
   fn parses_handoff_config_with_defaults() {
     let params = yaml_map(&[
       ("mode", "handoff"),
-      (
-        "agents",
-        "[{name: a, skill: ./a}, {name: b, skill: ./b}]",
-      ),
+      ("agents", "[{name: a, skill: ./a}, {name: b, skill: ./b}]"),
     ]);
     let cfg = MultiAgentConfig::from_params(&params).unwrap();
     match cfg {

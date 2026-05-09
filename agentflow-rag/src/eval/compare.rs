@@ -99,8 +99,7 @@ pub fn compare(baseline: &EvalReport, candidate: &EvalReport) -> ComparisonRepor
   let mut deltas: Vec<MetricDelta> = Vec::new();
 
   // Per-K metric deltas. Only emit rows for K values that exist in both reports.
-  let baseline_ks: std::collections::HashSet<usize> =
-    baseline.per_k.iter().map(|r| r.k).collect();
+  let baseline_ks: std::collections::HashSet<usize> = baseline.per_k.iter().map(|r| r.k).collect();
   let candidate_ks: std::collections::HashSet<usize> =
     candidate.per_k.iter().map(|r| r.k).collect();
   let common_ks: Vec<usize> = {
@@ -124,7 +123,15 @@ pub fn compare(baseline: &EvalReport, candidate: &EvalReport) -> ComparisonRepor
 
   let pairing = pair_per_query(&baseline.per_query, &candidate.per_query);
   let (paired_wins, paired_losses, paired_ties, verdict, reason) = match pairing {
-    Pairing::Mismatch(reason) => (0, 0, 0, Verdict::NotComparable { reason: reason.clone() }, reason),
+    Pairing::Mismatch(reason) => (
+      0,
+      0,
+      0,
+      Verdict::NotComparable {
+        reason: reason.clone(),
+      },
+      reason,
+    ),
     Pairing::Paired(rows) => {
       let mut wins = 0usize;
       let mut losses = 0usize;
@@ -214,10 +221,7 @@ enum Pairing<'a> {
   Mismatch(String),
 }
 
-fn pair_per_query<'a>(
-  baseline: &'a [PerQueryRow],
-  candidate: &'a [PerQueryRow],
-) -> Pairing<'a> {
+fn pair_per_query<'a>(baseline: &'a [PerQueryRow], candidate: &'a [PerQueryRow]) -> Pairing<'a> {
   if baseline.len() != candidate.len() {
     return Pairing::Mismatch(format!(
       "per-query row counts differ: baseline={} candidate={}",
@@ -289,12 +293,24 @@ mod tests {
     let baseline = make_report(
       "baseline",
       0.4,
-      vec![("q1", 0.0), ("q2", 0.0), ("q3", 0.5), ("q4", 0.0), ("q5", 0.0)],
+      vec![
+        ("q1", 0.0),
+        ("q2", 0.0),
+        ("q3", 0.5),
+        ("q4", 0.0),
+        ("q5", 0.0),
+      ],
     );
     let candidate = make_report(
       "candidate",
       0.8,
-      vec![("q1", 1.0), ("q2", 1.0), ("q3", 1.0), ("q4", 1.0), ("q5", 0.0)],
+      vec![
+        ("q1", 1.0),
+        ("q2", 1.0),
+        ("q3", 1.0),
+        ("q4", 1.0),
+        ("q5", 0.0),
+      ],
     );
     let cmp = compare(&baseline, &candidate);
     assert_eq!(cmp.verdict, Verdict::CandidateWins);
@@ -303,11 +319,7 @@ mod tests {
 
   #[test]
   fn compare_baseline_wins() {
-    let baseline = make_report(
-      "baseline",
-      0.9,
-      vec![("q1", 1.0), ("q2", 1.0), ("q3", 1.0)],
-    );
+    let baseline = make_report("baseline", 0.9, vec![("q1", 1.0), ("q2", 1.0), ("q3", 1.0)]);
     let candidate = make_report(
       "candidate",
       0.0,

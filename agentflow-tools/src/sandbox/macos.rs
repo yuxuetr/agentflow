@@ -66,8 +66,10 @@ impl SandboxBackend for MacosSandboxExecBackend {
     }
 
     let profile = build_profile(effective_capabilities, scope);
-    let mut profile_file =
-      tempfile::Builder::new().prefix("agentflow-sandbox-").suffix(".sb").tempfile()?;
+    let mut profile_file = tempfile::Builder::new()
+      .prefix("agentflow-sandbox-")
+      .suffix(".sb")
+      .tempfile()?;
     use std::io::Write;
     profile_file.write_all(profile.as_bytes())?;
     profile_file.flush()?;
@@ -127,17 +129,29 @@ fn build_profile(caps: &[Capability], scope: &SandboxScope) -> String {
   }
   if allow_fs_read {
     for path in &scope.read_paths {
-      out.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", escape_sbpl(path)));
+      out.push_str(&format!(
+        "(allow file-read* (subpath \"{}\"))\n",
+        escape_sbpl(path)
+      ));
     }
     if let Some(cwd) = &scope.working_directory {
-      out.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", escape_sbpl(cwd)));
+      out.push_str(&format!(
+        "(allow file-read* (subpath \"{}\"))\n",
+        escape_sbpl(cwd)
+      ));
     }
   }
   if allow_fs_write {
     for path in &scope.write_paths {
-      out.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", escape_sbpl(path)));
+      out.push_str(&format!(
+        "(allow file-write* (subpath \"{}\"))\n",
+        escape_sbpl(path)
+      ));
       // Writers usually need read on the same paths to do round-trip ops.
-      out.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", escape_sbpl(path)));
+      out.push_str(&format!(
+        "(allow file-read* (subpath \"{}\"))\n",
+        escape_sbpl(path)
+      ));
     }
   }
 
@@ -145,7 +159,10 @@ fn build_profile(caps: &[Capability], scope: &SandboxScope) -> String {
 }
 
 fn escape_sbpl(path: &std::path::Path) -> String {
-  path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
+  path
+    .to_string_lossy()
+    .replace('\\', "\\\\")
+    .replace('"', "\\\"")
 }
 
 fn rewrite_command_with_sandbox_exec(command: &mut Command, profile_path: &PathBuf) {

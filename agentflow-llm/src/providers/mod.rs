@@ -21,6 +21,26 @@ pub use moonshot::MoonshotProvider;
 pub use openai::OpenAIProvider;
 pub use stepfun::StepFunProvider;
 
+pub(crate) fn build_http_client(
+  builder: impl Fn(bool) -> reqwest::ClientBuilder,
+) -> Result<reqwest::Client> {
+  match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder(false).build())) {
+    Ok(result) => result.map_err(Into::into),
+    Err(_) => builder(true).build().map_err(Into::into),
+  }
+}
+
+pub(crate) fn default_http_client() -> Result<reqwest::Client> {
+  build_http_client(|disable_proxy| {
+    let builder = reqwest::Client::builder();
+    if disable_proxy {
+      builder.no_proxy()
+    } else {
+      builder
+    }
+  })
+}
+
 /// Request structure for LLM providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderRequest {

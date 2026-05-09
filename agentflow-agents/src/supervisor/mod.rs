@@ -36,7 +36,8 @@ pub mod handoff;
 
 pub use blackboard::{
   Blackboard, BlackboardEntry, BlackboardReadTool, BlackboardSchedule, BlackboardStop,
-  BlackboardSupervisor, BlackboardSupervisorBuilder, BlackboardSupervisorError, BlackboardWriteTool,
+  BlackboardSupervisor, BlackboardSupervisorBuilder, BlackboardSupervisorError,
+  BlackboardWriteTool,
 };
 pub use debate::{DebateSupervisor, DebateSupervisorBuilder, DebateSupervisorError};
 pub use handoff::{

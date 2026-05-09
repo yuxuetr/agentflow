@@ -220,11 +220,12 @@ impl Tool for ScriptTool {
 
     let scope = build_script_scope(&canonical_scripts_dir, &self.policy);
     let caps = self.requires_capabilities();
-    self.backend.wrap_command(&mut cmd, &caps, &scope).map_err(|err| {
-      ToolError::SandboxViolation {
+    self
+      .backend
+      .wrap_command(&mut cmd, &caps, &scope)
+      .map_err(|err| ToolError::SandboxViolation {
         message: format!("OS sandbox preparation failed: {err}"),
-      }
-    })?;
+      })?;
 
     let mut child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn '{}': {}", interpreter, e),

@@ -5,7 +5,9 @@
 //! produces a deterministic report. Vector / hybrid retrievers can plug in
 //! later via additional `--retriever` values.
 
-use agentflow_rag::eval::{Bm25Eval, Dataset, EvalConfig, ComparisonReport, EvalReport, compare, evaluate};
+use agentflow_rag::eval::{
+  Bm25Eval, ComparisonReport, Dataset, EvalConfig, EvalReport, compare, evaluate,
+};
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde_json::json;
@@ -24,12 +26,8 @@ pub async fn execute(
   compare_to: Option<String>,
   output: Option<PathBuf>,
 ) -> Result<()> {
-  let dataset = Dataset::load_from_dir(&dataset_dir).with_context(|| {
-    format!(
-      "loading dataset from {}",
-      dataset_dir.display()
-    )
-  })?;
+  let dataset = Dataset::load_from_dir(&dataset_dir)
+    .with_context(|| format!("loading dataset from {}", dataset_dir.display()))?;
 
   println!(
     "{}",
@@ -121,11 +119,7 @@ fn run_eval(
   }
 }
 
-fn run_compare_candidate(
-  dataset: &Dataset,
-  spec: &str,
-  k_values: &[usize],
-) -> Result<EvalReport> {
+fn run_compare_candidate(dataset: &Dataset, spec: &str, k_values: &[usize]) -> Result<EvalReport> {
   let (k1, b) = parse_bm25_params(spec)?;
   let config = EvalConfig {
     k_values: k_values.to_vec(),

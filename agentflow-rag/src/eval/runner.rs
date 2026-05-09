@@ -6,9 +6,7 @@
 //! or any hybrid. Concrete adapters live in [`super::retrievers`].
 
 use super::dataset::{Dataset, Judgment};
-use super::metrics::{
-  LatencyAggregate, QueryEvaluation, ndcg_at_k, recall_at_k, reciprocal_rank,
-};
+use super::metrics::{LatencyAggregate, QueryEvaluation, ndcg_at_k, recall_at_k, reciprocal_rank};
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -93,10 +91,7 @@ impl EvalReport {
       "Retriever: {}\nLabel:     {}\nQueries:   {} ({} with relevant)\n\n",
       self.retriever, self.label, self.num_queries, self.queries_with_relevant
     ));
-    out.push_str(&format!(
-      "{:<6} {:>10} {:>10}\n",
-      "K", "Recall", "nDCG"
-    ));
+    out.push_str(&format!("{:<6} {:>10} {:>10}\n", "K", "Recall", "nDCG"));
     out.push_str("------ ---------- ----------\n");
     for row in &self.per_k {
       out.push_str(&format!(

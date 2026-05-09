@@ -77,11 +77,16 @@ fn sum_evens(xs: Vec<i32>) -> i32 {
   let context = AgentContext::new(supervisor.session_id().to_string(), task, model);
   match AgentRuntime::run(&mut supervisor, context).await {
     Ok(result) => {
-      println!("=== Verdict ===\n{}\n", result.answer.as_deref().unwrap_or(""));
+      println!(
+        "=== Verdict ===\n{}\n",
+        result.answer.as_deref().unwrap_or("")
+      );
       println!("=== Proposals ===");
       for step in &result.steps {
         if let AgentStepKind::DebateProposal {
-          round, agent, proposal,
+          round,
+          agent,
+          proposal,
         } = &step.kind
         {
           println!("[round {round}] {agent}: {proposal}");

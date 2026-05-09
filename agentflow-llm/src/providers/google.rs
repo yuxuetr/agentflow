@@ -20,7 +20,7 @@ pub struct GoogleProvider {
 
 impl GoogleProvider {
   pub fn new(api_key: &str, base_url: Option<String>) -> Result<Self> {
-    Self::with_client(Client::new(), api_key, base_url)
+    Self::with_client(super::default_http_client()?, api_key, base_url)
   }
 
   /// Construct with a caller-supplied [`reqwest::Client`]. See

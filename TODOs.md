@@ -641,7 +641,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### M2. CI 健康度
 
-- [ ] 保持 `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` 全绿。
+- [x] 保持 `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` 全绿。2026-05-09 verified: fmt check clean, clippy workspace/all-targets clean, workspace tests clean（LLM provider mock TCP 测试在本机授权网络 sandbox 外运行）。
 - [ ] 每个 P0 任务交付时同步增加最少一个集成测试。
 - [ ] 测试数当前 479，目标 v0.3.0 ≥ 600，v0.4.0 ≥ 750。
 

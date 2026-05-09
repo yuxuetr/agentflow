@@ -159,13 +159,19 @@ impl VendorConfig {
 
 /// Create an HTTP client configured for API requests
 pub fn create_http_client() -> Result<Client> {
-  Client::builder()
-    .timeout(Duration::from_secs(30))
-    .user_agent("agentflow-llm/1.0")
-    .build()
-    .map_err(|e| LLMError::NetworkError {
-      message: format!("Failed to create HTTP client: {}", e),
-    })
+  crate::providers::build_http_client(|disable_proxy| {
+    let builder = Client::builder()
+      .timeout(Duration::from_secs(30))
+      .user_agent("agentflow-llm/1.0");
+    if disable_proxy {
+      builder.no_proxy()
+    } else {
+      builder
+    }
+  })
+  .map_err(|e| LLMError::NetworkError {
+    message: format!("Failed to create HTTP client: {}", e),
+  })
 }
 
 #[cfg(test)]

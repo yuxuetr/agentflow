@@ -101,11 +101,12 @@ impl Tool for ShellTool {
 
     let scope = build_scope_from_policy(&self.policy);
     let caps = self.requires_capabilities();
-    self.backend.wrap_command(&mut cmd, &caps, &scope).map_err(|err| {
-      ToolError::SandboxViolation {
+    self
+      .backend
+      .wrap_command(&mut cmd, &caps, &scope)
+      .map_err(|err| ToolError::SandboxViolation {
         message: format!("OS sandbox preparation failed: {err}"),
-      }
-    })?;
+      })?;
 
     let output = tokio::time::timeout(timeout, cmd.output())
       .await
@@ -175,7 +176,10 @@ mod tests {
   #[tokio::test]
   async fn default_backend_is_noop_so_existing_behaviour_holds() {
     let tool = ShellTool::default_policy();
-    let result = tool.execute(json!({"command": "echo hello"})).await.unwrap();
+    let result = tool
+      .execute(json!({"command": "echo hello"}))
+      .await
+      .unwrap();
     assert!(result.content.contains("hello"));
   }
 
@@ -191,7 +195,12 @@ mod tests {
     let policy = SandboxPolicy::permissive();
     let scope = build_scope_from_policy(&policy);
 
-    assert!(scope.read_paths.iter().any(|p| p == std::path::Path::new("/tmp")));
+    assert!(
+      scope
+        .read_paths
+        .iter()
+        .any(|p| p == std::path::Path::new("/tmp"))
+    );
     assert!(scope.working_directory.is_some());
   }
 
@@ -203,14 +212,8 @@ mod tests {
     };
     let scope = build_scope_from_policy(&policy);
 
-    assert_eq!(
-      scope.read_paths,
-      vec![PathBuf::from("/var/agentflow")]
-    );
-    assert_eq!(
-      scope.write_paths,
-      vec![PathBuf::from("/var/agentflow")]
-    );
+    assert_eq!(scope.read_paths, vec![PathBuf::from("/var/agentflow")]);
+    assert_eq!(scope.write_paths, vec![PathBuf::from("/var/agentflow")]);
     assert!(scope.working_directory.is_none());
   }
 }

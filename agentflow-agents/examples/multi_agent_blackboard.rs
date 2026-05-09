@@ -31,39 +31,47 @@ async fn main() {
   let writer_model = model.to_string();
 
   let mut supervisor = BlackboardSupervisorBuilder::new()
-    .add_agent("researcher", "Gathers facts and writes them to the board.", move |bb| {
-      let mut registry = ToolRegistry::new();
-      registry.register(Arc::new(BlackboardReadTool::new(bb.clone(), "researcher")));
-      registry.register(Arc::new(BlackboardWriteTool::new(bb, "researcher")));
-      ReActAgent::new(
-        ReActConfig::new(&researcher_model)
-          .with_persona(
-            "You are a researcher. Gather 2-3 key facts about the topic, then \
+    .add_agent(
+      "researcher",
+      "Gathers facts and writes them to the board.",
+      move |bb| {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(BlackboardReadTool::new(bb.clone(), "researcher")));
+        registry.register(Arc::new(BlackboardWriteTool::new(bb, "researcher")));
+        ReActAgent::new(
+          ReActConfig::new(&researcher_model)
+            .with_persona(
+              "You are a researcher. Gather 2-3 key facts about the topic, then \
              call bb_write(key=\"facts\", value=<json list>). Finish with a \
              one-sentence summary.",
-          )
-          .with_max_iterations(4),
-        Box::new(SessionMemory::default_window()),
-        Arc::new(registry),
-      )
-    })
-    .add_agent("writer", "Reads the facts and produces the final report.", move |bb| {
-      let mut registry = ToolRegistry::new();
-      registry.register(Arc::new(BlackboardReadTool::new(bb.clone(), "writer")));
-      registry.register(Arc::new(BlackboardWriteTool::new(bb, "writer")));
-      ReActAgent::new(
-        ReActConfig::new(&writer_model)
-          .with_persona(
-            "You are a technical writer. Call bb_read(key=\"facts\") to fetch \
+            )
+            .with_max_iterations(4),
+          Box::new(SessionMemory::default_window()),
+          Arc::new(registry),
+        )
+      },
+    )
+    .add_agent(
+      "writer",
+      "Reads the facts and produces the final report.",
+      move |bb| {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(BlackboardReadTool::new(bb.clone(), "writer")));
+        registry.register(Arc::new(BlackboardWriteTool::new(bb, "writer")));
+        ReActAgent::new(
+          ReActConfig::new(&writer_model)
+            .with_persona(
+              "You are a technical writer. Call bb_read(key=\"facts\") to fetch \
              the researcher's findings, then write a concise paragraph and \
              call bb_write(key=\"report\", value=<your paragraph>). Finish \
              with the paragraph as your answer.",
-          )
-          .with_max_iterations(4),
-        Box::new(SessionMemory::default_window()),
-        Arc::new(registry),
-      )
-    })
+            )
+            .with_max_iterations(4),
+          Box::new(SessionMemory::default_window()),
+          Arc::new(registry),
+        )
+      },
+    )
     .schedule(BlackboardSchedule::Sequential(vec![
       "researcher".into(),
       "writer".into(),
