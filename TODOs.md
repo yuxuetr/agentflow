@@ -234,7 +234,7 @@ cargo test -p agentflow-server -p agentflow-core -p agentflow-agents --target-di
 
 ### P1.1 Sandbox 测试矩阵
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -257,12 +257,12 @@ cargo test -p agentflow-server -p agentflow-core -p agentflow-agents --target-di
 
 子任务:
 
-- [ ] 定义 `SandboxTestCase` 辅助结构。
-- [ ] macOS `sandbox-exec` 测试扩展。
-- [ ] Linux sandbox 测试扩展。
-- [ ] Noop sandbox 降级测试: 必须输出 warning/doctor risk。
-- [ ] `ToolPolicyDecision` 记录 deny reason。
-- [ ] `agentflow doctor` 增加 sandbox capability 报告。
+- [x] 定义 `SandboxTestCase` 辅助结构。
+- [x] macOS `sandbox-exec` 测试扩展。
+- [x] Linux sandbox 测试扩展。
+- [x] Noop sandbox 降级测试: 必须输出 warning/doctor risk。
+- [x] `ToolPolicyDecision` 记录 deny reason。
+- [x] `agentflow doctor` 增加 sandbox capability 报告。
 
 涉及文件:
 
