@@ -637,7 +637,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 - [x] 每完成一个 P0/P1 任务后立刻更新 `CLAUDE.md` "Recent Updates" + `RoadMap.md` 状态。2026-05-09 已同步 N10 执行链状态（#12/#13/#14/#16）。
 - [x] 当 docs/ 文件描述的特性落地或变更时同步该文档。2026-05-09 已同步 README / CLAUDE.md / AGENTS.md / RoadMap.md / TODOs.md 中的 plugin、distributed、Web UI、marketplace 状态。
-- [ ] 每月一次 `docs/` 全量复查，移除过期描述。
+- [x] 每月一次 `docs/` 全量复查，移除过期描述。
 
 ### M2. CI 健康度
 
