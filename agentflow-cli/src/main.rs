@@ -560,6 +560,9 @@ enum RemoteMarketplaceCommands {
     /// Cache directory (default: ~/.agentflow/marketplace/cache)
     #[arg(long)]
     cache_dir: Option<String>,
+    /// Require each verified artifact to include and pass signature metadata
+    #[arg(long)]
+    strict: bool,
   },
 }
 
@@ -1006,7 +1009,8 @@ async fn main() {
         package,
         package_type,
         cache_dir,
-      } => marketplace::verify(registry, package, package_type, cache_dir).await,
+        strict,
+      } => marketplace::verify(registry, package, package_type, cache_dir, strict).await,
     },
     Commands::Trace(args) => match args.command {
       TraceCommands::Replay {

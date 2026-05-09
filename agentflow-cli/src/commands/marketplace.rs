@@ -1,5 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Cursor, Read};
 #[cfg(unix)]
@@ -13,6 +14,8 @@ use agentflow_skills::{
   MarketplacePackageType, RemoteMarketplaceCache, RemoteMarketplaceClient, RemoteMarketplaceEntry,
   RemoteMarketplaceManifest, SkillLoader,
 };
+
+const MAX_MARKETPLACE_ARCHIVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 pub async fn search(
   registry: String,
@@ -82,8 +85,14 @@ pub async fn install(
     return Ok(());
   }
 
-  let installed = install_cached_package(entry, &cached.path, install_dir, force)
-    .with_context(|| format!("Failed to install cached package '{}'", entry.name))?;
+  let installed =
+    install_cached_package(entry, &cached.path, install_dir, force).map_err(|err| {
+      anyhow!(
+        "Failed to install cached package '{}': {:#}",
+        entry.name,
+        err
+      )
+    })?;
   println!(
     "✅ Installed {} package: {}",
     entry.package_type.as_str(),
@@ -122,6 +131,7 @@ pub async fn verify(
   package: Option<String>,
   package_type: Option<String>,
   cache_dir: Option<String>,
+  strict: bool,
 ) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
   let package_type = parse_package_type_opt(package_type.as_deref())?;
@@ -140,6 +150,13 @@ pub async fn verify(
     let cached = cache
       .verify_cached_artifact(entry)
       .with_context(|| format!("Failed to verify cached package '{}'", entry.name))?;
+    if strict && !cached.signature_checked {
+      bail!(
+        "Strict verification requires signature metadata for '{}@{}'",
+        entry.name,
+        entry.version
+      );
+    }
     println!(
       "✅ Verified {} package: {}",
       entry.package_type.as_str(),
@@ -281,6 +298,7 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
   };
   let temp_dir = TempDir::new().context("Failed to create marketplace unpack directory")?;
   let mut archive = tar::Archive::new(reader);
+  let mut seen_paths = BTreeSet::new();
 
   for entry in archive.entries().with_context(|| {
     format!(
@@ -304,6 +322,30 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
     }
 
     let relative = safe_archive_path(&entry.path()?)?;
+    if !seen_paths.insert(relative.clone()) {
+      bail!(
+        "Refusing to unpack duplicate archive path '{}' from '{}'",
+        relative.display(),
+        artifact_path.display()
+      );
+    }
+    if entry_type.is_file() {
+      let size = entry.header().size().with_context(|| {
+        format!(
+          "Failed to read archive entry size for '{}' from '{}'",
+          relative.display(),
+          artifact_path.display()
+        )
+      })?;
+      if size > MAX_MARKETPLACE_ARCHIVE_FILE_BYTES {
+        bail!(
+          "Refusing to unpack oversized archive file '{}' ({} bytes exceeds {} bytes)",
+          relative.display(),
+          size,
+          MAX_MARKETPLACE_ARCHIVE_FILE_BYTES
+        );
+      }
+    }
     let target = temp_dir.path().join(relative);
     if entry_type.is_dir() {
       fs::create_dir_all(&target)
@@ -442,6 +484,7 @@ fn install_plugin_package(
         entry.name
       )
     })?;
+    validate_marketplace_plugin_entrypoint(entry, package_root, &manifest)?;
 
     let install_root = install_dir
       .map(PathBuf::from)
@@ -450,6 +493,60 @@ fn install_plugin_package(
     install_directory(package_root, &destination, force, "plugin")?;
     Ok(destination)
   }
+}
+
+#[cfg(feature = "plugin")]
+fn validate_marketplace_plugin_entrypoint(
+  entry: &RemoteMarketplaceEntry,
+  package_root: &Path,
+  manifest: &agentflow_core::plugin::PluginManifest,
+) -> Result<()> {
+  if manifest.plugin.entrypoint.is_absolute()
+    || manifest
+      .plugin
+      .entrypoint
+      .components()
+      .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+  {
+    bail!(
+      "Marketplace Plugin package '{}' entrypoint '{}' points outside package root '{}'",
+      entry.name,
+      manifest.plugin.entrypoint.display(),
+      package_root.display()
+    );
+  }
+
+  let canonical_root = fs::canonicalize(package_root).with_context(|| {
+    format!(
+      "Failed to canonicalize marketplace plugin package root '{}'",
+      package_root.display()
+    )
+  })?;
+  let resolved_entrypoint = manifest.resolve_entrypoint(package_root);
+  let canonical_entrypoint = fs::canonicalize(&resolved_entrypoint).with_context(|| {
+    format!(
+      "Marketplace Plugin package '{}' entrypoint '{}' is missing or cannot be resolved",
+      entry.name,
+      resolved_entrypoint.display()
+    )
+  })?;
+
+  if !canonical_entrypoint.starts_with(&canonical_root) {
+    bail!(
+      "Marketplace Plugin package '{}' entrypoint '{}' resolves outside package root '{}'",
+      entry.name,
+      resolved_entrypoint.display(),
+      package_root.display()
+    );
+  }
+  if !canonical_entrypoint.is_file() {
+    bail!(
+      "Marketplace Plugin package '{}' entrypoint '{}' is not a file",
+      entry.name,
+      resolved_entrypoint.display()
+    );
+  }
+  Ok(())
 }
 
 fn install_directory(source: &Path, destination: &Path, force: bool, label: &str) -> Result<()> {

@@ -137,6 +137,7 @@ agentflow marketplace search https://registry.example.com/marketplace.toml rust 
 agentflow marketplace update https://registry.example.com/marketplace.toml
 agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --dir ~/.agentflow/skills
 agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
+agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --strict
 ```
 
 Command behavior:
@@ -157,6 +158,9 @@ Install options:
 - `--force` overwrites an existing installed package directory.
 - `--cache-only` stops after verified cache write/verification and does not
   unpack into the runtime install directory.
+- `verify --strict` also requires signature metadata to be present and
+  successfully checked. Without `--strict`, unsigned artifacts may be verified
+  by checksum only.
 
 Package artifacts are `.tar` or `.tar.gz` archives. The archive may contain the
 manifest at the root or inside a single top-level directory:
@@ -167,7 +171,27 @@ manifest at the root or inside a single top-level directory:
   `plugin` feature.
 
 Archive extraction rejects absolute paths, `..` traversal, symlinks, hardlinks,
-and other non-file/non-directory entries before copying into the install root.
+duplicate paths, oversized files, and other non-file/non-directory entries
+before copying into the install root. Plugin package entrypoints must resolve
+to a file inside the package root; absolute entrypoints and `..` traversal are
+rejected before install.
+
+## Signing Policy Boundary
+
+Every artifact must match `entries[].source.checksum_sha256`; checksum
+mismatches are always fatal. Signature enforcement has two layers:
+
+- the cache calls the configured `MarketplaceSignatureVerifier` whenever an
+  `entries[].signature` block is present;
+- CLI policy decides whether a missing signature is acceptable.
+
+The default verifier, `ChecksumSha256SignatureVerifier`, is a bootstrap
+verifier for deterministic tests and simple local registries. It treats the
+signature value as another SHA-256 checksum and proves only that the artifact
+matches the catalog metadata. It does not provide publisher identity,
+transparency, expiry, revocation, or key rotation. Production registries should
+install a real verifier such as minisign or sigstore and run
+`agentflow marketplace verify --strict` in release or deployment workflows.
 
 ## Offline Flow
 
