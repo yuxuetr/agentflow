@@ -177,7 +177,7 @@ curl http://localhost:8080/v1/runs/<run_id>/graph
 
 ### P0.3 Run Cancellation
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -198,16 +198,16 @@ POST /v1/runs/{id}:cancel
 
 子任务:
 
-- [ ] 设计 `RunCancellationRegistry` 或在 executor 中管理 cancellation token。
-- [ ] Flow/Agent 执行路径接收 cancellation。
-- [ ] 增加 cancel route。
-- [ ] 增加 SSE cancellation event。
-- [ ] 增加 DB 状态更新。
-- [ ] 增加测试:
-  - [ ] cancel running run。
-  - [ ] cancel unknown run。
-  - [ ] cancel completed run。
-  - [ ] repeated cancel is idempotent。
+- [x] 设计 `RunCancellationRegistry` 或在 executor 中管理 cancellation token。
+- [x] Flow/Agent 执行路径接收 cancellation。
+- [x] 增加 cancel route。
+- [x] 增加 SSE cancellation event。
+- [x] 增加 DB 状态更新。
+- [x] 增加测试:
+  - [x] cancel running run。
+  - [x] cancel unknown run。
+  - [x] cancel completed run。
+  - [x] repeated cancel is idempotent。
 
 涉及文件:
 
