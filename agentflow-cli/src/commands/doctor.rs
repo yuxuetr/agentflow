@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use agentflow_llm::LLMConfig;
+use agentflow_llm::{LLMConfig, LLMConfigSource, MODELS_CONFIG_ENV};
 use agentflow_tools::sandbox::default_backend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,7 @@ struct PathReport {
   home: Option<PathBuf>,
   config_dir: Option<PathBuf>,
   models_config: Option<PathBuf>,
+  legacy_models_config: Option<PathBuf>,
   env_file: Option<PathBuf>,
   skills_dir: Option<PathBuf>,
   plugins_dir: Option<PathBuf>,
@@ -53,11 +54,14 @@ struct PathReport {
 
 #[derive(Debug, Serialize)]
 struct ConfigReport {
+  models_config_source: String,
+  models_config_path: String,
   models_config_exists: bool,
   models_config_loadable: bool,
   models: usize,
   providers: usize,
   missing_env_vars: Vec<String>,
+  warnings: Vec<String>,
   error: Option<String>,
 }
 
@@ -96,19 +100,26 @@ pub async fn execute(format: OutputFormat) -> Result<()> {
 async fn build_report() -> DoctorReport {
   let home = dirs::home_dir();
   let config_dir = home.as_ref().map(|p| p.join(".agentflow"));
-  let models_config = config_dir.as_ref().map(|p| p.join("models.yml"));
+  let resolved_source = LLMConfig::resolve_default_source().ok();
+  let models_config = resolved_source
+    .as_ref()
+    .and_then(|source| source.path.clone());
+  let legacy_models_config = config_dir.as_ref().map(|p| p.join("models.yaml"));
   let env_file = config_dir.as_ref().map(|p| p.join(".env"));
   let skills_dir = home.as_ref().map(|p| p.join(".agentflow").join("skills"));
   let plugins_dir = home.as_ref().map(|p| p.join(".agentflow").join("plugins"));
 
-  let config = match models_config.as_ref() {
-    Some(path) => inspect_config(path, env_file.as_deref()).await,
+  let config = match resolved_source.as_ref() {
+    Some(source) => inspect_config(source, env_file.as_deref()).await,
     None => ConfigReport {
+      models_config_source: "unknown".to_string(),
+      models_config_path: "unknown".to_string(),
       models_config_exists: false,
       models_config_loadable: false,
       models: 0,
       providers: 0,
       missing_env_vars: Vec::new(),
+      warnings: Vec::new(),
       error: Some("could not determine home directory".to_string()),
     },
   };
@@ -137,6 +148,7 @@ async fn build_report() -> DoctorReport {
       home,
       config_dir,
       models_config,
+      legacy_models_config,
       env_file,
       skills_dir,
       plugins_dir,
@@ -153,15 +165,50 @@ async fn build_report() -> DoctorReport {
   }
 }
 
-async fn inspect_config(path: &Path, env_path: Option<&Path>) -> ConfigReport {
+async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> ConfigReport {
+  let source_name = format!("{:?}", source.kind);
+  let source_path = source.display_path();
+  let Some(path) = source.path.as_ref() else {
+    return match LLMConfig::from_default_source().await {
+      Ok((config, _)) => ConfigReport {
+        models_config_source: source_name,
+        models_config_path: source_path,
+        models_config_exists: true,
+        models_config_loadable: true,
+        models: config.models.len(),
+        providers: config.providers.len(),
+        missing_env_vars: Vec::new(),
+        warnings: source.warnings.clone(),
+        error: None,
+      },
+      Err(e) => ConfigReport {
+        models_config_source: source_name,
+        models_config_path: source_path,
+        models_config_exists: false,
+        models_config_loadable: false,
+        models: 0,
+        providers: 0,
+        missing_env_vars: Vec::new(),
+        warnings: source.warnings.clone(),
+        error: Some(e.to_string()),
+      },
+    };
+  };
+
   if !path.exists() {
     return ConfigReport {
+      models_config_source: source_name,
+      models_config_path: source_path,
       models_config_exists: false,
       models_config_loadable: false,
       models: 0,
       providers: 0,
       missing_env_vars: Vec::new(),
-      error: Some("models.yml not found; run `agentflow config init`".to_string()),
+      warnings: source.warnings.clone(),
+      error: Some(format!(
+        "{} not found; run `agentflow config init` or set {MODELS_CONFIG_ENV}",
+        path.display()
+      )),
     };
   }
 
@@ -184,20 +231,26 @@ async fn inspect_config(path: &Path, env_path: Option<&Path>) -> ConfigReport {
       missing_env_vars.dedup();
 
       ConfigReport {
+        models_config_source: source_name,
+        models_config_path: source_path,
         models_config_exists: true,
         models_config_loadable: true,
         models: config.models.len(),
         providers: config.providers.len(),
         missing_env_vars,
+        warnings: source.warnings.clone(),
         error: None,
       }
     }
     Err(e) => ConfigReport {
+      models_config_source: source_name,
+      models_config_path: source_path,
       models_config_exists: true,
       models_config_loadable: false,
       models: 0,
       providers: 0,
       missing_env_vars: Vec::new(),
+      warnings: source.warnings.clone(),
       error: Some(e.to_string()),
     },
   }
@@ -248,6 +301,10 @@ fn print_text_report(report: &DoctorReport) {
     optional_path(report.paths.models_config.as_deref())
   );
   println!(
+    "  legacy config: {}",
+    optional_path(report.paths.legacy_models_config.as_deref())
+  );
+  println!(
     "  skills: {}",
     optional_path(report.paths.skills_dir.as_deref())
   );
@@ -258,8 +315,10 @@ fn print_text_report(report: &DoctorReport) {
   println!();
 
   println!("Config:");
+  println!("  source: {}", report.config.models_config_source);
+  println!("  path: {}", report.config.models_config_path);
   println!(
-    "  models.yml: {}",
+    "  models config: {}",
     if report.config.models_config_exists {
       "found"
     } else {
@@ -282,6 +341,9 @@ fn print_text_report(report: &DoctorReport) {
   }
   if let Some(error) = &report.config.error {
     println!("  warning: {error}");
+  }
+  for warning in &report.config.warnings {
+    println!("  warning: {warning}");
   }
   println!();
 

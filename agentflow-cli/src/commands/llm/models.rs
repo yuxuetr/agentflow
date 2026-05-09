@@ -1,19 +1,28 @@
 use agentflow_llm::{
-  AgentFlow, LLMConfig,
+  AgentFlow, LLMConfig, LLMConfigSourceKind,
   registry::{ModelRegistry, model_registry::ModelInfo},
 };
 use anyhow::{Context, Result};
 use colored::*;
-use std::path::PathBuf;
 
 pub async fn execute(provider: Option<String>, detailed: bool) -> Result<()> {
-  let models = if let Some(config_path) = user_config_path()? {
-    let config = LLMConfig::from_file(&config_path)
-      .await
-      .with_context(|| format!("Failed to load config file '{}'", config_path.display()))?;
-    printable_models_from_config(&config)
-  } else {
-    printable_models_from_registry().await?
+  let source = LLMConfig::resolve_default_source()?;
+  for warning in &source.warnings {
+    eprintln!("Warning: {warning}");
+  }
+
+  let models = match source.kind {
+    LLMConfigSourceKind::BuiltInDefault => printable_models_from_registry().await?,
+    _ => {
+      let config_path = source
+        .path
+        .as_ref()
+        .context("resolved config source had no path")?;
+      let config = LLMConfig::from_file(config_path)
+        .await
+        .with_context(|| format!("Failed to load config file '{}'", config_path.display()))?;
+      printable_models_from_config(&config)
+    }
   };
 
   if models.is_empty() {
@@ -61,14 +70,6 @@ struct PrintableModel {
   temperature: Option<f32>,
   max_tokens: Option<u32>,
   supports_streaming: bool,
-}
-
-fn user_config_path() -> Result<Option<PathBuf>> {
-  let Some(home_dir) = dirs::home_dir() else {
-    return Ok(None);
-  };
-  let path = home_dir.join(".agentflow").join("models.yml");
-  Ok(path.exists().then_some(path))
 }
 
 async fn printable_models_from_registry() -> Result<Vec<PrintableModel>> {

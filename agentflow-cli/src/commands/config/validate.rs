@@ -6,10 +6,10 @@ use std::{
 };
 
 pub async fn execute() -> Result<()> {
-  let config_path = default_config_path()?;
-  let config = LLMConfig::from_file(&config_path)
-    .await
-    .with_context(|| format!("Failed to load config file '{}'", config_path.display()))?;
+  let (config, source) = LLMConfig::from_default_source().await?;
+  for warning in &source.warnings {
+    eprintln!("Warning: {warning}");
+  }
 
   let env_path = default_env_path()?;
   let configured_env = load_env_file_keys(&env_path).await?;
@@ -32,7 +32,8 @@ pub async fn execute() -> Result<()> {
     }
   }
 
-  println!("Configuration: {}", config_path.display());
+  println!("Configuration: {}", source.display_path());
+  println!("Configuration source: {:?}", source.kind);
   println!("Models: {}", config.models.len());
   println!("Providers: {}", config.providers.len());
   println!("Required env vars: {}", required_env.len());
@@ -48,11 +49,6 @@ pub async fn execute() -> Result<()> {
   }
 
   Ok(())
-}
-
-fn default_config_path() -> Result<PathBuf> {
-  let home_dir = dirs::home_dir().context("Could not determine home directory")?;
-  Ok(home_dir.join(".agentflow").join("models.yml"))
 }
 
 fn default_env_path() -> Result<PathBuf> {

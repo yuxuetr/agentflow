@@ -1,6 +1,6 @@
 # AgentFlow Configuration
 
-Last updated: 2026-05-01
+Last updated: 2026-05-09
 
 This document covers the configuration that is currently implemented by the CLI:
 model/provider configuration, secrets, workflow YAML, run directories, and the
@@ -8,10 +8,16 @@ main validation commands.
 
 ## Model Configuration
 
-AgentFlow CLI reads model configuration from:
+AgentFlow resolves model configuration with this priority:
 
-1. `~/.agentflow/models.yml`
-2. bundled defaults when no user config exists
+1. `AGENTFLOW_MODELS_CONFIG`
+2. `~/.agentflow/models.yml`
+3. `~/.agentflow/models.yaml`
+4. bundled `default_models.yml` when no user config exists
+
+`models.yml` is the canonical filename. `models.yaml` is supported as a
+legacy fallback. If both files exist, AgentFlow uses `models.yml` and prints a
+warning.
 
 Initialize local configuration with:
 
@@ -33,9 +39,14 @@ agentflow config show
 agentflow config show models
 agentflow config show providers
 agentflow config validate
+agentflow doctor
+agentflow doctor --format json
 agentflow llm models
 agentflow llm models --provider openai --detailed
 ```
+
+`config show`, `config validate`, `doctor`, and `llm models` all report or use
+the same resolved model configuration source.
 
 `agentflow llm` is limited to model discovery and diagnostics. Interactive model
 use should go through `agentflow skill run`, `agentflow skill chat`, or

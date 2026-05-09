@@ -5,7 +5,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 /// Configuration for a specific model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,6 +272,48 @@ pub struct LLMConfig {
   pub defaults: GlobalDefaults,
 }
 
+/// Environment variable that overrides the default model configuration path.
+pub const MODELS_CONFIG_ENV: &str = "AGENTFLOW_MODELS_CONFIG";
+
+/// Source used when loading the default LLM model configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LLMConfigSource {
+  /// Stable source kind for diagnostics and machine-readable output.
+  pub kind: LLMConfigSourceKind,
+
+  /// File path for user-provided sources. Built-in defaults have no path.
+  pub path: Option<PathBuf>,
+
+  /// Non-fatal diagnostics collected during source resolution.
+  pub warnings: Vec<String>,
+}
+
+impl LLMConfigSource {
+  /// Human-readable description of the selected source.
+  pub fn display_path(&self) -> String {
+    self
+      .path
+      .as_ref()
+      .map(|path| path.display().to_string())
+      .unwrap_or_else(|| "built-in default_models.yml".to_string())
+  }
+
+  /// Returns true when the selected source is a file on disk.
+  pub fn is_file(&self) -> bool {
+    self.path.is_some()
+  }
+}
+
+/// Stable kind for default model configuration resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LLMConfigSourceKind {
+  EnvOverride,
+  UserModelsYml,
+  UserModelsYaml,
+  BuiltInDefault,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalDefaults {
   pub timeout_seconds: Option<u64>,
@@ -279,6 +322,72 @@ pub struct GlobalDefaults {
 }
 
 impl LLMConfig {
+  /// Resolve the model configuration source using AgentFlow's default priority:
+  ///
+  /// 1. `AGENTFLOW_MODELS_CONFIG`
+  /// 2. `~/.agentflow/models.yml`
+  /// 3. `~/.agentflow/models.yaml`
+  /// 4. Built-in defaults bundled in the crate
+  pub fn resolve_default_source() -> Result<LLMConfigSource> {
+    let config_dir = dirs::home_dir().map(|home| home.join(".agentflow"));
+    Self::resolve_default_source_from(config_dir.as_deref(), env::var_os(MODELS_CONFIG_ENV))
+  }
+
+  /// Resolve a model configuration source from explicit inputs.
+  ///
+  /// This is public so CLI commands and tests can use the same precedence rules
+  /// without mutating process-global environment variables.
+  pub fn resolve_default_source_from(
+    config_dir: Option<&Path>,
+    env_override: Option<OsString>,
+  ) -> Result<LLMConfigSource> {
+    if let Some(path) = env_override.filter(|value| !value.is_empty()) {
+      return Ok(LLMConfigSource {
+        kind: LLMConfigSourceKind::EnvOverride,
+        path: Some(PathBuf::from(path)),
+        warnings: Vec::new(),
+      });
+    }
+
+    if let Some(config_dir) = config_dir {
+      let yml_path = config_dir.join("models.yml");
+      let yaml_path = config_dir.join("models.yaml");
+      let yml_exists = yml_path.exists();
+      let yaml_exists = yaml_path.exists();
+
+      if yml_exists {
+        let mut warnings = Vec::new();
+        if yaml_exists {
+          warnings.push(format!(
+            "Both '{}' and '{}' exist; using '{}'",
+            yml_path.display(),
+            yaml_path.display(),
+            yml_path.display()
+          ));
+        }
+        return Ok(LLMConfigSource {
+          kind: LLMConfigSourceKind::UserModelsYml,
+          path: Some(yml_path),
+          warnings,
+        });
+      }
+
+      if yaml_exists {
+        return Ok(LLMConfigSource {
+          kind: LLMConfigSourceKind::UserModelsYaml,
+          path: Some(yaml_path),
+          warnings: Vec::new(),
+        });
+      }
+    }
+
+    Ok(LLMConfigSource {
+      kind: LLMConfigSourceKind::BuiltInDefault,
+      path: None,
+      warnings: Vec::new(),
+    })
+  }
+
   /// Load configuration from a YAML file
   pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
     let content =
@@ -296,6 +405,16 @@ impl LLMConfig {
     serde_yaml::from_str(yaml_content).map_err(|e| LLMError::ConfigurationError {
       message: format!("Failed to parse YAML config: {}", e),
     })
+  }
+
+  /// Load configuration from the default resolved source.
+  pub async fn from_default_source() -> Result<(Self, LLMConfigSource)> {
+    let source = Self::resolve_default_source()?;
+    let config = match source.path.as_ref() {
+      Some(path) => Self::from_file(path).await?,
+      None => Self::from_yaml(include_str!("../../templates/default_models.yml"))?,
+    };
+    Ok((config, source))
   }
 
   /// Get a model configuration by name
@@ -426,6 +545,7 @@ impl LLMConfig {
 mod tests {
   use super::*;
   use std::env;
+  use tempfile::TempDir;
 
   #[test]
   fn test_model_config_parsing() {
@@ -515,5 +635,59 @@ models:
     let config = LLMConfig::from_yaml(yaml).unwrap();
     assert_eq!(config.get_api_key("mock").unwrap(), "mock");
     assert!(config.validate().is_ok());
+  }
+
+  #[test]
+  fn resolves_models_yml_before_legacy_yaml() {
+    let temp = TempDir::new().unwrap();
+    let config_dir = temp.path();
+    std::fs::write(config_dir.join("models.yml"), "models: {}\n").unwrap();
+    std::fs::write(config_dir.join("models.yaml"), "models: {}\n").unwrap();
+
+    let source = LLMConfig::resolve_default_source_from(Some(config_dir), None).unwrap();
+
+    assert_eq!(source.kind, LLMConfigSourceKind::UserModelsYml);
+    assert_eq!(source.path.as_ref(), Some(&config_dir.join("models.yml")));
+    assert_eq!(source.warnings.len(), 1);
+  }
+
+  #[test]
+  fn resolves_legacy_models_yaml_when_yml_is_absent() {
+    let temp = TempDir::new().unwrap();
+    let config_dir = temp.path();
+    std::fs::write(config_dir.join("models.yaml"), "models: {}\n").unwrap();
+
+    let source = LLMConfig::resolve_default_source_from(Some(config_dir), None).unwrap();
+
+    assert_eq!(source.kind, LLMConfigSourceKind::UserModelsYaml);
+    assert_eq!(source.path.as_ref(), Some(&config_dir.join("models.yaml")));
+    assert!(source.warnings.is_empty());
+  }
+
+  #[test]
+  fn resolves_env_override_before_user_config() {
+    let temp = TempDir::new().unwrap();
+    let config_dir = temp.path();
+    let override_path = config_dir.join("override.yml");
+    std::fs::write(config_dir.join("models.yml"), "models: {}\n").unwrap();
+
+    let source = LLMConfig::resolve_default_source_from(
+      Some(config_dir),
+      Some(override_path.clone().into_os_string()),
+    )
+    .unwrap();
+
+    assert_eq!(source.kind, LLMConfigSourceKind::EnvOverride);
+    assert_eq!(source.path.as_ref(), Some(&override_path));
+  }
+
+  #[test]
+  fn resolves_builtin_default_when_no_user_config_exists() {
+    let temp = TempDir::new().unwrap();
+
+    let source = LLMConfig::resolve_default_source_from(Some(temp.path()), None).unwrap();
+
+    assert_eq!(source.kind, LLMConfigSourceKind::BuiltInDefault);
+    assert!(source.path.is_none());
   }
 }

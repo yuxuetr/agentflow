@@ -10,6 +10,19 @@ AgentFlow's LLM abstraction targets six providers. This document is the
 authoritative reference for what works on each, what doesn't, and how the
 behavior is verified.
 
+## Configuration source
+
+Provider definitions and model aliases are loaded with the shared AgentFlow
+configuration resolver:
+
+1. `AGENTFLOW_MODELS_CONFIG`
+2. `~/.agentflow/models.yml`
+3. `~/.agentflow/models.yaml`
+4. bundled `default_models.yml`
+
+`~/.agentflow/.env` remains the default local API-key file. CLI diagnostics
+show the selected config path/source and redact credential values.
+
 ## Capability matrix
 
 | Capability | OpenAI | Anthropic | Google | Moonshot | StepFun | Mock |

@@ -5,14 +5,15 @@ AgentFlow keeps provider credentials out of model and workflow configuration by 
 ## Current Loading Paths
 
 - `agentflow config init` writes `~/.agentflow/models.yml` and a template `~/.agentflow/.env`.
-- `AgentFlow::init()` loads `~/.agentflow/.env` first, then prefers `~/.agentflow/models.yml`, and falls back to built-in model defaults.
+- `AgentFlow::init()` loads `~/.agentflow/.env` first, then resolves model config as `AGENTFLOW_MODELS_CONFIG` -> `~/.agentflow/models.yml` -> `~/.agentflow/models.yaml` -> built-in defaults.
+- `models.yml` wins over legacy `models.yaml` when both exist; AgentFlow prints a warning so the duplicate can be cleaned up.
 - LLM provider configs use `api_key_env` fields such as `OPENAI_API_KEY` and `STEPFUN_API_KEY`.
 - Direct CLI audio/image commands currently read `STEPFUN_API_KEY` or `STEP_API_KEY` from the process environment.
 - Skill MCP servers may receive environment variables from skill configuration; validation and CLI output must treat tool params and env-like values as sensitive.
 
 ## Storage Boundary
 
-The current supported local secret store is the host environment plus `~/.agentflow/.env`. AgentFlow does not write plaintext API key values into `models.yml`.
+The current supported local secret store is the host environment plus `~/.agentflow/.env`. AgentFlow does not write plaintext API key values into `models.yml` or `models.yaml`.
 
 Local encryption and external secret manager integration should be added behind a resolver boundary:
 

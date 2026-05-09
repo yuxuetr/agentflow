@@ -58,8 +58,10 @@
 //!
 //! AgentFlow uses a unified configuration system with the following priority:
 //!
-//! 1. **User-specific**: `~/.agentflow/models.yml` (highest priority)
-//! 2. **Built-in defaults**: Bundled in crate (lowest priority)
+//! 1. **Explicit override**: `AGENTFLOW_MODELS_CONFIG`
+//! 2. **User-specific**: `~/.agentflow/models.yml`
+//! 3. **Legacy user-specific**: `~/.agentflow/models.yaml`
+//! 4. **Built-in defaults**: Bundled in crate (lowest priority)
 //!
 //! ### Generate Configuration Files
 //!
@@ -95,7 +97,8 @@ pub mod trace_context;
 // Re-export main API components
 pub use client::{LLMClient, ResponseFormat, StreamingResponse};
 pub use config::{
-  LLMConfig, LoadingBenchmark, ModelConfig, PerformanceComparison, VendorConfigManager,
+  LLMConfig, LLMConfigSource, LLMConfigSourceKind, LoadingBenchmark, MODELS_CONFIG_ENV,
+  ModelConfig, PerformanceComparison, VendorConfigManager,
 };
 pub use discovery::{ConfigUpdater, ModelFetcher, ModelValidator};
 pub use error::{LLMError, Result};
@@ -167,8 +170,10 @@ impl AgentFlow {
   /// Initialize the LLM system with default configuration
   ///
   /// Configuration priority (first found wins):
-  /// 1. ~/.agentflow/models.yml (user-specific)
-  /// 2. Built-in defaults (bundled in crate)
+  /// 1. `AGENTFLOW_MODELS_CONFIG`
+  /// 2. `~/.agentflow/models.yml` (user-specific)
+  /// 3. `~/.agentflow/models.yaml` (legacy user-specific)
+  /// 4. Built-in defaults (bundled in crate)
   ///
   /// Also loads environment variables from ~/.agentflow/.env if available
   pub async fn init() -> Result<()> {
@@ -180,21 +185,21 @@ impl AgentFlow {
       }
     }
 
-    // Try user-specific config
-    if let Some(home_dir) = dirs::home_dir() {
-      let user_config = home_dir.join(".agentflow").join("models.yml");
-      if user_config.exists() {
-        let config_path =
-          user_config
-            .to_str()
-            .ok_or_else(|| crate::LLMError::ConfigurationError {
-              message: format!("Config path contains invalid UTF-8: {:?}", user_config),
-            })?;
-        return Self::init_with_config(config_path).await;
-      }
+    let source = LLMConfig::resolve_default_source()?;
+    for warning in &source.warnings {
+      eprintln!("Warning: {warning}");
     }
 
-    // Fall back to built-in defaults
+    if let Some(config_path) = source.path {
+      let config_path =
+        config_path
+          .to_str()
+          .ok_or_else(|| crate::LLMError::ConfigurationError {
+            message: format!("Config path contains invalid UTF-8: {:?}", config_path),
+          })?;
+      return Self::init_with_config(config_path).await;
+    }
+
     Self::init_with_builtin_config().await
   }
 
