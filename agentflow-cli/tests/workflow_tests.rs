@@ -1009,17 +1009,21 @@ mod plugin_node_tests {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         // The CLI test crate's manifest dir is agentflow-cli/. The echo
         // plugin lives in agentflow-core/, so build it via -p selection.
-        let status = StdCommand::new(&cargo)
-          .args([
-            "build",
-            "--quiet",
-            "-p",
-            "agentflow-core",
-            "--features",
-            "plugin",
-            "--bin",
-            ECHO_PLUGIN_BIN,
-          ])
+        let mut command = StdCommand::new(&cargo);
+        command.args([
+          "build",
+          "--quiet",
+          "-p",
+          "agentflow-core",
+          "--features",
+          "plugin",
+          "--bin",
+          ECHO_PLUGIN_BIN,
+        ]);
+        if let Some(target_dir) = current_test_target_dir() {
+          command.arg("--target-dir").arg(target_dir);
+        }
+        let status = command
           .status()
           .expect("failed to invoke cargo build for echo plugin");
         assert!(status.success(), "cargo build for echo plugin failed");
@@ -1067,6 +1071,13 @@ mod plugin_node_tests {
     dirs
   }
 
+  fn current_test_target_dir() -> Option<PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    let deps = current.parent()?;
+    let profile = deps.parent()?;
+    profile.parent().map(Path::to_path_buf)
+  }
+
   fn write_plugin_manifest(dir: &Path, entrypoint: &Path) -> PathBuf {
     let manifest = format!(
       r#"
@@ -1112,22 +1123,28 @@ nodes:
   #[test]
   fn cli_workflow_run_supports_plugin_node() {
     let plugin_bin = ensure_echo_plugin_built();
-    let work = TempDir::new().unwrap();
+    let work = TempDir::new_in("/tmp").unwrap();
     let manifest = write_plugin_manifest(work.path(), &plugin_bin);
     let workflow = write_plugin_workflow(work.path(), &manifest);
     let output = work.path().join("plugin-result.json");
+    let run_dir = work.path().join("runs");
 
-    Command::cargo_bin("agentflow")
+    let assertion = Command::cargo_bin("agentflow")
       .unwrap()
       .args([
         "workflow",
         "run",
         workflow.to_str().unwrap(),
+        "--run-dir",
+        run_dir.to_str().unwrap(),
         "--output",
         output.to_str().unwrap(),
       ])
-      .assert()
-      .success();
+      .assert();
+    if let Err(err) = assertion.try_success() {
+      let run_files = collect_run_files(&run_dir);
+      panic!("plugin workflow command failed: {err}\nrun files:\n{run_files}");
+    }
 
     let saved = fs::read_to_string(&output).unwrap();
     assert!(
@@ -1138,7 +1155,7 @@ nodes:
 
   #[test]
   fn cli_workflow_run_rejects_plugin_node_missing_manifest() {
-    let work = TempDir::new().unwrap();
+    let work = TempDir::new_in("/tmp").unwrap();
     let workflow = work.path().join("bad_plugin_workflow.yml");
     fs::write(
       &workflow,
@@ -1160,5 +1177,25 @@ nodes:
       .failure()
       .stderr(predicate::str::contains("failed schema validation"))
       .stdout(predicate::str::contains("requires 'manifest'"));
+  }
+
+  fn collect_run_files(run_dir: &Path) -> String {
+    if !run_dir.exists() {
+      return "<no run dir>".to_string();
+    }
+    let mut out = String::new();
+    for entry in walkdir::WalkDir::new(run_dir)
+      .into_iter()
+      .filter_map(Result::ok)
+      .filter(|entry| entry.file_type().is_file())
+    {
+      out.push_str(&format!("--- {}\n", entry.path().display()));
+      match fs::read_to_string(entry.path()) {
+        Ok(content) => out.push_str(&content),
+        Err(err) => out.push_str(&format!("<read error: {err}>")),
+      }
+      out.push('\n');
+    }
+    out
   }
 }

@@ -110,6 +110,10 @@ jobs:
           cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
           cargo run -p agentflow-skills --example skill_calls_mcp_tool
           cargo run -p agentflow-agents --example hybrid_workflow_agent
+          cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
+          cargo run -p agentflow-core --features plugin --example plugin_host_demo
+          cargo test -p agentflow-cli --features plugin --test workflow_tests plugin_node_tests
+          cargo test -p agentflow-cli --features plugin --test marketplace_cli_tests marketplace_install_plugin_package_from_verified_cache
 
   release-gate:
     name: release gate

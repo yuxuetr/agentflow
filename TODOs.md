@@ -656,7 +656,7 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 ### 18. Third-party plugin CI smoke
 
-状态: TODO
+状态: 已完成 (2026-05-09)
 
 目标:
 
@@ -664,11 +664,11 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 
 子任务:
 
-- [ ] 在 `.github/workflows/quality.yml` 的 no-API smoke 中构建 `agentflow-echo-plugin`。
-- [ ] 在 CI smoke 中运行 `plugin_host_demo`。
-- [ ] 在 CI smoke 中运行 CLI plugin workflow 节点 e2e。
-- [ ] 在 CI smoke 中运行 marketplace plugin package install e2e。
-- [ ] 更新 `RoadMap.md` 中“三方插件示例进入 CI 编译/烟测”的验收状态。
+- [x] 在 `.github/workflows/quality.yml` 的 no-API smoke 中构建 `agentflow-echo-plugin`。
+- [x] 在 CI smoke 中运行 `plugin_host_demo`。
+- [x] 在 CI smoke 中运行 CLI plugin workflow 节点 e2e。
+- [x] 在 CI smoke 中运行 marketplace plugin package install e2e。
+- [x] 更新 `RoadMap.md` 中“三方插件示例进入 CI 编译/烟测”的验收状态。
 
 验收标准:
 
