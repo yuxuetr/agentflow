@@ -654,6 +654,26 @@ cargo clippy -p agentflow-core -p agentflow-cli --features plugin --all-targets 
 - `agentflow marketplace install <registry> echo-plugin --type plugin --dir <tmp> --force` 在 plugin feature build 下会安装出可 `agentflow plugin inspect` 的目录。
 - `agentflow marketplace install ... --cache-only` 只写 cache，不创建 skill/plugin install 目录。
 
+### 18. Third-party plugin CI smoke
+
+状态: TODO
+
+目标:
+
+- 让 plugin 参考实现和 out-of-tree/package install 路径进入 CI smoke，而不只做 feature compile check。
+
+子任务:
+
+- [ ] 在 `.github/workflows/quality.yml` 的 no-API smoke 中构建 `agentflow-echo-plugin`。
+- [ ] 在 CI smoke 中运行 `plugin_host_demo`。
+- [ ] 在 CI smoke 中运行 CLI plugin workflow 节点 e2e。
+- [ ] 在 CI smoke 中运行 marketplace plugin package install e2e。
+- [ ] 更新 `RoadMap.md` 中“三方插件示例进入 CI 编译/烟测”的验收状态。
+
+验收标准:
+
+- CI examples job 会覆盖 plugin binary build、host demo、workflow plugin node、marketplace plugin install 四条路径。
+
 ---
 
 ## 维护任务（持续）
