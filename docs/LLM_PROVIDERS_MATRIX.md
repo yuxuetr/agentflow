@@ -147,6 +147,15 @@ STEPFUN_API_KEY=… \
 cargo test -p agentflow-llm --test provider_consistency_live
 ```
 
+Additional live-test gates are reserved for modality-specific suites:
+
+```bash
+AGENTFLOW_LIVE_MULTIMODAL_TESTS=1
+AGENTFLOW_LIVE_IMAGE_TESTS=1
+AGENTFLOW_LIVE_AUDIO_TESTS=1
+AGENTFLOW_LIVE_VIDEO_TESTS=1
+```
+
 **Status**: live-test harness landed 2026-05-08. The default `cargo test`
 run is unaffected — without `AGENTFLOW_LIVE_LLM_TESTS` set, every test in
 `provider_consistency_live.rs` short-circuits before issuing a request and
@@ -158,15 +167,28 @@ Behavior of the harness:
 
 1. Skips cleanly when `AGENTFLOW_LIVE_LLM_TESTS` is unset (test passes,
    prints `[live] <provider>: skipped`).
-2. Uses minimum-cost defaults per provider (`gpt-4o-mini`,
+2. Calls `AgentFlow::init()` after the live gate is enabled, so
+   `~/.agentflow/.env`, `AGENTFLOW_MODELS_CONFIG`, `~/.agentflow/models.yml`,
+   and legacy `~/.agentflow/models.yaml` are loaded through the same resolver
+   used by CLI and server code.
+3. Uses minimum-cost defaults per provider (`gpt-4o-mini`,
    `claude-3-5-haiku-20241022`, `gemini-1.5-flash`, `moonshot-v1-8k`,
    `step-1-8k`); each is overridable via
-   `AGENTFLOW_LIVE_<PROVIDER>_MODEL`.
-3. One single-turn text request per provider with `max_tokens = 16` and
+   `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL`. The older
+   `AGENTFLOW_LIVE_<PROVIDER>_MODEL` form remains accepted for compatibility.
+   Examples: `AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL`,
+   `AGENTFLOW_LIVE_GLM_TEXT_MODEL`.
+4. One single-turn text request per provider with `max_tokens = 16` and
    `temperature = 0.0` for deterministic-as-possible cost.
-4. Runs nightly via `.github/workflows/llm-live.yml` (cron `30 9 * * *` UTC,
+5. Runs nightly via `.github/workflows/llm-live.yml` (cron `30 9 * * *` UTC,
    plus `workflow_dispatch` with an optional `providers` filter); not part
    of the PR-blocking `release-gate` aggregate in `quality.yml`.
+
+The harness logs provider names, selected env-var names, selected model names,
+and skip reasons, but never prints API key values. Keep live runs small:
+prefer one short prompt, low `max_tokens`, and explicit provider model
+overrides. Do not put live tests in ordinary PR CI; use local manual runs or
+nightly CI with budget/rate-limit controls.
 
 ## Adding a new provider
 
