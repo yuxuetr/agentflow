@@ -1,6 +1,6 @@
 # AgentFlow Docs
 
-Last updated: 2026-05-01
+Last updated: 2026-05-09
 
 This directory contains current user and maintainer documentation. Historical
 phase reports, old TODO trackers, implementation summaries, and stale backups
@@ -17,13 +17,19 @@ working references.
 - [MCP_SKILLS.md](MCP_SKILLS.md): MCP tool usage from Skills.
 - [TRACING_USAGE.md](TRACING_USAGE.md): trace capture, replay, and inspection.
 - [CHECKPOINT_RECOVERY.md](CHECKPOINT_RECOVERY.md): checkpoint and resume behavior.
+- [PLUGIN_DESIGN.md](PLUGIN_DESIGN.md): subprocess plugin runtime, manifest,
+  workflow node integration, sandbox bridge, and CLI.
+- [MARKETPLACE.md](MARKETPLACE.md): remote Skill/Plugin catalog schema,
+  artifact cache, signature verification, and marketplace CLI.
+- [WEB_UI.md](WEB_UI.md): embedded server UI for run lists, graph status,
+  event history, and SSE-backed debugging.
 
 ## Topic Guides
 
 - Workflow execution: [WORKFLOW_DEBUGGING.md](WORKFLOW_DEBUGGING.md), [HYBRID_WORKFLOW.md](HYBRID_WORKFLOW.md), [TIMEOUT_CONTROL.md](TIMEOUT_CONTROL.md), [RETRY_MECHANISM.md](RETRY_MECHANISM.md), [RESOURCE_MANAGEMENT.md](RESOURCE_MANAGEMENT.md)
-- Production operations: [DEPLOYMENT.md](DEPLOYMENT.md), [KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md), [HEALTH_CHECKS.md](HEALTH_CHECKS.md), [SECRET_MANAGEMENT.md](SECRET_MANAGEMENT.md), [TOOL_PERMISSIONS.md](TOOL_PERMISSIONS.md)
-- Skills and ecosystem: [SKILL_FORMAT.md](SKILL_FORMAT.md), [SKILL_REGISTRY.md](SKILL_REGISTRY.md), [MCP_SKILLS_INTEGRATION.md](MCP_SKILLS_INTEGRATION.md), [MCP_PRODUCTION_DESIGN.md](MCP_PRODUCTION_DESIGN.md)
-- LLM and multimodal: [GRANULAR_MODEL_TYPES.md](GRANULAR_MODEL_TYPES.md), [MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)
+- Production operations: [DEPLOYMENT.md](DEPLOYMENT.md), [DISTRIBUTED.md](DISTRIBUTED.md), [WEB_UI.md](WEB_UI.md), [KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md), [HEALTH_CHECKS.md](HEALTH_CHECKS.md), [SECRET_MANAGEMENT.md](SECRET_MANAGEMENT.md), [TOOL_PERMISSIONS.md](TOOL_PERMISSIONS.md), [SKILL_PERMISSIONS.md](SKILL_PERMISSIONS.md)
+- Skills and ecosystem: [SKILL_FORMAT.md](SKILL_FORMAT.md), [SKILL_REGISTRY.md](SKILL_REGISTRY.md), [MARKETPLACE.md](MARKETPLACE.md), [PLUGIN_DESIGN.md](PLUGIN_DESIGN.md), [MCP_SKILLS_INTEGRATION.md](MCP_SKILLS_INTEGRATION.md), [MCP_PRODUCTION_DESIGN.md](MCP_PRODUCTION_DESIGN.md)
+- LLM and multimodal: [LLM_PROVIDERS_MATRIX.md](LLM_PROVIDERS_MATRIX.md), [GRANULAR_MODEL_TYPES.md](GRANULAR_MODEL_TYPES.md), [MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)
 - Tracing internals: [TRACING_DESIGN.md](TRACING_DESIGN.md), [TRACE_PERSISTENCE_SCHEMA.md](TRACE_PERSISTENCE_SCHEMA.md)
 - Examples: [examples/README.md](examples/README.md)
 
@@ -32,7 +38,8 @@ working references.
 These live at the repository root, not inside `docs/`:
 
 - [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md): latest module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
-- [`RoadMap.md`](../RoadMap.md): N1–N7 closed; next phases N8/N9/N10 (v0.3.0 → v0.4.0 → v1.0.0-rc).
+- [`RoadMap.md`](../RoadMap.md): N1–N10 status, including the closed N8/N9
+  foundations and the N10 plugin, distributed, Web UI, and marketplace base.
 - [`TODOs.md`](../TODOs.md): active task queue derived from the evaluation and roadmap.
 
 ## Historical Release References

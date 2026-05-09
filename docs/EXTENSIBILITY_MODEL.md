@@ -1,8 +1,8 @@
 # Extensibility Model
 
 AgentFlow currently has a layered extension model built around Rust nodes,
-runtime tools, MCP servers, Skills, and local Skill catalogs. It does not yet
-ship a general-purpose plugin runtime.
+runtime tools, MCP servers, Skills, local and remote marketplace catalogs, and
+subprocess plugins.
 
 ## Decision Guide
 
@@ -12,8 +12,8 @@ ship a general-purpose plugin runtime.
 | Let an agent call a local function or wrapper | Tool | Tools are runtime-callable functions registered in `ToolRegistry`. |
 | Expose tools implemented outside AgentFlow | MCP server | MCP provides an external protocol/transport boundary; discovered tools are adapted into `ToolRegistry`. |
 | Package an agent capability for reuse | Skill | Skills combine persona, model defaults, tools, MCP servers, knowledge, memory, and security. |
-| Share Skills inside a repo or organization | Skill registry / marketplace catalog | Index and marketplace files are catalogs that resolve Skills; they are not plugin runtimes. |
-| Load arbitrary extensions dynamically | Future plugin system | Not implemented yet; future work needs lifecycle, permissions, versioning, signatures, and loading strategy. |
+| Share Skills or Plugins inside a repo or organization | Skill registry / marketplace catalog | Index and marketplace files resolve packages; remote marketplace entries are verified before being cached locally. |
+| Load arbitrary workflow extensions dynamically | Plugin | Subprocess JSON-RPC plugins provide process isolation, a manifest, lifecycle handshake, workflow node execution, and sandbox handoff. |
 
 ## Concepts
 
@@ -78,30 +78,47 @@ components; they do not provide a dynamic binary loading ABI.
 ### Skill Registry And Marketplace Catalog
 
 `skills.index.toml` is a local index of Skill directories. `marketplace.toml`
-groups one or more indexes into a browsable catalog.
+groups one or more indexes into a browsable local catalog. Remote marketplace
+manifests provide a unified package index for Skills and Plugins.
 
 Current catalog behavior:
 
 - local-first and no-network by default;
 - resolves a Skill directory and manifest;
 - can pin a manifest checksum;
-- prints or runs install flows that copy local Skill directories.
+- prints or runs install flows that copy local Skill directories;
+- can fetch a remote marketplace TOML over HTTP(S);
+- verifies downloaded artifacts by SHA-256 and pluggable signature policy;
+- stores verified artifacts under the local marketplace cache for offline
+  verification.
 
-This is not a general plugin marketplace. It is a Skill catalog layer that can
-later grow remote indexes, cache, bundle checksums, and trust policy without
-changing the local model.
+Remote `install` currently stops at the verified artifact cache. Package-specific
+unpack into `~/.agentflow/skills` or `~/.agentflow/plugins` is the remaining
+handoff step.
 
 ### Plugin
 
-Plugin is reserved for a future extension boundary. AgentFlow should not claim
-plugin runtime support until it has explicit answers for:
+Plugin is the dynamic workflow extension boundary. The implemented runtime uses
+a subprocess child that speaks newline-delimited JSON-RPC 2.0 over stdio.
 
-- lifecycle hooks
-- permission model and policy enforcement
-- version compatibility
-- distribution and signatures
-- dynamic loading strategy, such as process, WASM, or native ABI
-- observability and audit records
+Current plugin behavior:
+
+- `plugin.toml` manifest with name, version, runtime, entrypoint, protocol,
+  node declarations, capabilities, and optional signature metadata;
+- lifecycle: load, spawn child, handshake, execute node calls, shutdown, and
+  drop-time cleanup;
+- workflow YAML node type `plugin` routed through the CLI executor when built
+  with the `plugin` feature;
+- `agentflow plugin install|list|inspect|uninstall` for local plugin
+  management;
+- sandbox bridge through `AGENTFLOW_PLUGIN_SANDBOX=1`, translating plugin
+  manifest capabilities into the same OS sandbox backend used by process tools;
+- reference `agentflow-echo-plugin` binary and host demo under
+  `agentflow-core`.
+
+The first runtime is deliberately subprocess-based. WASM remains a possible
+future runtime tier; native `dlopen` is not part of the supported extension
+model.
 
 ## Composition
 
@@ -110,7 +127,8 @@ The intended dependency direction is:
 ```text
 Workflow DAG -> AgentNode -> Agent Runtime -> ToolRegistry -> Tool / MCP / WorkflowTool
 Skill -> Agent Runtime + ToolRegistry + Memory + Security
-Skill Registry / Marketplace Catalog -> Skill directories
+Skill Registry / Marketplace Catalog -> Skill directories / verified artifacts
+Plugin Workflow Node -> PluginHost -> subprocess plugin
 ```
 
 This keeps deterministic workflows, agent loops, tool calls, external tool
@@ -121,10 +139,11 @@ to compose.
 
 - No dynamic native plugin loading.
 - No WASM plugin runtime.
-- No remote plugin marketplace.
+- No automatic unpack from remote marketplace cache into runtime install
+  directories.
 - No background Skill updates.
 - No automatic network fetch during local registry validation.
 
-Future work may add these capabilities, but current documentation and CLI
-output should describe the implemented system as Skills, Tools, MCP, and Skill
-catalogs rather than a complete plugin system.
+Future work may add these capabilities, but current documentation and CLI output
+should distinguish the implemented subprocess plugin runtime and verified remote
+artifact cache from still-pending package unpack and background update flows.

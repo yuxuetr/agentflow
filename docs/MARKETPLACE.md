@@ -2,8 +2,8 @@
 
 AgentFlow is moving from local-only Skill catalogs toward a unified remote
 marketplace for both Skills and Plugins. The remote marketplace schema is the
-shared package index that future `agentflow marketplace ...` commands will
-fetch, cache, verify, and install from.
+shared package index that `agentflow marketplace ...` commands can fetch,
+cache, verify, and install from.
 
 ## Schema
 

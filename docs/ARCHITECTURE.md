@@ -1,6 +1,6 @@
 # AgentFlow Architecture
 
-Last updated: 2026-05-02
+Last updated: 2026-05-09
 
 AgentFlow is a Rust workspace for deterministic workflow execution and agent-native
 runtime loops. The project is organized around a small core engine and separate
@@ -11,12 +11,12 @@ All workspace crates use Rust 2024 edition.
 
 ## Layered Mental Model
 
-The 14 active crates (plus 2 scaffold crates) fall into four layers:
+The workspace crates fall into four layers:
 
 ```text
 +----------------------------------------------------------+
 | L4 Operations / Productization                          |
-|   tracing · viz · server (scaffold) · db (scaffold)     |
+|   tracing · viz · server · db · worker                  |
 +----------------------------------------------------------+
 | L3 Agent / Orchestration                                 |
 |   agents · skills · cli                                  |
@@ -82,8 +82,9 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-memory` | Session, SQLite, semantic memory types, and memory store abstractions. |
 | `agentflow-tracing` | Structured trace events, file storage, redaction, replay, OpenTelemetry integration, and terminal timeline inspection. |
 | `agentflow-viz` | Workflow graph conversion and DOT, JSON, and Mermaid renderers. |
-| `agentflow-db` | Database abstraction used by the server. |
-| `agentflow-server` | Axum gateway with health, liveness, and readiness endpoints. |
+| `agentflow-db` | SQLx database layer with migrations, models, and repository traits for runs, steps, events, artifacts, Skill installs, and MCP sessions. |
+| `agentflow-server` | Axum gateway with health endpoints, run submission/query routes, SSE event streams, Skill routes, bearer auth, Web UI embedding, and distributed scheduler control-plane primitives. |
+| `agentflow-worker` | Distributed worker runtime and binary built around the `WorkerProtocol` abstraction. |
 
 `agentflow-config` is not an active workspace crate. Current config-first workflow
 support lives in `agentflow-cli/src/config` and `agentflow-cli/src/executor`.
@@ -98,10 +99,12 @@ agentflow config init|show|validate
 agentflow llm models
 agentflow mcp list-tools|call-tool|list-resources
 agentflow skill init|install|validate|inspect|run|chat|list|list-tools|test|index|marketplace
+agentflow marketplace search|install|update|verify
+agentflow plugin install|list|inspect|uninstall   # when built with the plugin feature
 agentflow trace replay|tui
 agentflow audio asr|tts
 agentflow image generate|understand
-agentflow rag search|index|collections   # when built with the rag feature
+agentflow rag search|index|collections|eval        # when built with the rag feature
 ```
 
 The old bare prompt/chat command is not part of the public CLI. Interactive model
