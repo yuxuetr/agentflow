@@ -343,7 +343,7 @@ cargo test -p agentflow-skills -p agentflow-cli --target-dir /tmp/agentflow-targ
 
 ### P2.1 Live Test 基础设施
 
-状态: TODO
+状态: DONE
 
 方案:
 
@@ -373,11 +373,11 @@ AGENTFLOW_LIVE_GLM_VISION_MODEL=...
 
 子任务:
 
-- [ ] 统一 live test helper。
-- [ ] 从 `AgentFlow::init()` 加载 `~/.agentflow/.env` 和 models config。
-- [ ] 增加 provider capability probing。
-- [ ] 增加 skip reason 输出。
-- [ ] 增加费用/速率限制文档。
+- [x] 统一 live test helper。
+- [x] 从 `AgentFlow::init()` 加载 `~/.agentflow/.env` 和 models config。
+- [x] 增加 provider capability probing。
+- [x] 增加 skip reason 输出。
+- [x] 增加费用/速率限制文档。
 
 涉及文件:
 
