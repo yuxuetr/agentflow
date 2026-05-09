@@ -25,8 +25,24 @@ fn permissive_shell_with_sandbox() -> ShellTool {
   ShellTool::new(Arc::new(SandboxPolicy::permissive())).with_os_sandbox()
 }
 
+fn sandbox_exec_usable() -> bool {
+  std::process::Command::new("/usr/bin/sandbox-exec")
+    .arg("-p")
+    .arg("(version 1)(allow default)")
+    .arg("/bin/echo")
+    .arg("ok")
+    .output()
+    .map(|out| out.status.success())
+    .unwrap_or(false)
+}
+
 #[tokio::test]
 async fn macos_sandbox_allows_baseline_echo() {
+  if !sandbox_exec_usable() {
+    eprintln!("skipping: sandbox-exec is present but not usable in this environment");
+    return;
+  }
+
   let tool = permissive_shell_with_sandbox();
   let result = tool
     .execute(json!({"command": "/bin/echo hello-from-sandbox"}))
@@ -47,6 +63,11 @@ async fn macos_sandbox_allows_baseline_echo() {
 
 #[tokio::test]
 async fn macos_sandbox_blocks_write_outside_scope() {
+  if !sandbox_exec_usable() {
+    eprintln!("skipping: sandbox-exec is present but not usable in this environment");
+    return;
+  }
+
   // Pick a unique path that will not exist before the call. The default
   // capability set for ShellTool is just `Exec`, so the SBPL profile grants
   // no write paths — even /tmp writes must be denied.

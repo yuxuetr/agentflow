@@ -69,6 +69,8 @@ struct ConfigReport {
 struct SandboxReport {
   backend: &'static str,
   enforcing: bool,
+  capabilities: Vec<&'static str>,
+  warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +130,8 @@ async fn build_report() -> DoctorReport {
   let sandbox = SandboxReport {
     backend: sandbox_backend.name(),
     enforcing: sandbox_backend.is_enforcing(),
+    capabilities: sandbox_capabilities(sandbox_backend.is_enforcing()),
+    warnings: sandbox_warnings(sandbox_backend.name(), sandbox_backend.is_enforcing()),
   };
 
   let status =
@@ -350,8 +354,16 @@ fn print_text_report(report: &DoctorReport) {
   println!("Sandbox:");
   println!("  backend: {}", report.sandbox.backend);
   println!("  enforcing: {}", enabled_label(report.sandbox.enforcing));
-  if !report.sandbox.enforcing {
-    println!("  warning: this platform has no enforcing OS sandbox backend");
+  println!(
+    "  capabilities: {}",
+    if report.sandbox.capabilities.is_empty() {
+      "none".to_string()
+    } else {
+      report.sandbox.capabilities.join(", ")
+    }
+  );
+  for warning in &report.sandbox.warnings {
+    println!("  warning: {warning}");
   }
   println!();
 
@@ -399,9 +411,27 @@ fn optional_env(value: Option<&str>) -> &str {
   value.unwrap_or("unset")
 }
 
+fn sandbox_capabilities(enforcing: bool) -> Vec<&'static str> {
+  if enforcing {
+    vec!["process", "filesystem", "network"]
+  } else {
+    Vec::new()
+  }
+}
+
+fn sandbox_warnings(backend: &str, enforcing: bool) -> Vec<String> {
+  if enforcing {
+    Vec::new()
+  } else {
+    vec![format!(
+      "sandbox backend '{backend}' is not enforcing; shell, script, and plugin runs rely only on in-process policy checks"
+    )]
+  }
+}
+
 #[cfg(test)]
 mod tests {
-  use super::{OutputFormat, parse_env_key};
+  use super::{OutputFormat, parse_env_key, sandbox_warnings};
 
   #[test]
   fn output_format_rejects_unknown_values() {
@@ -418,5 +448,13 @@ mod tests {
     );
     assert_eq!(parse_env_key("# OPENAI_API_KEY=secret"), None);
     assert_eq!(parse_env_key("OPENAI_API_KEY="), None);
+  }
+
+  #[test]
+  fn sandbox_warnings_explain_noop_risk() {
+    let warnings = sandbox_warnings("noop", false);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("not enforcing"));
+    assert!(warnings[0].contains("in-process policy"));
   }
 }

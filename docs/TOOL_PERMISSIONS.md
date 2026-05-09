@@ -64,6 +64,34 @@ cannot grant a child more authority than the merge allowed.
 runtime; callers that require real enforcement should check
 `SandboxBackend::is_enforcing()` before spawning.
 
+`agentflow doctor` reports the selected backend, whether it is enforcing,
+and any sandbox risk warnings. A non-enforcing backend is not silent: the
+doctor status becomes `warning` and the JSON output includes a sandbox
+warning explaining that subprocesses are protected only by in-process
+policy checks.
+
+## Sandbox Matrix Coverage
+
+The regression matrix in `agentflow-tools/tests/sandbox_matrix.rs` covers
+the main escape classes that the in-process and OS layers are expected to
+handle:
+
+- path traversal such as `allowed/../outside`
+- absolute path reads and writes outside the allow-list
+- symlink reads that resolve outside the allow-list
+- hardlink creation attempts from sandboxed subprocesses when `fs.write`
+  was not granted
+- unapproved command execution
+- timeout handling for long-running subprocesses
+- large stdout handling
+- policy denials with explicit `deny_reason`
+
+`SandboxPolicy::path_denial_reason` canonicalizes existing paths before
+comparing them with allowed prefixes, so symlinks are checked by their
+resolved target. For writes to new files, `FileTool` validates both the
+requested target and its parent directory before creating directories or
+writing content.
+
 ### macOS — `sandbox-exec`
 
 `MacosSandboxExecBackend::wrap_command` writes a TinyScheme (SBPL) profile

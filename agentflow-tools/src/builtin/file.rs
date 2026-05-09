@@ -82,10 +82,8 @@ impl Tool for FileTool {
 
     let path = Path::new(path_str);
 
-    if !self.policy.is_path_allowed(path) {
-      return Err(ToolError::SandboxViolation {
-        message: format!("Path '{}' is outside allowed path prefixes", path_str),
-      });
+    if let Some(reason) = self.policy.path_denial_reason(path) {
+      return Err(ToolError::SandboxViolation { message: reason });
     }
 
     match operation {
@@ -112,6 +110,15 @@ impl Tool for FileTool {
       }
 
       "write" => {
+        if let Some(parent) = path.parent()
+          && !parent.as_os_str().is_empty()
+          && let Some(reason) = self.policy.path_denial_reason(parent)
+        {
+          return Err(ToolError::SandboxViolation {
+            message: format!("parent directory denied for write: {reason}"),
+          });
+        }
+
         let content = params["content"]
           .as_str()
           .ok_or_else(|| ToolError::InvalidParams {

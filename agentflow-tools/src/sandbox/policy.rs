@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Policy controlling what operations built-in tools are allowed to perform.
 ///
@@ -68,13 +68,44 @@ impl SandboxPolicy {
 
   /// Check whether a filesystem path is reachable under the policy.
   pub fn is_path_allowed(&self, path: &Path) -> bool {
+    self.path_denial_reason(path).is_none()
+  }
+
+  /// Return an explanatory denial reason for a filesystem path.
+  pub fn path_denial_reason(&self, path: &Path) -> Option<String> {
     if self.allowed_paths.is_empty() {
-      return true; // permissive
+      return None; // permissive
     }
-    self
+
+    if path
+      .components()
+      .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+      return Some(format!(
+        "path '{}' contains traversal or platform prefix components",
+        path.display()
+      ));
+    }
+
+    let comparable_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if self
       .allowed_paths
       .iter()
-      .any(|allowed| path.starts_with(allowed))
+      .any(|allowed| path_starts_with_allowed(&comparable_path, allowed))
+    {
+      None
+    } else {
+      Some(format!(
+        "path '{}' is outside allowed path prefixes: {}",
+        comparable_path.display(),
+        self
+          .allowed_paths
+          .iter()
+          .map(|path| path.display().to_string())
+          .collect::<Vec<_>>()
+          .join(", ")
+      ))
+    }
   }
 
   /// Check whether an HTTP host is reachable under the policy.
@@ -88,4 +119,11 @@ impl SandboxPolicy {
       .iter()
       .any(|d| domain == d.as_str() || domain.ends_with(&format!(".{}", d)))
   }
+}
+
+fn path_starts_with_allowed(path: &Path, allowed: &Path) -> bool {
+  let comparable_allowed = allowed
+    .canonicalize()
+    .unwrap_or_else(|_| allowed.to_path_buf());
+  path.starts_with(comparable_allowed)
 }
