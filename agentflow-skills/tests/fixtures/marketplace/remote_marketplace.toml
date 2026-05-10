@@ -1,0 +1,36 @@
+schema_version = 1
+name = "compat-marketplace"
+description = "Compatibility registry"
+homepage = "https://registry.example.com"
+future_registry_field = "ignored"
+
+[[entries]]
+name = "compat-skill"
+version = "1.0.0"
+type = "skill"
+aliases = ["compat"]
+description = "Compatibility skill package"
+future_entry_field = "ignored"
+
+[entries.source]
+registry_url = "https://registry.example.com/marketplace.toml"
+artifact_url = "https://registry.example.com/compat-skill.tar.gz"
+checksum_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+future_source_field = "ignored"
+
+[entries.signature]
+algorithm = "checksum-sha256"
+key_id = "dev"
+value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+future_signature_field = "ignored"
+
+[[entries]]
+name = "compat-plugin"
+version = "0.1.0"
+type = "plugin"
+aliases = []
+
+[entries.source]
+registry_url = "https://registry.example.com/marketplace.toml"
+artifact_url = "https://registry.example.com/compat-plugin.tar.gz"
+checksum_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

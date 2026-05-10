@@ -1,0 +1,47 @@
+[skill]
+name = "compat-toml"
+version = "1.2.3"
+description = "Structured compatibility manifest"
+future_skill_field = "ignored"
+
+[persona]
+role = "You verify manifest compatibility."
+language = "en"
+future_persona_field = "ignored"
+
+[model]
+name = "mock"
+max_iterations = 4
+budget_tokens = 1200
+future_model_field = "ignored"
+
+[security]
+mcp_server_allowlist = ["demo"]
+mcp_command_allowlist = ["python3"]
+mcp_env_allowlist = ["DEMO_TOKEN"]
+mcp_default_timeout_secs = 9
+mcp_max_concurrent_calls = 2
+mcp_max_servers = 2
+os_sandbox = true
+future_security_field = "ignored"
+
+[[tools]]
+name = "file"
+allowed_paths = ["./fixtures"]
+future_tool_field = "ignored"
+
+[[mcp_servers]]
+name = "demo"
+command = "python3"
+args = ["server.py"]
+future_mcp_field = "ignored"
+
+[[knowledge]]
+path = "knowledge.md"
+description = "Compatibility notes"
+future_knowledge_field = "ignored"
+
+[memory]
+type = "session"
+window_tokens = 2048
+future_memory_field = "ignored"

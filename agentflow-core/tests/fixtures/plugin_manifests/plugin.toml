@@ -1,0 +1,19 @@
+[plugin]
+name = "compat-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/compat-plugin"
+protocol = "agentflow.plugin/1"
+future_plugin_field = "ignored"
+
+[[plugin.nodes]]
+type = "compat_node"
+description = "Compatibility node"
+future_node_field = "ignored"
+
+[plugin.capabilities]
+filesystem = ["read:./inputs", "write:./outputs"]
+network = ["https://api.example.com"]
+processes = ["helper"]
+env_vars = ["COMPAT_TOKEN"]
+future_capability_field = ["ignored"]
