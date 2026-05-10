@@ -17,8 +17,12 @@ use uuid::Uuid;
 
 use agentflow_tracing::{OtelAttribute, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelStatus};
 
+pub mod distributed;
 pub mod grpc;
 
+pub use distributed::{
+  DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, NodeExecutionPayload,
+};
 pub use grpc::{GrpcWorkerProtocol, GrpcWorkerService, WorkerControlServer};
 
 /// Transport selected for the v1.0-rc distributed control plane.
@@ -77,6 +81,21 @@ impl WorkerTask {
       run_id,
       node_id: node_id.into(),
       attempt: 0,
+      payload,
+    }
+  }
+
+  pub fn with_attempt(
+    run_id: Uuid,
+    node_id: impl Into<String>,
+    attempt: u32,
+    payload: serde_json::Value,
+  ) -> Self {
+    Self {
+      task_id: Uuid::new_v4(),
+      run_id,
+      node_id: node_id.into(),
+      attempt,
       payload,
     }
   }
@@ -226,6 +245,7 @@ where
     state.assignments.insert(
       task.task_id,
       WorkerAssignment {
+        task_id: task.task_id,
         worker_id,
         run_id: task.run_id,
         node_id: task.node_id.clone(),
@@ -302,9 +322,22 @@ where
       WorkerTaskResult::Failed {
         error, retryable, ..
       } => {
+        let node_id = assignment.node_id;
         run.failed_tasks += 1;
-        run.last_error = Some(error);
+        run.last_error = Some(error.clone());
         run.retryable_failures += usize::from(retryable);
+        run.failures.insert(
+          node_id.clone(),
+          WorkerTaskFailure {
+            task_id,
+            worker_id: assignment.worker_id,
+            run_id: assignment.run_id,
+            node_id,
+            attempt: assignment.attempt,
+            error,
+            retryable,
+          },
+        );
       }
     }
     run.status = run.derive_status();
@@ -348,15 +381,75 @@ where
   pub async fn worker_heartbeat(&self, worker_id: &WorkerId) -> Option<WorkerHeartbeat> {
     self.state.lock().await.heartbeats.get(worker_id).cloned()
   }
+
+  pub async fn assignments_for_run(&self, run_id: Uuid) -> Vec<WorkerAssignment> {
+    self
+      .state
+      .lock()
+      .await
+      .assignments
+      .values()
+      .filter(|assignment| assignment.run_id == run_id)
+      .cloned()
+      .collect()
+  }
+
+  pub async fn forget_assignment(&self, task_id: Uuid) -> Option<WorkerAssignment> {
+    let mut state = self.state.lock().await;
+    let assignment = state.assignments.remove(&task_id)?;
+    if let Some(run) = state.runs.get_mut(&assignment.run_id) {
+      run.running_tasks = run.running_tasks.saturating_sub(1);
+    }
+    Some(assignment)
+  }
+}
+
+#[async_trait]
+impl<P> WorkerProtocol for WorkerControlPlane<P>
+where
+  P: WorkerProtocol + Clone,
+{
+  async fn submit_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
+    WorkerControlPlane::schedule_task(self, task).await
+  }
+
+  async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
+    WorkerControlPlane::claim_task(self, worker_id).await
+  }
+
+  async fn report_result(
+    &self,
+    worker_id: WorkerId,
+    task_id: Uuid,
+    result: WorkerTaskResult,
+  ) -> Result<(), SchedulerError> {
+    WorkerControlPlane::report_result(self, worker_id, task_id, result).await
+  }
+
+  async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
+    WorkerControlPlane::heartbeat(self, heartbeat).await
+  }
 }
 
 /// Worker assignment tracked by the control plane after a claim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerAssignment {
+  pub task_id: Uuid,
   pub worker_id: WorkerId,
   pub run_id: Uuid,
   pub node_id: String,
   pub attempt: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerTaskFailure {
+  pub task_id: Uuid,
+  pub worker_id: WorkerId,
+  pub run_id: Uuid,
+  pub node_id: String,
+  pub attempt: u32,
+  pub error: String,
+  pub retryable: bool,
 }
 
 /// Run status derived from distributed task counters.
@@ -381,6 +474,7 @@ pub struct RunControlSnapshot {
   pub retryable_failures: usize,
   pub last_error: Option<String>,
   pub outputs: HashMap<String, serde_json::Value>,
+  pub failures: HashMap<String, WorkerTaskFailure>,
   pub trace_events: Vec<WorkerTraceEvent>,
   pub stitched_trace_events: Vec<StitchedWorkerTraceEvent>,
 }
@@ -397,6 +491,7 @@ impl RunControlSnapshot {
       retryable_failures: 0,
       last_error: None,
       outputs: HashMap::new(),
+      failures: HashMap::new(),
       trace_events: Vec::new(),
       stitched_trace_events: Vec::new(),
     }

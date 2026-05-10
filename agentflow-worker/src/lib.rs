@@ -8,9 +8,14 @@
 
 use std::time::Duration;
 
+use agentflow_core::{
+  AgentFlowError, FlowValue,
+  async_node::{AsyncNode, AsyncNodeResult},
+};
+use agentflow_nodes::nodes::{file::FileNode, template::TemplateNode};
 use agentflow_server::{
-  SchedulerError, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask, WorkerTaskResult,
-  WorkerTraceEvent,
+  NodeExecutionPayload, SchedulerError, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
+  WorkerTaskResult, WorkerTraceEvent,
 };
 use thiserror::Error;
 use tokio::time::sleep;
@@ -80,7 +85,7 @@ where
     else {
       return Ok(None);
     };
-    let result = execute_stub(&self.config.worker_id, &task);
+    let result = execute_stub(&self.config.worker_id, &task).await;
     self
       .protocol
       .report_result(self.config.worker_id.clone(), task.task_id, result)
@@ -97,7 +102,11 @@ where
   }
 }
 
-fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
+async fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
+  if let Ok(payload) = serde_json::from_value::<NodeExecutionPayload>(task.payload.clone()) {
+    return execute_node_payload(worker_id, task, payload).await;
+  }
+
   WorkerTaskResult::Succeeded {
     output: serde_json::json!({
       "worker_id": worker_id.0,
@@ -129,13 +138,151 @@ fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
   }
 }
 
+async fn execute_node_payload(
+  worker_id: &WorkerId,
+  task: &WorkerTask,
+  payload: NodeExecutionPayload,
+) -> WorkerTaskResult {
+  let started = WorkerTraceEvent {
+    seq: 0,
+    kind: "worker.task.started".into(),
+    payload: serde_json::json!({
+      "worker_id": worker_id.0,
+      "task_id": task.task_id,
+      "node_id": task.node_id,
+      "node_type": payload.node_type,
+      "attempt": task.attempt,
+    }),
+  };
+
+  let result = execute_supported_node_payload(payload, task.attempt).await;
+
+  match result {
+    Ok(outputs) => WorkerTaskResult::Succeeded {
+      output: serde_json::to_value(outputs).unwrap_or_else(|_| serde_json::json!({})),
+      events: vec![
+        started,
+        WorkerTraceEvent {
+          seq: 1,
+          kind: "worker.task.completed".into(),
+          payload: serde_json::json!({
+            "worker_id": worker_id.0,
+            "task_id": task.task_id,
+            "node_id": task.node_id,
+            "attempt": task.attempt,
+          }),
+        },
+      ],
+    },
+    Err(error) => WorkerTaskResult::Failed {
+      error: error.to_string(),
+      retryable: matches!(error, AgentFlowError::AsyncExecutionError { .. }),
+      events: vec![
+        started,
+        WorkerTraceEvent {
+          seq: 1,
+          kind: "worker.task.failed".into(),
+          payload: serde_json::json!({
+            "worker_id": worker_id.0,
+            "task_id": task.task_id,
+            "node_id": task.node_id,
+            "attempt": task.attempt,
+            "error": error.to_string(),
+          }),
+        },
+      ],
+    },
+  }
+}
+
+async fn execute_supported_node_payload(
+  payload: NodeExecutionPayload,
+  attempt: u32,
+) -> Result<std::collections::HashMap<String, FlowValue>, AgentFlowError> {
+  match payload.node_type.as_str() {
+    "template" => execute_template_payload(&payload).await,
+    "file" => execute_file_payload(&payload).await,
+    "mock" => execute_mock_payload(&payload, attempt).await,
+    other => Err(AgentFlowError::FlowDefinitionError {
+      message: format!("distributed worker does not support node type '{other}'"),
+    }),
+  }
+}
+
+async fn execute_template_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  let template = string_parameter(payload, "template")?;
+  let mut node = TemplateNode::new(&payload.node_id, &template);
+  if let Some(output_key) = optional_string_parameter(payload, "output_key") {
+    node = node.with_output_key(&output_key);
+  }
+  if let Some(output_format) = optional_string_parameter(payload, "output_format") {
+    node = node.with_format(&output_format);
+  }
+  node.execute(&payload.inputs).await
+}
+
+async fn execute_file_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  FileNode.execute(&payload.inputs).await
+}
+
+async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> AsyncNodeResult {
+  if let Some(fail_until_attempt) = payload
+    .parameters
+    .get("fail_until_attempt")
+    .and_then(|value| value.as_u64())
+    && u64::from(attempt) < fail_until_attempt
+  {
+    return Err(AgentFlowError::AsyncExecutionError {
+      message: format!("mock node requested failure until attempt {fail_until_attempt}"),
+    });
+  }
+  if matches!(
+    payload
+      .parameters
+      .get("fail")
+      .and_then(|value| value.as_bool()),
+    Some(true)
+  ) {
+    return Err(AgentFlowError::AsyncExecutionError {
+      message: "mock node requested failure".to_string(),
+    });
+  }
+  let mut outputs = std::collections::HashMap::new();
+  let value = payload
+    .parameters
+    .get("value")
+    .cloned()
+    .unwrap_or_else(|| serde_json::json!(payload.node_id));
+  outputs.insert("output".to_string(), FlowValue::Json(value));
+  Ok(outputs)
+}
+
+fn string_parameter(payload: &NodeExecutionPayload, key: &str) -> Result<String, AgentFlowError> {
+  optional_string_parameter(payload, key).ok_or_else(|| AgentFlowError::NodeInputError {
+    message: format!(
+      "distributed node '{}' requires string parameter '{}'",
+      payload.node_id, key
+    ),
+  })
+}
+
+fn optional_string_parameter(payload: &NodeExecutionPayload, key: &str) -> Option<String> {
+  payload
+    .parameters
+    .get(key)
+    .and_then(|value| value.as_str())
+    .map(ToString::to_string)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use agentflow_server::{
     GrpcWorkerProtocol, InMemoryWorkerProtocol, RunControlStatus, WorkerControlPlane,
     WorkerControlServer,
+    scheduler::distributed::{mock_flow, mock_node},
   };
+  use chrono::Duration as ChronoDuration;
   use std::net::SocketAddr;
   use tokio::sync::oneshot;
   use tonic::transport::Server;
@@ -238,6 +385,196 @@ mod tests {
 
     let _ = shutdown_tx.send(());
     server.await.unwrap().unwrap();
+  }
+
+  #[tokio::test]
+  async fn run_once_executes_distributed_template_payload() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let worker_id = WorkerId::new("worker-template").unwrap();
+    let run_id = Uuid::new_v4();
+    let payload = NodeExecutionPayload::new(
+      "render",
+      "template",
+      std::collections::HashMap::from([(
+        "template".to_string(),
+        serde_json::json!("Hello {{ name }}"),
+      )]),
+      std::collections::HashMap::from([(
+        "name".to_string(),
+        FlowValue::Json(serde_json::json!("Ada")),
+      )]),
+    );
+    let task = WorkerTask::new(run_id, "render", serde_json::to_value(payload).unwrap());
+    let task_id = task.task_id;
+    protocol.submit_task(task).await.unwrap();
+
+    let runtime = WorkerRuntime::new(
+      protocol.clone(),
+      WorkerConfig::new(worker_id, "memory://local"),
+    );
+    runtime.run_once().await.unwrap();
+
+    let WorkerTaskResult::Succeeded { output, .. } =
+      protocol.completed_result(task_id).await.unwrap()
+    else {
+      panic!("expected template success");
+    };
+    assert_eq!(output["output"]["value"], "Hello Ada");
+  }
+
+  #[tokio::test]
+  async fn run_once_executes_distributed_file_payload() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let worker_id = WorkerId::new("worker-file").unwrap();
+    let run_id = Uuid::new_v4();
+    let path = std::env::temp_dir().join(format!("agentflow-worker-{}.txt", Uuid::new_v4()));
+    let payload = NodeExecutionPayload::new(
+      "write_file",
+      "file",
+      std::collections::HashMap::new(),
+      std::collections::HashMap::from([
+        (
+          "operation".to_string(),
+          FlowValue::Json(serde_json::json!("write")),
+        ),
+        (
+          "path".to_string(),
+          FlowValue::Json(serde_json::json!(path.to_string_lossy())),
+        ),
+        (
+          "content".to_string(),
+          FlowValue::Json(serde_json::json!("distributed file write")),
+        ),
+      ]),
+    );
+    protocol
+      .submit_task(WorkerTask::new(
+        run_id,
+        "write_file",
+        serde_json::to_value(payload).unwrap(),
+      ))
+      .await
+      .unwrap();
+
+    let runtime = WorkerRuntime::new(protocol, WorkerConfig::new(worker_id, "memory://local"));
+    runtime.run_once().await.unwrap();
+
+    let content = tokio::fs::read_to_string(&path).await.unwrap();
+    assert_eq!(content, "distributed file write");
+    let _ = tokio::fs::remove_file(path).await;
+  }
+
+  #[tokio::test]
+  async fn distributed_scheduler_runs_100_mock_nodes_with_two_workers() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let nodes = (0..100)
+      .map(|idx| mock_node(format!("node-{idx}"), Vec::new(), serde_json::json!(idx)))
+      .collect::<Vec<_>>();
+    let flow = mock_flow("large mock", nodes);
+    let mut scheduler =
+      agentflow_server::DistributedDagScheduler::new(run_id, flow, control.clone()).unwrap();
+    let worker_a = WorkerRuntime::new(
+      control.clone(),
+      WorkerConfig::new(WorkerId::new("worker-a").unwrap(), "memory://local"),
+    );
+    let worker_b = WorkerRuntime::new(
+      control.clone(),
+      WorkerConfig::new(WorkerId::new("worker-b").unwrap(), "memory://local"),
+    );
+
+    while !scheduler.is_terminal() {
+      scheduler.dispatch_ready().await.unwrap();
+      let claimed_a = worker_a.run_once().await.unwrap();
+      let claimed_b = worker_b.run_once().await.unwrap();
+      scheduler.reconcile_results().await.unwrap();
+      if claimed_a.is_none() && claimed_b.is_none() && scheduler.running_count() == 0 {
+        break;
+      }
+    }
+
+    let result = scheduler.run_result();
+    assert!(result.succeeded);
+    assert_eq!(result.state_pool.len(), 100);
+    let snapshot = control.run_snapshot(run_id).await.unwrap();
+    assert_eq!(snapshot.succeeded_tasks, 100);
+    assert_eq!(snapshot.stitched_trace_events.len(), 200);
+  }
+
+  #[tokio::test]
+  async fn distributed_scheduler_retries_retryable_failure() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let mut node = mock_node("retry-once", Vec::new(), serde_json::json!("ok"));
+    node.parameters.insert(
+      "fail_until_attempt".to_string(),
+      serde_yaml::to_value(1).unwrap(),
+    );
+    let flow = mock_flow("retry mock", vec![node]);
+    let mut scheduler =
+      agentflow_server::DistributedDagScheduler::new(run_id, flow, control.clone())
+        .unwrap()
+        .with_max_attempts(2);
+    let worker = WorkerRuntime::new(
+      control.clone(),
+      WorkerConfig::new(WorkerId::new("worker-retry").unwrap(), "memory://local"),
+    );
+
+    while !scheduler.is_terminal() {
+      scheduler.dispatch_ready().await.unwrap();
+      let _ = worker.run_once().await.unwrap();
+      scheduler.reconcile_results().await.unwrap();
+    }
+
+    let result = scheduler.run_result();
+    assert!(result.succeeded);
+    let snapshot = control.run_snapshot(run_id).await.unwrap();
+    assert_eq!(snapshot.failed_tasks, 1);
+    assert_eq!(snapshot.succeeded_tasks, 1);
+  }
+
+  #[tokio::test]
+  async fn distributed_scheduler_requeues_stale_heartbeat_task() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    let flow = mock_flow(
+      "stale mock",
+      vec![mock_node("stale-node", Vec::new(), serde_json::json!("ok"))],
+    );
+    let mut scheduler =
+      agentflow_server::DistributedDagScheduler::new(run_id, flow, control.clone())
+        .unwrap()
+        .with_max_attempts(2)
+        .with_heartbeat_timeout(Duration::from_millis(1));
+    scheduler.dispatch_ready().await.unwrap();
+
+    let worker_id = WorkerId::new("stale-worker").unwrap();
+    let claimed = control
+      .claim_task(worker_id.clone())
+      .await
+      .unwrap()
+      .unwrap();
+    control
+      .heartbeat(WorkerHeartbeat {
+        worker_id,
+        active_task: Some(claimed.task_id),
+        free_slots: 0,
+        ts: chrono::Utc::now() - ChronoDuration::seconds(5),
+      })
+      .await
+      .unwrap();
+
+    let requeued = scheduler.requeue_stale_tasks().await.unwrap();
+    assert_eq!(requeued, 1);
+    assert_eq!(
+      scheduler.node_status("stale-node"),
+      Some(agentflow_server::DistributedNodeStatus::Pending)
+    );
+    scheduler.dispatch_ready().await.unwrap();
+    assert_eq!(scheduler.running_count(), 1);
   }
 
   async fn connect_with_retry(endpoint: &str) -> GrpcWorkerProtocol {

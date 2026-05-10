@@ -7,6 +7,8 @@ description = "Distributed worker process for AgentFlow"
 license = "MIT"
 
 [dependencies]
+agentflow-core = { path = "../agentflow-core" }
+agentflow-nodes = { path = "../agentflow-nodes" }
 agentflow-server = { path = "../agentflow-server" }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -16,4 +18,5 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+serde_yaml = "0.9"
 tonic = "0.12"

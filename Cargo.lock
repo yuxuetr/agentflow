@@ -289,6 +289,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -378,10 +379,13 @@ dependencies = [
 name = "agentflow-worker"
 version = "0.1.0"
 dependencies = [
+ "agentflow-core",
+ "agentflow-nodes",
  "agentflow-server",
  "chrono",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 1.0.69",
  "tokio",
  "tonic",

@@ -127,15 +127,27 @@ that sits above the protocol. It currently provides:
   span events.
 - `heartbeat`: record worker liveness and free-slot capacity.
 
-This snapshot is still in-memory. The next persistence step is to project these
+`DistributedDagScheduler<P: WorkerProtocol>` sits above the control plane for
+the first executable distributed DAG milestone. It parses config-first DAGs
+into ready sets, emits one `WorkerTask` per ready node, gathers mapped inputs
+from completed upstream outputs, and folds worker results back into a state
+pool. The portable `NodeExecutionPayload` schema currently supports remote
+`template`, `file`, and `mock` execution.
+
+The scheduler includes bounded retry for retryable worker failures and stale
+heartbeat requeue for claimed tasks whose worker heartbeat exceeds the
+configured timeout. The 100-node two-worker smoke test verifies task claim,
+result reporting, state-pool completion, and stitched trace aggregation.
+
+The snapshot is still in-memory. The next persistence step is to project these
 state transitions into `runs`, `steps`, and `events` rows so `/v1/runs` and SSE
 streams can observe real distributed execution.
 
 ## Planned Control-Plane Flow
 
 1. `POST /v1/runs` persists a queued run as it does today.
-2. A real run executor parses the workflow and emits ready DAG nodes as
-   `WorkerTask`s.
+2. A distributed run executor parses the workflow and uses
+   `DistributedDagScheduler` to emit ready DAG nodes as `WorkerTask`s.
 3. Workers connect to the control plane and call `claim_task`.
 4. The control plane marks claimed steps as running and records worker ownership.
 5. Workers execute node work in-process, then call `report_result`.

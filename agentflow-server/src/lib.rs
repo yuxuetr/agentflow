@@ -37,7 +37,8 @@ pub use runs::{
   submit_run,
 };
 pub use scheduler::{
-  GrpcWorkerProtocol, GrpcWorkerService, InMemoryWorkerProtocol, RunControlSnapshot,
+  DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, GrpcWorkerProtocol,
+  GrpcWorkerService, InMemoryWorkerProtocol, NodeExecutionPayload, RunControlSnapshot,
   RunControlStatus, SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent, WorkerAssignment,
   WorkerControlPlane, WorkerControlServer, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
   WorkerTaskResult, WorkerTraceEvent, WorkerTransport, stitched_trace_to_otel_spans,
