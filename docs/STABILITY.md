@@ -68,6 +68,29 @@ an existing required field is breaking.
 | Server REST API envelope | Beta | JSON response field names for `/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, `/v1/skills`, and marketplace-related commands are preserved. Error responses use the server `ApiError` envelope. |
 | SSE event envelope | Beta | Events carry `run_id`, `seq`, `kind`, `payload`, and `ts`. `seq` is monotonically increasing per run and clients may reconnect with `after_seq`. New `kind` values are additive. |
 
+## Compatibility Fixture Ownership
+
+Golden fixtures for stable and beta serialized contracts live with the crate
+that owns the Rust type or wire endpoint. Test modules may share helper
+builders, but each owner is responsible for preserving backwards-compatible
+reads and stable writer output for its rows below.
+
+| Contract | Stability | Owner | Fixture location | Coverage |
+| --- | --- | --- | --- | --- |
+| `FlowValue` | Stable | `agentflow-core` | `agentflow-core/tests/fixtures/flow_value/` | Tagged `Json`, `File`, and `Url` values, `mime_type = null`, and legacy raw JSON values read as `FlowValue::Json`. |
+| Checkpoint state | Stable for `FlowValue` payloads, Beta for surrounding checkpoint metadata | `agentflow-core` | `agentflow-core/tests/fixtures/checkpoints/` | Persisted node-output maps, checkpoint round trips, and verification that new writers keep emitting tagged `FlowValue` values. |
+| `AgentStep` | Stable closed schema | `agentflow-agents` | `agentflow-agents/tests/fixtures/agent_steps/` | Observe, plan, tool call, tool result with typed parts, reflection, final answer, handoff, blackboard, debate proposal, and debate verdict steps. |
+| `AgentEvent` | Stable closed schema | `agentflow-agents` | `agentflow-agents/tests/fixtures/agent_events/` | Run lifecycle, tool policy, tool capability, memory hook derived events where serialized, handoff, blackboard, debate, and stop-reason payloads. |
+| `ToolDefinition` and OpenAI-style tools array | Stable | `agentflow-tools` | `agentflow-tools/tests/fixtures/tool_contracts/` | Function name, description, JSON schema parameters, metadata defaults, and provider-facing `tools` array shape. |
+| `ToolMetadata`, `ToolPermissionSet`, `ToolIdempotency`, `ToolOutputPart` | Stable | `agentflow-tools` | `agentflow-tools/tests/fixtures/tool_contracts/` | Builtin/script/MCP/workflow sources, sorted permission sets, idempotent/non-idempotent/unknown replay classes, and text/image/resource output parts. |
+| `SKILL.md` frontmatter | Stable | `agentflow-skills` | `agentflow-skills/tests/fixtures/manifests/skill_md/` | Required `name` and `description`, optional compatibility/security/MCP/tool fields, and ignored unknown frontmatter keys. |
+| `skill.toml` | Stable | `agentflow-skills` | `agentflow-skills/tests/fixtures/manifests/skill_toml/` | Stable manifest sections, serde defaults for new optional fields, and `skill.toml` precedence over `SKILL.md`. |
+| Plugin manifest | Beta | `agentflow-core` | `agentflow-core/tests/fixtures/plugin_manifests/` | `plugin.toml` runtime, entrypoint, protocol, node declarations, capabilities, unsupported runtime failures, and protocol mismatch failures. |
+| Marketplace manifest | Beta | `agentflow-skills` | `agentflow-skills/tests/fixtures/marketplace/` | Registry metadata, Skill and Plugin entries, source checksum/signature fields, aliases, and unknown optional field handling. |
+| Trace persistence events | Beta | `agentflow-tracing` | `agentflow-tracing/tests/fixtures/trace_events/` | File/JSON trace event persistence, replay fixtures, trace status transitions, node/LLM/agent/tool details, and redaction-sensitive fields. |
+| Server REST envelopes | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/rest_envelopes/` | `/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, success envelopes, pagination fields, and `ApiError` envelopes. |
+| SSE events | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/sse_events/` | `run_id`, monotonic `seq`, `kind`, `payload`, `ts`, backfill after `after_seq`, lag comments, and terminal event delivery. |
+
 ## Non-Stable Surfaces
 
 The following are intentionally not v1-stable yet:
