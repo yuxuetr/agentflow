@@ -640,10 +640,10 @@ cd agentflow-ui && npm test
 
 建议准备:
 
-- [ ] 3 个官方 Skills:
-  - [ ] code-reviewer
-  - [ ] research-assistant
-  - [ ] multimodal-content-analyzer
+- [x] 3 个官方 Skills:
+  - [x] code-reviewer
+  - [x] research-assistant
+  - [x] multimodal-content-analyzer
 - [ ] 2 个官方 Plugins:
   - [ ] echo/plugin smoke
   - [ ] data-transform plugin
