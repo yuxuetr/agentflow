@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -9,6 +9,7 @@ type RunRecord = {
   tenant_id?: string;
   started_at?: string;
   finished_at?: string | null;
+  run_dir?: string | null;
   error?: string | null;
 };
 
@@ -18,6 +19,16 @@ type RunEnvelope = RunRecord & {
 
 type ListRunsEnvelope = {
   runs: RunRecord[];
+};
+
+type CreateRunEnvelope = {
+  run_id: string;
+  status: string;
+};
+
+type CancelRunEnvelope = {
+  run: RunRecord;
+  cancelled: boolean;
 };
 
 type StreamedEvent = {
@@ -42,7 +53,20 @@ type RunGraph = {
   active_node?: string | null;
 };
 
-type ConnectionState = 'idle' | 'loading' | 'streaming' | 'closed' | 'error';
+type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
+
+const tokenKey = 'agentflow.ui.apiToken';
+const workflowKey = 'agentflow.ui.workflowDraft';
+const tenantKey = 'agentflow.ui.tenantId';
+
+const starterWorkflow = `name: web-ui-console-smoke
+version: "1.0"
+nodes:
+  hello:
+    type: template
+    template: "hello from the run console"
+outputs:
+  message: "{{ hello.output }}"`;
 
 const formatTime = (value?: string | null) => {
   if (!value) {
@@ -59,13 +83,13 @@ const runFromEnvelope = (value: RunEnvelope): RunRecord => value.run ?? value;
 
 const eventTone = (kind: string) => {
   const lower = kind.toLowerCase();
-  if (lower.includes('fail') || lower.includes('error')) {
+  if (lower.includes('fail') || lower.includes('error') || lower.includes('denied')) {
     return 'danger';
   }
-  if (lower.includes('tool')) {
+  if (lower.includes('tool') || lower.includes('policy') || lower.includes('capability')) {
     return 'tool';
   }
-  if (lower.includes('agent') || lower.includes('reflect') || lower.includes('plan')) {
+  if (lower.includes('agent') || lower.includes('reflect') || lower.includes('plan') || lower.includes('step')) {
     return 'agent';
   }
   if (lower.includes('complete') || lower.includes('succeed')) {
@@ -76,37 +100,24 @@ const eventTone = (kind: string) => {
 
 const prettyJson = (value: unknown) => JSON.stringify(value, null, 2);
 
-const knownSseEventKinds = [
-  'run_started',
-  'run_completed',
-  'workflow.started',
-  'workflow.completed',
-  'workflow.failed',
-  'node.started',
-  'node.completed',
-  'node.output.captured',
-  'node.failed',
-  'node.skipped',
-  'checkpoint.saved',
-  'checkpoint.restored',
-  'retry.attempt',
-  'resource.warning',
-  'llm.prompt.sent',
-  'llm.response.received',
-  'StepStarted',
-  'StepCompleted',
-  'ToolCallStarted',
-  'ToolCallCompleted',
-  'ToolPolicyDecision',
-  'ToolCapabilityDecision',
-  'ReflectionAdded',
-  'HandoffOccurred',
-  'BlackboardWritten',
-  'DebateRoundStarted',
-  'DebateVerdictRendered',
-  'RunStarted',
-  'RunStopped',
-];
+const isTerminalRun = (run: RunRecord | null) =>
+  run ? ['succeeded', 'failed', 'cancelled'].includes(run.status) : true;
+
+const readStorage = (key: string, fallback: string) => {
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeStorage = (key: string, value: string) => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage is best-effort; the console still works without it.
+  }
+};
 
 const findLatest = <T,>(items: T[], predicate: (item: T) => boolean) => {
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -117,8 +128,48 @@ const findLatest = <T,>(items: T[], predicate: (item: T) => boolean) => {
   return undefined;
 };
 
+const eventNodeId = (event: StreamedEvent) => {
+  const payload = event.payload as Record<string, unknown>;
+  return String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? '').trim();
+};
+
+const apiFetch = (path: string, token: string, init: RequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  const trimmed = token.trim();
+  if (trimmed) {
+    headers.set('Authorization', `Bearer ${trimmed}`);
+  }
+  return fetch(path, {
+    ...init,
+    headers,
+  });
+};
+
+const parseSseChunk = (buffer: string) => {
+  const events: StreamedEvent[] = [];
+  let cursor = buffer;
+  let boundary = cursor.indexOf('\n\n');
+  while (boundary >= 0) {
+    const raw = cursor.slice(0, boundary);
+    cursor = cursor.slice(boundary + 2);
+    const data = raw
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (data) {
+      events.push(JSON.parse(data) as StreamedEvent);
+    }
+    boundary = cursor.indexOf('\n\n');
+  }
+  return { events, rest: cursor };
+};
+
 function App() {
   const [runId, setRunId] = useState('');
+  const [tenantId, setTenantId] = useState(() => readStorage(tenantKey, 'default'));
+  const [apiToken, setApiToken] = useState(() => readStorage(tokenKey, ''));
+  const [workflowDraft, setWorkflowDraft] = useState(() => readStorage(workflowKey, starterWorkflow));
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
   const [runGraph, setRunGraph] = useState<RunGraph | null>(null);
@@ -126,6 +177,9 @@ function App() {
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [state, setState] = useState<ConnectionState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'cancelling'>('idle');
+  const [lastReconnect, setLastReconnect] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.seq === selectedSeq) ?? events.at(-1) ?? null,
@@ -136,53 +190,99 @@ function App() {
     if (runGraph?.graph.nodes?.length) {
       return runGraph.graph.nodes.map((node) => ({
         name: node.id,
+        label: node.label ?? node.id,
         status: node.status ?? 'pending',
         tone: eventTone(node.status ?? 'pending'),
       }));
     }
-    const seen = new Map<string, { name: string; status: string; tone: string }>();
+    const seen = new Map<string, { name: string; label: string; status: string; tone: string }>();
     for (const event of events) {
-      const payload = event.payload as Record<string, unknown>;
-      const name =
-        String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? event.kind).trim() ||
-        event.kind;
+      const name = eventNodeId(event) || event.kind;
       seen.set(name, {
         name,
+        label: name,
         status: event.kind,
         tone: eventTone(event.kind),
       });
     }
-    return Array.from(seen.values()).slice(-8);
+    return Array.from(seen.values()).slice(-12);
   }, [events, runGraph]);
+
+  const selectedNode = useMemo(() => {
+    if (!selectedEvent) {
+      return null;
+    }
+    const nodeId = eventNodeId(selectedEvent);
+    if (!nodeId) {
+      return null;
+    }
+    const node = runGraph?.graph.nodes?.find((item) => item.id === nodeId);
+    return {
+      id: nodeId,
+      label: node?.label ?? nodeId,
+      status: node?.status ?? selectedEvent.kind,
+      event: selectedEvent,
+    };
+  }, [runGraph, selectedEvent]);
+
+  const agentToolEvents = useMemo(
+    () =>
+      events.filter((event) => {
+        const tone = eventTone(event.kind);
+        return tone === 'agent' || tone === 'tool';
+      }),
+    [events],
+  );
+
+  const providerEvents = useMemo(
+    () =>
+      events.filter((event) => {
+        const payload = event.payload as Record<string, unknown>;
+        return payload.provider || payload.model || event.kind.toLowerCase().includes('llm');
+      }),
+    [events],
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('run');
     if (id) {
       setRunId(id);
+      setState('loading');
     }
   }, []);
 
   useEffect(() => {
-    const loadRuns = async () => {
-      try {
-        const response = await fetch('/v1/runs?limit=20');
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as ListRunsEnvelope;
-        setRuns(payload.runs);
-        if (!runId && payload.runs[0]) {
-          setRunId(payload.runs[0].id);
-          setState('loading');
-        }
-      } catch {
-        // The UI can still connect by explicit run id when the list route is
-        // unavailable or auth denies the request.
-      }
-    };
-    void loadRuns();
-  }, [runId]);
+    writeStorage(tokenKey, apiToken);
+  }, [apiToken]);
+
+  useEffect(() => {
+    writeStorage(tenantKey, tenantId);
+  }, [tenantId]);
+
+  useEffect(() => {
+    writeStorage(workflowKey, workflowDraft);
+  }, [workflowDraft]);
+
+  const loadRuns = async (nextTenant = tenantId) => {
+    const response = await apiFetch(`/v1/runs?tenant_id=${encodeURIComponent(nextTenant)}&limit=20`, apiToken);
+    if (!response.ok) {
+      throw new Error(`run list failed with HTTP ${response.status}`);
+    }
+    const payload = (await response.json()) as ListRunsEnvelope;
+    setRuns(payload.runs);
+    if (!runId && payload.runs[0]) {
+      setRunId(payload.runs[0].id);
+      setState('loading');
+    }
+  };
+
+  useEffect(() => {
+    void loadRuns().catch(() => {
+      // Explicit run connection still works when the list is unavailable.
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiToken, tenantId]);
 
   useEffect(() => {
     if (!runId || state !== 'loading') {
@@ -190,11 +290,50 @@ function App() {
     }
 
     let cancelled = false;
-    let source: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+    abortRef.current?.abort();
+
+    const appendEvent = (event: StreamedEvent) => {
+      setEvents((current) => {
+        if (current.some((item) => item.seq === event.seq)) {
+          return current;
+        }
+        return [...current, event].sort((left, right) => left.seq - right.seq);
+      });
+      setSelectedSeq((current) => current ?? event.seq);
+    };
+
+    const connectStream = async (afterSeq: number) => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const response = await apiFetch(
+        `/v1/runs/${runId}/events?after_seq=${encodeURIComponent(String(afterSeq))}`,
+        apiToken,
+        { signal: controller.signal },
+      );
+      if (!response.ok || !response.body) {
+        throw new Error(`event stream failed with HTTP ${response.status}`);
+      }
+      setState('streaming');
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+      while (!cancelled) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += value;
+        const parsed = parseSseChunk(buffer);
+        buffer = parsed.rest;
+        for (const event of parsed.events) {
+          appendEvent(event);
+        }
+      }
+    };
 
     const connect = async () => {
       try {
-        const response = await fetch(`/v1/runs/${runId}`);
+        const response = await apiFetch(`/v1/runs/${runId}`, apiToken);
         if (!response.ok) {
           throw new Error(`run lookup failed with HTTP ${response.status}`);
         }
@@ -202,49 +341,57 @@ function App() {
         if (cancelled) {
           return;
         }
-        setActiveRun(runFromEnvelope(payload));
+        const nextRun = runFromEnvelope(payload);
+        setActiveRun(nextRun);
         setRunGraph(null);
         setEvents([]);
         setSelectedSeq(null);
-        setState('streaming');
+        setError(null);
         window.history.replaceState(null, '', `/ui?run=${encodeURIComponent(runId)}`);
 
-        const historyResponse = await fetch(`/v1/runs/${runId}/events/history`);
+        const historyResponse = await apiFetch(`/v1/runs/${runId}/events/history`, apiToken);
+        let afterSeq = -1;
         if (historyResponse.ok) {
           const history = (await historyResponse.json()) as StreamedEvent[];
           setEvents(history);
           setSelectedSeq(history.at(-1)?.seq ?? null);
+          afterSeq = history.at(-1)?.seq ?? -1;
         }
 
-        const graphResponse = await fetch(`/v1/runs/${runId}/graph`);
+        const graphResponse = await apiFetch(`/v1/runs/${runId}/graph`, apiToken);
         if (graphResponse.ok) {
           setRunGraph((await graphResponse.json()) as RunGraph);
         }
 
-        source = new EventSource(`/v1/runs/${runId}/events`);
-        const handleMessage = (message: MessageEvent<string>) => {
-          const event = JSON.parse(message.data) as StreamedEvent;
-          setEvents((current) => {
-            if (current.some((item) => item.seq === event.seq)) {
-              return current;
-            }
-            return [...current, event].sort((left, right) => left.seq - right.seq);
-          });
-          setSelectedSeq((current) => current ?? event.seq);
-        };
-        source.onmessage = handleMessage;
-        for (const kind of knownSseEventKinds) {
-          source.addEventListener(kind, handleMessage);
-        }
-        source.onerror = () => {
-          source?.close();
-          setState((current) => (current === 'streaming' ? 'closed' : current));
-        };
-      } catch (err) {
+        await connectStream(afterSeq);
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-          setState('error');
+          setState('closed');
+          void apiFetch(`/v1/runs/${runId}`, apiToken)
+            .then((latest) => (latest.ok ? latest.json() : null))
+            .then((latest: RunEnvelope | null) => {
+              if (latest) {
+                setActiveRun(runFromEnvelope(latest));
+              }
+            });
         }
+      } catch (err) {
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
+          return;
+        }
+        const lastSeq = events.at(-1)?.seq ?? -1;
+        setLastReconnect(formatTime(new Date().toISOString()));
+        setState('reconnecting');
+        reconnectTimer = window.setTimeout(() => {
+          if (!cancelled) {
+            void connectStream(lastSeq).catch((streamErr) => {
+              if (!cancelled) {
+                setError(streamErr instanceof Error ? streamErr.message : String(streamErr));
+                setState('error');
+              }
+            });
+          }
+        }, 1200);
+        setError(err instanceof Error ? err.message : String(err));
       }
     };
 
@@ -252,11 +399,16 @@ function App() {
 
     return () => {
       cancelled = true;
-      source?.close();
+      abortRef.current?.abort();
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
     };
-  }, [runId, state]);
+    // events is intentionally not a dependency; reconnect uses the snapshot from this connection attempt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, state, apiToken]);
 
-  const submit = (event: React.FormEvent) => {
+  const connectExisting = (event: React.FormEvent) => {
     event.preventDefault();
     if (!runId.trim()) {
       return;
@@ -265,14 +417,75 @@ function App() {
     setState('loading');
   };
 
+  const submitRun = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!workflowDraft.trim()) {
+      setError('workflow YAML is required');
+      return;
+    }
+    setSubmitState('submitting');
+    setError(null);
+    try {
+      const response = await apiFetch('/v1/runs', apiToken, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: tenantId.trim() || 'default',
+          workflow: workflowDraft,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`run submission failed with HTTP ${response.status}`);
+      }
+      const payload = (await response.json()) as CreateRunEnvelope;
+      setRunId(payload.run_id);
+      setState('loading');
+      await loadRuns(tenantId.trim() || 'default');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitState('idle');
+    }
+  };
+
+  const cancelActiveRun = async () => {
+    if (!activeRun || isTerminalRun(activeRun)) {
+      return;
+    }
+    setSubmitState('cancelling');
+    setError(null);
+    try {
+      const response = await apiFetch(`/v1/runs/${activeRun.id}:cancel`, apiToken, { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`run cancellation failed with HTTP ${response.status}`);
+      }
+      const payload = (await response.json()) as CancelRunEnvelope;
+      setActiveRun(payload.run);
+      setState('closed');
+      abortRef.current?.abort();
+      await loadRuns(payload.run.tenant_id ?? tenantId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitState('idle');
+    }
+  };
+
+  const refreshActiveRun = () => {
+    if (!runId.trim()) {
+      return;
+    }
+    setState('loading');
+  };
+
   return (
     <main className="shell">
       <header className="topbar">
         <div>
           <p className="eyebrow">AgentFlow</p>
-          <h1>Hybrid Run Debugger</h1>
+          <h1>Run Console</h1>
         </div>
-        <form className="run-form" onSubmit={submit}>
+        <form className="run-form" onSubmit={connectExisting}>
           <input
             aria-label="Run ID"
             value={runId}
@@ -280,12 +493,15 @@ function App() {
             placeholder="Run ID"
           />
           <button type="submit">Connect</button>
+          <button disabled={!activeRun || isTerminalRun(activeRun) || submitState === 'cancelling'} type="button" onClick={cancelActiveRun}>
+            Cancel
+          </button>
         </form>
       </header>
 
       <section className="status-strip" aria-label="Run status">
         <div>
-          <span>State</span>
+          <span>Stream</span>
           <strong>{state}</strong>
         </div>
         <div>
@@ -294,11 +510,15 @@ function App() {
         </div>
         <div>
           <span>Tenant</span>
-          <strong>{activeRun?.tenant_id ?? 'default'}</strong>
+          <strong>{activeRun?.tenant_id ?? tenantId}</strong>
         </div>
         <div>
           <span>Events</span>
           <strong>{events.length}</strong>
+        </div>
+        <div>
+          <span>Reconnect</span>
+          <strong>{lastReconnect ?? 'none'}</strong>
         </div>
       </section>
 
@@ -308,7 +528,7 @@ function App() {
         <aside className="run-pane">
           <div className="pane-heading">
             <span>Runs</span>
-            <strong>{activeRun ? formatTime(activeRun.started_at) : '-'}</strong>
+            <button type="button" onClick={refreshActiveRun}>Refresh</button>
           </div>
           <ol className="run-list">
             {runs.map((run) => (
@@ -329,7 +549,29 @@ function App() {
               </li>
             ))}
           </ol>
-          <pre className="workflow-preview">{activeRun?.workflow ?? 'No run loaded.'}</pre>
+          <form className="submission-form" onSubmit={submitRun}>
+            <label>
+              <span>Tenant</span>
+              <input value={tenantId} onChange={(event) => setTenantId(event.target.value)} />
+            </label>
+            <label>
+              <span>API token</span>
+              <input
+                autoComplete="off"
+                type="password"
+                value={apiToken}
+                onChange={(event) => setApiToken(event.target.value)}
+                placeholder="Bearer token"
+              />
+            </label>
+            <label className="workflow-field">
+              <span>Workflow YAML</span>
+              <textarea value={workflowDraft} onChange={(event) => setWorkflowDraft(event.target.value)} />
+            </label>
+            <button disabled={submitState === 'submitting'} type="submit">
+              {submitState === 'submitting' ? 'Submitting' : 'Submit run'}
+            </button>
+          </form>
         </aside>
 
         <section className="graph-pane" aria-label="DAG status">
@@ -347,17 +589,11 @@ function App() {
                   key={node.name}
                   type="button"
                   onClick={() => {
-                    const match = findLatest(events, (event) => {
-                      const payload = event.payload as Record<string, unknown>;
-                      return (
-                        String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? event.kind) ===
-                        node.name
-                      );
-                    });
+                    const match = findLatest(events, (event) => eventNodeId(event) === node.name);
                     setSelectedSeq(match?.seq ?? null);
                   }}
                 >
-                  <span>{node.name}</span>
+                  <span>{node.label}</span>
                   <small>{node.status}</small>
                 </button>
               ))
@@ -389,12 +625,43 @@ function App() {
         </aside>
       </section>
 
-      <section className="details-pane" aria-label="Tool call details">
-        <div className="pane-heading">
-          <span>Details</span>
-          <strong>{selectedEvent?.kind ?? 'none'}</strong>
-        </div>
-        <pre>{selectedEvent ? prettyJson(selectedEvent.payload) : 'Select an event.'}</pre>
+      <section className="details-grid" aria-label="Run details">
+        <section className="details-pane">
+          <div className="pane-heading">
+            <span>Provider / config</span>
+            <strong>{providerEvents.length ? 'from events' : apiToken ? 'token set' : 'open / unset'}</strong>
+          </div>
+          <pre>{prettyJson({
+            tenant_id: activeRun?.tenant_id ?? tenantId,
+            run_dir: activeRun?.run_dir ?? null,
+            auth: apiToken ? 'bearer token configured in browser' : 'no browser token configured',
+            latest_provider_event: providerEvents.at(-1)?.payload ?? null,
+          })}</pre>
+        </section>
+
+        <section className="details-pane">
+          <div className="pane-heading">
+            <span>DAG node</span>
+            <strong>{selectedNode?.id ?? 'none'}</strong>
+          </div>
+          <pre>{selectedNode ? prettyJson(selectedNode) : 'Select a node event.'}</pre>
+        </section>
+
+        <section className="details-pane">
+          <div className="pane-heading">
+            <span>Agent / tool policy</span>
+            <strong>{agentToolEvents.at(-1)?.kind ?? 'none'}</strong>
+          </div>
+          <pre>{agentToolEvents.at(-1) ? prettyJson(agentToolEvents.at(-1)) : 'No agent or tool events.'}</pre>
+        </section>
+
+        <section className="details-pane">
+          <div className="pane-heading">
+            <span>Event payload</span>
+            <strong>{selectedEvent?.kind ?? 'none'}</strong>
+          </div>
+          <pre>{selectedEvent ? prettyJson(selectedEvent.payload) : 'Select an event.'}</pre>
+        </section>
       </section>
     </main>
   );

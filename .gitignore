@@ -18,6 +18,9 @@
 target/
 Cargo.lock
 
+# Frontend dependencies
+node_modules/
+
 # Logs
 *.log
 

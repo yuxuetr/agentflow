@@ -20,7 +20,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -63,11 +64,13 @@ h1 {
 
 .run-form {
   display: grid;
-  grid-template-columns: minmax(220px, 340px) 108px;
+  grid-template-columns: minmax(220px, 340px) 108px 96px;
   gap: 8px;
 }
 
-.run-form input {
+.run-form input,
+.submission-form input,
+.submission-form textarea {
   height: 38px;
   border: 1px solid #c9d1dc;
   border-radius: 6px;
@@ -76,7 +79,9 @@ h1 {
   padding: 0 10px;
 }
 
-.run-form button {
+.run-form button,
+.submission-form button,
+.pane-heading button {
   height: 38px;
   border: 0;
   border-radius: 6px;
@@ -85,9 +90,15 @@ h1 {
   font-weight: 700;
 }
 
+.run-form button:disabled,
+.submission-form button:disabled {
+  cursor: not-allowed;
+  background: #9ca8b2;
+}
+
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid #d9dee6;
@@ -131,7 +142,7 @@ h1 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.4fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(300px, 0.95fr) minmax(360px, 1.35fr) minmax(260px, 1fr);
   gap: 12px;
   min-height: 420px;
 }
@@ -156,6 +167,14 @@ h1 {
   padding: 0 12px;
 }
 
+.pane-heading button {
+  height: 30px;
+  border: 1px solid #c9d1dc;
+  background: #ffffff;
+  color: #264151;
+  padding: 0 10px;
+}
+
 .workflow-preview,
 .details-pane pre {
   margin: 0;
@@ -170,6 +189,35 @@ h1 {
 .workflow-preview {
   height: 218px;
   padding: 12px;
+}
+
+.submission-form {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e3e7ee;
+  padding: 12px;
+}
+
+.submission-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.submission-form label span {
+  color: #62717f;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.submission-form textarea {
+  min-height: 190px;
+  resize: vertical;
+  padding: 10px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .run-list {
@@ -359,9 +407,16 @@ h1 {
   padding: 12px;
 }
 
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 @media (max-width: 980px) {
   .topbar,
-  .workspace {
+  .workspace,
+  .details-grid {
     grid-template-columns: 1fr;
   }
 
@@ -371,7 +426,7 @@ h1 {
   }
 
   .run-form {
-    grid-template-columns: minmax(0, 1fr) 100px;
+    grid-template-columns: minmax(0, 1fr) 100px 92px;
   }
 
   .status-strip {
