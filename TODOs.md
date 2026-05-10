@@ -56,7 +56,7 @@ surface. Treat these tasks as the first execution lane.
     calls, tool results, handoff, blackboard, debate, memory, and capability
     decision events.
   - Verify unknown/additive JSON fields are tolerated where supported.
-- TODO P0.4 Tool contract compatibility tests:
+- DONE P0.4 Tool contract compatibility tests:
   - Add round-trip tests for `ToolDefinition`, `ToolMetadata`,
     `ToolPermissionSet`, `ToolIdempotency`, and typed `ToolOutputPart`.
   - Verify OpenAI-style `tools` array generation remains stable.
