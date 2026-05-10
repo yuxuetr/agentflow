@@ -636,7 +636,7 @@ cd agentflow-ui && npm test
 
 ### P4.2 官方生态样板
 
-状态: TODO
+状态: DONE
 
 建议准备:
 
@@ -648,14 +648,14 @@ cd agentflow-ui && npm test
   - [x] echo/plugin smoke
   - [x] data-transform plugin
 - [x] 1 个 remote marketplace 示例。
-- [ ] 1 个 hybrid demo:
+- [x] 1 个 hybrid demo:
   - DAG + Agent + MCP + RAG + Trace + Web UI。
 
 验收标准:
 
-- 新用户按教程能完成 install -> inspect -> run -> trace replay -> Web UI 查看。
-- 所有示例默认可用 mock/offline 模式。
-- live provider 模式可选启用。
+- [x] 新用户按教程能完成 install -> inspect -> run -> trace replay -> Web UI 查看。
+- [x] 所有示例默认可用 mock/offline 模式。
+- [x] live provider 模式可选启用。
 
 ### P4.3 文档收敛
 
