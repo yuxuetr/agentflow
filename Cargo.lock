@@ -286,12 +286,14 @@ dependencies = [
  "dirs",
  "dotenvy",
  "futures",
+ "prost",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tonic",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
@@ -382,6 +384,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tonic",
  "uuid",
 ]
 

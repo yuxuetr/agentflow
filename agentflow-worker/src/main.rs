@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agentflow_server::{InMemoryWorkerProtocol, WorkerId};
+use agentflow_server::{GrpcWorkerProtocol, InMemoryWorkerProtocol, WorkerId};
 use agentflow_worker::{WorkerConfig, WorkerRuntime};
 
 #[tokio::main]
@@ -18,20 +18,41 @@ async fn run() -> Result<(), String> {
   config.poll_interval = args.poll_interval;
   config.heartbeat_interval = args.heartbeat_interval;
 
-  if config.control_plane != "memory://local" {
-    return Err(format!(
-      "control plane '{}' is not available yet; use memory://local for local smoke tests",
-      config.control_plane
-    ));
+  if config.control_plane == "memory://local" {
+    let runtime = WorkerRuntime::new(InMemoryWorkerProtocol::new(), config);
+    return run_runtime(runtime, args.once).await;
   }
 
-  let runtime = WorkerRuntime::new(InMemoryWorkerProtocol::new(), config);
-  if args.once {
+  let endpoint = grpc_endpoint(&config.control_plane)?;
+  let protocol = GrpcWorkerProtocol::connect(&endpoint)
+    .await
+    .map_err(|e| e.to_string())?;
+  let runtime = WorkerRuntime::new(protocol, config);
+  run_runtime(runtime, args.once).await
+}
+
+async fn run_runtime<P>(runtime: WorkerRuntime<P>, once: bool) -> Result<(), String>
+where
+  P: agentflow_server::WorkerProtocol,
+{
+  if once {
     let _ = runtime.run_once().await.map_err(|e| e.to_string())?;
+    Ok(())
   } else {
-    runtime.run_forever().await.map_err(|e| e.to_string())?;
+    runtime.run_forever().await.map_err(|e| e.to_string())
   }
-  Ok(())
+}
+
+fn grpc_endpoint(control_plane: &str) -> Result<String, String> {
+  if let Some(rest) = control_plane.strip_prefix("grpc://") {
+    return Ok(format!("http://{rest}"));
+  }
+  if control_plane.starts_with("http://") || control_plane.starts_with("https://") {
+    return Ok(control_plane.to_string());
+  }
+  Err(format!(
+    "control plane '{control_plane}' is unsupported; use memory://local, grpc://host:port, or http(s)://host:port"
+  ))
 }
 
 #[derive(Debug)]
@@ -97,5 +118,5 @@ impl Args {
 }
 
 fn help() -> String {
-  "usage: agentflow-worker [--worker-id ID] [--control-plane memory://local] [--once] [--poll-ms N] [--heartbeat-ms N]".into()
+  "usage: agentflow-worker [--worker-id ID] [--control-plane memory://local|grpc://host:port|http://host:port] [--once] [--poll-ms N] [--heartbeat-ms N]".into()
 }

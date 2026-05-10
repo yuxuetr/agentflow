@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package agentflow.scheduler.v1;
+
+service WorkerControl {
+  rpc SubmitTask(SubmitTaskRequest) returns (Empty);
+  rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse);
+  rpc ReportResult(ReportResultRequest) returns (Empty);
+  rpc Heartbeat(HeartbeatRequest) returns (Empty);
+}
+
+message Empty {}
+
+message WorkerTask {
+  string task_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  uint32 attempt = 4;
+  string payload_json = 5;
+}
+
+message WorkerTraceEvent {
+  int64 seq = 1;
+  string kind = 2;
+  string payload_json = 3;
+}
+
+message WorkerTaskResult {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_SUCCEEDED = 1;
+    STATUS_FAILED = 2;
+  }
+
+  Status status = 1;
+  string output_json = 2;
+  string error = 3;
+  bool retryable = 4;
+  repeated WorkerTraceEvent events = 5;
+}
+
+message SubmitTaskRequest {
+  WorkerTask task = 1;
+}
+
+message ClaimTaskRequest {
+  string worker_id = 1;
+}
+
+message ClaimTaskResponse {
+  WorkerTask task = 1;
+}
+
+message ReportResultRequest {
+  string worker_id = 1;
+  string task_id = 2;
+  WorkerTaskResult result = 3;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  string active_task_id = 2;
+  uint32 free_slots = 3;
+  string timestamp_rfc3339 = 4;
+}

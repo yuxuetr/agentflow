@@ -17,6 +17,10 @@ use uuid::Uuid;
 
 use agentflow_tracing::{OtelAttribute, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelStatus};
 
+pub mod grpc;
+
+pub use grpc::{GrpcWorkerProtocol, GrpcWorkerService, WorkerControlServer};
+
 /// Transport selected for the v1.0-rc distributed control plane.
 pub const SELECTED_TRANSPORT: WorkerTransport = WorkerTransport::Grpc;
 

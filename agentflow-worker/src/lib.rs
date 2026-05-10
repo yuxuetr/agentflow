@@ -132,7 +132,13 @@ fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_server::InMemoryWorkerProtocol;
+  use agentflow_server::{
+    GrpcWorkerProtocol, InMemoryWorkerProtocol, RunControlStatus, WorkerControlPlane,
+    WorkerControlServer,
+  };
+  use std::net::SocketAddr;
+  use tokio::sync::oneshot;
+  use tonic::transport::Server;
   use uuid::Uuid;
 
   #[tokio::test]
@@ -170,5 +176,86 @@ mod tests {
     );
 
     assert!(runtime.run_once().await.unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn two_workers_claim_and_report_over_grpc() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run_id = Uuid::new_v4();
+    control
+      .schedule_task(WorkerTask::new(
+        run_id,
+        "node-a",
+        serde_json::json!({"input": "a"}),
+      ))
+      .await
+      .unwrap();
+    control
+      .schedule_task(WorkerTask::new(
+        run_id,
+        "node-b",
+        serde_json::json!({"input": "b"}),
+      ))
+      .await
+      .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let addr = unused_local_addr();
+    let server_control = control.clone();
+    let server = tokio::spawn(async move {
+      Server::builder()
+        .add_service(WorkerControlServer::new(server_control))
+        .serve_with_shutdown(addr, async {
+          let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    let endpoint = format!("http://{addr}");
+    let worker_a = WorkerId::new("worker-a").unwrap();
+    let worker_b = WorkerId::new("worker-b").unwrap();
+    let runtime_a = WorkerRuntime::new(
+      connect_with_retry(&endpoint).await,
+      WorkerConfig::new(worker_a.clone(), endpoint.clone()),
+    );
+    let runtime_b = WorkerRuntime::new(
+      connect_with_retry(&endpoint).await,
+      WorkerConfig::new(worker_b.clone(), endpoint),
+    );
+
+    let task_a = runtime_a.run_once().await.unwrap().unwrap();
+    let task_b = runtime_b.run_once().await.unwrap().unwrap();
+    assert_ne!(task_a.task_id, task_b.task_id);
+
+    let snapshot = control.run_snapshot(run_id).await.unwrap();
+    assert_eq!(snapshot.status, RunControlStatus::Succeeded);
+    assert_eq!(snapshot.succeeded_tasks, 2);
+    assert_eq!(snapshot.outputs.len(), 2);
+    assert_eq!(snapshot.stitched_trace_events.len(), 4);
+    assert!(control.worker_heartbeat(&worker_a).await.is_some());
+    assert!(control.worker_heartbeat(&worker_b).await.is_some());
+
+    let _ = shutdown_tx.send(());
+    server.await.unwrap().unwrap();
+  }
+
+  async fn connect_with_retry(endpoint: &str) -> GrpcWorkerProtocol {
+    let mut last_error = None;
+    for _ in 0..20 {
+      match GrpcWorkerProtocol::connect(endpoint).await {
+        Ok(protocol) => return protocol,
+        Err(err) => {
+          last_error = Some(err);
+          sleep(Duration::from_millis(25)).await;
+        }
+      }
+    }
+    panic!("failed to connect to gRPC worker control: {last_error:?}");
+  }
+
+  fn unused_local_addr() -> SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap()
   }
 }

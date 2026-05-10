@@ -37,10 +37,10 @@ pub use runs::{
   submit_run,
 };
 pub use scheduler::{
-  InMemoryWorkerProtocol, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
-  StitchedWorkerTraceEvent, WorkerAssignment, WorkerControlPlane, WorkerHeartbeat, WorkerId,
-  WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
-  stitched_trace_to_otel_spans,
+  GrpcWorkerProtocol, GrpcWorkerService, InMemoryWorkerProtocol, RunControlSnapshot,
+  RunControlStatus, SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent, WorkerAssignment,
+  WorkerControlPlane, WorkerControlServer, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
+  WorkerTaskResult, WorkerTraceEvent, WorkerTransport, stitched_trace_to_otel_spans,
 };
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,

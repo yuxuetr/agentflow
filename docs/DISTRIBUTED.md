@@ -75,7 +75,19 @@ local prototyping. It provides FIFO claims, claiming-worker validation on result
 submission, and heartbeat snapshots.
 
 It is not durable and must not be used as a multi-process scheduler. Its purpose
-is to lock down the protocol semantics before adding tonic service definitions.
+is to keep protocol semantics covered without requiring a network service.
+
+The first tonic adapter is now available in `agentflow-server`:
+
+- `proto/agentflow/scheduler/v1/worker.proto` defines `SubmitTask`,
+  `ClaimTask`, `ReportResult`, and `Heartbeat`.
+- `WorkerControlServer` exposes any `WorkerControl` implementation as a gRPC
+  service.
+- `WorkerControlPlane<P>` implements `WorkerControl`, so remote worker results
+  still pass through assignment validation, run counters, and stitched trace
+  aggregation.
+- `GrpcWorkerProtocol` implements the same `WorkerProtocol` trait from the
+  client side and is used by worker processes.
 
 `agentflow-worker` is now a minimal worker process and library runtime. The
 runtime is protocol-agnostic and performs one loop of:
@@ -85,14 +97,19 @@ runtime is protocol-agnostic and performs one loop of:
 3. execute the current stub node runner;
 4. report a terminal result with worker-local trace fragments.
 
-The binary currently supports local smoke tests against `memory://local`:
+The binary supports local smoke tests against `memory://local`:
 
 ```bash
 cargo run -p agentflow-worker -- --once --worker-id worker-a
 ```
 
-Remote control-plane connections remain the responsibility of the upcoming
-tonic adapter.
+It can also connect to a gRPC control-plane endpoint:
+
+```bash
+cargo run -p agentflow-worker -- \
+  --control-plane grpc://127.0.0.1:50051 \
+  --worker-id worker-a
+```
 
 `WorkerControlPlane<P: WorkerProtocol>` is the server-side scheduling façade
 that sits above the protocol. It currently provides:
@@ -130,14 +147,14 @@ streams can observe real distributed execution.
 The target deployment shape is one control plane plus N workers:
 
 ```bash
-agentflow-server --bind 0.0.0.0:8080
-agentflow-worker --control-plane http://agentflow-server:8080 --worker-id worker-a
-agentflow-worker --control-plane http://agentflow-server:8080 --worker-id worker-b
+agentflow-server --bind 0.0.0.0:8080 --worker-grpc 0.0.0.0:50051
+agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-a
+agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-b
 ```
 
-The concrete `agentflow-worker` binary exists; remote `http://...` /
-`grpc://...` control-plane connectivity is not enabled until the tonic adapter
-implements the same `WorkerProtocol` semantics.
+The library-level gRPC adapter and two-worker smoke coverage are in place. The
+server binary still needs a CLI flag/listener wiring step before the deployment
+shape above is a complete end-user command.
 
 ## Failure Semantics
 

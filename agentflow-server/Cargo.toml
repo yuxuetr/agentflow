@@ -24,6 +24,8 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 dirs = "5.0"
+prost = "0.13"
+tonic = "0.12"
 
 # Workspace dependencies
 agentflow-db = { path = "../agentflow-db" }
