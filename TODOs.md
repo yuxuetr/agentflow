@@ -69,7 +69,7 @@ surface. Treat these tasks as the first execution lane.
   - Add JSON fixtures for `/v1/runs`, `/v1/runs/{id}`,
     `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, and SSE events.
   - Verify `seq`, `kind`, `payload`, and `ts` reconnect semantics.
-- TODO P0.7 Documentation convergence cleanup:
+- DONE P0.7 Documentation convergence cleanup:
   - Update or clearly mark stale claims in historical/evaluation docs about
     native tool calling, multi-agent support, server/db scaffold status, RAG
     eval, and OS sandbox support.
