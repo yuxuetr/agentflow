@@ -1,0 +1,64 @@
+schema_version = 1
+name = "agentflow-official-examples"
+description = "Offline-first example registry for official AgentFlow Skill and Plugin samples."
+homepage = "https://example.com/agentflow/examples"
+
+[[entries]]
+name = "code-reviewer"
+version = "1.0.0"
+type = "skill"
+aliases = ["review"]
+description = "Review code changes for correctness, security, maintainability, and tests."
+
+[entries.source]
+registry_url = "https://example.com/agentflow/examples/marketplace.toml"
+artifact_url = "https://example.com/agentflow/examples/skills/code-reviewer-1.0.0.tar.gz"
+checksum_sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[[entries]]
+name = "research-assistant"
+version = "1.0.0"
+type = "skill"
+aliases = ["research"]
+description = "Summarize supplied research context with source-aware reasoning."
+
+[entries.source]
+registry_url = "https://example.com/agentflow/examples/marketplace.toml"
+artifact_url = "https://example.com/agentflow/examples/skills/research-assistant-1.0.0.tar.gz"
+checksum_sha256 = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+[[entries]]
+name = "multimodal-content-analyzer"
+version = "1.0.0"
+type = "skill"
+aliases = ["multimodal"]
+description = "Analyze text, transcript, OCR, and model-generated media observations."
+
+[entries.source]
+registry_url = "https://example.com/agentflow/examples/marketplace.toml"
+artifact_url = "https://example.com/agentflow/examples/skills/multimodal-content-analyzer-1.0.0.tar.gz"
+checksum_sha256 = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+
+[[entries]]
+name = "agentflow-echo-plugin"
+version = "1.0.0"
+type = "plugin"
+aliases = ["echo-plugin"]
+description = "Subprocess plugin smoke test that returns FlowValue inputs unchanged."
+
+[entries.source]
+registry_url = "https://example.com/agentflow/examples/marketplace.toml"
+artifact_url = "https://example.com/agentflow/examples/plugins/agentflow-echo-plugin-1.0.0.tar.gz"
+checksum_sha256 = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+
+[[entries]]
+name = "agentflow-data-transform-plugin"
+version = "1.0.0"
+type = "plugin"
+aliases = ["data-transform"]
+description = "Subprocess plugin with JSON pick and merge nodes for offline workflow demos."
+
+[entries.source]
+registry_url = "https://example.com/agentflow/examples/marketplace.toml"
+artifact_url = "https://example.com/agentflow/examples/plugins/agentflow-data-transform-plugin-1.0.0.tar.gz"
+checksum_sha256 = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
