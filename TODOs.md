@@ -675,7 +675,7 @@ cd agentflow-ui && npm test
 - [x] 新建或更新 `docs/CURRENT_STATUS.md`。
 - [x] 在 `README.md` 指向 `docs/CURRENT_STATUS.md`。
 - [x] 标注 `PROJECT_EVALUATION_2026-05-01.md` 为历史报告。
-- [ ] `RoadMap.md` 只保留未来路线，不再混入已完成实施细节。
+- [x] `RoadMap.md` 只保留未来路线，不再混入已完成实施细节。
 - [ ] `TODOs.md` 只保留短期执行队列。
 
 ---
