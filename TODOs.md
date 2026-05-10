@@ -612,27 +612,27 @@ cd agentflow-ui && npm test
 
 ### P4.1 v1 稳定接口清单
 
-状态: TODO
+状态: DONE
 
 需要冻结或标注稳定级别:
 
-- [ ] `AsyncNode`
-- [ ] `FlowValue` checkpoint schema
-- [ ] `Tool`
-- [ ] `ToolMetadata`
-- [ ] `AgentRuntime`
-- [ ] `AgentStep` / `AgentEvent`
-- [ ] `SKILL.md` frontmatter
-- [ ] `skill.toml`
-- [ ] Plugin manifest
-- [ ] Marketplace manifest
-- [ ] Trace schema
-- [ ] Server REST API envelope
+- [x] `AsyncNode`
+- [x] `FlowValue` checkpoint schema
+- [x] `Tool`
+- [x] `ToolMetadata`
+- [x] `AgentRuntime`
+- [x] `AgentStep` / `AgentEvent`
+- [x] `SKILL.md` frontmatter
+- [x] `skill.toml`
+- [x] Plugin manifest
+- [x] Marketplace manifest
+- [x] Trace schema
+- [x] Server REST API envelope
 
 产出:
 
-- [ ] `docs/STABILITY.md`
-- [ ] `docs/API_COMPATIBILITY.md`
+- [x] `docs/STABILITY.md`
+- [x] `docs/API_COMPATIBILITY.md`
 
 ### P4.2 官方生态样板
 
