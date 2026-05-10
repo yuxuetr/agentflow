@@ -501,7 +501,7 @@ models:
 
 ### P3.1 gRPC Worker Adapter
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -518,11 +518,11 @@ models:
 
 子任务:
 
-- [ ] 定义 proto。
-- [ ] 实现 server-side adapter。
-- [ ] 实现 worker client adapter。
-- [ ] 保留 in-memory adapter 作为单元测试默认实现。
-- [ ] 增加 2-worker integration test 或本地 smoke script。
+- [x] 定义 proto。
+- [x] 实现 server-side adapter。
+- [x] 实现 worker client adapter。
+- [x] 保留 in-memory adapter 作为单元测试默认实现。
+- [x] 增加 2-worker integration test 或本地 smoke script。
 
 涉及文件:
 
