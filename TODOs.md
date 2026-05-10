@@ -644,9 +644,9 @@ cd agentflow-ui && npm test
   - [x] code-reviewer
   - [x] research-assistant
   - [x] multimodal-content-analyzer
-- [ ] 2 个官方 Plugins:
-  - [ ] echo/plugin smoke
-  - [ ] data-transform plugin
+- [x] 2 个官方 Plugins:
+  - [x] echo/plugin smoke
+  - [x] data-transform plugin
 - [ ] 1 个 remote marketplace 示例。
 - [ ] 1 个 hybrid demo:
   - DAG + Agent + MCP + RAG + Trace + Web UI。
