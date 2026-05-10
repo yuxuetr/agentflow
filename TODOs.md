@@ -60,7 +60,7 @@ surface. Treat these tasks as the first execution lane.
   - Add round-trip tests for `ToolDefinition`, `ToolMetadata`,
     `ToolPermissionSet`, `ToolIdempotency`, and typed `ToolOutputPart`.
   - Verify OpenAI-style `tools` array generation remains stable.
-- TODO P0.5 Manifest compatibility tests:
+- DONE P0.5 Manifest compatibility tests:
   - Add fixtures for `SKILL.md`, `skill.toml`, `plugin.toml`, and remote
     marketplace TOML.
   - Verify unknown optional fields are ignored or preserved according to the
