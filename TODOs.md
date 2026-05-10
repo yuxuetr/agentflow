@@ -51,7 +51,7 @@ surface. Treat these tasks as the first execution lane.
   - Add tagged-schema round-trip tests for `Json`, `File`, and `Url`.
   - Add legacy raw-JSON checkpoint read fixtures.
   - Verify writers continue emitting tagged values.
-- TODO P0.3 Agent trace compatibility tests:
+- DONE P0.3 Agent trace compatibility tests:
   - Add golden fixtures for `AgentStep` and `AgentEvent`, including tool
     calls, tool results, handoff, blackboard, debate, memory, and capability
     decision events.
