@@ -1,0 +1,77 @@
+# Official ecosystem hybrid demo.
+#
+# Offline validation:
+#   cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+#     workflow validate examples/ecosystem/workflows/hybrid_offline_demo.yml --strict
+#
+# Dry run:
+#   cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+#     workflow run examples/ecosystem/workflows/hybrid_offline_demo.yml --dry-run
+#
+# Full execution is intentionally opt-in because MCP, RAG, and model providers
+# depend on local services. See examples/ecosystem/README.md.
+
+name: "Official Ecosystem Hybrid Demo"
+description: "DAG + Agent + MCP + RAG + Plugin + Trace + Web UI demonstration."
+
+nodes:
+  - id: intake
+    type: template
+    parameters:
+      template: |
+        Review AgentFlow's v1 extension story:
+        - stable Rust APIs
+        - Skills and Plugins
+        - Marketplace distribution
+        - Web UI run console
+
+  - id: retrieve_context
+    type: rag
+    dependencies: ["intake"]
+    parameters:
+      operation: search
+      collection: "agentflow_docs"
+      qdrant_url: "http://localhost:6334"
+      embedding_model: "mock-embedding"
+      query: "AgentFlow DAG Agent MCP RAG Trace Web UI"
+      top_k: 3
+
+  - id: inspect_mcp_tools
+    type: mcp
+    dependencies: ["intake"]
+    parameters:
+      server_command: ["python3", "examples/ecosystem/mcp/echo_server.py"]
+      tool_name: "echo"
+      tool_params:
+        text: "offline dry-run placeholder"
+      timeout_ms: 1000
+      max_retries: 0
+
+  - id: normalize_payload
+    type: plugin
+    dependencies: ["retrieve_context", "inspect_mcp_tools"]
+    input_mapping:
+      object: "{{ nodes.retrieve_context.outputs.results }}"
+    parameters:
+      manifest: "examples/ecosystem/plugins/data-transform/plugin.toml"
+      node_type: "json_merge"
+
+  - id: prepare_agent_task
+    type: template
+    dependencies: ["normalize_payload"]
+    input_mapping:
+      context: "{{ nodes.normalize_payload.outputs.object }}"
+    parameters:
+      template: |
+        Produce a concise operator summary for this hybrid run.
+
+        Context:
+        {{ context }}
+
+  - id: summarize_with_skill
+    type: skill_agent
+    dependencies: ["prepare_agent_task"]
+    input_mapping:
+      message: "{{ nodes.prepare_agent_task.outputs.output }}"
+    parameters:
+      skill: "examples/ecosystem/skills/research-assistant"
