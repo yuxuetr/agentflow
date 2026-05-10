@@ -3,6 +3,15 @@
 > Historical reference: this report captured the project state on
 > 2026-05-01 and informed the P0-P4 task queue. For the maintained current
 > status, see `docs/CURRENT_STATUS.md`.
+>
+> Current-status override (2026-05-10): this document is intentionally kept as
+> historical analysis. Several findings below are no longer current:
+> provider-native tool calling is documented in `docs/LLM_PROVIDERS_MATRIX.md`;
+> multi-agent handoff/blackboard/debate supervisors are implemented and
+> documented in `docs/MULTI_AGENT.md`; `agentflow-server` / `agentflow-db` now
+> have run APIs, event history, SSE, cancellation, migrations, and repositories;
+> RAG eval is shipped and documented in `docs/RAG_EVAL.md`; OS sandbox backends
+> and fallback visibility are documented in `docs/TOOL_PERMISSIONS.md`.
 
 - 评估日期：2026-05-01
 - 评估范围：workspace 全部 16 个 crate、`docs/` 设计文档、CLI 执行路径、agent runtime、DAG 调度器、产品化闭环
@@ -22,7 +31,7 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 | Agent-native SDK 成熟度 | B+ | ReAct + Plan-Execute + Reflection + Memory + 工具 + 取消/预算约束都已落实 |
 | Config-first（YAML/CLI）成熟度 | B | `agent`/`skill_agent` 节点、`workflow run` flags、`skill init/run/test`、trace replay 都已落地，但 schema 校验和错误经验仍需收紧 |
 | 生产可观测性 | B+ | OTel exporter、Trace 持久化、replay、TUI、redaction 链路完整 |
-| 服务端平台化 | C- | `agentflow-server` 仅 130 行、`agentflow-db` 仅 48 行，仍是骨架 |
+| 服务端平台化 | C- | Historical 2026-05-01 state: `agentflow-server` / `agentflow-db` were scaffolds. Current state has run APIs, event history, SSE, cancellation, DB migrations, and repositories; see `docs/CURRENT_STATUS.md`. |
 | 综合 | **B+** | 框架级骨架已具备；下一阶段重点是平台化（server/db）、表达式/调度精化、工具调用与原生 function-calling 收敛 |
 
 **项目可以同时支持 DAG 传统智能体与 agent-native 自主智能体**，并已具备两者的混合编排，结论与项目目标一致。
@@ -47,8 +56,8 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 | **智能体/编排** | `agentflow-cli` | 统一命令入口（workflow/skill/llm/image/audio/mcp/trace/rag/config）| ⭐⭐⭐ | ~6.3K | 5+ |
 | **运维/产品化** | `agentflow-tracing` | Trace 采集、redaction、replay、TUI、OTel、SQLite/Postgres 持久化 | ⭐⭐⭐ | ~4.2K | 22 |
 | **运维/产品化** | `agentflow-viz` | DAG → Mermaid/DOT/JSON 可视化 | ⭐⭐ | ~1.8K | 26 |
-| **运维/产品化** | `agentflow-server` | Axum 网关，目前主要是 health/live/ready | ⭐ scaffold | 130 | 0 |
-| **运维/产品化** | `agentflow-db` | PostgreSQL 连接 (sqlx) | ⭐ scaffold | 48 | 0 |
+| **运维/产品化** | `agentflow-server` | Historical 2026-05-01 state: Axum health/live/ready scaffold. Current state: run APIs, event history, SSE, cancellation, skills routes, embedded Web UI. | Historical ⭐ scaffold | Historical 130 | Historical 0 |
+| **运维/产品化** | `agentflow-db` | Historical 2026-05-01 state: PostgreSQL pool scaffold. Current state: migrations and repositories for run/step/event/artifact/skill/MCP session storage. | Historical ⭐ scaffold | Historical 48 | Historical 0 |
 
 > CLAUDE.md 里描述的"3 个核心 crate"早已不是现状；下次更新时建议改为 14+2 crate 的真实分层。
 
@@ -106,7 +115,7 @@ pub struct FlowExecutionConfig { mode, max_concurrency, fail_fast, continue_on_s
 4. **持久化语义清晰**：每节点完成后写 `N_outputs.json` + `state_after_N.json`；checkpoint 启用时还会落 `CheckpointManager`；恢复路径通过 `skip_until` + `restored_state_pool` 复用先前完成的节点
 5. **故障域可控**：retry / timeout / resource_manager / health / state_monitor 模块独立，可被节点装饰
 
-**机制级不足：**
+**机制级不足（historical 2026-05-01 view; see current-status notes below）：**
 
 | 问题 | 现状 | 影响 |
 | --- | --- | --- |
@@ -159,9 +168,9 @@ pub trait AgentRuntime {
 | 问题 | 现状 | 影响 |
 | --- | --- | --- |
 | ReAct 主路径未统一通过 `AgentRuntime` trait | `ReActAgent::run(prompt)` 是公共 API；`AgentRuntime::run(ctx)` 主要用于 `AgentNode`、跨语言/跨 runtime 互操作能力受限 | trait 生态难以扩展第三方 runtime |
-| Tool 调用未走 LLM 原生 function-calling | 仍以 prompt 注入工具描述，由 ReAct 解析器抽取 `Action:` / `ActionInput:` | 部分 model（GPT-4o tools / Claude tool_use）可达性差，token 成本高、稳健性弱 |
+| Tool 调用未走 LLM 原生 function-calling | Historical: prompt 注入工具描述，由 ReAct 解析器抽取 `Action:` / `ActionInput:`。Current: provider-native `tool_calls` / `tool_choice` or compatible fallback is documented and covered by provider matrix tests. | See `docs/LLM_PROVIDERS_MATRIX.md`. |
 | Partial resume 仍限制未完成 tool call | `AgentNodeResumeContract` 拒绝隐式重放 | 严格但当前代价较高；对 idempotent tool 没有自动 fast-path |
-| 多智能体协作 | `supervisor/` 为雏形，代码量较少 | Agent-as-Tool / Workflow-as-Tool 已可手工组合，但 swarm/handoff/共享 blackboard 模型尚未沉淀 |
+| 多智能体协作 | Historical: `supervisor/` 为雏形。Current: handoff、blackboard、debate supervisors are implemented and documented. | See `docs/MULTI_AGENT.md`. |
 | Token 计数估算 | 现实现是粗粒度估算（按 4 字符≈1 token） | 长上下文准确度不够，跨 provider 不一致 |
 
 ### 2.3 工具与权限模型（方向正确，强制力中等）
@@ -178,11 +187,17 @@ pub trait AgentRuntime {
 - 四类来源统一，trace 里能看到"这次工具调用从哪个 MCP server 解析出来、命中了哪条 policy 规则"
 - `ToolOutputPart` 已支持图像、资源类型化输出，对多模态 agent 是重要支撑
 
-**不足：**
+**不足（historical 2026-05-01 view; current sandbox docs supersede parts of this）：**
 
-- **权限是声明式过滤为主**，强 enforcement（路径白名单、网络白名单、子进程沙箱）依赖具体工具实现，没有进程级 jail（如 Linux seccomp、macOS sandbox-exec）
+- **Historical**: 权限是声明式过滤为主，缺少进程级 jail。**Current**:
+  macOS `sandbox-exec`、Linux seccomp、no-op fallback visibility, and doctor
+  reporting are documented in `docs/TOOL_PERMISSIONS.md`. Remaining active
+  work is security profile policy and broader enforcement coverage, not absence
+  of any OS sandbox layer.
 - 内置 `ShellTool` 已默认注释关闭——安全立场正确，但缺少"显式 opt-in + 受限 shell 子集"的官方推荐路径
-- 工具调用审计与 trace 已串联，但**幂等性元数据**（`Idempotent | NonIdempotent | Unknown`）尚未进入 metadata，partial resume 只能保守拒绝
+- 工具调用审计与 trace 已串联。Historical note: 幂等性元数据尚未进入
+  metadata. Current code has `ToolIdempotency`; active work remains making
+  non-idempotent resume decisions more visible in CLI/server output.
 
 ### 2.4 LLM 抽象（成熟，工具调用待统一）
 
@@ -194,7 +209,10 @@ pub trait AgentRuntime {
 - 模型注册和能力描述（`ModelCapabilities`、`ModelType`）
 - StepFun 专用图像/音频 API 完整覆盖
 
-**待办：** `tool_calls` 字段在抽象层尚未一等公民化——目前 ReAct/Plan-Execute 仍在 prompt 层做工具调用协议，没有用 OpenAI tools array 或 Anthropic tool_use blocks 让模型原生输出。`agentflow-tools::ToolRegistry` 已暴露 `as_openai_tools()` 便利函数，差最后一步：把 LLM 抽象层的请求/响应类型扩展成 tool calls 一等公民，并在 ReAct 中替换字符串解析路径。
+**Historical 2026-05-01 待办，已被后续实现部分取代：**
+`tool_calls` / `tool_choice` provider-native or compatible fallback support is
+now documented in `docs/LLM_PROVIDERS_MATRIX.md`. Keep that matrix as the
+authoritative source for provider behavior instead of this historical section.
 
 ### 2.5 Skills 体系（架构正确，权限统一仍可加强）
 
@@ -286,19 +304,19 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 - **职责**：多 provider LLM 抽象 + 多模态 + 流式 + 模型注册/发现/校验
 - **完备性**：高
-- **不足**：tool calling 未一等公民化；配置默认依赖用户目录，多租户服务端注入仍粗放；token 计数粗粒度
+- **Historical 不足**：tool calling 未一等公民化；配置默认依赖用户目录，多租户服务端注入仍粗放；token 计数粗粒度。Current override: provider-native / compatible fallback tool calling is documented in `docs/LLM_PROVIDERS_MATRIX.md`.
 
 ### 4.4 agentflow-agents ⭐⭐⭐
 
 - **职责**：agent-native runtime（ReAct/Plan-Execute/Reflection/Supervisor）+ AgentNode + WorkflowTool + 公共工具（PDF/批处理）
 - **完备性**：高
-- **不足**：`AgentRuntime` trait 与具体 agent 公共 API 双轨；多智能体协作仅雏形；resume 严格但保守
+- **Historical 不足**：`AgentRuntime` trait 与具体 agent 公共 API 双轨；多智能体协作仅雏形；resume 严格但保守。Current override: handoff / blackboard / debate supervisors are implemented and documented in `docs/MULTI_AGENT.md`; resume visibility remains active work.
 
 ### 4.5 agentflow-tools ⭐⭐
 
 - **职责**：Tool trait + Registry + Sandbox + Policy + 内置工具
 - **完备性**：方向正确
-- **不足**：权限以声明/过滤为主，缺进程级强 enforcement；缺工具幂等性元数据；缺统一审计 schema 与 tracing 强绑定
+- **Historical 不足**：权限以声明/过滤为主，缺进程级强 enforcement；缺工具幂等性元数据；缺统一审计 schema 与 tracing 强绑定。Current override: OS sandbox backends, fallback visibility, capability decisions, and `ToolIdempotency` exist; profile defaults and broader enforcement remain active work.
 
 ### 4.6 agentflow-mcp ⭐⭐⭐
 
@@ -342,17 +360,24 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 - **完备性**：静态可视化够用
 - **不足**：未与 trace 实时状态、checkpoint 进度联动，无法在调试 UI 中看到"当前 DAG 跑到哪个节点"
 
-### 4.13 agentflow-server ⭐ scaffold
+### 4.13 agentflow-server ⭐ scaffold (historical)
 
 - **职责**：Axum 网关
-- **现状**：130 行，仅 health/live/ready；无 run / agent / skill / trace 管理 API
-- **缺口**：业务路由、AuthN/AuthZ、租户隔离、API 版本化、SSE/WebSocket 流式、与 agentflow-db 的仓储协作
+- **Historical 2026-05-01 现状**：130 行，仅 health/live/ready；无 run / agent / skill / trace 管理 API
+- **Current 2026-05-10 override**：run submission/list/get/cancel, graph,
+  event history, SSE streaming, Skill routes, auth middleware, and embedded Web
+  UI route are implemented. Remaining active work is production hardening
+  (security profiles, CORS/request limits, retention, tenant boundaries), not
+  initial scaffold completion.
 
-### 4.14 agentflow-db ⭐ scaffold
+### 4.14 agentflow-db ⭐ scaffold (historical)
 
 - **职责**：Postgres 连接管理
-- **现状**：48 行，仅 pool 初始化；无 schema / migration / repository 层
-- **缺口**：核心实体（run / step / event / artifact / skill_install / mcp_session）schema、migration（refinery/sqlx-migrate）、Repository trait
+- **Historical 2026-05-01 现状**：48 行，仅 pool 初始化；无 schema / migration / repository 层
+- **Current 2026-05-10 override**：run / step / event / artifact /
+  skill_install / mcp_session schemas, migration, and repository traits are in
+  place. Remaining work is retention, backup/restore, and secured tenant/session
+  boundaries.
 
 ### 4.15 跨 workspace 一致性
 
@@ -366,12 +391,12 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 | # | 风险 | 严重性 | 触发场景 |
 | --- | --- | --- | --- |
 | R1 | FlowValue::File/Url checkpoint roundtrip 损失类型 | 中 | 含多模态/文件输出的工作流失败重启 |
-| R2 | LLM 工具调用走 prompt 解析，跨 provider 稳健性差 | 中 | 切换到 Claude/GPT-4o 原生 tool_use 时输出格式不齐 |
-| R3 | `agentflow-server` / `agentflow-db` 仍是骨架 | 高（产品化）| 想以平台/SaaS 形态部署 |
-| R4 | 多智能体协作仅雏形 | 中 | 需要 swarm / handoff / 协作合约 |
-| R5 | 权限是过滤型，缺进程级 jail | 中 | shell/script tool 在不可信环境运行 |
+| R2 | Historical: LLM 工具调用走 prompt 解析，跨 provider 稳健性差. Current: provider-native/fallback matrix exists; keep adding provider consistency tests. | 中 | 切换 provider 时的工具调用一致性 |
+| R3 | Historical: `agentflow-server` / `agentflow-db` 仍是骨架. Current: base APIs and DB repositories exist; risk moved to production hardening. | 高（产品化）| 认证、租户边界、retention、备份恢复 |
+| R4 | Historical: 多智能体协作仅雏形. Current: handoff / blackboard / debate implemented. | 中 | 更复杂协作策略和质量评估 |
+| R5 | Historical: 权限是过滤型，缺进程级 jail. Current: OS sandbox backends and fallback visibility exist; risk moved to profile defaults and full enforcement coverage. | 中 | shell/script/plugin tool 在不可信环境运行 |
 | R6 | OTel context 跨 LLM hop 断裂 | 低 | 端到端 distributed tracing |
-| R7 | RAG 缺评测 harness | 中 | 知识库迭代/调参缺反馈回路 |
+| R7 | Historical: RAG 缺评测 harness. Current: `agentflow-rag::eval` and `agentflow rag eval` are shipped; risk moved to CI baselines and regression datasets. | 中 | 知识库迭代/调参缺反馈回路 |
 | R8 | YAML schema 错误经验 | 低 | 用户编写复杂 workflow 时 |
 | R9 | workspace edition 不统一 | 低 | 升级 Rust 工具链时 |
 
@@ -383,12 +408,12 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ### 6.1 P0（建议下一次发布前必做）
 
-1. **平台化最小骨架**——把 `agentflow-server` 推到可用：
+1. **平台化最小骨架**——把 `agentflow-server` 推到可用（historical recommendation; core skeleton now implemented）：
    - 提供 `POST /v1/runs`、`GET /v1/runs/{id}`、`GET /v1/runs/{id}/events`（SSE）、`POST /v1/skills/{name}:run`
    - `agentflow-db` 落实 run/step/event/artifact 4 张表的 schema + migration（refinery 或 sqlx::migrate）
    - 与 `agentflow-tracing` 的 Postgres 后端复用同一 schema，避免双写
 
-2. **LLM 原生 tool calling 一等公民化**：
+2. **LLM 原生 tool calling 一等公民化（historical recommendation; see current provider matrix）**：
    - 在 `agentflow-llm` 抽象层把 `tool_calls` / `tool_choice` 加入请求/响应类型
    - 在 `ReActAgent` 与 `PlanExecuteAgent` 中替换 prompt 解析路径为：
      - 优先走 provider 原生（OpenAI tools、Anthropic tool_use、Google function declarations）
@@ -405,11 +430,11 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ### 6.2 P1（v1.0 候选阶段）
 
-5. **多智能体协作范式**：
+5. **多智能体协作范式（historical recommendation; handoff/blackboard/debate now implemented）**：
    - 在 `agentflow-agents/supervisor` 沉淀三种范式：handoff（角色切换）、blackboard（共享白板）、debate（多 agent 投票/批判）
    - 给出权威示例：研究 + 写作 + 评审三 agent 协作
 
-6. **工具沙箱强化**：
+6. **工具沙箱强化（partially implemented; active work is policy/profile hardening）**：
    - 在 `ShellTool`/`ScriptTool` 上接入 macOS sandbox-exec / Linux seccomp + chroot 子集
    - `Tool` 增加 `requires_capabilities()`（fs.read / fs.write / net / exec）和 `effective_capabilities`（被 SkillSecurity / ToolPolicy / CLI flag 三方裁剪后的最终权限）
    - 在 trace 中固化 capability 决策事件
@@ -418,7 +443,7 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
    - `agentflow-llm` 客户端在 HTTP 请求里注入 `traceparent` header（即使 LLM 提供商不解析，本地 hop 也能被 OTel 拼起来）
    - 统一 `WorkflowRunId / AgentSessionId / ToolCallId` 的属性命名
 
-8. **RAG 评测 harness**：
+8. **RAG 评测 harness（historical recommendation; shipped, active work is CI baselines）**：
    - `agentflow-rag/eval/`：标注集 + Recall@K / MRR / nDCG 指标 + 对比 baseline
    - CLI 子命令 `agentflow rag eval <dataset>`
 
