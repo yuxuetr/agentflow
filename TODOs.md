@@ -437,18 +437,18 @@ AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consisten
 
 ### P2.4 你需要准备的内容
 
-状态: TODO
+状态: DONE
 
 请准备:
 
-- [ ] `~/.agentflow/.env` 中的真实 API Key:
+- [x] `~/.agentflow/.env` 中的真实 API Key:
 
 ```bash
 STEPFUN_API_KEY=...
 GLM_API_KEY=...
 ```
 
-- [ ] 如果有其他 provider，也可以加入:
+- [x] 如果有其他 provider，也可以加入:
 
 ```bash
 OPENAI_API_KEY=...
@@ -456,18 +456,18 @@ ANTHROPIC_API_KEY=...
 GOOGLE_API_KEY=...
 ```
 
-- [ ] 每个 provider 的 base URL。
-- [ ] 每个 provider 的可用模型名:
-  - [ ] 文本模型。
-  - [ ] 视觉/多模态模型。
-  - [ ] 图像生成模型。
-  - [ ] ASR 模型。
-  - [ ] TTS 模型。
-  - [ ] 视频生成模型。
-- [ ] 官方最小调用样例或文档链接。
-- [ ] 是否允许 live tests 产生真实费用。
-- [ ] 单轮手动测试预算上限。
-- [ ] 是否允许把 live tests 放入 nightly CI；默认建议不放入普通 CI。
+- [x] 每个 provider 的 base URL。
+- [x] 每个 provider 的可用模型名:
+  - [x] 文本模型。
+  - [x] 视觉/多模态模型。
+  - [x] 图像生成模型。
+  - [x] ASR 模型。
+  - [x] TTS 模型。
+  - [x] 视频生成模型。
+- [x] 官方最小调用样例或文档链接。
+- [x] 是否允许 live tests 产生真实费用。
+- [x] 单轮手动测试预算上限。
+- [x] 是否允许把 live tests 放入 nightly CI；默认建议不放入普通 CI。
 
 建议本地配置样例:
 
@@ -544,7 +544,7 @@ cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-t
 
 ### P3.2 Distributed DAG Scheduler
 
-状态: TODO
+状态: DONE
 
 方案:
 
@@ -555,11 +555,11 @@ cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-t
 
 子任务:
 
-- [ ] 定义 node execution payload schema。
-- [ ] 支持 template/file/mock nodes 的 remote execution。
-- [ ] 支持 failure/retry。
-- [ ] 支持 heartbeat lost 后 requeue。
-- [ ] 100+ node DAG 两 worker 验收。
+- [x] 定义 node execution payload schema。
+- [x] 支持 template/file/mock nodes 的 remote execution。
+- [x] 支持 failure/retry。
+- [x] 支持 heartbeat lost 后 requeue。
+- [x] 100+ node DAG 两 worker 验收。
 
 验收标准:
 
@@ -698,21 +698,21 @@ cd agentflow-ui && npm test
 
 请准备以下信息，但不要提交到仓库:
 
-- [ ] 本地 `~/.agentflow/.env`。
-- [ ] StepFun API Key。
-- [ ] GLM API Key。
-- [ ] 每个 provider 的 base URL。
-- [ ] 每个能力对应的模型名:
-  - [ ] 文本。
-  - [ ] 视觉/多模态。
-  - [ ] 图像生成。
-  - [ ] ASR。
-  - [ ] TTS。
-  - [ ] 视频生成。
-- [ ] 官方最小调用样例或文档链接。
-- [ ] live test 是否允许产生费用。
-- [ ] 单次手动 live test 预算上限。
-- [ ] 是否允许 nightly CI 使用真实 key；默认建议只本地手动跑。
+- [x] 本地 `~/.agentflow/.env`。
+- [x] StepFun API Key。
+- [x] GLM API Key。
+- [x] 每个 provider 的 base URL。
+- [x] 每个能力对应的模型名:
+  - [x] 文本。
+  - [x] 视觉/多模态。
+  - [x] 图像生成。
+  - [x] ASR。
+  - [x] TTS。
+  - [x] 视频生成。
+- [x] 官方最小调用样例或文档链接。
+- [x] live test 是否允许产生费用。
+- [x] 单次手动 live test 预算上限。
+- [x] 是否允许 nightly CI 使用真实 key；默认建议只本地手动跑。
 
 本地建议:
 
