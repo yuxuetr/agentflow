@@ -8,6 +8,9 @@
 
 AgentFlow V2 is evolving from a workflow orchestration engine into an agent framework with a shared runtime foundation. It supports deterministic DAG workflows for production automation and agent-native loops for planning, tool use, reflection, memory, and multi-step decision making.
 
+For the maintained snapshot of implemented surfaces, stability boundaries, and
+active work, see [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md).
+
 ## 🏗️ Architecture: Shared Runtime For Workflows And Agents
 
 AgentFlow is built on five core principles:

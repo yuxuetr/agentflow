@@ -9,6 +9,8 @@ working references.
 
 ## Start Here
 
+- [CURRENT_STATUS.md](CURRENT_STATUS.md): current authoritative project status,
+  implemented surfaces, stability links, and active work.
 - [ARCHITECTURE.md](ARCHITECTURE.md): current workspace layout and runtime model.
 - [CONFIGURATION.md](CONFIGURATION.md): CLI config, secrets, workflow YAML, and run directories.
 - [WORKFLOW_SCHEMA.md](WORKFLOW_SCHEMA.md): implemented config-first workflow validation contract.
@@ -37,7 +39,8 @@ working references.
 
 These live at the repository root, not inside `docs/`:
 
-- [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md): latest module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
+- [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md):
+  historical module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
 - [`RoadMap.md`](../RoadMap.md): N1–N10 status, including the closed N8/N9
   foundations and the N10 plugin, distributed, Web UI, and marketplace base.
 - [`TODOs.md`](../TODOs.md): active task queue derived from the evaluation and roadmap.

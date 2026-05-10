@@ -1,5 +1,9 @@
 # AgentFlow 项目深度评估报告
 
+> Historical reference: this report captured the project state on
+> 2026-05-01 and informed the P0-P4 task queue. For the maintained current
+> status, see `docs/CURRENT_STATUS.md`.
+
 - 评估日期：2026-05-01
 - 评估范围：workspace 全部 16 个 crate、`docs/` 设计文档、CLI 执行路径、agent runtime、DAG 调度器、产品化闭环
 - 与上一版报告 (`OVERALL_EVALUATION_REPORT.md`，2026-04-28) 的关系：本报告基于 `main` 分支最新代码 (HEAD `41ed3f8`) 重新校核全部模块，纠正若干已经过时的结论（例如 DAG 并发调度、`agent`/`skill_agent` YAML 节点、`workflow run` flags），并将"机制设计 + 优化方案"作为重点重写
