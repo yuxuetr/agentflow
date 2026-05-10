@@ -47,7 +47,7 @@ surface. Treat these tasks as the first execution lane.
     marketplace manifests, trace events, server REST envelopes, and SSE
     events.
   - Add a short fixture map to the relevant docs or test module comments.
-- TODO P0.2 `FlowValue` checkpoint compatibility tests:
+- DONE P0.2 `FlowValue` checkpoint compatibility tests:
   - Add tagged-schema round-trip tests for `Json`, `File`, and `Url`.
   - Add legacy raw-JSON checkpoint read fixtures.
   - Verify writers continue emitting tagged values.
