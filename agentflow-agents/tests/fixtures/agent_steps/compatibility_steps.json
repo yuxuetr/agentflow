@@ -1,0 +1,119 @@
+[
+  {
+    "index": 0,
+    "kind": {
+      "type": "observe",
+      "input": "investigate"
+    },
+    "timestamp": "2026-05-10T00:00:00Z",
+    "duration_ms": null
+  },
+  {
+    "index": 1,
+    "kind": {
+      "type": "plan",
+      "thought": "call a tool"
+    },
+    "timestamp": "2026-05-10T00:00:01Z",
+    "duration_ms": 3
+  },
+  {
+    "index": 2,
+    "kind": {
+      "type": "tool_call",
+      "tool": "search",
+      "params": {
+        "query": "agentflow"
+      }
+    },
+    "timestamp": "2026-05-10T00:00:02Z",
+    "duration_ms": null
+  },
+  {
+    "index": 3,
+    "kind": {
+      "type": "tool_result",
+      "tool": "search",
+      "content": "found",
+      "is_error": false,
+      "parts": [
+        {
+          "type": "text",
+          "text": "found"
+        },
+        {
+          "type": "resource",
+          "uri": "file:///tmp/result.txt",
+          "mime_type": "text/plain",
+          "text": "found"
+        }
+      ]
+    },
+    "timestamp": "2026-05-10T00:00:03Z",
+    "duration_ms": 7
+  },
+  {
+    "index": 4,
+    "kind": {
+      "type": "reflect",
+      "content": "tool result is enough"
+    },
+    "timestamp": "2026-05-10T00:00:04Z",
+    "duration_ms": null
+  },
+  {
+    "index": 5,
+    "kind": {
+      "type": "handoff",
+      "from": "researcher",
+      "to": "writer",
+      "message": "draft the answer"
+    },
+    "timestamp": "2026-05-10T00:00:05Z",
+    "duration_ms": null
+  },
+  {
+    "index": 6,
+    "kind": {
+      "type": "blackboard_op",
+      "op": "write",
+      "key": "claim",
+      "agent": "writer",
+      "value": {
+        "text": "AgentFlow supports traces"
+      }
+    },
+    "timestamp": "2026-05-10T00:00:06Z",
+    "duration_ms": null
+  },
+  {
+    "index": 7,
+    "kind": {
+      "type": "debate_proposal",
+      "round": 1,
+      "agent": "reviewer",
+      "proposal": "ship with compatibility fixtures"
+    },
+    "timestamp": "2026-05-10T00:00:07Z",
+    "duration_ms": null
+  },
+  {
+    "index": 8,
+    "kind": {
+      "type": "debate_verdict",
+      "winner": "reviewer",
+      "rationale": "fixtures protect the wire schema"
+    },
+    "timestamp": "2026-05-10T00:00:08Z",
+    "duration_ms": null
+  },
+  {
+    "index": 9,
+    "kind": {
+      "type": "final_answer",
+      "answer": "done"
+    },
+    "timestamp": "2026-05-10T00:00:09Z",
+    "duration_ms": null
+  }
+]

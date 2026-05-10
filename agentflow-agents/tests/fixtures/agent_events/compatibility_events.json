@@ -1,0 +1,135 @@
+[
+  {
+    "event": "run_started",
+    "session_id": "compat-session",
+    "model": "mock",
+    "timestamp": "2026-05-10T00:00:00Z"
+  },
+  {
+    "event": "step_started",
+    "session_id": "compat-session",
+    "step_index": 2,
+    "step_type": "tool_call",
+    "timestamp": "2026-05-10T00:00:02Z"
+  },
+  {
+    "event": "step_completed",
+    "session_id": "compat-session",
+    "step": {
+      "index": 9,
+      "kind": {
+        "type": "final_answer",
+        "answer": "done"
+      },
+      "timestamp": "2026-05-10T00:00:09Z",
+      "duration_ms": null
+    }
+  },
+  {
+    "event": "tool_call_started",
+    "session_id": "compat-session",
+    "step_index": 2,
+    "tool": "search",
+    "params": {
+      "query": "agentflow"
+    },
+    "source": "builtin",
+    "permissions": ["network"],
+    "timestamp": "2026-05-10T00:00:02Z"
+  },
+  {
+    "event": "tool_policy_decision",
+    "session_id": "compat-session",
+    "step_index": 2,
+    "tool": "search",
+    "allowed": true,
+    "matched_rule": "allow network",
+    "source": "builtin",
+    "permissions": ["network"],
+    "params_summary": {
+      "query": "agentflow"
+    },
+    "timestamp": "2026-05-10T00:00:02Z"
+  },
+  {
+    "event": "tool_capability_decision",
+    "session_id": "compat-session",
+    "step_index": 2,
+    "tool": "search",
+    "allowed": false,
+    "required": ["net"],
+    "effective": [],
+    "denied": ["net"],
+    "deny_reason": "tool 'search' was denied capabilities: net",
+    "trace": [
+      {
+        "source": "tool_required",
+        "allowed": ["net"],
+        "running": ["net"]
+      },
+      {
+        "source": "skill_security",
+        "allowed": [],
+        "dropped": ["net"],
+        "running": []
+      }
+    ],
+    "timestamp": "2026-05-10T00:00:02Z"
+  },
+  {
+    "event": "tool_call_completed",
+    "session_id": "compat-session",
+    "step_index": 3,
+    "tool": "search",
+    "is_error": false,
+    "duration_ms": 7,
+    "source": "builtin",
+    "permissions": ["network"],
+    "timestamp": "2026-05-10T00:00:03Z"
+  },
+  {
+    "event": "reflection_added",
+    "session_id": "compat-session",
+    "step_index": 4,
+    "timestamp": "2026-05-10T00:00:04Z"
+  },
+  {
+    "event": "handoff_occurred",
+    "session_id": "compat-session",
+    "step_index": 5,
+    "from": "researcher",
+    "to": "writer",
+    "timestamp": "2026-05-10T00:00:05Z"
+  },
+  {
+    "event": "blackboard_written",
+    "session_id": "compat-session",
+    "step_index": 6,
+    "op": "write",
+    "agent": "writer",
+    "key": "claim",
+    "timestamp": "2026-05-10T00:00:06Z"
+  },
+  {
+    "event": "debate_round_started",
+    "session_id": "compat-session",
+    "round": 1,
+    "participants": ["reviewer", "writer"],
+    "timestamp": "2026-05-10T00:00:07Z"
+  },
+  {
+    "event": "debate_verdict_rendered",
+    "session_id": "compat-session",
+    "step_index": 8,
+    "winner": "reviewer",
+    "timestamp": "2026-05-10T00:00:08Z"
+  },
+  {
+    "event": "run_stopped",
+    "session_id": "compat-session",
+    "reason": {
+      "reason": "final_answer"
+    },
+    "timestamp": "2026-05-10T00:00:09Z"
+  }
+]
