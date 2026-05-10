@@ -569,7 +569,7 @@ cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-t
 
 ### P3.3 Web UI Run Console
 
-状态: TODO
+状态: DONE
 
 问题:
 
@@ -578,13 +578,13 @@ cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-t
 
 子任务:
 
-- [ ] Run submission form。
-- [ ] Run cancellation button。
-- [ ] Auth token 配置入口或说明。
-- [ ] Provider/config status panel。
-- [ ] DAG node detail panel。
-- [ ] Agent step / tool policy detail panel。
-- [ ] Live event reconnect。
+- [x] Run submission form。
+- [x] Run cancellation button。
+- [x] Auth token 配置入口或说明。
+- [x] Provider/config status panel。
+- [x] DAG node detail panel。
+- [x] Agent step / tool policy detail panel。
+- [x] Live event reconnect。
 
 涉及文件:
 
