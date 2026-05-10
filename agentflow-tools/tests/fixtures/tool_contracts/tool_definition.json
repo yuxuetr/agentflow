@@ -1,0 +1,22 @@
+{
+  "name": "mcp_demo_echo",
+  "description": "Echo text through a demo MCP server",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": ["text"]
+  },
+  "metadata": {
+    "source": "mcp",
+    "permissions": {
+      "permissions": ["mcp", "network"]
+    },
+    "idempotency": "unknown",
+    "mcp_server_name": "demo",
+    "mcp_tool_name": "echo"
+  }
+}

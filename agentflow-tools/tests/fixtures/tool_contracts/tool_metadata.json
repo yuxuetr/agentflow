@@ -1,0 +1,7 @@
+{
+  "source": "script",
+  "permissions": {
+    "permissions": ["filesystem_read", "process_exec"]
+  },
+  "idempotency": "non_idempotent"
+}

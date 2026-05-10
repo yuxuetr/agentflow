@@ -1,0 +1,17 @@
+[
+  {
+    "type": "text",
+    "text": "hello"
+  },
+  {
+    "type": "image",
+    "data": "aW1hZ2U=",
+    "mime_type": "image/png"
+  },
+  {
+    "type": "resource",
+    "uri": "file:///tmp/report.md",
+    "mime_type": "text/markdown",
+    "text": "# Report"
+  }
+]
