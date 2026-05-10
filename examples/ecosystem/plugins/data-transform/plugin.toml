@@ -1,0 +1,20 @@
+[plugin]
+name = "agentflow-data-transform-plugin"
+version = "1.0.0"
+runtime = "subprocess"
+entrypoint = "bin/data_transform_plugin.py"
+protocol = "agentflow.plugin/1"
+
+[[plugin.nodes]]
+type = "json_pick"
+description = "Pick one key from a JSON FlowValue object and return it as output.value."
+
+[[plugin.nodes]]
+type = "json_merge"
+description = "Merge JSON object FlowValues into one output.object value."
+
+[plugin.capabilities]
+filesystem = []
+network = []
+processes = []
+env_vars = []

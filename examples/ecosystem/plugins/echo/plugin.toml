@@ -1,0 +1,16 @@
+[plugin]
+name = "agentflow-echo-plugin"
+version = "1.0.0"
+runtime = "subprocess"
+entrypoint = "bin/echo_plugin.py"
+protocol = "agentflow.plugin/1"
+
+[[plugin.nodes]]
+type = "echo"
+description = "Return the supplied FlowValue inputs unchanged for plugin smoke tests."
+
+[plugin.capabilities]
+filesystem = []
+network = []
+processes = []
+env_vars = []
