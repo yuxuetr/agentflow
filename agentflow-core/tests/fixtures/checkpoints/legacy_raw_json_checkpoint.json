@@ -1,0 +1,19 @@
+{
+  "workflow_id": "legacy-raw-json-workflow",
+  "last_completed_node": "legacy_node",
+  "state": {
+    "legacy_node": {
+      "object_output": {
+        "answer": 42,
+        "nested": {
+          "ok": true
+        }
+      },
+      "array_output": ["alpha", "beta"],
+      "string_output": "legacy text"
+    }
+  },
+  "created_at": "2026-05-10T00:00:00Z",
+  "status": "Running",
+  "metadata": {}
+}
