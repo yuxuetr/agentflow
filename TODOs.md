@@ -65,7 +65,7 @@ surface. Treat these tasks as the first execution lane.
     marketplace TOML.
   - Verify unknown optional fields are ignored or preserved according to the
     documented contract.
-- TODO P0.6 Server envelope and SSE compatibility tests:
+- DONE P0.6 Server envelope and SSE compatibility tests:
   - Add JSON fixtures for `/v1/runs`, `/v1/runs/{id}`,
     `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, and SSE events.
   - Verify `seq`, `kind`, `payload`, and `ts` reconnect semantics.
