@@ -87,7 +87,7 @@ auditable, and explicit.
     sandboxing, plugin execution, and marketplace installs.
   - Wire profile selection through CLI/server config without changing current
     local defaults unexpectedly.
-- TODO P1.2 Server production auth fail-closed:
+- DONE P1.2 Server production auth fail-closed:
   - Add explicit dev/prod mode to `agentflow-server` or `agentflow serve`.
   - In production mode, fail startup if `AGENTFLOW_API_TOKEN` or replacement
     auth config is missing.
