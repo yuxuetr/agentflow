@@ -1,5 +1,8 @@
 use agentflow_db::Database;
-use agentflow_server::{AppState, SkillCatalog, create_router, resolve_auth_config_from_env};
+use agentflow_server::{
+  AppState, SkillCatalog, create_router, resolve_auth_config_from_env,
+  server_security_defaults_from_env,
+};
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -32,7 +35,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       return Err(err.into());
     }
   };
-  let security_defaults = security_profile.defaults();
+  let security_defaults = match server_security_defaults_from_env(security_profile) {
+    Ok(defaults) => defaults,
+    Err(err) => {
+      error!("{err}");
+      return Err(err.into());
+    }
+  };
   info!("Using '{}' security profile", security_profile);
 
   let auth = match resolve_auth_config_from_env(security_profile) {
@@ -50,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   let state = AppState::new(db)
-    .with_security_profile(security_profile)
+    .with_security_defaults(security_defaults)
     .with_auth(auth)
     .with_skills(SkillCatalog::from_env());
   let app = create_router(state);

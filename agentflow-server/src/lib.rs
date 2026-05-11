@@ -7,15 +7,21 @@
 //! `agentflow-core` / `agentflow-agents`.
 
 use axum::{
-  Json, Router, middleware,
+  Json, Router,
+  extract::DefaultBodyLimit,
+  http::{HeaderValue, Method, header},
+  middleware,
   routing::{get, post},
 };
 use serde::Serialize;
 use std::sync::Arc;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+  cors::{AllowOrigin, Any, CorsLayer},
+  trace::TraceLayer,
+};
 
 use agentflow_db::{Database, Repositories};
-use agentflow_tools::{SecurityProfile, SecurityProfileDefaults};
+use agentflow_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 
 pub mod auth;
 pub mod error;
@@ -51,6 +57,11 @@ pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,
 };
 pub use ui::{asset_response, index_html, ui_router};
+
+pub const CORS_ALLOWED_ORIGINS_ENV: &str = "AGENTFLOW_CORS_ALLOWED_ORIGINS";
+pub const MAX_REQUEST_BODY_BYTES_ENV: &str = "AGENTFLOW_MAX_REQUEST_BODY_BYTES";
+pub const MAX_WORKFLOW_SUBMIT_BYTES_ENV: &str = "AGENTFLOW_MAX_WORKFLOW_SUBMIT_BYTES";
+pub const MAX_SKILL_RUN_BYTES_ENV: &str = "AGENTFLOW_MAX_SKILL_RUN_BYTES";
 
 /// Server-wide state injected into every handler.
 #[derive(Clone)]
@@ -129,6 +140,86 @@ impl AppState {
     self.security = profile.defaults();
     self
   }
+
+  /// Attach fully-resolved security defaults, including server-side env
+  /// overrides for CORS origins and request body limits.
+  pub fn with_security_defaults(mut self, defaults: SecurityProfileDefaults) -> Self {
+    self.security = defaults;
+    self
+  }
+}
+
+pub fn server_security_defaults_from_env(
+  profile: SecurityProfile,
+) -> Result<SecurityProfileDefaults, ServerHttpConfigError> {
+  let mut defaults = profile.defaults();
+
+  if let Some(origins) = comma_separated_env(CORS_ALLOWED_ORIGINS_ENV) {
+    validate_origins(&origins)?;
+    defaults.cors.allowed_origins = origins;
+  }
+  if let Some(limit) = u64_env(MAX_REQUEST_BODY_BYTES_ENV)? {
+    defaults.request_limits.max_request_body_bytes = limit;
+  }
+  if let Some(limit) = u64_env(MAX_WORKFLOW_SUBMIT_BYTES_ENV)? {
+    defaults.request_limits.max_workflow_submit_bytes = limit;
+  }
+  if let Some(limit) = u64_env(MAX_SKILL_RUN_BYTES_ENV)? {
+    defaults.request_limits.max_skill_run_bytes = limit;
+  }
+
+  Ok(defaults)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ServerHttpConfigError {
+  #[error("{name} contains invalid HTTP origin '{value}': {source}")]
+  InvalidOrigin {
+    name: &'static str,
+    value: String,
+    source: axum::http::header::InvalidHeaderValue,
+  },
+  #[error("{name} must be a positive integer byte count, got '{value}'")]
+  InvalidByteLimit { name: &'static str, value: String },
+}
+
+fn comma_separated_env(name: &'static str) -> Option<Vec<String>> {
+  let value = std::env::var(name).ok()?;
+  let values = value
+    .split(',')
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(ToOwned::to_owned)
+    .collect::<Vec<_>>();
+  Some(values)
+}
+
+fn u64_env(name: &'static str) -> Result<Option<u64>, ServerHttpConfigError> {
+  let Some(value) = std::env::var(name).ok() else {
+    return Ok(None);
+  };
+  let limit = value
+    .trim()
+    .parse()
+    .map_err(|_| ServerHttpConfigError::InvalidByteLimit {
+      name,
+      value: value.clone(),
+    })?;
+  if limit == 0 {
+    return Err(ServerHttpConfigError::InvalidByteLimit { name, value });
+  }
+  Ok(Some(limit))
+}
+
+fn validate_origins(origins: &[String]) -> Result<(), ServerHttpConfigError> {
+  for origin in origins {
+    HeaderValue::from_str(origin).map_err(|source| ServerHttpConfigError::InvalidOrigin {
+      name: CORS_ALLOWED_ORIGINS_ENV,
+      value: origin.clone(),
+      source,
+    })?;
+  }
+  Ok(())
 }
 
 /// Build the gateway router with the standard health / authenticated split.
@@ -144,11 +235,18 @@ pub fn create_router(state: AppState) -> Router {
     .route("/health/live", get(liveness_check))
     .route("/health/ready", get(readiness_check));
 
+  let workflow_limit = state.security.request_limits.max_workflow_submit_bytes as usize;
+  let skill_limit = state.security.request_limits.max_skill_run_bytes as usize;
+
   let v1 = Router::new()
     .route("/v1/whoami", get(whoami))
-    .route("/v1/runs", get(list_runs).post(submit_run))
-    .route("/v1/runs/:id", get(get_run))
-    .route("/v1/runs/:id_cancel", post(cancel_run))
+    .route(
+      "/v1/runs",
+      get(list_runs)
+        .post(submit_run)
+        .layer(DefaultBodyLimit::max(workflow_limit)),
+    )
+    .route("/v1/runs/:id", get(get_run).post(cancel_run))
     .route("/v1/runs/:id/graph", get(get_run_graph))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
@@ -156,7 +254,10 @@ pub fn create_router(state: AppState) -> Router {
     // The `:run` suffix is part of the path. Axum's pattern can't match a
     // literal segment containing `:`, so we capture the whole tail and
     // strip the suffix in the handler.
-    .route("/v1/skills/:name_run", post(run_skill));
+    .route(
+      "/v1/skills/:name_run",
+      post(run_skill).layer(DefaultBodyLimit::max(skill_limit)),
+    );
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),
@@ -167,9 +268,33 @@ pub fn create_router(state: AppState) -> Router {
     .merge(health)
     .merge(v1)
     .merge(ui_router())
-    .layer(CorsLayer::permissive())
+    .layer(cors_layer(&state.security))
     .layer(TraceLayer::new_for_http())
     .with_state(state)
+}
+
+fn cors_layer(defaults: &SecurityProfileDefaults) -> CorsLayer {
+  match defaults.cors.mode {
+    CorsMode::Permissive => CorsLayer::permissive(),
+    CorsMode::ExplicitOrigins => {
+      let origins = defaults
+        .cors
+        .allowed_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect::<Vec<_>>();
+      let allow_origin = if origins.is_empty() {
+        AllowOrigin::list(Vec::<HeaderValue>::new())
+      } else {
+        AllowOrigin::list(origins)
+      };
+      CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .expose_headers(Any)
+    }
+  }
 }
 
 #[derive(Debug, Serialize)]

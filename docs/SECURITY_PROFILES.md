@@ -32,9 +32,17 @@ selection into:
 - `agentflow doctor`: reports the selected profile, effective defaults, and
   invalid profile warnings in text and JSON output.
 
+Server startup also accepts explicit HTTP policy overrides:
+
+- `AGENTFLOW_CORS_ALLOWED_ORIGINS`: comma-separated browser origins. In
+  `production`, only these origins receive `Access-Control-Allow-Origin`.
+- `AGENTFLOW_MAX_REQUEST_BODY_BYTES`: global documented request-body budget.
+- `AGENTFLOW_MAX_WORKFLOW_SUBMIT_BYTES`: max JSON body for `POST /v1/runs`.
+- `AGENTFLOW_MAX_SKILL_RUN_BYTES`: max JSON body for
+  `POST /v1/skills/{name}:run`.
+
 The follow-up P1 tasks continue turning these defaults into enforcement:
 
-- P1.3 applies CORS and request body limits.
 - P1.4/P1.5 harden HTTP, file, and script tools.
 - P1.6 exposes sandbox enforcement status in policy decisions.
 - P1.8 applies plugin execution policy by profile.
