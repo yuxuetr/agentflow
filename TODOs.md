@@ -92,7 +92,7 @@ auditable, and explicit.
   - In production mode, fail startup if `AGENTFLOW_API_TOKEN` or replacement
     auth config is missing.
   - Keep test/local-dev mode easy to run.
-- TODO P1.3 Configurable CORS and request limits:
+- DONE P1.3 Configurable CORS and request limits:
   - Replace unconditional permissive CORS for non-dev profiles.
   - Add max request body size for workflow submit and Skill run routes.
   - Add tests for rejected origins and oversized bodies.
