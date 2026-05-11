@@ -1,5 +1,5 @@
 use agentflow_db::Database;
-use agentflow_server::{AppState, AuthConfig, SkillCatalog, create_router};
+use agentflow_server::{AppState, SkillCatalog, create_router, resolve_auth_config_from_env};
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -35,20 +35,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let security_defaults = security_profile.defaults();
   info!("Using '{}' security profile", security_profile);
 
-  let auth = AuthConfig::from_env();
-  if auth.is_none() {
-    if security_defaults.auth.require_api_token {
-      warn!(
-        "AGENTFLOW_API_TOKEN is not set, but the '{}' security profile requires bearer auth. \
-         P1.2 will make this fail closed; do not expose this server until auth is configured.",
-        security_profile
-      );
-    } else {
-      warn!(
-        "AGENTFLOW_API_TOKEN is not set; the gateway is running without bearer auth. \
-         Set AGENTFLOW_API_TOKEN before exposing this server outside trusted networks."
-      );
+  let auth = match resolve_auth_config_from_env(security_profile) {
+    Ok(auth) => auth,
+    Err(err) => {
+      error!("{err}");
+      return Err(err.into());
     }
+  };
+  if auth.is_none() && !security_defaults.auth.require_api_token {
+    warn!(
+      "AGENTFLOW_API_TOKEN is not set; the gateway is running without bearer auth. \
+       Set AGENTFLOW_API_TOKEN before exposing this server outside trusted networks."
+    );
   }
 
   let state = AppState::new(db)

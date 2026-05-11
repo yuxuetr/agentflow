@@ -25,7 +25,10 @@ pub mod scheduler;
 pub mod skills;
 pub mod ui;
 
-pub use auth::{AuthConfig, require_bearer_token};
+pub use auth::{
+  AuthConfig, AuthConfigError, require_bearer_token, resolve_auth_config,
+  resolve_auth_config_from_env,
+};
 pub use error::ApiError;
 pub use events_stream::{
   EventBroker, EventSink, PersistingEventSink, StreamedEvent, WorkflowEventListener, list_events,

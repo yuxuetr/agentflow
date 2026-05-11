@@ -27,13 +27,13 @@ selection into:
 
 - `agentflow-server`: reads `AGENTFLOW_SECURITY_PROFILE`, defaults to
   `local`, stores the selected defaults in `AppState`, and logs the active
-  profile.
+  profile. When the selected profile requires auth, startup fails unless
+  `AGENTFLOW_API_TOKEN` is set to a non-empty token.
 - `agentflow doctor`: reports the selected profile, effective defaults, and
   invalid profile warnings in text and JSON output.
 
-The follow-up P1 tasks turn these defaults into enforcement:
+The follow-up P1 tasks continue turning these defaults into enforcement:
 
-- P1.2 makes production auth fail closed.
 - P1.3 applies CORS and request body limits.
 - P1.4/P1.5 harden HTTP, file, and script tools.
 - P1.6 exposes sandbox enforcement status in policy decisions.
@@ -46,5 +46,6 @@ optional auth, optional OS sandboxing, subprocess plugins, and the existing
 tool capability surface so existing local workflows continue to run.
 
 Use `production` only when the server or daemon may be reachable by other
-users or hosts. Until the follow-up enforcement tasks land, production mode is
-visible and auditable but not yet a complete security boundary by itself.
+users or hosts. Production mode now requires `AGENTFLOW_API_TOKEN` before the
+server starts, but it is not yet a complete security boundary until the
+remaining P1 enforcement tasks land.

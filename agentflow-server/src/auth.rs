@@ -9,6 +9,7 @@
 //! Routes opt in by attaching the [`require_bearer_token`] layer; health
 //! checks bypass auth so probes from kubelet / load balancers stay simple.
 
+use agentflow_tools::SecurityProfile;
 use axum::{
   extract::{Request, State},
   http::header::AUTHORIZATION,
@@ -28,16 +29,52 @@ pub struct AuthConfig {
 }
 
 impl AuthConfig {
-  /// Build from env var. Returns `None` when `AGENTFLOW_API_TOKEN` is unset
-  /// or empty so callers can decide whether to fail-closed (production) or
-  /// run open (local dev / tests).
-  pub fn from_env() -> Option<Self> {
-    let token = std::env::var("AGENTFLOW_API_TOKEN").ok()?;
-    let trimmed = token.trim();
+  /// Build from a raw token string. Empty or whitespace-only tokens are
+  /// treated as absent so callers can keep local-dev auth optional while
+  /// production startup can fail closed.
+  pub fn from_token(token: Option<&str>) -> Option<Self> {
+    let trimmed = token?.trim();
     (!trimmed.is_empty()).then(|| Self {
       expected_token: trimmed.to_string(),
     })
   }
+
+  /// Build from env var. Returns `None` when `AGENTFLOW_API_TOKEN` is unset
+  /// or empty so callers can decide whether to fail-closed (production) or
+  /// run open (local dev / tests).
+  pub fn from_env() -> Option<Self> {
+    let token = std::env::var("AGENTFLOW_API_TOKEN").ok();
+    Self::from_token(token.as_deref())
+  }
+}
+
+/// Resolve bearer auth for the active security profile.
+///
+/// `dev` and `local` keep historical no-token local startup behavior.
+/// `production` fails closed when no non-empty token is configured.
+pub fn resolve_auth_config(
+  profile: SecurityProfile,
+  token: Option<&str>,
+) -> Result<Option<AuthConfig>, AuthConfigError> {
+  let auth = AuthConfig::from_token(token);
+  if profile.defaults().auth.require_api_token && auth.is_none() {
+    return Err(AuthConfigError::MissingRequiredToken { profile });
+  }
+  Ok(auth)
+}
+
+/// Resolve bearer auth from `AGENTFLOW_API_TOKEN` for the active profile.
+pub fn resolve_auth_config_from_env(
+  profile: SecurityProfile,
+) -> Result<Option<AuthConfig>, AuthConfigError> {
+  let token = std::env::var("AGENTFLOW_API_TOKEN").ok();
+  resolve_auth_config(profile, token.as_deref())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthConfigError {
+  #[error("AGENTFLOW_API_TOKEN is required when AGENTFLOW_SECURITY_PROFILE is '{profile}'")]
+  MissingRequiredToken { profile: SecurityProfile },
 }
 
 /// Axum middleware that rejects requests without a valid bearer token.
@@ -123,5 +160,53 @@ mod tests {
     unsafe {
       std::env::remove_var("AGENTFLOW_API_TOKEN");
     }
+  }
+
+  #[test]
+  fn token_parser_trims_and_rejects_empty_values() {
+    assert!(AuthConfig::from_token(None).is_none());
+    assert!(AuthConfig::from_token(Some("")).is_none());
+    assert!(AuthConfig::from_token(Some("  ")).is_none());
+
+    let cfg = AuthConfig::from_token(Some("  secret  ")).unwrap();
+    assert_eq!(cfg.expected_token, "secret");
+  }
+
+  #[test]
+  fn production_profile_requires_non_empty_token() {
+    let err = resolve_auth_config(SecurityProfile::Production, None).unwrap_err();
+    assert!(matches!(
+      err,
+      AuthConfigError::MissingRequiredToken {
+        profile: SecurityProfile::Production
+      }
+    ));
+
+    let err = resolve_auth_config(SecurityProfile::Production, Some("  ")).unwrap_err();
+    assert!(matches!(
+      err,
+      AuthConfigError::MissingRequiredToken {
+        profile: SecurityProfile::Production
+      }
+    ));
+
+    let cfg = resolve_auth_config(SecurityProfile::Production, Some("secret"))
+      .unwrap()
+      .unwrap();
+    assert_eq!(cfg.expected_token, "secret");
+  }
+
+  #[test]
+  fn local_and_dev_profiles_keep_auth_optional() {
+    assert!(
+      resolve_auth_config(SecurityProfile::Local, None)
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+      resolve_auth_config(SecurityProfile::Dev, None)
+        .unwrap()
+        .is_none()
+    );
   }
 }
