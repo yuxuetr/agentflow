@@ -81,7 +81,7 @@ surface. Treat these tasks as the first execution lane.
 Goal: make tool execution and local/server runtime behavior conservative,
 auditable, and explicit.
 
-- TODO P1.1 Security profile model:
+- DONE P1.1 Security profile model:
   - Define `dev`, `local`, and `production` security profiles.
   - Document defaults for auth, CORS, request limits, tool permissions,
     sandboxing, plugin execution, and marketplace installs.

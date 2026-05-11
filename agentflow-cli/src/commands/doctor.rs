@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use agentflow_llm::{LLMConfig, LLMConfigSource, MODELS_CONFIG_ENV};
 use agentflow_tools::sandbox::default_backend;
+use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile, SecurityProfileDefaults};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -29,6 +30,7 @@ struct DoctorReport {
   features: FeatureReport,
   paths: PathReport,
   config: ConfigReport,
+  security: SecurityReport,
   sandbox: SandboxReport,
   environment: EnvironmentReport,
   status: DoctorStatus,
@@ -63,6 +65,14 @@ struct ConfigReport {
   missing_env_vars: Vec<String>,
   warnings: Vec<String>,
   error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SecurityReport {
+  env_var: &'static str,
+  profile: SecurityProfile,
+  defaults: SecurityProfileDefaults,
+  warning: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,12 +144,17 @@ async fn build_report() -> DoctorReport {
     warnings: sandbox_warnings(sandbox_backend.name(), sandbox_backend.is_enforcing()),
   };
 
-  let status =
-    if config.error.is_some() || !config.missing_env_vars.is_empty() || !sandbox.enforcing {
-      DoctorStatus::Warning
-    } else {
-      DoctorStatus::Ok
-    };
+  let security = security_report();
+
+  let status = if config.error.is_some()
+    || !config.missing_env_vars.is_empty()
+    || !sandbox.enforcing
+    || security.warning.is_some()
+  {
+    DoctorStatus::Warning
+  } else {
+    DoctorStatus::Ok
+  };
 
   DoctorReport {
     version: env!("CARGO_PKG_VERSION"),
@@ -158,6 +173,7 @@ async fn build_report() -> DoctorReport {
       plugins_dir,
     },
     config,
+    security,
     sandbox,
     environment: EnvironmentReport {
       agentflow_run_dir: std::env::var("AGENTFLOW_RUN_DIR").ok(),
@@ -166,6 +182,28 @@ async fn build_report() -> DoctorReport {
       agentflow_skills_index: std::env::var("AGENTFLOW_SKILLS_INDEX").ok(),
     },
     status,
+  }
+}
+
+fn security_report() -> SecurityReport {
+  match SecurityProfile::from_env() {
+    Ok(profile) => SecurityReport {
+      env_var: SECURITY_PROFILE_ENV,
+      profile,
+      defaults: profile.defaults(),
+      warning: None,
+    },
+    Err(err) => {
+      let profile = SecurityProfile::default();
+      SecurityReport {
+        env_var: SECURITY_PROFILE_ENV,
+        profile,
+        defaults: profile.defaults(),
+        warning: Some(format!(
+          "{SECURITY_PROFILE_ENV} is invalid ({err}); falling back to '{profile}' for diagnostics"
+        )),
+      }
+    }
   }
 }
 
@@ -347,6 +385,45 @@ fn print_text_report(report: &DoctorReport) {
     println!("  warning: {error}");
   }
   for warning in &report.config.warnings {
+    println!("  warning: {warning}");
+  }
+  println!();
+
+  println!("Security:");
+  println!("  profile: {}", report.security.profile);
+  println!("  env var: {}", report.security.env_var);
+  println!(
+    "  auth token required: {}",
+    enabled_label(report.security.defaults.auth.require_api_token)
+  );
+  println!("  cors: {:?}", report.security.defaults.cors.mode);
+  println!(
+    "  max request body: {} bytes",
+    report
+      .security
+      .defaults
+      .request_limits
+      .max_request_body_bytes
+  );
+  println!(
+    "  os sandbox required: {}",
+    enabled_label(report.security.defaults.sandboxing.require_os_sandbox)
+  );
+  println!(
+    "  subprocess plugins: {}",
+    enabled_label(report.security.defaults.plugins.allow_subprocess_plugins)
+  );
+  println!(
+    "  marketplace signatures: {}",
+    enabled_label(
+      report
+        .security
+        .defaults
+        .marketplace
+        .require_signature_verification
+    )
+  );
+  if let Some(warning) = &report.security.warning {
     println!("  warning: {warning}");
   }
   println!();

@@ -24,6 +24,7 @@ pub mod error;
 pub mod policy;
 pub mod registry;
 pub mod sandbox;
+pub mod security_profile;
 pub mod tool;
 
 pub use capability::{Capability, CapabilityDecisionEntry, EffectiveCapabilities, GrantSource};
@@ -31,6 +32,11 @@ pub use error::ToolError;
 pub use policy::{ToolPolicy, ToolPolicyDecision};
 pub use registry::ToolRegistry;
 pub use sandbox::SandboxPolicy;
+pub use security_profile::{
+  AuthDefaults, CorsDefaults, CorsMode, MarketplaceInstallDefaults, PluginExecutionDefaults,
+  RequestLimitDefaults, SECURITY_PROFILE_ENV, SandboxingDefaults, SecurityProfile,
+  SecurityProfileDefaults, SecurityProfileError, ToolPermissionDefaults,
+};
 pub use tool::{
   Tool, ToolCall, ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,
   ToolPermission, ToolPermissionSet, ToolSource,

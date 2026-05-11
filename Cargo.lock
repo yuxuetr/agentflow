@@ -277,6 +277,7 @@ dependencies = [
  "agentflow-core",
  "agentflow-db",
  "agentflow-skills",
+ "agentflow-tools",
  "agentflow-tracing",
  "agentflow-viz",
  "anyhow",

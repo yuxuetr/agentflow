@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use agentflow_db::{Database, Repositories};
+use agentflow_tools::{SecurityProfile, SecurityProfileDefaults};
 
 pub mod auth;
 pub mod error;
@@ -68,6 +69,9 @@ pub struct AppState {
   pub event_broker: EventBroker,
   /// Process-local cancellation registry for queued/running background runs.
   pub cancellation_registry: RunCancellationRegistry,
+  /// Active security profile and documented defaults. Enforcement is rolled
+  /// out by the follow-up P1 tasks without changing local behavior here.
+  pub security: SecurityProfileDefaults,
 }
 
 impl std::fmt::Debug for AppState {
@@ -79,6 +83,7 @@ impl std::fmt::Debug for AppState {
       .field("skills", &self.skills)
       .field("executor", &"<dyn RunExecutor>")
       .field("cancellation_registry", &self.cancellation_registry)
+      .field("security", &self.security)
       .finish()
   }
 }
@@ -94,6 +99,7 @@ impl AppState {
       executor: default_executor(),
       event_broker: EventBroker::new(),
       cancellation_registry: RunCancellationRegistry::new(),
+      security: SecurityProfile::default().defaults(),
     }
   }
 
@@ -112,6 +118,12 @@ impl AppState {
   /// Attach a populated skill catalog. Defaults to empty.
   pub fn with_skills(mut self, skills: SkillCatalog) -> Self {
     self.skills = skills;
+    self
+  }
+
+  /// Attach the active security profile defaults.
+  pub fn with_security_profile(mut self, profile: SecurityProfile) -> Self {
+    self.security = profile.defaults();
     self
   }
 }
