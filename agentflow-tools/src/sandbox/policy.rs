@@ -1,5 +1,14 @@
 use std::path::{Component, Path, PathBuf};
 
+/// Network destinations that are denied unless a policy explicitly opts in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkAddressClass {
+  Loopback,
+  LinkLocal,
+  Private,
+  CloudMetadata,
+}
+
 /// Policy controlling what operations built-in tools are allowed to perform.
 ///
 /// The default policy is **restrictive**: only a safe set of read-only shell
@@ -18,6 +27,18 @@ pub struct SandboxPolicy {
   /// Allowed host suffixes for HTTP requests (e.g. `"example.com"`).
   /// If **empty**, ALL domains are allowed (permissive mode).
   pub allowed_domains: Vec<String>,
+
+  /// Allow HTTP tools to reach loopback addresses such as `127.0.0.1` and `::1`.
+  pub allow_loopback_network_access: bool,
+
+  /// Allow HTTP tools to reach link-local addresses such as `169.254.0.0/16`.
+  pub allow_link_local_network_access: bool,
+
+  /// Allow HTTP tools to reach private RFC1918/ULA addresses.
+  pub allow_private_network_access: bool,
+
+  /// Allow HTTP tools to reach well-known cloud metadata endpoints.
+  pub allow_cloud_metadata_access: bool,
 
   /// Maximum wall-clock time for a single shell command (seconds).
   pub max_exec_time_secs: u64,
@@ -38,6 +59,10 @@ impl Default for SandboxPolicy {
       .collect(),
       allowed_paths: vec![],
       allowed_domains: vec![],
+      allow_loopback_network_access: false,
+      allow_link_local_network_access: false,
+      allow_private_network_access: false,
+      allow_cloud_metadata_access: false,
       max_exec_time_secs: 30,
       max_file_read_bytes: 10 * 1024 * 1024, // 10 MB
     }
@@ -52,6 +77,10 @@ impl SandboxPolicy {
       allowed_commands: vec![], // empty = all allowed in permissive
       allowed_paths: vec![],
       allowed_domains: vec![],
+      allow_loopback_network_access: true,
+      allow_link_local_network_access: true,
+      allow_private_network_access: true,
+      allow_cloud_metadata_access: true,
       max_exec_time_secs: 60,
       max_file_read_bytes: 100 * 1024 * 1024,
     }
@@ -118,6 +147,16 @@ impl SandboxPolicy {
       .allowed_domains
       .iter()
       .any(|d| domain == d.as_str() || domain.ends_with(&format!(".{}", d)))
+  }
+
+  /// Check whether a protected network address class is explicitly allowed.
+  pub fn is_network_address_class_allowed(&self, class: NetworkAddressClass) -> bool {
+    match class {
+      NetworkAddressClass::Loopback => self.allow_loopback_network_access,
+      NetworkAddressClass::LinkLocal => self.allow_link_local_network_access,
+      NetworkAddressClass::Private => self.allow_private_network_access,
+      NetworkAddressClass::CloudMetadata => self.allow_cloud_metadata_access,
+    }
   }
 }
 

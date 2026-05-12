@@ -45,6 +45,27 @@ Agent runtime traces copy known idempotency into `_agentflow.side_effect_class`.
 unresolved calls can be replayed, while non-idempotent or unknown unresolved
 calls require manual recovery.
 
+## HTTP SSRF Protection
+
+`HttpTool` validates every request URL before opening the connection and
+validates each redirect destination before following it. Domain allow-lists
+still use `SandboxPolicy.allowed_domains`, but network-local destinations are
+blocked even when the domain list is empty.
+
+The default policy rejects:
+
+- loopback addresses such as `127.0.0.1`, `::1`, and DNS names resolving to
+  them
+- link-local addresses such as `169.254.0.0/16` and IPv6 `fe80::/10`
+- private addresses such as RFC1918 IPv4 ranges and IPv6 ULA `fc00::/7`
+- well-known cloud metadata endpoints such as `169.254.169.254`,
+  `100.100.100.200`, and metadata hostnames
+- non-HTTP schemes
+
+Trusted callers can opt in explicitly through `SandboxPolicy` fields:
+`allow_loopback_network_access`, `allow_link_local_network_access`,
+`allow_private_network_access`, and `allow_cloud_metadata_access`.
+
 ## OS-Level Sandbox Backends
 
 The permission model above is enforced **in-process** through `ToolPolicy`,

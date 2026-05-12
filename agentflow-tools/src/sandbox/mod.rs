@@ -32,4 +32,4 @@ pub use linux::LinuxSeccompBackend;
 #[cfg(target_os = "macos")]
 pub use macos::MacosSandboxExecBackend;
 pub use noop::NoopSandboxBackend;
-pub use policy::SandboxPolicy;
+pub use policy::{NetworkAddressClass, SandboxPolicy};

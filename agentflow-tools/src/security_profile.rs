@@ -9,22 +9,17 @@ pub const SECURITY_PROFILE_ENV: &str = "AGENTFLOW_SECURITY_PROFILE";
 
 /// Coarse runtime posture for local tools, server routes, plugins, and remote
 /// marketplace operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecurityProfile {
   /// Trusted development: fastest feedback loop, intentionally permissive.
   Dev,
   /// Default single-user local posture: explicit enough to inspect without
   /// breaking historical local workflows.
+  #[default]
   Local,
   /// Shared or exposed deployment posture: fail closed where possible.
   Production,
-}
-
-impl Default for SecurityProfile {
-  fn default() -> Self {
-    Self::Local
-  }
 }
 
 impl SecurityProfile {

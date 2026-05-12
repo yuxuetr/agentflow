@@ -486,7 +486,7 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig], skill_dir: &Path) -> Sandbo
     allowed_paths,
     allowed_domains,
     max_exec_time_secs,
-    max_file_read_bytes: 10 * 1024 * 1024, // 10 MB
+    ..SandboxPolicy::default()
   }
 }
 
