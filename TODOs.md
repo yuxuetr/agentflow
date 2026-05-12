@@ -101,7 +101,7 @@ auditable, and explicit.
     metadata endpoints by default.
   - Make exceptions explicit through `SandboxPolicy`.
   - Add DNS/IP resolution tests and redirect tests.
-- TODO P1.5 File and script hardening pass:
+- DONE P1.5 File and script hardening pass:
   - Re-audit path canonicalization for read, write, list, and script execution.
   - Add tests for missing parent paths, symlink races where practical,
     hardlinks, absolute paths, and traversal.
