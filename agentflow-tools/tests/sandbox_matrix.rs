@@ -97,6 +97,103 @@ async fn file_tool_blocks_traversal_absolute_and_symlink_escape() {
 }
 
 #[tokio::test]
+async fn file_tool_allows_missing_parent_under_allowed_root() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  std::fs::create_dir_all(&allowed).unwrap();
+  let target = allowed.join("missing").join("nested").join("out.txt");
+
+  let tool = FileTool::new(policy_for(&allowed));
+  let output = tool
+    .execute(json!({"operation": "write", "path": target, "content": "ok"}))
+    .await
+    .unwrap();
+
+  assert!(!output.is_error);
+  assert_eq!(
+    std::fs::read_to_string(allowed.join("missing").join("nested").join("out.txt")).unwrap(),
+    "ok"
+  );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_blocks_write_through_symlinked_parent() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  std::os::unix::fs::symlink(&outside, allowed.join("outside-link")).unwrap();
+
+  let tool = FileTool::new(policy_for(&allowed));
+
+  assert_file_denied(
+    &tool,
+    SandboxTestCase {
+      name: "symlinked parent write",
+      params: json!({"operation": "write", "path": allowed.join("outside-link").join("pwn.txt"), "content": "x"}),
+      expect_fragment: "outside allowed path prefixes",
+    },
+  )
+  .await;
+  assert!(!outside.join("pwn.txt").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_blocks_hardlink_reads_by_default() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  let secret = outside.join("secret.txt");
+  let hardlink = allowed.join("secret-hardlink.txt");
+  std::fs::write(&secret, "secret").unwrap();
+  std::fs::hard_link(&secret, &hardlink).unwrap();
+
+  let tool = FileTool::new(policy_for(&allowed));
+
+  assert_file_denied(
+    &tool,
+    SandboxTestCase {
+      name: "hardlink read",
+      params: json!({"operation": "read", "path": hardlink}),
+      expect_fragment: "hard links",
+    },
+  )
+  .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_can_explicitly_allow_hardlink_reads() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  let secret = outside.join("secret.txt");
+  let hardlink = allowed.join("secret-hardlink.txt");
+  std::fs::write(&secret, "secret").unwrap();
+  std::fs::hard_link(&secret, &hardlink).unwrap();
+
+  let policy = Arc::new(SandboxPolicy {
+    allowed_paths: vec![allowed.clone()],
+    allow_hardlinked_files: true,
+    ..SandboxPolicy::default()
+  });
+  let tool = FileTool::new(policy);
+  let output = tool
+    .execute(json!({"operation": "read", "path": hardlink}))
+    .await
+    .unwrap();
+
+  assert_eq!(output.content, "secret");
+}
+
+#[tokio::test]
 async fn shell_tool_blocks_unallowed_command_before_spawn() {
   let tool = ShellTool::default_policy();
   let error = tool

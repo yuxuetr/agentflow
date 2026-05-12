@@ -113,6 +113,11 @@ resolved target. For writes to new files, `FileTool` validates both the
 requested target and its parent directory before creating directories or
 writing content.
 
+`FileTool` also rejects hardlinked regular files by default. Hardlinks do not
+carry enough path provenance to prove that an allowed path is the file's only
+reachable name, so callers must explicitly opt in with
+`SandboxPolicy.allow_hardlinked_files` when that behavior is trusted.
+
 ### macOS — `sandbox-exec`
 
 `MacosSandboxExecBackend::wrap_command` writes a TinyScheme (SBPL) profile

@@ -40,6 +40,9 @@ pub struct SandboxPolicy {
   /// Allow HTTP tools to reach well-known cloud metadata endpoints.
   pub allow_cloud_metadata_access: bool,
 
+  /// Allow file tools to read or overwrite hardlinked regular files.
+  pub allow_hardlinked_files: bool,
+
   /// Maximum wall-clock time for a single shell command (seconds).
   pub max_exec_time_secs: u64,
 
@@ -63,6 +66,7 @@ impl Default for SandboxPolicy {
       allow_link_local_network_access: false,
       allow_private_network_access: false,
       allow_cloud_metadata_access: false,
+      allow_hardlinked_files: false,
       max_exec_time_secs: 30,
       max_file_read_bytes: 10 * 1024 * 1024, // 10 MB
     }
@@ -81,6 +85,7 @@ impl SandboxPolicy {
       allow_link_local_network_access: true,
       allow_private_network_access: true,
       allow_cloud_metadata_access: true,
+      allow_hardlinked_files: true,
       max_exec_time_secs: 60,
       max_file_read_bytes: 100 * 1024 * 1024,
     }
@@ -116,7 +121,7 @@ impl SandboxPolicy {
       ));
     }
 
-    let comparable_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let comparable_path = canonicalize_existing_prefix(path);
     if self
       .allowed_paths
       .iter()
@@ -165,4 +170,27 @@ fn path_starts_with_allowed(path: &Path, allowed: &Path) -> bool {
     .canonicalize()
     .unwrap_or_else(|_| allowed.to_path_buf());
   path.starts_with(comparable_allowed)
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+  if let Ok(canonical) = path.canonicalize() {
+    return canonical;
+  }
+
+  let mut existing = path.to_path_buf();
+  let mut missing = Vec::new();
+  while !existing.as_os_str().is_empty() && !existing.exists() {
+    if let Some(name) = existing.file_name() {
+      missing.push(name.to_os_string());
+    }
+    if !existing.pop() {
+      break;
+    }
+  }
+
+  let mut comparable = existing.canonicalize().unwrap_or(existing);
+  for component in missing.iter().rev() {
+    comparable.push(component);
+  }
+  comparable
 }

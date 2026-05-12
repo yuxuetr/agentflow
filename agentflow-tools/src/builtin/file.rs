@@ -92,6 +92,10 @@ impl Tool for FileTool {
           .await
           .map_err(ToolError::IoError)?;
 
+        if let Some(reason) = hardlink_denial_reason(path, &metadata, &self.policy) {
+          return Err(ToolError::SandboxViolation { message: reason });
+        }
+
         if metadata.len() > self.policy.max_file_read_bytes {
           return Err(ToolError::SandboxViolation {
             message: format!(
@@ -124,6 +128,12 @@ impl Tool for FileTool {
           .ok_or_else(|| ToolError::InvalidParams {
             message: "Parameter 'content' is required for 'write' operation".to_string(),
           })?;
+
+        if let Ok(metadata) = tokio::fs::metadata(path).await
+          && let Some(reason) = hardlink_denial_reason(path, &metadata, &self.policy)
+        {
+          return Err(ToolError::SandboxViolation { message: reason });
+        }
 
         if let Some(parent) = path.parent()
           && !parent.as_os_str().is_empty()
@@ -167,4 +177,32 @@ impl Tool for FileTool {
       }),
     }
   }
+}
+
+#[cfg(unix)]
+fn hardlink_denial_reason(
+  path: &Path,
+  metadata: &std::fs::Metadata,
+  policy: &SandboxPolicy,
+) -> Option<String> {
+  use std::os::unix::fs::MetadataExt;
+
+  if policy.allow_hardlinked_files || !metadata.is_file() || metadata.nlink() <= 1 {
+    return None;
+  }
+
+  Some(format!(
+    "file '{}' has {} hard links and hardlinked files are not allowed",
+    path.display(),
+    metadata.nlink()
+  ))
+}
+
+#[cfg(not(unix))]
+fn hardlink_denial_reason(
+  _path: &Path,
+  _metadata: &std::fs::Metadata,
+  _policy: &SandboxPolicy,
+) -> Option<String> {
+  None
 }
