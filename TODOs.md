@@ -96,7 +96,7 @@ auditable, and explicit.
   - Replace unconditional permissive CORS for non-dev profiles.
   - Add max request body size for workflow submit and Skill run routes.
   - Add tests for rejected origins and oversized bodies.
-- TODO P1.4 HTTP tool SSRF protection:
+- DONE P1.4 HTTP tool SSRF protection:
   - Reject loopback, link-local, private IP ranges, unix sockets, and cloud
     metadata endpoints by default.
   - Make exceptions explicit through `SandboxPolicy`.
