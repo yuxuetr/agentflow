@@ -679,25 +679,37 @@ Architectural rules (enforced via review):
     with `HARNESS_ENVELOPE_SCHEMA_VERSION = harness/1`.
 
 - TODO P-H.1 Harness runtime MVP (Phase H1; ~1-2 weeks; PREREQ: P-H.0):
-  - Scaffold `agentflow-harness/` crate with:
-    - `HarnessRuntime` wrapping `ReActAgent` via `AgentRuntime`.
-    - `HarnessContext` with session_id, workspace_dir, profile, limits.
-    - `HarnessEvent` emission wired to `agentflow-tracing`.
-  - Implement default context providers:
-    - `AgentsMdProvider` (reads `AGENTS.md` if present, with priority +
-      token cost).
-    - `TodosMdProvider` (reads `TODOs.md` short queue).
-    - `RoadmapMdProvider` (reads `RoadMap.md` Direction section).
-    - `WorkspaceLayoutProvider` (top-level dir listing).
-  - Integrate with `ToolRegistry` (no new tool wiring).
-  - Integrate with `SkillBuilder` for explicit Skill loading.
-  - CLI entry: `agentflow harness run "..."` with `--output
-    text|json|stream-json`.
-  - Session id printed in final answer.
-  - Persist session events to JSONL by default; SQLite/Postgres
-    feature-gated.
-  - Tests for the doc's "Acceptance Criteria For MVP" list
-    (HARNESS_MODE_EVOLUTION L815-828).
+  Library scaffolding landed; CLI and resume work remain. Subtasks:
+  - DONE `HarnessRuntime` wrapping any `AgentRuntime` impl (composes
+    `ReActAgent` via `Box<dyn AgentRuntime>`).
+  - DONE `HarnessRunOptions` carrying session_id, workspace, profile,
+    runtime kind, limits, persona prefix, context-token budget.
+  - DONE Four default context providers (`AgentsMdProvider`,
+    `TodosMdProvider`, `RoadmapMdProvider`, `WorkspaceLayoutProvider`)
+    with priority + token-cost estimates.
+  - DONE Event bridge: inner `AgentEvent`s and `AgentStep`s translate
+    into the frozen [`HarnessEvent`] envelopes with monotonic `seq`.
+  - DONE Persistence: `InMemoryEventSink` + `JsonlEventSink` +
+    `SinkChain` fan-out; SQLite / Postgres sinks deferred to P-H.5
+    alongside the server integration.
+  - DONE Tool / Skill integration is composition-only: callers pass a
+    pre-built `ReActAgent` (typically from
+    `SkillBuilder::build()`); the runtime never touches `ToolRegistry`
+    directly.
+  - DONE Tests: 38 unit tests + 6 envelope fixtures + 1 react+mock LLM
+    smoke test covering session bookends, context piping, step/tool
+    event translation, budget trimming, stop-reason mapping, and JSONL
+    round-trip.
+  - TODO CLI entry: `agentflow harness run "..."` with `--output
+    text|json|stream-json`, `--skill`, `--session`, `--workspace`,
+    `--profile`, `--model`, `--run-dir`. Print session id with the
+    final answer.
+  - TODO Session resume: re-attach prior memory + sink by session id
+    (`agentflow harness resume <session_id>`). Phase H1 wires
+    `--session` through but does not yet rehydrate memory.
+  - TODO Bridge `HarnessEventSink` into `agentflow-tracing` so trace
+    listeners receive Harness envelopes without re-implementing the
+    sink interface.
 
 ### After P1.7 — Hooks And Approval
 

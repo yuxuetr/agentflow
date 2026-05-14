@@ -34,6 +34,9 @@ pub mod context;
 pub mod error;
 pub mod event;
 pub mod hooks;
+pub mod persistence;
+pub mod providers;
+pub mod runtime;
 
 pub use approval::{
   ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest, ApprovalRisk, ApprovalScope,
@@ -49,6 +52,14 @@ pub use event::{
   ToolCallRequestedPayload,
 };
 pub use hooks::{CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook};
+pub use persistence::{
+  HarnessEventSink, InMemoryEventSink, JsonlEventSink, SinkChain, default_session_dir,
+};
+pub use providers::{
+  AgentsMdProvider, DEFAULT_DOC_CHAR_CAP, RoadmapMdProvider, TodosMdProvider,
+  WorkspaceLayoutProvider, default_providers,
+};
+pub use runtime::{HarnessRunOptions, HarnessRunResult, HarnessRuntime};
 
 /// Crate version exposed for diagnostics; matches `Cargo.toml`.
 pub const HARNESS_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");

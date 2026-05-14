@@ -3,17 +3,18 @@ name = "agentflow-harness"
 version = "0.1.0"
 edition = "2024"
 authors = ["AgentFlow Contributors"]
-description = "Harness Agent Mode contract crate: long-lived, workspace-aware agent sessions for AgentFlow"
+description = "Harness Agent Mode runtime + contract crate: long-lived, workspace-aware agent sessions for AgentFlow"
 license = "MIT"
 keywords = ["ai", "agents", "harness", "agentflow"]
 categories = ["development-tools"]
 
-# Phase H0 (P-H.0) deliverable: this crate freezes the contract surface
-# (event envelope, approval protocol, hook traits, session context) without
-# any execution logic. Runtime wiring lives in Phase H1+. Keep the
-# dependency footprint deliberately small so the contracts stay reusable.
+# Phase H0 deliverable: the contract surface (event envelope, approval
+# protocol, hook traits, session context). Phase H1 adds the runtime
+# wrapper around `agentflow_agents::AgentRuntime`, four default context
+# providers, JSONL persistence, and event bridging.
 
 [dependencies]
+agentflow-agents = { path = "../agentflow-agents" }
 agentflow-tools = { path = "../agentflow-tools" }
 
 async-trait = "0.1"
@@ -21,6 +22,12 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
+tokio = { version = "1.0", features = ["fs", "io-util", "sync", "macros", "rt"] }
+tracing = "0.1"
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["macros", "rt"] }
+agentflow-llm = { path = "../agentflow-llm" }
+agentflow-memory = { path = "../agentflow-memory" }
+tempfile = "3"
+tokio = { version = "1.0", features = ["full"] }
