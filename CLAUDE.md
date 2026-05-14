@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 14 active crates plus 2 scaffold crates (`agentflow-server`, `agentflow-db`).
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 15 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
 
 Recommended four-layer mental model:
 
 - **L1 Execution Core**: `agentflow-core` (DAG engine, `AsyncNode`, `FlowValue`, scheduler, retry, timeout, checkpoint, resource manager, health, events)
 - **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
 - **L3 Agent / Orchestration**: `agentflow-agents`, `agentflow-skills`, `agentflow-cli`
-- **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-viz`, `agentflow-server`, `agentflow-db`
+- **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-viz`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`
 
 Two complementary execution styles:
 
@@ -106,6 +106,12 @@ Axum gateway for platform mode. Implemented: `/v1/runs` (POST/GET), `/v1/runs/{i
 #### L4 — agentflow-db
 PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / artifacts / skill_installs / mcp_sessions) via `sqlx::migrate!()`. Repository layer: `RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo`.
 
+#### L4 — agentflow-worker
+Standalone worker process for distributed DAG execution. Speaks `WorkerProtocol` over gRPC to the server control plane, pulls assigned tasks, executes the node payload locally, and streams events back with W3C `traceparent` continuity so worker spans stitch into the parent OTel trace. Today the supported node payloads are limited (template/file); extending to LLM / HTTP / MCP / agent payloads is tracked as P2.8.
+
+#### L4 — agentflow-ui
+React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run list, DAG status panel, event history replay, live SSE updates. It is a client of the same `/v1/*` and SSE contracts the CLI uses — never bypass server APIs for UI-only features. Productization beyond the alpha shell is tracked under P6.
+
 ## Development Guidelines
 
 ### Code Style
@@ -142,8 +148,10 @@ PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / 
 - **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag search|index|collections|eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
 - **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks, checkpoint recovery, retry, resource management, structured logging, Prometheus metrics
 - **Tracing** — `EventListener`, JSONL/SQLite/Postgres persistence, `trace replay` TUI, OTel OTLP exporter, W3C `traceparent` propagation through LLM HTTP calls
-- **OS-level sandbox** — macOS sandbox-exec / Linux seccomp backends for shell/script tools (opt-in via `security.os_sandbox`)
+- **OS-level sandbox** — macOS sandbox-exec / Linux seccomp backends for shell/script tools (opt-in via `security.os_sandbox`); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output
 - **Platform skeleton** — server gateway routes (`/v1/runs`, SSE, skills) + DB schema/repos + auth
+- **Distributed worker foundation** — `agentflow-worker` runtime/binary, gRPC `WorkerProtocol`, server control-plane façade, stitched worker traces mapped to OTel spans (node-payload coverage is partial; see P2.8)
+- **Web UI alpha shell** — `agentflow-ui` SPA embedded at `/ui`, run list, DAG graph/status, event history, SSE updates
 
 ### 📋 Roadmap
 
@@ -162,7 +170,7 @@ PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / 
 - ✅ Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates
 - ✅ Plugin marketplace remote registry foundation: unified Skill/Plugin manifest, read-only HTTP client, artifact cache, signature verifier, marketplace CLI, and docs
 
-See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the evaluation that drove the prioritization. For change history, prefer `git log` over a doc summary.
+See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-14.md` for the most recent evaluation (the 2026-05-01 evaluation is retained as historical context). For change history, prefer `git log` over a doc summary.
 
 ## File Organization
 
@@ -245,7 +253,7 @@ See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the e
 
 ---
 
-**Last Updated**: 2026-05-07
+**Last Updated**: 2026-05-14
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
-**Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-01.md`)
+**Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-14.md`)

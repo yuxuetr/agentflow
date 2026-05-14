@@ -782,12 +782,7 @@ Architectural rules (enforced via review):
 Ongoing housekeeping that should ride along with feature work but doesn't
 fit a P-segment.
 
-- TODO M.1 `CLAUDE.md` sync after worker/ui:
-  - Add `agentflow-worker` and `agentflow-ui` to the L4 description.
-  - Change "14+2 crate" wording to "15 Rust crates + 1 Web UI crate".
-  - Update "Current Implementation Status" with `agentflow-worker`
-    foundation + Web UI alpha shell.
-  - Cross-reference `PROJECT_EVALUATION_2026-05-14.md`.
+- DONE M.1 `CLAUDE.md` sync after worker/ui.
 
 - TODO M.2 `docs/AGENT_SDK.md` trait-change sync:
   - Add a doc maintenance checklist: every change to `AgentRuntime`,
