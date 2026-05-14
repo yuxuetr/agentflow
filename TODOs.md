@@ -800,12 +800,7 @@ fit a P-segment.
     backend-specific tests and cross-layer search tests.
   - Worker (P5): coverage grows with P5.5–P5.7.
 
-- TODO M.4 Historical eval doc cleanup:
-  - Add a one-line current-status pointer to `OVERALL_EVALUATION_REPORT.md`
-    (2026-04-28) similar to what `PROJECT_EVALUATION_2026-05-01.md`
-    already has.
-  - Decide whether to archive `IMPLEMENTATION_STATUS.md` (2025-10-25)
-    given `docs/CURRENT_STATUS.md` is authoritative.
+- DONE M.4 Historical eval doc cleanup.
 
 - TODO M.5 CI workflow audit:
   - Inventory all `.github/workflows/` files.

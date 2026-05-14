@@ -1,5 +1,14 @@
 # AgentFlow Project - Current Implementation Status
 
+> Archived historical reference (snapshot dated 2025-10-25). For the
+> maintained current status, see `docs/CURRENT_STATUS.md`, which is the
+> authoritative source. The workspace has since grown from the 6 crates
+> described below to 15 Rust crates + 1 Web UI crate; subsequent
+> evaluations live in `OVERALL_EVALUATION_REPORT.md` (2026-04-28),
+> `PROJECT_EVALUATION_2026-05-01.md`, and
+> `PROJECT_EVALUATION_2026-05-14.md`. The content below is preserved as
+> a snapshot, not as a description of current state.
+
 ## Executive Summary
 
 AgentFlow is a Rust-based workflow orchestration platform with comprehensive LLM integration support. The project is structured as a workspace with 6 core crates, providing both SDK (code-first) and CLI (configuration-first) interfaces. The implementation is mature in core areas (workflow execution, LLM providers, built-in nodes) while MCP/RAG features documented in CLAUDE.md remain in early planning stages.
