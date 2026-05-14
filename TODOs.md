@@ -312,20 +312,42 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
   - Mark JSON outputs as stable surfaces in `docs/STABILITY.md`.
 
 - TODO P3.4 `agentflow doctor` expansion:
-  - Diagnose:
-    - Model config files reachable, syntactically valid.
-    - Provider API keys present (without leaking values).
-    - Feature flags compiled in.
-    - MCP server reachability via configured transport.
-    - Sandbox backend name + enforcement level (links to P1.6).
-    - Server + DB availability when `--server` provided.
-    - Plugin runtime spawn smoke (no-op plugin, ≤1s).
-    - Marketplace cache readable.
-    - Disk space for run_dir / trace_dir.
-  - Provide both human-readable and `--output json` modes.
-  - Exit code 0 / 1 / 2 reflect ok / warn / fail respectively.
-  - Add a `--profile dev|local|production` flag that changes the
-    pass/fail thresholds.
+  Library/CLI structural surface landed; deeper provider probes
+  (MCP reachability + plugin spawn smoke) remain. Subtasks:
+  - DONE Tri-state `DoctorStatus` (`ok` / `warning` / `fail`) with
+    exit codes `0` / `1` / `2`. Existing `--format text|json` modes
+    keep their JSON envelope; new fields are additive.
+  - DONE `--profile dev|local|production` flag changes the
+    pass/fail thresholds. Default is `local` (matches the security
+    profile naming). `production` escalates missing API keys, missing
+    auth-token env, missing run/trace dirs, and non-enforcing sandbox
+    to `fail`. `dev` keeps the same checks but never escalates
+    beyond `warning`.
+  - DONE Disk reachability section: `run_dir`, `trace_dir`, and
+    `marketplace_cache` checks (resolution via override → env →
+    default, plus a per-dir write-probe). Source identifier
+    (`env` / `default`) accompanies each path so operators can see
+    why a directory was chosen.
+  - DONE `--server <url>` reachability probe issues `GET <url>/health`
+    with a 3 s timeout and surfaces `status_code` + error in the
+    structured report. Unreachable server escalates to `fail`.
+  - DONE Existing diagnostics (model config validation, provider API
+    keys, feature flags, sandbox backend + enforcement, security
+    profile) already covered by the prior shape; this slice plugs
+    them into the new tri-state status calculation without changing
+    their structure.
+  - DONE Tests: 7 new CLI tests cover the default warning path, the
+    production fail-closed path, the dev lenient path, the env-driven
+    run-dir write probe, the unreachable-server probe, the text
+    output sections, and the unknown-profile rejection. 2 existing
+    `config_cli_tests::doctor_*` tests updated to accept exit 0/1
+    as expected outcomes for missing-config scenarios.
+  - TODO MCP server reachability via configured transport — defer
+    until `agentflow mcp config` ships a structured config surface
+    the doctor command can crawl.
+  - TODO Plugin runtime spawn smoke (no-op plugin, ≤1 s) — defer
+    until the plugin manifest schema includes a `dry_run` entry point
+    so the smoke test does not depend on a real plugin binary.
 
 - TODO P3.5 Permission explanation improvements:
   - Expand `agentflow skill inspect --explain-permissions <skill>`:

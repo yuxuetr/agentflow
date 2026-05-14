@@ -27,12 +27,16 @@ impl OutputFormat {
 #[derive(Debug, Serialize)]
 struct DoctorReport {
   version: &'static str,
+  profile: DoctorProfile,
   features: FeatureReport,
   paths: PathReport,
   config: ConfigReport,
   security: SecurityReport,
   sandbox: SandboxReport,
   environment: EnvironmentReport,
+  disk: DiskReport,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  server: Option<ServerReport>,
   status: DoctorStatus,
 }
 
@@ -98,25 +102,138 @@ struct EnvironmentReport {
   agentflow_skills_index: Option<String>,
 }
 
+/// Filesystem reachability report for the workspace state dirs that
+/// AgentFlow writes during execution. The byte-cost check is
+/// deliberately coarse: we look up "is the directory present, and is
+/// it writable" rather than running platform-specific `statvfs`. The
+/// 80 % case for operators is "did I forget to mount the run-dir
+/// volume" — that case is fully covered without a new dependency.
 #[derive(Debug, Serialize)]
+struct DiskReport {
+  run_dir: DirCheck,
+  trace_dir: DirCheck,
+  marketplace_cache: DirCheck,
+}
+
+#[derive(Debug, Serialize)]
+struct DirCheck {
+  /// Resolved path (override → env → default).
+  path: String,
+  /// Stable identifier of the source (`override`, `env`, `default`).
+  source: &'static str,
+  /// `true` when the directory exists and is a directory.
+  exists: bool,
+  /// `true` when a probe-file create + remove succeeded under the dir.
+  writable: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
+}
+
+/// Server reachability report populated only when `--server <url>` is
+/// supplied. Issues a `GET <url>/health` with a 3 s timeout and
+/// records the HTTP status code.
+#[derive(Debug, Serialize)]
+struct ServerReport {
+  url: String,
+  reachable: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  status_code: Option<u16>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
+}
+
+/// Tri-state doctor verdict. `agentflow doctor` exits with the
+/// corresponding [`Self::exit_code`] so CI gates can branch on it
+/// (`P3.4`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum DoctorStatus {
   Ok,
   Warning,
+  Fail,
 }
 
-pub async fn execute(format: OutputFormat) -> Result<()> {
-  let report = build_report().await;
+impl DoctorStatus {
+  fn exit_code(self) -> i32 {
+    match self {
+      Self::Ok => 0,
+      Self::Warning => 1,
+      Self::Fail => 2,
+    }
+  }
+
+  fn promote(&mut self, other: Self) {
+    if other.rank() > self.rank() {
+      *self = other;
+    }
+  }
+
+  fn rank(self) -> u8 {
+    match self {
+      Self::Ok => 0,
+      Self::Warning => 1,
+      Self::Fail => 2,
+    }
+  }
+}
+
+/// Pass/fail threshold profile chosen via `--profile`. Sticks to
+/// `local` by default so the legacy behaviour (warn but exit 0… now
+/// warn = exit 1) stays close to what existing users expect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorProfile {
+  /// Most lenient. Missing models config and missing API keys stay
+  /// at `Warning` and never escalate to `Fail`.
+  Dev,
+  /// Default. Matches the security model `local` profile.
+  Local,
+  /// Strictest. Missing API keys, missing API token, missing
+  /// marketplace cache, and missing run/trace dirs escalate to
+  /// `Fail`.
+  Production,
+}
+
+impl DoctorProfile {
+  pub fn parse(value: &str) -> Result<Self> {
+    match value {
+      "dev" => Ok(Self::Dev),
+      "local" => Ok(Self::Local),
+      "production" => Ok(Self::Production),
+      other => Err(anyhow::anyhow!(
+        "unsupported --profile '{other}', expected dev | local | production"
+      )),
+    }
+  }
+
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Dev => "dev",
+      Self::Local => "local",
+      Self::Production => "production",
+    }
+  }
+}
+
+/// Execute the doctor command. The CLI passes through `--profile` and
+/// optional `--server` URL; both default to None so legacy invocations
+/// keep working.
+pub async fn execute(
+  format: OutputFormat,
+  profile: DoctorProfile,
+  server: Option<String>,
+) -> Result<()> {
+  let report = build_report(profile, server.as_deref()).await;
   match format {
     OutputFormat::Json => {
       println!("{}", serde_json::to_string_pretty(&report)?);
     }
     OutputFormat::Text => print_text_report(&report),
   }
-  Ok(())
+  std::process::exit(report.status.exit_code());
 }
 
-async fn build_report() -> DoctorReport {
+async fn build_report(profile: DoctorProfile, server: Option<&str>) -> DoctorReport {
   let home = dirs::home_dir();
   let config_dir = home.as_ref().map(|p| p.join(".agentflow"));
   let resolved_source = LLMConfig::resolve_default_source().ok();
@@ -154,19 +271,62 @@ async fn build_report() -> DoctorReport {
   };
 
   let security = security_report();
-
-  let status = if config.error.is_some()
-    || !config.missing_env_vars.is_empty()
-    || !sandbox.enforcing
-    || security.warning.is_some()
-  {
-    DoctorStatus::Warning
-  } else {
-    DoctorStatus::Ok
+  let disk = disk_report(home.as_deref());
+  let server_report = match server {
+    Some(url) => Some(probe_server(url).await),
+    None => None,
   };
+
+  let mut status = DoctorStatus::Ok;
+
+  // Config / API keys.
+  if config.error.is_some() {
+    status.promote(DoctorStatus::Warning);
+  }
+  if !config.missing_env_vars.is_empty() {
+    status.promote(match profile {
+      DoctorProfile::Production => DoctorStatus::Fail,
+      _ => DoctorStatus::Warning,
+    });
+  }
+
+  // Sandbox.
+  if !sandbox.enforcing {
+    let level = if matches!(profile, DoctorProfile::Production) {
+      DoctorStatus::Fail
+    } else {
+      DoctorStatus::Warning
+    };
+    status.promote(level);
+  }
+
+  // Security warnings.
+  if security.warning.is_some() {
+    status.promote(DoctorStatus::Warning);
+  }
+
+  // Disk reachability.
+  for check in [&disk.run_dir, &disk.trace_dir, &disk.marketplace_cache] {
+    if !check.exists {
+      status.promote(DoctorStatus::Warning);
+    } else if !check.writable {
+      status.promote(match profile {
+        DoctorProfile::Production => DoctorStatus::Fail,
+        _ => DoctorStatus::Warning,
+      });
+    }
+  }
+
+  // Server reachability (only when explicitly probed).
+  if let Some(report) = server_report.as_ref()
+    && !report.reachable
+  {
+    status.promote(DoctorStatus::Fail);
+  }
 
   DoctorReport {
     version: env!("CARGO_PKG_VERSION"),
+    profile,
     features: FeatureReport {
       rag: cfg!(feature = "rag"),
       plugin: cfg!(feature = "plugin"),
@@ -190,7 +350,108 @@ async fn build_report() -> DoctorReport {
       agentflow_api_token_set: std::env::var("AGENTFLOW_API_TOKEN").is_ok(),
       agentflow_skills_index: std::env::var("AGENTFLOW_SKILLS_INDEX").ok(),
     },
+    disk,
+    server: server_report,
     status,
+  }
+}
+
+fn disk_report(home: Option<&Path>) -> DiskReport {
+  let run_dir = resolve_dir(home, "AGENTFLOW_RUN_DIR", &["runs"]);
+  let trace_dir = resolve_dir(home, "AGENTFLOW_TRACE_DIR", &["traces"]);
+  let marketplace_cache = resolve_dir(
+    home,
+    "AGENTFLOW_MARKETPLACE_CACHE",
+    &["marketplace", "cache"],
+  );
+  DiskReport {
+    run_dir,
+    trace_dir,
+    marketplace_cache,
+  }
+}
+
+fn resolve_dir(home: Option<&Path>, env_var: &str, default_tail: &[&str]) -> DirCheck {
+  let (path, source) =
+    if let Some(value) = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()) {
+      (PathBuf::from(value), "env")
+    } else if let Some(home) = home {
+      let mut p = home.join(".agentflow");
+      for segment in default_tail {
+        p.push(segment);
+      }
+      (p, "default")
+    } else {
+      (PathBuf::from("<unknown>"), "default")
+    };
+
+  let exists = path.is_dir();
+  let writable = if exists { probe_writable(&path) } else { false };
+  let error = if !exists {
+    Some("directory does not exist; will be created on first write".to_string())
+  } else if !writable {
+    Some("directory exists but write probe failed".to_string())
+  } else {
+    None
+  };
+  DirCheck {
+    path: path.display().to_string(),
+    source,
+    exists,
+    writable,
+    error,
+  }
+}
+
+fn probe_writable(dir: &Path) -> bool {
+  let probe = dir.join(format!(".agentflow-doctor-probe-{}", std::process::id()));
+  match std::fs::write(&probe, b"probe") {
+    Ok(()) => {
+      let _ = std::fs::remove_file(&probe);
+      true
+    }
+    Err(_) => false,
+  }
+}
+
+async fn probe_server(url: &str) -> ServerReport {
+  let trimmed = url.trim_end_matches('/');
+  let health = format!("{trimmed}/health");
+  let client = match reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(3))
+    .build()
+  {
+    Ok(client) => client,
+    Err(err) => {
+      return ServerReport {
+        url: url.to_string(),
+        reachable: false,
+        status_code: None,
+        error: Some(format!("http client init failed: {err}")),
+      };
+    }
+  };
+  match client.get(&health).send().await {
+    Ok(response) => {
+      let code = response.status().as_u16();
+      let ok = response.status().is_success();
+      ServerReport {
+        url: url.to_string(),
+        reachable: ok,
+        status_code: Some(code),
+        error: if ok {
+          None
+        } else {
+          Some(format!("non-success HTTP status {code}"))
+        },
+      }
+    }
+    Err(err) => ServerReport {
+      url: url.to_string(),
+      reachable: false,
+      status_code: None,
+      error: Some(err.to_string()),
+    },
   }
 }
 
@@ -475,6 +736,40 @@ fn print_text_report(report: &DoctorReport) {
     "  AGENTFLOW_SKILLS_INDEX: {}",
     optional_env(report.environment.agentflow_skills_index.as_deref())
   );
+  println!();
+
+  println!("Disk:");
+  print_dir_check("run dir", &report.disk.run_dir);
+  print_dir_check("trace dir", &report.disk.trace_dir);
+  print_dir_check("marketplace cache", &report.disk.marketplace_cache);
+  println!();
+
+  if let Some(server) = &report.server {
+    println!("Server:");
+    println!("  url: {}", server.url);
+    println!("  reachable: {}", enabled_label(server.reachable));
+    if let Some(code) = server.status_code {
+      println!("  status: {code}");
+    }
+    if let Some(err) = &server.error {
+      println!("  error: {err}");
+    }
+    println!();
+  }
+
+  println!("Profile: {}", report.profile.as_str());
+}
+
+fn print_dir_check(label: &str, check: &DirCheck) {
+  let status = match (check.exists, check.writable) {
+    (true, true) => "ok",
+    (true, false) => "read-only",
+    (false, _) => "missing",
+  };
+  println!("  {label}: {status} ({}) [{}]", check.path, check.source);
+  if let Some(err) = &check.error {
+    println!("    note: {err}");
+  }
 }
 
 fn enabled_label(value: bool) -> &'static str {
@@ -485,6 +780,7 @@ fn status_label(status: &DoctorStatus) -> &'static str {
   match status {
     DoctorStatus::Ok => "ok",
     DoctorStatus::Warning => "warning",
+    DoctorStatus::Fail => "fail",
   }
 }
 

@@ -217,17 +217,26 @@ fn top_level_help_exposes_diagnostics_and_feature_gated_commands() {
 }
 
 #[test]
-fn doctor_reports_missing_config_without_failing() {
+fn doctor_reports_missing_config_without_panicking() {
   let home = TempDir::new().unwrap();
 
+  // Missing models config + missing API keys + missing
+  // run/trace dirs now produce a Warning (exit 1) under any profile.
+  // The test asserts the structured output is still rendered; we
+  // accept exit 0 (Ok) or 1 (Warning) but not Fail.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
-    .arg("doctor")
-    .env("HOME", home.path())
-    .assert()
-    .success()
-    .stdout(predicate::str::contains("AgentFlow doctor"))
-    .stdout(predicate::str::contains("source: BuiltInDefault"));
+    .args(["doctor", "--profile", "dev"])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  assert!(
+    matches!(output.status.code(), Some(0) | Some(1)),
+    "expected exit 0 or 1, got {:?}",
+    output.status.code()
+  );
+  let stdout = String::from_utf8(output.stdout).unwrap();
+  assert!(stdout.contains("AgentFlow doctor"));
+  assert!(stdout.contains("source: BuiltInDefault"));
 }
 
 #[test]
@@ -236,14 +245,17 @@ fn doctor_json_reports_enabled_feature_flags() {
 
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
-    .args(["doctor", "--format", "json"])
-    .env("HOME", home.path())
-    .assert()
-    .success()
-    .stdout(predicate::str::contains("\"features\""))
-    .stdout(predicate::str::contains("\"models_config_source\""))
-    .stdout(predicate::str::contains("\"rag\""))
-    .stdout(predicate::str::contains("\"plugin\""));
+    .args(["doctor", "--format", "json", "--profile", "dev"])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  assert!(matches!(output.status.code(), Some(0) | Some(1)));
+  let stdout = String::from_utf8(output.stdout).unwrap();
+  assert!(stdout.contains("\"features\""));
+  assert!(stdout.contains("\"models_config_source\""));
+  assert!(stdout.contains("\"rag\""));
+  assert!(stdout.contains("\"plugin\""));
+  assert!(stdout.contains("\"disk\""));
+  assert!(stdout.contains("\"profile\": \"dev\""));
 }
 
 #[cfg(not(feature = "rag"))]

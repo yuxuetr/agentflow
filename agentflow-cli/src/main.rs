@@ -109,6 +109,12 @@ struct DoctorArgs {
   /// Output format
   #[arg(long, default_value = "text", value_parser = ["text", "json"])]
   format: String,
+  /// Pass/fail threshold profile
+  #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+  profile: String,
+  /// When supplied, also probe `<url>/health` for server reachability
+  #[arg(long)]
+  server: Option<String>,
 }
 #[derive(Args)]
 struct HarnessArgs {
@@ -1164,9 +1170,12 @@ async fn main() {
         max_field_chars,
       } => trace::tui::execute(run_id, dir, filter, details, max_field_chars).await,
     },
-    Commands::Doctor(args) => match doctor::OutputFormat::parse(&args.format) {
-      Ok(format) => doctor::execute(format).await,
-      Err(err) => Err(err),
+    Commands::Doctor(args) => match (
+      doctor::OutputFormat::parse(&args.format),
+      doctor::DoctorProfile::parse(&args.profile),
+    ) {
+      (Ok(format), Ok(profile)) => doctor::execute(format, profile, args.server).await,
+      (Err(err), _) | (_, Err(err)) => Err(err),
     },
     Commands::Serve(args) => {
       serve_cmd::execute(
