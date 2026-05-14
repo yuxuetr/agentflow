@@ -802,12 +802,7 @@ fit a P-segment.
 
 - DONE M.4 Historical eval doc cleanup.
 
-- TODO M.5 CI workflow audit:
-  - Inventory all `.github/workflows/` files.
-  - Ensure `feature-matrix.yml` (P3.9), `bench.yml` (P7.2),
-    `examples-smoke.yml` (P3.10), `rag-eval-smoke.yml` (P4.1) exist or
-    are tracked.
-  - Document any flake-prone job and its retry policy.
+- DONE M.5 CI workflow audit (see `docs/CI_WORKFLOWS.md`).
 
 - TODO M.6 Workspace edition pin:
   - All 15 Rust crates are on edition 2024 now. Add a `cargo xtask
