@@ -49,7 +49,7 @@ impl ApprovalRisk {
 /// Scope of an approval decision. A decision is always recorded against
 /// the originating request; the scope tells the runtime how many future
 /// requests for the same tool should reuse it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalScope {
   /// Apply to the originating request only.

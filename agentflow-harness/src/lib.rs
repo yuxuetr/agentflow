@@ -30,10 +30,12 @@
 //! [`docs/HARNESS_MODE.md`]: ../../docs/HARNESS_MODE.md
 
 pub mod approval;
+pub mod approval_providers;
 pub mod context;
 pub mod error;
 pub mod event;
 pub mod hooks;
+pub mod hooks_runtime;
 pub mod persistence;
 pub mod providers;
 pub mod runtime;
@@ -41,6 +43,9 @@ pub mod tracing_bridge;
 
 pub use approval::{
   ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest, ApprovalRisk, ApprovalScope,
+};
+pub use approval_providers::{
+  AutoAllowApprovalProvider, AutoDenyApprovalProvider, CliApprovalProvider,
 };
 pub use context::{
   ContextItem, ContextPriority, ContextProvider, HarnessContext, HarnessProfile, HarnessRuntimeKind,
@@ -53,6 +58,9 @@ pub use event::{
   ToolCallRequestedPayload,
 };
 pub use hooks::{CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook};
+pub use hooks_runtime::{
+  DEFAULT_APPROVAL_TIMEOUT, DEFAULT_HOOK_TIMEOUT, HookConfig, HookedTool, wrap_registry,
+};
 pub use persistence::{
   HarnessEventSink, InMemoryEventSink, JsonlEventSink, SinkChain, StdoutEventSink,
   default_session_dir,

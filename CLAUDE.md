@@ -81,11 +81,12 @@ Declarative agent capability packages:
 - CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
 
 #### L3 — agentflow-harness
-Harness Agent Mode crate (Phase H0 contract freeze + Phase H1 runtime MVP, both closed):
+Harness Agent Mode crate (Phase H0 contract freeze + H1 runtime MVP + H2 hooks/approval, all closed):
 - **Frozen contract surface (H0):** `HarnessEvent` line-delimited JSON envelope (closed kind set: `session_started`, `step_started`, `tool_call_requested`, `approval_requested`, `approval_decided`, `tool_call_completed`, `background_task_updated`, `memory_summary_added`, `stopped`); `ApprovalRequest` / `ApprovalDecision` / `ApprovalRisk` / `ApprovalScope` interactive approval protocol; async hook traits `PreToolHook` / `PostToolHook` / `ApprovalProvider` / `ContextProvider`; session descriptor `HarnessContext` / `HarnessProfile` / `HarnessRuntimeKind`
 - **Runtime MVP (H1):** `HarnessRuntime` wrapping any `agentflow_agents::AgentRuntime` (typically `ReActAgent`) via `Box<dyn AgentRuntime>`; four default context providers (`AgentsMdProvider`, `TodosMdProvider`, `RoadmapMdProvider`, `WorkspaceLayoutProvider`) with priority + token-cost estimates and priority-aware budget trimming; `InMemoryEventSink` / `JsonlEventSink` / `StdoutEventSink` / `SinkChain` persistence; deterministic `AgentEvent` → `HarnessEvent` translation with monotonic `seq`; `tracing_bridge` honoring the `AGENTFLOW_TRACE_DIR` convention so Harness session logs co-locate with the rest of the trace tooling.
+- **Hooks + approval (H2):** `HookedTool` + `wrap_registry(registry, HookConfig)` decorate every registered `Tool` with a pre/post hook + approval pipeline. Pre-hook timeouts and errors are fail-closed; post-hooks are advisory. Three `ApprovalProvider` implementations (`AutoAllow`, `AutoDeny`, `Cli`). Production profile escalates `NonIdempotent` calls to `RequireApproval` automatically. `Session` / `Run` scope decisions are cached per tool. `DenyAndStop` short-circuits every subsequent tool call. Approval-lifecycle events (`approval_requested` / `approval_decided`) flow through the existing `SinkChain`.
 - **CLI surface:** `agentflow harness run|resume|list|inspect` with `--output text|json|stream-json` and the full flag set documented in `docs/HARNESS_MODE.md`.
-- Stability tier **experimental** until Phase H2 wires approval / hooks (gated on P1.7). See `docs/HARNESS_MODE.md` for the implementation spec.
+- Stability tier **experimental** until Phase H3 wires parallel native tool calls (gated on P3.7). See `docs/HARNESS_MODE.md` for the implementation spec.
 
 #### L3 — agentflow-cli
 Unified user interface:

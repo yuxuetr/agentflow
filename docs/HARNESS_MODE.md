@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-14
-Status: **Phase H0 + Phase H1 closed.** H2 (hooks + approval) is the next active phase, gated on `P1.7` non-idempotent resume policy.
+Status: **Phase H0 + H1 + H2 closed.** H3 (parallel native tool calls) is the next active phase, gated on `P3.7` LLM provider matrix documentation.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -173,6 +173,73 @@ Providers emit structured `ContextItem`s with priority and token cost;
 the runtime composes them under a token budget rather than dumping
 files blindly (HARNESS_MODE_EVOLUTION Risk 4).
 
+### Wiring hooks into the tool registry (Phase H2)
+
+The `agentflow_harness::wrap_registry` function decorates every tool
+already registered in a `ToolRegistry` with a `HookedTool` wrapper.
+The wrapper:
+
+1. Builds a `PendingToolCall` from the tool metadata + params.
+2. Runs every registered `PreToolHook` under a bounded timeout
+   (`DEFAULT_HOOK_TIMEOUT = 5s`; configurable via
+   `HookConfig::with_hook_timeout`). Pre-hook timeouts and errors
+   are fail-closed — the call is denied with a reason that names the
+   offending hook.
+3. Merges the per-hook decisions (`Deny` > `RequireApproval` >
+   `Allow`).
+4. **Production escalation**: when `HarnessProfile::Production` is
+   active and the call's idempotency is `NonIdempotent`, the wrapper
+   escalates even an `Allow` to `RequireApproval` with risk
+   `Critical` so production runs are fail-closed by default
+   (HARNESS_MODE_EVOLUTION Risk 2).
+5. If approval is required: emits `HarnessEvent::ApprovalRequested`,
+   delegates to the configured `ApprovalProvider`, emits
+   `ApprovalDecided`. `Session` / `Run` scope decisions are cached
+   per tool name so subsequent calls reuse the prior outcome without
+   re-prompting. `DenyAndStop` short-circuits every subsequent call
+   without raising further approvals.
+6. Dispatches the inner tool when allowed, returns
+   `ToolError::PolicyDenied` otherwise.
+7. Runs every `PostToolHook` (advisory; failures are logged but
+   never undo the tool result).
+
+Three reference providers ship in `agentflow_harness::approval_providers`:
+
+- `AutoAllowApprovalProvider` — CI smoke + dev profile override.
+- `AutoDenyApprovalProvider` (`with_stop_on_deny`) — production
+  fail-closed default.
+- `CliApprovalProvider` — blocking stdin prompt with explicit scope
+  parsing (`y` / `s`ession / `r`un / `n` / `q`uit). Honours
+  `ApprovalRequest::expires_at` by racing
+  `tokio::time::sleep` against `spawn_blocking` stdin.
+
+Usage pattern:
+
+```rust
+let mut registry = ToolRegistry::new();
+registry.register(Arc::new(ShellTool::new(policy.clone())));
+
+let sinks = SinkChain::new().push(jsonl_sink);
+let approval = Arc::new(CliApprovalProvider::stdin());
+let hooked_registry = wrap_registry(
+  registry,
+  HookConfig::new("sess-1", approval, sinks.clone())
+    .with_profile(HarnessProfile::Production)
+    .with_pre_hook(my_audit_hook)
+    .with_hook_timeout(Duration::from_secs(2)),
+);
+
+let agent = ReActAgent::new(config, memory, Arc::new(hooked_registry));
+let mut runtime = HarnessRuntime::new(Box::new(agent))
+  .with_event_sink(jsonl_sink);
+runtime.run(options).await
+```
+
+`HookedTool` only emits approval-lifecycle events. Tool-call
+lifecycle events (`tool_call_requested` / `tool_call_completed`)
+keep flowing from the `HarnessRuntime` post-hoc translation, so
+existing consumers do not see duplicates when hooks are wired.
+
 ## Session context
 
 ```rust
@@ -287,6 +354,7 @@ cancelled, timeout).
 | --- | --- | --- | --- |
 | H0 | P-H.0 | Contract inventory (this doc) | **closed** |
 | H1 | P-H.1 | Runtime MVP, default providers, CLI entry | **closed** |
+| H2 | P-H.2 | Hooks + approval (`wrap_registry`, 3 providers, production fail-closed) | **closed** |
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |

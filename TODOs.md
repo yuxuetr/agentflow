@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 closed; H2 fully unblocked (P1.7 closed) |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 closed; H3 next (gated on P3.7) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -58,6 +58,7 @@ but do not implement channel adapters in this queue.
 - P-H.1 Harness runtime MVP (`HarnessRuntime`, four default context providers, JSONL persistence, tracing-dir bridge, `agentflow harness run|resume|list|inspect` CLI).
 - P1.7 Non-idempotent tool resume policy (`ResumePlan` envelope + `Flow::load_resume_plan` / `Flow::resume_with_options` + `WorkflowEvent::ResumeDecisionRecorded` + `agentflow workflow resume-plan` CLI + `GET /v1/runs/{id}/resume-plan`).
 - P2.1 `agentflow serve` command (`ServeConfig` + `run` / `run_check` library hooks + `agentflow serve --check` structured readiness diagnostic + subprocess wrapper).
+- P-H.2 Hooks and approval (`HookedTool` wrapper + `wrap_registry` + 3 `ApprovalProvider`s + fail-closed Production escalation + traced approval lifecycle with scope cache).
 
 ---
 
@@ -757,19 +758,50 @@ Architectural rules (enforced via review):
 
 ### After P1.7 — Hooks And Approval
 
-- TODO P-H.2 Hooks and approval (Phase H2; ~1-2 weeks; PREREQ: P-H.1,
-  P1.7):
-  - Hook registry inside `HarnessRuntime`.
-  - `PreToolHook` / `PostToolHook` execution with bounded timeout.
-  - `ApprovalProvider` trait:
-    - `CliApprovalProvider` (blocking, prompt + reason).
-    - `NonInteractiveAutoApprovalProvider` (auto-approve safe tools).
-    - `NonInteractiveDenyApprovalProvider` (deny all risky tools).
-  - Fail-closed: production profile defaults to deny for mutating tools
-    without explicit policy.
-  - Approval events recorded in trace (request, decision, scope).
-  - Tests for: denied, allowed-once, allowed-for-session,
-    cancelled-during-prompt, timeout.
+- DONE P-H.2 Hooks and approval (Phase H2):
+  - New `agentflow-harness::hooks_runtime` module decorates every
+    registered [`Tool`] with a `HookedTool` wrapper via
+    `wrap_registry(registry, HookConfig)`. Callers build the
+    `ToolRegistry` first, wrap it with hooks + approval, then pass
+    `Arc::new(registry)` to `ReActAgent::new` (or any
+    `AgentRuntime`). The `HookedTool` delegates metadata + capability
+    surface to the inner tool and intercepts only `execute()`.
+  - `PreToolHook` / `PostToolHook` invocation under a
+    `HookConfig::with_hook_timeout` bound (default 5 s). Pre-hook
+    timeouts and errors are fail-closed: the call is denied with a
+    structured reason that names the offending hook. Post-hook
+    failures are advisory (logged via `tracing::warn!`) and never
+    undo the tool result.
+  - Three `ApprovalProvider` implementations in
+    `approval_providers`:
+    - `AutoAllowApprovalProvider` (CI smoke, dev override).
+    - `AutoDenyApprovalProvider` (`with_stop_on_deny` flag for the
+      production fail-closed default).
+    - `CliApprovalProvider` (blocking stdin prompt, scriptable via
+      `with_streams(writer, reader)` for tests; honours
+      `ApprovalRequest::expires_at` by racing
+      `tokio::time::sleep` against `spawn_blocking` stdin).
+  - Fail-closed production default: when the active
+    `HarnessProfile` is `Production` and the call's
+    `ToolIdempotency` is `NonIdempotent`, the wrapper escalates even
+    an unanimous `Allow` to `RequireApproval` (Risk 2). The fresh
+    `ApprovalRequest` carries `risk = Critical` and a reason that
+    points at the production-profile escalation.
+  - Approval lifecycle is fully traced through the existing
+    `SinkChain`: every approval emits one
+    `HarnessEvent::ApprovalRequested` followed by exactly one
+    `ApprovalDecided` (including a synthetic `cached` decision when a
+    prior `Session`/`Run` scope decision is reused). `DenyAndStop`
+    short-circuits subsequent tool calls in the session without
+    re-prompting.
+  - Tests (12 new in `hooks_runtime::tests`, 9 in
+    `approval_providers::tests`): allow path, pre-hook deny,
+    require-approval routing, auto-deny denial, production
+    escalation, Session-scope caching, Once-scope re-prompt, slow
+    pre-hook timeout, provider-error treated as cancellation, deny-
+    and-stop blocking, post-hook fires on success + failure, each
+    `CliApprovalProvider` response parse, `ApprovalRequest::expires_at`
+    deadline.
 
 ### After P3.7 — Parallel Native Tool Calls
 
