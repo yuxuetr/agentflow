@@ -10,6 +10,54 @@ AgentFlow's LLM abstraction targets seven providers/profiles. This document is t
 authoritative reference for what works on each, what doesn't, and how the
 behavior is verified.
 
+## ProviderRequest contract
+
+Every `LLMProvider` impl receives a `ProviderRequest` and returns a
+`ProviderResponse`. The wire fields are intentionally narrow so adapter
+behavior can stay consistent. **The field names below are exercised by
+`agentflow-llm/tests/provider_matrix_doc.rs` — adding or renaming a
+field on `ProviderRequest` fails CI until this section is updated.**
+
+| Field | Type | Required | Description |
+| --- | --- | :-: | --- |
+| `model` | `String` | ✅ | Provider-resolved model identifier (e.g. `gpt-4o-mini`, `claude-3-5-sonnet-20241022`). Adapters translate to the wire shape each provider expects. |
+| `messages` | `Vec<Value>` | ✅ | OpenAI-style message array. Multimodal content is encoded as `image_url` blocks; adapters translate to provider-native shapes (Anthropic `image`, Google `inline_data`). |
+| `stream` | `bool` | ✅ | When `true`, the provider returns a chunked / SSE response. `ModelCapabilities::requires_streaming` rejects `stream = false` for streaming-only models. |
+| `parameters` | `HashMap<String, Value>` | ✅ | Free-form provider passthrough (temperature, top_p, max_tokens, custom flags). Adapters whitelist and rename as needed; unknown keys are ignored. |
+| `tools` | `Option<Vec<ToolSpec>>` | – | Native tool / function-calling specification. `None` skips tool wiring entirely. |
+| `tool_choice` | `Option<ToolChoice>` | – | Selection strategy used together with `tools`. See the [`ToolChoice` table](#toolchoice-modes). |
+
+## ToolChoice modes
+
+The `ToolChoice` enum is serialised in snake_case so the wire shape
+matches OpenAI's `tool_choice` field. Anthropic / Google adapters
+translate to their respective vocabularies.
+
+| Mode | Provider behavior |
+| --- | --- |
+| `auto` (default) | Model decides whether to call a tool. Adapters omit `tool_choice` from the outbound request when this is the default. |
+| `none` | Model MUST NOT call a tool; reply text-only. |
+| `required` | Model MUST call at least one tool. Providers that lack a literal "required" mode (some Google revisions) raise `LLMError::ProviderUnsupportedMode` at request time. |
+| `tool` (with `{ name }`) | Model MUST call exactly the named tool. Useful for deterministic agent steps and benchmarks. |
+
+## ModelCapabilities flags
+
+`ModelCapabilities` (in `agentflow-llm::model_types`) is the per-model
+description loaded from the YAML registry. The flags below drive
+provider-side validation and ReAct fallback behavior:
+
+| Flag | Type | Purpose |
+| --- | --- | --- |
+| `model_type` | `ModelType` | Stable model-type classification (`text`, `image_generate`, `image_understand`, `audio_tts`, `audio_asr`, `video_generate`, `video_understand`, `doc_understand`, `code_gen`, `function_calling`, `embedding`). Determines admissible inputs / outputs. |
+| `supports_streaming` | `bool` | Model exposes a streaming variant. |
+| `requires_streaming` | `bool` | Model has no non-streaming mode; callers MUST set `ProviderRequest::stream = true`. |
+| `supports_tools` | `bool` | Tool calling is supported on any path (native or prompt-based). |
+| `native_tool_calling` | `bool` | Provider-native tool calling (OpenAI `tool_calls`, Anthropic `tool_use`, Google `functionCall`). When `false`, ReAct falls back to prompt-based protocols. |
+| `max_context_tokens` | `Option<u32>` | Hard ceiling on the model's input context window. Used by prompt assembly. |
+| `max_output_tokens` | `Option<u32>` | Hard ceiling on a single response. |
+| `supports_system_messages` | `bool` | When `false`, the adapter folds system content into the first user message. |
+| `custom_capabilities` | `HashMap<String, Value>` | Provider-specific opt-ins (vision detail mode, JSON-mode strictness, etc). Stable surface but opaque to the registry. |
+
 ## Configuration source
 
 Provider definitions and model aliases are loaded with the shared AgentFlow
@@ -97,6 +145,53 @@ Environment overrides win for model selection:
 `AGENTFLOW_LIVE_GLM_VISION_MODEL`. Without overrides, the harness first checks
 the loaded AgentFlow model config and then falls back to low-cost defaults:
 `glm-4.5-flash` for text/tools and `glm-4.5v` for vision.
+
+## Model families & context windows
+
+The numbers below are the **public** context windows documented by
+each vendor; the runtime ceiling is whatever the model's YAML registry
+entry sets in `max_context_tokens`. When the registry value is `None`,
+prompt assembly assumes a conservative 4 K token cap so adapters
+never silently truncate.
+
+| Provider | Model family | Public context | Verification |
+| --- | --- | --- | --- |
+| OpenAI | `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, `o1` | 128K–200K | `tested` (live + offline) |
+| OpenAI | `gpt-3.5-turbo` | 16K | `tested` (offline only) |
+| Anthropic | `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022` | 200K | `tested` (live + offline) |
+| Anthropic | `claude-3-opus-20240229` | 200K | `best_effort` (offline only) |
+| Google | `gemini-1.5-flash`, `gemini-1.5-pro` | 1M | `tested` (offline; live nightly) |
+| Google | `gemini-2.0-flash`, `gemini-2.0-flash-exp` | 1M | `best_effort` (offline only) |
+| Moonshot | `moonshot-v1-8k`, `moonshot-v1-32k`, `moonshot-v1-128k` | 8K / 32K / 128K | `tested` (live + offline) |
+| StepFun | `step-1-8k`, `step-1-128k`, `step-1v-8k`, `step-2-16k` | 8K – 128K | `tested` (live + offline) |
+| GLM | `glm-4.5`, `glm-4.5-flash`, `glm-4.5v` | 128K | `tested` (live + offline, vision opt-in) |
+| Mock | `mock-runtime-*`, `mock-*` | configurable per test | n/a |
+
+Status vocabulary:
+
+- `tested` — verified in unit + integration tests (and / or nightly live CI).
+- `best_effort` — provider supports the model and adapters wire it,
+  but no AgentFlow test asserts the exact wire shape.
+- `n/a` — Mock provider; not a real backend.
+
+## Rate-limit handling
+
+AgentFlow does **not** auto-retry rate-limited requests by default.
+Provider adapters preserve the upstream `Retry-After` header (when
+present) in `LLMError::HttpError::message` so downstream consumers
+(workflow retry middleware, the `agentflow-core` `retry_executor`)
+can react with exponential backoff or queue back-pressure.
+
+| Layer | Behavior |
+| --- | --- |
+| Provider adapter (per `LLMProvider`) | Maps `HTTP 429` to `LLMError::HttpError { status_code: 429, message }`. Adapter never sleeps. |
+| `LLMClient` (high-level helper) | Reads `RetryPolicy` from the registry's model config. When set, drives backoff via `agentflow-core::retry_executor`. Default is no retry. |
+| Workflow / agent retry executor | Applies `retry::ErrorPattern::Status(429)` if the workflow config declares retries. ReActAgent has its own `max_iterations` ceiling unrelated to rate-limit retry. |
+| Operator-visible behavior | A 429 response surfaces as a `ToolError::PolicyDenied`-style `LLMError` in the agent step trace; the operator sees the upstream message verbatim. |
+
+If a deployment needs aggressive 429 handling, set
+`max_retries` + an exponential `RetryPolicy` in the model YAML and the
+high-level helper will respect it.
 
 ## Error mapping (verified contract)
 

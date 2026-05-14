@@ -44,6 +44,16 @@ The current architecture is organized into four layers:
   stitched worker trace events.
 - Official offline-first ecosystem samples under `examples/ecosystem/`.
 
+## LLM providers
+
+The full per-provider capability matrix, `ProviderRequest` contract,
+`ToolChoice` modes, `ModelCapabilities` flags, model families /
+context windows, and rate-limit handling all live in
+[`LLM_PROVIDERS_MATRIX.md`](LLM_PROVIDERS_MATRIX.md). That document is
+the single source of truth for what each provider supports; entries
+are verified by `agentflow-llm/tests/provider_consistency.rs` (offline)
+and `provider_consistency_live.rs` (opt-in live).
+
 ## Stability
 
 The v1 stability inventory lives in:

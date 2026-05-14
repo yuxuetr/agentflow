@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 closed; H3 next (gated on P3.7) |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 closed; H3 unblocked (P3.7 closed) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -59,6 +59,7 @@ but do not implement channel adapters in this queue.
 - P1.7 Non-idempotent tool resume policy (`ResumePlan` envelope + `Flow::load_resume_plan` / `Flow::resume_with_options` + `WorkflowEvent::ResumeDecisionRecorded` + `agentflow workflow resume-plan` CLI + `GET /v1/runs/{id}/resume-plan`).
 - P2.1 `agentflow serve` command (`ServeConfig` + `run` / `run_check` library hooks + `agentflow serve --check` structured readiness diagnostic + subprocess wrapper).
 - P-H.2 Hooks and approval (`HookedTool` wrapper + `wrap_registry` + 3 `ApprovalProvider`s + fail-closed Production escalation + traced approval lifecycle with scope cache).
+- P3.7 LLM provider matrix documentation (`ProviderRequest` / `ToolChoice` / `ModelCapabilities` / model families / rate-limit sections + drift-detection doc-test). Unblocks P-H.3.
 
 ---
 
@@ -372,17 +373,34 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     runs behind `AGENTFLOW_LIVE_PROVIDER=1`.
   - Block release on this suite (mock provider only) in default CI.
 
-- TODO P3.7 LLM provider matrix documentation:
-  - Author `docs/LLM_PROVIDERS_MATRIX.md` as the single source of truth:
-    - Per-provider table: streaming, tool_calls, tool_choice modes,
-      multimodal types, max context, supported model families, error code
-      mapping, rate-limit handling.
-    - Per-feature capability flags exposed by `ModelCapabilities`.
-    - Tested-vs-best-effort badges (matching P3.6 coverage).
-  - Cross-reference from `docs/CURRENT_STATUS.md` and `README.md`.
-  - Add doc-test that the matrix headers stay in sync with the
-    `ProviderRequest` field set.
-  - PREREQ for P-H.3 (Harness parallel tool calls).
+- DONE P3.7 LLM provider matrix documentation:
+  - `docs/LLM_PROVIDERS_MATRIX.md` gains four authoritative sections:
+    - `ProviderRequest contract` documents every field of
+      `agentflow_llm::providers::ProviderRequest` (`model`,
+      `messages`, `stream`, `parameters`, `tools`, `tool_choice`).
+    - `ToolChoice modes` covers all four `ToolChoice` variants
+      (`auto`, `none`, `required`, `tool` with `{ name }`).
+    - `ModelCapabilities flags` covers the per-model levers
+      (`model_type`, `supports_streaming`, `requires_streaming`,
+      `supports_tools`, `native_tool_calling`, `max_context_tokens`,
+      `max_output_tokens`, `supports_system_messages`,
+      `custom_capabilities`).
+    - `Model families & context windows` lists the documented
+      vendor context windows per family with `tested` /
+      `best_effort` / `n/a` verification status.
+    - `Rate-limit handling` describes how `HTTP 429` flows through
+      adapters (no auto-retry, `Retry-After` preserved in error
+      message), the `LLMClient` retry plumbing, and the workflow
+      `RetryPolicy` opt-in.
+  - Cross-referenced from `README.md` (intro) and
+    `docs/CURRENT_STATUS.md` (new LLM providers subsection).
+  - Doc-test (`agentflow-llm/tests/provider_matrix_doc.rs`) catches
+    drift in four ways: (a) destructuring `ProviderRequest` at
+    compile time so a new field forces an update; (b) asserting each
+    field name appears in the matrix wrapped in backticks; (c) the
+    same for every `ToolChoice` variant; (d) every required
+    `ModelCapabilities` flag and verification status string is
+    present in the doc.
 
 - TODO P3.8 Cross-hop OpenTelemetry context propagation:
   - LLM hop already propagates `traceparent` (closed). Extend to:
