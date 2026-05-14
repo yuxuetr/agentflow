@@ -250,6 +250,20 @@ enum WorkflowCommands {
     #[arg(long)]
     strict: bool,
   },
+  /// Inspect the resume plan for a checkpointed workflow run
+  ResumePlan {
+    /// Run / workflow id whose checkpoint should be inspected
+    run_id: String,
+    /// Checkpoint directory (default: ~/.agentflow/checkpoints)
+    #[arg(long)]
+    checkpoint_dir: Option<String>,
+    /// Treat `Unknown` idempotency calls as safe to replay
+    #[arg(long)]
+    force_replay: bool,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    format: String,
+  },
   /// Debug and inspect workflow structure
   Debug {
     workflow_file: String,
@@ -862,6 +876,12 @@ async fn main() {
         format,
         strict,
       } => workflow::validate::execute(workflow_file, format, strict).await,
+      WorkflowCommands::ResumePlan {
+        run_id,
+        checkpoint_dir,
+        force_replay,
+        format,
+      } => workflow::resume_plan::execute(run_id, checkpoint_dir, force_replay, format).await,
       WorkflowCommands::Debug {
         workflow_file,
         visualize,

@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 closed; H2 unblocked (gated on P1.7) |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 closed; H2 fully unblocked (P1.7 closed) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -56,6 +56,7 @@ but do not implement channel adapters in this queue.
 - P4.3 documentation convergence.
 - P-H.0 Harness contract inventory (new `agentflow-harness` crate, frozen envelopes, hook trait boundaries, `docs/HARNESS_MODE.md`).
 - P-H.1 Harness runtime MVP (`HarnessRuntime`, four default context providers, JSONL persistence, tracing-dir bridge, `agentflow harness run|resume|list|inspect` CLI).
+- P1.7 Non-idempotent tool resume policy (`ResumePlan` envelope + `Flow::load_resume_plan` / `Flow::resume_with_options` + `WorkflowEvent::ResumeDecisionRecorded` + `agentflow workflow resume-plan` CLI + `GET /v1/runs/{id}/resume-plan`).
 
 ---
 
@@ -86,20 +87,29 @@ auditable, and explicit.
 - DONE P1.5 File and script hardening pass.
 - DONE P1.6 Sandbox enforcement visibility.
 
-- TODO P1.7 Non-idempotent tool resume policy:
-  - Extend resume CLI output (`agentflow workflow run --resume <run-id>`)
-    to print:
-    - The list of unfinished tool calls.
-    - Each call's `ToolIdempotency` classification.
-    - The replay decision (`replayed` / `skipped` / `requires_manual`).
-    - The reason string.
-  - Add trace fields: `resume.tool_call_id`, `resume.idempotency`,
-    `resume.decision`, `resume.reason`.
-  - Expose the same data in `GET /v1/runs/{id}/resume-plan` server route.
-  - Add tests for: idempotent call replay, non-idempotent call denial,
-    `Undeclared` call denial with `--force-replay` opt-in, and resume audit
-    log presence.
-  - Prereq for P-H.2 (Harness hooks/approval).
+- DONE P1.7 Non-idempotent tool resume policy:
+  - New `agentflow-core::resume` module exposes `ResumePlan` /
+    `ResumeToolCall` / `ResumeDecision` / `ResumeIdempotency` /
+    `ResumeSummary` / `ResumePlanOptions` + `build_resume_plan`. Plan
+    schema version `1` (`RESUME_PLAN_SCHEMA_VERSION`).
+  - `Flow::resume_with_options` blocks resume when any call is
+    `requires_manual`; `Flow::resume` keeps the previous behaviour by
+    threading default options. `Flow::load_resume_plan(workflow_id,
+    options)` reads the plan without executing anything. Each plan
+    entry emits a `WorkflowEvent::ResumeDecisionRecorded` trace event
+    carrying `resume.tool_call_id`, `resume.tool`, `resume.idempotency`,
+    `resume.decision`, `resume.reason`, and `resume.force_replay`.
+  - CLI: `agentflow workflow resume-plan <run-id> [--checkpoint-dir]
+    [--force-replay] [--format text|json]` renders the plan offline
+    (no LLM, no DB).
+  - Server: `GET /v1/runs/{id}/resume-plan?checkpoint_dir=…&force_replay=…`
+    returns the same plan envelope. The route is registered alongside
+    `/v1/runs/{id}/graph` so SSE / Web UI consumers can join on
+    `run.kind = resume.decision.recorded`.
+  - Tests: 10 `resume` unit tests + 7 CLI integration tests covering
+    each `ResumeDecision` (replay / skip / requires_manual) plus the
+    `--force-replay` opt-in and missing-checkpoint paths + 4 server
+    route integration tests (auto-skip without `AGENTFLOW_DATABASE_TEST_URL`).
 
 - TODO P1.8 Plugin execution policy:
   - Define default plugin execution policy per security profile in

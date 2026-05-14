@@ -163,6 +163,34 @@ pub enum WorkflowEvent {
     duration: Duration,
     timestamp: Instant,
   },
+
+  /// One row from a resume plan as emitted by `Flow::resume`. Each
+  /// unresolved tool call captured in the checkpoint produces exactly
+  /// one event so trace consumers can join `resume.tool_call_id` to
+  /// the underlying agent trace. See `agentflow_core::resume`
+  /// (`P1.7`).
+  ResumeDecisionRecorded {
+    workflow_id: String,
+    /// DAG node that owns the tool call.
+    node_id: String,
+    /// Stable id from the agent runtime trace (`resume.tool_call_id`).
+    tool_call_id: String,
+    /// Tool name as registered with the `ToolRegistry`.
+    tool: String,
+    /// Step index inside the agent run.
+    step_index: usize,
+    /// Replay-safety classification (`resume.idempotency`):
+    /// `idempotent` / `non_idempotent` / `unknown`.
+    idempotency: String,
+    /// Decision the planner reached (`resume.decision`):
+    /// `replay` / `skip` / `requires_manual`.
+    decision: String,
+    /// Operator-readable reason (`resume.reason`).
+    reason: String,
+    /// True when `--force-replay` was supplied for this resume.
+    force_replay: bool,
+    timestamp: Instant,
+  },
 }
 
 /// Token usage statistics for LLM calls
@@ -191,7 +219,8 @@ impl WorkflowEvent {
       | Self::RetryAttempt { workflow_id, .. }
       | Self::ResourceWarning { workflow_id, .. }
       | Self::LLMPromptSent { workflow_id, .. }
-      | Self::LLMResponseReceived { workflow_id, .. } => workflow_id,
+      | Self::LLMResponseReceived { workflow_id, .. }
+      | Self::ResumeDecisionRecorded { workflow_id, .. } => workflow_id,
     }
   }
 
@@ -212,7 +241,8 @@ impl WorkflowEvent {
       | Self::RetryAttempt { timestamp, .. }
       | Self::ResourceWarning { timestamp, .. }
       | Self::LLMPromptSent { timestamp, .. }
-      | Self::LLMResponseReceived { timestamp, .. } => *timestamp,
+      | Self::LLMResponseReceived { timestamp, .. }
+      | Self::ResumeDecisionRecorded { timestamp, .. } => *timestamp,
     }
   }
 
@@ -234,6 +264,7 @@ impl WorkflowEvent {
       Self::ResourceWarning { .. } => "resource.warning",
       Self::LLMPromptSent { .. } => "llm.prompt.sent",
       Self::LLMResponseReceived { .. } => "llm.response.received",
+      Self::ResumeDecisionRecorded { .. } => "resume.decision.recorded",
     }
   }
 }
@@ -336,6 +367,19 @@ impl fmt::Display for WorkflowEvent {
           f,
           "LLM response received from {} for node '{}' in {:?}",
           model, node_id, duration
+        )
+      }
+      Self::ResumeDecisionRecorded {
+        node_id,
+        tool_call_id,
+        decision,
+        idempotency,
+        ..
+      } => {
+        write!(
+          f,
+          "Resume decision '{}' for tool call '{}' (idempotency={}) on node '{}'",
+          decision, tool_call_id, idempotency, node_id
         )
       }
     }

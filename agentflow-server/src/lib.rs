@@ -42,9 +42,9 @@ pub use events_stream::{
 };
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
-  ListRunsResponse, RunCancellationRegistry, RunContext, RunExecutor, RunGraphResponse,
-  RunResponse, StubExecutor, cancel_run, default_executor, get_run, get_run_graph, list_runs,
-  submit_run,
+  ListRunsResponse, ResumePlanQuery, RunCancellationRegistry, RunContext, RunExecutor,
+  RunGraphResponse, RunResponse, StubExecutor, cancel_run, default_executor, get_run,
+  get_run_graph, get_run_resume_plan, list_runs, submit_run,
 };
 pub use scheduler::{
   DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, GrpcWorkerProtocol,
@@ -248,6 +248,7 @@ pub fn create_router(state: AppState) -> Router {
     )
     .route("/v1/runs/:id", get(get_run).post(cancel_run))
     .route("/v1/runs/:id/graph", get(get_run_graph))
+    .route("/v1/runs/:id/resume-plan", get(get_run_resume_plan))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
     .route("/v1/skills", get(list_skills))

@@ -47,9 +47,10 @@ fn tagged_flow_value_fixtures_round_trip() {
 
 #[test]
 fn legacy_raw_json_checkpoint_values_read_as_json_flow_values() {
-  let checkpoint: Checkpoint =
-    serde_json::from_str(include_str!("fixtures/checkpoints/legacy_raw_json_checkpoint.json"))
-      .unwrap();
+  let checkpoint: Checkpoint = serde_json::from_str(include_str!(
+    "fixtures/checkpoints/legacy_raw_json_checkpoint.json"
+  ))
+  .unwrap();
 
   let node_state = checkpoint
     .state
@@ -110,7 +111,10 @@ async fn checkpoint_writer_emits_tagged_flow_values() {
   );
 
   let mut state = HashMap::new();
-  state.insert("node".to_string(), serde_json::to_value(node_outputs).unwrap());
+  state.insert(
+    "node".to_string(),
+    serde_json::to_value(node_outputs).unwrap(),
+  );
 
   manager
     .save_checkpoint("tagged-writer-workflow", "node", &state)
@@ -127,7 +131,10 @@ async fn checkpoint_writer_emits_tagged_flow_values() {
   let latest: serde_json::Value = serde_json::from_str(&latest).unwrap();
   let node = &latest["state"]["node"];
 
-  assert_eq!(node["json_output"], json!({"type": "json", "value": {"ok": true}}));
+  assert_eq!(
+    node["json_output"],
+    json!({"type": "json", "value": {"ok": true}})
+  );
   assert_eq!(
     node["file_output"],
     json!({

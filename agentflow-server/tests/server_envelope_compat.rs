@@ -42,7 +42,9 @@ fn create_run_response_fixture_matches_wire_shape() {
 
   assert_eq!(
     serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/create_run_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/create_run_response.json"
+    ))
   );
 }
 
@@ -54,7 +56,9 @@ fn get_run_response_fixture_matches_wire_shape() {
 
   assert_eq!(
     serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/get_run_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/get_run_response.json"
+    ))
   );
 }
 
@@ -66,20 +70,28 @@ fn list_runs_response_fixture_matches_wire_shape() {
 
   assert_eq!(
     serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/list_runs_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/list_runs_response.json"
+    ))
   );
 }
 
 #[test]
 fn cancel_run_response_fixture_matches_wire_shape() {
   let response = CancelRunResponse {
-    run: run("cancelled", Some("2026-05-10T00:00:05Z"), Some("cancel requested")),
+    run: run(
+      "cancelled",
+      Some("2026-05-10T00:00:05Z"),
+      Some("cancel requested"),
+    ),
     cancelled: true,
   };
 
   assert_eq!(
     serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/cancel_run_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/cancel_run_response.json"
+    ))
   );
 }
 
@@ -103,7 +115,9 @@ fn run_graph_response_fixture_matches_wire_shape() {
 
   assert_eq!(
     serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/run_graph_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/run_graph_response.json"
+    ))
   );
 }
 
@@ -135,7 +149,9 @@ async fn api_error_fixture_matches_unified_error_envelope() {
 
   assert_eq!(
     serde_json::from_slice::<Value>(&bytes).unwrap(),
-    fixture_value(include_str!("fixtures/rest_envelopes/api_error_response.json"))
+    fixture_value(include_str!(
+      "fixtures/rest_envelopes/api_error_response.json"
+    ))
   );
 }
 

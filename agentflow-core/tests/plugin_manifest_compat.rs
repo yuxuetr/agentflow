@@ -16,7 +16,10 @@ fn plugin_manifest_fixture_ignores_unknown_optional_fields() {
   assert_eq!(manifest.plugin.protocol, SUPPORTED_PROTOCOL_VERSION);
   assert_eq!(manifest.plugin.nodes.len(), 1);
   assert_eq!(manifest.plugin.nodes[0].node_type, "compat_node");
-  assert_eq!(manifest.plugin.capabilities.network, vec!["https://api.example.com"]);
+  assert_eq!(
+    manifest.plugin.capabilities.network,
+    vec!["https://api.example.com"]
+  );
   manifest.validate().unwrap();
 }
 

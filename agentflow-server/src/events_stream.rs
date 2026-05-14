@@ -512,6 +512,30 @@ fn workflow_event_payload(event: &agentflow_core::events::WorkflowEvent) -> serd
         "total_tokens": u.total_tokens,
       })),
     }),
+    W::ResumeDecisionRecorded {
+      workflow_id,
+      node_id,
+      tool_call_id,
+      tool,
+      step_index,
+      idempotency,
+      decision,
+      reason,
+      force_replay,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "resume": {
+        "tool_call_id": tool_call_id,
+        "tool": tool,
+        "step_index": step_index,
+        "idempotency": idempotency,
+        "decision": decision,
+        "reason": reason,
+        "force_replay": force_replay,
+      },
+    }),
   }
 }
 

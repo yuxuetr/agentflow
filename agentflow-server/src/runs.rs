@@ -22,7 +22,12 @@ use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use agentflow_core::{FlowCancellationToken, FlowExecutionConfig, async_node::AsyncNodeResult};
+use agentflow_core::{
+  FlowCancellationToken, FlowExecutionConfig, ResumePlan, ResumePlanOptions,
+  async_node::AsyncNodeResult,
+  build_resume_plan,
+  checkpoint::{CheckpointConfig, CheckpointManager},
+};
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 
@@ -416,6 +421,18 @@ pub struct RunGraphResponse {
   pub active_node: Option<String>,
 }
 
+/// Query string for `GET /v1/runs/{id}/resume-plan`.
+#[derive(Debug, Deserialize, Default)]
+pub struct ResumePlanQuery {
+  /// Override the checkpoint directory. Defaults to the
+  /// `CheckpointConfig::default()` path
+  /// (`~/.agentflow/checkpoints` for the server's user).
+  pub checkpoint_dir: Option<String>,
+  /// Treat `Unknown` idempotency calls as safe to replay.
+  #[serde(default)]
+  pub force_replay: bool,
+}
+
 /// `GET /v1/runs` — list recent runs for a tenant, newest first.
 pub async fn list_runs(
   State(state): State<AppState>,
@@ -511,6 +528,50 @@ async fn next_event_seq(repos: &Repositories, run_id: Uuid) -> Result<i64, ApiEr
       .map(|seq| seq + 1)
       .unwrap_or(0),
   )
+}
+
+/// `GET /v1/runs/{id}/resume-plan` — derive a structured resume plan
+/// from the persisted checkpoint for this run.
+///
+/// Returns the same envelope produced by `agentflow workflow
+/// resume-plan` so CLI / UI / Harness approval consumers share one
+/// wire shape. Loading the plan does **not** execute anything; it
+/// only reads the checkpoint state.
+pub async fn get_run_resume_plan(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+  Query(params): Query<ResumePlanQuery>,
+) -> Result<Json<ResumePlan>, ApiError> {
+  // Confirm the run exists so the route returns a meaningful 404 even
+  // when no checkpoint has been written yet.
+  let _run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+
+  let mut config = CheckpointConfig::default();
+  if let Some(dir) = params.checkpoint_dir.as_ref() {
+    config = config.with_checkpoint_dir(PathBuf::from(dir));
+  }
+  let manager = CheckpointManager::new(config)
+    .map_err(|e| ApiError::Internal(format!("checkpoint manager init failed: {e}")))?;
+  let checkpoint = manager
+    .load_latest_checkpoint(&id.to_string())
+    .await
+    .map_err(|e| ApiError::Internal(format!("failed to load checkpoint: {e}")))?
+    .ok_or_else(|| ApiError::NotFound(format!("no checkpoint found for run {}", id)))?;
+
+  let plan = build_resume_plan(
+    &checkpoint,
+    &ResumePlanOptions {
+      force_replay: params.force_replay,
+    },
+  )
+  .map_err(|e| ApiError::Internal(format!("failed to build resume plan: {e}")))?;
+
+  Ok(Json(plan))
 }
 
 /// `GET /v1/runs/{id}/graph` — convert the stored workflow to

@@ -22,6 +22,7 @@ pub mod timeout;
 pub mod checkpoint;
 pub mod resource_limits;
 pub mod resource_manager;
+pub mod resume;
 pub mod scheduler;
 pub mod state_monitor;
 
@@ -44,6 +45,10 @@ pub use health::{HealthChecker, HealthReport, HealthStatus};
 pub use node::Node;
 pub use resource_limits::ResourceLimits;
 pub use resource_manager::{CombinedResourceStats, ResourceManager, ResourceManagerConfig};
+pub use resume::{
+  RESUME_PLAN_SCHEMA_VERSION, ResumeDecision, ResumeIdempotency, ResumePlan, ResumePlanOptions,
+  ResumeSummary, ResumeToolCall, build_resume_plan,
+};
 pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
 pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
 pub use scheduler::{FlowCancellationToken, FlowExecutionConfig, FlowExecutionMode};

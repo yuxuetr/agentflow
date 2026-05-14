@@ -4,6 +4,7 @@ use crate::{
   error::AgentFlowError,
   events::{EventListener, WorkflowEvent},
   expr,
+  resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
   value::FlowValue,
 };
@@ -98,10 +99,33 @@ impl Flow {
     self.execute_from_inputs(HashMap::new()).await
   }
 
-  /// Resume workflow from the latest checkpoint for a given workflow ID
+  /// Resume workflow from the latest checkpoint for a given workflow ID.
+  ///
+  /// Uses [`ResumePlanOptions::default()`] — call [`Flow::resume_with_options`]
+  /// to opt into `--force-replay`-style behavior.
   pub async fn resume(
     &self,
     workflow_id: &str,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    self
+      .resume_with_options(workflow_id, &ResumePlanOptions::default())
+      .await
+  }
+
+  /// Resume workflow from the latest checkpoint, threading
+  /// [`ResumePlanOptions`] (e.g. `force_replay`) into the per-tool-call
+  /// resume audit log.
+  ///
+  /// Before execution this method emits one
+  /// [`WorkflowEvent::ResumeDecisionRecorded`] per unresolved tool call
+  /// found in the checkpoint. If any call's decision is
+  /// [`crate::ResumeDecision::RequiresManual`], resume aborts with a
+  /// configuration error so the operator can resolve the call manually
+  /// (or re-run with `force_replay`).
+  pub async fn resume_with_options(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     if !self.checkpoint_enabled {
       return Err(AgentFlowError::ConfigurationError {
@@ -124,11 +148,64 @@ impl Flow {
         message: format!("No checkpoint found for workflow '{}'", workflow_id),
       })?;
 
+    let plan = build_resume_plan(&checkpoint, options)?;
+    self.emit_resume_decisions(&plan);
+    if !plan.summary.can_auto_resume() {
+      return Err(AgentFlowError::ConfigurationError {
+        message: format!(
+          "resume blocked: {} tool call(s) require manual recovery. Use \
+           `agentflow workflow resume-plan {workflow_id}` to inspect them.",
+          plan.summary.requires_manual
+        ),
+      });
+    }
+
     println!(
       "📥 Resuming workflow '{}' from checkpoint at node '{}'",
       workflow_id, checkpoint.last_completed_node
     );
     self.execute_from_checkpoint(workflow_id, checkpoint).await
+  }
+
+  /// Load the [`ResumePlan`] for a checkpointed workflow without
+  /// executing anything. Used by the CLI (`agentflow workflow
+  /// resume-plan`) and the server (`GET /v1/runs/{id}/resume-plan`).
+  pub async fn load_resume_plan(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+  ) -> Result<ResumePlan, AgentFlowError> {
+    let manager =
+      self
+        .checkpoint_manager
+        .as_ref()
+        .ok_or_else(|| AgentFlowError::ConfigurationError {
+          message: "Checkpointing is not enabled on this Flow.".to_string(),
+        })?;
+    let checkpoint = manager
+      .load_latest_checkpoint(workflow_id)
+      .await?
+      .ok_or_else(|| AgentFlowError::ConfigurationError {
+        message: format!("No checkpoint found for workflow '{}'", workflow_id),
+      })?;
+    build_resume_plan(&checkpoint, options)
+  }
+
+  fn emit_resume_decisions(&self, plan: &ResumePlan) {
+    for entry in &plan.tool_calls {
+      self.emit_event(WorkflowEvent::ResumeDecisionRecorded {
+        workflow_id: plan.workflow_id.clone(),
+        node_id: entry.node_id.clone(),
+        tool_call_id: entry.tool_call_id.clone(),
+        tool: entry.tool.clone(),
+        step_index: entry.step_index,
+        idempotency: entry.idempotency.as_str().to_string(),
+        decision: entry.decision.as_str().to_string(),
+        reason: entry.reason.clone(),
+        force_replay: plan.force_replay,
+        timestamp: Instant::now(),
+      });
+    }
   }
 
   pub async fn execute_from_inputs(
