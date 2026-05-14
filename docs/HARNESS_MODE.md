@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-14
-Status: **Phase H0 — contract freeze (this document).**
+Status: **Phase H0 + Phase H1 closed.** H2 (hooks + approval) is the next active phase, gated on `P1.7` non-idempotent resume policy.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -200,7 +200,7 @@ pub enum HarnessProfile { Dev, Local, Production }
 Phase H1 will populate these inside `HarnessRuntime::start` and pass
 them to providers and hooks.
 
-## CLI surface (target for Phase H1)
+## CLI surface (shipped in Phase H1)
 
 ```bash
 agentflow harness run "Analyze this project and propose next steps"
@@ -228,6 +228,22 @@ Flags:
 Initial implementation must not ship a TUI. A stable `stream-json`
 event surface gives TUI / Web UI a clean integration point later
 (HARNESS_MODE_EVOLUTION Risk 5).
+
+The CLI also exposes `agentflow harness list` / `agentflow harness
+inspect <session_id>` for offline session log triage. Both honour the
+same `--run-dir` precedence (explicit → `AGENTFLOW_RUN_DIR` →
+`AGENTFLOW_TRACE_DIR` → `~/.agentflow/runs`) so the trace replay tools
+can find Harness logs without bespoke wiring.
+
+### Tracing bridge
+
+`agentflow_harness::tracing_bridge` resolves the session-log root from
+the `AGENTFLOW_TRACE_DIR` convention shared by the rest of AgentFlow
+trace tooling. Each Harness session is one append-only JSONL file at
+`<base>/harness/sessions/<session_id>.jsonl`. Deeper integration with
+`agentflow-tracing::TraceStorage` (a single storage layer for both
+agent and Harness events) is Phase H5 work; it does not block Phase
+H1 because the on-disk layout already makes the data discoverable.
 
 ## Server surface (target for Phase H5)
 
@@ -270,7 +286,7 @@ cancelled, timeout).
 | Phase | TODO id | Theme | Status |
 | --- | --- | --- | --- |
 | H0 | P-H.0 | Contract inventory (this doc) | **closed** |
-| H1 | P-H.1 | Runtime MVP, default providers, CLI entry | active after H0 |
+| H1 | P-H.1 | Runtime MVP, default providers, CLI entry | **closed** |
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |

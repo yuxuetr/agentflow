@@ -81,10 +81,11 @@ Declarative agent capability packages:
 - CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
 
 #### L3 — agentflow-harness
-Harness Agent Mode crate (Phase H0 contract freeze + Phase H1 runtime MVP):
+Harness Agent Mode crate (Phase H0 contract freeze + Phase H1 runtime MVP, both closed):
 - **Frozen contract surface (H0):** `HarnessEvent` line-delimited JSON envelope (closed kind set: `session_started`, `step_started`, `tool_call_requested`, `approval_requested`, `approval_decided`, `tool_call_completed`, `background_task_updated`, `memory_summary_added`, `stopped`); `ApprovalRequest` / `ApprovalDecision` / `ApprovalRisk` / `ApprovalScope` interactive approval protocol; async hook traits `PreToolHook` / `PostToolHook` / `ApprovalProvider` / `ContextProvider`; session descriptor `HarnessContext` / `HarnessProfile` / `HarnessRuntimeKind`
-- **Runtime MVP (H1):** `HarnessRuntime` wrapping any `agentflow_agents::AgentRuntime` (typically `ReActAgent`) via `Box<dyn AgentRuntime>`; four default context providers (`AgentsMdProvider`, `TodosMdProvider`, `RoadmapMdProvider`, `WorkspaceLayoutProvider`) with priority + token-cost estimates and priority-aware budget trimming; `InMemoryEventSink` / `JsonlEventSink` / `SinkChain` persistence; deterministic `AgentEvent` → `HarnessEvent` translation with monotonic `seq`
-- CLI entry (`agentflow harness run`), resume, and `agentflow-tracing` bridge are tracked under P-H.1 follow-ups. Stability tier **experimental** until Phase H2 wires approval and hooks. See `docs/HARNESS_MODE.md` for the implementation spec.
+- **Runtime MVP (H1):** `HarnessRuntime` wrapping any `agentflow_agents::AgentRuntime` (typically `ReActAgent`) via `Box<dyn AgentRuntime>`; four default context providers (`AgentsMdProvider`, `TodosMdProvider`, `RoadmapMdProvider`, `WorkspaceLayoutProvider`) with priority + token-cost estimates and priority-aware budget trimming; `InMemoryEventSink` / `JsonlEventSink` / `StdoutEventSink` / `SinkChain` persistence; deterministic `AgentEvent` → `HarnessEvent` translation with monotonic `seq`; `tracing_bridge` honoring the `AGENTFLOW_TRACE_DIR` convention so Harness session logs co-locate with the rest of the trace tooling.
+- **CLI surface:** `agentflow harness run|resume|list|inspect` with `--output text|json|stream-json` and the full flag set documented in `docs/HARNESS_MODE.md`.
+- Stability tier **experimental** until Phase H2 wires approval / hooks (gated on P1.7). See `docs/HARNESS_MODE.md` for the implementation spec.
 
 #### L3 — agentflow-cli
 Unified user interface:

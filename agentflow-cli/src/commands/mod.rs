@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod config;
 pub mod doctor;
+pub mod harness;
 pub mod image;
 pub mod llm;
 pub mod marketplace;

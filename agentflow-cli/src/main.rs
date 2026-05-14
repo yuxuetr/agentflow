@@ -8,7 +8,8 @@ use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{
-  audio, config as config_cmd, doctor, image, llm, marketplace, mcp, skill, trace, workflow,
+  audio, config as config_cmd, doctor, harness, image, llm, marketplace, mcp, skill, trace,
+  workflow,
 };
 
 #[derive(Parser)]
@@ -40,6 +41,8 @@ enum Commands {
   Trace(TraceArgs),
   /// Diagnose local AgentFlow configuration and runtime capabilities
   Doctor(DoctorArgs),
+  /// Harness Agent Mode: workspace-aware, long-lived agent sessions
+  Harness(HarnessArgs),
   #[cfg(feature = "plugin")]
   /// Plugin management commands (subprocess plugins)
   Plugin(PluginArgs),
@@ -104,6 +107,87 @@ struct DoctorArgs {
   /// Output format
   #[arg(long, default_value = "text", value_parser = ["text", "json"])]
   format: String,
+}
+#[derive(Args)]
+struct HarnessArgs {
+  #[command(subcommand)]
+  command: HarnessCommands,
+}
+
+#[derive(Subcommand)]
+enum HarnessCommands {
+  /// Run a Harness session and stream events to disk (+ optional stdout)
+  Run {
+    /// User input that opens the session
+    input: String,
+    /// Path to a skill directory to load (optional)
+    #[arg(long)]
+    skill: Option<String>,
+    /// Model id (required when no --skill is supplied)
+    #[arg(long)]
+    model: Option<String>,
+    /// Resume an existing session id rather than generating a fresh one
+    #[arg(long)]
+    session: Option<String>,
+    /// Workspace root (default: current working directory)
+    #[arg(long)]
+    workspace: Option<String>,
+    /// Security profile
+    #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+    profile: String,
+    /// Underlying agent runtime
+    #[arg(long, default_value = "react", value_parser = ["react", "plan_execute", "plan-execute", "handoff", "blackboard", "debate"])]
+    runtime: String,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    output: String,
+    /// Override the run-dir (session log root). Defaults to AGENTFLOW_RUN_DIR or ~/.agentflow/runs
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Maximum total agent steps
+    #[arg(long)]
+    max_steps: Option<usize>,
+    /// Maximum total tool calls
+    #[arg(long)]
+    max_tool_calls: Option<usize>,
+    /// Wall-clock timeout in milliseconds
+    #[arg(long)]
+    timeout_ms: Option<u64>,
+    /// Skip the default workspace context providers (AGENTS.md / TODOs.md / ...)
+    #[arg(long)]
+    no_default_context: bool,
+  },
+  /// Replay a persisted Harness session log (no LLM is invoked).
+  Resume {
+    /// Session id to replay
+    session_id: String,
+    /// Override the run-dir
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    output: String,
+  },
+  /// List persisted Harness session logs
+  List {
+    /// Override the run-dir
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    output: String,
+  },
+  /// Inspect a single persisted Harness session log
+  Inspect {
+    /// Session id to inspect
+    session_id: String,
+    /// Override the run-dir
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    output: String,
+  },
 }
 #[cfg(feature = "plugin")]
 #[derive(Args)]
@@ -1030,6 +1114,51 @@ async fn main() {
     Commands::Doctor(args) => match doctor::OutputFormat::parse(&args.format) {
       Ok(format) => doctor::execute(format).await,
       Err(err) => Err(err),
+    },
+    Commands::Harness(args) => match args.command {
+      HarnessCommands::Run {
+        input,
+        skill,
+        model,
+        session,
+        workspace,
+        profile,
+        runtime,
+        output,
+        run_dir,
+        max_steps,
+        max_tool_calls,
+        timeout_ms,
+        no_default_context,
+      } => {
+        harness::run::execute(
+          input,
+          skill,
+          model,
+          session,
+          workspace,
+          profile,
+          runtime,
+          output,
+          run_dir,
+          max_steps,
+          max_tool_calls,
+          timeout_ms,
+          no_default_context,
+        )
+        .await
+      }
+      HarnessCommands::Resume {
+        session_id,
+        run_dir,
+        output,
+      } => harness::resume::execute(session_id, run_dir, output).await,
+      HarnessCommands::List { run_dir, output } => harness::list::execute(run_dir, output).await,
+      HarnessCommands::Inspect {
+        session_id,
+        run_dir,
+        output,
+      } => harness::inspect::execute(session_id, run_dir, output).await,
     },
     #[cfg(feature = "plugin")]
     Commands::Plugin(args) => match args.command {

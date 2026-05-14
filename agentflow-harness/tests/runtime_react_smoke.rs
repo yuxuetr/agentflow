@@ -99,7 +99,11 @@ async fn harness_runtime_drives_react_agent_with_mock_provider() {
   assert!(!result.session_id.is_empty());
 
   let events = sink.snapshot().await;
-  assert!(events.len() >= 3, "expected ≥3 events, got {}", events.len());
+  assert!(
+    events.len() >= 3,
+    "expected ≥3 events, got {}",
+    events.len()
+  );
   let first = &events[0];
   assert!(matches!(first.body, HarnessEventBody::SessionStarted(_)));
   assert_eq!(first.seq, 0, "first event must have seq 0");

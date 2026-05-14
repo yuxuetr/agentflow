@@ -163,6 +163,45 @@ impl HarnessEventSink for JsonlEventSink {
   }
 }
 
+/// Sink that writes one JSON line per event to stdout. Used by
+/// `agentflow harness run --output stream-json`. Stdout is locked on
+/// each write so concurrent writers from different sinks do not
+/// interleave bytes mid-event.
+pub struct StdoutEventSink;
+
+impl StdoutEventSink {
+  pub fn new() -> Self {
+    Self
+  }
+}
+
+impl Default for StdoutEventSink {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+#[async_trait]
+impl HarnessEventSink for StdoutEventSink {
+  fn name(&self) -> &str {
+    "stdout"
+  }
+
+  async fn write(&self, event: &HarnessEvent) -> Result<(), HarnessError> {
+    let line = serde_json::to_string(event)
+      .map_err(|err| HarnessError::Envelope(format!("encode harness event: {err}")))?;
+    // Use std stdout under a lock so this stays a single println-equivalent.
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    writeln!(handle, "{line}").map_err(|err| HarnessError::Envelope(err.to_string()))?;
+    handle
+      .flush()
+      .map_err(|err| HarnessError::Envelope(err.to_string()))?;
+    Ok(())
+  }
+}
+
 /// Process-local sink that collects events into a `Vec` for tests and
 /// stream-json fan-out from a sibling sink.
 #[derive(Default)]

@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 closed; H1 unblocked |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 closed; H2 unblocked (gated on P1.7) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -55,6 +55,7 @@ but do not implement channel adapters in this queue.
 - P4.2 official ecosystem samples.
 - P4.3 documentation convergence.
 - P-H.0 Harness contract inventory (new `agentflow-harness` crate, frozen envelopes, hook trait boundaries, `docs/HARNESS_MODE.md`).
+- P-H.1 Harness runtime MVP (`HarnessRuntime`, four default context providers, JSONL persistence, tracing-dir bridge, `agentflow harness run|resume|list|inspect` CLI).
 
 ---
 
@@ -678,38 +679,40 @@ Architectural rules (enforced via review):
   - `docs/STABILITY.md` lists the new envelopes at `Experimental` tier
     with `HARNESS_ENVELOPE_SCHEMA_VERSION = harness/1`.
 
-- TODO P-H.1 Harness runtime MVP (Phase H1; ~1-2 weeks; PREREQ: P-H.0):
-  Library scaffolding landed; CLI and resume work remain. Subtasks:
-  - DONE `HarnessRuntime` wrapping any `AgentRuntime` impl (composes
-    `ReActAgent` via `Box<dyn AgentRuntime>`).
-  - DONE `HarnessRunOptions` carrying session_id, workspace, profile,
-    runtime kind, limits, persona prefix, context-token budget.
-  - DONE Four default context providers (`AgentsMdProvider`,
+- DONE P-H.1 Harness runtime MVP (Phase H1):
+  - `HarnessRuntime` wraps any `AgentRuntime` impl (typically
+    `ReActAgent`) via `Box<dyn AgentRuntime>`; persona is assembled
+    from context providers under a priority-aware token budget; the
+    monotonic `seq` event stream is fanned through a `SinkChain`.
+  - Four default context providers (`AgentsMdProvider`,
     `TodosMdProvider`, `RoadmapMdProvider`, `WorkspaceLayoutProvider`)
     with priority + token-cost estimates.
-  - DONE Event bridge: inner `AgentEvent`s and `AgentStep`s translate
-    into the frozen [`HarnessEvent`] envelopes with monotonic `seq`.
-  - DONE Persistence: `InMemoryEventSink` + `JsonlEventSink` +
-    `SinkChain` fan-out; SQLite / Postgres sinks deferred to P-H.5
-    alongside the server integration.
-  - DONE Tool / Skill integration is composition-only: callers pass a
-    pre-built `ReActAgent` (typically from
-    `SkillBuilder::build()`); the runtime never touches `ToolRegistry`
-    directly.
-  - DONE Tests: 38 unit tests + 6 envelope fixtures + 1 react+mock LLM
-    smoke test covering session bookends, context piping, step/tool
-    event translation, budget trimming, stop-reason mapping, and JSONL
-    round-trip.
-  - TODO CLI entry: `agentflow harness run "..."` with `--output
-    text|json|stream-json`, `--skill`, `--session`, `--workspace`,
-    `--profile`, `--model`, `--run-dir`. Print session id with the
-    final answer.
-  - TODO Session resume: re-attach prior memory + sink by session id
-    (`agentflow harness resume <session_id>`). Phase H1 wires
-    `--session` through but does not yet rehydrate memory.
-  - TODO Bridge `HarnessEventSink` into `agentflow-tracing` so trace
-    listeners receive Harness envelopes without re-implementing the
-    sink interface.
+  - Persistence: `InMemoryEventSink`, `JsonlEventSink`,
+    `StdoutEventSink`, `SinkChain` fan-out. SQLite / Postgres sinks
+    stay deferred to P-H.5 alongside the server integration.
+  - Tool / Skill composition only: callers supply a pre-built
+    `ReActAgent` (typically from `SkillBuilder::build()`); the runtime
+    never touches `ToolRegistry` directly.
+  - Tracing bridge (`agentflow_harness::tracing_bridge`): honors the
+    `AGENTFLOW_TRACE_DIR` convention so trace replay / TUI tooling
+    can find Harness session logs without bespoke wiring. Deeper
+    integration with `agentflow-tracing::TraceStorage` (one storage
+    layer for both agent and Harness events) tracked under P-H.5.
+  - CLI surface (`agentflow harness …`):
+    - `run "<input>"` with `--skill`, `--model`, `--session`,
+      `--workspace`, `--profile`, `--runtime`, `--output
+      text|json|stream-json`, `--run-dir`, `--max-steps`,
+      `--max-tool-calls`, `--timeout-ms`, `--no-default-context`.
+      Final answer trailer prints `Session: <id>`.
+    - `resume <session_id>` replays the persisted JSONL log
+      (`--output text|json|stream-json`). Full memory rehydration is
+      Phase H2 work because it requires a persistent `MemoryStore`
+      and an idempotency-aware resume policy (P1.7).
+    - `list` enumerates session logs (text + JSON formats).
+    - `inspect <session_id>` summarises a session log.
+  - Tests: 41 harness unit tests + 6 envelope fixtures + 1 ReAct+mock
+    smoke + 9 CLI end-to-end tests (list / inspect / resume / help /
+    arg validation).
 
 ### After P1.7 — Hooks And Approval
 

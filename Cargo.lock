@@ -56,8 +56,10 @@ version = "0.2.0"
 dependencies = [
  "agentflow-agents",
  "agentflow-core",
+ "agentflow-harness",
  "agentflow-llm",
  "agentflow-mcp",
+ "agentflow-memory",
  "agentflow-nodes",
  "agentflow-rag",
  "agentflow-skills",
