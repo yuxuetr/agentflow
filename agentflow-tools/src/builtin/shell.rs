@@ -5,7 +5,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::sandbox::{NoopSandboxBackend, SandboxBackend, SandboxPolicy, SandboxScope};
+use crate::sandbox::{
+  NoopSandboxBackend, SandboxBackend, SandboxPolicy, SandboxScope, SandboxStatus,
+};
 use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
 /// Execute a shell command via `sh -c` with sandbox enforcement.
@@ -78,6 +80,10 @@ impl Tool for ShellTool {
 
   fn idempotency(&self, _params: &Value) -> ToolIdempotency {
     ToolIdempotency::NonIdempotent
+  }
+
+  fn sandbox_status(&self) -> Option<SandboxStatus> {
+    Some(SandboxStatus::from_backend(self.backend.as_ref()))
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {

@@ -26,7 +26,9 @@ pub mod linux;
 pub mod macos;
 pub mod noop;
 
-pub use backend::{SandboxBackend, SandboxError, SandboxScope, default_backend};
+pub use backend::{
+  SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope, SandboxStatus, default_backend,
+};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxSeccompBackend;
 #[cfg(target_os = "macos")]

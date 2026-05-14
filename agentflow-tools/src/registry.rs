@@ -137,19 +137,27 @@ impl ToolRegistry {
   ///
   /// Layers, in order: tool requires → skill security → tool policy → CLI flag.
   /// Each layer's contribution is recorded in [`EffectiveCapabilities::trace`].
+  ///
+  /// The returned [`EffectiveCapabilities`] also carries the tool's sandbox
+  /// status (when the tool wraps a subprocess), so trace consumers can see
+  /// the active backend name and enforcement level without a second lookup.
   pub fn evaluate_capabilities(&self, name: &str) -> Result<EffectiveCapabilities, ToolError> {
     let tool = self.tools.get(name).ok_or_else(|| ToolError::NotFound {
       name: name.to_string(),
     })?;
     let required = tool.requires_capabilities();
     let policy_caps = self.policy.allowed_capabilities();
-    Ok(EffectiveCapabilities::resolve(
+    let mut effective = EffectiveCapabilities::resolve(
       name,
       &required,
       self.skill_capabilities.as_deref(),
       policy_caps.as_deref(),
       self.cli_capabilities.as_deref(),
-    ))
+    );
+    if let Some(status) = tool.sandbox_status() {
+      effective = effective.with_sandbox(status);
+    }
+    Ok(effective)
   }
 
   pub fn policy_audit_log(&self) -> Vec<ToolPolicyDecision> {
@@ -449,6 +457,41 @@ mod tests {
     assert_eq!(
       audit[0].trace.last().map(|entry| entry.source),
       Some(crate::capability::GrantSource::CliFlag)
+    );
+  }
+
+  #[tokio::test]
+  async fn evaluate_capabilities_carries_sandbox_status_for_subprocess_tools() {
+    use crate::builtin::ShellTool;
+    use crate::sandbox::{SandboxEnforcement, SandboxPolicy};
+
+    let policy = Arc::new(SandboxPolicy::permissive());
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(ShellTool::new(policy)));
+
+    let effective = registry.evaluate_capabilities("shell").unwrap();
+    let status = effective
+      .sandbox
+      .expect("shell tool must surface a sandbox status snapshot");
+    // Default ShellTool uses the no-op backend; this is the silent-fall-through
+    // case the visibility task is meant to surface. It must be Disabled, not
+    // missing.
+    assert_eq!(status.backend, "noop");
+    assert_eq!(status.enforcement, SandboxEnforcement::Disabled);
+  }
+
+  #[tokio::test]
+  async fn evaluate_capabilities_omits_sandbox_for_pure_in_process_tools() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+
+    let effective = registry.evaluate_capabilities("http").unwrap();
+    assert!(
+      effective.sandbox.is_none(),
+      "in-process tools that don't spawn subprocesses must report no sandbox status"
     );
   }
 

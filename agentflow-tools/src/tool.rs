@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::capability::Capability;
 use crate::error::ToolError;
+use crate::sandbox::SandboxStatus;
 
 /// Result of a tool execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,6 +357,19 @@ pub trait Tool: Send + Sync {
   /// [`Capability`] values; tools can override to declare a tighter set.
   fn requires_capabilities(&self) -> Vec<Capability> {
     Capability::from_permissions(&self.metadata().permissions.permissions)
+  }
+
+  /// Snapshot of the OS sandbox backend this tool wraps a child process in,
+  /// if any. Defaults to `None` because most tools run entirely in-process.
+  ///
+  /// Tools that spawn subprocesses (shell, script, plugin) should override
+  /// this so the active backend name and enforcement level are visible in
+  /// `ToolCapabilityDecision` events and `agentflow doctor` output. The
+  /// snapshot must reflect the backend actually used at execution time, not
+  /// the platform default — tests and offline runs may inject a no-op
+  /// backend and the trace should reflect that.
+  fn sandbox_status(&self) -> Option<SandboxStatus> {
+    None
   }
 
   /// Execute the tool and return its output

@@ -30,7 +30,7 @@ but do not implement channel adapters in this queue.
 | Segment | Theme | Status |
 | --- | --- | --- |
 | P0 | V1 Contract Hardening | CLOSED |
-| P1 | Security And Tool Governance | partially closed (P1.6-P1.9 active) |
+| P1 | Security And Tool Governance | partially closed (P1.7-P1.9 active) |
 | P2 | Local Server / Daemon Reliability | active |
 | P3 | Rust SDK And CLI Experience | active |
 | P4 | Memory, RAG, And Eval Foundations | active |
@@ -49,6 +49,7 @@ but do not implement channel adapters in this queue.
 - P1.3 Configurable CORS and request limits.
 - P1.4 HTTP tool SSRF protection.
 - P1.5 File and script path hardening.
+- P1.6 Sandbox enforcement visibility.
 - P3.3 Web UI Run Console (alpha shell embedded in server).
 - P4.1 v1 stable interface inventory.
 - P4.2 official ecosystem samples.
@@ -81,20 +82,7 @@ auditable, and explicit.
 - DONE P1.3 Configurable CORS and request limits.
 - DONE P1.4 HTTP tool SSRF protection.
 - DONE P1.5 File and script hardening pass.
-
-- TODO P1.6 Sandbox enforcement visibility:
-  - Surface the active sandbox backend name (`sandbox-exec` / `seccomp` /
-    `noop`) and its enforcing/non-enforcing status in:
-    - `ToolCapabilityDecision` events.
-    - `agentflow doctor --output json` output (see P3.4).
-    - Trace events for every shell/script tool invocation.
-  - Add `SandboxBackend::enforcement_level()` returning `Enforcing |
-    Permissive | Disabled` and propagate into the capability decision struct.
-  - Add tests that assert the no-op backend is visible in traces, not
-    silent.
-  - Add tests for macOS sandbox-exec (skipped on non-macOS) and Linux
-    seccomp (skipped on non-Linux) confirming enforcement is observable.
-  - Update `docs/TOOL_PERMISSIONS.md` "Sandbox visibility" subsection.
+- DONE P1.6 Sandbox enforcement visibility.
 
 - TODO P1.7 Non-idempotent tool resume policy:
   - Extend resume CLI output (`agentflow workflow run --resume <run-id>`)

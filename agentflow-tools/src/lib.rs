@@ -31,7 +31,7 @@ pub use capability::{Capability, CapabilityDecisionEntry, EffectiveCapabilities,
 pub use error::ToolError;
 pub use policy::{ToolPolicy, ToolPolicyDecision};
 pub use registry::ToolRegistry;
-pub use sandbox::SandboxPolicy;
+pub use sandbox::{SandboxEnforcement, SandboxPolicy, SandboxStatus};
 pub use security_profile::{
   AuthDefaults, CorsDefaults, CorsMode, MarketplaceInstallDefaults, PluginExecutionDefaults,
   RequestLimitDefaults, SECURITY_PROFILE_ENV, SandboxingDefaults, SecurityProfile,

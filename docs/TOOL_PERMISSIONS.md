@@ -91,6 +91,64 @@ doctor status becomes `warning` and the JSON output includes a sandbox
 warning explaining that subprocesses are protected only by in-process
 policy checks.
 
+### Sandbox visibility
+
+The active sandbox backend and its enforcement state are observable
+everywhere a shell, script, or plugin tool runs. Operators reading a trace
+or a doctor report should never have to guess whether the kernel is
+actually constraining a child process.
+
+**Enforcement levels** — `SandboxBackend::enforcement_level()` returns one
+of three tokens:
+
+| Token        | Meaning                                                                                  |
+|--------------|------------------------------------------------------------------------------------------|
+| `enforcing`  | Backend installed and actively constraining the child (macOS with `sandbox-exec`, Linux seccomp on a supported arch). |
+| `permissive` | Platform backend exists but cannot enforce in the current environment (missing `sandbox-exec` binary, unsupported Linux arch). Usually points at a misconfiguration. |
+| `disabled`   | No enforcing backend is available on this platform (e.g. Windows, or a tool that explicitly opted out via `NoopSandboxBackend`). |
+
+`SandboxBackend::is_enforcing()` remains as a boolean shortcut for legacy
+call sites; it returns `true` iff the level is `enforcing`.
+
+**Trace events** — every shell/script/plugin invocation emits an
+`AgentEvent::ToolCapabilityDecision` with a `sandbox` field:
+
+```json
+{
+  "event": "tool_capability_decision",
+  "tool": "shell",
+  "sandbox": { "backend": "sandbox-exec", "enforcement": "enforcing" }
+}
+```
+
+In-process tools (HTTP, file, MCP) omit the `sandbox` field because no OS
+backend is engaged. The field is `#[serde(skip_serializing_if = "Option::is_none")]`,
+so older trace consumers continue to deserialise.
+
+A `noop` backend is **not** silent: the event still records
+`{ "backend": "noop", "enforcement": "disabled" }` so misconfigured
+shell/script tools are visible in `agentflow trace replay`. This is what
+the P1.6 visibility rule enforces: a missing sandbox must always be a
+loud condition in traces, never a default omitted from the event stream.
+
+**Doctor output** — `agentflow doctor --output json` returns both the
+tri-state `enforcement` token and the legacy `enforcing` boolean:
+
+```json
+"sandbox": {
+  "backend": "sandbox-exec",
+  "enforcement": "enforcing",
+  "enforcing": true,
+  "capabilities": ["process", "filesystem", "network"],
+  "warnings": []
+}
+```
+
+The two warning shapes differ between `permissive` ("installed but not
+enforcing in this environment") and `disabled` ("no enforcing sandbox
+backend is available") so an operator reading the report can distinguish
+"my platform has no backend" from "the backend is broken on this host".
+
 ## Sandbox Matrix Coverage
 
 The regression matrix in `agentflow-tools/tests/sandbox_matrix.rs` covers

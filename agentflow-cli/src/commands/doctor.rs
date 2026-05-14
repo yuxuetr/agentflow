@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use agentflow_llm::{LLMConfig, LLMConfigSource, MODELS_CONFIG_ENV};
-use agentflow_tools::sandbox::default_backend;
+use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile, SecurityProfileDefaults};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +78,13 @@ struct SecurityReport {
 #[derive(Debug, Serialize)]
 struct SandboxReport {
   backend: &'static str,
+  /// Tri-state enforcement (`enforcing` / `permissive` / `disabled`). Operators
+  /// reading the JSON output can distinguish "no platform backend on this OS"
+  /// (`disabled`) from "backend exists but cannot enforce right now"
+  /// (`permissive`, e.g. missing `sandbox-exec`, unsupported arch).
+  enforcement: SandboxEnforcement,
+  /// Kept for backwards-compatible JSON consumers. Equivalent to
+  /// `enforcement == "enforcing"`.
   enforcing: bool,
   capabilities: Vec<&'static str>,
   warnings: Vec<String>,
@@ -137,11 +144,13 @@ async fn build_report() -> DoctorReport {
   };
 
   let sandbox_backend = default_backend();
+  let enforcement = sandbox_backend.enforcement_level();
   let sandbox = SandboxReport {
     backend: sandbox_backend.name(),
-    enforcing: sandbox_backend.is_enforcing(),
-    capabilities: sandbox_capabilities(sandbox_backend.is_enforcing()),
-    warnings: sandbox_warnings(sandbox_backend.name(), sandbox_backend.is_enforcing()),
+    enforcement,
+    enforcing: enforcement.is_enforcing(),
+    capabilities: sandbox_capabilities(enforcement.is_enforcing()),
+    warnings: sandbox_warnings(sandbox_backend.name(), enforcement),
   };
 
   let security = security_report();
@@ -430,6 +439,7 @@ fn print_text_report(report: &DoctorReport) {
 
   println!("Sandbox:");
   println!("  backend: {}", report.sandbox.backend);
+  println!("  enforcement: {}", report.sandbox.enforcement.as_str());
   println!("  enforcing: {}", enabled_label(report.sandbox.enforcing));
   println!(
     "  capabilities: {}",
@@ -496,19 +506,21 @@ fn sandbox_capabilities(enforcing: bool) -> Vec<&'static str> {
   }
 }
 
-fn sandbox_warnings(backend: &str, enforcing: bool) -> Vec<String> {
-  if enforcing {
-    Vec::new()
-  } else {
-    vec![format!(
-      "sandbox backend '{backend}' is not enforcing; shell, script, and plugin runs rely only on in-process policy checks"
-    )]
+fn sandbox_warnings(backend: &str, enforcement: SandboxEnforcement) -> Vec<String> {
+  match enforcement {
+    SandboxEnforcement::Enforcing => Vec::new(),
+    SandboxEnforcement::Permissive => vec![format!(
+      "sandbox backend '{backend}' is installed but not enforcing in this environment; shell, script, and plugin runs rely only on in-process policy checks"
+    )],
+    SandboxEnforcement::Disabled => vec![format!(
+      "no enforcing sandbox backend is available (running with backend '{backend}'); shell, script, and plugin runs rely only on in-process policy checks"
+    )],
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{OutputFormat, parse_env_key, sandbox_warnings};
+  use super::{OutputFormat, SandboxEnforcement, parse_env_key, sandbox_warnings};
 
   #[test]
   fn output_format_rejects_unknown_values() {
@@ -528,10 +540,27 @@ mod tests {
   }
 
   #[test]
-  fn sandbox_warnings_explain_noop_risk() {
-    let warnings = sandbox_warnings("noop", false);
+  fn sandbox_warnings_explain_disabled_state() {
+    let warnings = sandbox_warnings("noop", SandboxEnforcement::Disabled);
     assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("not enforcing"));
+    assert!(warnings[0].contains("no enforcing sandbox backend"));
     assert!(warnings[0].contains("in-process policy"));
+  }
+
+  #[test]
+  fn sandbox_warnings_distinguish_permissive_from_disabled() {
+    // Operators need to tell "platform has no backend at all" apart from
+    // "platform backend exists but cannot enforce right now". The two
+    // warnings must therefore be different strings.
+    let disabled = sandbox_warnings("noop", SandboxEnforcement::Disabled);
+    let permissive = sandbox_warnings("sandbox-exec", SandboxEnforcement::Permissive);
+    assert_ne!(disabled, permissive);
+    assert!(permissive[0].contains("installed but not enforcing"));
+  }
+
+  #[test]
+  fn sandbox_warnings_empty_when_enforcing() {
+    let warnings = sandbox_warnings("seccomp", SandboxEnforcement::Enforcing);
+    assert!(warnings.is_empty());
   }
 }

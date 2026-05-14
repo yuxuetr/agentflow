@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::Notify;
 
 use agentflow_memory::Message;
-use agentflow_tools::{Capability, CapabilityDecisionEntry, ToolOutputPart};
+use agentflow_tools::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOutputPart};
 
 /// Runtime limits shared by agent-native execution loops.
 ///
@@ -398,6 +398,14 @@ pub enum AgentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     deny_reason: Option<String>,
     trace: Vec<CapabilityDecisionEntry>,
+    /// Active sandbox status for tools that wrap a child process.
+    ///
+    /// `None` for in-process tools (HTTP, file, MCP) where no OS sandbox is
+    /// engaged. Shell, script, and plugin invocations populate this with the
+    /// backend name (`sandbox-exec` / `seccomp` / `noop`) and the
+    /// enforcement level visible at the moment of decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox: Option<SandboxStatus>,
     timestamp: DateTime<Utc>,
   },
   ToolCallCompleted {
@@ -857,6 +865,7 @@ mod tests {
       denied: effective.denied.clone(),
       deny_reason: effective.deny_reason.clone(),
       trace: effective.trace.clone(),
+      sandbox: effective.sandbox.clone(),
       timestamp: now,
     };
 
@@ -865,8 +874,85 @@ mod tests {
     assert_eq!(json["allowed"], true);
     assert_eq!(json["required"][0], "exec");
     assert_eq!(json["trace"][0]["source"], "tool_required");
+    // No backend attached for this synthetic decision; the field must be
+    // omitted from JSON (skip_serializing_if) so old consumers keep working.
+    assert!(
+      json.get("sandbox").is_none(),
+      "absent sandbox status must be elided from JSON for forward compatibility"
+    );
 
     let decoded: AgentEvent = serde_json::from_value(json).unwrap();
     assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn tool_capability_decision_includes_sandbox_when_present() {
+    use agentflow_tools::{SandboxEnforcement, SandboxStatus};
+
+    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+      "shell",
+      &[Capability::Exec],
+      Some(&[Capability::Exec]),
+      None,
+      None,
+    )
+    .with_sandbox(SandboxStatus::new(
+      "sandbox-exec",
+      SandboxEnforcement::Enforcing,
+    ));
+    let event = AgentEvent::ToolCapabilityDecision {
+      session_id: "session-cap-sb".to_string(),
+      step_index: 1,
+      tool: "shell".to_string(),
+      allowed: effective.allowed,
+      required: effective.required.clone(),
+      effective: effective.effective.clone(),
+      denied: effective.denied.clone(),
+      deny_reason: effective.deny_reason.clone(),
+      trace: effective.trace.clone(),
+      sandbox: effective.sandbox.clone(),
+      timestamp: Utc::now(),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["sandbox"]["backend"], "sandbox-exec");
+    assert_eq!(json["sandbox"]["enforcement"], "enforcing");
+
+    let decoded: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, event);
+  }
+
+  #[test]
+  fn tool_capability_decision_surfaces_noop_backend_in_trace() {
+    use agentflow_tools::{SandboxEnforcement, SandboxStatus};
+
+    // Regression: a no-op backend used to be silent. The visibility rule for
+    // P1.6 is that it must appear in trace events as `disabled` so operators
+    // can spot misconfigured shell/script tools.
+    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+      "shell",
+      &[Capability::Exec],
+      None,
+      None,
+      None,
+    )
+    .with_sandbox(SandboxStatus::new("noop", SandboxEnforcement::Disabled));
+    let event = AgentEvent::ToolCapabilityDecision {
+      session_id: "session-cap-noop".to_string(),
+      step_index: 0,
+      tool: "shell".to_string(),
+      allowed: effective.allowed,
+      required: effective.required.clone(),
+      effective: effective.effective.clone(),
+      denied: effective.denied.clone(),
+      deny_reason: effective.deny_reason.clone(),
+      trace: effective.trace.clone(),
+      sandbox: effective.sandbox.clone(),
+      timestamp: Utc::now(),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["sandbox"]["backend"], "noop");
+    assert_eq!(json["sandbox"]["enforcement"], "disabled");
   }
 }

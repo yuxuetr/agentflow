@@ -21,7 +21,7 @@ use tokio::process::Command;
 
 use crate::capability::Capability;
 
-use super::{SandboxBackend, SandboxError, SandboxScope};
+use super::{SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope};
 
 const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
 
@@ -50,6 +50,17 @@ impl SandboxBackend for MacosSandboxExecBackend {
 
   fn is_enforcing(&self) -> bool {
     self.available
+  }
+
+  fn enforcement_level(&self) -> SandboxEnforcement {
+    if self.available {
+      SandboxEnforcement::Enforcing
+    } else {
+      // The platform backend exists (we are on macOS) but `sandbox-exec`
+      // is missing from the host. Operators should investigate, so emit
+      // Permissive rather than collapsing to Disabled.
+      SandboxEnforcement::Permissive
+    }
   }
 
   fn wrap_command(

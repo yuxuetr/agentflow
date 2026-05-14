@@ -277,6 +277,7 @@ impl PlanExecuteAgent {
           denied: effective.denied,
           deny_reason: effective.deny_reason,
           trace: effective.trace,
+          sandbox: effective.sandbox,
           timestamp: Utc::now(),
         });
       }

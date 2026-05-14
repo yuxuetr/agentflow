@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::ToolPermission;
+use crate::sandbox::SandboxStatus;
 
 /// A single OS-mappable capability requested by a tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -121,6 +122,14 @@ pub struct EffectiveCapabilities {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub deny_reason: Option<String>,
   pub trace: Vec<CapabilityDecisionEntry>,
+  /// Active OS sandbox status for tools that wrap a child process.
+  ///
+  /// `None` for tools that run entirely in-process (HTTP, file, MCP).
+  /// Tools that spawn subprocesses (shell, script, plugin) populate this
+  /// so operators can see the backend name and enforcement state in trace
+  /// events and doctor diagnostics.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub sandbox: Option<SandboxStatus>,
 }
 
 impl EffectiveCapabilities {
@@ -194,7 +203,16 @@ impl EffectiveCapabilities {
       allowed,
       deny_reason,
       trace,
+      sandbox: None,
     }
+  }
+
+  /// Attach a sandbox status snapshot to the decision. Tools that wrap a
+  /// child process (shell, script, plugin) call this so the active backend
+  /// is observable in trace events and doctor output.
+  pub fn with_sandbox(mut self, status: SandboxStatus) -> Self {
+    self.sandbox = Some(status);
+    self
   }
 }
 

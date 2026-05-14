@@ -4,7 +4,7 @@ use tokio::process::Command;
 
 use crate::capability::Capability;
 
-use super::{SandboxBackend, SandboxError, SandboxScope};
+use super::{SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope};
 
 /// Pass-through backend. `is_enforcing()` returns `false`; callers that
 /// require actual enforcement should detect this and refuse to spawn.
@@ -33,6 +33,10 @@ impl SandboxBackend for NoopSandboxBackend {
 
   fn is_enforcing(&self) -> bool {
     false
+  }
+
+  fn enforcement_level(&self) -> SandboxEnforcement {
+    SandboxEnforcement::Disabled
   }
 
   fn wrap_command(

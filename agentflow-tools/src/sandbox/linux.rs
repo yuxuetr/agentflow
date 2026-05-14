@@ -44,7 +44,7 @@ use tokio::process::Command;
 
 use crate::capability::Capability;
 
-use super::{SandboxBackend, SandboxError, SandboxScope};
+use super::{SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope};
 
 /// Linux seccomp backend. Cheap to clone: holds an `Arc` of the compiled BPF.
 pub struct LinuxSeccompBackend {
@@ -74,6 +74,17 @@ impl SandboxBackend for LinuxSeccompBackend {
 
   fn is_enforcing(&self) -> bool {
     self.arch.is_some()
+  }
+
+  fn enforcement_level(&self) -> SandboxEnforcement {
+    if self.arch.is_some() {
+      SandboxEnforcement::Enforcing
+    } else {
+      // We are on Linux but the architecture is not in the supported
+      // (`x86_64`, `aarch64`) set. Report Permissive so operators can see
+      // that an enforcing backend exists on this platform but isn't active.
+      SandboxEnforcement::Permissive
+    }
   }
 
   fn wrap_command(
