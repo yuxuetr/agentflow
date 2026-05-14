@@ -67,6 +67,8 @@ an existing required field is breaking.
 | Trace persistence schema | Beta | Table names and core columns in `docs/TRACE_PERSISTENCE_SCHEMA.md` are the compatibility target. New columns/tables may be added. Existing columns must not change type without a migration. |
 | Server REST API envelope | Beta | JSON response field names for `/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, `/v1/skills`, and marketplace-related commands are preserved. Error responses use the server `ApiError` envelope. |
 | SSE event envelope | Beta | Events carry `run_id`, `seq`, `kind`, `payload`, and `ts`. `seq` is monotonically increasing per run and clients may reconnect with `after_seq`. New `kind` values are additive. |
+| `HarnessEvent` envelope | Experimental | `agentflow-harness` line-delimited JSON: `seq`, `session_id`, `ts`, `kind`, `payload`. Closed kind set (`session_started`, `step_started`, `tool_call_requested`, `approval_requested`, `approval_decided`, `tool_call_completed`, `background_task_updated`, `memory_summary_added`, `stopped`). Wire schema version `harness/1`. Additive optional fields and additive kinds keep the version; breaking changes bump it. |
+| `ApprovalRequest` / `ApprovalDecision` | Experimental | `agentflow-harness` approval protocol envelopes. `id` joins request to decision. `decision` ∈ `allow` / `deny` / `deny_and_stop`. `scope` ∈ `once` / `session` / `run`. Stability promoted to Beta after Phase H2 wires them through the runtime. |
 
 ## Compatibility Fixture Ownership
 
@@ -90,6 +92,7 @@ reads and stable writer output for its rows below.
 | Trace persistence events | Beta | `agentflow-tracing` | `agentflow-tracing/tests/fixtures/trace_events/` | File/JSON trace event persistence, replay fixtures, trace status transitions, node/LLM/agent/tool details, and redaction-sensitive fields. |
 | Server REST envelopes | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/rest_envelopes/` | `/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/graph`, `/v1/runs/{id}/events/history`, success envelopes, pagination fields, and `ApiError` envelopes. |
 | SSE events | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/sse_events/` | `run_id`, monotonic `seq`, `kind`, `payload`, `ts`, backfill after `after_seq`, lag comments, and terminal event delivery. |
+| `HarnessEvent` / `ApprovalRequest` / `ApprovalDecision` | Experimental | `agentflow-harness` | `agentflow-harness/tests/fixtures/` | Closed kind set, session/approval envelopes, additive optional-field tolerance, and `HARNESS_ENVELOPE_SCHEMA_VERSION` ("harness/1") stability. |
 
 ## Non-Stable Surfaces
 

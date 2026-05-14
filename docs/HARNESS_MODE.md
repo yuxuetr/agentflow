@@ -1,0 +1,309 @@
+# Harness Mode — Implementation Spec
+
+Last updated: 2026-05-14
+Status: **Phase H0 — contract freeze (this document).**
+
+Harness Mode is AgentFlow's long-lived, workspace-aware agent session
+layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
+memory, and tracing surfaces with a stable session protocol so the same
+contract works across CLI direct execution, the local server, and the
+embedded Web UI.
+
+This document is the **implementation spec** owned by Phase H0+ work in
+`TODOs.md` (segment `P-H`). The longer rationale that motivates the
+design lives in `HARNESS_MODE_EVOLUTION.md`.
+
+## Scope of this freeze (Phase H0)
+
+Phase H0 freezes the **contract surface** so downstream consumers can
+build against stable types while Phase H1 wires runtime execution. The
+crate `agentflow-harness` ships these types only — no runtime, no
+orchestration, no platform side effects.
+
+Frozen surfaces:
+
+- `HarnessEvent` — line-delimited JSON envelope for session activity.
+- `ApprovalRequest` / `ApprovalDecision` — interactive approval
+  protocol.
+- `PreToolHook` / `PostToolHook` — async hook traits.
+- `ApprovalProvider` — pluggable approval source.
+- `ContextProvider` — pluggable project context source.
+- `HarnessContext` / `HarnessProfile` / `HarnessRuntimeKind` — session
+  descriptor.
+
+Stability tier: **experimental** until Phase H1 exercises them
+end-to-end (`docs/STABILITY.md`).
+
+Envelope schema version: `harness/1` (constant
+`agentflow_harness::HARNESS_ENVELOPE_SCHEMA_VERSION`). Bump only on
+breaking wire shape changes; additive optional fields and additive
+event kinds keep the same version.
+
+## Crate placement
+
+`agentflow-harness` is a **new crate** under `agentflow-harness/`. Two
+reasons:
+
+1. **Additive boundary.** Building Harness as a crate next to
+   `agentflow-agents` rather than a module inside it makes the wrapper
+   pattern explicit: Harness composes the existing runtime, it does
+   not replace it. This addresses HARNESS_MODE_EVOLUTION Risk 1 ("a
+   parallel runtime") by physical separation.
+2. **Light dependency footprint.** The contract crate depends only on
+   `agentflow-tools` (for `ToolIdempotency`, `ToolPermission`,
+   `ToolSource`) plus `serde` / `chrono` / `async-trait` / `thiserror`.
+   This keeps the wire surface reusable from UIs and SDKs that should
+   not pull in the entire agent stack.
+
+Phase H1+ will add execution dependencies (`agentflow-agents`,
+`agentflow-skills`, `agentflow-tracing`, ...).
+
+## Event envelope
+
+```json
+{
+  "seq": 0,
+  "session_id": "abc",
+  "ts": "2026-05-14T12:34:56Z",
+  "kind": "session_started",
+  "payload": { ... }
+}
+```
+
+Serialization uses `tag = "kind", content = "payload",
+rename_all = "snake_case"`. `seq` is monotonically increasing per
+session and starts at `0`; consumers reconnect with `after_seq=N`.
+
+The frozen kind set (Phase H0):
+
+| kind | payload | when emitted |
+| --- | --- | --- |
+| `session_started` | workspace, runtime, profile, model, skills, context summary | once at session bootstrap |
+| `step_started` | step_index, step_type | start of each agent step |
+| `tool_call_requested` | step_index, tool, source, permissions, idempotency, params_summary | agent asked to call a tool |
+| `approval_requested` | embedded `ApprovalRequest` | policy or hook gated the call |
+| `approval_decided` | embedded `ApprovalDecision` | provider returned a decision |
+| `tool_call_completed` | step_index, tool, is_error, duration_ms, source, output_summary | tool returned |
+| `background_task_updated` | task_id, status, summary, error | managed task state change |
+| `memory_summary_added` | layer, summary, token_estimate | memory compaction appended a summary |
+| `stopped` | reason, final_answer, error | session terminating |
+
+The enum is **closed**. New kinds are additive AgentFlow releases.
+Trace replay tooling depends on the closed surface.
+
+## Approval protocol
+
+```rust
+pub struct ApprovalRequest {
+  pub id: String,
+  pub session_id: String,
+  pub step_index: usize,
+  pub tool: String,
+  pub source: Option<ToolSource>,
+  pub permissions: Vec<ToolPermission>,
+  pub idempotency: ToolIdempotency,
+  pub params_summary: serde_json::Value,
+  pub risk: ApprovalRisk,
+  pub reason: String,
+  pub requested_at: DateTime<Utc>,
+  pub expires_at: Option<DateTime<Utc>>,
+}
+
+pub enum ApprovalRisk { Low, Medium, High, Critical }
+
+pub struct ApprovalDecision {
+  pub request_id: String,
+  pub decision: ApprovalOutcome,  // allow | deny | deny_and_stop
+  pub scope: ApprovalScope,       // once | session | run
+  pub decided_by: String,
+  pub decided_at: DateTime<Utc>,
+  pub reason: Option<String>,
+}
+```
+
+Rules:
+
+- `ApprovalRequest.id` is unique within a session; it is the join key
+  between request and decision.
+- `params_summary` MUST be redacted/truncated; raw secrets must not
+  enter the wire envelope (HARNESS_MODE_EVOLUTION Risk 4).
+- `expires_at` is honored by the provider; a missed deadline produces
+  `HarnessError::ApprovalTimeout`, never an implicit allow
+  (HARNESS_MODE_EVOLUTION Risk 2).
+
+## Hook traits
+
+```rust
+#[async_trait]
+pub trait ContextProvider: Send + Sync {
+  fn name(&self) -> &str;
+  fn priority_hint(&self) -> ContextPriority { ContextPriority::Normal }
+  async fn collect(&self, ctx: &HarnessContext) -> Result<Vec<ContextItem>, HarnessError>;
+}
+
+#[async_trait]
+pub trait PreToolHook: Send + Sync {
+  fn name(&self) -> &str;
+  async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError>;
+}
+
+#[async_trait]
+pub trait PostToolHook: Send + Sync {
+  fn name(&self) -> &str;
+  async fn after_tool(&self, call: &CompletedToolCall) -> Result<(), HarnessError>;
+}
+
+#[async_trait]
+pub trait ApprovalProvider: Send + Sync {
+  fn name(&self) -> &str;
+  async fn request(&self, request: ApprovalRequest) -> Result<ApprovalDecision, HarnessError>;
+}
+```
+
+`PreToolDecision` is a tagged enum (`allow` / `require_approval` /
+`deny`). The runtime composes multiple `PreToolHook`s; the strictest
+returned decision wins.
+
+`PostToolHook` is advisory: a hook failure is recorded but never rolls
+back the tool call.
+
+`ContextProvider`s must be deterministic for a given context when no
+external state has changed, so trace replay can reproduce the prompt.
+Providers emit structured `ContextItem`s with priority and token cost;
+the runtime composes them under a token budget rather than dumping
+files blindly (HARNESS_MODE_EVOLUTION Risk 4).
+
+## Session context
+
+```rust
+pub struct HarnessContext {
+  pub session_id: String,
+  pub workspace_root: PathBuf,
+  pub user_input: String,
+  pub model: String,
+  pub runtime: HarnessRuntimeKind,
+  pub profile: HarnessProfile,
+  pub metadata: serde_json::Value,
+}
+
+pub enum HarnessRuntimeKind {
+  React,
+  PlanExecute,
+  Handoff,
+  Blackboard,
+  Debate,
+}
+
+pub enum HarnessProfile { Dev, Local, Production }
+```
+
+Phase H1 will populate these inside `HarnessRuntime::start` and pass
+them to providers and hooks.
+
+## CLI surface (target for Phase H1)
+
+```bash
+agentflow harness run "Analyze this project and propose next steps"
+agentflow harness run --skill ./skills/code-review "Review current changes"
+agentflow harness run --output stream-json "Implement the next TODO safely"
+agentflow harness resume <session_id>
+agentflow harness list
+agentflow harness inspect <session_id>
+```
+
+Flags:
+
+```text
+--model <model>
+--runtime react|plan_execute|handoff|blackboard|debate
+--skill <path-or-name>
+--mcp-config <path>
+--permission-mode ask|deny|auto
+--security-profile dev|local|production
+--output text|json|stream-json
+--run-dir <path>
+--trace-dir <path>
+```
+
+Initial implementation must not ship a TUI. A stable `stream-json`
+event surface gives TUI / Web UI a clean integration point later
+(HARNESS_MODE_EVOLUTION Risk 5).
+
+## Server surface (target for Phase H5)
+
+```text
+POST /v1/harness/sessions
+GET  /v1/harness/sessions
+GET  /v1/harness/sessions/{id}
+POST /v1/harness/sessions/{id}:resume
+POST /v1/harness/sessions/{id}:cancel
+GET  /v1/harness/sessions/{id}/events           # SSE
+GET  /v1/harness/sessions/{id}/events/history
+GET  /v1/harness/sessions/{id}/approvals
+POST /v1/harness/sessions/{id}/approvals/{approval_id}
+```
+
+The server is **optional**. CLI direct execution stays first-class.
+
+## Fixtures and tests
+
+Phase H0 ships frozen-fixture round-trip tests in
+`agentflow-harness/tests/`:
+
+- `envelope_contract.rs` — decode + re-encode of session bootstrap,
+  approval request/decision, terminal stopped event, and an additive
+  unknown-field tolerance check.
+- `tests/fixtures/*.json` — the v1 wire fixtures. Changes to these
+  files must bump `HARNESS_ENVELOPE_SCHEMA_VERSION` and update
+  `docs/STABILITY.md`.
+
+Phase H1 will add execution tests (session bootstrap, ReAct
+integration, context provider determinism); Phase H2 will add
+approval lifecycle tests (allowed once, allowed for session, denied,
+cancelled, timeout).
+
+## Phase plan recap
+
+`HARNESS_MODE_EVOLUTION.md` carries the full plan. `TODOs.md` segment
+`P-H` is the operational queue. The current ordering:
+
+| Phase | TODO id | Theme | Status |
+| --- | --- | --- | --- |
+| H0 | P-H.0 | Contract inventory (this doc) | **closed** |
+| H1 | P-H.1 | Runtime MVP, default providers, CLI entry | active after H0 |
+| H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
+| H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
+| H4 | P-H.4 | Background task tools | gated |
+| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | gated |
+| H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
+
+## Architectural invariants
+
+These are enforced via PR review:
+
+1. **Wrap, do not replace.** Harness Mode wraps existing `AgentRuntime`,
+   `ToolRegistry`, trace contracts, and Skill contracts. New behavior
+   is additive through hooks, events, and session context.
+2. **Default to ask / deny for mutating tools** in `local` and
+   `production` profiles. `dev` profile may auto-allow but must still
+   emit the approval lifecycle events.
+3. **Resume honors `ToolIdempotency`.** Non-idempotent tool calls
+   require explicit manual recovery (`P1.7`). The runtime must never
+   silently replay an `Unknown` or `NonIdempotent` call.
+4. **Context items carry priority and token cost.** Providers MUST
+   NOT dump entire files into the prompt without budget control.
+5. **UI is a client of the protocol.** The server SSE surface and Web
+   UI rendering are downstream consumers of `HarnessEvent`; they do
+   not get to invent their own wire shape.
+
+## Open questions deferred to Phase H1
+
+- Where does `HarnessSessionStore` live (in-memory only vs. backed by
+  the existing `runs` schema with a `kind = harness` column)?
+- How are background-task lifecycle events deduplicated when the same
+  task transitions multiple times?
+- Default token budget per `ContextPriority` band — concrete numbers
+  pending real prompt assembly tests.
+
+These do not block the H0 freeze; they are recorded here so Phase H1
+work can pick them up directly.

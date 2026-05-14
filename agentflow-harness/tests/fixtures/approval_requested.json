@@ -1,0 +1,21 @@
+{
+  "seq": 7,
+  "session_id": "sess-fixture-1",
+  "ts": "2026-05-14T12:34:57Z",
+  "kind": "approval_requested",
+  "payload": {
+    "request": {
+      "id": "req-1",
+      "session_id": "sess-fixture-1",
+      "step_index": 5,
+      "tool": "shell",
+      "source": "builtin",
+      "permissions": ["process_exec"],
+      "idempotency": "non_idempotent",
+      "params_summary": {"cmd": "rm /tmp/x"},
+      "risk": "high",
+      "reason": "shell tool requires explicit approval in local profile",
+      "requested_at": "2026-05-14T12:34:57Z"
+    }
+  }
+}

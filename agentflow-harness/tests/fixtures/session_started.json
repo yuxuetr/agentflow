@@ -1,0 +1,15 @@
+{
+  "seq": 0,
+  "session_id": "sess-fixture-1",
+  "ts": "2026-05-14T12:34:56Z",
+  "kind": "session_started",
+  "payload": {
+    "workspace_root": "/tmp/agentflow-fixture",
+    "runtime": "react",
+    "profile": "local",
+    "model": "step-1",
+    "skills": ["code-review"],
+    "context_item_count": 3,
+    "context_token_estimate": 1024
+  }
+}

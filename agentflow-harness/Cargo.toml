@@ -1,0 +1,26 @@
+[package]
+name = "agentflow-harness"
+version = "0.1.0"
+edition = "2024"
+authors = ["AgentFlow Contributors"]
+description = "Harness Agent Mode contract crate: long-lived, workspace-aware agent sessions for AgentFlow"
+license = "MIT"
+keywords = ["ai", "agents", "harness", "agentflow"]
+categories = ["development-tools"]
+
+# Phase H0 (P-H.0) deliverable: this crate freezes the contract surface
+# (event envelope, approval protocol, hook traits, session context) without
+# any execution logic. Runtime wiring lives in Phase H1+. Keep the
+# dependency footprint deliberately small so the contracts stay reusable.
+
+[dependencies]
+agentflow-tools = { path = "../agentflow-tools" }
+
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt"] }

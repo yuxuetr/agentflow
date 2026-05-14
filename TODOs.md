@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | NEW — H0/H1 can start now |
+| P-H | Harness Agent Mode (parallel track) | H0 closed; H1 unblocked |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -54,6 +54,7 @@ but do not implement channel adapters in this queue.
 - P4.1 v1 stable interface inventory.
 - P4.2 official ecosystem samples.
 - P4.3 documentation convergence.
+- P-H.0 Harness contract inventory (new `agentflow-harness` crate, frozen envelopes, hook trait boundaries, `docs/HARNESS_MODE.md`).
 
 ---
 
@@ -654,29 +655,28 @@ Architectural rules (enforced via review):
 - Treat any UI as a client of the stable JSON event envelope, not the
   source of truth (Risk 5).
 
-### Foundation — Start Now (no platform prereq)
+### Foundation — closed
 
-- TODO P-H.0 Harness contract inventory (Phase H0; ~2-4 days):
-  - Promote `HARNESS_MODE_EVOLUTION.md` content into
-    `docs/HARNESS_MODE.md` as the implementation spec.
-  - Define and freeze JSON envelopes:
-    - `HarnessEvent` (kinds: `SessionStarted`, `StepStarted`,
-      `ToolCallRequested`, `ApprovalRequested`, `ApprovalDecided`,
-      `ToolCallCompleted`, `BackgroundTaskUpdated`, `MemorySummaryAdded`,
-      `Stopped`).
+- DONE P-H.0 Harness contract inventory (Phase H0):
+  - `docs/HARNESS_MODE.md` is the implementation spec, promoted from
+    `HARNESS_MODE_EVOLUTION.md` (the rationale doc).
+  - JSON envelopes frozen in new `agentflow-harness` crate:
+    - `HarnessEvent` (closed kind set: `session_started`, `step_started`,
+      `tool_call_requested`, `approval_requested`, `approval_decided`,
+      `tool_call_completed`, `background_task_updated`,
+      `memory_summary_added`, `stopped`).
     - `ApprovalRequest` (tool name, args summary, risk classification,
       idempotency, requested_at, expires_at).
     - `ApprovalDecision` (decision, scope: once/session/run, decided_by,
       decided_at, reason).
-  - Define hook trait boundaries:
-    - `PreToolHook`, `PostToolHook`, `ApprovalProvider`,
-      `ContextProvider`.
-  - Decide `agentflow-harness` as a new crate vs initial module in
-    `agentflow-agents`. (Default recommendation: new crate to enforce
-    additive boundary.)
-  - Add round-trip contract tests for new envelopes.
-  - Update `docs/STABILITY.md` with the new envelopes' stability tier
-    (likely `beta` initially).
+  - Hook trait boundaries defined: `PreToolHook`, `PostToolHook`,
+    `ApprovalProvider`, `ContextProvider`.
+  - `agentflow-harness` shipped as a new crate (additive boundary;
+    Phase H1 wires runtime execution on top).
+  - Round-trip contract tests + frozen JSON fixtures under
+    `agentflow-harness/tests/fixtures/`.
+  - `docs/STABILITY.md` lists the new envelopes at `Experimental` tier
+    with `HARNESS_ENVELOPE_SCHEMA_VERSION = harness/1`.
 
 - TODO P-H.1 Harness runtime MVP (Phase H1; ~1-2 weeks; PREREQ: P-H.0):
   - Scaffold `agentflow-harness/` crate with:

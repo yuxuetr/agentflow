@@ -1,0 +1,10 @@
+{
+  "seq": 42,
+  "session_id": "sess-fixture-1",
+  "ts": "2026-05-14T12:36:00Z",
+  "kind": "stopped",
+  "payload": {
+    "reason": "completed",
+    "final_answer": "All TODOs reviewed."
+  }
+}

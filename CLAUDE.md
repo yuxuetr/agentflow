@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 15 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 16 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
 
 Recommended four-layer mental model:
 
 - **L1 Execution Core**: `agentflow-core` (DAG engine, `AsyncNode`, `FlowValue`, scheduler, retry, timeout, checkpoint, resource manager, health, events)
 - **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
-- **L3 Agent / Orchestration**: `agentflow-agents`, `agentflow-skills`, `agentflow-cli`
+- **L3 Agent / Orchestration**: `agentflow-agents`, `agentflow-skills`, `agentflow-harness`, `agentflow-cli`
 - **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-viz`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`
 
 Two complementary execution styles:
@@ -79,6 +79,14 @@ Declarative agent capability packages:
 - `SkillBuilder` wires persona / model / tools / knowledge / memory / mcp_servers / security into a runnable agent
 - Local registry (`skills.index.toml`) + marketplace catalog
 - CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
+
+#### L3 — agentflow-harness
+Harness Agent Mode contract crate (Phase H0 freeze):
+- `HarnessEvent` line-delimited JSON envelope (closed kind set: `session_started`, `step_started`, `tool_call_requested`, `approval_requested`, `approval_decided`, `tool_call_completed`, `background_task_updated`, `memory_summary_added`, `stopped`)
+- `ApprovalRequest` / `ApprovalDecision` / `ApprovalRisk` / `ApprovalScope` interactive approval protocol
+- Async hook traits: `PreToolHook`, `PostToolHook`, `ApprovalProvider`, `ContextProvider`
+- `HarnessContext`, `HarnessProfile`, `HarnessRuntimeKind` session descriptor
+- Stability tier **experimental** until Phase H1 exercises the runtime end-to-end. See `docs/HARNESS_MODE.md` for the implementation spec.
 
 #### L3 — agentflow-cli
 Unified user interface:

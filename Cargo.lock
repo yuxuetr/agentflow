@@ -141,6 +141,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentflow-harness"
+version = "0.1.0"
+dependencies = [
+ "agentflow-tools",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "agentflow-llm"
 version = "0.2.0"
 dependencies = [
