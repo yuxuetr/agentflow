@@ -8,8 +8,8 @@ use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{
-  audio, config as config_cmd, doctor, harness, image, llm, marketplace, mcp, skill, trace,
-  workflow,
+  audio, config as config_cmd, doctor, harness, image, llm, marketplace, mcp, serve as serve_cmd,
+  skill, trace, workflow,
 };
 
 #[derive(Parser)]
@@ -43,6 +43,8 @@ enum Commands {
   Doctor(DoctorArgs),
   /// Harness Agent Mode: workspace-aware, long-lived agent sessions
   Harness(HarnessArgs),
+  /// Boot the AgentFlow Gateway (Axum HTTP API) by spawning `agentflow-server`
+  Serve(ServeArgs),
   #[cfg(feature = "plugin")]
   /// Plugin management commands (subprocess plugins)
   Plugin(PluginArgs),
@@ -112,6 +114,37 @@ struct DoctorArgs {
 struct HarnessArgs {
   #[command(subcommand)]
   command: HarnessCommands,
+}
+
+#[derive(Args)]
+struct ServeArgs {
+  /// `host:port` to bind to (default: 127.0.0.1:8080, env: AGENTFLOW_SERVE_BIND)
+  #[arg(long)]
+  bind: Option<String>,
+  /// Postgres URL (default env: DATABASE_URL)
+  #[arg(long)]
+  database_url: Option<String>,
+  /// Workflow run-artifact root (env: AGENTFLOW_RUN_DIR)
+  #[arg(long)]
+  run_dir: Option<String>,
+  /// Trace directory (env: AGENTFLOW_TRACE_DIR)
+  #[arg(long)]
+  trace_dir: Option<String>,
+  /// Active security profile
+  #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+  security_profile: String,
+  /// Name of the env var that carries the bearer auth token
+  #[arg(long, default_value = "AGENTFLOW_API_TOKEN")]
+  auth_token_env: String,
+  /// Explicit CORS allow-list (comma-separated)
+  #[arg(long, value_delimiter = ',')]
+  cors_origins: Vec<String>,
+  /// Maximum request body size in megabytes
+  #[arg(long)]
+  max_body_mb: Option<u64>,
+  /// Run readiness diagnostics without binding any sockets and exit
+  #[arg(long)]
+  check: bool,
 }
 
 #[derive(Subcommand)]
@@ -1135,6 +1168,20 @@ async fn main() {
       Ok(format) => doctor::execute(format).await,
       Err(err) => Err(err),
     },
+    Commands::Serve(args) => {
+      serve_cmd::execute(
+        args.bind,
+        args.database_url,
+        args.run_dir,
+        args.trace_dir,
+        args.security_profile,
+        args.auth_token_env,
+        args.cors_origins,
+        args.max_body_mb,
+        args.check,
+      )
+      .await
+    }
     Commands::Harness(args) => match args.command {
       HarnessCommands::Run {
         input,

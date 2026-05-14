@@ -57,6 +57,7 @@ but do not implement channel adapters in this queue.
 - P-H.0 Harness contract inventory (new `agentflow-harness` crate, frozen envelopes, hook trait boundaries, `docs/HARNESS_MODE.md`).
 - P-H.1 Harness runtime MVP (`HarnessRuntime`, four default context providers, JSONL persistence, tracing-dir bridge, `agentflow harness run|resume|list|inspect` CLI).
 - P1.7 Non-idempotent tool resume policy (`ResumePlan` envelope + `Flow::load_resume_plan` / `Flow::resume_with_options` + `WorkflowEvent::ResumeDecisionRecorded` + `agentflow workflow resume-plan` CLI + `GET /v1/runs/{id}/resume-plan`).
+- P2.1 `agentflow serve` command (`ServeConfig` + `run` / `run_check` library hooks + `agentflow serve --check` structured readiness diagnostic + subprocess wrapper).
 
 ---
 
@@ -145,23 +146,31 @@ auditable, and explicit.
 Goal: make the server a dependable local execution control plane without
 turning it into a channel hub.
 
-- TODO P2.1 `agentflow serve` command:
-  - Add `agentflow-cli/src/commands/serve.rs` invoking
-    `agentflow_server::run()` with config.
-  - Support flags / env:
-    - `--bind <host:port>` / `AGENTFLOW_SERVE_BIND` (default `127.0.0.1:8080`).
-    - `--database-url` / `AGENTFLOW_DATABASE_URL`.
-    - `--run-dir` / `AGENTFLOW_RUN_DIR`.
-    - `--trace-dir` / `AGENTFLOW_TRACE_DIR`.
-    - `--security-profile dev|local|production` (default `local`).
-    - `--auth-token-env <var>` (default `AGENTFLOW_API_TOKEN`).
-    - `--cors-origins <list>`.
-    - `--max-body-mb`.
-  - Startup diagnostics printed to stdout (without leaking secrets):
-    - effective profile, bind, db reachable y/n, trace dir, run dir,
-      auth token source, sandbox backend, plugin runtime status.
-  - Add `agentflow serve --check` non-binding readiness mode for CI.
-  - Add integration tests that start/stop the server in tests.
+- DONE P2.1 `agentflow serve` command:
+  - `agentflow-server::serve` exposes `ServeConfig`, `run`,
+    `run_check`, `build_startup_report`, `ServeReadiness`, and
+    `StartupReport`. Both the `agentflow-server` binary and the CLI
+    subcommand go through the same path.
+  - CLI `agentflow serve` spawns the `agentflow-server` binary (the
+    inverse dep already runs cli→server in the server crate, so cli
+    cannot link the server library; the subprocess hop preserves the
+    one-binary deploy model). Flags supported: `--bind`,
+    `--database-url`, `--run-dir`, `--trace-dir`, `--security-profile`,
+    `--auth-token-env`, `--cors-origins`, `--max-body-mb`, `--check`.
+    Each flag falls back to the documented env var.
+  - `--check` runs the non-binding readiness diagnostic; emits a
+    structured JSON report and exits with `0` / `1` / `2` for
+    `ok` / `warn` / `fail`. Report carries the effective profile,
+    bind, db reachability + host, sandbox backend, plugin runtime
+    hint, paths, auth token env name, and a warnings / errors list.
+    Auth tokens are never embedded; only the env var name and a bool
+    flag.
+  - Tests: 7 server-lib unit tests covering readiness promotion, host
+    extraction, missing DB, production-without-token (fail),
+    local-with-token (warn), plus 4 CLI integration tests covering
+    the structured JSON output, production fail-closed, token-present
+    happy path with secret redaction, and `--help` flag surface. All
+    tests run hermetically — no Postgres or open ports required.
 
 - TODO P2.2 Run retention and cleanup policy:
   - Add settings to `agentflow-db`:

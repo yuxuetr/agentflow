@@ -9,6 +9,7 @@ pub mod mcp;
 #[cfg(feature = "plugin")]
 pub mod plugin;
 pub mod rag;
+pub mod serve;
 pub mod skill;
 pub mod trace;
 pub mod workflow;

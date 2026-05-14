@@ -28,6 +28,7 @@ pub mod error;
 pub mod events_stream;
 pub mod runs;
 pub mod scheduler;
+pub mod serve;
 pub mod skills;
 pub mod ui;
 
@@ -52,6 +53,10 @@ pub use scheduler::{
   RunControlStatus, SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent, WorkerAssignment,
   WorkerControlPlane, WorkerControlServer, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
   WorkerTaskResult, WorkerTraceEvent, WorkerTransport, stitched_trace_to_otel_spans,
+};
+pub use serve::{
+  AGENTFLOW_SERVE_BIND_ENV, DEFAULT_SERVE_BIND, ServeConfig, ServeError, ServeReadiness,
+  StartupReport, build_startup_report, run, run_check,
 };
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,

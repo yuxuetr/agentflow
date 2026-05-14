@@ -1,10 +1,23 @@
-use agentflow_db::Database;
+//! Binary entry for the AgentFlow Gateway. All real boot logic lives
+//! in [`agentflow_server::serve`] so the same code path is shared with
+//! the `agentflow serve` CLI subcommand (P2.1).
+//!
+//! Flag surface:
+//! - `--check` — non-binding readiness diagnostics; prints a JSON
+//!   report and exits with `0` (Ok), `1` (Warn), or `2` (Fail).
+//! - any other args are passed through but ignored for now.
+//!
+//! All other configuration is taken from environment variables so the
+//! `agentflow serve` CLI subcommand can drive this binary by setting
+//! env vars + arguments without linking the server crate (which would
+//! introduce a cycle with `agentflow-cli`).
+
+use std::net::SocketAddr;
+
 use agentflow_server::{
-  AppState, SkillCatalog, create_router, resolve_auth_config_from_env,
-  server_security_defaults_from_env,
+  AGENTFLOW_SERVE_BIND_ENV, DEFAULT_SERVE_BIND, ServeConfig, ServeError, run, run_check,
 };
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
-use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -16,61 +29,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let _ = dotenvy::dotenv();
 
-  let db_url = std::env::var("DATABASE_URL")
-    .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/agentflow".to_string());
+  let args: Vec<String> = std::env::args().collect();
+  let check_mode = args.iter().any(|arg| arg == "--check");
 
-  info!("Initializing database connection and applying migrations…");
-  let db = match Database::connect_and_migrate(&db_url, 8).await {
-    Ok(d) => d,
-    Err(e) => {
-      error!("Failed to connect to database: {}", e);
-      return Err(e.into());
-    }
-  };
+  let config = build_config_from_env()?;
 
-  let security_profile = match SecurityProfile::from_env() {
-    Ok(profile) => profile,
-    Err(err) => {
-      error!("Invalid {SECURITY_PROFILE_ENV}: {err}");
-      return Err(err.into());
-    }
-  };
-  let security_defaults = match server_security_defaults_from_env(security_profile) {
-    Ok(defaults) => defaults,
-    Err(err) => {
-      error!("{err}");
-      return Err(err.into());
-    }
-  };
-  info!("Using '{}' security profile", security_profile);
-
-  let auth = match resolve_auth_config_from_env(security_profile) {
-    Ok(auth) => auth,
-    Err(err) => {
-      error!("{err}");
-      return Err(err.into());
-    }
-  };
-  if auth.is_none() && !security_defaults.auth.require_api_token {
-    warn!(
-      "AGENTFLOW_API_TOKEN is not set; the gateway is running without bearer auth. \
-       Set AGENTFLOW_API_TOKEN before exposing this server outside trusted networks."
-    );
+  if check_mode {
+    let report = run_check(config).await?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    std::process::exit(report.readiness.exit_code());
   }
 
-  let state = AppState::new(db)
-    .with_security_defaults(security_defaults)
-    .with_auth(auth)
-    .with_skills(SkillCatalog::from_env());
-  let app = create_router(state);
+  match run(config).await {
+    Ok(()) => Ok(()),
+    Err(err) => {
+      eprintln!("{err}");
+      match &err {
+        ServeError::Database(_) | ServeError::MissingDatabaseUrl => Err(err.into()),
+        _ => Err(err.into()),
+      }
+    }
+  }
+}
 
-  let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-  let addr = format!("0.0.0.0:{}", port);
+fn build_config_from_env() -> Result<ServeConfig, Box<dyn std::error::Error>> {
+  let bind = resolve_bind()?;
+  let security_profile = SecurityProfile::from_env().map_err(|err| {
+    eprintln!("Invalid {SECURITY_PROFILE_ENV}: {err}");
+    err
+  })?;
+  let database_url = std::env::var("DATABASE_URL")
+    .ok()
+    .filter(|value| !value.trim().is_empty());
+  let auth_token_env = std::env::var("AGENTFLOW_SERVE_AUTH_TOKEN_ENV")
+    .unwrap_or_else(|_| "AGENTFLOW_API_TOKEN".to_string());
 
-  info!("Starting AgentFlow Gateway on {}", addr);
-  let listener = tokio::net::TcpListener::bind(&addr).await?;
+  Ok(ServeConfig {
+    bind,
+    database_url,
+    run_dir: std::env::var("AGENTFLOW_RUN_DIR").ok().map(Into::into),
+    trace_dir: std::env::var("AGENTFLOW_TRACE_DIR").ok().map(Into::into),
+    security_profile,
+    auth_token_env,
+    cors_origins: Vec::new(),
+    max_body_mb: None,
+  })
+}
 
-  axum::serve(listener, app).await?;
-
-  Ok(())
+fn resolve_bind() -> Result<SocketAddr, std::net::AddrParseError> {
+  // Backwards compatibility: prefer the historical `PORT` env, then the
+  // new `AGENTFLOW_SERVE_BIND`, then the documented default.
+  if let Ok(port) = std::env::var("PORT") {
+    return format!("0.0.0.0:{port}").parse();
+  }
+  if let Ok(addr) = std::env::var(AGENTFLOW_SERVE_BIND_ENV) {
+    return addr.parse();
+  }
+  DEFAULT_SERVE_BIND.parse()
 }
