@@ -112,6 +112,56 @@ impl EventBroker {
     let mut map = self.inner.lock().expect("event broker mutex poisoned");
     map.remove(&run_id);
   }
+
+  /// Like [`Self::finalise`] but defers the actual channel removal by
+  /// `grace`. Lets in-flight SSE subscribers drain the terminal event
+  /// from the broadcast buffer before the sender is dropped. The
+  /// caller doesn't need to await the returned task — it lives on
+  /// the tokio runtime and self-terminates.
+  ///
+  /// Phase `P2.4`: prevents the "publish terminal event → finalise →
+  /// subscriber misses it" race that fired when the executor wrote
+  /// the final SSE event and immediately tore the channel down.
+  pub fn finalise_with_grace(&self, run_id: Uuid, grace: Duration) {
+    let broker = self.clone();
+    tokio::spawn(async move {
+      if !grace.is_zero() {
+        tokio::time::sleep(grace).await;
+      }
+      broker.finalise(run_id);
+    });
+  }
+
+  /// Snapshot of the active per-run channel count. Useful for tests
+  /// and lightweight broker diagnostics; cheap to call (a single
+  /// `Mutex::lock` + `HashMap::len`).
+  pub fn active_runs(&self) -> usize {
+    self.inner.lock().map(|m| m.len()).unwrap_or(0)
+  }
+
+  /// Returns the number of receivers currently subscribed to
+  /// `run_id`. `0` when the channel is missing entirely. Used by
+  /// integration tests to assert drop-on-disconnect and by
+  /// operational diagnostics.
+  pub fn receiver_count(&self, run_id: Uuid) -> usize {
+    let map = self.inner.lock().expect("event broker mutex poisoned");
+    map
+      .get(&run_id)
+      .map(|sender| sender.receiver_count())
+      .unwrap_or(0)
+  }
+}
+
+/// Default grace period between publishing the terminal event and
+/// dropping the broadcast channel. Pulled from
+/// `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` at first use; falls back to
+/// 500 ms when the env var is missing or unparseable.
+pub fn broker_finalize_grace() -> Duration {
+  let raw = std::env::var("AGENTFLOW_BROKER_FINALIZE_GRACE_MS")
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok())
+    .unwrap_or(500);
+  Duration::from_millis(raw)
 }
 
 /// Persist + publish an event in one shot. The DB row is the source of
@@ -585,6 +635,116 @@ mod tests {
     // After finalise the sender is dropped; recv eventually yields Closed.
     let result = rx.recv().await;
     assert!(matches!(result, Err(broadcast::error::RecvError::Closed)));
+  }
+
+  #[tokio::test]
+  async fn broker_finalise_with_grace_preserves_terminal_event_for_subscriber() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    let mut rx = broker.subscribe(run_id);
+
+    // Publish a terminal event then schedule finalise with a short grace
+    // window. The subscriber should still receive the terminal event
+    // before the channel goes away.
+    broker.publish(sample_event(run_id, 0));
+    broker.finalise_with_grace(run_id, std::time::Duration::from_millis(50));
+
+    let received = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+      .await
+      .expect("recv did not time out")
+      .expect("terminal event delivered before channel teardown");
+    assert_eq!(received.seq, 0);
+
+    // After the grace window elapses, the channel is removed from the
+    // broker.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(broker.active_runs(), 0);
+  }
+
+  #[tokio::test]
+  async fn broker_finalise_with_zero_grace_still_removes_channel() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    let _rx = broker.subscribe(run_id);
+    broker.finalise_with_grace(run_id, std::time::Duration::ZERO);
+    // Allow the spawned task to run.
+    tokio::task::yield_now().await;
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    assert_eq!(broker.active_runs(), 0);
+  }
+
+  #[tokio::test]
+  async fn broker_receiver_count_tracks_subscriber_drops() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    let rx_one = broker.subscribe(run_id);
+    let rx_two = broker.subscribe(run_id);
+    assert_eq!(broker.receiver_count(run_id), 2);
+    drop(rx_one);
+    // tokio::broadcast updates receiver_count lazily on send/recv; force
+    // an interaction by publishing a no-op event.
+    broker.publish(sample_event(run_id, 0));
+    assert_eq!(broker.receiver_count(run_id), 1);
+    drop(rx_two);
+    broker.publish(sample_event(run_id, 1));
+    assert_eq!(broker.receiver_count(run_id), 0);
+  }
+
+  #[tokio::test]
+  async fn broker_subscriber_disconnect_does_not_block_other_subscribers() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    let rx_short = broker.subscribe(run_id);
+    let mut rx_long = broker.subscribe(run_id);
+    // Drop the short-lived subscriber to simulate a client disconnect.
+    drop(rx_short);
+    // The remaining subscriber should still receive published events.
+    broker.publish(sample_event(run_id, 0));
+    let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx_long.recv())
+      .await
+      .expect("recv did not time out")
+      .expect("surviving subscriber gets the event");
+    assert_eq!(received.seq, 0);
+  }
+
+  #[test]
+  fn broker_finalize_grace_env_transitions_are_picked_up() {
+    // Single test (synchronous, no tokio scheduler racing with other
+    // tokio::test cases) walks default → override → invalid →
+    // default. The three states share one env var, so they must
+    // run serially.
+    // SAFETY: the env var is dedicated to this surface and no other
+    // test reads it during this test's lifetime.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_BROKER_FINALIZE_GRACE_MS");
+    }
+    assert_eq!(
+      broker_finalize_grace(),
+      std::time::Duration::from_millis(500),
+      "unset → 500 ms default"
+    );
+
+    unsafe {
+      std::env::set_var("AGENTFLOW_BROKER_FINALIZE_GRACE_MS", "120");
+    }
+    assert_eq!(
+      broker_finalize_grace(),
+      std::time::Duration::from_millis(120),
+      "valid override honored"
+    );
+
+    unsafe {
+      std::env::set_var("AGENTFLOW_BROKER_FINALIZE_GRACE_MS", "not-a-number");
+    }
+    assert_eq!(
+      broker_finalize_grace(),
+      std::time::Duration::from_millis(500),
+      "invalid value → 500 ms default"
+    );
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_BROKER_FINALIZE_GRACE_MS");
+    }
   }
 
   #[tokio::test]

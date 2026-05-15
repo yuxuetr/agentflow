@@ -45,7 +45,10 @@ pub struct CleanupConfig {
   pub run_dir_retention_days: u32,
   /// Polling interval for the background loop. Single-shot invocations
   /// (`agentflow cleanup`) ignore this value.
-  #[serde(default = "default_interval", skip_serializing_if = "is_default_interval")]
+  #[serde(
+    default = "default_interval",
+    skip_serializing_if = "is_default_interval"
+  )]
   pub interval: Duration,
   /// When `true`, the sweep reports candidates but performs no
   /// mutations. Set by `agentflow cleanup --dry-run`.

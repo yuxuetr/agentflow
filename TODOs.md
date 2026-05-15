@@ -65,6 +65,7 @@ but do not implement channel adapters in this queue.
 - P2.2 Run retention and cleanup policy (`agentflow-server::cleanup` module + per-profile defaults + DB/filesystem sweep + `agentflow cleanup --dry-run` CLI + background loop in `serve`). Per-run override deferred.
 - P1.8 Plugin execution policy (`agentflow-tools::plugin_policy` + per-profile defaults + `agentflow plugin install --allow-unsandboxed-plugin --signed` + production opt-in rejection + `tracing::info!` trace target).
 - P1.9 MCP capability + SkillSecurity merge policy (`agentflow-skills::policy::resolve_tool_policy` + `ResolvedToolPolicy` / `AdmissionSource` types + `docs/MCP_CAPABILITY_POLICY.md` precedence table; CLI flag wiring tracked under P3.5).
+- P2.4 SSE robustness (`EventBroker::finalise_with_grace` + `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` + public diagnostics + reconnect across active / recently-completed / long-completed runs + disconnect-no-leak tests).
 
 ---
 
@@ -276,16 +277,34 @@ turning it into a channel hub.
   - Cover both authenticated and unauthenticated paths in
     `local`/`production` profiles.
 
-- TODO P2.4 SSE robustness:
-  - Verify `GET /v1/runs/{id}/events?after_seq=N` reconnect behavior across:
-    - Active run (events still arriving).
-    - Recently completed run (broker finalized, events persisted).
-    - Long-completed run (broker dropped, only DB has events).
-  - Ensure broker finalization does not drop terminal persisted events:
-    add `finalize_with_grace_ms` between final event publish and broker
-    teardown.
-  - Add timeout-safe subscriber tests with `tokio::time::timeout`.
-  - Add tests for client disconnect mid-stream (no leaked tasks).
+- DONE P2.4 SSE robustness:
+  - `EventBroker::finalise_with_grace(run_id, grace)` spawns a
+    deferred teardown so subscribers can drain the terminal event
+    from the broadcast buffer before the channel is removed.
+  - `broker_finalize_grace()` reads
+    `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` (default 500 ms) so
+    operators can tune the window without redeploying.
+  - Every call site that previously did `broker.finalise(run_id)`
+    inside `runs.rs` (stub executor success, real flow executor
+    success, executor error path, `cancel_run`) now goes through
+    `finalise_with_grace(id, broker_finalize_grace())`. The bare
+    `finalise` API is preserved for cases that need immediate
+    teardown (tests, explicit error short-circuits).
+  - `EventBroker::active_runs()` and `EventBroker::receiver_count()`
+    are now public so operational diagnostics and integration tests
+    can observe broker state without poking at `Mutex` internals.
+  - Tests:
+    - 10 unit tests in `events_stream::tests` (3 new for grace
+      behaviour + receiver-count + disconnect isolation + env
+      transitions). All hermetic.
+    - 5 integration tests in `tests/sse_robustness.rs` cover
+      reconnect against a recently-completed run, reconnect
+      against a long-completed run that lost the broker entry,
+      `after_seq` above max returns empty, SSE 404 for unknown
+      run, and the disconnect-mid-stream path that asserts the
+      broker drops the receiver count via the now-public
+      `receiver_count()` accessor. They self-skip without
+      `AGENTFLOW_DATABASE_TEST_URL`.
 
 - TODO P2.5 CLI local-daemon mode:
   - Design `--server <url>` / `AGENTFLOW_SERVER_URL` plumbing for selected

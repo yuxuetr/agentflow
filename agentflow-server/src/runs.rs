@@ -28,6 +28,8 @@ use agentflow_core::{
   build_resume_plan,
   checkpoint::{CheckpointConfig, CheckpointManager},
 };
+
+use crate::events_stream::broker_finalize_grace;
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 
@@ -190,7 +192,9 @@ impl RunExecutor for FlowRunExecutor {
         .runs
         .update_status(ctx.run_id, status, Some(&e.to_string()))
         .await;
-      ctx.broker.finalise(ctx.run_id);
+      ctx
+        .broker
+        .finalise_with_grace(ctx.run_id, broker_finalize_grace());
     }
   }
 }
@@ -237,7 +241,9 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
       .await?;
   }
 
-  ctx.broker.finalise(ctx.run_id);
+  ctx
+    .broker
+    .finalise_with_grace(ctx.run_id, broker_finalize_grace());
   info!(run_id = %ctx.run_id, "flow executor finished");
   Ok(())
 }
@@ -318,7 +324,9 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
     .await?;
   // Drop the per-run broadcast channel so live subscribers see EOF after
   // any in-flight events drain.
-  ctx.broker.finalise(ctx.run_id);
+  ctx
+    .broker
+    .finalise_with_grace(ctx.run_id, broker_finalize_grace());
   info!(run_id = %ctx.run_id, "stub executor finished");
   Ok(())
 }
@@ -476,7 +484,9 @@ pub async fn cancel_run(
     .update_status(id, RunStatus::Cancelled, Some("cancel requested"))
     .await?;
   publish_cancellation_event(&state.repos, &state.event_broker, id).await?;
-  state.event_broker.finalise(id);
+  state
+    .event_broker
+    .finalise_with_grace(id, broker_finalize_grace());
   state.cancellation_registry.complete(id);
 
   let run = state
