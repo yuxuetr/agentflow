@@ -6,6 +6,7 @@ use agentflow_skills::SkillLoader;
 use agentflow_skills::policy::{
   McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission, resolve_tool_policy,
 };
+use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{Capability, EffectiveCapabilities, ToolPermission};
 
 pub async fn execute(
@@ -132,6 +133,7 @@ pub async fn execute(
       &manifest.tools,
       &manifest.security.tool_permission_allowlist,
     );
+    print_sandbox_profile(manifest.security.os_sandbox, &manifest.tools);
     let resolved = resolve_skill_policy(&manifest, &allow_tools, &deny_tools);
     print_policy_admissions(&resolved, &allow_tools, &deny_tools);
   } else if !allow_tools.is_empty() || !deny_tools.is_empty() {
@@ -215,6 +217,54 @@ fn print_capability_explanations(
         format_caps(&entry.running),
         dropped,
       );
+    }
+  }
+}
+
+/// Print the effective OS-level sandbox state: detected platform backend,
+/// its enforcement tri-state, and the skill manifest's `security.os_sandbox`
+/// opt-in. The backend probe is hermetic (no spawn, just metadata) so this
+/// runs on every inspect call without touching the network or spawning a
+/// subprocess.
+fn print_sandbox_profile(os_sandbox_optin: bool, tools: &[agentflow_skills::manifest::ToolConfig]) {
+  let backend = default_backend();
+  let enforcement = backend.enforcement_level();
+  println!("\nSandbox profile:");
+  println!("  backend:           {}", backend.name());
+  println!("  enforcement:       {}", enforcement.as_str());
+  println!(
+    "  manifest opt-in:   security.os_sandbox = {}",
+    os_sandbox_optin
+  );
+
+  let has_sandboxable_tool = tools
+    .iter()
+    .any(|t| matches!(t.name.to_lowercase().as_str(), "shell" | "script"));
+  let mut notes: Vec<String> = Vec::new();
+  if has_sandboxable_tool {
+    if !os_sandbox_optin && enforcement == SandboxEnforcement::Enforcing {
+      notes.push(
+        "skill declares shell/script tools but has not opted in to OS sandbox (security.os_sandbox = false) while the platform backend is available — consider enabling".to_string(),
+      );
+    }
+    if os_sandbox_optin && enforcement != SandboxEnforcement::Enforcing {
+      notes.push(format!(
+        "skill opted in to OS sandbox but the active backend reports '{}'; shell/script tools will run unsandboxed unless deployed to a platform with an enforcing backend",
+        enforcement.as_str()
+      ));
+    }
+  } else if os_sandbox_optin {
+    notes.push(
+      "security.os_sandbox is enabled but no shell/script tool is declared — flag has no effect for this skill"
+        .to_string(),
+    );
+  }
+  if notes.is_empty() {
+    println!("  notes:             (none)");
+  } else {
+    println!("  notes:");
+    for note in &notes {
+      println!("    - {}", note);
     }
   }
 }

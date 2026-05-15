@@ -624,6 +624,73 @@ fn skill_inspect_cli_deny_beats_cli_allow_on_same_tool() {
 }
 
 #[test]
+fn skill_inspect_explain_permissions_prints_sandbox_profile_section() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  // rust_expert declares shell + script tools but leaves
+  // security.os_sandbox = false, so the report should flag the opt-out
+  // when the platform backend actually enforces.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let assert = cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--explain-permissions",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Sandbox profile:"))
+    .stdout(predicate::str::contains("backend:"))
+    .stdout(predicate::str::contains("enforcement:"))
+    .stdout(predicate::str::contains(
+      "manifest opt-in:   security.os_sandbox = false",
+    ));
+  // Note text only fires when the active backend reports `enforcing`. macOS
+  // CI runners typically do; Linux runners will too via seccomp. On hosts
+  // that fall back to `noop` (Windows / unsupported arch) the note is
+  // expected to be absent — assert the section header is still present and
+  // omit the note assertion in that case.
+  let output = assert.get_output().stdout.clone();
+  let stdout = String::from_utf8(output).unwrap();
+  if stdout.contains("enforcement:       enforcing") {
+    assert!(
+      stdout.contains("skill declares shell/script tools but has not opted in"),
+      "expected opt-out note on enforcing platform; got:\n{stdout}"
+    );
+  } else {
+    assert!(
+      stdout.contains("notes:"),
+      "sandbox profile section should always render a notes field; got:\n{stdout}"
+    );
+  }
+}
+
+#[test]
+fn skill_inspect_explain_permissions_sandbox_profile_clean_for_mcp_only_skill() {
+  // mcp-basic declares no shell/script tool, so the notes block should be
+  // "(none)" regardless of whether the platform backend is enforcing.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &mcp_basic_skill_path(),
+      "--explain-permissions",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Sandbox profile:"))
+    .stdout(predicate::str::contains(
+      "manifest opt-in:   security.os_sandbox = false",
+    ))
+    .stdout(predicate::str::contains("notes:             (none)"));
+}
+
+#[test]
 fn skill_inspect_allow_deny_tool_without_explain_permissions_emits_hint() {
   let rust_expert_path = format!(
     "{}/../agentflow-skills/examples/skills/rust_expert",
