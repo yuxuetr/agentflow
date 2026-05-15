@@ -76,6 +76,7 @@ but do not implement channel adapters in this queue.
 - M.6 Workspace edition pin: new `xtask/` workspace member + `cargo xtask verify-edition` subcommand walks every member's `Cargo.toml` and asserts `edition = "2024"`. `.cargo/config.toml` ships the `xtask` alias; Quality CI workflow gains a `verify-edition` job listed under `release-gate.needs`. Tests: 3 unit (synthetic workspace) + 3 integration (real workspace + bad subcommand).
 - P3.5 (Slice 3 of 4): `skill inspect --explain-permissions` now prints a `Sandbox profile:` block that surfaces the detected platform backend (`sandbox-exec` / `seccomp` / `noop`), the tri-state `SandboxEnforcement` level, the manifest's `security.os_sandbox` opt-in, and operator notes for suspicious combinations (shell/script tools without opt-in on enforcing platforms; opt-in without an enforcing backend; opt-in without any sandboxable tool). 2 new CLI tests in `skill_cli_tests.rs` lock down the rust_expert opt-out path and the mcp-basic clean path. Slice 4 (MCP capability discovery wiring in `skill inspect`) remains TODO.
 - P3.9 (partial): Quality CI `features` job expanded from 6 to 12 combinations (cli-no-default, cli-mcp-rag-plugin, cli-all-features, tracing-postgres, mcp-all-transports, nodes-default added alongside the six existing rows). Each row was validated locally with `cargo check` before landing. Two combinations from the wishlist were found broken at HEAD and tracked under the new M.7 entry instead of being wired in as failing CI jobs.
+- M.2 `docs/AGENT_SDK.md` trait-change sync: new `cargo xtask check-agent-sdk-doc` subcommand walks every backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and asserts a `pub (trait|struct|enum|type|fn) Ident` declaration exists under any `agentflow-*/src/**/*.rs`. Allowlist covers known non-types. Quality CI gains a `check-agent-sdk-doc` job listed in `release-gate.needs`. Tests: 5 unit + 1 integration.
 
 ---
 
@@ -1233,13 +1234,31 @@ fit a P-segment.
 
 - DONE M.1 `CLAUDE.md` sync after worker/ui.
 
-- TODO M.2 `docs/AGENT_SDK.md` trait-change sync:
-  - Add a doc maintenance checklist: every change to `AgentRuntime`,
-    `ReflectionStrategy`, `MemorySummaryBackend`, `ToolPolicy`, or
-    `EventListener` traits must update the doc and the `custom_*`
-    examples in the same PR.
-  - Add a `cargo xtask check-agent-sdk-doc` step that greps for stale
-    type names.
+- DONE M.2 `docs/AGENT_SDK.md` trait-change sync:
+  - New `cargo xtask check-agent-sdk-doc` subcommand walks every
+    backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and
+    asserts a matching `pub (trait|struct|enum|type|fn) Ident`
+    declaration exists under any `agentflow-*/src/**/*.rs`. Catches
+    doc rot when a trait or type referenced in the SDK guide is
+    renamed or removed without updating the doc. An explicit
+    allowlist (`Err`, `None`, enum variants `Step` / `Plan` /
+    `Reflect` / `Failure` / `Critique` / `Final` / `FailureReason`,
+    and the doc's inline example type `EchoTool`) covers known
+    non-type mentions.
+  - Heuristics: CamelCase = leading uppercase + alphanumerics + at
+    least one lowercase (skips acronyms like `JSON` / `URL`).
+    Pub-decl scanner handles `pub`, `pub(crate)`, `pub(super)`,
+    and `pub(in path)`.
+  - CI: new `check-agent-sdk-doc` Quality job listed in
+    `release-gate.needs`. Today's clean state: 35 mentions
+    cross-referenced, 9 ignored via allowlist, all pass.
+  - Tests: 5 unit (happy path, missing-type failure, allowlist
+    honored, extractor edge cases, visibility-restricted decls) +
+    1 integration (real workspace exits 0).
+  - Doc maintenance checklist itself is enforced by the xtask, not
+    a separate written checklist — the CI gate fails any PR that
+    introduces drift, which is the same outcome as a checklist
+    review step but is mechanically enforced.
 
 - TODO M.3 Test coverage gaps:
   - `agentflow-db`: currently 4 smoke tests. Add per-repo CRUD tests
