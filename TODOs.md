@@ -75,6 +75,7 @@ but do not implement channel adapters in this queue.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
 - M.6 Workspace edition pin: new `xtask/` workspace member + `cargo xtask verify-edition` subcommand walks every member's `Cargo.toml` and asserts `edition = "2024"`. `.cargo/config.toml` ships the `xtask` alias; Quality CI workflow gains a `verify-edition` job listed under `release-gate.needs`. Tests: 3 unit (synthetic workspace) + 3 integration (real workspace + bad subcommand).
 - P3.5 (Slice 3 of 4): `skill inspect --explain-permissions` now prints a `Sandbox profile:` block that surfaces the detected platform backend (`sandbox-exec` / `seccomp` / `noop`), the tri-state `SandboxEnforcement` level, the manifest's `security.os_sandbox` opt-in, and operator notes for suspicious combinations (shell/script tools without opt-in on enforcing platforms; opt-in without an enforcing backend; opt-in without any sandboxable tool). 2 new CLI tests in `skill_cli_tests.rs` lock down the rust_expert opt-out path and the mcp-basic clean path. Slice 4 (MCP capability discovery wiring in `skill inspect`) remains TODO.
+- P3.9 (partial): Quality CI `features` job expanded from 6 to 12 combinations (cli-no-default, cli-mcp-rag-plugin, cli-all-features, tracing-postgres, mcp-all-transports, nodes-default added alongside the six existing rows). Each row was validated locally with `cargo check` before landing. Two combinations from the wishlist were found broken at HEAD and tracked under the new M.7 entry instead of being wired in as failing CI jobs.
 
 ---
 
@@ -554,19 +555,23 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
   - Update `docs/TRACE_PERSISTENCE_SCHEMA.md` "Hop continuity" subsection.
 
 - TODO P3.9 CLI feature flag CI matrix:
-  - Add a CI workflow `feature-matrix.yml` that runs `cargo check` and
-    a minimal smoke test for each combination:
-    - `--no-default-features`
-    - `--no-default-features --features rag`
-    - `--no-default-features --features mcp`
-    - `--no-default-features --features audio`
-    - `--no-default-features --features image`
-    - `--no-default-features --features plugin`
-    - `--no-default-features --features tracing-sqlite`
-    - `--no-default-features --features tracing-postgres`
-    - `--no-default-features --features otel`
-    - `--all-features` (existing).
-  - Mark broken combinations explicitly with a tracking issue.
+  - DONE (partial) — Quality CI `features` job grew from 6 to 12
+    combinations: cli-no-default, cli-mcp, cli-rag, cli-plugin,
+    cli-mcp-rag-plugin, cli-all-features, tracing-postgres,
+    mcp-local-transports, mcp-all-transports, core-observability,
+    core-plugin, nodes-default. Each was validated locally via
+    `cargo check` before landing.
+  - The wishlist's `audio`, `image`, `tracing-sqlite`, and `otel`
+    feature names do not currently exist in any workspace crate. Add
+    them only when the actual feature flags exist — promote to a
+    fresh subtask if/when those features ship.
+  - Two combinations from the original wishlist are broken at HEAD
+    and tracked under M.7 instead of being wired in as failing jobs:
+    `agentflow-llm --no-default-features --features openai` (default
+    `logging` feature is load-bearing for tracing imports) and
+    `agentflow-nodes --features batch,conditional,factories` (these
+    features assume the default llm/http/file/template are enabled
+    but Cargo strips them when `--features` is supplied).
 
 - TODO P3.10 Examples smoke test CI:
   - Extend P3.2 into a CI job that runs every example in
@@ -1247,6 +1252,23 @@ fit a P-segment.
 - DONE M.4 Historical eval doc cleanup.
 
 - DONE M.5 CI workflow audit (see `docs/CI_WORKFLOWS.md`).
+
+- TODO M.7 Fix broken minimal feature combinations:
+  - `agentflow-llm --no-default-features --features openai`:
+    code references `tracing::*` unconditionally but the `logging`
+    feature (which pulls in the `tracing` dep) is part of the default
+    feature set. Either gate the imports under
+    `#[cfg(feature = "logging")]` or move `tracing` to an
+    unconditional dep.
+  - `agentflow-nodes --features batch,conditional,factories`:
+    `batch`/`conditional`/`factories` reference `LlmNode::new`,
+    `HttpNode::new`, `FileNode::new`, `FlowValue::String`, and
+    `as_f64`. These require the default `llm`/`http`/`file`/`template`
+    features. Either declare the dependency in `[features]` (e.g.
+    `batch = ["llm", "http", "file", "template"]`) or relax the
+    code paths to be feature-gated.
+  - Once fixed, add the corresponding rows to the Quality CI
+    `features` matrix.
 
 - DONE M.6 Workspace edition pin:
   - New `xtask/` workspace member with a single `verify-edition`
