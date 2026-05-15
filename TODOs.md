@@ -84,6 +84,7 @@ but do not implement channel adapters in this queue.
 - P4.4 Minimal agent eval implementation (3 slices): `agentflow-agents::eval` module ships `Dataset` / `Assertion` / `EvalRunner` + `AgentRuntimeFactory` trait + `EvalReport` envelope; new `AgentStopReason::CostLimitExceeded` variant flows through every workspace match site. `agentflow eval run <dataset>` CLI with `--format text|json`, `--filter <glob>`, `--fail-on-status failed|never`. Tiny `ci_offline` fixture drives the bare ReActAgent against the mock provider so the suite is hermetic. 33 unit tests in agentflow-agents + 10 unit/integration tests in agentflow-cli. Cost tracking is plumbed (cost_usd_actual = 0.0 until the LLM providers report it). Trace ids are `eval-<case_id>-<epoch hex>` so `agentflow trace replay` consumes them directly.
 - P4.4 follow-up trio (3 commits): (1) skill-aware factory + tool admission via new `SkillBuilder::build_with_admission` — `case.skill` cases now route through full skill loading with `tools_allowed/denied` filtering the registry pre-run. (2) real cost tracking via new `AgentEvent::LlmCallCompleted` + `PricingTable` (loadable from `AGENTFLOW_PRICING_TABLE` env or `~/.agentflow/pricing.yml`) — `cost_usd_actual` now reflects real per-call token usage × per-model rates, and `case.cost_limit_usd` is actually enforced. (3) `docs/SKILL_VALIDATOR_PROTOCOL.md` defines the v1 `[validation]` manifest section that backs the `final_answer_matches_skill` assertion.
 - SKILL_VALIDATOR_PROTOCOL implementation (2 commits): `agentflow-skills::validator` ships `SkillValidator` trait + `RegexValidator` + `CommandValidator` + `build_validator` factory; manifest gains `[validation] kind = "none" | "regex" | "command"`. `SkillLoader::validate` pre-compiles validators so bad regex / empty command surfaces at load time. Assertion-layer closure return promoted to `SkillValidatorVerdict { Pass | Fail{reason} | Unrunnable{reason} }`. CLI eval factory caches per-skill validators and wires them through `skill_validator(case)`. Tests: 22 new (16 unit in skills + 3 unit in assertions + 3 CLI integration). `final_answer_matches_skill` Just Works end-to-end against skills with `[validation]`.
+- P4.1 RAG eval CI fixture: `agentflow-rag/eval_datasets/ci_offline/` ships a 20-doc synthetic CC0 corpus + 10 queries + qrels; `agentflow-cli/tests/rag_eval_cli_tests.rs` (gated on `rag`) drives the CLI end-to-end and locks the JSON envelope shape downstream consumers depend on, with a Recall@5 ≥ 0.8 sanity gate. New `rag-eval-smoke` Quality job listed in `release-gate.needs` so schema or quality regressions fail the gate. Today: BM25 Recall@5=1.0, MRR=1.0, p95 latency ~0.1ms.
 
 ---
 
@@ -606,15 +607,22 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
 Goal: make retrieval, memory, and agent quality measurable and
 regression-safe.
 
-- TODO P4.1 RAG eval CI fixture:
-  - Add `agentflow-rag/eval_datasets/ci_offline/` with:
-    - ~20 corpus docs (synthetic, public-domain only).
-    - ~10 queries with graded qrels.
-  - Add CI job `rag-eval-smoke.yml` running `agentflow rag eval
-    eval_datasets/ci_offline --baseline bm25 --output json`.
-  - Assert schema: `recall@5`, `mrr`, `ndcg@10`, `latency_ms_p50`,
-    `latency_ms_p95`.
-  - Block release on schema regressions.
+- DONE P4.1 RAG eval CI fixture:
+  - `agentflow-rag/eval_datasets/ci_offline/` ships dataset.toml +
+    20-doc synthetic corpus.jsonl + 10 queries.jsonl + 10 qrels.jsonl
+    (graded 0–3). Text written fresh for the fixture so it's CC0-1.0
+    with no external source to drift.
+  - `agentflow-cli/tests/rag_eval_cli_tests.rs` (gated on `rag`
+    feature) drives the CLI end-to-end and asserts every JSON
+    envelope field downstream consumers need: `dataset.{path,
+    manifest, corpus_size, queries, judgments}`, `baseline.{retriever,
+    label, mrr, latency, per_k, num_queries}`,
+    `latency.{mean_ms, p50_ms, p95_ms}`, `per_k` rows carrying
+    `{k, recall, ndcg}`. K values must equal CLI default set
+    `[1, 3, 5, 10]`. Recall@5 ≥ 0.8 sanity gate (today: 1.0).
+  - Quality CI gains a `rag-eval-smoke` job; listed in
+    `release-gate.needs` so schema or quality regressions fail the
+    release gate.
 
 - TODO P4.2 RAG eval baseline snapshots:
   - Store baseline metric snapshots under
