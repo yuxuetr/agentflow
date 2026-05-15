@@ -2,6 +2,7 @@ pub mod audio;
 pub mod cleanup;
 pub mod config;
 pub mod doctor;
+pub mod eval;
 pub mod harness;
 pub mod image;
 pub mod llm;

@@ -8,8 +8,8 @@ use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{
-  audio, cleanup as cleanup_cmd, config as config_cmd, doctor, harness, image, llm, marketplace,
-  mcp, serve as serve_cmd, skill, trace, workflow,
+  audio, cleanup as cleanup_cmd, config as config_cmd, doctor, eval as eval_cmd, harness, image,
+  llm, marketplace, mcp, serve as serve_cmd, skill, trace, workflow,
 };
 
 #[derive(Parser)]
@@ -47,6 +47,8 @@ enum Commands {
   Serve(ServeArgs),
   /// Run the retention sweep once and exit (delegates to `agentflow-server --cleanup`)
   Cleanup(CleanupArgs),
+  /// Run an agent eval dataset and emit a structured report
+  Eval(EvalArgs),
   #[cfg(feature = "plugin")]
   /// Plugin management commands (subprocess plugins)
   Plugin(PluginArgs),
@@ -126,6 +128,32 @@ struct DoctorArgs {
 struct HarnessArgs {
   #[command(subcommand)]
   command: HarnessCommands,
+}
+
+#[derive(Args)]
+struct EvalArgs {
+  #[command(subcommand)]
+  command: EvalCommands,
+}
+
+#[derive(Subcommand)]
+enum EvalCommands {
+  /// Execute an eval dataset and emit the structured report
+  Run {
+    /// Path to the eval dataset directory (`dataset.toml` + `cases.jsonl`)
+    dataset_dir: String,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    format: String,
+    /// Glob filter applied to case ids (supports `*` and `?`); non-
+    /// matching cases are reported as skipped.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Exit-status policy: `failed` (any failed case → exit 1) or
+    /// `never` (always exit 0 unless dataset itself is malformed).
+    #[arg(long = "fail-on-status", default_value = "failed", value_parser = ["failed", "never"])]
+    fail_on_status: String,
+  },
 }
 
 #[derive(Args)]
@@ -1234,6 +1262,14 @@ async fn main() {
       )
       .await
     }
+    Commands::Eval(args) => match args.command {
+      EvalCommands::Run {
+        dataset_dir,
+        format,
+        filter,
+        fail_on_status,
+      } => eval_cmd::execute(dataset_dir, format, filter, fail_on_status).await,
+    },
     Commands::Serve(args) => {
       serve_cmd::execute(
         args.bind,

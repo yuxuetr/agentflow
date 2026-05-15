@@ -1,0 +1,14 @@
+schema_version = 1
+name = "ci-offline"
+version = "0.1.0"
+description = "Hermetic agent eval fixture for CI smoke. Drives a bare ReActAgent against the mock LLM provider; no API key, no network."
+source = "internal"
+license = "CC0-1.0"
+
+# Per-case defaults inherited by every entry in cases.jsonl. The model
+# name is parameterised at runtime — integration tests override it via
+# the case-level `model` field so each test gets a unique mock model id
+# that AGENTFLOW_MOCK_RESPONSES can target without leaking across tests.
+[defaults]
+max_steps = 4
+max_tool_calls = 0

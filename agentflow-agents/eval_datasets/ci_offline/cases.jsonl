@@ -1,0 +1,2 @@
+{"id":"hello-world","prompt":"say hello","model":"mock-eval-hello","expected_assertions":[{"type":"contains","needle":"hello"},{"type":"step_count_below","max_steps":10}],"notes":"smallest end-to-end smoke: agent emits a final answer that contains the needle."}
+{"id":"step-budget","prompt":"plan + answer","model":"mock-eval-budget","expected_assertions":[{"type":"contains","needle":"done"},{"type":"tool_not_called","tool":"shell"}],"notes":"agent should never reach for shell on a pure-text prompt."}
