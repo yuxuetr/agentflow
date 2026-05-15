@@ -536,6 +536,156 @@ fn cli_workflow_validate_strict_rejects_unknown_parameters() {
     .stdout(predicate::str::contains("typo_param"));
 }
 
+fn write_mixed_permission_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("permission_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Permission Survey
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello {{ name }}"
+  - id: fetch
+    type: http
+    parameters:
+      url: "https://api.example.com/v1/widgets"
+      method: GET
+      allowed_domains: ["api.example.com"]
+  - id: write_out
+    type: file
+    parameters:
+      operation: write
+      path: "/tmp/out.txt"
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_text_per_node() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mixed_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Permission requirements:"))
+    .stdout(predicate::str::contains(
+      "2 of 3 nodes carry a host-side permission category",
+    ))
+    .stdout(predicate::str::contains("render (type=template) → pure"))
+    .stdout(predicate::str::contains("fetch (type=http) → network"))
+    .stdout(predicate::str::contains("capabilities: [net]"))
+    .stdout(predicate::str::contains(
+      "allowed_domains: [api.example.com]",
+    ))
+    .stdout(predicate::str::contains(
+      "write_out (type=file) → filesystem",
+    ))
+    .stdout(predicate::str::contains(
+      "capabilities: [fs.read, fs.write]",
+    ))
+    .stdout(predicate::str::contains(
+      "permissive: no allowed_paths constraint",
+    ));
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_json_envelope() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mixed_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"permissions\""))
+    .stdout(predicate::str::contains("\"category\": \"network\""))
+    .stdout(predicate::str::contains("\"category\": \"filesystem\""))
+    .stdout(predicate::str::contains("\"total_nodes\": 3"))
+    .stdout(predicate::str::contains("\"permission_bearing_nodes\": 2"));
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_off_omits_section() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mixed_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Permission requirements:").not());
+}
+
+fn write_shell_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("shell_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Shell Workflow
+nodes:
+  - id: probe
+    type: shell
+    parameters:
+      command: "uname"
+      allowed_commands: ["uname", "uptime"]
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_shell_node_capability() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_shell_workflow(&work);
+
+  // Schema may flag shell as unsupported in the CLI factory; the permission
+  // report still prints to stdout regardless of validation status.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .stdout(predicate::str::contains("probe (type=shell) → exec"))
+    .stdout(predicate::str::contains("capabilities: [exec]"))
+    .stdout(predicate::str::contains(
+      "allowed_commands: [uname, uptime]",
+    ));
+}
+
 #[cfg(not(feature = "mcp"))]
 #[test]
 fn cli_workflow_run_reports_feature_gated_mcp_node() {

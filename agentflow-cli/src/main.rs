@@ -309,6 +309,9 @@ enum WorkflowCommands {
     /// Treat schema warnings for unknown node parameters as validation errors
     #[arg(long)]
     strict: bool,
+    /// Print the per-node permission and capability requirements
+    #[arg(long = "explain-permissions")]
+    explain_permissions: bool,
   },
   /// Inspect the resume plan for a checkpointed workflow run
   ResumePlan {
@@ -949,7 +952,8 @@ async fn main() {
         workflow_file,
         format,
         strict,
-      } => workflow::validate::execute(workflow_file, format, strict).await,
+        explain_permissions,
+      } => workflow::validate::execute(workflow_file, format, strict, explain_permissions).await,
       WorkflowCommands::ResumePlan {
         run_id,
         checkpoint_dir,
