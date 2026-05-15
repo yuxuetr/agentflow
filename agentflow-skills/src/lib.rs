@@ -44,6 +44,7 @@ pub mod loader;
 pub mod manifest;
 pub mod marketplace;
 pub mod mcp_tools;
+pub mod policy;
 pub mod remote_marketplace;
 pub mod skill_md;
 
@@ -62,6 +63,10 @@ pub use marketplace::{
   SkillMarketplaceIndex,
 };
 pub use mcp_tools::{McpClientPool, McpToolAdapter, public_tool_name};
+pub use policy::{
+  AdmissionSource, McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission,
+  resolve_tool_policy,
+};
 pub use remote_marketplace::{
   CachedMarketplaceArtifact, ChecksumSha256SignatureVerifier,
   DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, MarketplacePackageType, MarketplaceSignature,

@@ -64,6 +64,7 @@ but do not implement channel adapters in this queue.
 - P-H.4 Background task tools (`agentflow-harness::tasks`: `TaskRuntime` / `TaskHandle` / `TaskAgentFactory` + 5 built-in `task_*` tools + nested-spawn rejection + bounded output buffer + lifecycle events through parent SinkChain).
 - P2.2 Run retention and cleanup policy (`agentflow-server::cleanup` module + per-profile defaults + DB/filesystem sweep + `agentflow cleanup --dry-run` CLI + background loop in `serve`). Per-run override deferred.
 - P1.8 Plugin execution policy (`agentflow-tools::plugin_policy` + per-profile defaults + `agentflow plugin install --allow-unsandboxed-plugin --signed` + production opt-in rejection + `tracing::info!` trace target).
+- P1.9 MCP capability + SkillSecurity merge policy (`agentflow-skills::policy::resolve_tool_policy` + `ResolvedToolPolicy` / `AdmissionSource` types + `docs/MCP_CAPABILITY_POLICY.md` precedence table; CLI flag wiring tracked under P3.5).
 
 ---
 
@@ -155,18 +156,36 @@ auditable, and explicit.
     subsection with the per-profile table and the operator-intent
     rule for `--allow-unsandboxed-plugin`.
 
-- TODO P1.9 MCP capability + SkillSecurity merge policy:
-  - Author `docs/MCP_CAPABILITY_POLICY.md` describing how an MCP server's
-    declared capabilities interact with:
-    - SkillSecurity `allowed_tools` / `denied_tools`.
-    - Top-level `ToolPolicy` allow/deny rules.
-    - CLI `--allow-tool` / `--deny-tool` runtime overrides.
-  - Implement merge resolution in `agentflow-skills::resolve_tool_policy`.
-  - Add a decision precedence table: CLI > SkillSecurity > MCP server
-    capability > ToolPolicy default.
-  - Add tests for each precedence ordering case.
-  - Surface the resolved policy in `agentflow skill inspect
-    --explain-permissions` (P3.5).
+- DONE P1.9 MCP capability + SkillSecurity merge policy:
+  - New `agentflow-skills::policy` module exposes
+    `resolve_tool_policy(PolicyResolutionInput) -> ResolvedToolPolicy`.
+    `PolicyResolutionInput` carries every admission layer
+    (`known_tools`, `skill_allowed_tools`, `skill_denied_tools`,
+    `mcp_server_capabilities`, `skill_mcp_server_allowlist`,
+    `cli_allow_tools`, `cli_deny_tools`, optional `fallback_policy`,
+    and per-tool `tool_metadata`).
+  - `ResolvedToolPolicy.decisions` is a `BTreeMap` so iteration
+    order is stable for `--output json` consumers.
+  - `ToolAdmission` carries `allowed`, `source` (`AdmissionSource`
+    enum), `reason`, and an optional `mcp_server` field set when
+    `AdmissionSource::McpServerCapability` fires.
+  - Precedence (highest first): `CliDeny` → `CliAllow` →
+    `SkillDeny` → `SkillAllow` → `McpServerCapability` →
+    `ToolPolicyDefault`. Unmatched tools fall through to
+    `NoMatch` with `allowed = false` — fail-closed by design.
+  - `docs/MCP_CAPABILITY_POLICY.md` documents the rationale, the
+    precedence table, the `PolicyResolutionInput` field set, and
+    five worked examples (CLI deny override, skill deny beats MCP,
+    MCP allowlist filter, `ToolPolicy` fall-back, no-match
+    fail-closed).
+  - Tests (11 in `policy::tests`): each precedence row + MCP
+    allowlist gating + fallback policy allow + fallback policy
+    deny + unmatched fail-closed + serde round-trip + allow/deny
+    counter accuracy. All hermetic.
+  - CLI surface (`agentflow skill inspect --explain-permissions`,
+    `--allow-tool`, `--deny-tool`) is documented as the v1
+    consumer of this surface; wiring the flags through every CLI
+    entry point is tracked under `P3.5`.
 
 ---
 

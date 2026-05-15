@@ -10,7 +10,13 @@ fn skill_md_fixture_ignores_unknown_frontmatter_and_builds_manifest() {
 
   assert_eq!(skill.name, "compat-skill");
   assert_eq!(skill.allowed_tools, vec!["file", "http"]);
-  assert_eq!(skill.metadata.get("future_metadata_key").map(String::as_str), Some("preserved"));
+  assert_eq!(
+    skill
+      .metadata
+      .get("future_metadata_key")
+      .map(String::as_str),
+    Some("preserved")
+  );
   assert_eq!(skill.mcp_servers.len(), 1);
   assert_eq!(skill.security.resolved_mcp_default_timeout_secs(), 12);
 
@@ -32,7 +38,10 @@ fn skill_toml_fixture_ignores_unknown_optional_fields() {
   assert_eq!(manifest.tools[0].allowed_paths, vec!["./fixtures"]);
   assert_eq!(manifest.mcp_servers[0].resolved_timeout_secs(), 30);
   assert_eq!(manifest.knowledge[0].path, "knowledge.md");
-  assert_eq!(manifest.memory.as_ref().unwrap().resolved_window_tokens(), 2048);
+  assert_eq!(
+    manifest.memory.as_ref().unwrap().resolved_window_tokens(),
+    2048
+  );
 }
 
 #[test]
@@ -55,13 +64,20 @@ fn skill_loader_prefers_skill_toml_over_skill_md() {
 
 #[test]
 fn remote_marketplace_fixture_ignores_unknown_optional_fields() {
-  let manifest =
-    RemoteMarketplaceManifest::parse_toml(include_str!("fixtures/marketplace/remote_marketplace.toml"))
-      .unwrap();
+  let manifest = RemoteMarketplaceManifest::parse_toml(include_str!(
+    "fixtures/marketplace/remote_marketplace.toml"
+  ))
+  .unwrap();
 
   assert_eq!(manifest.name, "compat-marketplace");
   assert_eq!(manifest.entries().len(), 2);
-  assert_eq!(manifest.entries()[0].package_type, MarketplacePackageType::Skill);
+  assert_eq!(
+    manifest.entries()[0].package_type,
+    MarketplacePackageType::Skill
+  );
   assert_eq!(manifest.entries()[0].aliases, vec!["compat"]);
-  assert_eq!(manifest.entries()[1].package_type, MarketplacePackageType::Plugin);
+  assert_eq!(
+    manifest.entries()[1].package_type,
+    MarketplacePackageType::Plugin
+  );
 }
