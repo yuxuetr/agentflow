@@ -346,6 +346,7 @@ dependencies = [
  "async-trait",
  "dirs",
  "glob",
+ "regex",
  "reqwest 0.12.24",
  "semver",
  "serde",

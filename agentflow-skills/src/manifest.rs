@@ -50,7 +50,76 @@ pub struct SkillManifest {
   #[serde(default)]
   pub knowledge: Vec<KnowledgeConfig>,
   pub memory: Option<MemoryConfig>,
+  /// Optional `[validation]` section backing the agent-eval harness's
+  /// `final_answer_matches_skill` assertion. See
+  /// `docs/SKILL_VALIDATOR_PROTOCOL.md` for the contract. Default is
+  /// [`ValidationConfig::None`].
+  #[serde(default)]
+  pub validation: ValidationConfig,
 }
+
+/// Closed `kind` discriminator backing the v1 skill validator
+/// protocol. New variants land under a `schema_version` bump in the
+/// manifest; the loader rejects unknown kinds at v1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ValidationConfig {
+  /// Skill explicitly declares no validator (equivalent to omitting
+  /// the `[validation]` table). `final_answer_matches_skill` reports
+  /// "skill declares no validator" for runs against this skill.
+  #[default]
+  None,
+  /// Regex match against the final answer. Pattern is compiled at
+  /// `SkillLoader::validate` time so malformed regexes never reach the
+  /// eval runner.
+  Regex {
+    pattern: String,
+    /// Set the regex `m` flag. Default `false`.
+    #[serde(default)]
+    multiline: bool,
+    /// Set the regex `s` flag (dot matches newline). Default `false`.
+    #[serde(default)]
+    dotall: bool,
+  },
+  /// Shell command that receives the final answer on stdin and returns
+  /// its verdict via exit code (0 = pass, non-zero = fail, 125 reserved
+  /// for "unrunnable" per the `git bisect run` convention).
+  Command {
+    /// `argv` with the executable at `[0]`. Resolved through `PATH` if
+    /// no slash is present; absolute / relative paths are honored
+    /// verbatim.
+    command: Vec<String>,
+    /// Wall-clock timeout in seconds (clamped to [1, 120]). Default
+    /// 30.
+    #[serde(default = "default_validator_timeout_secs")]
+    timeout_secs: u64,
+    /// Working directory relative to the skill directory. Default `.`.
+    #[serde(default = "default_validator_working_dir")]
+    working_dir: String,
+    /// Environment variable allowlist. Default `["PATH", "LANG"]` —
+    /// any variable not in this list is stripped from the child's
+    /// environment before exec.
+    #[serde(default = "default_validator_env_allowlist")]
+    env_allowlist: Vec<String>,
+  },
+}
+
+fn default_validator_timeout_secs() -> u64 {
+  30
+}
+
+fn default_validator_working_dir() -> String {
+  ".".to_string()
+}
+
+fn default_validator_env_allowlist() -> Vec<String> {
+  vec!["PATH".to_string(), "LANG".to_string()]
+}
+
+/// Hard upper bound on validator timeouts; matches the doc.
+pub const VALIDATOR_TIMEOUT_SECS_MAX: u64 = 120;
+/// Hard lower bound on validator timeouts (0 would be a no-op race).
+pub const VALIDATOR_TIMEOUT_SECS_MIN: u64 = 1;
 
 /// Basic identity metadata for the skill.
 #[derive(Debug, Clone, Serialize, Deserialize)]

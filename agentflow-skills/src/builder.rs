@@ -670,6 +670,7 @@ mod tests {
       mcp_servers: vec![],
       knowledge: vec![],
       memory: None,
+      validation: Default::default(),
     }
   }
 

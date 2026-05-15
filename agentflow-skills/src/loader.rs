@@ -212,6 +212,14 @@ impl SkillLoader {
       }
     }
 
+    // ── validator (P4.4 follow-up step 3) ──────────────────────────────
+    // Pre-compile the validator so a bad regex or empty command vector
+    // surfaces as a manifest error at validate-time, never at eval-run
+    // time. The constructed validator is dropped here — eval / CLI
+    // callers rebuild it via `build_validator` when they need to run
+    // it.
+    let _ = crate::validator::build_validator(manifest, skill_dir)?;
+
     Ok(warnings)
   }
 }

@@ -183,6 +183,7 @@ impl SkillMd {
       mcp_servers,
       knowledge: vec![],
       memory: None,
+      validation: Default::default(),
     }
   }
 }

@@ -47,6 +47,7 @@ pub mod mcp_tools;
 pub mod policy;
 pub mod remote_marketplace;
 pub mod skill_md;
+pub mod validator;
 
 pub use builder::SkillBuilder;
 pub use error::SkillError;
@@ -56,7 +57,8 @@ pub use index::{
 pub use loader::SkillLoader;
 pub use manifest::{
   KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SecurityConfig,
-  SkillInfo, SkillManifest, ToolConfig,
+  SkillInfo, SkillManifest, ToolConfig, VALIDATOR_TIMEOUT_SECS_MAX, VALIDATOR_TIMEOUT_SECS_MIN,
+  ValidationConfig,
 };
 pub use marketplace::{
   FeaturedSkill, MarketplaceResolvedSkill, MarketplaceSkillListing, SkillMarketplace,
@@ -74,3 +76,7 @@ pub use remote_marketplace::{
   RemoteMarketplaceEntry, RemoteMarketplaceManifest,
 };
 pub use skill_md::SkillMd;
+pub use validator::{
+  CommandValidator, RegexValidator, SkillValidator, VALIDATOR_UNRUNNABLE_EXIT_CODE,
+  ValidatorVerdict, build_validator,
+};
