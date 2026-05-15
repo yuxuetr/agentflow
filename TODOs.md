@@ -1134,8 +1134,11 @@ Architectural rules (enforced via review):
       unknown-id failure cases.
     - DONE: append-mode resume (preserving prior events + continuing
       the seq series) needs `HarnessRuntime::with_initial_seq` to land
-      first in `agentflow-harness`. Tracked as a follow-up; the rerun
-      semantic is documented as the v1 contract in `HARNESS_MODE.md`.
+      first in `agentflow-harness`. The upstream knob has now landed
+      (`HarnessRuntime::with_initial_seq` builder + unit tests); the
+      rerun semantic remains the documented v1 contract in
+      `HARNESS_MODE.md`. Server-side wiring of the new `mode=append`
+      flavour is tracked as the next slice (P-H.5 follow-up below).
     - DONE: UI detail page switches from polling to SSE
       (`EventSource` against `/v1/harness/sessions/{id}/events`). The
       session row + pending approvals still poll on 2s since they

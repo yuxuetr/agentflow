@@ -153,6 +153,7 @@ pub struct HarnessRuntime {
   inner: Box<dyn AgentRuntime>,
   context_providers: Vec<Arc<dyn ContextProvider>>,
   sinks: SinkChain,
+  initial_seq: u64,
 }
 
 impl HarnessRuntime {
@@ -164,6 +165,7 @@ impl HarnessRuntime {
       inner,
       context_providers: Vec::new(),
       sinks: SinkChain::new(),
+      initial_seq: 0,
     }
   }
 
@@ -186,6 +188,28 @@ impl HarnessRuntime {
   /// Register an event sink. Sinks are dispatched in registration order.
   pub fn with_event_sink(mut self, sink: Arc<dyn HarnessEventSink>) -> Self {
     self.sinks = std::mem::take(&mut self.sinks).push(sink);
+    self
+  }
+
+  /// Set the seq number used for the first event emitted by the next
+  /// `run()`. Defaults to `0`, matching the original behaviour.
+  ///
+  /// **Why:** the Harness `:resume` route on the server has two flavours.
+  /// The default *rerun* semantic clears prior persisted events and
+  /// starts a fresh `seq=0` series, which is fine when the operator
+  /// wants a clean retry. *Append-mode* resume keeps the prior log and
+  /// continues the seq series — for that to work without colliding
+  /// with persisted `(session_id, seq)` rows, the runtime needs to
+  /// start emitting at `MAX(seq) + 1`, not `0`. This builder is the
+  /// single seam that lets the server thread that offset in.
+  ///
+  /// **How to apply:** pass the next-unused seq for the session
+  /// (`MAX(existing seq) + 1`). The first emitted `session_started`
+  /// event will use this value; subsequent events increment from
+  /// there, so `final_event_seq` in the result still equals the last
+  /// emitted event's `seq`.
+  pub fn with_initial_seq(mut self, initial_seq: u64) -> Self {
+    self.initial_seq = initial_seq;
     self
   }
 
@@ -232,7 +256,7 @@ impl HarnessRuntime {
       .await?;
     let persona = assemble_persona(options.persona_prefix.as_deref(), &items);
 
-    let mut seq = 0u64;
+    let mut seq = self.initial_seq;
     let context_token_estimate: usize = items.iter().map(|item| item.token_estimate).sum();
     let started_payload = SessionStartedPayload {
       workspace_root: ctx.workspace_root.to_string_lossy().into_owned(),
@@ -768,6 +792,56 @@ mod tests {
       .expect("stopped event present");
     assert_eq!(stopped.reason, StopReason::LimitReached);
     assert!(stopped.error.as_deref().unwrap().contains("max_steps=4"));
+  }
+
+  #[tokio::test]
+  async fn runtime_with_initial_seq_offsets_first_event() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("ok", captured.clone()));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(inner)
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>)
+      .with_initial_seq(42);
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = runtime
+      .run(HarnessRunOptions::new("hi", dir.path(), "mock"))
+      .await
+      .unwrap();
+    let events = sink.snapshot().await;
+    assert_eq!(
+      events.first().unwrap().seq,
+      42,
+      "first emitted event must use initial_seq"
+    );
+    let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
+    let mut sorted = seqs.clone();
+    sorted.sort();
+    assert_eq!(seqs, sorted, "seqs remain monotonic when offset");
+    let final_seq = events.iter().map(|e| e.seq).max().unwrap();
+    assert_eq!(final_seq, result.final_event_seq);
+    assert!(
+      final_seq >= 42,
+      "final seq must be at or above the initial offset"
+    );
+  }
+
+  #[tokio::test]
+  async fn runtime_default_initial_seq_starts_at_zero() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("ok", captured.clone()));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime =
+      HarnessRuntime::new(inner).with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("hi", dir.path(), "mock"))
+      .await
+      .unwrap();
+    let events = sink.snapshot().await;
+    assert_eq!(events.first().unwrap().seq, 0);
   }
 
   #[tokio::test]

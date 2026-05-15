@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. Append-mode resume (preserving prior events + continuing the seq series) is the one remaining piece, tracked as a follow-up alongside the `HarnessRuntime::with_initial_seq` upstream change.
+Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. The upstream contract knob for append-mode resume — `HarnessRuntime::with_initial_seq` — has landed in `agentflow-harness`; wiring the server `:resume` route to opt into append mode is tracked as the next slice.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -355,9 +355,12 @@ POST /v1/harness/sessions/{id}:resume           # closed (slice 4)
 persisted event for the session in one Postgres transaction, flips
 the row back to `running`, optionally replaces `user_input`, and
 respawns the executor. The inner `HarnessRuntime`'s `seq` counter
-starts at 0 again — append-mode resume that preserves the prior log
-and continues the seq series needs a `HarnessRuntime::with_initial_seq`
-upstream change, tracked as a P-H follow-up.
+starts at 0 again. The upstream contract knob for append-mode resume
+— `HarnessRuntime::with_initial_seq` — now exists in
+`agentflow-harness`, so the server can opt the next `:resume`
+revision into append mode (preserve prior events, continue the seq
+series) without further upstream churn. That route-level wiring is
+tracked as a follow-up slice.
 
 `POST /v1/harness/sessions/{id}:cancel` and
 `POST /v1/harness/sessions/{id}:resume` share one Axum POST handler
