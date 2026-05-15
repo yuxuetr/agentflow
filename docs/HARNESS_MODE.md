@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slices 1+2 closed; slices 3–4 in progress.** Slices 3–4 cover the Web UI integration + full E2E render tests.
+Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slices 1+2+3 closed; slice 4 in progress.** Slice 4 covers the `:resume` route + full CLI→server→UI E2E render tests.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -333,9 +333,24 @@ GET  /v1/harness/sessions/{id}/approvals        # closed (slice 2)
 POST /v1/harness/sessions/{id}/approvals/{id}   # closed (slice 2)
 ```
 
-Slices 3–4 (in progress) cover Web UI integration plus full
-CLI→server→UI E2E render tests; `POST /v1/harness/sessions/{id}:resume`
-remains TODO.
+Phase H5 slice 3 (closed) ships the Web UI surface:
+
+- `/ui/harness/sessions` — tenant-scoped session list (auto-refresh).
+- `/ui/harness/sessions/new` — submit form (prompt + workspace_root +
+  profile + runtime + model + skill_name; localStorage-persisted
+  inputs minus the API token).
+- `/ui/harness/sessions/{id}` — detail page with summary, event
+  timeline (kind-tone colours + payload pane), pending approval cards
+  with allow / deny / deny_and_stop × `once` / `session` / `run` scope
+  dropdown, and a cancel button that disables once the session is
+  terminal.
+
+The SPA polls every 2 s on the detail page (4 s on the list) — once
+slice 4 wires the SSE stream, the polling fallback drops to a
+backstop for clients that lose the connection.
+
+Slice 4 (in progress) covers `POST /v1/harness/sessions/{id}:resume`
+plus full CLI→server→UI E2E render tests.
 
 DB schema (slice 1): two dedicated tables `harness_sessions` and
 `harness_session_events` (Postgres migration
@@ -394,7 +409,7 @@ cancelled, timeout).
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |
-| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slices 1+2 closed; slices 3–4 in progress** |
+| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slices 1+2+3 closed; slice 4 in progress** |
 | H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
 
 ## Architectural invariants

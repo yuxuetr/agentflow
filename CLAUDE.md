@@ -120,7 +120,7 @@ PostgreSQL persistence for the gateway. Eight-table schema (runs / steps / event
 Standalone worker process for distributed DAG execution. Speaks `WorkerProtocol` over gRPC to the server control plane, pulls assigned tasks, executes the node payload locally, and streams events back with W3C `traceparent` continuity so worker spans stitch into the parent OTel trace. Today the supported node payloads are limited (template/file); extending to LLM / HTTP / MCP / agent payloads is tracked as P2.8.
 
 #### L4 — agentflow-ui
-React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run list, DAG status panel, event history replay, live SSE updates. It is a client of the same `/v1/*` and SSE contracts the CLI uses — never bypass server APIs for UI-only features. Productization beyond the alpha shell is tracked under P6.
+React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run list, DAG status panel, event history replay, live SSE updates. Harness Mode surface (P-H.5 slice 3): `/ui/harness/sessions` (list), `/ui/harness/sessions/new` (submit form), `/ui/harness/sessions/{id}` (detail with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × scope dropdown, cancel button). It is a client of the same `/v1/*` and SSE contracts the CLI uses — never bypass server APIs for UI-only features. Productization beyond the alpha shell is tracked under P6.
 
 ## Development Guidelines
 

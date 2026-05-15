@@ -69,6 +69,7 @@ but do not implement channel adapters in this queue.
 - P6.1 Run creation form (`/ui/runs/new` deep link + `RunCreateForm` with tenant / profile / workflow / inputs / file-pick / localStorage / submit→redirect + Playwright E2E spec).
 - P-H.5 (Slice 1 of 4): Harness Mode server schema + core routes (`harness_sessions` / `harness_session_events` tables, `HarnessSessionRepo` / `HarnessEventRepo`, `HarnessSessionExecutor` trait + `StubHarnessExecutor`, `HarnessEventBroker`, six routes including SSE backfill, integration tests `tests/harness_routes.rs` self-skipping without `AGENTFLOW_DATABASE_TEST_URL`). Slices 2–4 (approval routes + real executor + Web UI + full E2E) remain TODO.
 - P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
+- P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
 
 ---
 
@@ -1094,12 +1095,32 @@ Architectural rules (enforced via review):
       E2E, gated on both `AGENTFLOW_DATABASE_TEST_URL` and
       `MOONSHOT_API_KEY` so the workspace stays hermetic without
       either).
-  - Slice 3 (TODO): Web UI
-    - `/ui/harness/sessions` list page.
-    - `/ui/harness/sessions/{id}` timeline + tool call panel.
-    - Approval panel with allow/deny + scope choice.
-    - Session resume action.
-  - Slice 4 (TODO): full E2E tests across CLI submit → server stream → UI render.
+  - Slice 3 (DONE): Web UI
+    - DONE: `/ui/harness/sessions` list page (tenant-scoped table with
+      status pill, profile, runtime, model, prompt preview, ID; auto-
+      refresh every 4s; click row → detail).
+    - DONE: `/ui/harness/sessions/new` submit form (prompt +
+      workspace_root + profile + runtime + model + skill_name;
+      localStorage-persisted inputs; API token never persisted; submit
+      → redirect to detail).
+    - DONE: `/ui/harness/sessions/{id}` detail page (summary block,
+      event timeline with kind tone colours + payload pane, pending
+      approval cards with allow / deny / deny_and_stop and once /
+      session / run scope dropdown, cancel button gated on terminal
+      status; polls session + events + approvals every 2s).
+    - DONE: server-side deep-link routes
+      (`ui_router_registers_harness_deep_link_routes` test confirms
+      all four `/ui/harness/sessions*` paths serve the SPA shell).
+    - DONE: Vite build refreshed (`agentflow-ui/dist/app.js` 209→225
+      KiB; `styles.css` 7.9→13.88 KiB; no new npm deps).
+    - DONE: Playwright spec
+      `agentflow-ui/e2e/harness-sessions.spec.ts` (three cases:
+      submit→redirect; list→detail; localStorage persistence without
+      token).
+    - Session resume action remains TODO (depends on the
+      `POST /v1/harness/sessions/{id}:resume` route in slice 4).
+  - Slice 4 (TODO): session resume route + full E2E tests across CLI
+    submit → server stream → UI render.
 
 ### Deferred to RoadMap Later Tracks
 

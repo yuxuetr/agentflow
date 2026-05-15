@@ -947,6 +947,852 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   );
 }
 
+// ─── P-H.5 slice 3 — Harness Mode Web UI ─────────────────────────
+
+type HarnessSession = {
+  id: string;
+  tenant_id: string;
+  status: string;
+  user_input: string;
+  workspace_root: string;
+  profile: string;
+  runtime_kind: string;
+  model: string;
+  skill_name?: string | null;
+  started_at?: string;
+  finished_at?: string | null;
+  final_answer?: string | null;
+  error?: string | null;
+};
+
+type HarnessEvent = {
+  session_id: string;
+  seq: number;
+  kind: string;
+  payload: unknown;
+  ts: string;
+};
+
+type PendingApproval = {
+  id: string;
+  session_id: string;
+  step_index: number;
+  tool: string;
+  source?: string | null;
+  permissions?: string[];
+  idempotency?: string;
+  params_summary?: unknown;
+  risk: string;
+  reason: string;
+  requested_at: string;
+  expires_at?: string | null;
+};
+
+type ApprovalOutcome = 'allow' | 'deny' | 'deny_and_stop';
+type ApprovalScope = 'once' | 'session' | 'run';
+
+const harnessNewFormPromptKey = 'agentflow.ui.harness.newForm.user_input';
+const harnessNewFormWorkspaceKey = 'agentflow.ui.harness.newForm.workspace_root';
+const harnessNewFormProfileKey = 'agentflow.ui.harness.newForm.profile';
+const harnessNewFormRuntimeKey = 'agentflow.ui.harness.newForm.runtime_kind';
+const harnessNewFormModelKey = 'agentflow.ui.harness.newForm.model';
+const harnessNewFormSkillKey = 'agentflow.ui.harness.newForm.skill_name';
+const harnessNewFormTenantKey = 'agentflow.ui.harness.newForm.tenant_id';
+
+const harnessStatusTone = (status: string): 'pending' | 'success' | 'danger' | 'neutral' => {
+  switch (status) {
+    case 'running':
+      return 'pending';
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'danger';
+    case 'cancelled':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+};
+
+const isHarnessTerminal = (session: HarnessSession | null) =>
+  session ? ['completed', 'failed', 'cancelled'].includes(session.status) : true;
+
+const harnessSessionIdFromPath = () => {
+  // `/ui/harness/sessions/<uuid>`. We extract the trailing segment
+  // without depending on a router library — keeps the SPA dep tree
+  // small and lets the server own the deep-link list.
+  const match = window.location.pathname.match(/^\/ui\/harness\/sessions\/([^/]+)$/);
+  if (!match) {
+    return null;
+  }
+  const candidate = match[1];
+  if (candidate === 'new' || candidate.length === 0) {
+    return null;
+  }
+  return candidate;
+};
+
+function HarnessSessionList({
+  apiToken,
+  onTokenChange,
+}: {
+  apiToken: string;
+  onTokenChange: (token: string) => void;
+}) {
+  const [tenantId, setTenantId] = useState(() =>
+    readStorage(harnessNewFormTenantKey, 'default'),
+  );
+  const [sessions, setSessions] = useState<HarnessSession[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    writeStorage(harnessNewFormTenantKey, tenantId);
+  }, [tenantId]);
+
+  const refresh = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ tenant_id: tenantId.trim() || 'default' });
+      const response = await apiFetch(`/v1/harness/sessions?${params.toString()}`, apiToken);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`list failed: HTTP ${response.status} ${text}`);
+      }
+      const body = (await response.json()) as { sessions: HarnessSession[] };
+      setSessions(body.sessions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    const handle = window.setInterval(() => {
+      void refresh();
+    }, 4000);
+    return () => window.clearInterval(handle);
+    // We intentionally exclude `refresh` from deps: it closes over
+    // tenantId+apiToken which we want to re-resolve via the explicit
+    // dependency below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, apiToken]);
+
+  return (
+    <main className="shell harness-list-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">AgentFlow / Harness</p>
+          <h1>Sessions</h1>
+        </div>
+        <nav className="harness-nav">
+          <a className="topbar-link" href="/ui">
+            ← Run console
+          </a>
+          <a
+            data-testid="harness-new-link"
+            className="topbar-link topbar-cta"
+            href="/ui/harness/sessions/new"
+          >
+            + New session
+          </a>
+        </nav>
+      </header>
+
+      <section className="harness-controls">
+        <label>
+          <span>Tenant</span>
+          <input
+            data-testid="harness-list-tenant"
+            value={tenantId}
+            onChange={(event) => setTenantId(event.target.value)}
+            placeholder="default"
+          />
+        </label>
+        <label>
+          <span>API token</span>
+          <input
+            data-testid="harness-list-token"
+            type="password"
+            autoComplete="off"
+            value={apiToken}
+            onChange={(event) => onTokenChange(event.target.value)}
+            placeholder="Bearer token (not persisted)"
+          />
+        </label>
+        <button type="button" onClick={() => void refresh()} disabled={busy}>
+          {busy ? 'Loading…' : 'Refresh'}
+        </button>
+      </section>
+
+      {error ? <p className="error-line">{error}</p> : null}
+
+      <section className="harness-table">
+        <table data-testid="harness-list-table">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Status</th>
+              <th>Profile</th>
+              <th>Runtime</th>
+              <th>Model</th>
+              <th>Prompt</th>
+              <th>ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="harness-table-empty">
+                  No sessions yet for tenant "{tenantId || 'default'}". Use{' '}
+                  <a href="/ui/harness/sessions/new">+ New session</a> to create one.
+                </td>
+              </tr>
+            ) : (
+              sessions.map((session) => (
+                <tr
+                  key={session.id}
+                  data-testid="harness-list-row"
+                  onClick={() => window.location.assign(`/ui/harness/sessions/${session.id}`)}
+                  className="harness-row"
+                >
+                  <td>{formatTime(session.started_at)}</td>
+                  <td>
+                    <span className={`status-pill status-${harnessStatusTone(session.status)}`}>
+                      {session.status}
+                    </span>
+                  </td>
+                  <td>{session.profile}</td>
+                  <td>{session.runtime_kind}</td>
+                  <td className="harness-cell-mono">{session.model}</td>
+                  <td className="harness-cell-prompt">{session.user_input}</td>
+                  <td className="harness-cell-mono">{session.id.slice(0, 8)}…</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  );
+}
+
+const harnessFormStarterPrompt = '请用一句话总结当前工作区。';
+const harnessFormStarterWorkspace = '/tmp';
+const harnessFormStarterModel = 'moonshot-v1-auto';
+
+type HarnessProfileChoice = 'dev' | 'local' | 'production';
+const HARNESS_PROFILES: HarnessProfileChoice[] = ['dev', 'local', 'production'];
+
+type HarnessRuntimeChoice = 'react' | 'plan_execute';
+const HARNESS_RUNTIMES: HarnessRuntimeChoice[] = ['react', 'plan_execute'];
+
+function HarnessSubmitForm({
+  apiToken,
+  onTokenChange,
+}: {
+  apiToken: string;
+  onTokenChange: (token: string) => void;
+}) {
+  const [tenantId, setTenantId] = useState(() =>
+    readStorage(harnessNewFormTenantKey, 'default'),
+  );
+  const [userInput, setUserInput] = useState(() =>
+    readStorage(harnessNewFormPromptKey, harnessFormStarterPrompt),
+  );
+  const [workspaceRoot, setWorkspaceRoot] = useState(() =>
+    readStorage(harnessNewFormWorkspaceKey, harnessFormStarterWorkspace),
+  );
+  const [profile, setProfile] = useState<HarnessProfileChoice>(() => {
+    const value = readStorage(harnessNewFormProfileKey, 'local');
+    return (HARNESS_PROFILES as string[]).includes(value)
+      ? (value as HarnessProfileChoice)
+      : 'local';
+  });
+  const [runtimeKind, setRuntimeKind] = useState<HarnessRuntimeChoice>(() => {
+    const value = readStorage(harnessNewFormRuntimeKey, 'react');
+    return (HARNESS_RUNTIMES as string[]).includes(value)
+      ? (value as HarnessRuntimeChoice)
+      : 'react';
+  });
+  const [model, setModel] = useState(() =>
+    readStorage(harnessNewFormModelKey, harnessFormStarterModel),
+  );
+  const [skillName, setSkillName] = useState(() => readStorage(harnessNewFormSkillKey, ''));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    writeStorage(harnessNewFormTenantKey, tenantId);
+  }, [tenantId]);
+  useEffect(() => {
+    writeStorage(harnessNewFormPromptKey, userInput);
+  }, [userInput]);
+  useEffect(() => {
+    writeStorage(harnessNewFormWorkspaceKey, workspaceRoot);
+  }, [workspaceRoot]);
+  useEffect(() => {
+    writeStorage(harnessNewFormProfileKey, profile);
+  }, [profile]);
+  useEffect(() => {
+    writeStorage(harnessNewFormRuntimeKey, runtimeKind);
+  }, [runtimeKind]);
+  useEffect(() => {
+    writeStorage(harnessNewFormModelKey, model);
+  }, [model]);
+  useEffect(() => {
+    writeStorage(harnessNewFormSkillKey, skillName);
+  }, [skillName]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    const promptTrimmed = userInput.trim();
+    if (!promptTrimmed) {
+      setError('User prompt is required');
+      return;
+    }
+    const workspaceTrimmed = workspaceRoot.trim();
+    if (!workspaceTrimmed) {
+      setError('Workspace root is required');
+      return;
+    }
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        user_input: promptTrimmed,
+        workspace_root: workspaceTrimmed,
+        tenant_id: tenantId.trim() || 'default',
+        profile,
+        runtime_kind: runtimeKind,
+        model: model.trim() || harnessFormStarterModel,
+      };
+      const skillTrimmed = skillName.trim();
+      if (skillTrimmed) {
+        body.skill_name = skillTrimmed;
+      }
+      const response = await apiFetch('/v1/harness/sessions', apiToken, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text}`);
+      }
+      const payload = (await response.json()) as { session_id: string };
+      window.location.assign(`/ui/harness/sessions/${encodeURIComponent(payload.session_id)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="shell create-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">AgentFlow / Harness</p>
+          <h1>New session</h1>
+        </div>
+        <nav className="harness-nav">
+          <a className="topbar-link" href="/ui/harness/sessions">
+            ← Sessions
+          </a>
+        </nav>
+      </header>
+
+      {error ? <p className="error-line">{error}</p> : null}
+
+      <form className="create-form" onSubmit={submit}>
+        <section className="create-row">
+          <label>
+            <span>Tenant</span>
+            <input
+              data-testid="harness-new-tenant"
+              value={tenantId}
+              onChange={(event) => setTenantId(event.target.value)}
+              placeholder="default"
+            />
+          </label>
+          <label>
+            <span>Profile</span>
+            <select
+              data-testid="harness-new-profile"
+              value={profile}
+              onChange={(event) => setProfile(event.target.value as HarnessProfileChoice)}
+            >
+              {HARNESS_PROFILES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Runtime</span>
+            <select
+              data-testid="harness-new-runtime"
+              value={runtimeKind}
+              onChange={(event) => setRuntimeKind(event.target.value as HarnessRuntimeChoice)}
+            >
+              {HARNESS_RUNTIMES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>API token</span>
+            <input
+              data-testid="harness-new-token"
+              type="password"
+              autoComplete="off"
+              value={apiToken}
+              onChange={(event) => onTokenChange(event.target.value)}
+              placeholder="Bearer token (not persisted)"
+            />
+          </label>
+        </section>
+
+        <section className="create-row">
+          <label className="harness-grow">
+            <span>Model</span>
+            <input
+              data-testid="harness-new-model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="moonshot-v1-auto"
+            />
+          </label>
+          <label className="harness-grow">
+            <span>Skill (optional)</span>
+            <input
+              data-testid="harness-new-skill"
+              value={skillName}
+              onChange={(event) => setSkillName(event.target.value)}
+              placeholder="leave blank for no skill"
+            />
+          </label>
+          <label className="harness-grow">
+            <span>Workspace root</span>
+            <input
+              data-testid="harness-new-workspace"
+              value={workspaceRoot}
+              onChange={(event) => setWorkspaceRoot(event.target.value)}
+              placeholder="/path/to/workspace"
+            />
+          </label>
+        </section>
+
+        <section className="create-editor" aria-label="User prompt editor">
+          <div className="pane-heading">
+            <span>Prompt</span>
+          </div>
+          <textarea
+            data-testid="harness-new-prompt"
+            className="code-editor"
+            spellCheck={true}
+            value={userInput}
+            onChange={(event) => setUserInput(event.target.value)}
+            rows={10}
+          />
+        </section>
+
+        <footer className="create-actions">
+          <button data-testid="harness-new-submit" disabled={busy} type="submit">
+            {busy ? 'Submitting…' : 'Start session'}
+          </button>
+          <small>
+            Inputs persist in localStorage (tenant, profile, runtime, model, skill, workspace, prompt).
+            The API token is never saved.
+          </small>
+        </footer>
+      </form>
+    </main>
+  );
+}
+
+function HarnessSessionDetail({
+  sessionId,
+  apiToken,
+  onTokenChange,
+}: {
+  sessionId: string;
+  apiToken: string;
+  onTokenChange: (token: string) => void;
+}) {
+  const [session, setSession] = useState<HarnessSession | null>(null);
+  const [events, setEvents] = useState<HarnessEvent[]>([]);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const fetchSession = async () => {
+    try {
+      const response = await apiFetch(`/v1/harness/sessions/${sessionId}`, apiToken);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`session fetch failed: HTTP ${response.status} ${text}`);
+      }
+      const body = (await response.json()) as HarnessSession;
+      setSession(body);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const fetchEvents = async () => {
+    try {
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}/events/history`,
+        apiToken,
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`events fetch failed: HTTP ${response.status} ${text}`);
+      }
+      const body = (await response.json()) as HarnessEvent[];
+      setEvents(body);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const fetchApprovals = async () => {
+    try {
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}/approvals`,
+        apiToken,
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`approvals fetch failed: HTTP ${response.status} ${text}`);
+      }
+      const body = (await response.json()) as { approvals: PendingApproval[] };
+      setApprovals(body.approvals);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  useEffect(() => {
+    void fetchSession();
+    void fetchEvents();
+    void fetchApprovals();
+    // Poll every 2s while running. Once terminal, slow to 10s so
+    // operators can still refresh without hammering the gateway.
+    const handle = window.setInterval(() => {
+      void fetchSession();
+      void fetchEvents();
+      void fetchApprovals();
+    }, 2000);
+    return () => window.clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, apiToken]);
+
+  const decide = async (
+    requestId: string,
+    decision: ApprovalOutcome,
+    scope: ApprovalScope,
+  ) => {
+    setError(null);
+    setInfo(null);
+    try {
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}/approvals/${encodeURIComponent(requestId)}`,
+        apiToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision, scope, decided_by: 'ui' }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`decide failed: HTTP ${response.status} ${text}`);
+      }
+      setInfo(`Approval ${requestId} → ${decision}/${scope}`);
+      // Refresh immediately so the approval clears without waiting
+      // for the next poll tick.
+      void fetchApprovals();
+      void fetchEvents();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const cancel = async () => {
+    setError(null);
+    setInfo(null);
+    try {
+      const response = await apiFetch(`/v1/harness/sessions/${sessionId}:cancel`, apiToken, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`cancel failed: HTTP ${response.status} ${text}`);
+      }
+      setInfo('Cancel requested');
+      void fetchSession();
+      void fetchEvents();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const selectedEvent = useMemo(
+    () => events.find((event) => event.seq === selectedSeq) ?? null,
+    [events, selectedSeq],
+  );
+
+  const terminal = isHarnessTerminal(session);
+
+  return (
+    <main className="shell harness-detail-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">AgentFlow / Harness</p>
+          <h1>Session {sessionId.slice(0, 8)}…</h1>
+        </div>
+        <nav className="harness-nav">
+          <a className="topbar-link" href="/ui/harness/sessions">
+            ← Sessions
+          </a>
+          <a className="topbar-link" href="/ui/harness/sessions/new">
+            + New session
+          </a>
+        </nav>
+      </header>
+
+      <section className="harness-controls">
+        <label>
+          <span>API token</span>
+          <input
+            data-testid="harness-detail-token"
+            type="password"
+            autoComplete="off"
+            value={apiToken}
+            onChange={(event) => onTokenChange(event.target.value)}
+            placeholder="Bearer token (not persisted)"
+          />
+        </label>
+        <button
+          data-testid="harness-detail-cancel"
+          type="button"
+          onClick={() => void cancel()}
+          disabled={terminal}
+        >
+          {terminal ? 'Terminal' : 'Cancel session'}
+        </button>
+      </section>
+
+      {error ? <p className="error-line">{error}</p> : null}
+      {info ? <p className="info-line">{info}</p> : null}
+
+      <section className="harness-detail-grid">
+        <section className="harness-summary">
+          <h2>Summary</h2>
+          {session ? (
+            <dl>
+              <div>
+                <dt>Status</dt>
+                <dd>
+                  <span className={`status-pill status-${harnessStatusTone(session.status)}`}>
+                    {session.status}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt>Tenant</dt>
+                <dd>{session.tenant_id}</dd>
+              </div>
+              <div>
+                <dt>Profile</dt>
+                <dd>{session.profile}</dd>
+              </div>
+              <div>
+                <dt>Runtime</dt>
+                <dd>{session.runtime_kind}</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd className="harness-cell-mono">{session.model}</dd>
+              </div>
+              {session.skill_name ? (
+                <div>
+                  <dt>Skill</dt>
+                  <dd>{session.skill_name}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>Workspace</dt>
+                <dd className="harness-cell-mono">{session.workspace_root}</dd>
+              </div>
+              <div>
+                <dt>Started</dt>
+                <dd>{formatTime(session.started_at)}</dd>
+              </div>
+              <div>
+                <dt>Finished</dt>
+                <dd>{formatTime(session.finished_at)}</dd>
+              </div>
+              {session.error ? (
+                <div>
+                  <dt>Error</dt>
+                  <dd className="harness-cell-error">{session.error}</dd>
+                </div>
+              ) : null}
+              {session.final_answer ? (
+                <div className="harness-summary-answer">
+                  <dt>Final answer</dt>
+                  <dd>
+                    <pre>{session.final_answer}</pre>
+                  </dd>
+                </div>
+              ) : null}
+              <div className="harness-summary-prompt">
+                <dt>Prompt</dt>
+                <dd>
+                  <pre>{session.user_input}</pre>
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p>Loading…</p>
+          )}
+        </section>
+
+        <section
+          className="harness-approvals"
+          aria-label="Pending approvals"
+          data-testid="harness-approvals-section"
+        >
+          <h2>Pending approvals ({approvals.length})</h2>
+          {approvals.length === 0 ? (
+            <p className="harness-approvals-empty">
+              No approvals waiting for this session.
+            </p>
+          ) : (
+            <ul className="harness-approvals-list">
+              {approvals.map((approval) => (
+                <ApprovalCard
+                  key={`${approval.session_id}-${approval.id}`}
+                  approval={approval}
+                  onDecide={(decision, scope) => void decide(approval.id, decision, scope)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="harness-timeline" aria-label="Event timeline">
+          <h2>Timeline ({events.length})</h2>
+          {events.length === 0 ? (
+            <p className="harness-timeline-empty">No events yet.</p>
+          ) : (
+            <ol className="harness-event-list" data-testid="harness-event-list">
+              {events.map((event) => (
+                <li
+                  key={event.seq}
+                  className={`harness-event harness-event-${eventTone(event.kind)} ${
+                    selectedSeq === event.seq ? 'harness-event-selected' : ''
+                  }`}
+                  onClick={() => setSelectedSeq(event.seq)}
+                >
+                  <span className="harness-event-seq">#{event.seq}</span>
+                  <span className="harness-event-kind">{event.kind}</span>
+                  <span className="harness-event-time">{formatTime(event.ts)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section className="harness-event-payload">
+          <h2>Event payload</h2>
+          {selectedEvent ? (
+            <pre>{prettyJson(selectedEvent.payload)}</pre>
+          ) : (
+            <p>Select an event from the timeline.</p>
+          )}
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function ApprovalCard({
+  approval,
+  onDecide,
+}: {
+  approval: PendingApproval;
+  onDecide: (decision: ApprovalOutcome, scope: ApprovalScope) => void;
+}) {
+  const [scope, setScope] = useState<ApprovalScope>('once');
+  return (
+    <li className="harness-approval-card" data-testid="harness-approval-card">
+      <header>
+        <strong>{approval.tool}</strong>
+        <span className={`risk-pill risk-${approval.risk}`}>{approval.risk}</span>
+      </header>
+      <p className="harness-approval-reason">{approval.reason}</p>
+      <p className="harness-approval-meta">
+        step #{approval.step_index} · {approval.idempotency ?? 'unknown'} · raised{' '}
+        {formatTime(approval.requested_at)}
+      </p>
+      {approval.params_summary !== undefined && approval.params_summary !== null ? (
+        <pre className="harness-approval-params">{prettyJson(approval.params_summary)}</pre>
+      ) : null}
+      <div className="harness-approval-controls">
+        <label>
+          <span>Scope</span>
+          <select
+            data-testid="harness-approval-scope"
+            value={scope}
+            onChange={(event) => setScope(event.target.value as ApprovalScope)}
+          >
+            <option value="once">once</option>
+            <option value="session">session</option>
+            <option value="run">run</option>
+          </select>
+        </label>
+        <button
+          data-testid="harness-approval-allow"
+          type="button"
+          className="harness-btn harness-btn-allow"
+          onClick={() => onDecide('allow', scope)}
+        >
+          Allow
+        </button>
+        <button
+          data-testid="harness-approval-deny"
+          type="button"
+          className="harness-btn harness-btn-deny"
+          onClick={() => onDecide('deny', scope)}
+        >
+          Deny
+        </button>
+        <button
+          data-testid="harness-approval-deny-stop"
+          type="button"
+          className="harness-btn harness-btn-deny"
+          onClick={() => onDecide('deny_and_stop', scope)}
+        >
+          Deny &amp; Stop
+        </button>
+      </div>
+    </li>
+  );
+}
+
 // ─── Top-level router ────────────────────────────────────────────
 
 function App() {
@@ -965,6 +1811,22 @@ function App() {
 
   if (pathname === '/ui/runs/new') {
     return <RunCreateForm apiToken={apiToken} onTokenChange={setApiToken} />;
+  }
+  if (pathname === '/ui/harness/sessions' || pathname === '/ui/harness/sessions/') {
+    return <HarnessSessionList apiToken={apiToken} onTokenChange={setApiToken} />;
+  }
+  if (pathname === '/ui/harness/sessions/new') {
+    return <HarnessSubmitForm apiToken={apiToken} onTokenChange={setApiToken} />;
+  }
+  const harnessId = harnessSessionIdFromPath();
+  if (harnessId) {
+    return (
+      <HarnessSessionDetail
+        sessionId={harnessId}
+        apiToken={apiToken}
+        onTokenChange={setApiToken}
+      />
+    );
   }
   return <RunConsole apiToken={apiToken} onTokenChange={setApiToken} />;
 }
