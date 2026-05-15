@@ -384,9 +384,14 @@ Slice 4 also flips the Web UI detail page from polling to
 lose the broker channel (the workflow `EventBroker` contract drops
 long-completed sessions to keep memory bounded). A stream-state pill
 in the controls strip surfaces `streaming` / `error` / etc. A
-**Resume (rerun)** button appears once the session is terminal; the
-operator can optionally provide a new prompt, otherwise the original
-prompt is replayed.
+**Resume** button appears once the session is terminal; the operator
+can optionally provide a new prompt and pick a mode from a `rerun` /
+`append` dropdown next to the button. The button label echoes the
+selected mode (`Resume (rerun)` / `Resume (append)`). In rerun the
+client clears the local timeline so stale events don't show while the
+executor reproduces them; in append the prior events stay visible
+because the new seqs arrive on top of them as a single continuous
+timeline.
 
 The combined integration test
 `agentflow-server/tests/harness_full_stack_e2e.rs` exercises every

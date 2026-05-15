@@ -1436,6 +1436,7 @@ function HarnessSessionDetail({
   const [streamState, setStreamState] = useState<ConnectionState>('idle');
   const [resumeBusy, setResumeBusy] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
+  const [resumeMode, setResumeMode] = useState<'rerun' | 'append'>('rerun');
 
   const mergeEvent = (incoming: HarnessEvent) => {
     setEvents((prior) => {
@@ -1615,16 +1616,19 @@ function HarnessSessionDetail({
     }
   };
 
-  // P-H.5 slice 4: resume re-runs the session from scratch (events
-  // are reset). The server enforces the terminal precondition; the
-  // button is only enabled when `terminal` is true. Reload the page
-  // after the POST so the SSE stream + history start fresh.
+  // P-H.5: resume restarts (rerun) or extends (append) the session.
+  // Server enforces the terminal precondition; the button is only
+  // enabled when `terminal` is true. After the POST the SSE stream
+  // takes over again — for rerun we drop the local timeline so stale
+  // events don't show while the executor reproduces them; for append
+  // we keep prior events on screen since the new seqs will arrive on
+  // top of them as a single continuous timeline.
   const resume = async () => {
     setError(null);
     setInfo(null);
     setResumeBusy(true);
     try {
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = { mode: resumeMode };
       const trimmed = resumePrompt.trim();
       if (trimmed) {
         body.user_input = trimmed;
@@ -1638,11 +1642,13 @@ function HarnessSessionDetail({
         const text = await response.text();
         throw new Error(`resume failed: HTTP ${response.status} ${text}`);
       }
-      setInfo('Resume requested — events reset, executor restarted.');
-      // Reset local state so the timeline doesn't show stale prior
-      // events while the executor reproduces them.
-      replaceEvents([]);
-      setSelectedSeq(null);
+      if (resumeMode === 'rerun') {
+        setInfo('Resume (rerun) — events reset, executor restarted.');
+        replaceEvents([]);
+        setSelectedSeq(null);
+      } else {
+        setInfo('Resume (append) — prior events preserved, seq continues.');
+      }
       setResumePrompt('');
       void fetchSession();
     } catch (err) {
@@ -1715,13 +1721,25 @@ function HarnessSessionDetail({
             disabled={!terminal || resumeBusy}
           />
         </label>
+        <label>
+          <span>Mode</span>
+          <select
+            data-testid="harness-detail-resume-mode"
+            value={resumeMode}
+            onChange={(event) => setResumeMode(event.target.value as 'rerun' | 'append')}
+            disabled={!terminal || resumeBusy}
+          >
+            <option value="rerun">rerun (reset events)</option>
+            <option value="append">append (continue seq)</option>
+          </select>
+        </label>
         <button
           data-testid="harness-detail-resume"
           type="button"
           onClick={() => void resume()}
           disabled={!terminal || resumeBusy}
         >
-          {resumeBusy ? 'Resuming…' : 'Resume (rerun)'}
+          {resumeBusy ? 'Resuming…' : `Resume (${resumeMode})`}
         </button>
       </section>
 

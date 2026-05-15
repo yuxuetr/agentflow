@@ -1133,18 +1133,20 @@ Architectural rules (enforced via review):
       path, the 400 on a running session, and the unknown-suffix /
       unknown-id failure cases.
     - DONE: append-mode resume (preserving prior events + continuing
-      the seq series). Both halves landed: the upstream
-      `HarnessRuntime::with_initial_seq` builder in `agentflow-harness`
-      and the server-side wiring on `:resume`. The route now accepts
-      `mode: "rerun" | "append"` (default `rerun` for backwards
-      compat); `append` queries `MAX(seq)` from
+      the seq series). All three layers landed: the upstream
+      `HarnessRuntime::with_initial_seq` builder in `agentflow-harness`,
+      the server-side wiring on `:resume`, and the Web UI mode toggle.
+      The route accepts `mode: "rerun" | "append"` (default `rerun`
+      for backwards compat); `append` queries `MAX(seq)` from
       `harness_session_events`, leaves prior rows intact via
       `HarnessSessionRepo::reset_for_append_resume`, and seeds the
-      executor with `initial_seq = MAX(seq) + 1`. Integration tests
+      executor with `initial_seq = MAX(seq) + 1`. The Web UI detail
+      page exposes a `rerun` / `append` select next to the resume
+      button; in append mode the local timeline is kept on screen so
+      new seqs visibly extend the prior log. Integration tests
       `resume_append_mode_preserves_events_and_continues_seq` and
-      `resume_default_mode_is_rerun_when_field_omitted` cover the new
-      paths. UI button currently still drives rerun-only — exposing
-      the mode toggle in the Web UI is a small follow-up.
+      `resume_default_mode_is_rerun_when_field_omitted` cover the
+      route paths.
     - DONE: UI detail page switches from polling to SSE
       (`EventSource` against `/v1/harness/sessions/{id}/events`). The
       session row + pending approvals still poll on 2s since they
