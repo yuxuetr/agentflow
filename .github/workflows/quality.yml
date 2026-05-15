@@ -78,6 +78,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Existing combinations.
           - name: core-observability
             command: cargo check -p agentflow-core --features observability
           - name: mcp-local-transports
@@ -90,6 +91,25 @@ jobs:
             command: cargo check -p agentflow-cli --no-default-features --features plugin
           - name: core-plugin
             command: cargo check -p agentflow-core --features plugin --all-targets
+          # P3.9 expansion (working combinations as of v0.3.0):
+          - name: cli-no-default
+            command: cargo check -p agentflow-cli --no-default-features
+          - name: cli-mcp-rag-plugin
+            command: cargo check -p agentflow-cli --no-default-features --features mcp,rag,plugin
+          - name: cli-all-features
+            command: cargo check -p agentflow-cli --all-features
+          - name: tracing-postgres
+            command: cargo check -p agentflow-tracing --features postgres
+          - name: mcp-all-transports
+            command: cargo check -p agentflow-mcp --features client,server,stdio,http
+          - name: nodes-default
+            command: cargo check -p agentflow-nodes
+          # Broken combinations are tracked under M.7 instead of failing CI:
+          #   - agentflow-llm --no-default-features --features openai
+          #     (default logging feature is load-bearing for tracing imports)
+          #   - agentflow-nodes --features batch,conditional,factories
+          #     (these features assume the default llm/http/file/template are
+          #     also enabled but Cargo strips them when --features is supplied)
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
