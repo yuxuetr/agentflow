@@ -1389,6 +1389,16 @@ impl ReActAgent {
         message: format!("timeout after {}ms", timeout_ms),
       }),
       AgentStopReason::Cancelled { message } => Err(ReActError::Cancelled { reason: message }),
+      AgentStopReason::CostLimitExceeded {
+        used_usd,
+        budget_usd,
+      } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message: format!(
+          "cost limit exceeded: ${:.4} (budget ${:.4})",
+          used_usd, budget_usd
+        ),
+      }),
       AgentStopReason::Error { message } => Err(ReActError::ToolError {
         tool: "runtime".to_string(),
         message,

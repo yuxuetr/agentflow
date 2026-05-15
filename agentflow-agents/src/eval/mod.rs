@@ -19,8 +19,12 @@
 
 pub mod assertion;
 pub mod dataset;
+pub mod runner;
 
 pub use assertion::{
-  Assertion, AssertionContext, AssertionInScope, AssertionOutcome, AssertionTarget,
+  Assertion, AssertionContext, AssertionInScope, AssertionOutcome, AssertionTarget, SkillValidator,
 };
 pub use dataset::{Dataset, DatasetManifest, EvalCase, EvalCaseDefaults, EvalError, RawEvalCase};
+pub use runner::{
+  AgentRuntimeFactory, CaseReport, CaseStatus, EvalReport, EvalRunner, EvalRunnerError, EvalSummary,
+};

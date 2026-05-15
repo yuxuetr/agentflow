@@ -359,6 +359,16 @@ async fn live_execute(
       result.answer.clone(),
       Some(format!("token_budget_exceeded:{used}/{budget}")),
     ),
+    AgentStopReason::CostLimitExceeded {
+      used_usd,
+      budget_usd,
+    } => (
+      HarnessSessionStatus::Failed,
+      result.answer.clone(),
+      Some(format!(
+        "cost_limit_exceeded:${used_usd:.4}/${budget_usd:.4}"
+      )),
+    ),
     AgentStopReason::Error { message } => (
       HarnessSessionStatus::Failed,
       None,

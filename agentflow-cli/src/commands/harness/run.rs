@@ -220,6 +220,10 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
     Timeout { timeout_ms } => format!("timeout({timeout_ms}ms)"),
     Cancelled { message } => format!("cancelled({message})"),
     TokenBudgetExceeded { used, budget } => format!("token_budget({used}/{budget})"),
+    CostLimitExceeded {
+      used_usd,
+      budget_usd,
+    } => format!("cost_limit(${used_usd:.4}/${budget_usd:.4})"),
     Error { message } => format!("error({message})"),
   }
 }

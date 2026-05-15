@@ -532,6 +532,16 @@ fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> Stopp
       final_answer: None,
       error: Some(format!("token_budget exceeded: {used}/{budget}")),
     },
+    AgentStopReason::CostLimitExceeded {
+      used_usd,
+      budget_usd,
+    } => StoppedPayload {
+      reason: StopReason::LimitReached,
+      final_answer: None,
+      error: Some(format!(
+        "cost_limit_usd exceeded: ${used_usd:.4}/${budget_usd:.4}"
+      )),
+    },
     AgentStopReason::Error { message } => StoppedPayload {
       reason: StopReason::Failed,
       final_answer: None,

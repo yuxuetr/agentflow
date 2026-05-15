@@ -190,17 +190,43 @@ impl PartialEq for AgentCancellationToken {
 impl Eq for AgentCancellationToken {}
 
 /// Why an agent-native loop stopped.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+//
+// `Eq` is intentionally not derived: the `CostLimitExceeded` variant
+// carries `f64` fields. Consumers that need bit-exact equality should
+// compare on individual fields rather than the variant as a whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum AgentStopReason {
   FinalAnswer,
-  StopCondition { condition: String },
-  MaxSteps { max_steps: usize },
-  MaxToolCalls { max_tool_calls: usize },
-  Timeout { timeout_ms: u64 },
-  Cancelled { message: String },
-  TokenBudgetExceeded { used: u32, budget: u32 },
-  Error { message: String },
+  StopCondition {
+    condition: String,
+  },
+  MaxSteps {
+    max_steps: usize,
+  },
+  MaxToolCalls {
+    max_tool_calls: usize,
+  },
+  Timeout {
+    timeout_ms: u64,
+  },
+  Cancelled {
+    message: String,
+  },
+  TokenBudgetExceeded {
+    used: u32,
+    budget: u32,
+  },
+  /// Accumulated provider cost crossed the eval harness's
+  /// `cost_limit_usd`. Only emitted by the eval runner today; the agent
+  /// runtimes themselves do not enforce cost budgets yet.
+  CostLimitExceeded {
+    used_usd: f64,
+    budget_usd: f64,
+  },
+  Error {
+    message: String,
+  },
 }
 
 impl AgentStopReason {
