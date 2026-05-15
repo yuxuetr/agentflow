@@ -71,6 +71,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
+- P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 
 ---
 
@@ -449,14 +450,29 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     so the smoke test does not depend on a real plugin binary.
 
 - TODO P3.5 Permission explanation improvements:
-  - Expand `agentflow skill inspect --explain-permissions <skill>`:
-    - Print the resolved tool list and per-tool source / policy decisions.
-    - Print effective sandbox profile.
-    - Print MCP server permissions (links to P1.9).
-  - Add `agentflow workflow validate --explain-permissions <yaml>` that
-    does the same for non-Skill YAML workflows.
-  - Add tests for representative shell / file / http / MCP / workflow
-    tool policy outputs.
+  - DONE Slice 1 — `agentflow skill inspect --explain-permissions`
+    now wires the P1.9 `resolve_tool_policy` table alongside the
+    existing capability decisions. New repeatable flags
+    `--allow-tool <NAME>` and `--deny-tool <NAME>` feed the CLI
+    override layer (highest precedence). Output prints the
+    `AdmissionSource` (`cli_deny` / `cli_allow` / `skill_allow` /
+    `mcp_server_capability` / `tool_policy_default` / `no_match`)
+    plus admission reason for every tool the skill declares, every
+    tool named on the CLI, and (when wired) every MCP-advertised
+    tool. 5 new CLI tests in `skill_cli_tests.rs` lock down the
+    precedence rules. Hint message when the flags are passed
+    without `--explain-permissions`.
+  - TODO Print effective sandbox profile alongside the admission table
+    (today only the `Security:` block surfaces sandbox state — the
+    explain-permissions section should reuse that info).
+  - TODO Print MCP server permissions (per-server allowlist + the
+    capability map fed into `resolve_tool_policy`) — needs MCP
+    capability discovery to be plumbed into `skill inspect` (today
+    only `skill list-tools` actually contacts the server).
+  - TODO Add `agentflow workflow validate --explain-permissions
+    <yaml>` that does the same for non-Skill YAML workflows.
+  - TODO Add tests for representative HTTP / MCP / workflow tool
+    policy outputs (slice 1 covers shell/file/script).
 
 - TODO P3.6 Native tool calling provider consistency tests:
   - Add `agentflow-llm/tests/provider_consistency.rs` covering, per
