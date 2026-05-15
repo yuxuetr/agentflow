@@ -74,6 +74,7 @@ but do not implement channel adapters in this queue.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
 - M.6 Workspace edition pin: new `xtask/` workspace member + `cargo xtask verify-edition` subcommand walks every member's `Cargo.toml` and asserts `edition = "2024"`. `.cargo/config.toml` ships the `xtask` alias; Quality CI workflow gains a `verify-edition` job listed under `release-gate.needs`. Tests: 3 unit (synthetic workspace) + 3 integration (real workspace + bad subcommand).
+- P3.5 (Slice 3 of 4): `skill inspect --explain-permissions` now prints a `Sandbox profile:` block that surfaces the detected platform backend (`sandbox-exec` / `seccomp` / `noop`), the tri-state `SandboxEnforcement` level, the manifest's `security.os_sandbox` opt-in, and operator notes for suspicious combinations (shell/script tools without opt-in on enforcing platforms; opt-in without an enforcing backend; opt-in without any sandboxable tool). 2 new CLI tests in `skill_cli_tests.rs` lock down the rust_expert opt-out path and the mcp-basic clean path. Slice 4 (MCP capability discovery wiring in `skill inspect`) remains TODO.
 
 ---
 
@@ -464,9 +465,17 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     tool. 5 new CLI tests in `skill_cli_tests.rs` lock down the
     precedence rules. Hint message when the flags are passed
     without `--explain-permissions`.
-  - TODO Print effective sandbox profile alongside the admission table
-    (today only the `Security:` block surfaces sandbox state — the
-    explain-permissions section should reuse that info).
+  - DONE Slice 3 — `skill inspect --explain-permissions` now prints
+    a `Sandbox profile:` block alongside the admission table. The
+    block surfaces the detected platform backend (`sandbox-exec` /
+    `seccomp` / `noop`), the tri-state `SandboxEnforcement` level,
+    the manifest's `security.os_sandbox` opt-in flag, and operator
+    notes that flag suspicious combinations: shell/script declared
+    + backend enforcing + opt-in `false`; opt-in `true` + backend
+    not enforcing; opt-in `true` + no sandboxable tool declared.
+    The probe is hermetic — no subprocess spawn. 2 new CLI tests
+    in `skill_cli_tests.rs` cover the rust_expert opt-out and the
+    mcp-basic clean path.
   - TODO Print MCP server permissions (per-server allowlist + the
     capability map fed into `resolve_tool_policy`) — needs MCP
     capability discovery to be plumbed into `skill inspect` (today
