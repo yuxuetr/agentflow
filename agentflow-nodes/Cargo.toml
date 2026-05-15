@@ -16,7 +16,6 @@ file = []
 template = ["handlebars"]
 batch = []
 conditional = []
-factories = []
 mcp = ["agentflow-mcp"]
 rag = ["agentflow-rag"]
 

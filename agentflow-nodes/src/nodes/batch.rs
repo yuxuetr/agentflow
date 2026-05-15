@@ -10,13 +10,30 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 /// Batch node for parallel processing of multiple items
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BatchNode {
   pub name: String,
   pub items_key: String, // Key in shared state containing array of items to process
   pub batch_size: usize,
   pub max_concurrent: usize,
+  /// The inner node executed once per batch item. Skipped in [`Debug`]
+  /// output because `AsyncNode` is a trait object (no `Debug` bound).
   pub child_node: Option<Arc<dyn AsyncNode>>,
+}
+
+impl std::fmt::Debug for BatchNode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("BatchNode")
+      .field("name", &self.name)
+      .field("items_key", &self.items_key)
+      .field("batch_size", &self.batch_size)
+      .field("max_concurrent", &self.max_concurrent)
+      .field(
+        "child_node",
+        &self.child_node.as_ref().map(|_| "<AsyncNode>"),
+      )
+      .finish()
+  }
 }
 
 impl BatchNode {
@@ -52,15 +69,15 @@ impl BatchNode {
       let mut tasks = JoinSet::new();
 
       for item in items.iter() {
-        if tasks.len() >= self.max_concurrent {
-          if let Some(task_result) = tasks.join_next().await {
-            match task_result {
-              Ok(result) => results.push(result?),
-              Err(e) => {
-                return Err(AgentFlowError::AsyncExecutionError {
-                  message: format!("Batch processing task failed: {}", e),
-                });
-              }
+        if tasks.len() >= self.max_concurrent
+          && let Some(task_result) = tasks.join_next().await
+        {
+          match task_result {
+            Ok(result) => results.push(result?),
+            Err(e) => {
+              return Err(AgentFlowError::AsyncExecutionError {
+                message: format!("Batch processing task failed: {}", e),
+              });
             }
           }
         }
@@ -135,11 +152,19 @@ impl AsyncNode for BatchNode {
       all_results.len()
     );
 
+    // Flatten the Vec<FlowValue> into a plain JSON array — the custom
+    // FlowValue Serialize impl would otherwise wrap each entry in
+    // `{type, value}`, which is the trace envelope shape, not the data
+    // shape downstream nodes consume.
+    let array: Vec<Value> = all_results
+      .into_iter()
+      .map(|v| match v {
+        FlowValue::Json(inner) => inner,
+        other => serde_json::to_value(other).unwrap_or(Value::Null),
+      })
+      .collect();
     let mut outputs = HashMap::new();
-    outputs.insert(
-      "results".to_string(),
-      FlowValue::Json(serde_json::to_value(all_results).unwrap()),
-    );
+    outputs.insert("results".to_string(), FlowValue::Json(Value::Array(array)));
 
     Ok(outputs)
   }

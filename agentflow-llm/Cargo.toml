@@ -14,8 +14,12 @@ default = ["openai", "anthropic", "google", "logging"]
 openai = []
 anthropic = []
 google = []
-observability = ["tracing"]
-logging = ["tracing", "tracing-subscriber"]
+# `tracing` is now a hard dependency (matching every other agentflow-* crate);
+# `observability` is kept as an empty alias so existing callers keep building.
+observability = []
+# `logging` adds the `tracing-subscriber` setup helpers on top of the always-on
+# `tracing` macros.
+logging = ["dep:tracing-subscriber"]
 
 [dependencies]
 # Core async and serialization
@@ -41,7 +45,7 @@ dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Observability and logging
-tracing = { version = "0.1", optional = true }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 log = "0.4"
 

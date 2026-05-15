@@ -113,12 +113,11 @@ jobs:
             command: cargo check -p agentflow-mcp --features client,server,stdio,http
           - name: nodes-default
             command: cargo check -p agentflow-nodes
-          # Broken combinations are tracked under M.7 instead of failing CI:
-          #   - agentflow-llm --no-default-features --features openai
-          #     (default logging feature is load-bearing for tracing imports)
-          #   - agentflow-nodes --features batch,conditional,factories
-          #     (these features assume the default llm/http/file/template are
-          #     also enabled but Cargo strips them when --features is supplied)
+          # M.7 fixes — these previously failed and are now wired in:
+          - name: llm-openai-only
+            command: cargo check -p agentflow-llm --no-default-features --features openai
+          - name: nodes-batch-conditional
+            command: cargo check -p agentflow-nodes --features batch,conditional
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

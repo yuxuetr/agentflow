@@ -86,7 +86,6 @@ impl ConditionalNode {
           let actual = match value {
             FlowValue::Json(Value::String(s)) => s.clone(),
             FlowValue::Json(v) => v.to_string(),
-            FlowValue::String(s) => s.clone(),
             _ => "".to_string(),
           };
           Ok(actual == *expected)
@@ -96,7 +95,7 @@ impl ConditionalNode {
       }
       ConditionType::GreaterThan(threshold) => {
         if let Some(value) = inputs.get(var_name) {
-          if let Some(number) = value.as_f64() {
+          if let Some(number) = flow_value_as_f64(value) {
             Ok(number > *threshold)
           } else {
             Ok(false)
@@ -107,7 +106,7 @@ impl ConditionalNode {
       }
       ConditionType::LessThan(threshold) => {
         if let Some(value) = inputs.get(var_name) {
-          if let Some(number) = value.as_f64() {
+          if let Some(number) = flow_value_as_f64(value) {
             Ok(number < *threshold)
           } else {
             Ok(false)
@@ -143,6 +142,16 @@ impl ConditionalNode {
         }
       }
     }
+  }
+}
+
+/// Extract a numeric value from a [`FlowValue`] for comparison conditions.
+/// Returns `None` for non-numeric variants so the condition reads as
+/// "not numeric, doesn't satisfy the comparison" rather than panicking.
+fn flow_value_as_f64(value: &FlowValue) -> Option<f64> {
+  match value {
+    FlowValue::Json(Value::Number(n)) => n.as_f64(),
+    _ => None,
   }
 }
 
@@ -188,10 +197,7 @@ mod tests {
   async fn test_conditional_node_exists() {
     let node = ConditionalNode::exists("test", "my_var");
     let mut inputs = AsyncNodeInputs::new();
-    inputs.insert(
-      "my_var".to_string(),
-      FlowValue::String("some_value".to_string()),
-    );
+    inputs.insert("my_var".to_string(), FlowValue::Json(json!("some_value")));
 
     let result = node.execute(&inputs).await.unwrap();
     let output = result.get("output").unwrap();
@@ -204,7 +210,7 @@ mod tests {
     let mut inputs = AsyncNodeInputs::new();
     inputs.insert(
       "my_var".to_string(),
-      FlowValue::String("expected_value".to_string()),
+      FlowValue::Json(json!("expected_value")),
     );
 
     let result = node.execute(&inputs).await.unwrap();
@@ -227,10 +233,7 @@ mod tests {
   async fn test_conditional_node_contains() {
     let node = ConditionalNode::contains("test", "my_var", "sub");
     let mut inputs = AsyncNodeInputs::new();
-    inputs.insert(
-      "my_var".to_string(),
-      FlowValue::String("substring".to_string()),
-    );
+    inputs.insert("my_var".to_string(), FlowValue::Json(json!("substring")));
 
     let result = node.execute(&inputs).await.unwrap();
     let output = result.get("output").unwrap();
