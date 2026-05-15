@@ -17,6 +17,17 @@ use agentflow_skills::{
 
 const MAX_MARKETPLACE_ARCHIVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
+// Zip-bomb defense. Marketplace packages are expected to be at most a
+// handful of MiB; a 256 MiB cumulative cap leaves a comfortable margin
+// for legitimate plugins while rejecting decompression-ratio attacks
+// (a gzipped tar of mostly-zeroes can easily expand past a GiB).
+const MAX_MARKETPLACE_ARCHIVE_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
+// Plugin manifests often ship hundreds of small fixture files, but
+// 16k entries is more than the runtime should ever care about — beyond
+// that we are looking at a directory bomb, not a real package.
+const MAX_MARKETPLACE_ARCHIVE_ENTRIES: usize = 16_384;
+
 pub async fn search(
   registry: String,
   query: Option<String>,
@@ -299,6 +310,8 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
   let temp_dir = TempDir::new().context("Failed to create marketplace unpack directory")?;
   let mut archive = tar::Archive::new(reader);
   let mut seen_paths = BTreeSet::new();
+  let mut total_bytes: u64 = 0;
+  let mut entry_count: usize = 0;
 
   for entry in archive.entries().with_context(|| {
     format!(
@@ -306,6 +319,14 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
       artifact_path.display()
     )
   })? {
+    entry_count += 1;
+    if entry_count > MAX_MARKETPLACE_ARCHIVE_ENTRIES {
+      bail!(
+        "Refusing to unpack archive with more than {} entries from '{}'",
+        MAX_MARKETPLACE_ARCHIVE_ENTRIES,
+        artifact_path.display()
+      );
+    }
     let mut entry = entry.with_context(|| {
       format!(
         "Failed to read an archive entry from '{}'",
@@ -321,7 +342,7 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
       );
     }
 
-    let relative = safe_archive_path(&entry.path()?)?;
+    let relative = safe_archive_path(&entry.path()?, &entry.path_bytes())?;
     if !seen_paths.insert(relative.clone()) {
       bail!(
         "Refusing to unpack duplicate archive path '{}' from '{}'",
@@ -343,6 +364,14 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
           relative.display(),
           size,
           MAX_MARKETPLACE_ARCHIVE_FILE_BYTES
+        );
+      }
+      total_bytes = total_bytes.saturating_add(size);
+      if total_bytes > MAX_MARKETPLACE_ARCHIVE_TOTAL_BYTES {
+        bail!(
+          "Refusing to unpack oversized archive (cumulative {} bytes exceeds {} bytes; possible decompression bomb)",
+          total_bytes,
+          MAX_MARKETPLACE_ARCHIVE_TOTAL_BYTES
         );
       }
     }
@@ -369,7 +398,18 @@ fn extract_package_archive(artifact_path: &Path) -> Result<TempDir> {
   Ok(temp_dir)
 }
 
-fn safe_archive_path(path: &Path) -> Result<PathBuf> {
+fn safe_archive_path(path: &Path, raw_bytes: &[u8]) -> Result<PathBuf> {
+  // Reject any path whose raw tar bytes aren't valid UTF-8. Marketplace
+  // packages travel across operating systems, and a path that round-trips
+  // through `Path` on Unix but breaks on Windows (or vice-versa) is a
+  // portability footgun that has no legitimate use. Erroring early is
+  // strictly safer than letting `tar::Entry::unpack` decide.
+  if std::str::from_utf8(raw_bytes).is_err() {
+    bail!(
+      "Refusing to unpack unsafe archive path (non-UTF-8 bytes): {:?}",
+      raw_bytes
+    );
+  }
   let mut safe = PathBuf::new();
   for component in path.components() {
     match component {

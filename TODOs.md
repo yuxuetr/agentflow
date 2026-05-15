@@ -854,16 +854,26 @@ expansion) to be useful for non-trivial workloads.
     documenting the deterministic-archive + SHA-256-signature flow
     and the strict / non-strict policy layering.
 
-- TODO P5.3 Marketplace unpack hardening:
-  - Extend archive extraction tests for:
-    - Nested archives (zip inside tar).
-    - Duplicate metadata (multiple `SKILL.md`).
-    - Executable bits on extracted files.
-    - Very large file counts (>10k entries).
-    - Invalid UTF-8 paths.
-    - Path traversal (`../../etc/passwd`).
-    - Zip-bomb / decompression-ratio limits.
-  - All should error cleanly, never write outside the target dir.
+- DONE P5.3 Marketplace unpack hardening:
+  - `extract_package_archive` now enforces two new gates on top of
+    the per-file 16 MiB cap and path-component checks: a cumulative
+    256 MiB cap (zip-bomb defense) and a 16k-entry cap (directory
+    bomb). `safe_archive_path` also rejects non-UTF-8 path bytes
+    outright — portability footgun on Windows and round-trips ugly
+    through Path on Unix.
+  - `agentflow-cli/tests/marketplace_unpack_hardening_tests.rs`
+    covers the missing edge cases the existing CLI suite didn't:
+    nested archives (zip-shaped blob stored as opaque file, no
+    auto-recursion); duplicate top-level `SKILL.md`; executable bit
+    preservation on install (unix-gated); 4k-entry happy path;
+    16k+ entry rejection; invalid UTF-8 path rejection; per-file
+    bomb; gzipped bomb. The cumulative-cap 256 MiB defense has an
+    `#[ignore]` test for manual validation.
+  - Path traversal, symlink, hardlink, duplicate paths, and the
+    per-file 16 MiB cap are already covered in
+    `tests/marketplace_cli_tests.rs` — kept as-is.
+  - Each failure case asserts the install root is left untouched
+    (defense-in-depth check inside `assert_install_failure`).
 
 - TODO P5.4 Plugin sandbox default policy (tied to P1.8):
   - Per-profile defaults wired through `agentflow-tools::policy::PluginPolicy`.
