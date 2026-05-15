@@ -72,6 +72,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
+- P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
 
 ---
 
@@ -469,10 +470,25 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     capability map fed into `resolve_tool_policy`) — needs MCP
     capability discovery to be plumbed into `skill inspect` (today
     only `skill list-tools` actually contacts the server).
-  - TODO Add `agentflow workflow validate --explain-permissions
-    <yaml>` that does the same for non-Skill YAML workflows.
-  - TODO Add tests for representative HTTP / MCP / workflow tool
-    policy outputs (slice 1 covers shell/file/script).
+  - DONE Slice 2 — `agentflow workflow validate --explain-permissions
+    <yaml>` walks `FlowDefinitionV2` and emits a per-node permission
+    report. Each node is classified into one of nine
+    `PermissionCategory` variants (`pure` / `filesystem` / `network` /
+    `exec` / `mcp` / `plugin` / `llm` / `agent` / `unknown`), tagged
+    with required capabilities (`fs.read`, `fs.write`, `net`, `exec`,
+    `mcp.call`, `plugin.exec`, `agent.runtime`), and the relevant
+    constraint parameters are surfaced (`url`, `method`,
+    `allowed_domains`, `allowed_paths`, `allowed_commands`,
+    `server_command`, `tool_name`, `plugin_id`, `model`, `skill`,
+    `allowed_tools`). Missing-allowlist constraints emit "permissive:
+    …" notes for operator review. `--format json` extends the existing
+    envelope with a `permissions` object carrying per-node + aggregate
+    counts. 4 new CLI tests in `workflow_tests.rs` cover text output,
+    JSON envelope, off-by-default behaviour, and the shell-node
+    capability surface.
+  - TODO Add tests for representative MCP node admission and
+    `multi_agent` / `skill_agent` permission output (slice 2 covers
+    template / http / file / shell).
 
 - TODO P3.6 Native tool calling provider consistency tests:
   - Add `agentflow-llm/tests/provider_consistency.rs` covering, per
