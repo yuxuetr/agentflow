@@ -63,6 +63,7 @@ but do not implement channel adapters in this queue.
 - P-H.3 Harness parallel tool calls (`ReActAgent` batch dispatcher: concurrent for Idempotent, serial for risky, deterministic LLM-order trace, partial-failure tolerance, atomic max-tool-calls precheck).
 - P-H.4 Background task tools (`agentflow-harness::tasks`: `TaskRuntime` / `TaskHandle` / `TaskAgentFactory` + 5 built-in `task_*` tools + nested-spawn rejection + bounded output buffer + lifecycle events through parent SinkChain).
 - P2.2 Run retention and cleanup policy (`agentflow-server::cleanup` module + per-profile defaults + DB/filesystem sweep + `agentflow cleanup --dry-run` CLI + background loop in `serve`). Per-run override deferred.
+- P1.8 Plugin execution policy (`agentflow-tools::plugin_policy` + per-profile defaults + `agentflow plugin install --allow-unsandboxed-plugin --signed` + production opt-in rejection + `tracing::info!` trace target).
 
 ---
 
@@ -117,19 +118,42 @@ auditable, and explicit.
     `--force-replay` opt-in and missing-checkpoint paths + 4 server
     route integration tests (auto-skip without `AGENTFLOW_DATABASE_TEST_URL`).
 
-- TODO P1.8 Plugin execution policy:
-  - Define default plugin execution policy per security profile in
-    `agentflow-tools::policy::PluginPolicy`:
-    - `dev`: sandbox optional, network/file allowed by manifest.
-    - `local`: sandbox required, manifest must declare permissions.
-    - `production`: sandbox required, signature required, network
-      explicit-allow only.
-  - Require explicit `--allow-unsandboxed-plugin` CLI flag in `local`
-    and `production` profiles.
-  - Wire plugin policy decision into trace events.
-  - Add tests for plugin spawn denial, sandbox opt-in, and signature
-    rejection.
-  - Document in `docs/TOOL_PERMISSIONS.md` "Plugin policy" subsection.
+- DONE P1.8 Plugin execution policy:
+  - New `agentflow-tools::plugin_policy` module exposes
+    `PluginPolicy`, `PluginNetworkPolicy`, `PluginEvaluationInput`,
+    and `PluginPolicyDecision`. `PluginPolicy::for_profile(profile)`
+    returns the documented defaults:
+    - `dev`: sandbox optional, signature optional,
+      `network = ManifestAllowed`.
+    - `local` (default): sandbox required, signature optional,
+      `network = ManifestAllowed`. `--allow-unsandboxed-plugin`
+      honored.
+    - `production`: sandbox required, signature required,
+      `network = ExplicitAllowOnly`. `--allow-unsandboxed-plugin`
+      is recorded as a deny reason *unconditionally* so misuse is
+      caught even when the active host happens to be sandboxed.
+  - `agentflow plugin install` now evaluates the policy before any
+    filesystem write. New CLI flags: `--allow-unsandboxed-plugin`,
+    `--signed`. Decision fields are emitted via
+    `tracing::info!(target = "agentflow.plugin.policy")` with
+    structured fields (`plugin`, `profile`, `allowed`,
+    `sandbox_active`, `signature_checked`, `network_policy`); a
+    typed `WorkflowEvent` variant is intentionally deferred until
+    enough consumers ask for it.
+  - Tests:
+    - 10 unit tests in `plugin_policy::tests` cover the dev/local/
+      production matrix, the opt-in unconditional rejection under
+      production, signature requirement, blanket-vs-explicit
+      network admission, serde round-trip, and deny-reason
+      aggregation.
+    - 3 new CLI integration tests in `tests/plugin_cli_tests.rs`
+      verify production rejects unsigned plugins, production
+      rejects `--allow-unsandboxed-plugin` even with `--signed`,
+      and `--help` lists the two new flags. All 9 plugin CLI
+      tests still pass.
+  - `docs/TOOL_PERMISSIONS.md` now has a "Plugin policy (P1.8)"
+    subsection with the per-profile table and the operator-intent
+    rule for `--allow-unsandboxed-plugin`.
 
 - TODO P1.9 MCP capability + SkillSecurity merge policy:
   - Author `docs/MCP_CAPABILITY_POLICY.md` describing how an MCP server's

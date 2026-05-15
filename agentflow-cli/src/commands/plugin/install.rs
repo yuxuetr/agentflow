@@ -11,8 +11,16 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use agentflow_core::plugin::PluginManifest;
+use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
+use agentflow_tools::{PluginEvaluationInput, PluginPolicy, SecurityProfile};
 
-pub async fn execute(source_dir: String, target_dir: Option<String>, force: bool) -> Result<()> {
+pub async fn execute(
+  source_dir: String,
+  target_dir: Option<String>,
+  force: bool,
+  allow_unsandboxed_plugin: bool,
+  has_signature: bool,
+) -> Result<()> {
   let source = Path::new(&source_dir);
   if !source.is_dir() {
     anyhow::bail!("Plugin source '{}' is not a directory", source.display());
@@ -39,6 +47,44 @@ pub async fn execute(source_dir: String, target_dir: Option<String>, force: bool
       manifest_path.display()
     )
   })?;
+
+  // Plugin policy gate (P1.8). Evaluate before any filesystem write so
+  // a denied install never half-installs.
+  let profile = SecurityProfile::from_env().unwrap_or_default();
+  let policy = PluginPolicy::for_profile(profile);
+  let sandbox = default_backend();
+  let sandbox_enforcing = matches!(sandbox.enforcement_level(), SandboxEnforcement::Enforcing);
+  let network_grants = &manifest.plugin.capabilities.network;
+  let mut input = PluginEvaluationInput::new(&manifest.plugin.name);
+  input.has_signature = has_signature;
+  input.sandbox_enforcing = sandbox_enforcing;
+  input.network_requested = !network_grants.is_empty();
+  // The current manifest treats any non-empty list as explicit
+  // origins; bare `["*"]` (deliberate wildcard) collapses to a
+  // single non-explicit entry so production rejects it.
+  input.network_origins_explicit = network_grants
+    .iter()
+    .all(|origin| origin != "*" && !origin.is_empty());
+  input.allow_unsandboxed_opt_in = allow_unsandboxed_plugin;
+  let decision = policy.evaluate(&input);
+  tracing::info!(
+    target: "agentflow.plugin.policy",
+    plugin = %decision.plugin_name,
+    profile = %decision.profile,
+    allowed = decision.allowed,
+    sandbox_active = decision.sandbox_active,
+    signature_checked = decision.signature_checked,
+    network_policy = decision.network_policy.as_str(),
+    "plugin policy decision"
+  );
+  if !decision.allowed {
+    let reason = decision.deny_reason().unwrap_or_else(|| "denied".into());
+    anyhow::bail!(
+      "plugin '{}' rejected by `{}` policy: {reason}",
+      manifest.plugin.name,
+      decision.profile
+    );
+  }
 
   let resolved_entrypoint = manifest.resolve_entrypoint(source);
   if !resolved_entrypoint.exists() {

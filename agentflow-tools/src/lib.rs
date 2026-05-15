@@ -21,6 +21,7 @@
 pub mod builtin;
 pub mod capability;
 pub mod error;
+pub mod plugin_policy;
 pub mod policy;
 pub mod registry;
 pub mod sandbox;
@@ -29,6 +30,9 @@ pub mod tool;
 
 pub use capability::{Capability, CapabilityDecisionEntry, EffectiveCapabilities, GrantSource};
 pub use error::ToolError;
+pub use plugin_policy::{
+  PluginEvaluationInput, PluginNetworkPolicy, PluginPolicy, PluginPolicyDecision,
+};
 pub use policy::{ToolPolicy, ToolPolicyDecision};
 pub use registry::ToolRegistry;
 pub use sandbox::{SandboxEnforcement, SandboxPolicy, SandboxStatus};

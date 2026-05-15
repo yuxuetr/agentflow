@@ -77,7 +77,9 @@ fn tool_metadata_and_permission_set_fixture_round_trips() {
 
 #[test]
 fn typed_tool_output_parts_fixture_round_trips() {
-  let fixture = fixture_value(include_str!("fixtures/tool_contracts/tool_output_parts.json"));
+  let fixture = fixture_value(include_str!(
+    "fixtures/tool_contracts/tool_output_parts.json"
+  ));
   let parts: Vec<ToolOutputPart> = serde_json::from_value(fixture.clone()).unwrap();
 
   assert!(matches!(parts[0], ToolOutputPart::Text { .. }));
@@ -93,7 +95,9 @@ fn openai_tools_array_fixture_remains_stable() {
 
   assert_eq!(
     serde_json::to_value(registry.openai_tools_array()).unwrap(),
-    fixture_value(include_str!("fixtures/tool_contracts/openai_tools_array.json"))
+    fixture_value(include_str!(
+      "fixtures/tool_contracts/openai_tools_array.json"
+    ))
   );
 }
 
@@ -115,7 +119,10 @@ fn tool_contracts_accept_additive_fields_where_supported() {
   });
 
   let definition: ToolDefinition = serde_json::from_value(value.clone()).unwrap();
-  value.as_object_mut().unwrap().remove("future_definition_field");
+  value
+    .as_object_mut()
+    .unwrap()
+    .remove("future_definition_field");
   value["metadata"]
     .as_object_mut()
     .unwrap()

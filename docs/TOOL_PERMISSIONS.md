@@ -312,3 +312,38 @@ the full translation table and the `AGENTFLOW_PLUGIN_SANDBOX=1` opt-in
 flag. The capability merge layer (skill / policy / CLI) does **not**
 apply to plugin spawns — plugins are governed by their own manifest
 declarations, not by the host workflow's skill security.
+
+## Plugin policy (P1.8)
+
+`agentflow-tools::PluginPolicy` is the second admission gate for plugins.
+Where the sandbox layer above decides *how* a plugin runs once it's been
+spawned, the plugin policy decides *whether* the plugin is allowed to be
+installed at all under the active security profile. The CLI evaluates
+the policy at `agentflow plugin install` time and refuses to write any
+files when the decision is `Deny`.
+
+| Profile | Sandbox | Sandbox opt-in | Signature | Network |
+| --- | --- | --- | --- | --- |
+| `dev` | optional | n/a | not required | manifest-declared origins allowed |
+| `local` (default) | required | `--allow-unsandboxed-plugin` honored | not required | manifest-declared origins allowed |
+| `production` | required | **rejected** even if supplied | required | only explicit non-wildcard origins admitted |
+
+Behavioral rules:
+
+- The `--allow-unsandboxed-plugin` flag is treated as an operator
+  intent. Under `production` the flag is recorded as a deny reason
+  even when the sandbox backend happens to be active, so misuse is
+  detected before it can land on a host that lacks the sandbox.
+- `--signed` tells the install command that the plugin archive
+  carried a verified signature (this is the same signal the
+  marketplace install path produces). `production` denies any
+  install that does not set it.
+- A non-empty `[plugin.capabilities].network` array containing
+  `*` or an empty string is treated as a wildcard / non-explicit
+  grant — `production` rejects it.
+- Every decision is logged as `tracing::info!` on the
+  `agentflow.plugin.policy` target with the structured fields
+  `plugin`, `profile`, `allowed`, `sandbox_active`,
+  `signature_checked`, and `network_policy`. Trace replay tools
+  can grep for the target name; a typed `WorkflowEvent` variant
+  is reserved as a follow-up once enough consumers want it.

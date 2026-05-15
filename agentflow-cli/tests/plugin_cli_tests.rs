@@ -258,6 +258,68 @@ fn plugin_uninstall_refuses_directory_without_manifest() {
 }
 
 #[test]
+fn plugin_install_production_profile_rejects_unsigned_plugin() {
+  let work = TempDir::new().unwrap();
+  let plugins_dir = work.path().join("plugins");
+  let source = write_source_plugin(work.path(), "prod-plugin");
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      source.to_str().unwrap(),
+      "--dir",
+      plugins_dir.to_str().unwrap(),
+    ])
+    .env("AGENTFLOW_SECURITY_PROFILE", "production")
+    .assert()
+    .failure()
+    .stderr(
+      predicate::str::contains("production")
+        .and(predicate::str::contains("signature").or(predicate::str::contains("sandbox"))),
+    );
+  // The install must have been refused before any filesystem write.
+  assert!(!plugins_dir.join("prod-plugin").exists());
+}
+
+#[test]
+fn plugin_install_production_profile_refuses_allow_unsandboxed_opt_in() {
+  let work = TempDir::new().unwrap();
+  let plugins_dir = work.path().join("plugins");
+  let source = write_source_plugin(work.path(), "prod-opt-in");
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      source.to_str().unwrap(),
+      "--dir",
+      plugins_dir.to_str().unwrap(),
+      "--allow-unsandboxed-plugin",
+      "--signed",
+    ])
+    .env("AGENTFLOW_SECURITY_PROFILE", "production")
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "refuses --allow-unsandboxed-plugin",
+    ));
+}
+
+#[test]
+fn plugin_install_help_lists_p18_flags() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "install", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("--allow-unsandboxed-plugin"))
+    .stdout(predicate::str::contains("--signed"));
+}
+
+#[test]
 fn plugin_list_on_empty_dir_is_friendly() {
   let work = TempDir::new().unwrap();
   let plugins_dir = work.path().join("plugins-missing");

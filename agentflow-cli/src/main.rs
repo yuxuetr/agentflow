@@ -772,6 +772,14 @@ enum PluginCommands {
     /// Overwrite an existing installed plugin directory
     #[arg(long)]
     force: bool,
+    /// Opt out of sandbox requirement (`local` profile only;
+    /// `production` always refuses this flag).
+    #[arg(long)]
+    allow_unsandboxed_plugin: bool,
+    /// Treat the plugin archive as signature-verified (`production`
+    /// profile requires this).
+    #[arg(long)]
+    signed: bool,
   },
   /// List installed plugins and the node types each one declares
   List {
@@ -1273,7 +1281,9 @@ async fn main() {
         source_dir,
         dir,
         force,
-      } => plugin::install::execute(source_dir, dir, force).await,
+        allow_unsandboxed_plugin,
+        signed,
+      } => plugin::install::execute(source_dir, dir, force, allow_unsandboxed_plugin, signed).await,
       PluginCommands::List { dir } => plugin::list::execute(dir).await,
       PluginCommands::Inspect { plugin } => plugin::inspect::execute(plugin).await,
       PluginCommands::Uninstall { name, dir, force } => {
