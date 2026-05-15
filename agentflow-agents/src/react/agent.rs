@@ -286,6 +286,15 @@ impl ReActAgent {
     self
   }
 
+  /// Read-only view of the agent's tool registry.
+  ///
+  /// Useful for callers that want to introspect which tools are admitted —
+  /// for example, the eval harness asserting that admission filters were
+  /// applied, or `agentflow skill inspect` rendering the resolved set.
+  pub fn tools(&self) -> &Arc<ToolRegistry> {
+    &self.tools
+  }
+
   /// Attach a reflection strategy to the runtime trace.
   pub fn with_reflection_strategy(mut self, strategy: Arc<dyn ReflectionStrategy>) -> Self {
     self.reflection = Some(strategy);

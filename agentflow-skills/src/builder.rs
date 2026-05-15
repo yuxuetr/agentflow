@@ -80,6 +80,48 @@ impl SkillBuilder {
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
     Ok(registry)
   }
+
+  /// Same as [`Self::build`], but each tool produced by the skill manifest
+  /// passes through `admit` before being registered with the agent. Returning
+  /// `false` keeps the tool out of the agent's registry entirely — used by
+  /// the eval harness (and any future operator-driven override) to enforce
+  /// per-case `tools_allowed` / `tools_denied` admission.
+  ///
+  /// Naming the tool by its `Tool::name()` matches the wire-level name the
+  /// agent uses when emitting `AgentStepKind::ToolCall { tool, .. }`, so the
+  /// closure semantics line up with what `tool_called` / `tool_not_called`
+  /// assertions check.
+  pub async fn build_with_admission<F>(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+    admit: F,
+  ) -> Result<ReActAgent, SkillError>
+  where
+    F: Fn(&str) -> bool,
+  {
+    info!(
+        skill = %manifest.skill.name,
+        version = %manifest.skill.version,
+        "Building agent from skill manifest (with admission filter)"
+    );
+
+    let persona = build_persona(manifest, skill_dir)?;
+    let config = ReActConfig::new(manifest.model.resolved_model())
+      .with_persona(persona)
+      .with_max_iterations(manifest.model.resolved_max_iterations())
+      .with_budget_tokens(manifest.model.resolved_budget_tokens());
+
+    let source_registry = Self::build_registry(manifest, skill_dir).await?;
+    let mut filtered = ToolRegistry::new();
+    for tool in source_registry.list() {
+      if admit(tool.name()) {
+        filtered.register(tool);
+      }
+    }
+
+    let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
+    Ok(ReActAgent::new(config, memory, Arc::new(filtered)))
+  }
 }
 
 // ── Persona builder ──────────────────────────────────────────────────────────
@@ -678,6 +720,51 @@ mod tests {
     ];
     // Build must succeed (tools are registered, no LLM called).
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn build_with_admission_admits_only_filter_approved_tools() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("admission-skill");
+    manifest.tools = vec![
+      ToolConfig {
+        name: "shell".to_string(),
+        ..ToolConfig::default()
+      },
+      ToolConfig {
+        name: "file".to_string(),
+        ..ToolConfig::default()
+      },
+    ];
+
+    // Filter that keeps only `file`. The agent's registry should reflect
+    // that — `shell` must be absent even though the manifest declared it.
+    let agent = SkillBuilder::build_with_admission(&manifest, dir.path(), |name| name == "file")
+      .await
+      .unwrap();
+    assert!(agent.tools().get("file").is_some());
+    assert!(agent.tools().get("shell").is_none());
+  }
+
+  #[tokio::test]
+  async fn build_with_admission_admits_every_tool_when_filter_always_true() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("admission-skill-2");
+    manifest.tools = vec![
+      ToolConfig {
+        name: "shell".to_string(),
+        ..ToolConfig::default()
+      },
+      ToolConfig {
+        name: "file".to_string(),
+        ..ToolConfig::default()
+      },
+    ];
+    let agent = SkillBuilder::build_with_admission(&manifest, dir.path(), |_| true)
+      .await
+      .unwrap();
+    assert!(agent.tools().get("file").is_some());
+    assert!(agent.tools().get("shell").is_some());
   }
 
   #[tokio::test]

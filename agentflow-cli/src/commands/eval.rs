@@ -3,6 +3,8 @@
 //! See `docs/AGENT_EVAL_FORMAT.md` for the dataset format and the JSON
 //! envelope this command emits. Slice 3 of `P4.4`.
 
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -15,6 +17,7 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentRuntime;
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SessionMemory;
+use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
 
 /// `agentflow eval run <dataset>` entry point.
@@ -146,23 +149,85 @@ impl ReActAgentFactory {
 #[async_trait]
 impl AgentRuntimeFactory for ReActAgentFactory {
   async fn build(&self, case: &EvalCase) -> Result<Box<dyn AgentRuntime>, EvalRunnerError> {
-    let model = case
-      .model
-      .clone()
-      .ok_or_else(|| EvalRunnerError::FactoryFailed {
-        case_id: case.id.clone(),
-        message: "case has no model and dataset has no default model".to_string(),
-      })?;
-    let config = match case.max_steps {
-      Some(n) => ReActConfig::new(&model).with_max_iterations(n),
-      None => ReActConfig::new(&model),
-    };
-    let agent = ReActAgent::new(
-      config,
-      Box::new(SessionMemory::default_window()),
-      Arc::new(ToolRegistry::new()),
-    );
-    Ok(Box::new(agent))
+    if let Some(skill_dir) = case.skill.as_deref() {
+      build_skill_agent(case, skill_dir).await
+    } else {
+      build_bare_agent(case)
+    }
+  }
+}
+
+fn build_bare_agent(case: &EvalCase) -> Result<Box<dyn AgentRuntime>, EvalRunnerError> {
+  let model = case
+    .model
+    .clone()
+    .ok_or_else(|| EvalRunnerError::FactoryFailed {
+      case_id: case.id.clone(),
+      message: "case has no model and dataset has no default model".to_string(),
+    })?;
+  let config = match case.max_steps {
+    Some(n) => ReActConfig::new(&model).with_max_iterations(n),
+    None => ReActConfig::new(&model),
+  };
+  let agent = ReActAgent::new(
+    config,
+    Box::new(SessionMemory::default_window()),
+    Arc::new(ToolRegistry::new()),
+  );
+  Ok(Box::new(agent))
+}
+
+async fn build_skill_agent(
+  case: &EvalCase,
+  skill_dir: &str,
+) -> Result<Box<dyn AgentRuntime>, EvalRunnerError> {
+  let dir = Path::new(skill_dir);
+  let mut manifest = SkillLoader::load(dir).map_err(|e| EvalRunnerError::FactoryFailed {
+    case_id: case.id.clone(),
+    message: format!("failed to load skill '{skill_dir}': {e}"),
+  })?;
+  if let Some(model) = case.model.clone() {
+    manifest.model.name = Some(model);
+  }
+  let _warnings =
+    SkillLoader::validate(&manifest, dir).map_err(|e| EvalRunnerError::FactoryFailed {
+      case_id: case.id.clone(),
+      message: format!("skill validation failed for '{skill_dir}': {e}"),
+    })?;
+
+  let admit = admission_for_case(case);
+  let agent = SkillBuilder::build_with_admission(&manifest, dir, admit)
+    .await
+    .map_err(|e| EvalRunnerError::FactoryFailed {
+      case_id: case.id.clone(),
+      message: format!("failed to build skill agent for '{skill_dir}': {e}"),
+    })?;
+  // Note: `case.max_steps` is enforced by the runner via
+  // `RuntimeLimits::max_steps` threaded into `AgentContext`, not by the
+  // agent's own iteration cap. Both knobs apply; the lower one wins.
+  Ok(Box::new(agent))
+}
+
+/// Build the per-case admission closure.
+///
+/// Precedence mirrors the P3.5 / P1.9 CLI override layer applied at the
+/// case scope:
+///
+/// - Denied tools always lose.
+/// - When `tools_allowed` is non-empty, only its members are admitted.
+/// - When `tools_allowed` is empty, every non-denied tool the skill
+///   declared is admitted (default open).
+fn admission_for_case(case: &EvalCase) -> impl Fn(&str) -> bool + '_ {
+  let denied: HashSet<&str> = case.tools_denied.iter().map(String::as_str).collect();
+  let allowed: HashSet<&str> = case.tools_allowed.iter().map(String::as_str).collect();
+  move |name: &str| -> bool {
+    if denied.contains(name) {
+      return false;
+    }
+    if allowed.is_empty() {
+      return true;
+    }
+    allowed.contains(name)
   }
 }
 

@@ -193,3 +193,284 @@ fn cli_eval_run_help_lists_format_filter_fail_on_status_flags() {
     .stdout(predicate::str::contains("--filter"))
     .stdout(predicate::str::contains("--fail-on-status"));
 }
+
+// ── Skill-aware factory + tools admission ───────────────────────────────
+
+/// Write a minimal skill.toml under `dir` that registers `shell` + `file`
+/// tools. Used to exercise `case.skill` loading and the
+/// `tools_allowed` / `tools_denied` admission filter. Intentionally
+/// skips the `script` tool to avoid the validator's `scripts/` dir
+/// requirement.
+fn write_three_tool_skill(dir: &Path, model: &str) {
+  fs::write(
+    dir.join("skill.toml"),
+    format!(
+      r#"
+[skill]
+name = "eval-three-tools"
+version = "0.1.0"
+description = "Two-tool skill fixture for eval CLI tests"
+
+[persona]
+role = "Answer the user concisely."
+
+[model]
+name = "{model}"
+max_iterations = 4
+
+[[tools]]
+name = "shell"
+
+[[tools]]
+name = "file"
+"#
+    ),
+  )
+  .unwrap();
+}
+
+fn write_dataset_targeting_skill(dir: &Path, skill_dir: &Path, dataset_body: &str) {
+  fs::write(
+    dir.join("dataset.toml"),
+    format!(
+      r#"
+schema_version = 1
+name = "skill-fixture"
+version = "0.0.1"
+
+[defaults]
+skill = "{skill}"
+max_steps = 4
+"#,
+      skill = skill_dir.display(),
+    ),
+  )
+  .unwrap();
+  fs::write(dir.join("cases.jsonl"), dataset_body).unwrap();
+}
+
+#[test]
+fn cli_eval_run_loads_case_skill_when_present() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let skill_dir = work.path().join("eval-skill");
+  fs::create_dir_all(&skill_dir).unwrap();
+  let model = "mock-eval-skill-loaded";
+  write_three_tool_skill(&skill_dir, model);
+
+  // Write the models.yml that registers this case's model id.
+  let cfg = home.path().join(".agentflow");
+  fs::create_dir_all(&cfg).unwrap();
+  fs::write(
+    cfg.join("models.yml"),
+    format!(
+      r#"
+models:
+  {model}:
+    vendor: mock
+    type: text
+    model_id: {model}
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#
+    ),
+  )
+  .unwrap();
+
+  let dataset_dir = work.path().join("dataset");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  // One case that asserts `tool_not_called` for `shell` — should pass
+  // because the canned mock response answers directly without tools.
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "skill-loaded",
+        "prompt": "say hello",
+        "model": model,
+        "expected_assertions": [
+          {"type": "contains", "needle": "hello"},
+          {"type": "tool_not_called", "tool": "shell"}
+        ]
+      })
+    ),
+  );
+
+  let responses = serde_json::to_string(&vec![
+    r#"{"thought":"answer directly","answer":"hello world"}"#,
+  ])
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"passed\": 1"));
+}
+
+#[test]
+fn cli_eval_run_tools_denied_filters_skill_registry_before_invocation() {
+  // This case is structured so the *only* way the agent could pass the
+  // `contains` assertion is via a tool the case explicitly denies. The
+  // factory should filter that tool out of the registry, so the agent
+  // can never reach for it — the case must therefore Fail with a
+  // tool_called assertion mismatch, proving admission was applied.
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let skill_dir = work.path().join("eval-skill-denied");
+  fs::create_dir_all(&skill_dir).unwrap();
+  let model = "mock-eval-skill-denied";
+  write_three_tool_skill(&skill_dir, model);
+
+  let cfg = home.path().join(".agentflow");
+  fs::create_dir_all(&cfg).unwrap();
+  fs::write(
+    cfg.join("models.yml"),
+    format!(
+      r#"
+models:
+  {model}:
+    vendor: mock
+    type: text
+    model_id: {model}
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#
+    ),
+  )
+  .unwrap();
+
+  let dataset_dir = work.path().join("dataset");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  // The case asserts shell *must* be called at least once. The skill
+  // declares shell, but the case denies it. Expectation: case fails
+  // because the registry the agent sees has no `shell` tool, so
+  // tool_called for shell hits min_count=0.
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "shell-denied",
+        "prompt": "echo via shell",
+        "model": model,
+        "tools_denied": ["shell"],
+        "expected_assertions": [
+          {"type": "tool_called", "tool": "shell", "min_count": 1}
+        ]
+      })
+    ),
+  );
+
+  let responses = serde_json::to_string(&vec![
+    r#"{"thought":"answer directly","answer":"no tools used"}"#,
+  ])
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .output()
+    .unwrap();
+  // Exit 1 because the case fails (tools_denied prevented the
+  // shell tool from being registered → tool_called min_count=1 missed).
+  assert_eq!(output.status.code(), Some(1));
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(report["summary"]["failed"], 1);
+  let case = &report["cases"][0];
+  assert_eq!(case["status"], "failed");
+  assert_eq!(case["tool_call_count"], 0);
+}
+
+#[test]
+fn cli_eval_run_skill_load_failure_reports_factory_error() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  // Point `case.skill` at a directory that exists but has no manifest.
+  let skill_dir = work.path().join("missing-skill");
+  fs::create_dir_all(&skill_dir).unwrap();
+
+  let cfg = home.path().join(".agentflow");
+  fs::create_dir_all(&cfg).unwrap();
+  fs::write(
+    cfg.join("models.yml"),
+    r#"
+models:
+  mock-eval-broken:
+    vendor: mock
+    type: text
+    model_id: mock-eval-broken
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#,
+  )
+  .unwrap();
+
+  let dataset_dir = work.path().join("dataset");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "broken-skill",
+        "prompt": "hi",
+        "model": "mock-eval-broken",
+        "expected_assertions": [
+          {"type": "contains", "needle": "hi"}
+        ]
+      })
+    ),
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", "[]")
+    .output()
+    .unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let case = &report["cases"][0];
+  assert_eq!(case["status"], "failed");
+  assert_eq!(case["stop_reason"], "factory_error");
+  assert!(
+    case["runtime_error"]
+      .as_str()
+      .unwrap()
+      .contains("failed to load skill"),
+    "runtime_error: {:?}",
+    case["runtime_error"]
+  );
+}
