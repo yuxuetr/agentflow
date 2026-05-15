@@ -81,6 +81,7 @@ but do not implement channel adapters in this queue.
 - M.7 Fix broken minimal feature combinations: `agentflow-llm --no-default-features --features openai` and `agentflow-nodes --features batch,conditional` now compile + test clean. Root causes: optional `tracing` dep (llm) and stale unit-struct constructor references in the `factories` module (nodes); secondary bugs in `conditional.rs` (stale `FlowValue::String` arm) and `batch.rs` (Debug derive on trait object + serialization mis-shape). The `factories` feature + module was deleted (unused, never compiled). CI Quality `features` matrix gains `llm-openai-only` and `nodes-batch-conditional` rows.
 - P4.5 Memory layering design: `docs/MEMORY_LAYERING.md` defines the four-layer boundary (Session / Semantic / Preference / Entity facts) with per-layer lifetime, key, retention default, and the prompt-assembly precedence order. Spec'd trait extensions (`SemanticMemoryStore` extends `MemoryStore`; `PreferenceStore` + `EntityFactStore` separate) keep the new code from leaking into existing backends. Migration path is additive — current `SessionMemory` / `SqliteMemory` / `SemanticMemory` keep working without changes. Unblocks P4.7 implementation and P-H.4 background task context.
 - P4.3 Agent eval format design: `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for `agentflow eval run` and the JSON report envelope. JSONL+TOML layout mirrors the existing RAG eval. EvalCase fields are grounded in real `agentflow_agents::RuntimeLimits` types; six-variant closed assertion DSL (`contains` / `regex` / `tool_called` / `tool_not_called` / `step_count_below` / `final_answer_matches_skill`). Runner is one `Flow` with one `EvalCaseNode` per case — reuses concurrent scheduling, checkpoints, OTel propagation. Unblocks P4.4 implementation.
+- P4.4 Minimal agent eval implementation (3 slices): `agentflow-agents::eval` module ships `Dataset` / `Assertion` / `EvalRunner` + `AgentRuntimeFactory` trait + `EvalReport` envelope; new `AgentStopReason::CostLimitExceeded` variant flows through every workspace match site. `agentflow eval run <dataset>` CLI with `--format text|json`, `--filter <glob>`, `--fail-on-status failed|never`. Tiny `ci_offline` fixture drives the bare ReActAgent against the mock provider so the suite is hermetic. 33 unit tests in agentflow-agents + 10 unit/integration tests in agentflow-cli. Cost tracking is plumbed (cost_usd_actual = 0.0 until the LLM providers report it). Trace ids are `eval-<case_id>-<epoch hex>` so `agentflow trace replay` consumes them directly.
 
 ---
 
@@ -655,14 +656,45 @@ regression-safe.
     envelope shape are stable at first land; future variants require
     a `schema_version` bump.
 
-- TODO P4.4 Minimal agent eval implementation:
-  - Implement `agentflow-agents/src/eval/runner.rs` running cases from
-    P4.3.
-  - Implement `agentflow eval run <dataset>` CLI command.
-  - Produce both JSON report and human-readable summary.
-  - Capture trace IDs for failed cases.
-  - Add a tiny offline dataset (mock provider) used by CI.
-  - PREREQ for any release-gate quality claim.
+- DONE P4.4 Minimal agent eval implementation:
+  - DONE Slice 1 — `agentflow-agents/src/eval/{dataset,assertion}.rs`
+    implement the on-disk format and closed 6-variant assertion DSL
+    from P4.3. `Dataset::load_from_dir` walks `dataset.toml` +
+    `cases.jsonl`, applies `[defaults]` inheritance, validates
+    uniqueness + non-empty assertion lists. `Assertion::evaluate`
+    returns a structured `AssertionOutcome` and never panics. 23 unit
+    tests cover every variant pass + fail path.
+  - DONE Slice 2 — `agentflow-agents/src/eval/runner.rs` adds
+    `EvalRunner` that walks the dataset, drives an `AgentRuntime` per
+    case via an `AgentRuntimeFactory` trait, evaluates assertions
+    against the captured `AgentRunResult`, and emits a structured
+    `EvalReport` (matches the JSON envelope in
+    `docs/AGENT_EVAL_FORMAT.md`). New `AgentStopReason::CostLimitExceeded`
+    variant; `Eq` dropped from the enum derive because `f64` doesn't
+    impl `Eq` (no consumer required it — grep-confirmed). Exhaustive
+    `AgentStopReason` matches updated across react/agent.rs,
+    agentflow-harness/runtime.rs, agentflow-server/harness_live.rs,
+    and agentflow-cli/harness/run.rs. 10 new runner tests.
+  - DONE Slice 3 — `agentflow eval run <dataset>` subcommand wires
+    the runner with `--format text|json`, `--filter <glob>`,
+    `--fail-on-status failed|never`. Default factory builds a fresh
+    `ReActAgent` per case using the case-declared model + an empty
+    `ToolRegistry` (skill loading + tool admission via P3.5 flags
+    deferred to a follow-up). Tiny hermetic fixture under
+    `agentflow-agents/eval_datasets/ci_offline/` (two cases against
+    the mock provider). 6 new CLI integration tests + 4 unit tests
+    for the glob/fail-threshold/format parser.
+  - Cost tracking: `cost_usd_actual` is plumbed through the report
+    but reports `0.0` today because the LLM provider doesn't yet emit
+    per-call cost. The new `CostLimitExceeded` variant is reserved
+    for the eval harness's future enforcement layer once provider
+    cost reporting lands.
+  - Trace replay path: every case carries a `trace_id` formatted as
+    `eval-<case_id>-<epoch_ms hex>` so `agentflow trace replay
+    <trace_id>` Just Works for failure debugging.
+  - Release-gate quality claims can now point at
+    `cargo test -p agentflow-cli --test eval_cli_tests` as the
+    reproducible signal.
 
 - DONE P4.5 Memory layering design:
   - `docs/MEMORY_LAYERING.md` defines four mutually exclusive memory
