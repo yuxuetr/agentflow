@@ -405,6 +405,90 @@ providers:
 }
 
 #[test]
+fn cli_eval_run_cost_usd_actual_reflects_pricing_table_via_env() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+  // Pricing table priced at $1 / 1k input + $2 / 1k output. Mock
+  // provider stamps `prompt_tokens: Some(50)` and a response-word-count-
+  // dependent `completion_tokens` (see agentflow-llm/src/providers/mock.rs);
+  // exact dollar amount varies with response length so the test asserts
+  // strictly-positive cost + proportional bounds rather than an exact
+  // figure that would couple this test to mock-provider internals.
+  let pricing_path = home.path().join("pricing.yml");
+  fs::write(
+    &pricing_path,
+    r#"
+models:
+  mock-eval-hello:
+    input_per_1k: 1.0
+    output_per_1k: 2.0
+  mock-eval-budget:
+    input_per_1k: 1.0
+    output_per_1k: 2.0
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args(["eval", "run", &fixture_path(), "--format", "json"])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses())
+    .env("AGENTFLOW_PRICING_TABLE", pricing_path.to_str().unwrap())
+    .output()
+    .unwrap();
+  assert!(
+    output.status.success(),
+    "stderr: {}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let total_cost = report["summary"]["cost_usd_total"].as_f64().unwrap();
+  // Lower bound: each case has ≥1 mock LLM call with prompt_tokens=50,
+  // input @ $1/1k = $0.05 minimum. Two cases → ≥ $0.10.
+  // Upper bound: each case has at most ~3 LLM iterations on the canned
+  // response, completion tokens are bounded by response length (~3
+  // words), so $0.10 × 6 = $0.60 is a safe ceiling.
+  assert!(
+    total_cost >= 0.05,
+    "expected cost_usd_total ≥ $0.05 from mock token usage; got ${total_cost}"
+  );
+  assert!(
+    total_cost < 1.0,
+    "expected cost_usd_total < $1.00 from a 2-case mock-provider run; got ${total_cost}"
+  );
+  // Every case must report a strictly-positive per-case cost when its
+  // model is in the pricing table — confirms the runner aggregates
+  // events per-case, not just at the summary level.
+  for case in report["cases"].as_array().unwrap() {
+    let cost = case["cost_usd_actual"].as_f64().unwrap();
+    assert!(
+      cost > 0.0,
+      "per-case cost_usd_actual should be > 0 when model is priced; got ${cost}",
+    );
+  }
+}
+
+#[test]
+fn cli_eval_run_cost_usd_actual_zero_when_no_pricing_table_configured() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+  // No AGENTFLOW_PRICING_TABLE; no ~/.agentflow/pricing.yml under
+  // the synthetic HOME. The harness should fall back to an empty
+  // pricing table → $0 across the run despite real token usage.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args(["eval", "run", &fixture_path(), "--format", "json"])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses())
+    .output()
+    .unwrap();
+  assert!(output.status.success());
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(report["summary"]["cost_usd_total"], 0.0);
+}
+
+#[test]
 fn cli_eval_run_skill_load_failure_reports_factory_error() {
   let home = TempDir::new().unwrap();
   let work = TempDir::new().unwrap();

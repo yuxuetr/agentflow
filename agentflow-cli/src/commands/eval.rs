@@ -4,7 +4,7 @@
 //! envelope this command emits. Slice 3 of `P4.4`.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +12,7 @@ use async_trait::async_trait;
 
 use agentflow_agents::eval::{
   AgentRuntimeFactory, CaseStatus, Dataset, EvalCase, EvalReport, EvalRunner, EvalRunnerError,
+  PricingTable,
 };
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentRuntime;
@@ -43,6 +44,8 @@ pub async fn execute(
   if let Some(pattern) = filter.clone() {
     runner = runner.with_filter(move |case| glob_match(&pattern, &case.id));
   }
+  let pricing = load_pricing_table()?;
+  runner = runner.with_pricing(pricing);
   let report = runner.run().await;
 
   match format {
@@ -131,6 +134,38 @@ fn glob_match_inner(pattern: &[char], candidate: &[char]) -> bool {
     pi += 1;
   }
   pi == pattern.len()
+}
+
+/// Resolve a [`PricingTable`] from the operator's environment.
+///
+/// Lookup order (first match wins):
+///   1. `AGENTFLOW_PRICING_TABLE=/path/to/pricing.yml` — explicit override.
+///   2. `~/.agentflow/pricing.yml` — per-host default.
+///   3. Empty table — every model costs $0.
+///
+/// Missing files are not an error: an unconfigured host should still
+/// run evals, just with cost_usd_actual = 0 across the board.
+/// Malformed YAML *is* an error and short-circuits the run with a
+/// structured anyhow message so operators don't silently lose cost
+/// tracking they expected to have.
+fn load_pricing_table() -> Result<PricingTable> {
+  if let Ok(path) = std::env::var("AGENTFLOW_PRICING_TABLE") {
+    let path = PathBuf::from(path);
+    return PricingTable::load_from_yaml(&path)
+      .with_context(|| format!("failed to load pricing table from {}", path.display()));
+  }
+  if let Some(home) = dirs::home_dir() {
+    let default_path = home.join(".agentflow").join("pricing.yml");
+    if default_path.exists() {
+      return PricingTable::load_from_yaml(&default_path).with_context(|| {
+        format!(
+          "failed to load default pricing table from {}",
+          default_path.display()
+        )
+      });
+    }
+  }
+  Ok(PricingTable::empty())
 }
 
 /// Default factory: spin up a fresh bare ReActAgent per case using the

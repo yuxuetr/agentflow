@@ -613,6 +613,7 @@ impl ReActAgent {
       if !tool_specs.is_empty() {
         builder = builder.tools(tool_specs);
       }
+      let llm_call_started = std::time::Instant::now();
       let llm_call = builder.execute_full();
       let llm_response: LLMResponse = match (
         remaining_timeout(run_started_at, timeout_ms),
@@ -703,6 +704,21 @@ impl ReActAgent {
         }
         (None, None) => llm_call.await?,
       };
+
+      // Surface token usage for downstream cost / latency aggregators
+      // (eval harness, tracing dashboards). `None` token fields are
+      // preserved as `None` — aggregators must treat them as unknown.
+      let usage = llm_response.usage.as_ref();
+      events.push(AgentEvent::LlmCallCompleted {
+        session_id: self.session_id.clone(),
+        step_index,
+        model: self.config.model.clone(),
+        prompt_tokens: usage.and_then(|u| u.prompt_tokens),
+        completion_tokens: usage.and_then(|u| u.completion_tokens),
+        total_tokens: usage.and_then(|u| u.total_tokens),
+        duration_ms: llm_call_started.elapsed().as_millis() as u64,
+        timestamp: chrono::Utc::now(),
+      });
 
       let raw_response = llm_response.content.clone();
       debug!(response = %raw_response, "LLM responded");
@@ -2199,6 +2215,7 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       | AgentEvent::ToolPolicyDecision { step_index, .. }
       | AgentEvent::ToolCapabilityDecision { step_index, .. }
       | AgentEvent::ToolCallCompleted { step_index, .. }
+      | AgentEvent::LlmCallCompleted { step_index, .. }
       | AgentEvent::ReflectionAdded { step_index, .. }
       | AgentEvent::HandoffOccurred { step_index, .. }
       | AgentEvent::BlackboardWritten { step_index, .. }

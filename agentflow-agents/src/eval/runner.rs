@@ -24,6 +24,7 @@ use crate::runtime::{
 
 use super::assertion::{AssertionContext, AssertionOutcome, SkillValidator};
 use super::dataset::{Dataset, EvalCase};
+use super::pricing::PricingTable;
 
 /// Boxed skill validator closure returned by [`AgentRuntimeFactory::skill_validator`].
 pub type BoxedSkillValidator<'a> = Box<dyn Fn(&str) -> Option<bool> + Send + Sync + 'a>;
@@ -165,6 +166,7 @@ pub struct EvalRunner<'a> {
   dataset: &'a Dataset,
   factory: &'a dyn AgentRuntimeFactory,
   filter: Option<Box<CaseFilter>>,
+  pricing: PricingTable,
 }
 
 impl<'a> EvalRunner<'a> {
@@ -173,6 +175,7 @@ impl<'a> EvalRunner<'a> {
       dataset,
       factory,
       filter: None,
+      pricing: PricingTable::empty(),
     }
   }
 
@@ -183,6 +186,15 @@ impl<'a> EvalRunner<'a> {
     F: Fn(&EvalCase) -> bool + Send + Sync + 'static,
   {
     self.filter = Some(Box::new(predicate));
+    self
+  }
+
+  /// Attach a [`PricingTable`] so per-case `cost_usd_actual` reflects
+  /// the configured per-model rates. Defaults to an empty table
+  /// (everything costs $0). Used by `agentflow eval run` to plug
+  /// `~/.agentflow/pricing.yml`.
+  pub fn with_pricing(mut self, pricing: PricingTable) -> Self {
+    self.pricing = pricing;
     self
   }
 
@@ -312,21 +324,43 @@ impl<'a> EvalRunner<'a> {
 
     let assertions_passed = assertion_outcomes.iter().all(|o| o.passed);
     let stop_success = run_outcome.stop_reason.is_success();
-    let status = if assertions_passed && stop_success {
-      CaseStatus::Passed
-    } else {
-      CaseStatus::Failed
-    };
     let tool_call_count = run_outcome
       .steps
       .iter()
       .filter(|s| matches!(s.kind, crate::runtime::AgentStepKind::ToolCall { .. }))
       .count();
 
-    // Cost tracking is plumbed but the LLM provider does not yet report
-    // per-call cost, so this stays 0.0 in the current implementation.
-    // `cost_limit_usd` is recorded for future enforcement.
-    let cost_usd_actual = 0.0_f64;
+    // Aggregate per-call token usage from the run's events. Providers
+    // that don't report usage contribute zero (None → 0); the pricing
+    // table similarly returns zero when neither the model id nor the
+    // table's `default` row is set.
+    let cost_usd_actual = aggregate_cost(&run_outcome.events, &self.pricing);
+
+    // Per-case cost limit enforcement. The agent runtime itself does
+    // not (yet) emit `AgentStopReason::CostLimitExceeded` — the eval
+    // harness re-stamps the case status when the post-run cost crosses
+    // the budget. The agent's actual stop_reason stays in the report
+    // for trace replay; `runtime_error` carries the cost-limit
+    // explanation so the failure row is self-explanatory.
+    let cost_exceeded = case
+      .cost_limit_usd
+      .is_some_and(|budget| cost_usd_actual > budget);
+
+    let status = if cost_exceeded || !assertions_passed || !stop_success {
+      CaseStatus::Failed
+    } else {
+      CaseStatus::Passed
+    };
+
+    let cost_limit_reason = if cost_exceeded {
+      Some(format!(
+        "cost_limit_usd exceeded: ${:.4} > ${:.4}",
+        cost_usd_actual,
+        case.cost_limit_usd.unwrap_or(0.0)
+      ))
+    } else {
+      None
+    };
 
     CaseReport {
       id: case.id.clone(),
@@ -336,17 +370,41 @@ impl<'a> EvalRunner<'a> {
       finished_at: Utc::now(),
       duration_ms: elapsed.as_millis() as u64,
       cost_usd_actual,
-      stop_reason: stop_reason_label(&run_outcome.stop_reason),
+      stop_reason: if cost_exceeded {
+        "cost_limit_exceeded".to_string()
+      } else {
+        stop_reason_label(&run_outcome.stop_reason)
+      },
       step_count: run_outcome.steps.len(),
       tool_call_count,
       assertions: assertion_outcomes,
       notes: case.notes.clone(),
-      runtime_error: match &run_outcome.stop_reason {
+      runtime_error: cost_limit_reason.or_else(|| match &run_outcome.stop_reason {
         AgentStopReason::Error { message } => Some(message.clone()),
         _ => None,
-      },
+      }),
     }
   }
+}
+
+/// Aggregate the total USD cost of a finished run by walking its
+/// `LlmCallCompleted` events and multiplying each by the table's
+/// pricing for the call's model.
+fn aggregate_cost(events: &[crate::runtime::AgentEvent], pricing: &PricingTable) -> f64 {
+  let mut total = 0.0_f64;
+  for event in events {
+    if let crate::runtime::AgentEvent::LlmCallCompleted {
+      model,
+      prompt_tokens,
+      completion_tokens,
+      ..
+    } = event
+    {
+      let p = pricing.lookup(model);
+      total += p.cost_for_call(*prompt_tokens, *completion_tokens);
+    }
+  }
+  total
 }
 
 fn aggregate(cases: &[CaseReport], cost_total: f64, latencies: &mut [u64]) -> EvalSummary {
@@ -778,6 +836,136 @@ mod tests {
     let sorted = vec![10u64, 20, 30, 40, 50];
     assert_eq!(percentile(&sorted, 50), 30);
     assert_eq!(percentile(&sorted, 95), 50);
+  }
+
+  #[tokio::test]
+  async fn cost_usd_actual_aggregates_llm_call_events_against_pricing_table() {
+    let dataset = make_dataset(vec![case(
+      "c1",
+      "x",
+      vec![Assertion::Contains {
+        needle: "x".to_string(),
+        target: AssertionTarget::FinalAnswer,
+        case_insensitive: false,
+      }],
+    )]);
+    let mut result = run_result_with("x here", vec![]);
+    result.events = vec![
+      crate::runtime::AgentEvent::LlmCallCompleted {
+        session_id: "trace".to_string(),
+        step_index: 0,
+        model: "mock-model".to_string(),
+        prompt_tokens: Some(2_000),
+        completion_tokens: Some(500),
+        total_tokens: Some(2_500),
+        duration_ms: 100,
+        timestamp: chrono::Utc::now(),
+      },
+      // A second call to verify the runner sums per-call costs.
+      crate::runtime::AgentEvent::LlmCallCompleted {
+        session_id: "trace".to_string(),
+        step_index: 1,
+        model: "mock-model".to_string(),
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(0),
+        total_tokens: Some(1_000),
+        duration_ms: 80,
+        timestamp: chrono::Utc::now(),
+      },
+    ];
+    let factory = StubFactory::new().with_result("c1", result);
+    let pricing = crate::eval::PricingTable::default().with_model(
+      "mock-model",
+      crate::eval::ModelPricing {
+        input_per_1k: 1.0,
+        output_per_1k: 2.0,
+      },
+    );
+    let runner = EvalRunner::new(&dataset, &factory).with_pricing(pricing);
+    let report = runner.run().await;
+    // First call:  2.0 input + 1.0 output = $3.0
+    // Second call: 1.0 input + 0.0 output = $1.0
+    // Total:                                 $4.0
+    let cost = report.cases[0].cost_usd_actual;
+    assert!((cost - 4.0).abs() < 1e-9, "cost = {cost}");
+    // Summary aggregates per-case costs.
+    assert!((report.summary.cost_usd_total - 4.0).abs() < 1e-9);
+  }
+
+  #[tokio::test]
+  async fn cost_over_limit_flips_status_to_failed_with_runtime_error() {
+    let mut c = case(
+      "c1",
+      "x",
+      vec![Assertion::Contains {
+        needle: "x".to_string(),
+        target: AssertionTarget::FinalAnswer,
+        case_insensitive: false,
+      }],
+    );
+    c.cost_limit_usd = Some(0.005); // $0.005 budget
+    let dataset = make_dataset(vec![c]);
+    let mut result = run_result_with("x here", vec![]);
+    result.events = vec![crate::runtime::AgentEvent::LlmCallCompleted {
+      session_id: "trace".to_string(),
+      step_index: 0,
+      model: "mock-model".to_string(),
+      prompt_tokens: Some(10_000), // 10k input × $0.001 = $0.010 > $0.005
+      completion_tokens: Some(0),
+      total_tokens: Some(10_000),
+      duration_ms: 100,
+      timestamp: chrono::Utc::now(),
+    }];
+    let factory = StubFactory::new().with_result("c1", result);
+    let pricing = crate::eval::PricingTable::default().with_model(
+      "mock-model",
+      crate::eval::ModelPricing {
+        input_per_1k: 0.001,
+        output_per_1k: 0.001,
+      },
+    );
+    let report = EvalRunner::new(&dataset, &factory)
+      .with_pricing(pricing)
+      .run()
+      .await;
+    let case = &report.cases[0];
+    assert_eq!(case.status, CaseStatus::Failed);
+    assert_eq!(case.stop_reason, "cost_limit_exceeded");
+    assert!(
+      case
+        .runtime_error
+        .as_ref()
+        .unwrap()
+        .contains("cost_limit_usd"),
+      "runtime_error: {:?}",
+      case.runtime_error
+    );
+    assert!((case.cost_usd_actual - 0.010).abs() < 1e-9);
+  }
+
+  #[tokio::test]
+  async fn cost_usd_actual_zero_when_no_llm_events() {
+    let dataset = make_dataset(vec![case(
+      "c1",
+      "x",
+      vec![Assertion::Contains {
+        needle: "x".to_string(),
+        target: AssertionTarget::FinalAnswer,
+        case_insensitive: false,
+      }],
+    )]);
+    let factory = StubFactory::new().with_result("c1", run_result_with("x here", vec![]));
+    let pricing = crate::eval::PricingTable::default().with_default(crate::eval::ModelPricing {
+      input_per_1k: 100.0,
+      output_per_1k: 100.0,
+    });
+    let report = EvalRunner::new(&dataset, &factory)
+      .with_pricing(pricing)
+      .run()
+      .await;
+    // No LlmCallCompleted events on the canned result → $0.0
+    // regardless of how expensive the pricing table claims the model is.
+    assert_eq!(report.cases[0].cost_usd_actual, 0.0);
   }
 
   #[test]

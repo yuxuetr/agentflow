@@ -395,6 +395,7 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
     | AgentEvent::ToolPolicyDecision { step_index, .. }
     | AgentEvent::ToolCapabilityDecision { step_index, .. }
     | AgentEvent::ToolCallCompleted { step_index, .. }
+    | AgentEvent::LlmCallCompleted { step_index, .. }
     | AgentEvent::ReflectionAdded { step_index, .. }
     | AgentEvent::HandoffOccurred { step_index, .. }
     | AgentEvent::BlackboardWritten { step_index, .. }

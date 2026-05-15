@@ -451,6 +451,29 @@ pub enum AgentEvent {
     step_index: usize,
     timestamp: DateTime<Utc>,
   },
+  /// One LLM round-trip completed. Emitted by every runtime that calls
+  /// an LLM provider; carries the per-call `TokenUsage` so downstream
+  /// consumers (eval cost tracking, tracing, dashboards) can aggregate
+  /// without re-instrumenting the agents themselves.
+  ///
+  /// `prompt_tokens` / `completion_tokens` / `total_tokens` are all
+  /// optional because not every provider reports usage — providers that
+  /// don't (or whose response was truncated mid-stream) leave them
+  /// `None`. Aggregators must treat `None` as "unknown" rather than
+  /// zero.
+  LlmCallCompleted {
+    session_id: String,
+    step_index: usize,
+    model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    total_tokens: Option<u32>,
+    duration_ms: u64,
+    timestamp: DateTime<Utc>,
+  },
   RunStopped {
     session_id: String,
     reason: AgentStopReason,
