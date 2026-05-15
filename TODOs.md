@@ -68,6 +68,7 @@ but do not implement channel adapters in this queue.
 - P2.4 SSE robustness (`EventBroker::finalise_with_grace` + `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` + public diagnostics + reconnect across active / recently-completed / long-completed runs + disconnect-no-leak tests).
 - P6.1 Run creation form (`/ui/runs/new` deep link + `RunCreateForm` with tenant / profile / workflow / inputs / file-pick / localStorage / submit→redirect + Playwright E2E spec).
 - P-H.5 (Slice 1 of 4): Harness Mode server schema + core routes (`harness_sessions` / `harness_session_events` tables, `HarnessSessionRepo` / `HarnessEventRepo`, `HarnessSessionExecutor` trait + `StubHarnessExecutor`, `HarnessEventBroker`, six routes including SSE backfill, integration tests `tests/harness_routes.rs` self-skipping without `AGENTFLOW_DATABASE_TEST_URL`). Slices 2–4 (approval routes + real executor + Web UI + full E2E) remain TODO.
+- P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
 
 ---
 
@@ -1059,15 +1060,40 @@ Architectural rules (enforced via review):
       without `AGENTFLOW_DATABASE_TEST_URL` (mirrors
       `sse_robustness.rs` pattern). Verified seven scenarios pass on
       a Postgres deployment.
-  - Slice 2 (TODO): approval routes + executor wiring
-    - `GET /v1/harness/sessions/{id}/approvals` (pending approvals).
-    - `POST /v1/harness/sessions/{id}/approvals/{request_id}` (decide).
-    - Server-side `ApprovalProvider` implementation that parks the
-      future on a pending-approvals map and resolves via the POST
-      handler.
-    - Replace `StubHarnessExecutor` with a real adapter that wires
-      `agentflow-harness::HarnessRuntime` (LLM-backed `ReActAgent`
-      with hook-wrapped tool registry).
+  - Slice 2 (DONE): approval routes + LLM-backed executor
+    - DONE: `agentflow-server::harness_approval` adds
+      `PendingApprovalRegistry`, `ServerApprovalProvider` (parks
+      `ApprovalRequest`s on per-`(session, request_id)` `oneshot`
+      channels, honors `expires_at` with a 5-min default deadline,
+      cleans up timed-out / dropped entries).
+    - DONE: routes `GET /v1/harness/sessions/{id}/approvals` and
+      `POST /v1/harness/sessions/{id}/approvals/{request_id}`.
+    - DONE: `agentflow-server::harness_live` adds
+      `LiveHarnessExecutor` that wires `HarnessRuntime` ↔ `ReActAgent`
+      ↔ tool registry (hook-wrapped via `wrap_registry`) with the
+      shared `ServerApprovalProvider`. `agentflow serve` swaps the
+      default `StubHarnessExecutor` for the live one; tests keep the
+      stub via plain `AppState::new(db)` so workspace `cargo test`
+      stays hermetic.
+    - DONE: `ServerHarnessEventSink` translates the closed
+      `HarnessEvent` envelope into `harness_session_events` rows + a
+      `HarnessEventBroker` publish so SSE backfill and live push share
+      one source of truth.
+    - DONE: `HarnessRuntime::run` holds `&self` across awaits, which
+      forces `HarnessRuntime: Sync` (and `AgentRuntime: Send` is
+      `Send`-only). `LiveHarnessExecutor` runs each session on its
+      own current-thread Tokio runtime hosted in
+      `tokio::task::spawn_blocking` so the executor stays `Send`
+      without forcing the rest of the server onto a current-thread
+      runtime. Cost: one OS thread per concurrent harness session;
+      removed once `HarnessRuntime` is updated to thread `&mut self`
+      (or `AgentRuntime: Sync` is added).
+    - DONE: integration tests
+      `agentflow-server/tests/harness_approval_routes.rs` (four
+      cases) and `tests/harness_live_executor.rs` (single Moonshot
+      E2E, gated on both `AGENTFLOW_DATABASE_TEST_URL` and
+      `MOONSHOT_API_KEY` so the workspace stays hermetic without
+      either).
   - Slice 3 (TODO): Web UI
     - `/ui/harness/sessions` list page.
     - `/ui/harness/sessions/{id}` timeline + tool call panel.

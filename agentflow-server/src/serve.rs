@@ -13,6 +13,13 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Default deadline a `ServerApprovalProvider` waits for an operator
+/// decision before timing out (P-H.5 slice 2). Five minutes balances UI
+/// reaction time against not stalling a multi-tenant deployment
+/// indefinitely.
+const HARNESS_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 use serde::Serialize;
 use tracing::{error, info, warn};
@@ -23,7 +30,10 @@ use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
 
 use crate::auth::{AuthConfigError, resolve_auth_config_from_env};
 use crate::skills::SkillCatalog;
-use crate::{AppState, ServerHttpConfigError, create_router, server_security_defaults_from_env};
+use crate::{
+  AppState, LiveHarnessExecutor, ServerHttpConfigError, create_router,
+  server_security_defaults_from_env,
+};
 
 /// Default bind address when neither the CLI flag nor the env var is set.
 pub const DEFAULT_SERVE_BIND: &str = "127.0.0.1:8080";
@@ -371,12 +381,17 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     );
   }
 
-  let state: Arc<AppState> = Arc::new(
-    AppState::new(db.clone())
-      .with_security_defaults(security_defaults)
-      .with_auth(auth)
-      .with_skills(SkillCatalog::from_env()),
-  );
+  let state = AppState::new(db.clone())
+    .with_security_defaults(security_defaults)
+    .with_auth(auth)
+    .with_skills(SkillCatalog::from_env());
+  // Swap the default `StubHarnessExecutor` for the LLM-backed
+  // `LiveHarnessExecutor` (P-H.5 slice 2). Tests keep the stub by
+  // building `AppState::new(db)` without this hop, so unit tests don't
+  // pay for `AgentFlow::init` or contact an LLM provider.
+  let live_harness =
+    LiveHarnessExecutor::new(state.approval_registry.clone(), HARNESS_APPROVAL_TIMEOUT);
+  let state: Arc<AppState> = Arc::new(state.with_harness_executor(Arc::new(live_harness)));
   let app = create_router((*state).clone());
 
   // Spawn the background cleanup loop (`P2.2`). Uses the active

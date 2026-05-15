@@ -37,6 +37,10 @@ agentflow-skills = { path = "../agentflow-skills" }
 agentflow-viz = { path = "../agentflow-viz" }
 agentflow-tracing = { path = "../agentflow-tracing" }
 agentflow-tools = { path = "../agentflow-tools" }
+agentflow-harness = { path = "../agentflow-harness" }
+agentflow-agents = { path = "../agentflow-agents" }
+agentflow-llm = { path = "../agentflow-llm" }
+agentflow-memory = { path = "../agentflow-memory" }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

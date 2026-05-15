@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slice 1 closed (server schema + core routes); slices 2–4 in progress.** H5 slices 2–4 cover approval routes + real LLM-backed executor wiring + Web UI + full E2E tests.
+Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slices 1+2 closed; slices 3–4 in progress.** Slices 3–4 cover the Web UI integration + full E2E render tests.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -325,13 +325,17 @@ GET  /v1/harness/sessions/{id}/events           # closed (slice 1) — SSE with 
 GET  /v1/harness/sessions/{id}/events/history   # closed (slice 1) — JSON history
 ```
 
-Slices 2–4 (in progress) cover the remaining surface:
+Phase H5 slice 2 (closed) adds the approval surface + the real
+LLM-backed executor:
 
 ```text
-POST /v1/harness/sessions/{id}:resume           # slice 2
-GET  /v1/harness/sessions/{id}/approvals        # slice 2
-POST /v1/harness/sessions/{id}/approvals/{id}   # slice 2
+GET  /v1/harness/sessions/{id}/approvals        # closed (slice 2)
+POST /v1/harness/sessions/{id}/approvals/{id}   # closed (slice 2)
 ```
+
+Slices 3–4 (in progress) cover Web UI integration plus full
+CLI→server→UI E2E render tests; `POST /v1/harness/sessions/{id}:resume`
+remains TODO.
 
 DB schema (slice 1): two dedicated tables `harness_sessions` and
 `harness_session_events` (Postgres migration
@@ -345,9 +349,16 @@ mirrors the workflow `events` contract exactly.
 
 Slice 1 plumbing uses a `StubHarnessExecutor` that emits
 `session_started` + `stopped` events and marks the session row as
-`failed: executor_not_yet_wired`. The real LLM-backed executor wiring
-(`agentflow-harness::HarnessRuntime` with hook-wrapped tool registry)
-lands in slice 2 alongside the approval routes.
+`failed: executor_not_yet_wired`. Slice 2 introduces
+`LiveHarnessExecutor`, which wires `HarnessRuntime` ↔ `ReActAgent` ↔
+a hook-wrapped tool registry (`wrap_registry(HookConfig)`) backed by
+`ServerApprovalProvider`. `agentflow serve` swaps the default stub
+for the live executor; unit tests keep the stub via plain
+`AppState::new(db)` so the hermetic test suite never contacts an LLM
+provider. `HarnessRuntime::run` holds `&self` across awaits, so the
+live executor runs every session on its own current-thread Tokio
+runtime hosted in `tokio::task::spawn_blocking` to preserve `Send` at
+the outer trait boundary.
 
 The server is **optional**. CLI direct execution stays first-class.
 
@@ -383,7 +394,7 @@ cancelled, timeout).
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |
-| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slice 1 closed; slices 2–4 in progress** |
+| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slices 1+2 closed; slices 3–4 in progress** |
 | H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
 
 ## Architectural invariants

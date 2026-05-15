@@ -28,6 +28,8 @@ pub mod cleanup;
 pub mod error;
 pub mod events_stream;
 pub mod harness;
+pub mod harness_approval;
+pub mod harness_live;
 pub mod runs;
 pub mod scheduler;
 pub mod serve;
@@ -54,6 +56,11 @@ pub use harness::{
   get_harness_session, list_harness_events, list_harness_sessions, stream_harness_events,
   submit_harness_session,
 };
+pub use harness_approval::{
+  ApprovalDecisionRequest, ApprovalDecisionResponse, ApprovalResolveError, PendingApprovalRegistry,
+  PendingApprovalsResponse, ServerApprovalProvider, decide_approval, list_pending_approvals,
+};
+pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
   ListRunsResponse, ResumePlanQuery, RunCancellationRegistry, RunContext, RunExecutor,
@@ -108,6 +115,11 @@ pub struct AppState {
   /// to SSE subscribers. Parallel to [`AppState::event_broker`] so a slow
   /// workflow subscriber can't lag a harness session and vice versa.
   pub harness_broker: HarnessEventBroker,
+  /// Process-local pending-approval registry (P-H.5 slice 2). The
+  /// `ServerApprovalProvider` parks each pending request here; the
+  /// `POST /v1/harness/sessions/{id}/approvals/{request_id}` route
+  /// resolves the oneshot from the HTTP side.
+  pub approval_registry: PendingApprovalRegistry,
   /// Active security profile and documented defaults. Enforcement is rolled
   /// out by the follow-up P1 tasks without changing local behavior here.
   pub security: SecurityProfileDefaults,
@@ -142,6 +154,7 @@ impl AppState {
       cancellation_registry: RunCancellationRegistry::new(),
       harness_executor: default_harness_executor(),
       harness_broker: HarnessEventBroker::new(),
+      approval_registry: PendingApprovalRegistry::new(),
       security: SecurityProfile::default().defaults(),
     }
   }
@@ -319,6 +332,14 @@ pub fn create_router(state: AppState) -> Router {
     .route(
       "/v1/harness/sessions/:id/events",
       get(stream_harness_events),
+    )
+    .route(
+      "/v1/harness/sessions/:id/approvals",
+      get(list_pending_approvals),
+    )
+    .route(
+      "/v1/harness/sessions/:id/approvals/:request_id",
+      post(decide_approval),
     );
 
   let v1 = match state.auth.clone() {

@@ -295,9 +295,13 @@ dependencies = [
 name = "agentflow-server"
 version = "0.1.0"
 dependencies = [
+ "agentflow-agents",
  "agentflow-cli",
  "agentflow-core",
  "agentflow-db",
+ "agentflow-harness",
+ "agentflow-llm",
+ "agentflow-memory",
  "agentflow-skills",
  "agentflow-tools",
  "agentflow-tracing",
