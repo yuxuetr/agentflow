@@ -82,7 +82,8 @@ but do not implement channel adapters in this queue.
 - P4.5 Memory layering design: `docs/MEMORY_LAYERING.md` defines the four-layer boundary (Session / Semantic / Preference / Entity facts) with per-layer lifetime, key, retention default, and the prompt-assembly precedence order. Spec'd trait extensions (`SemanticMemoryStore` extends `MemoryStore`; `PreferenceStore` + `EntityFactStore` separate) keep the new code from leaking into existing backends. Migration path is additive — current `SessionMemory` / `SqliteMemory` / `SemanticMemory` keep working without changes. Unblocks P4.7 implementation and P-H.4 background task context.
 - P4.3 Agent eval format design: `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for `agentflow eval run` and the JSON report envelope. JSONL+TOML layout mirrors the existing RAG eval. EvalCase fields are grounded in real `agentflow_agents::RuntimeLimits` types; six-variant closed assertion DSL (`contains` / `regex` / `tool_called` / `tool_not_called` / `step_count_below` / `final_answer_matches_skill`). Runner is one `Flow` with one `EvalCaseNode` per case — reuses concurrent scheduling, checkpoints, OTel propagation. Unblocks P4.4 implementation.
 - P4.4 Minimal agent eval implementation (3 slices): `agentflow-agents::eval` module ships `Dataset` / `Assertion` / `EvalRunner` + `AgentRuntimeFactory` trait + `EvalReport` envelope; new `AgentStopReason::CostLimitExceeded` variant flows through every workspace match site. `agentflow eval run <dataset>` CLI with `--format text|json`, `--filter <glob>`, `--fail-on-status failed|never`. Tiny `ci_offline` fixture drives the bare ReActAgent against the mock provider so the suite is hermetic. 33 unit tests in agentflow-agents + 10 unit/integration tests in agentflow-cli. Cost tracking is plumbed (cost_usd_actual = 0.0 until the LLM providers report it). Trace ids are `eval-<case_id>-<epoch hex>` so `agentflow trace replay` consumes them directly.
-- P4.4 follow-up trio (3 commits): (1) skill-aware factory + tool admission via new `SkillBuilder::build_with_admission` — `case.skill` cases now route through full skill loading with `tools_allowed/denied` filtering the registry pre-run. (2) real cost tracking via new `AgentEvent::LlmCallCompleted` + `PricingTable` (loadable from `AGENTFLOW_PRICING_TABLE` env or `~/.agentflow/pricing.yml`) — `cost_usd_actual` now reflects real per-call token usage × per-model rates, and `case.cost_limit_usd` is actually enforced. (3) `docs/SKILL_VALIDATOR_PROTOCOL.md` defines the v1 `[validation]` manifest section that backs the `final_answer_matches_skill` assertion (impl pending under P4.7 or a sibling ticket).
+- P4.4 follow-up trio (3 commits): (1) skill-aware factory + tool admission via new `SkillBuilder::build_with_admission` — `case.skill` cases now route through full skill loading with `tools_allowed/denied` filtering the registry pre-run. (2) real cost tracking via new `AgentEvent::LlmCallCompleted` + `PricingTable` (loadable from `AGENTFLOW_PRICING_TABLE` env or `~/.agentflow/pricing.yml`) — `cost_usd_actual` now reflects real per-call token usage × per-model rates, and `case.cost_limit_usd` is actually enforced. (3) `docs/SKILL_VALIDATOR_PROTOCOL.md` defines the v1 `[validation]` manifest section that backs the `final_answer_matches_skill` assertion.
+- SKILL_VALIDATOR_PROTOCOL implementation (2 commits): `agentflow-skills::validator` ships `SkillValidator` trait + `RegexValidator` + `CommandValidator` + `build_validator` factory; manifest gains `[validation] kind = "none" | "regex" | "command"`. `SkillLoader::validate` pre-compiles validators so bad regex / empty command surfaces at load time. Assertion-layer closure return promoted to `SkillValidatorVerdict { Pass | Fail{reason} | Unrunnable{reason} }`. CLI eval factory caches per-skill validators and wires them through `skill_validator(case)`. Tests: 22 new (16 unit in skills + 3 unit in assertions + 3 CLI integration). `final_answer_matches_skill` Just Works end-to-end against skills with `[validation]`.
 
 ---
 
@@ -707,9 +708,27 @@ regression-safe.
     discriminator in skill.toml's new `[validation]` table; command
     validators stdin = final_answer, exit-code = verdict, 125
     reserved for "unrunnable", inherits skill security profile +
-    OS sandbox. Implementation tracked under P4.7 (memory backends)
-    or a separate ticket — the trait + factory + manifest parsing
-    + `final_answer_matches_skill` wiring still need to land.
+    OS sandbox.
+  - DONE Follow-up step 3 implementation (2 commits, ~700 LoC):
+    `agentflow-skills::validator` ships `SkillValidator` trait +
+    `RegexValidator` + `CommandValidator` + `build_validator` factory;
+    `SkillLoader::validate` pre-compiles validators so bad regex /
+    empty command vector errors surface at manifest-load time, not
+    eval-run time. The eval assertion layer's
+    `SkillValidator` closure type was promoted from `Option<bool>` to
+    a richer `SkillValidatorVerdict { Pass | Fail { reason } |
+    Unrunnable { reason } }`, with `final_answer_matches_skill`
+    mapping each verdict to a distinct `AssertionOutcome.reason`. CLI
+    `ReActAgentFactory` resolves + caches the per-skill validator and
+    wires it into the runner via `skill_validator(case)`. Tests: 16
+    new unit tests in `agentflow-skills/src/validator.rs` (regex pass
+    / fail / multiline / bad pattern at build time; command pass /
+    fail with stderr capture / exit-125 unrunnable / timeout / stdin
+    delivery / timeout clamping / TOML round trip) + 3 new in
+    `assertion.rs` (pass / fail-surfaces-validator-reason /
+    unrunnable-prefixed) + 3 new CLI integration tests
+    (passes-when-regex-matches / fails-with-reason-in-report /
+    no-validator-falls-through).
   - Trace replay path: every case carries a `trace_id` formatted as
     `eval-<case_id>-<epoch_ms hex>` so `agentflow trace replay
     <trace_id>` Just Works for failure debugging.
