@@ -160,6 +160,103 @@ pub struct McpSession {
   pub metadata: Option<serde_json::Value>,
 }
 
+/// Lifecycle states a `harness_sessions` row can hold.
+///
+/// Mirrors the closed enum of [`RunStatus`] but uses a Harness-specific
+/// terminal vocabulary (`completed` / `failed` / `cancelled`). Stored as
+/// TEXT so adding new variants is additive without a migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessSessionStatus {
+  Running,
+  Completed,
+  Failed,
+  Cancelled,
+}
+
+impl HarnessSessionStatus {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Running => "running",
+      Self::Completed => "completed",
+      Self::Failed => "failed",
+      Self::Cancelled => "cancelled",
+    }
+  }
+
+  /// Parse the canonical `harness_sessions.status` column into the typed
+  /// enum. Returns `None` for unknown values; callers usually want to
+  /// bubble that up as a 500 since it indicates DB / app drift. Named
+  /// `parse` (not `from_str`) so it doesn't shadow `std::str::FromStr`.
+  pub fn parse(value: &str) -> Option<Self> {
+    Some(match value {
+      "running" => Self::Running,
+      "completed" => Self::Completed,
+      "failed" => Self::Failed,
+      "cancelled" => Self::Cancelled,
+      _ => return None,
+    })
+  }
+
+  /// Terminal statuses are not transitioned through again — used by the
+  /// cancel route to short-circuit when a session has already finished.
+  pub fn is_terminal(self) -> bool {
+    matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+  }
+}
+
+/// One row in the `harness_sessions` table.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct HarnessSession {
+  pub id: Uuid,
+  pub tenant_id: String,
+  pub status: String,
+  pub user_input: String,
+  pub workspace_root: String,
+  pub profile: String,
+  pub runtime_kind: String,
+  pub model: String,
+  pub skill_name: Option<String>,
+  pub started_at: DateTime<Utc>,
+  pub finished_at: Option<DateTime<Utc>>,
+  pub final_answer: Option<String>,
+  pub error: Option<String>,
+}
+
+/// Input for creating a new harness session via
+/// [`crate::repo::HarnessSessionRepo::create`].
+#[derive(Debug, Clone)]
+pub struct NewHarnessSession {
+  pub id: Uuid,
+  pub tenant_id: String,
+  pub user_input: String,
+  pub workspace_root: String,
+  pub profile: String,
+  pub runtime_kind: String,
+  pub model: String,
+  pub skill_name: Option<String>,
+}
+
+/// One row in the `harness_session_events` table. `seq` is monotonic per
+/// `session_id`; SSE subscribers use it as a resume cursor — same shape
+/// and contract as the workflow `events` table, just scoped to a session.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct HarnessSessionEvent {
+  pub session_id: Uuid,
+  pub seq: i64,
+  pub kind: String,
+  pub payload: serde_json::Value,
+  pub ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewHarnessSessionEvent {
+  pub session_id: Uuid,
+  pub seq: i64,
+  pub kind: String,
+  pub payload: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -176,5 +273,21 @@ mod tests {
       assert_eq!(RunStatus::parse(status.as_str()), Some(status));
     }
     assert_eq!(RunStatus::parse("unknown"), None);
+  }
+
+  #[test]
+  fn harness_session_status_round_trips() {
+    for status in [
+      HarnessSessionStatus::Running,
+      HarnessSessionStatus::Completed,
+      HarnessSessionStatus::Failed,
+      HarnessSessionStatus::Cancelled,
+    ] {
+      assert_eq!(HarnessSessionStatus::parse(status.as_str()), Some(status));
+    }
+    assert_eq!(HarnessSessionStatus::parse("queued"), None);
+    assert!(HarnessSessionStatus::Completed.is_terminal());
+    assert!(HarnessSessionStatus::Cancelled.is_terminal());
+    assert!(!HarnessSessionStatus::Running.is_terminal());
   }
 }

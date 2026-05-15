@@ -67,6 +67,7 @@ but do not implement channel adapters in this queue.
 - P1.9 MCP capability + SkillSecurity merge policy (`agentflow-skills::policy::resolve_tool_policy` + `ResolvedToolPolicy` / `AdmissionSource` types + `docs/MCP_CAPABILITY_POLICY.md` precedence table; CLI flag wiring tracked under P3.5).
 - P2.4 SSE robustness (`EventBroker::finalise_with_grace` + `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` + public diagnostics + reconnect across active / recently-completed / long-completed runs + disconnect-no-leak tests).
 - P6.1 Run creation form (`/ui/runs/new` deep link + `RunCreateForm` with tenant / profile / workflow / inputs / file-pick / localStorage / submit→redirect + Playwright E2E spec).
+- P-H.5 (Slice 1 of 4): Harness Mode server schema + core routes (`harness_sessions` / `harness_session_events` tables, `HarnessSessionRepo` / `HarnessEventRepo`, `HarnessSessionExecutor` trait + `StubHarnessExecutor`, `HarnessEventBroker`, six routes including SSE backfill, integration tests `tests/harness_routes.rs` self-skipping without `AGENTFLOW_DATABASE_TEST_URL`). Slices 2–4 (approval routes + real executor + Web UI + full E2E) remain TODO.
 
 ---
 
@@ -1035,21 +1036,44 @@ Architectural rules (enforced via review):
 
 - TODO P-H.5 Server + Web UI integration (Phase H5; ~3-5 weeks; PREREQ:
   P2.1, P2.2, P2.4, P-H.2, P6.1):
-  - Server routes:
-    - `POST /v1/harness/sessions`.
-    - `GET /v1/harness/sessions/{id}`.
-    - `POST /v1/harness/sessions/{id}:cancel`.
-    - `GET /v1/harness/sessions/{id}/events` (SSE with backfill).
+  - Slice 1 (DONE): server schema + core routes
+    - DONE: DB migration `0002_harness_sessions.sql` adds dedicated
+      `harness_sessions` + `harness_session_events` tables (kept separate
+      from `runs` so the lifecycle columns stay strongly typed instead of
+      overloading the workflow schema with sentinel columns).
+    - DONE: `agentflow-db` `HarnessSessionRepo` / `HarnessEventRepo`
+      traits + Pg impls bundled into `Repositories`.
+    - DONE: `agentflow-server::harness` module with
+      `HarnessEventBroker`, `HarnessSessionExecutor` trait,
+      `StubHarnessExecutor` (records `session_started` + `stopped`
+      events and marks the row `failed: executor_not_yet_wired` until
+      the real runtime lands).
+    - DONE: routes wired into `create_router`:
+      - `POST /v1/harness/sessions`
+      - `GET /v1/harness/sessions`
+      - `GET /v1/harness/sessions/{id}`
+      - `POST /v1/harness/sessions/{id}:cancel`
+      - `GET /v1/harness/sessions/{id}/events` (SSE with backfill)
+      - `GET /v1/harness/sessions/{id}/events/history` (JSON history)
+    - DONE: integration tests `tests/harness_routes.rs` self-skip
+      without `AGENTFLOW_DATABASE_TEST_URL` (mirrors
+      `sse_robustness.rs` pattern). Verified seven scenarios pass on
+      a Postgres deployment.
+  - Slice 2 (TODO): approval routes + executor wiring
     - `GET /v1/harness/sessions/{id}/approvals` (pending approvals).
     - `POST /v1/harness/sessions/{id}/approvals/{request_id}` (decide).
-  - DB: extend `runs` schema with `kind = workflow|harness` or add
-    `harness_sessions` table (decide in P-H.0 spec).
-  - Web UI:
+    - Server-side `ApprovalProvider` implementation that parks the
+      future on a pending-approvals map and resolves via the POST
+      handler.
+    - Replace `StubHarnessExecutor` with a real adapter that wires
+      `agentflow-harness::HarnessRuntime` (LLM-backed `ReActAgent`
+      with hook-wrapped tool registry).
+  - Slice 3 (TODO): Web UI
     - `/ui/harness/sessions` list page.
     - `/ui/harness/sessions/{id}` timeline + tool call panel.
     - Approval panel with allow/deny + scope choice.
     - Session resume action.
-  - Tests across CLI submit → server stream → UI render.
+  - Slice 4 (TODO): full E2E tests across CLI submit → server stream → UI render.
 
 ### Deferred to RoadMap Later Tracks
 

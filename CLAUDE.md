@@ -111,10 +111,10 @@ Observability:
 DAG visualization: YAML → VisualGraph → Mermaid / DOT / JSON. Static; not yet wired to live trace state.
 
 #### L4 — agentflow-server
-Axum gateway for platform mode. Implemented: `/v1/runs` (POST/GET), `/v1/runs/{id}/events` (SSE with backfill), `/v1/skills`, `/v1/skills/{name}:run`. Bearer-token auth, unified error envelope, `WorkflowEventListener` bridge to DB. Real Flow runner replacing `StubExecutor` lands in v0.4.0.
+Axum gateway for platform mode. Workflow surface: `/v1/runs` (POST/GET), `/v1/runs/{id}/events` (SSE with backfill), `/v1/skills`, `/v1/skills/{name}:run`. Harness Mode surface (P-H.5 slice 1): `/v1/harness/sessions` (POST/GET), `/v1/harness/sessions/{id}` (GET + `:cancel` POST), `/v1/harness/sessions/{id}/events` (SSE with backfill), `/v1/harness/sessions/{id}/events/history` (JSON), backed by `HarnessSessionExecutor` trait + `StubHarnessExecutor` (LLM-backed runtime + approval routes tracked under remaining P-H.5 slices). Bearer-token auth, unified error envelope, `WorkflowEventListener` bridge to DB. Real Flow runner replacing `StubExecutor` lands in v0.4.0.
 
 #### L4 — agentflow-db
-PostgreSQL persistence for the gateway. 6-table schema (runs / steps / events / artifacts / skill_installs / mcp_sessions) via `sqlx::migrate!()`. Repository layer: `RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo`.
+PostgreSQL persistence for the gateway. Eight-table schema (runs / steps / events / artifacts / skill_installs / mcp_sessions + harness_sessions / harness_session_events) via `sqlx::migrate!()`. Repository layer: `RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` / `HarnessSessionRepo` / `HarnessEventRepo`.
 
 #### L4 — agentflow-worker
 Standalone worker process for distributed DAG execution. Speaks `WorkerProtocol` over gRPC to the server control plane, pulls assigned tasks, executes the node payload locally, and streams events back with W3C `traceparent` continuity so worker spans stitch into the parent OTel trace. Today the supported node payloads are limited (template/file); extending to LLM / HTTP / MCP / agent payloads is tracked as P2.8.

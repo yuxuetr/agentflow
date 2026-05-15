@@ -16,8 +16,9 @@ use uuid::Uuid;
 
 use crate::error::DbError;
 use crate::models::{
-  Artifact, Event, McpSession, NewArtifact, NewEvent, NewRun, NewStep, Run, RunStatus,
-  SkillInstall, Step,
+  Artifact, Event, HarnessSession, HarnessSessionEvent, HarnessSessionStatus, McpSession,
+  NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Run,
+  RunStatus, SkillInstall, Step,
 };
 
 /// Run lifecycle persistence.
@@ -71,6 +72,49 @@ pub trait SkillInstallRepo: Send + Sync {
 pub trait McpSessionRepo: Send + Sync {
   async fn open(&self, session: McpSession) -> Result<(), DbError>;
   async fn close(&self, id: Uuid, tool_calls: i32) -> Result<(), DbError>;
+}
+
+/// Harness session lifecycle persistence (P-H.5).
+///
+/// Mirrors [`RunRepo`] but is scoped to the `harness_sessions` table so the
+/// agent-native flow keeps its own typed surface and avoids overloading
+/// the workflow `runs` schema with sentinel columns.
+#[async_trait]
+pub trait HarnessSessionRepo: Send + Sync {
+  async fn create(&self, session: NewHarnessSession) -> Result<HarnessSession, DbError>;
+  async fn get(&self, id: Uuid) -> Result<Option<HarnessSession>, DbError>;
+  /// List sessions for a tenant, newest first.
+  async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<HarnessSession>, DbError>;
+  /// Transition the session's status. `final_answer` populates the
+  /// terminal answer column on success; `error` populates the failure
+  /// message on failure / cancel. Both default to `COALESCE`d updates so
+  /// repeated transitions don't blow away earlier values.
+  async fn update_status(
+    &self,
+    id: Uuid,
+    status: HarnessSessionStatus,
+    final_answer: Option<&str>,
+    error: Option<&str>,
+  ) -> Result<(), DbError>;
+}
+
+/// Harness session event log persistence (P-H.5).
+///
+/// Same contract as [`EventRepo`] but keyed by `session_id`. Kept separate
+/// so SSE consumers can subscribe to either world without overlapping
+/// `(run_id, seq)` primary keys.
+#[async_trait]
+pub trait HarnessEventRepo: Send + Sync {
+  async fn append(&self, event: NewHarnessSessionEvent) -> Result<HarnessSessionEvent, DbError>;
+  /// Return events for `session_id` with `seq > after_seq`, ordered ascending.
+  ///
+  /// SSE subscribers pass their last-seen `seq` to resume after a reconnect.
+  async fn list_after(
+    &self,
+    session_id: Uuid,
+    after_seq: i64,
+    limit: i64,
+  ) -> Result<Vec<HarnessSessionEvent>, DbError>;
 }
 
 // ----- Postgres implementations -----
@@ -357,7 +401,149 @@ impl McpSessionRepo for PgMcpSessionRepo {
   }
 }
 
-/// Convenience bundle of all six Pg repositories backed by the same pool.
+#[derive(Clone, Debug)]
+pub struct PgHarnessSessionRepo {
+  pub pool: PgPool,
+}
+
+#[async_trait]
+impl HarnessSessionRepo for PgHarnessSessionRepo {
+  async fn create(&self, session: NewHarnessSession) -> Result<HarnessSession, DbError> {
+    let row = sqlx::query_as::<_, HarnessSession>(
+      r#"INSERT INTO harness_sessions (
+           id, tenant_id, status, user_input, workspace_root, profile,
+           runtime_kind, model, skill_name
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, tenant_id, status, user_input, workspace_root, profile,
+                   runtime_kind, model, skill_name, started_at, finished_at,
+                   final_answer, error"#,
+    )
+    .bind(session.id)
+    .bind(&session.tenant_id)
+    .bind(HarnessSessionStatus::Running.as_str())
+    .bind(&session.user_input)
+    .bind(&session.workspace_root)
+    .bind(&session.profile)
+    .bind(&session.runtime_kind)
+    .bind(&session.model)
+    .bind(session.skill_name.as_deref())
+    .fetch_one(&self.pool)
+    .await?;
+    Ok(row)
+  }
+
+  async fn get(&self, id: Uuid) -> Result<Option<HarnessSession>, DbError> {
+    let row = sqlx::query_as::<_, HarnessSession>(
+      r#"SELECT id, tenant_id, status, user_input, workspace_root, profile,
+                runtime_kind, model, skill_name, started_at, finished_at,
+                final_answer, error
+         FROM harness_sessions
+         WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&self.pool)
+    .await?;
+    Ok(row)
+  }
+
+  async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<HarnessSession>, DbError> {
+    let rows = sqlx::query_as::<_, HarnessSession>(
+      r#"SELECT id, tenant_id, status, user_input, workspace_root, profile,
+                runtime_kind, model, skill_name, started_at, finished_at,
+                final_answer, error
+         FROM harness_sessions
+         WHERE tenant_id = $1
+         ORDER BY started_at DESC
+         LIMIT $2"#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(rows)
+  }
+
+  async fn update_status(
+    &self,
+    id: Uuid,
+    status: HarnessSessionStatus,
+    final_answer: Option<&str>,
+    error: Option<&str>,
+  ) -> Result<(), DbError> {
+    let finished_at = status.is_terminal().then(Utc::now);
+
+    let result = sqlx::query(
+      r#"UPDATE harness_sessions
+         SET status = $2,
+             finished_at = COALESCE($3, finished_at),
+             final_answer = COALESCE($4, final_answer),
+             error = COALESCE($5, error)
+         WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(status.as_str())
+    .bind(finished_at)
+    .bind(final_answer)
+    .bind(error)
+    .execute(&self.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+      return Err(DbError::NotFound {
+        entity_type: "harness_session",
+        id: id.to_string(),
+      });
+    }
+    Ok(())
+  }
+}
+
+#[derive(Clone, Debug)]
+pub struct PgHarnessEventRepo {
+  pub pool: PgPool,
+}
+
+#[async_trait]
+impl HarnessEventRepo for PgHarnessEventRepo {
+  async fn append(&self, event: NewHarnessSessionEvent) -> Result<HarnessSessionEvent, DbError> {
+    let row = sqlx::query_as::<_, HarnessSessionEvent>(
+      r#"INSERT INTO harness_session_events (session_id, seq, kind, payload)
+         VALUES ($1, $2, $3, $4)
+         RETURNING session_id, seq, kind, payload, ts"#,
+    )
+    .bind(event.session_id)
+    .bind(event.seq)
+    .bind(&event.kind)
+    .bind(&event.payload)
+    .fetch_one(&self.pool)
+    .await?;
+    Ok(row)
+  }
+
+  async fn list_after(
+    &self,
+    session_id: Uuid,
+    after_seq: i64,
+    limit: i64,
+  ) -> Result<Vec<HarnessSessionEvent>, DbError> {
+    let rows = sqlx::query_as::<_, HarnessSessionEvent>(
+      r#"SELECT session_id, seq, kind, payload, ts
+         FROM harness_session_events
+         WHERE session_id = $1 AND seq > $2
+         ORDER BY seq ASC
+         LIMIT $3"#,
+    )
+    .bind(session_id)
+    .bind(after_seq)
+    .bind(limit)
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(rows)
+  }
+}
+
+/// Convenience bundle of all Pg repositories backed by the same pool.
 ///
 /// `agentflow-server::AppState` injects this into route handlers so each route
 /// can pick the repo it needs without holding a separate pool reference.
@@ -369,6 +555,8 @@ pub struct Repositories {
   pub artifacts: PgArtifactRepo,
   pub skill_installs: PgSkillInstallRepo,
   pub mcp_sessions: PgMcpSessionRepo,
+  pub harness_sessions: PgHarnessSessionRepo,
+  pub harness_events: PgHarnessEventRepo,
 }
 
 impl Repositories {
@@ -379,7 +567,9 @@ impl Repositories {
       events: PgEventRepo { pool: pool.clone() },
       artifacts: PgArtifactRepo { pool: pool.clone() },
       skill_installs: PgSkillInstallRepo { pool: pool.clone() },
-      mcp_sessions: PgMcpSessionRepo { pool },
+      mcp_sessions: PgMcpSessionRepo { pool: pool.clone() },
+      harness_sessions: PgHarnessSessionRepo { pool: pool.clone() },
+      harness_events: PgHarnessEventRepo { pool },
     }
   }
 }

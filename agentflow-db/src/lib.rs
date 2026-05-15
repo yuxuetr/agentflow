@@ -6,10 +6,12 @@ pub mod repo;
 pub use database::Database;
 pub use error::DbError;
 pub use models::{
-  Artifact, Event, McpSession, NewArtifact, NewEvent, NewRun, NewStep, Run, RunStatus,
-  SkillInstall, Step,
+  Artifact, Event, HarnessSession, HarnessSessionEvent, HarnessSessionStatus, McpSession,
+  NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Run,
+  RunStatus, SkillInstall, Step,
 };
 pub use repo::{
-  ArtifactRepo, EventRepo, McpSessionRepo, PgArtifactRepo, PgEventRepo, PgMcpSessionRepo,
-  PgRunRepo, PgSkillInstallRepo, PgStepRepo, Repositories, RunRepo, SkillInstallRepo, StepRepo,
+  ArtifactRepo, EventRepo, HarnessEventRepo, HarnessSessionRepo, McpSessionRepo, PgArtifactRepo,
+  PgEventRepo, PgHarnessEventRepo, PgHarnessSessionRepo, PgMcpSessionRepo, PgRunRepo,
+  PgSkillInstallRepo, PgStepRepo, Repositories, RunRepo, SkillInstallRepo, StepRepo,
 };

@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 closed.** H5 (server + Web UI integration) is the next active phase, gated on `P2.1` / `P2.2` / `P2.4` / `P6.1`.
+Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slice 1 closed (server schema + core routes); slices 2–4 in progress.** H5 slices 2–4 cover approval routes + real LLM-backed executor wiring + Web UI + full E2E tests.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -312,19 +312,42 @@ trace tooling. Each Harness session is one append-only JSONL file at
 agent and Harness events) is Phase H5 work; it does not block Phase
 H1 because the on-disk layout already makes the data discoverable.
 
-## Server surface (target for Phase H5)
+## Server surface (Phase H5)
+
+Phase H5 slice 1 (closed) ships the schema + core lifecycle routes:
 
 ```text
-POST /v1/harness/sessions
-GET  /v1/harness/sessions
-GET  /v1/harness/sessions/{id}
-POST /v1/harness/sessions/{id}:resume
-POST /v1/harness/sessions/{id}:cancel
-GET  /v1/harness/sessions/{id}/events           # SSE
-GET  /v1/harness/sessions/{id}/events/history
-GET  /v1/harness/sessions/{id}/approvals
-POST /v1/harness/sessions/{id}/approvals/{approval_id}
+POST /v1/harness/sessions                       # closed (slice 1)
+GET  /v1/harness/sessions                       # closed (slice 1)
+GET  /v1/harness/sessions/{id}                  # closed (slice 1)
+POST /v1/harness/sessions/{id}:cancel           # closed (slice 1)
+GET  /v1/harness/sessions/{id}/events           # closed (slice 1) — SSE with backfill
+GET  /v1/harness/sessions/{id}/events/history   # closed (slice 1) — JSON history
 ```
+
+Slices 2–4 (in progress) cover the remaining surface:
+
+```text
+POST /v1/harness/sessions/{id}:resume           # slice 2
+GET  /v1/harness/sessions/{id}/approvals        # slice 2
+POST /v1/harness/sessions/{id}/approvals/{id}   # slice 2
+```
+
+DB schema (slice 1): two dedicated tables `harness_sessions` and
+`harness_session_events` (Postgres migration
+`0002_harness_sessions.sql`). The lifecycle columns diverge enough
+from workflow `runs` (workspace root, security profile, runtime kind,
+model, optional skill) that overloading the existing schema with a
+`kind` discriminator + sentinel nullables would be strictly worse
+than two narrow tables. SSE subscribers use `(session_id, seq)` for
+backfill/replay; channel reuse for the `harness_session_events` log
+mirrors the workflow `events` contract exactly.
+
+Slice 1 plumbing uses a `StubHarnessExecutor` that emits
+`session_started` + `stopped` events and marks the session row as
+`failed: executor_not_yet_wired`. The real LLM-backed executor wiring
+(`agentflow-harness::HarnessRuntime` with hook-wrapped tool registry)
+lands in slice 2 alongside the approval routes.
 
 The server is **optional**. CLI direct execution stays first-class.
 
@@ -360,7 +383,7 @@ cancelled, timeout).
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |
-| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | gated |
+| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slice 1 closed; slices 2–4 in progress** |
 | H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
 
 ## Architectural invariants

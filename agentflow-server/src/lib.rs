@@ -27,6 +27,7 @@ pub mod auth;
 pub mod cleanup;
 pub mod error;
 pub mod events_stream;
+pub mod harness;
 pub mod runs;
 pub mod scheduler;
 pub mod serve;
@@ -44,6 +45,14 @@ pub use error::ApiError;
 pub use events_stream::{
   EventBroker, EventSink, PersistingEventSink, StreamedEvent, WorkflowEventListener, list_events,
   publish_through, stream_events,
+};
+pub use harness::{
+  CancelHarnessSessionResponse, CreateHarnessSessionRequest, CreateHarnessSessionResponse,
+  HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor,
+  HarnessSessionResponse, ListHarnessSessionsQuery, ListHarnessSessionsResponse,
+  StreamedHarnessEvent, StubHarnessExecutor, cancel_harness_session, default_harness_executor,
+  get_harness_session, list_harness_events, list_harness_sessions, stream_harness_events,
+  submit_harness_session,
 };
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
@@ -92,6 +101,13 @@ pub struct AppState {
   pub event_broker: EventBroker,
   /// Process-local cancellation registry for queued/running background runs.
   pub cancellation_registry: RunCancellationRegistry,
+  /// Background executor for submitted harness sessions (P-H.5). Defaults
+  /// to [`StubHarnessExecutor`] until the LLM-backed runtime lands.
+  pub harness_executor: Arc<dyn harness::HarnessSessionExecutor>,
+  /// Process-local broker that fans persisted harness session events out
+  /// to SSE subscribers. Parallel to [`AppState::event_broker`] so a slow
+  /// workflow subscriber can't lag a harness session and vice versa.
+  pub harness_broker: HarnessEventBroker,
   /// Active security profile and documented defaults. Enforcement is rolled
   /// out by the follow-up P1 tasks without changing local behavior here.
   pub security: SecurityProfileDefaults,
@@ -106,6 +122,8 @@ impl std::fmt::Debug for AppState {
       .field("skills", &self.skills)
       .field("executor", &"<dyn RunExecutor>")
       .field("cancellation_registry", &self.cancellation_registry)
+      .field("harness_executor", &"<dyn HarnessSessionExecutor>")
+      .field("harness_broker", &self.harness_broker)
       .field("security", &self.security)
       .finish()
   }
@@ -122,8 +140,21 @@ impl AppState {
       executor: default_executor(),
       event_broker: EventBroker::new(),
       cancellation_registry: RunCancellationRegistry::new(),
+      harness_executor: default_harness_executor(),
+      harness_broker: HarnessEventBroker::new(),
       security: SecurityProfile::default().defaults(),
     }
+  }
+
+  /// Attach a custom harness session executor (e.g. wired to a real
+  /// `agentflow-harness::HarnessRuntime`). Tests use this to keep the
+  /// route layer + DB plumbing decoupled from the agent stack.
+  pub fn with_harness_executor(
+    mut self,
+    executor: Arc<dyn harness::HarnessSessionExecutor>,
+  ) -> Self {
+    self.harness_executor = executor;
+    self
   }
 
   /// Attach an auth configuration. `None` keeps auth disabled.
@@ -267,6 +298,27 @@ pub fn create_router(state: AppState) -> Router {
     .route(
       "/v1/skills/:name_run",
       post(run_skill).layer(DefaultBodyLimit::max(skill_limit)),
+    )
+    .route(
+      "/v1/harness/sessions",
+      get(list_harness_sessions)
+        .post(submit_harness_session)
+        .layer(DefaultBodyLimit::max(workflow_limit)),
+    )
+    // GET captures `:id` as Uuid; POST captures the raw path (including the
+    // literal `:cancel` suffix) as String and strips it inside the handler.
+    // Same single-route + dual-method trick as `/v1/runs/:id`.
+    .route(
+      "/v1/harness/sessions/:id",
+      get(get_harness_session).post(cancel_harness_session),
+    )
+    .route(
+      "/v1/harness/sessions/:id/events/history",
+      get(list_harness_events),
+    )
+    .route(
+      "/v1/harness/sessions/:id/events",
+      get(stream_harness_events),
     );
 
   let v1 = match state.auth.clone() {
