@@ -537,7 +537,113 @@ fn skill_inspect_explain_permissions_prints_capability_decision() {
     .stdout(predicate::str::contains("tool_required"))
     .stdout(predicate::str::contains("skill_security"))
     .stdout(predicate::str::contains("tool_policy"))
-    .stdout(predicate::str::contains("cli_flag"));
+    .stdout(predicate::str::contains("cli_flag"))
+    .stdout(predicate::str::contains("Tool admission decisions:"))
+    .stdout(predicate::str::contains("3 allowed, 0 denied"))
+    .stdout(predicate::str::contains("source: skill_allow"))
+    .stdout(predicate::str::contains("allowed by skill manifest"));
+}
+
+#[test]
+fn skill_inspect_cli_deny_tool_overrides_skill_admission() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--explain-permissions",
+      "--deny-tool",
+      "shell",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Tool admission decisions:"))
+    .stdout(predicate::str::contains("cli_deny_tools: shell"))
+    .stdout(predicate::str::contains("- shell [DENIED]"))
+    .stdout(predicate::str::contains("source: cli_deny"))
+    .stdout(predicate::str::contains("denied by --deny-tool"))
+    .stdout(predicate::str::contains("2 allowed, 1 denied"));
+}
+
+#[test]
+fn skill_inspect_cli_allow_tool_admits_tool_not_in_skill_manifest() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--explain-permissions",
+      "--allow-tool",
+      "http",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Tool admission decisions:"))
+    .stdout(predicate::str::contains("cli_allow_tools: http"))
+    .stdout(predicate::str::contains("- http [ALLOWED]"))
+    .stdout(predicate::str::contains("source: cli_allow"))
+    .stdout(predicate::str::contains("allowed by --allow-tool"))
+    .stdout(predicate::str::contains("4 allowed, 0 denied"));
+}
+
+#[test]
+fn skill_inspect_cli_deny_beats_cli_allow_on_same_tool() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--explain-permissions",
+      "--allow-tool",
+      "shell",
+      "--deny-tool",
+      "shell",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("- shell [DENIED]"))
+    .stdout(predicate::str::contains("source: cli_deny"));
+}
+
+#[test]
+fn skill_inspect_allow_deny_tool_without_explain_permissions_emits_hint() {
+  let rust_expert_path = format!(
+    "{}/../agentflow-skills/examples/skills/rust_expert",
+    env!("CARGO_MANIFEST_DIR")
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &rust_expert_path,
+      "--allow-tool",
+      "http",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "--allow-tool / --deny-tool are only honored with --explain-permissions",
+    ));
 }
 
 #[test]

@@ -1,10 +1,19 @@
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use agentflow_skills::SkillLoader;
+use agentflow_skills::policy::{
+  McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission, resolve_tool_policy,
+};
 use agentflow_tools::{Capability, EffectiveCapabilities, ToolPermission};
 
-pub async fn execute(skill_dir: String, explain_permissions: bool) -> Result<()> {
+pub async fn execute(
+  skill_dir: String,
+  explain_permissions: bool,
+  allow_tools: Vec<String>,
+  deny_tools: Vec<String>,
+) -> Result<()> {
   let dir = Path::new(&skill_dir);
   let manifest =
     SkillLoader::load(dir).with_context(|| format!("Failed to load skill from '{}'", skill_dir))?;
@@ -123,6 +132,10 @@ pub async fn execute(skill_dir: String, explain_permissions: bool) -> Result<()>
       &manifest.tools,
       &manifest.security.tool_permission_allowlist,
     );
+    let resolved = resolve_skill_policy(&manifest, &allow_tools, &deny_tools);
+    print_policy_admissions(&resolved, &allow_tools, &deny_tools);
+  } else if !allow_tools.is_empty() || !deny_tools.is_empty() {
+    println!("\n(note: --allow-tool / --deny-tool are only honored with --explain-permissions)");
   }
 
   if warnings.is_empty() {
@@ -203,6 +216,79 @@ fn print_capability_explanations(
         dropped,
       );
     }
+  }
+}
+
+fn resolve_skill_policy(
+  manifest: &agentflow_skills::SkillManifest,
+  cli_allow: &[String],
+  cli_deny: &[String],
+) -> ResolvedToolPolicy {
+  let skill_allowed: Vec<String> = manifest.tools.iter().map(|t| t.name.clone()).collect();
+  let skill_denied: Vec<String> = Vec::new();
+  let mcp_caps: McpCapabilityMap = McpCapabilityMap::new();
+  let mcp_allowlist: Vec<String> = manifest.security.mcp_server_allowlist.clone();
+  let tool_metadata = BTreeMap::new();
+
+  let mut known: std::collections::BTreeSet<String> = skill_allowed.iter().cloned().collect();
+  for t in cli_allow {
+    known.insert(t.clone());
+  }
+  for t in cli_deny {
+    known.insert(t.clone());
+  }
+  let known_vec: Vec<String> = known.into_iter().collect();
+
+  resolve_tool_policy(PolicyResolutionInput {
+    known_tools: &known_vec,
+    skill_allowed_tools: &skill_allowed,
+    skill_denied_tools: &skill_denied,
+    mcp_server_capabilities: &mcp_caps,
+    skill_mcp_server_allowlist: &mcp_allowlist,
+    cli_allow_tools: cli_allow,
+    cli_deny_tools: cli_deny,
+    fallback_policy: None,
+    tool_metadata: &tool_metadata,
+  })
+}
+
+fn print_policy_admissions(
+  resolved: &ResolvedToolPolicy,
+  cli_allow: &[String],
+  cli_deny: &[String],
+) {
+  println!("\nTool admission decisions:");
+  if resolved.decisions.is_empty() {
+    println!("  (no tools declared and no --allow-tool / --deny-tool overrides)");
+    return;
+  }
+  println!(
+    "  {} allowed, {} denied",
+    resolved.allow_count(),
+    resolved.deny_count()
+  );
+  if !cli_allow.is_empty() {
+    println!("  cli_allow_tools: {}", cli_allow.join(", "));
+  }
+  if !cli_deny.is_empty() {
+    println!("  cli_deny_tools: {}", cli_deny.join(", "));
+  }
+  for (tool, admission) in resolved.iter() {
+    print_admission_row(tool, admission);
+  }
+}
+
+fn print_admission_row(tool: &str, admission: &ToolAdmission) {
+  let verdict = if admission.allowed {
+    "ALLOWED"
+  } else {
+    "DENIED"
+  };
+  println!("  - {} [{}]", tool, verdict);
+  println!("    source: {}", admission.source.as_str());
+  println!("    reason: {}", admission.reason);
+  if let Some(server) = &admission.mcp_server {
+    println!("    mcp_server: {}", server);
   }
 }
 

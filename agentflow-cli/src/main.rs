@@ -545,6 +545,12 @@ enum SkillCommands {
     /// Explain the capability decision for each declared tool
     #[arg(long = "explain-permissions")]
     explain_permissions: bool,
+    /// Operator override: admit tool by name (repeatable). Beats skill manifest.
+    #[arg(long = "allow-tool", value_name = "TOOL")]
+    allow_tools: Vec<String>,
+    /// Operator override: deny tool by name (repeatable). Highest precedence.
+    #[arg(long = "deny-tool", value_name = "TOOL")]
+    deny_tools: Vec<String>,
   },
   /// Run a skill with a single message and exit
   Run {
@@ -1123,7 +1129,9 @@ async fn main() {
       SkillCommands::Inspect {
         skill_dir,
         explain_permissions,
-      } => skill::inspect::execute(skill_dir, explain_permissions).await,
+        allow_tools,
+        deny_tools,
+      } => skill::inspect::execute(skill_dir, explain_permissions, allow_tools, deny_tools).await,
       SkillCommands::Run {
         skill_dir,
         message,
