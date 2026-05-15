@@ -37,7 +37,24 @@ struct DoctorReport {
   disk: DiskReport,
   #[serde(skip_serializing_if = "Option::is_none")]
   server: Option<ServerReport>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  backup_check: Option<BackupCheckReport>,
   status: DoctorStatus,
+}
+
+/// Backup-readiness report populated only when `--backup-check` is supplied.
+/// Walks every workspace state directory an operator would need to back up
+/// or restore and probes that each is present and writable. Extends the
+/// existing `DiskReport` (which only covers run/trace/marketplace) with the
+/// skills and plugins install dirs. See `docs/SERVER_BACKUP_RESTORE.md`
+/// for the rationale behind the dir set.
+#[derive(Debug, Serialize)]
+struct BackupCheckReport {
+  run_dir: DirCheck,
+  trace_dir: DirCheck,
+  marketplace_cache: DirCheck,
+  skills_dir: DirCheck,
+  plugins_dir: DirCheck,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,7 +132,7 @@ struct DiskReport {
   marketplace_cache: DirCheck,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct DirCheck {
   /// Resolved path (override → env → default).
   path: String,
@@ -222,8 +239,9 @@ pub async fn execute(
   format: OutputFormat,
   profile: DoctorProfile,
   server: Option<String>,
+  backup_check: bool,
 ) -> Result<()> {
-  let report = build_report(profile, server.as_deref()).await;
+  let report = build_report(profile, server.as_deref(), backup_check).await;
   match format {
     OutputFormat::Json => {
       println!("{}", serde_json::to_string_pretty(&report)?);
@@ -233,7 +251,11 @@ pub async fn execute(
   std::process::exit(report.status.exit_code());
 }
 
-async fn build_report(profile: DoctorProfile, server: Option<&str>) -> DoctorReport {
+async fn build_report(
+  profile: DoctorProfile,
+  server: Option<&str>,
+  backup_check: bool,
+) -> DoctorReport {
   let home = dirs::home_dir();
   let config_dir = home.as_ref().map(|p| p.join(".agentflow"));
   let resolved_source = LLMConfig::resolve_default_source().ok();
@@ -324,6 +346,38 @@ async fn build_report(profile: DoctorProfile, server: Option<&str>) -> DoctorRep
     status.promote(DoctorStatus::Fail);
   }
 
+  // Backup-readiness section (only populated when --backup-check is set).
+  let backup_check_report = if backup_check {
+    let skills = resolve_dir(home.as_deref(), "AGENTFLOW_SKILLS_DIR", &["skills"]);
+    let plugins = resolve_dir(home.as_deref(), "AGENTFLOW_PLUGINS_DIR", &["plugins"]);
+    let report = BackupCheckReport {
+      run_dir: disk.run_dir.clone(),
+      trace_dir: disk.trace_dir.clone(),
+      marketplace_cache: disk.marketplace_cache.clone(),
+      skills_dir: skills,
+      plugins_dir: plugins,
+    };
+    for check in [
+      &report.run_dir,
+      &report.trace_dir,
+      &report.marketplace_cache,
+      &report.skills_dir,
+      &report.plugins_dir,
+    ] {
+      if !check.exists {
+        status.promote(match profile {
+          DoctorProfile::Production => DoctorStatus::Fail,
+          _ => DoctorStatus::Warning,
+        });
+      } else if !check.writable {
+        status.promote(DoctorStatus::Fail);
+      }
+    }
+    Some(report)
+  } else {
+    None
+  };
+
   DoctorReport {
     version: env!("CARGO_PKG_VERSION"),
     profile,
@@ -352,6 +406,7 @@ async fn build_report(profile: DoctorProfile, server: Option<&str>) -> DoctorRep
     },
     disk,
     server: server_report,
+    backup_check: backup_check_report,
     status,
   }
 }
@@ -754,6 +809,16 @@ fn print_text_report(report: &DoctorReport) {
     if let Some(err) = &server.error {
       println!("  error: {err}");
     }
+    println!();
+  }
+
+  if let Some(backup) = &report.backup_check {
+    println!("Backup check:");
+    print_dir_check("run dir", &backup.run_dir);
+    print_dir_check("trace dir", &backup.trace_dir);
+    print_dir_check("marketplace cache", &backup.marketplace_cache);
+    print_dir_check("skills dir", &backup.skills_dir);
+    print_dir_check("plugins dir", &backup.plugins_dir);
     println!();
   }
 

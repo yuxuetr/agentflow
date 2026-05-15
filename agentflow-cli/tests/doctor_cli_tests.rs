@@ -153,6 +153,154 @@ fn doctor_text_output_includes_disk_and_profile_sections() {
 }
 
 #[test]
+fn doctor_backup_check_section_omitted_by_default() {
+  let home = TempDir::new().unwrap();
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--profile", "dev", "--format", "json"])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert!(
+    report.get("backup_check").is_none() || report["backup_check"].is_null(),
+    "backup_check should be absent when --backup-check is not supplied"
+  );
+}
+
+#[test]
+fn doctor_backup_check_reports_writable_dirs_under_synthetic_home() {
+  let home = TempDir::new().unwrap();
+  // Pre-create all five backup-relevant dirs so each probe succeeds.
+  for sub in [
+    ".agentflow/runs",
+    ".agentflow/traces",
+    ".agentflow/marketplace/cache",
+    ".agentflow/skills",
+    ".agentflow/plugins",
+  ] {
+    std::fs::create_dir_all(home.path().join(sub)).unwrap();
+  }
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--backup-check",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let backup = &report["backup_check"];
+  for key in [
+    "run_dir",
+    "trace_dir",
+    "marketplace_cache",
+    "skills_dir",
+    "plugins_dir",
+  ] {
+    assert_eq!(
+      backup[key]["writable"], true,
+      "{key} should be writable when pre-created; got {:?}",
+      backup[key]
+    );
+    assert_eq!(backup[key]["exists"], true, "{key} should exist");
+  }
+}
+
+#[test]
+fn doctor_backup_check_production_profile_escalates_missing_dirs_to_fail() {
+  let home = TempDir::new().unwrap();
+  // Intentionally do NOT pre-create the backup dirs. Under the production
+  // profile this should escalate to a Fail (exit 2).
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "production",
+      "--format",
+      "json",
+      "--backup-check",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_API_TOKEN", "dummy-token-for-test");
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(report["status"], "fail");
+  let backup = &report["backup_check"];
+  assert_eq!(backup["skills_dir"]["exists"], false);
+  assert_eq!(backup["plugins_dir"]["exists"], false);
+}
+
+#[test]
+fn doctor_backup_check_text_output_renders_section_header() {
+  let home = TempDir::new().unwrap();
+  for sub in [
+    ".agentflow/runs",
+    ".agentflow/traces",
+    ".agentflow/marketplace/cache",
+    ".agentflow/skills",
+    ".agentflow/plugins",
+  ] {
+    std::fs::create_dir_all(home.path().join(sub)).unwrap();
+  }
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--profile", "dev", "--backup-check"])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let stdout = String::from_utf8(output.stdout).unwrap();
+  assert!(
+    stdout.contains("Backup check:"),
+    "missing Backup check section: {stdout}"
+  );
+  assert!(stdout.contains("skills dir:"));
+  assert!(stdout.contains("plugins dir:"));
+}
+
+#[test]
+fn doctor_backup_check_honors_skills_and_plugins_env_overrides() {
+  let home = TempDir::new().unwrap();
+  let skills_override = TempDir::new().unwrap();
+  let plugins_override = TempDir::new().unwrap();
+  // Create the other three dirs under HOME so only skills/plugins come
+  // from the override.
+  for sub in [
+    ".agentflow/runs",
+    ".agentflow/traces",
+    ".agentflow/marketplace/cache",
+  ] {
+    std::fs::create_dir_all(home.path().join(sub)).unwrap();
+  }
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--backup-check",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_SKILLS_DIR", skills_override.path())
+    .env("AGENTFLOW_PLUGINS_DIR", plugins_override.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let backup = &report["backup_check"];
+  assert_eq!(backup["skills_dir"]["source"], "env");
+  assert_eq!(backup["plugins_dir"]["source"], "env");
+  assert_eq!(
+    backup["skills_dir"]["path"],
+    skills_override.path().display().to_string()
+  );
+  assert_eq!(backup["skills_dir"]["writable"], true);
+}
+
+#[test]
 fn doctor_rejects_unknown_profile() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd.args(["doctor", "--profile", "bogus"]);

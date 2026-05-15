@@ -117,6 +117,10 @@ struct DoctorArgs {
   /// When supplied, also probe `<url>/health` for server reachability
   #[arg(long)]
   server: Option<String>,
+  /// Add a backup-readiness section: explicit writability probe for
+  /// run_dir / trace_dir / marketplace_cache / skills_dir / plugins_dir
+  #[arg(long = "backup-check")]
+  backup_check: bool,
 }
 #[derive(Args)]
 struct HarnessArgs {
@@ -1215,7 +1219,9 @@ async fn main() {
       doctor::OutputFormat::parse(&args.format),
       doctor::DoctorProfile::parse(&args.profile),
     ) {
-      (Ok(format), Ok(profile)) => doctor::execute(format, profile, args.server).await,
+      (Ok(format), Ok(profile)) => {
+        doctor::execute(format, profile, args.server, args.backup_check).await
+      }
       (Err(err), _) | (_, Err(err)) => Err(err),
     },
     Commands::Cleanup(args) => {
