@@ -1,0 +1,56 @@
+{
+  "host": {
+    "id": "apple-m2-max",
+    "machine": "Apple M2 Max",
+    "arch": "arm64",
+    "os": "macOS 25.3.0",
+    "rustc": "stable",
+    "captured_at": "2026-05-15"
+  },
+  "notes": [
+    "Numbers are median wall-clock from Criterion (warm_up 1s, measurement 3s, 20 samples).",
+    "Host differences are expected; treat baselines as signals, not gates.",
+    "The CI gate (P7.2) re-runs benches on a fixed runner and compares against that runner's baseline."
+  ],
+  "benchmarks": {
+    "agentflow-core/scheduler": {
+      "flow_linear/serial/10":              { "median_ns": 738740, "throughput_elem_per_s": 13534 },
+      "flow_linear/concurrent_8/10":        { "median_ns": 746740, "throughput_elem_per_s": 13391 },
+      "flow_linear/serial/100":             { "median_ns": 6174800, "throughput_elem_per_s": 16194 },
+      "flow_linear/concurrent_8/100":       { "median_ns": 6816900, "throughput_elem_per_s": 14669 },
+      "flow_linear/serial/1000":            { "median_ns": 62962000, "throughput_elem_per_s": 15883 },
+      "flow_linear/concurrent_8/1000":      { "median_ns": 101860000, "throughput_elem_per_s": 9817 },
+      "flow_fanout/serial/10":              { "median_ns": 777090, "throughput_elem_per_s": 12869 },
+      "flow_fanout/concurrent_8/10":        { "median_ns": 754810, "throughput_elem_per_s": 13249 },
+      "flow_fanout/serial/100":             { "median_ns": 6241000, "throughput_elem_per_s": 16022 },
+      "flow_fanout/concurrent_8/100":       { "median_ns": 6342200, "throughput_elem_per_s": 15768 },
+      "flow_fanout/serial/1000":            { "median_ns": 62632000, "throughput_elem_per_s": 15966 },
+      "flow_fanout/concurrent_8/1000":      { "median_ns": 71544000, "throughput_elem_per_s": 13979 }
+    },
+    "agentflow-llm/provider_hop": {
+      "provider_hop/execute/1":             { "median_ns": 199, "throughput_elem_per_s": 5019800 },
+      "provider_hop/execute/8":             { "median_ns": 198, "throughput_elem_per_s": 5053400 },
+      "provider_hop/execute/32":            { "median_ns": 200, "throughput_elem_per_s": 5004900 },
+      "provider_hop_streaming/execute_streaming_full_drain": { "median_ns": 135, "throughput_elem_per_s": 7418200 }
+    },
+    "agentflow-rag/retrieval": {
+      "bm25_search/top_10/1000":            { "median_ns": 109400, "throughput_elem_per_s": 9141 },
+      "bm25_search/top_100/1000":           { "median_ns": 119160, "throughput_elem_per_s": 8392 },
+      "bm25_search/top_10/10000":           { "median_ns": 1371600, "throughput_elem_per_s": 729 },
+      "bm25_search/top_100/10000":          { "median_ns": 1394600, "throughput_elem_per_s": 717 },
+      "bm25_index/build_corpus/1000":       { "median_ns": 307430000, "throughput_elem_per_s": 3253 },
+      "bm25_index/build_corpus/10000":      { "median_ns": 31475000000, "throughput_elem_per_s": 318 }
+    },
+    "agentflow-tracing/event_write": {
+      "trace_serialize/nodes/10":           { "median_ns": 4589, "throughput_elem_per_s": 2179100 },
+      "trace_serialize/nodes/100":          { "median_ns": 41645, "throughput_elem_per_s": 2401200 },
+      "trace_serialize/nodes/1000":         { "median_ns": 395270, "throughput_elem_per_s": 2529900 },
+      "file_storage_save/nodes/10":         { "median_ns": 66744, "throughput_elem_per_s": 149830 },
+      "file_storage_save/nodes/100":        { "median_ns": 121690, "throughput_elem_per_s": 821740 },
+      "file_storage_save/nodes/1000":       { "median_ns": 685500, "throughput_elem_per_s": 1458800 },
+      "jsonl_append/nodes/10":              { "median_ns": 4934600, "throughput_elem_per_s": 2026 },
+      "jsonl_append/nodes/100":             { "median_ns": 5201500, "throughput_elem_per_s": 19225 },
+      "jsonl_append/nodes/1000":            { "median_ns": 8373700, "throughput_elem_per_s": 119420 }
+    }
+  }
+}

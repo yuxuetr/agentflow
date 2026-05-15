@@ -60,3 +60,8 @@ env_logger = "0.10"
 tempfile = "3.8"
 futures-util = "0.3"
 base64 = "0.21"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "provider_hop"
+harness = false

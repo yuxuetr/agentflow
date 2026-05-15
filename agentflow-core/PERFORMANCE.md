@@ -162,6 +162,22 @@ cargo test -p agentflow-core --test large_dag_benchmarks --target-dir /tmp/agent
 12. `benchmark_summary` - Overall summary
 13. `large_dag_benchmarks` - Synthetic 100 / 1,000 / 10,000 node DAG build and scheduler baseline
 
+## Criterion micro-benches (P7.1)
+
+In addition to the test-style benchmarks above, the four "hot path"
+crates ship Criterion suites. These run independently and form the
+inputs for the perf regression gate (P7.2).
+
+```bash
+cargo bench -p agentflow-core --bench scheduler
+cargo bench -p agentflow-llm  --bench provider_hop
+cargo bench -p agentflow-rag  --bench retrieval
+cargo bench -p agentflow-tracing --bench event_write
+```
+
+Baselines per host live under [`benches/baselines/`](../benches/baselines/).
+See that directory's README for the schema and capture flow.
+
 ## Future Benchmarking
 
 Phase 1.5 benchmarking is complete. Future phases will add:
@@ -172,5 +188,5 @@ Phase 1.5 benchmarking is complete. Future phases will add:
 
 ---
 
-**Last Updated:** 2025-11-16
+**Last Updated:** 2026-05-15
 **Status:** ✅ All Phase 1.5 performance targets met (including timeout, health checks, and checkpoint recovery)

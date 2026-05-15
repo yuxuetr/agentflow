@@ -987,17 +987,24 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
 Goal: establish a perf baseline + release rehearsal so v1.0 ships with
 known characteristics, not surprises.
 
-- TODO P7.1 `cargo bench` baselines:
-  - Add Criterion benches:
-    - `agentflow-core/benches/scheduler.rs`: 10/100/1000-node DAGs,
-      serial vs concurrent, p50/p95.
-    - `agentflow-llm/benches/provider_hop.rs`: mock provider latency
-      overhead.
-    - `agentflow-rag/benches/retrieval.rs`: 1k/10k corpus BM25.
-    - `agentflow-tracing/benches/event_write.rs`: JSONL vs SQLite
-      throughput.
-  - Check in baseline JSON in `benches/baselines/<host>.json` (note: host
-    differences are expected; baselines are signals, not gates).
+- DONE P7.1 `cargo bench` baselines:
+  - Criterion benches landed for all four crates:
+    - `agentflow-core/benches/scheduler.rs` — linear + fan-out shapes
+      at 10/100/1000 nodes, serial vs `concurrent_8`.
+    - `agentflow-llm/benches/provider_hop.rs` — mock provider single
+      hop (1/8/32 turns) + streaming full-drain.
+    - `agentflow-rag/benches/retrieval.rs` — BM25 search at 1k/10k
+      corpus, top_10 / top_100; plus build-corpus index throughput.
+    - `agentflow-tracing/benches/event_write.rs` — serialize-only,
+      `FileTraceStorage::save_trace`, and synthetic JSONL append
+      (sibling group reserved for a real JSONL / SQLite backend
+      once those land).
+  - Captured baseline: `benches/baselines/apple-m2-max.json` plus a
+    README documenting the schema and capture flow. Host differences
+    are expected; the P7.2 gate compares against the runner's own
+    baseline.
+  - PERFORMANCE.md (in `agentflow-core/`) now links to the criterion
+    suites alongside the legacy `cargo test` perf harness.
 
 - TODO P7.2 CI perf regression gate:
   - Add `bench.yml` workflow that runs benches on a fixed runner.
