@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Internal workspace automation: edition pin, future repo-wide checks"
+
+[dependencies]
+anyhow = "1"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

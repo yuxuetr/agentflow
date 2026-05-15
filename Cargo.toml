@@ -17,6 +17,7 @@ members = [
   "agentflow-server",
   "agentflow-worker",
   "agentflow-harness",
+  "xtask",
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"
