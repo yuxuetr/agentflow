@@ -31,6 +31,15 @@ jobs:
       - name: Run cargo xtask verify-edition
         run: cargo xtask verify-edition
 
+  check-agent-sdk-doc:
+    name: check agent SDK doc references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run cargo xtask check-agent-sdk-doc
+        run: cargo xtask check-agent-sdk-doc
+
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
@@ -150,6 +159,7 @@ jobs:
     needs:
       - fmt
       - verify-edition
+      - check-agent-sdk-doc
       - clippy
       - test
       - doctest
@@ -161,6 +171,7 @@ jobs:
         run: |
           echo "fmt: ${{ needs.fmt.result }}"
           echo "verify-edition: ${{ needs.verify-edition.result }}"
+          echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
           echo "test: ${{ needs.test.result }}"
           echo "doctest: ${{ needs.doctest.result }}"
@@ -168,6 +179,7 @@ jobs:
           echo "examples: ${{ needs.examples.result }}"
           test "${{ needs.fmt.result }}" = "success"
           test "${{ needs.verify-edition.result }}" = "success"
+          test "${{ needs.check-agent-sdk-doc.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.doctest.result }}" = "success"

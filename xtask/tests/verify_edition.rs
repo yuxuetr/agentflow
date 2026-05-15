@@ -65,3 +65,21 @@ fn missing_subcommand_prints_usage_and_exits_with_failure() {
     "stderr should explain the missing subcommand; got: {stderr}"
   );
 }
+
+#[test]
+fn check_agent_sdk_doc_passes_on_real_workspace() {
+  let output = Command::new(xtask_binary())
+    .arg("check-agent-sdk-doc")
+    .output()
+    .expect("invoking xtask binary should not fail");
+  assert!(
+    output.status.success(),
+    "check-agent-sdk-doc on the real workspace should pass; stderr:\n{}",
+    String::from_utf8_lossy(&output.stderr),
+  );
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("check-agent-sdk-doc: OK"),
+    "stdout: {stdout}"
+  );
+}
