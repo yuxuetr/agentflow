@@ -1433,6 +1433,25 @@ function HarnessSessionDetail({
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [streamState, setStreamState] = useState<ConnectionState>('idle');
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [resumePrompt, setResumePrompt] = useState('');
+
+  const mergeEvent = (incoming: HarnessEvent) => {
+    setEvents((prior) => {
+      // Idempotent merge: if we already have this seq, keep the
+      // earlier copy (DB rows are immutable). SSE backfill + DB
+      // backfill happily overlap during the EventSource warm-up.
+      if (prior.some((existing) => existing.seq === incoming.seq)) {
+        return prior;
+      }
+      return [...prior, incoming].sort((a, b) => a.seq - b.seq);
+    });
+  };
+
+  const replaceEvents = (incoming: HarnessEvent[]) => {
+    setEvents([...incoming].sort((a, b) => a.seq - b.seq));
+  };
 
   const fetchSession = async () => {
     try {
@@ -1449,7 +1468,10 @@ function HarnessSessionDetail({
     }
   };
 
-  const fetchEvents = async () => {
+  // Polling fallback used when SSE fails. Hits the JSON history route
+  // and replaces the local list — works whether or not the server has
+  // a broker channel for this session.
+  const fetchEventsFallback = async () => {
     try {
       const response = await apiFetch(
         `/v1/harness/sessions/${sessionId}/events/history`,
@@ -1460,7 +1482,7 @@ function HarnessSessionDetail({
         throw new Error(`events fetch failed: HTTP ${response.status} ${text}`);
       }
       const body = (await response.json()) as HarnessEvent[];
-      setEvents(body);
+      replaceEvents(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1483,18 +1505,64 @@ function HarnessSessionDetail({
     }
   };
 
+  // SSE wires the event timeline to the gateway's broker. The session
+  // row + pending approvals still poll on a slower cadence since
+  // EventSource only covers the event stream — approvals are a
+  // separate REST surface.
   useEffect(() => {
     void fetchSession();
-    void fetchEvents();
     void fetchApprovals();
-    // Poll every 2s while running. Once terminal, slow to 10s so
-    // operators can still refresh without hammering the gateway.
-    const handle = window.setInterval(() => {
+    // Seed once via the history route so the timeline doesn't appear
+    // empty before the first SSE frame arrives.
+    void fetchEventsFallback();
+
+    setStreamState('loading');
+    let source: EventSource | null = null;
+    let fallbackHandle: number | null = null;
+    try {
+      source = new EventSource(`/v1/harness/sessions/${sessionId}/events`);
+      source.onopen = () => setStreamState('streaming');
+      source.onmessage = (msg) => {
+        try {
+          const parsed = JSON.parse(msg.data) as HarnessEvent;
+          mergeEvent(parsed);
+        } catch {
+          // Non-JSON keep-alive comment — ignore.
+        }
+      };
+      source.onerror = () => {
+        setStreamState('error');
+        // EventSource auto-reconnects; we just flip the state so the
+        // UI surfaces the degraded mode. Fall back to history polling
+        // until SSE recovers so the timeline stays up-to-date even if
+        // the broker channel is closed (a known case for
+        // long-completed sessions per the workflow `EventBroker`
+        // contract).
+        if (fallbackHandle === null) {
+          fallbackHandle = window.setInterval(() => {
+            void fetchEventsFallback();
+          }, 5000);
+        }
+      };
+    } catch (err) {
+      setStreamState('error');
+      setError(err instanceof Error ? err.message : String(err));
+    }
+
+    // Approval poll + session row poll, every 2 s while not terminal.
+    const sessionHandle = window.setInterval(() => {
       void fetchSession();
-      void fetchEvents();
       void fetchApprovals();
     }, 2000);
-    return () => window.clearInterval(handle);
+
+    return () => {
+      source?.close();
+      window.clearInterval(sessionHandle);
+      if (fallbackHandle !== null) {
+        window.clearInterval(fallbackHandle);
+      }
+      setStreamState('closed');
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, apiToken]);
 
@@ -1521,9 +1589,9 @@ function HarnessSessionDetail({
       }
       setInfo(`Approval ${requestId} → ${decision}/${scope}`);
       // Refresh immediately so the approval clears without waiting
-      // for the next poll tick.
+      // for the next poll tick. The SSE stream picks up the
+      // `approval_decided` envelope on its own.
       void fetchApprovals();
-      void fetchEvents();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1542,9 +1610,45 @@ function HarnessSessionDetail({
       }
       setInfo('Cancel requested');
       void fetchSession();
-      void fetchEvents();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // P-H.5 slice 4: resume re-runs the session from scratch (events
+  // are reset). The server enforces the terminal precondition; the
+  // button is only enabled when `terminal` is true. Reload the page
+  // after the POST so the SSE stream + history start fresh.
+  const resume = async () => {
+    setError(null);
+    setInfo(null);
+    setResumeBusy(true);
+    try {
+      const body: Record<string, unknown> = {};
+      const trimmed = resumePrompt.trim();
+      if (trimmed) {
+        body.user_input = trimmed;
+      }
+      const response = await apiFetch(`/v1/harness/sessions/${sessionId}:resume`, apiToken, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`resume failed: HTTP ${response.status} ${text}`);
+      }
+      setInfo('Resume requested — events reset, executor restarted.');
+      // Reset local state so the timeline doesn't show stale prior
+      // events while the executor reproduces them.
+      replaceEvents([]);
+      setSelectedSeq(null);
+      setResumePrompt('');
+      void fetchSession();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResumeBusy(false);
     }
   };
 
@@ -1584,6 +1688,12 @@ function HarnessSessionDetail({
             placeholder="Bearer token (not persisted)"
           />
         </label>
+        <span
+          data-testid="harness-detail-stream-state"
+          className={`stream-pill stream-${streamState}`}
+        >
+          stream: {streamState}
+        </span>
         <button
           data-testid="harness-detail-cancel"
           type="button"
@@ -1591,6 +1701,27 @@ function HarnessSessionDetail({
           disabled={terminal}
         >
           {terminal ? 'Terminal' : 'Cancel session'}
+        </button>
+      </section>
+
+      <section className="harness-controls harness-resume-controls">
+        <label className="harness-grow">
+          <span>Resume prompt (optional — empty replays original)</span>
+          <input
+            data-testid="harness-detail-resume-prompt"
+            value={resumePrompt}
+            onChange={(event) => setResumePrompt(event.target.value)}
+            placeholder="Leave blank to rerun with the original prompt"
+            disabled={!terminal || resumeBusy}
+          />
+        </label>
+        <button
+          data-testid="harness-detail-resume"
+          type="button"
+          onClick={() => void resume()}
+          disabled={!terminal || resumeBusy}
+        >
+          {resumeBusy ? 'Resuming…' : 'Resume (rerun)'}
         </button>
       </section>
 

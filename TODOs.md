@@ -70,6 +70,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 1 of 4): Harness Mode server schema + core routes (`harness_sessions` / `harness_session_events` tables, `HarnessSessionRepo` / `HarnessEventRepo`, `HarnessSessionExecutor` trait + `StubHarnessExecutor`, `HarnessEventBroker`, six routes including SSE backfill, integration tests `tests/harness_routes.rs` self-skipping without `AGENTFLOW_DATABASE_TEST_URL`). Slices 2–4 (approval routes + real executor + Web UI + full E2E) remain TODO.
 - P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
+- P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 
 ---
 
@@ -1036,7 +1037,7 @@ Architectural rules (enforced via review):
 
 ### After P2.1+P2.2+P2.4 + P6 Web UI Baseline
 
-- TODO P-H.5 Server + Web UI integration (Phase H5; ~3-5 weeks; PREREQ:
+- DONE P-H.5 Server + Web UI integration (Phase H5; ~3-5 weeks; PREREQ:
   P2.1, P2.2, P2.4, P-H.2, P6.1):
   - Slice 1 (DONE): server schema + core routes
     - DONE: DB migration `0002_harness_sessions.sql` adds dedicated
@@ -1119,8 +1120,41 @@ Architectural rules (enforced via review):
       token).
     - Session resume action remains TODO (depends on the
       `POST /v1/harness/sessions/{id}:resume` route in slice 4).
-  - Slice 4 (TODO): session resume route + full E2E tests across CLI
-    submit → server stream → UI render.
+  - Slice 4 (DONE): resume route + SSE-backed UI + full-stack E2E
+    - DONE: `POST /v1/harness/sessions/{id}:resume` with the rerun
+      semantic (clear prior events, flip status back to `running`,
+      respawn executor; optional `user_input` override). Single
+      dispatcher `post_harness_session_action` handles both `:cancel`
+      and `:resume` so one POST route binds two semantically distinct
+      actions. Atomic via a Postgres txn that DELETEs from
+      `harness_session_events` then UPDATEs the row.
+      `HarnessSessionRepo::reset_for_resume` keeps the wipe + status
+      flip in one Pg transaction; integration tests cover the happy
+      path, the 400 on a running session, and the unknown-suffix /
+      unknown-id failure cases.
+    - DONE: append-mode resume (preserving prior events + continuing
+      the seq series) needs `HarnessRuntime::with_initial_seq` to land
+      first in `agentflow-harness`. Tracked as a follow-up; the rerun
+      semantic is documented as the v1 contract in `HARNESS_MODE.md`.
+    - DONE: UI detail page switches from polling to SSE
+      (`EventSource` against `/v1/harness/sessions/{id}/events`). The
+      session row + pending approvals still poll on 2s since they
+      live on a separate REST surface. Stream pill in the controls
+      strip shows `streaming` / `error` / etc.; on SSE failure the
+      page falls back to a 5s history poll so the timeline keeps
+      updating even when the broker channel has been dropped.
+    - DONE: UI "Resume (rerun)" button posts to `:resume` with the
+      optional prompt input; gated on terminal status; clears local
+      timeline state on success so the rerun lifecycle isn't mixed
+      with the stale one.
+    - DONE: `tests/harness_full_stack_e2e.rs` — single test that
+      drives submit → SSE stream → DB history → terminal row →
+      resume → rerun history against real Postgres + Moonshot. ~6.5s
+      end-to-end. Self-skips without DB or Moonshot key.
+    - DONE: `docs/HARNESS_MODE.md` marks slice 4 closed; `CLAUDE.md`
+      lists the resume route + SSE detail page in the gateway / UI
+      surface; `STABILITY.md` already promoted the envelopes to Beta
+      in slice 2.
 
 ### Deferred to RoadMap Later Tracks
 

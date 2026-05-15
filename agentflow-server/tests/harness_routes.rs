@@ -324,3 +324,176 @@ async fn sse_against_unknown_session_returns_404() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn resume_terminal_session_clears_events_and_restarts() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping resume_terminal_session_clears_events_and_restarts");
+    return;
+  };
+
+  let app = create_router(state.clone());
+  let id = submit_basic_session(app.clone(), "first run").await;
+  // Stub executor reaches `failed: executor_not_yet_wired` in ~50 ms.
+  tokio::time::sleep(Duration::from_millis(250)).await;
+
+  // Sanity-check the prior event log so we can assert the reset later.
+  let history_before = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/v1/harness/sessions/{id}/events/history"))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(history_before.status(), StatusCode::OK);
+  let events_before = body_json(history_before).await;
+  let before_count = events_before
+    .as_array()
+    .map(|arr| arr.len())
+    .unwrap_or_default();
+  assert!(
+    before_count >= 1,
+    "stub executor should have persisted ≥1 event before resume"
+  );
+
+  let resume = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{id}:resume"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+          serde_json::to_vec(&json!({"user_input": "second run with new prompt"})).unwrap(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(resume.status(), StatusCode::OK);
+  let body = body_json(resume).await;
+  assert_eq!(body["resumed"], true);
+  // The response carries the freshly-reset row: new user_input, no
+  // finished_at / final_answer / error, status flipped back to running.
+  assert_eq!(body["user_input"], "second run with new prompt");
+  assert!(matches!(
+    body["status"].as_str(),
+    Some("running") | Some("failed")
+  ));
+  assert!(
+    body["finished_at"].is_null() || body["status"] == "failed",
+    "finished_at should be null right after resume (or already terminal again if the stub finished fast)"
+  );
+
+  // Wait for the executor to finish the rerun. The stub writes two
+  // events (session_started + stopped), so once the rerun is terminal
+  // the event count is at most 2 — proving the prior log was wiped.
+  tokio::time::sleep(Duration::from_millis(300)).await;
+  let history_after = app
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/v1/harness/sessions/{id}/events/history"))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  let events_after = body_json(history_after).await;
+  let after = events_after
+    .as_array()
+    .expect("events history is array")
+    .clone();
+  assert_eq!(
+    after.len(),
+    2,
+    "stub rerun should produce exactly 2 events, got {after:?}"
+  );
+  assert_eq!(after[0]["kind"], "session_started");
+  assert_eq!(after[1]["kind"], "stopped");
+  // The seq counter restarted at 0 because the prior rows were
+  // cleared — proves the rerun semantic.
+  assert_eq!(after[0]["seq"], 0);
+  assert_eq!(after[1]["seq"], 1);
+}
+
+#[tokio::test]
+async fn resume_rejects_running_session_with_400() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping resume_rejects_running_session_with_400");
+    return;
+  };
+
+  // Use a sleepy executor so the row stays `running` while we issue
+  // the resume call.
+  use agentflow_server::HarnessSessionExecutor;
+  use async_trait::async_trait;
+  struct SleepyExecutor;
+  #[async_trait]
+  impl HarnessSessionExecutor for SleepyExecutor {
+    async fn execute(&self, _ctx: agentflow_server::HarnessSessionContext) {
+      tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+  }
+  let state = state.with_harness_executor(std::sync::Arc::new(SleepyExecutor));
+  let app = create_router(state);
+  let id = submit_basic_session(app.clone(), "still running").await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{id}:resume"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn resume_unknown_session_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping resume_unknown_session_returns_404");
+    return;
+  };
+  let response = create_router(state)
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{}:resume", Uuid::new_v4()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn post_action_unknown_suffix_returns_400() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping post_action_unknown_suffix_returns_400");
+    return;
+  };
+  let app = create_router(state);
+  // Any valid uuid-shaped suffix lands at the dispatcher.
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{}:wat", Uuid::new_v4()))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

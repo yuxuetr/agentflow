@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 closed. H5 slices 1+2+3 closed; slice 4 in progress.** Slice 4 covers the `:resume` route + full CLI→server→UI E2E render tests.
+Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. Append-mode resume (preserving prior events + continuing the seq series) is the one remaining piece, tracked as a follow-up alongside the `HarnessRuntime::with_initial_seq` upstream change.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -345,12 +345,42 @@ Phase H5 slice 3 (closed) ships the Web UI surface:
   dropdown, and a cancel button that disables once the session is
   terminal.
 
-The SPA polls every 2 s on the detail page (4 s on the list) — once
-slice 4 wires the SSE stream, the polling fallback drops to a
-backstop for clients that lose the connection.
+Phase H5 slice 4 (closed) finishes the surface:
 
-Slice 4 (in progress) covers `POST /v1/harness/sessions/{id}:resume`
-plus full CLI→server→UI E2E render tests.
+```text
+POST /v1/harness/sessions/{id}:resume           # closed (slice 4)
+```
+
+`:resume` ships with the **rerun semantic**: the route DELETEs every
+persisted event for the session in one Postgres transaction, flips
+the row back to `running`, optionally replaces `user_input`, and
+respawns the executor. The inner `HarnessRuntime`'s `seq` counter
+starts at 0 again — append-mode resume that preserves the prior log
+and continues the seq series needs a `HarnessRuntime::with_initial_seq`
+upstream change, tracked as a P-H follow-up.
+
+`POST /v1/harness/sessions/{id}:cancel` and
+`POST /v1/harness/sessions/{id}:resume` share one Axum POST handler
+(`post_harness_session_action`) that dispatches on the suffix —
+Axum can't bind two POST handlers to the same path pattern, so the
+dispatcher is the cleanest way to keep two semantically distinct
+actions on a single REST resource.
+
+Slice 4 also flips the Web UI detail page from polling to
+`EventSource` SSE, with a 5 s history-poll fallback for clients that
+lose the broker channel (the workflow `EventBroker` contract drops
+long-completed sessions to keep memory bounded). A stream-state pill
+in the controls strip surfaces `streaming` / `error` / etc. A
+**Resume (rerun)** button appears once the session is terminal; the
+operator can optionally provide a new prompt, otherwise the original
+prompt is replayed.
+
+The combined integration test
+`agentflow-server/tests/harness_full_stack_e2e.rs` exercises every
+layer the Web UI consumes in one ~6.5 s pass against real Postgres +
+Moonshot: submit → SSE stream → DB history → terminal row → resume
+→ rerun history. Skips automatically without
+`AGENTFLOW_DATABASE_TEST_URL` and `MOONSHOT_API_KEY`.
 
 DB schema (slice 1): two dedicated tables `harness_sessions` and
 `harness_session_events` (Postgres migration
@@ -409,7 +439,7 @@ cancelled, timeout).
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |
-| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **slices 1+2+3 closed; slice 4 in progress** |
+| H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **closed** |
 | H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
 
 ## Architectural invariants

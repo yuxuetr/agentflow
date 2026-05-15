@@ -52,9 +52,10 @@ pub use harness::{
   CancelHarnessSessionResponse, CreateHarnessSessionRequest, CreateHarnessSessionResponse,
   HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor,
   HarnessSessionResponse, ListHarnessSessionsQuery, ListHarnessSessionsResponse,
-  StreamedHarnessEvent, StubHarnessExecutor, cancel_harness_session, default_harness_executor,
-  get_harness_session, list_harness_events, list_harness_sessions, stream_harness_events,
-  submit_harness_session,
+  ResumeHarnessSessionRequest, ResumeHarnessSessionResponse, StreamedHarnessEvent,
+  StubHarnessExecutor, cancel_harness_session, default_harness_executor, get_harness_session,
+  list_harness_events, list_harness_sessions, post_harness_session_action, resume_harness_session,
+  stream_harness_events, submit_harness_session,
 };
 pub use harness_approval::{
   ApprovalDecisionRequest, ApprovalDecisionResponse, ApprovalResolveError, PendingApprovalRegistry,
@@ -319,11 +320,12 @@ pub fn create_router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(workflow_limit)),
     )
     // GET captures `:id` as Uuid; POST captures the raw path (including the
-    // literal `:cancel` suffix) as String and strips it inside the handler.
-    // Same single-route + dual-method trick as `/v1/runs/:id`.
+    // literal `:cancel` / `:resume` suffix) as String and dispatches inside
+    // `post_harness_session_action`. Same single-route + dual-method trick
+    // as `/v1/runs/:id`.
     .route(
       "/v1/harness/sessions/:id",
-      get(get_harness_session).post(cancel_harness_session),
+      get(get_harness_session).post(post_harness_session_action),
     )
     .route(
       "/v1/harness/sessions/:id/events/history",

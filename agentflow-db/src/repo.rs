@@ -96,6 +96,15 @@ pub trait HarnessSessionRepo: Send + Sync {
     final_answer: Option<&str>,
     error: Option<&str>,
   ) -> Result<(), DbError>;
+  /// Reset a terminal session back to `running` so a fresh executor
+  /// run can write into the same row (P-H.5 slice 4 resume route).
+  ///
+  /// Clears `finished_at`, `final_answer`, and `error`, replaces
+  /// `user_input` if `new_user_input` is provided, and deletes every
+  /// existing `harness_session_events` row that referenced this
+  /// session via the FK CASCADE. The transaction is atomic so a
+  /// concurrent reader never observes a half-reset state.
+  async fn reset_for_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError>;
 }
 
 /// Harness session event log persistence (P-H.5).
@@ -495,6 +504,38 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
         id: id.to_string(),
       });
     }
+    Ok(())
+  }
+
+  async fn reset_for_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError> {
+    let mut tx = self.pool.begin().await?;
+    // CASCADE on the FK already wipes harness_session_events when the
+    // session row is deleted, but we keep the session row — so the
+    // child rows are deleted explicitly here.
+    sqlx::query("DELETE FROM harness_session_events WHERE session_id = $1")
+      .bind(id)
+      .execute(&mut *tx)
+      .await?;
+    let result = sqlx::query(
+      r#"UPDATE harness_sessions
+         SET status = 'running',
+             finished_at = NULL,
+             final_answer = NULL,
+             error = NULL,
+             user_input = $2
+         WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(new_user_input)
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+      return Err(DbError::NotFound {
+        entity_type: "harness_session",
+        id: id.to_string(),
+      });
+    }
+    tx.commit().await?;
     Ok(())
   }
 }

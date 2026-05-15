@@ -493,6 +493,35 @@ pub async fn get_harness_session(
   Ok(Json(HarnessSessionResponse { session }))
 }
 
+/// Dispatcher for the two POST actions on `/v1/harness/sessions/{id}`.
+///
+/// Axum can't bind two POST handlers to the same path pattern, so the
+/// router routes both `:cancel` and `:resume` here and the handler
+/// dispatches on the suffix. The raw `:id` capture includes the
+/// suffix verbatim (e.g. `<uuid>:cancel`); the matching handler strips
+/// it before parsing the UUID.
+pub async fn post_harness_session_action(
+  state: State<AppState>,
+  Path(id_action): Path<String>,
+  body: Option<Json<ResumeHarnessSessionRequest>>,
+) -> Result<axum::response::Response, ApiError> {
+  use axum::response::IntoResponse;
+  if id_action.ends_with(":cancel") {
+    return cancel_harness_session(state, Path(id_action))
+      .await
+      .map(IntoResponse::into_response);
+  }
+  if id_action.ends_with(":resume") {
+    let body = body.map(|Json(value)| value).unwrap_or_default();
+    return resume_harness_session(state, Path(id_action), Json(body))
+      .await
+      .map(IntoResponse::into_response);
+  }
+  Err(ApiError::BadRequest(
+    "harness session action route must end with :cancel or :resume".into(),
+  ))
+}
+
 /// `POST /v1/harness/sessions/{id}:cancel` — idempotently cancel a running
 /// session. Terminal sessions return the current row with
 /// `cancelled: false`.
@@ -552,6 +581,132 @@ pub async fn cancel_harness_session(
   Ok(Json(CancelHarnessSessionResponse {
     session,
     cancelled: true,
+  }))
+}
+
+/// Body for `POST /v1/harness/sessions/{id}:resume`.
+///
+/// `user_input` is optional: omitting it replays the original prompt.
+/// Pass a new prompt to extend the session with a follow-up
+/// instruction. Other lifecycle fields (workspace, profile, runtime,
+/// model, skill) are taken from the existing row — operators rerun
+/// against the same shape, not a new shape.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ResumeHarnessSessionRequest {
+  #[serde(default)]
+  pub user_input: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResumeHarnessSessionResponse {
+  #[serde(flatten)]
+  pub session: HarnessSession,
+  pub resumed: bool,
+}
+
+/// `POST /v1/harness/sessions/{id}:resume` — rerun a session from
+/// scratch.
+///
+/// **Semantic (v1):** resume clears prior persisted events, flips the
+/// row back to `running`, and spawns a fresh `HarnessSessionExecutor`
+/// run with the same `session_id`. The original `user_input` is
+/// reused unless the request body overrides it.
+///
+/// This is the simplest semantic that works against the current
+/// `HarnessRuntime`, whose `seq` counter is local and starts at 0 on
+/// every `run()`. Append-mode resume (preserving prior events and
+/// continuing the seq series) needs a `HarnessRuntime::with_initial_seq`
+/// upstream — tracked as a P-H follow-up. Rerun semantics are
+/// nevertheless useful in practice: retry-with-tweak debugging, rerun
+/// after a transient LLM failure, swap the prompt without abandoning
+/// the row.
+///
+/// Returns 409 Conflict when the session is still running so two
+/// reruns can't race the same row. Cancel first if needed.
+pub async fn resume_harness_session(
+  State(state): State<AppState>,
+  Path(id_resume): Path<String>,
+  Json(body): Json<ResumeHarnessSessionRequest>,
+) -> Result<Json<ResumeHarnessSessionResponse>, ApiError> {
+  let id_raw = id_resume.strip_suffix(":resume").ok_or_else(|| {
+    ApiError::BadRequest("harness session resume route must end with :resume".into())
+  })?;
+  let id = Uuid::parse_str(id_raw)
+    .map_err(|_| ApiError::BadRequest(format!("invalid harness session id '{}'", id_raw)))?;
+
+  let session = state
+    .repos
+    .harness_sessions
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", id)))?;
+
+  if !HarnessSessionStatus::parse(&session.status)
+    .map(HarnessSessionStatus::is_terminal)
+    .unwrap_or(false)
+  {
+    return Err(ApiError::BadRequest(format!(
+      "harness session {} is still {}; cancel before resuming",
+      id, session.status
+    )));
+  }
+
+  // Pick the next prompt: explicit override, else the original.
+  let user_input = body
+    .user_input
+    .as_deref()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string)
+    .unwrap_or_else(|| session.user_input.clone());
+
+  // Clear the prior event log so the inner runtime's seq counter (which
+  // starts at 0 every run) doesn't collide with persisted rows. This is
+  // a destructive operation by design — see the function's docstring.
+  state
+    .repos
+    .harness_sessions
+    .reset_for_resume(id, &user_input)
+    .await?;
+
+  // Spawn the executor in the background. The HTTP request returns
+  // immediately with the refreshed row.
+  let executor = state.harness_executor.clone();
+  let repos = state.repos.clone();
+  let broker = state.harness_broker.clone();
+  let workspace_root = session.workspace_root.clone();
+  let profile = session.profile.clone();
+  let runtime_kind = session.runtime_kind.clone();
+  let model = session.model.clone();
+  let skill_name = session.skill_name.clone();
+  let user_input_owned = user_input.clone();
+  tokio::spawn(async move {
+    executor
+      .execute(HarnessSessionContext {
+        session_id: id,
+        user_input: user_input_owned,
+        workspace_root,
+        profile,
+        runtime_kind,
+        model,
+        skill_name,
+        repos,
+        broker,
+      })
+      .await;
+  });
+
+  // Refetch so the response reflects the freshly-reset row (status,
+  // cleared finished_at / final_answer / error, optional new prompt).
+  let session = state
+    .repos
+    .harness_sessions
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", id)))?;
+  Ok(Json(ResumeHarnessSessionResponse {
+    session,
+    resumed: true,
   }))
 }
 
