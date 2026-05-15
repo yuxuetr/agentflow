@@ -85,6 +85,7 @@ but do not implement channel adapters in this queue.
 - P4.4 follow-up trio (3 commits): (1) skill-aware factory + tool admission via new `SkillBuilder::build_with_admission` — `case.skill` cases now route through full skill loading with `tools_allowed/denied` filtering the registry pre-run. (2) real cost tracking via new `AgentEvent::LlmCallCompleted` + `PricingTable` (loadable from `AGENTFLOW_PRICING_TABLE` env or `~/.agentflow/pricing.yml`) — `cost_usd_actual` now reflects real per-call token usage × per-model rates, and `case.cost_limit_usd` is actually enforced. (3) `docs/SKILL_VALIDATOR_PROTOCOL.md` defines the v1 `[validation]` manifest section that backs the `final_answer_matches_skill` assertion.
 - SKILL_VALIDATOR_PROTOCOL implementation (2 commits): `agentflow-skills::validator` ships `SkillValidator` trait + `RegexValidator` + `CommandValidator` + `build_validator` factory; manifest gains `[validation] kind = "none" | "regex" | "command"`. `SkillLoader::validate` pre-compiles validators so bad regex / empty command surfaces at load time. Assertion-layer closure return promoted to `SkillValidatorVerdict { Pass | Fail{reason} | Unrunnable{reason} }`. CLI eval factory caches per-skill validators and wires them through `skill_validator(case)`. Tests: 22 new (16 unit in skills + 3 unit in assertions + 3 CLI integration). `final_answer_matches_skill` Just Works end-to-end against skills with `[validation]`.
 - P4.1 RAG eval CI fixture: `agentflow-rag/eval_datasets/ci_offline/` ships a 20-doc synthetic CC0 corpus + 10 queries + qrels; `agentflow-cli/tests/rag_eval_cli_tests.rs` (gated on `rag`) drives the CLI end-to-end and locks the JSON envelope shape downstream consumers depend on, with a Recall@5 ≥ 0.8 sanity gate. New `rag-eval-smoke` Quality job listed in `release-gate.needs` so schema or quality regressions fail the gate. Today: BM25 Recall@5=1.0, MRR=1.0, p95 latency ~0.1ms.
+- P4.2 RAG eval baseline snapshots: `agentflow-rag/eval_baselines/ci_offline/bm25.json` is the checked-in baseline. `ComparisonReport.paired_sign_p_value` adds a real one-tailed binomial p-value computed in log-space. CLI gains `--compare-baseline <path>` + tunable `--regression-recall-threshold` (default 0.03) + `--regression-p-value` (default 0.05); BOTH must trip jointly to fail. CI's rag-eval-smoke now runs schema tests + gate-logic unit tests + live baseline comparison. 16 new tests total (6 p-value math + 7 gate-logic + 3 CLI integration).
 
 ---
 
@@ -624,14 +625,30 @@ regression-safe.
     `release-gate.needs` so schema or quality regressions fail the
     release gate.
 
-- TODO P4.2 RAG eval baseline snapshots:
-  - Store baseline metric snapshots under
-    `agentflow-rag/eval_baselines/<dataset>/<retriever>.json`.
-  - Add `agentflow rag eval --compare-baseline` that emits a candidate-vs-
-    baseline report with paired sign test p-value.
-  - CI fails when candidate is statistically worse than baseline by a
-    configurable threshold (default: p < 0.05 + ≥3% absolute drop in
-    `recall@5`).
+- DONE P4.2 RAG eval baseline snapshots:
+  - `ComparisonReport.paired_sign_p_value: Option<f64>` carries the
+    one-tailed binomial p-value testing "candidate is worse than
+    baseline" — `P(X ≤ wins | X ~ Binomial(wins+losses, 0.5))`,
+    computed in log-space for numerical stability.
+  - `agentflow-rag/eval_baselines/ci_offline/bm25.json` is the
+    checked-in baseline; today's fresh run matches it (gate PASS,
+    p-value n/a because all queries tie at perfect RR).
+  - `agentflow rag eval --compare-baseline <path>` loads an
+    `EvalReport` from disk, runs the fresh eval as candidate, and
+    applies the regression gate. `--regression-recall-threshold`
+    (default 0.03) and `--regression-p-value` (default 0.05) make
+    both knobs operator-tunable. BOTH criteria must trip together
+    to flag a regression — single hits inform but don't gate.
+  - CLI exits 1 when regression detected; JSON envelope carries a
+    new `regression` block with the decision + thresholds used.
+  - `--compare-to` and `--compare-baseline` are mutually exclusive.
+  - Quality CI's `rag-eval-smoke` job now runs the schema test, the
+    gate-logic unit tests, AND the live baseline comparison. Future
+    regressions that cross both thresholds will fail the release
+    gate.
+  - Tests: 6 new unit (paired sign p-value math) + 7 new unit
+    (`evaluate_regression` gate logic) + 3 new CLI integration
+    (compare-baseline PASS, JSON regression block, mutex flags).
 
 - DONE P4.3 Agent eval format design:
   - `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for
