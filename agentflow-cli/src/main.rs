@@ -8,8 +8,8 @@ use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{
-  audio, config as config_cmd, doctor, harness, image, llm, marketplace, mcp, serve as serve_cmd,
-  skill, trace, workflow,
+  audio, cleanup as cleanup_cmd, config as config_cmd, doctor, harness, image, llm, marketplace,
+  mcp, serve as serve_cmd, skill, trace, workflow,
 };
 
 #[derive(Parser)]
@@ -45,6 +45,8 @@ enum Commands {
   Harness(HarnessArgs),
   /// Boot the AgentFlow Gateway (Axum HTTP API) by spawning `agentflow-server`
   Serve(ServeArgs),
+  /// Run the retention sweep once and exit (delegates to `agentflow-server --cleanup`)
+  Cleanup(CleanupArgs),
   #[cfg(feature = "plugin")]
   /// Plugin management commands (subprocess plugins)
   Plugin(PluginArgs),
@@ -120,6 +122,25 @@ struct DoctorArgs {
 struct HarnessArgs {
   #[command(subcommand)]
   command: HarnessCommands,
+}
+
+#[derive(Args)]
+struct CleanupArgs {
+  /// Postgres URL (default env: DATABASE_URL)
+  #[arg(long)]
+  database_url: Option<String>,
+  /// Workflow run-artifact root (env: AGENTFLOW_RUN_DIR)
+  #[arg(long)]
+  run_dir: Option<String>,
+  /// Trace directory (env: AGENTFLOW_TRACE_DIR)
+  #[arg(long)]
+  trace_dir: Option<String>,
+  /// Active security profile (drives retention defaults)
+  #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+  security_profile: String,
+  /// Preview targets without deleting anything
+  #[arg(long)]
+  dry_run: bool,
 }
 
 #[derive(Args)]
@@ -1177,6 +1198,16 @@ async fn main() {
       (Ok(format), Ok(profile)) => doctor::execute(format, profile, args.server).await,
       (Err(err), _) | (_, Err(err)) => Err(err),
     },
+    Commands::Cleanup(args) => {
+      cleanup_cmd::execute(
+        args.database_url,
+        args.run_dir,
+        args.trace_dir,
+        args.security_profile,
+        args.dry_run,
+      )
+      .await
+    }
     Commands::Serve(args) => {
       serve_cmd::execute(
         args.bind,

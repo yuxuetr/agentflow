@@ -24,6 +24,7 @@ use agentflow_db::{Database, Repositories};
 use agentflow_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 
 pub mod auth;
+pub mod cleanup;
 pub mod error;
 pub mod events_stream;
 pub mod runs;
@@ -35,6 +36,9 @@ pub mod ui;
 pub use auth::{
   AuthConfig, AuthConfigError, require_bearer_token, resolve_auth_config,
   resolve_auth_config_from_env,
+};
+pub use cleanup::{
+  CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
 };
 pub use error::ApiError;
 pub use events_stream::{

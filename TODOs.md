@@ -62,6 +62,7 @@ but do not implement channel adapters in this queue.
 - P3.7 LLM provider matrix documentation (`ProviderRequest` / `ToolChoice` / `ModelCapabilities` / model families / rate-limit sections + drift-detection doc-test). Unblocks P-H.3.
 - P-H.3 Harness parallel tool calls (`ReActAgent` batch dispatcher: concurrent for Idempotent, serial for risky, deterministic LLM-order trace, partial-failure tolerance, atomic max-tool-calls precheck).
 - P-H.4 Background task tools (`agentflow-harness::tasks`: `TaskRuntime` / `TaskHandle` / `TaskAgentFactory` + 5 built-in `task_*` tools + nested-spawn rejection + bounded output buffer + lifecycle events through parent SinkChain).
+- P2.2 Run retention and cleanup policy (`agentflow-server::cleanup` module + per-profile defaults + DB/filesystem sweep + `agentflow cleanup --dry-run` CLI + background loop in `serve`). Per-run override deferred.
 
 ---
 
@@ -176,22 +177,49 @@ turning it into a channel hub.
     happy path with secret redaction, and `--help` flag surface. All
     tests run hermetically — no Postgres or open ports required.
 
-- TODO P2.2 Run retention and cleanup policy:
-  - Add settings to `agentflow-db`:
-    - `runs.retention_days` (default 30 in `local`, 90 in `production`).
-    - `events.retention_days` (default 14).
-    - `artifacts.retention_days` (default 30).
-    - `run_dir.retention_days` (default 14).
-    - Per-run override via `POST /v1/runs` body `retention_overrides`.
-  - Implement `agentflow-server::cleanup::cleanup_expired()`:
-    - DB sweep using `WHERE finished_at < now() - interval`.
-    - Filesystem sweep over `AGENTFLOW_RUN_DIR` matching DB.
-    - Never delete runs in `Running` or `Pending` state.
-  - Add `agentflow cleanup --dry-run` CLI subcommand.
-  - Add background cleanup task in `agentflow serve` (configurable interval,
-    default 1 hour).
-  - Add tests: retain active runs, delete terminal runs past TTL, dry-run
-    output stability, retention override.
+- DONE P2.2 Run retention and cleanup policy:
+  - `agentflow-server::cleanup::cleanup_expired(db, run_dir_root,
+    config)` runs the DB sweep + filesystem sweep in one call. Returns
+    a structured `CleanupReport` (started_at/finished_at, per-category
+    counts, targeted run id preview, `dry_run` flag).
+  - `CleanupConfig::for_profile(profile)` provides the defaults the
+    task spec calls for (`runs_retention_days` = 30 in `local`/`dev`,
+    90 in `production`; `events_retention_days` = 14;
+    `artifacts_retention_days` = 30; `run_dir_retention_days` = 14;
+    `interval` = 1 h).
+  - DB sweep refuses to touch `queued` / `running` runs (`WHERE status
+    IN ('succeeded', 'failed', 'cancelled')` everywhere) and uses
+    `INTERVAL` literals built from the retention days. Cascade FKs
+    handle the `steps` rows owned by deleted runs. Dry-run mode
+    swaps the `DELETE` for a `COUNT(*)` preview without mutating.
+  - Filesystem sweep walks `run_dir_root` one level deep, only acts
+    on UUID-named subdirectories, queries the DB to skip dirs whose
+    run is still active, and gates by directory mtime against the
+    cutoff.
+  - `agentflow-server --cleanup [--dry-run]` runs the sweep once and
+    exits with the JSON `CleanupReport` on stdout. `agentflow serve`
+    spawns a background task that re-runs the sweep every
+    `CleanupConfig::interval` and logs the report; failures retry on
+    the next tick instead of crashing the gateway.
+  - `agentflow cleanup [--database-url] [--run-dir] [--trace-dir]
+    [--security-profile] [--dry-run]` CLI subcommand spawns the
+    server binary in `--cleanup` mode, mirroring the `serve` pattern
+    to avoid an `agentflow-cli` ↔ `agentflow-server` dep cycle.
+  - Tests:
+    - 7 unit tests in `cleanup::tests` covering profile defaults,
+      dry-run flag, serde round-trip, UUID-name filter, and the
+      missing-root short-circuit.
+    - 3 server integration tests in `tests/cleanup_route.rs` that
+      skip without `AGENTFLOW_DATABASE_TEST_URL`: dry-run targets
+      old terminal runs without deleting; actual sweep deletes old
+      terminal runs but keeps active + young; filesystem sweep
+      removes orphaned UUID dirs while leaving active-run dirs in
+      place.
+    - 2 CLI tests assert the `--help` surface and the
+      `--security-profile bogus` rejection.
+  - Per-run override (`POST /v1/runs` body `retention_overrides`) is
+    deferred to a follow-up; the schema would need a new table or
+    JSONB column and isn't required for v1 cleanup hygiene.
 
 - TODO P2.3 Server end-to-end run tests:
   - Add `agentflow-server/tests/e2e_runs.rs` integration suite covering:

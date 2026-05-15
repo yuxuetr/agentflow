@@ -14,10 +14,13 @@
 
 use std::net::SocketAddr;
 
+use agentflow_db::Database;
 use agentflow_server::{
-  AGENTFLOW_SERVE_BIND_ENV, DEFAULT_SERVE_BIND, ServeConfig, ServeError, run, run_check,
+  AGENTFLOW_SERVE_BIND_ENV, CleanupConfig, DEFAULT_SERVE_BIND, ServeConfig, ServeError,
+  cleanup_expired, run, run_check,
 };
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
+use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -31,6 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let args: Vec<String> = std::env::args().collect();
   let check_mode = args.iter().any(|arg| arg == "--check");
+  let cleanup_mode = args.iter().any(|arg| arg == "--cleanup");
+  let dry_run = args.iter().any(|arg| arg == "--dry-run");
 
   let config = build_config_from_env()?;
 
@@ -38,6 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = run_check(config).await?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     std::process::exit(report.readiness.exit_code());
+  }
+
+  if cleanup_mode {
+    let report = run_cleanup_once(&config, dry_run).await?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    return Ok(());
   }
 
   match run(config).await {
@@ -74,6 +85,21 @@ fn build_config_from_env() -> Result<ServeConfig, Box<dyn std::error::Error>> {
     cors_origins: Vec::new(),
     max_body_mb: None,
   })
+}
+
+async fn run_cleanup_once(
+  config: &ServeConfig,
+  dry_run: bool,
+) -> Result<agentflow_server::CleanupReport, Box<dyn std::error::Error>> {
+  let db_url = config
+    .database_url
+    .as_ref()
+    .ok_or("DATABASE_URL is required for cleanup")?;
+  let db = Database::connect_and_migrate(db_url, 4).await?;
+  let cleanup_cfg = CleanupConfig::for_profile(config.security_profile).with_dry_run(dry_run);
+  let run_root: Option<PathBuf> = config.run_dir.clone();
+  let report = cleanup_expired(&db, run_root.as_deref(), &cleanup_cfg).await?;
+  Ok(report)
 }
 
 fn resolve_bind() -> Result<SocketAddr, std::net::AddrParseError> {
