@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
-Last updated: 2026-05-14
-Status: **Phase H0 + H1 + H2 closed.** H3 (parallel native tool calls) is the next active phase, gated on `P3.7` LLM provider matrix documentation.
+Last updated: 2026-05-15
+Status: **Phase H0 + H1 + H2 + H3 closed.** H4 (background task tools) is the next active phase; no platform prereq.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -355,6 +355,7 @@ cancelled, timeout).
 | H0 | P-H.0 | Contract inventory (this doc) | **closed** |
 | H1 | P-H.1 | Runtime MVP, default providers, CLI entry | **closed** |
 | H2 | P-H.2 | Hooks + approval (`wrap_registry`, 3 providers, production fail-closed) | **closed** |
+| H3 | P-H.3 | Parallel native tool calls (ReAct batch dispatcher, deterministic LLM-order trace) | **closed** |
 | H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |

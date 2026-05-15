@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 closed; H3 unblocked (P3.7 closed) |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 closed; H4 next (no platform prereq) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -60,6 +60,7 @@ but do not implement channel adapters in this queue.
 - P2.1 `agentflow serve` command (`ServeConfig` + `run` / `run_check` library hooks + `agentflow serve --check` structured readiness diagnostic + subprocess wrapper).
 - P-H.2 Hooks and approval (`HookedTool` wrapper + `wrap_registry` + 3 `ApprovalProvider`s + fail-closed Production escalation + traced approval lifecycle with scope cache).
 - P3.7 LLM provider matrix documentation (`ProviderRequest` / `ToolChoice` / `ModelCapabilities` / model families / rate-limit sections + drift-detection doc-test). Unblocks P-H.3.
+- P-H.3 Harness parallel tool calls (`ReActAgent` batch dispatcher: concurrent for Idempotent, serial for risky, deterministic LLM-order trace, partial-failure tolerance, atomic max-tool-calls precheck).
 
 ---
 
@@ -823,16 +824,41 @@ Architectural rules (enforced via review):
 
 ### After P3.7 — Parallel Native Tool Calls
 
-- TODO P-H.3 Parallel tool calls (Phase H3; ~1-2 weeks; PREREQ: P-H.2,
-  P3.7):
-  - Modify ReAct dispatch to consume `tool_calls` array atomically per
-    LLM turn.
-  - Concurrent execution for safe (Idempotent) tools.
-  - Serial + approval-gated for risky tools.
-  - Deterministic trace ordering: emit `ToolCallStarted` events in the
-    LLM-returned order even when execution is concurrent.
-  - Tests for mixed safe/risky batches, partial failure (one tool fails,
-    others continue), cancellation mid-batch.
+- DONE P-H.3 Parallel tool calls (Phase H3):
+  - `ReActAgent::run_with_context` adds a new batch path: when the
+    LLM returns `>= 2` native tool calls in one turn, the agent
+    dispatches them through `dispatch_native_tool_calls_batch`
+    atomically. The previous single-call path keeps working for
+    `len == 1` and for prompt-based ReAct turns.
+  - **Concurrent + serial split.** Tools whose
+    `ToolIdempotency::Idempotent` flag is set run concurrently via
+    `futures::future::join_all`; everything else (`NonIdempotent` /
+    `Unknown`) runs serially in array order. The harness
+    `HookedTool` wrapper continues to gate risky calls through the
+    `ApprovalProvider` flow (P-H.2), so "approval-gated" behaviour
+    is composed, not duplicated.
+  - **Deterministic trace ordering.** `ToolPolicyDecision`,
+    `ToolCapabilityDecision`, `ToolCallStarted`, and the `ToolCall`
+    step rows fire in LLM-returned order before any execution
+    begins. `ToolCallCompleted` events and `ToolResult` step rows
+    also follow that order, so trace replay reproduces the same
+    timeline whether the wire-level completion order matched the
+    LLM order or not.
+  - **Pre-flight atomicity.** A batch that would push the running
+    tool-call counter past `RuntimeLimits::max_tool_calls` is
+    refused before any inner tool runs (stop reason
+    `MaxToolCalls`). Pre-cancelled tokens short-circuit before the
+    concurrent group spawns.
+  - **Partial failure tolerance.** A single tool failing inside a
+    batch produces a `ToolOutput::error` for that call, the other
+    calls still complete, and the agent loop continues to the next
+    LLM turn. A single combined reflection records the error list
+    instead of emitting one reflection per failed call.
+  - Tests (4 new): batch ordering + LLM-order trace; partial
+    failure (1 errors, 2 succeed); pre-cancelled token returns
+    `Cancelled`; `max_tool_calls=2` with a 3-call batch returns
+    `MaxToolCalls` without executing any tool.
+  - `futures = "0.3"` added to `agentflow-agents` dependencies.
 
 ### After P-H.0 Spec + In-Process Task Runtime Design
 

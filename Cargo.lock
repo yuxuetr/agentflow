@@ -38,6 +38,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures",
  "reqwest 0.12.24",
  "serde",
  "serde_json",
