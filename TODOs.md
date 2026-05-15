@@ -37,7 +37,7 @@ but do not implement channel adapters in this queue.
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | NEW — active |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 closed; H4 next (no platform prereq) |
+| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -61,6 +61,7 @@ but do not implement channel adapters in this queue.
 - P-H.2 Hooks and approval (`HookedTool` wrapper + `wrap_registry` + 3 `ApprovalProvider`s + fail-closed Production escalation + traced approval lifecycle with scope cache).
 - P3.7 LLM provider matrix documentation (`ProviderRequest` / `ToolChoice` / `ModelCapabilities` / model families / rate-limit sections + drift-detection doc-test). Unblocks P-H.3.
 - P-H.3 Harness parallel tool calls (`ReActAgent` batch dispatcher: concurrent for Idempotent, serial for risky, deterministic LLM-order trace, partial-failure tolerance, atomic max-tool-calls precheck).
+- P-H.4 Background task tools (`agentflow-harness::tasks`: `TaskRuntime` / `TaskHandle` / `TaskAgentFactory` + 5 built-in `task_*` tools + nested-spawn rejection + bounded output buffer + lifecycle events through parent SinkChain).
 
 ---
 
@@ -862,20 +863,44 @@ Architectural rules (enforced via review):
 
 ### After P-H.0 Spec + In-Process Task Runtime Design
 
-- TODO P-H.4 Background task tools (Phase H4; ~2-3 weeks; PREREQ: P-H.2):
-  - Implement in-process task runtime in `agentflow-harness::tasks`:
-    - `TaskHandle` with id, status, output buffer, cancellation.
-    - Lifecycle: `Pending → Running → Completed | Failed | Cancelled`.
-  - Built-in tools for the agent to invoke:
-    - `task_create(prompt, skill?, tools_allowed?)`.
-    - `task_get(task_id)`.
-    - `task_list(filter?)`.
-    - `task_stop(task_id)`.
-    - `task_output(task_id, tail_lines?)`.
-  - Trace and cancellation integration with the parent session.
-  - Output capture with `max_output_bytes` enforcement.
-  - Tests for: spawn → complete, spawn → cancel, spawn → fail,
-    nested task spawn rejection (avoid runaway hierarchy).
+- DONE P-H.4 Background task tools (Phase H4):
+  - New `agentflow-harness::tasks` module implements an in-process
+    task runtime. Each task is a `tokio::spawn`-backed future running
+    an inner `Box<dyn AgentRuntime>` produced by a caller-supplied
+    `TaskAgentFactory`. The factory keeps the runtime agnostic of
+    LLM config, memory backend, and tool registry.
+  - `TaskHandle` captures id, prompt, status, skill, allowed tools,
+    timestamps, final answer / error, captured output, and a
+    `output_truncated` flag. Lifecycle:
+    `Pending → Running → Completed | Failed | Cancelled` with
+    `is_terminal()` short-circuit on stops + cancels.
+  - Five built-in tools (`task_create`, `task_get`, `task_list`,
+    `task_stop`, `task_output`) wrap the runtime as standard
+    `agentflow_tools::Tool` impls. `task_tools(runtime)` helper
+    returns them in a registration-ready vec.
+  - Every lifecycle transition emits one
+    `HarnessEvent::BackgroundTaskUpdated` through the parent
+    session's `SinkChain` using the shared `seq_counter`, so child
+    task events interleave deterministically with approval / tool
+    events.
+  - Cancellation: `task_stop` flips an `AgentCancellationToken` the
+    runtime threads through `AgentContext`, so the inner agent
+    aborts promptly. The runtime overrides any factory-supplied
+    token so `task_stop` always wins.
+  - **Nested spawn rejection.** The spawned task runs inside
+    `tokio::task_local!`-scoped `IN_BACKGROUND_TASK`. `TaskRuntime
+    ::create_task` returns `HarnessError::InvalidState` when called
+    from inside that scope — so a task agent calling `task_create`
+    again fails fast with a clear error, no runaway hierarchies.
+  - Output capture: `TaskWriter::push_line` is bounded by
+    `max_output_bytes` (default 64 KiB). Overflow flips
+    `output_truncated` instead of failing the task. `task_output`
+    accepts `tail_lines` to return only the most recent lines.
+  - Tests (8 new): spawn → complete with full lifecycle event
+    sequence; spawn → fail; spawn → stop yields Cancelled; nested
+    spawn rejection; list filter + sort; output truncation;
+    `TaskCreateTool` routes through runtime; `task_tools` helper
+    name set.
 
 ### After P2.1+P2.2+P2.4 + P6 Web UI Baseline
 

@@ -39,6 +39,7 @@ pub mod hooks_runtime;
 pub mod persistence;
 pub mod providers;
 pub mod runtime;
+pub mod tasks;
 pub mod tracing_bridge;
 
 pub use approval::{
@@ -70,6 +71,11 @@ pub use providers::{
   WorkspaceLayoutProvider, default_providers,
 };
 pub use runtime::{HarnessRunOptions, HarnessRunResult, HarnessRuntime};
+pub use tasks::{
+  DEFAULT_MAX_OUTPUT_BYTES, TaskAgentBundle, TaskAgentFactory, TaskCreateTool, TaskGetTool,
+  TaskHandle, TaskListTool, TaskOutputSnapshot, TaskOutputTool, TaskRuntime, TaskSpec, TaskStatus,
+  TaskStopTool, TaskWriter, task_tools,
+};
 pub use tracing_bridge::{AGENTFLOW_TRACE_DIR_ENV, open_tracing_sink, resolve_trace_session_dir};
 
 /// Crate version exposed for diagnostics; matches `Cargo.toml`.
