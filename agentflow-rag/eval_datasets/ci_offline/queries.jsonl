@@ -1,0 +1,10 @@
+{"id":"q-rust-ownership","text":"How does Rust enforce memory safety without a garbage collector?"}
+{"id":"q-rust-async","text":"What async runtime is used for Rust networked services?"}
+{"id":"q-python-types","text":"What are Python type hints and how are they checked?"}
+{"id":"q-go-concurrency","text":"How does Go support concurrency?"}
+{"id":"q-linux-containers","text":"Which kernel features enable Linux containers?"}
+{"id":"q-tcp-vs-udp","text":"What is the difference between TCP and UDP transport protocols?"}
+{"id":"q-http-versions","text":"How do HTTP/2 and HTTP/3 differ from HTTP/1.1?"}
+{"id":"q-bigo-sorting","text":"What is the lower bound on comparison-based sorting?"}
+{"id":"q-turing-lambda","text":"What is the relationship between Turing machines and lambda calculus?"}
+{"id":"q-pubkey-crypto","text":"How does public key cryptography use key pairs?"}

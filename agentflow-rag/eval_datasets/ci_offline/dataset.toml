@@ -1,0 +1,12 @@
+name = "ci-offline"
+version = "0.1.0"
+source = "internal-synthetic"
+license = "CC0-1.0"
+description = """
+Synthetic public-domain CI fixture for the RAG eval harness. 20 short
+factual corpus docs covering programming languages, operating systems,
+networking, and CS theory; 10 queries with graded qrels (0–3). Designed
+so BM25 can cleanly distinguish relevant from irrelevant docs — the
+recall / nDCG numbers are the schema regression signal, not a quality
+claim about the retriever itself.
+"""

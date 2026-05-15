@@ -1,0 +1,10 @@
+{"query_id":"q-rust-ownership","relevances":{"doc-rust-001":3,"doc-rust-002":1}}
+{"query_id":"q-rust-async","relevances":{"doc-rust-002":3,"doc-rust-001":1}}
+{"query_id":"q-python-types","relevances":{"doc-python-002":3,"doc-python-001":1}}
+{"query_id":"q-go-concurrency","relevances":{"doc-go-001":3}}
+{"query_id":"q-linux-containers","relevances":{"doc-linux-002":3,"doc-linux-001":1}}
+{"query_id":"q-tcp-vs-udp","relevances":{"doc-tcp-001":3,"doc-udp-001":3}}
+{"query_id":"q-http-versions","relevances":{"doc-http-001":3}}
+{"query_id":"q-bigo-sorting","relevances":{"doc-sort-001":3,"doc-bigo-001":2}}
+{"query_id":"q-turing-lambda","relevances":{"doc-turing-001":3,"doc-lambda-001":3}}
+{"query_id":"q-pubkey-crypto","relevances":{"doc-crypto-001":3}}

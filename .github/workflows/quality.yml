@@ -124,6 +124,15 @@ jobs:
       - name: Check feature combination
         run: ${{ matrix.command }}
 
+  rag-eval-smoke:
+    name: rag eval schema regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run RAG eval CI fixture (BM25, schema gate)
+        run: cargo test -p agentflow-cli --features rag --test rag_eval_cli_tests
+
   examples:
     name: examples compile and smoke
     runs-on: ubuntu-latest
@@ -164,6 +173,7 @@ jobs:
       - doctest
       - features
       - examples
+      - rag-eval-smoke
     if: ${{ always() }}
     steps:
       - name: Summarize required gates
@@ -176,6 +186,7 @@ jobs:
           echo "doctest: ${{ needs.doctest.result }}"
           echo "features: ${{ needs.features.result }}"
           echo "examples: ${{ needs.examples.result }}"
+          echo "rag-eval-smoke: ${{ needs.rag-eval-smoke.result }}"
           test "${{ needs.fmt.result }}" = "success"
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
@@ -184,3 +195,4 @@ jobs:
           test "${{ needs.doctest.result }}" = "success"
           test "${{ needs.features.result }}" = "success"
           test "${{ needs.examples.result }}" = "success"
+          test "${{ needs.rag-eval-smoke.result }}" = "success"
