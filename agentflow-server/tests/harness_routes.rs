@@ -46,6 +46,12 @@ async fn body_json(response: axum::response::Response) -> Value {
 }
 
 async fn submit_basic_session(app: axum::Router, prompt: &str) -> Uuid {
+  submit_for_tenant(app, prompt, "default").await
+}
+
+/// Variant that pins a specific tenant so list-ordering tests can isolate
+/// themselves from parallel test inserts on the shared `default` tenant.
+async fn submit_for_tenant(app: axum::Router, prompt: &str, tenant: &str) -> Uuid {
   let response = app
     .oneshot(
       Request::builder()
@@ -56,6 +62,7 @@ async fn submit_basic_session(app: axum::Router, prompt: &str) -> Uuid {
           serde_json::to_vec(&json!({
             "user_input": prompt,
             "workspace_root": "/tmp",
+            "tenant_id": tenant,
           }))
           .unwrap(),
         ))
@@ -139,17 +146,20 @@ async fn list_sessions_returns_newest_first() {
     return;
   };
 
+  // Pin both submissions to a unique tenant so parallel tests can't
+  // race their own `default`-tenant inserts into our listing.
+  let tenant = format!("list-ordering-{}", Uuid::new_v4());
   let app = create_router(state);
-  let first = submit_basic_session(app.clone(), "first").await;
-  // Small delay so started_at ordering is stable.
+  let first = submit_for_tenant(app.clone(), "first", &tenant).await;
+  // Small delay so started_at ordering is stable across the two rows.
   tokio::time::sleep(Duration::from_millis(10)).await;
-  let second = submit_basic_session(app.clone(), "second").await;
+  let second = submit_for_tenant(app.clone(), "second", &tenant).await;
 
   let response = app
     .oneshot(
       Request::builder()
         .method("GET")
-        .uri("/v1/harness/sessions")
+        .uri(format!("/v1/harness/sessions?tenant_id={}", tenant))
         .body(Body::empty())
         .unwrap(),
     )
@@ -158,7 +168,7 @@ async fn list_sessions_returns_newest_first() {
   assert_eq!(response.status(), StatusCode::OK);
   let body = body_json(response).await;
   let sessions = body["sessions"].as_array().expect("sessions is array");
-  assert!(sessions.len() >= 2);
+  assert_eq!(sessions.len(), 2, "tenant-scoped listing returns both rows");
   // Newest first — submitted-second should land at index 0.
   assert_eq!(sessions[0]["id"], second.to_string());
   assert_eq!(sessions[1]["id"], first.to_string());
