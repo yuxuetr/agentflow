@@ -171,3 +171,88 @@ fn cli_rag_eval_ci_offline_loads_without_output_flag() {
     .assert()
     .success();
 }
+
+// ── P4.2 baseline-snapshot regression gate ─────────────────────────────
+
+fn baseline_snapshot_path() -> String {
+  format!(
+    "{}/../agentflow-rag/eval_baselines/ci_offline/bm25.json",
+    env!("CARGO_MANIFEST_DIR")
+  )
+}
+
+#[test]
+fn cli_rag_eval_compare_baseline_passes_against_checked_in_snapshot() {
+  // The committed snapshot was produced by the same BM25 + dataset
+  // combo, so a fresh run must match it. Exit 0 + regression gate PASS.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &fixture_path(),
+      "--compare-baseline",
+      &baseline_snapshot_path(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicates::str::contains("Regression gate (PASS)"));
+}
+
+#[test]
+fn cli_rag_eval_compare_baseline_json_carries_regression_block() {
+  let work = TempDir::new().unwrap();
+  let report_path = work.path().join("report.json");
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &fixture_path(),
+      "--compare-baseline",
+      &baseline_snapshot_path(),
+      "--output",
+      report_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+  let raw = fs::read_to_string(&report_path).unwrap();
+  let report: Value = serde_json::from_str(&raw).unwrap();
+  let regression = &report["regression"];
+  assert_eq!(regression["regression_detected"], false);
+  assert!(regression["threshold_recall_drop"].as_f64().is_some());
+  assert!(regression["threshold_p_value"].as_f64().is_some());
+  // Comparison block should now also carry paired_sign_p_value when
+  // present (None on a tied-baseline-vs-self compare).
+  let comparison = &report["comparison"];
+  assert!(comparison.is_object(), "comparison block must be present");
+}
+
+// Note: the regression-detected end-to-end path (gate FAIL → exit 1)
+// is covered by unit tests inside agentflow-cli/src/commands/rag/eval.rs
+// rather than another integration test. Constructing a BM25-fooling
+// dataset is fragile and couples the test to retriever internals; the
+// unit tests pass a hand-built ComparisonReport into the same
+// evaluate_regression function the CLI uses, so the gate logic itself
+// is exercised without the retriever stamp.
+
+#[test]
+fn cli_rag_eval_rejects_mutually_exclusive_flags() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &fixture_path(),
+      "--compare-to",
+      "k1=1.5,b=0.6",
+      "--compare-baseline",
+      &baseline_snapshot_path(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("mutually exclusive"));
+}

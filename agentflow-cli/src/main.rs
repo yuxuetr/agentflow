@@ -929,6 +929,19 @@ enum RagCommands {
     /// Compare baseline against a candidate retriever spec, e.g. "k1=1.5,b=0.6"
     #[arg(long)]
     compare_to: Option<String>,
+    /// Compare the fresh run against a stored baseline snapshot
+    /// (`agentflow-rag/eval_baselines/<dataset>/<retriever>.json`).
+    /// Mutually exclusive with --compare-to.
+    #[arg(long)]
+    compare_baseline: Option<std::path::PathBuf>,
+    /// Absolute drop in Recall@5 that, together with a significant
+    /// paired sign-test p-value, trips the regression gate. Default 0.03.
+    #[arg(long)]
+    regression_recall_threshold: Option<f64>,
+    /// One-tailed paired sign-test p-value below which the gate trips
+    /// (when paired with a recall drop). Default 0.05.
+    #[arg(long)]
+    regression_p_value: Option<f64>,
     /// Optional JSON report output path
     #[arg(short, long)]
     output: Option<std::path::PathBuf>,
@@ -1396,8 +1409,23 @@ async fn main() {
         retriever,
         k_values,
         compare_to,
+        compare_baseline,
+        regression_recall_threshold,
+        regression_p_value,
         output,
-      } => rag::eval::execute(dataset, retriever, k_values, compare_to, output).await,
+      } => {
+        rag::eval::execute(
+          dataset,
+          retriever,
+          k_values,
+          compare_to,
+          compare_baseline,
+          regression_recall_threshold,
+          regression_p_value,
+          output,
+        )
+        .await
+      }
     },
     #[cfg(not(feature = "rag"))]
     Commands::Rag(_) => Err(anyhow::anyhow!(

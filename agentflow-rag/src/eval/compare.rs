@@ -46,6 +46,17 @@ pub struct ComparisonReport {
   pub paired_ties: usize,
   pub verdict: Verdict,
   pub verdict_reason: String,
+  /// One-tailed paired sign-test p-value for the hypothesis
+  /// "candidate is worse than baseline". Computed as
+  /// `P(X ≤ paired_wins | X ~ Binomial(paired_wins + paired_losses, 0.5))`
+  /// — a small value means the candidate's per-query loss rate is
+  /// unlikely under the null of "no difference", i.e. a regression.
+  ///
+  /// `None` when no paired-query data was available (Verdict ==
+  /// NotComparable) or both sides tied on every query
+  /// (`paired_wins + paired_losses == 0`).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub paired_sign_p_value: Option<f64>,
 }
 
 impl ComparisonReport {
@@ -74,6 +85,12 @@ impl ComparisonReport {
       "\nPaired sign test (per-query reciprocal rank):\n  wins={}  losses={}  ties={}\n",
       self.paired_wins, self.paired_losses, self.paired_ties
     ));
+    if let Some(p) = self.paired_sign_p_value {
+      out.push_str(&format!(
+        "  p-value (one-tailed, candidate worse): {:.4}\n",
+        p
+      ));
+    }
     out.push_str(&format!(
       "Verdict:   {} — {}\n",
       verdict_label(&self.verdict),
@@ -180,6 +197,12 @@ pub fn compare(baseline: &EvalReport, candidate: &EvalReport) -> ComparisonRepor
     }
   };
 
+  let paired_sign_p_value = if matches!(verdict, Verdict::NotComparable { .. }) {
+    None
+  } else {
+    paired_sign_lower_tail_p_value(paired_wins, paired_losses)
+  };
+
   ComparisonReport {
     baseline_label: format_label(baseline),
     candidate_label: format_label(candidate),
@@ -189,7 +212,53 @@ pub fn compare(baseline: &EvalReport, candidate: &EvalReport) -> ComparisonRepor
     paired_ties,
     verdict,
     verdict_reason: reason,
+    paired_sign_p_value,
   }
+}
+
+/// One-tailed binomial p-value for the paired sign test asking
+/// "is the candidate worse than the baseline?".
+///
+/// Returns `P(X ≤ wins)` where `X ~ Binomial(wins + losses, 0.5)`.
+/// `None` when `wins + losses == 0` (no decisive paired queries to
+/// score). All math is in log-space so the result is well-behaved
+/// for `n` up to several thousand without overflow.
+pub fn paired_sign_lower_tail_p_value(wins: usize, losses: usize) -> Option<f64> {
+  let n = wins + losses;
+  if n == 0 {
+    return None;
+  }
+  // CDF for Binomial(n, 0.5) up to and including `wins`.
+  // P(X = k) = C(n, k) * 0.5^n. We accumulate in log space, then sum
+  // exp() of each term. For n ≤ a few thousand, this is fast and
+  // numerically stable enough for the regression gate's purposes.
+  let log_half_n = (n as f64) * (0.5f64).ln();
+  let mut sum = 0.0_f64;
+  for k in 0..=wins {
+    let log_term = log_choose(n, k) + log_half_n;
+    sum += log_term.exp();
+  }
+  // Clamp into [0, 1] to absorb tiny numeric drift near the
+  // boundaries (e.g. wins = n).
+  Some(sum.clamp(0.0, 1.0))
+}
+
+fn log_choose(n: usize, k: usize) -> f64 {
+  // log(C(n, k)) via lgamma. lgamma(x + 1) = log(x!) for non-negative
+  // integers; std exposes it as f64::ln_gamma_1p? No — use a
+  // hand-rolled Stirling-friendly via lgamma. Rust std doesn't
+  // expose lgamma; implement directly using libm-style series.
+  if k > n {
+    return f64::NEG_INFINITY;
+  }
+  // Cap k at n - k to halve the work.
+  let k = k.min(n - k);
+  let mut log_c = 0.0_f64;
+  for i in 0..k {
+    // log(n - i) - log(i + 1)
+    log_c += ((n - i) as f64).ln() - ((i + 1) as f64).ln();
+  }
+  log_c
 }
 
 fn format_label(report: &EvalReport) -> String {
@@ -363,5 +432,70 @@ mod tests {
     let text = cmp.render_table();
     assert!(text.contains("MRR"));
     assert!(text.contains("Verdict"));
+  }
+
+  // ── Paired sign test p-value ────────────────────────────────────────
+
+  #[test]
+  fn paired_sign_p_value_is_none_when_all_paired_queries_tied() {
+    assert_eq!(paired_sign_lower_tail_p_value(0, 0), None);
+  }
+
+  #[test]
+  fn paired_sign_p_value_05_when_wins_equal_losses() {
+    // n = 10, wins = 5. P(X ≤ 5 | Binomial(10, 0.5)) ≈ 0.6230 (the
+    // median + a touch). The point of this test is that the helper
+    // returns a value greater than 0.5 when wins equal losses, since
+    // P(X ≤ median) of a symmetric distribution is just over 0.5.
+    let p = paired_sign_lower_tail_p_value(5, 5).unwrap();
+    assert!((p - 0.6230).abs() < 1e-3, "p = {p}");
+  }
+
+  #[test]
+  fn paired_sign_p_value_small_when_losses_dominate() {
+    // n = 10, wins = 1 (so 9 losses). P(X ≤ 1) = (1 + 10) / 2^10
+    // = 11 / 1024 ≈ 0.01074. Solidly below 0.05; CI gate should
+    // flag this as a regression.
+    let p = paired_sign_lower_tail_p_value(1, 9).unwrap();
+    assert!(p < 0.05, "p = {p} should be below 0.05");
+    assert!((p - (11.0 / 1024.0)).abs() < 1e-6, "p = {p}");
+  }
+
+  #[test]
+  fn paired_sign_p_value_near_one_when_wins_dominate() {
+    // All wins → P(X ≤ n) = 1 exactly. The helper should clamp to
+    // 1.0 even with tiny numeric drift.
+    let p = paired_sign_lower_tail_p_value(20, 0).unwrap();
+    assert!((p - 1.0).abs() < 1e-9, "p = {p}");
+  }
+
+  #[test]
+  fn paired_sign_p_value_borderline_at_two_out_of_ten() {
+    // n = 10, wins = 2. P(X ≤ 2) = (1 + 10 + 45) / 1024
+    // = 56/1024 ≈ 0.0547 — just barely above 0.05. The classic
+    // "almost significant" cutoff that proves the gate's threshold
+    // is meaningful.
+    let p = paired_sign_lower_tail_p_value(2, 8).unwrap();
+    assert!(p > 0.05, "p = {p} should be just above 0.05");
+    assert!((p - (56.0 / 1024.0)).abs() < 1e-6, "p = {p}");
+  }
+
+  #[test]
+  fn compare_emits_p_value_field_when_paired_data_present() {
+    let baseline = make_report("baseline", 0.5, vec![("q1", 0.5), ("q2", 0.5)]);
+    let candidate = make_report("candidate", 0.5, vec![("q1", 1.0), ("q2", 1.0)]);
+    let cmp = compare(&baseline, &candidate);
+    assert!(
+      cmp.paired_sign_p_value.is_some(),
+      "p-value should be set when paired data is present"
+    );
+  }
+
+  #[test]
+  fn compare_omits_p_value_when_not_comparable() {
+    let baseline = make_report("baseline", 0.5, vec![("q1", 0.5)]);
+    let candidate = make_report("candidate", 0.5, vec![("qX", 0.5)]);
+    let cmp = compare(&baseline, &candidate);
+    assert!(cmp.paired_sign_p_value.is_none());
   }
 }

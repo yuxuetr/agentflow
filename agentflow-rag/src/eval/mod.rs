@@ -23,7 +23,9 @@ pub mod metrics;
 pub mod retrievers;
 pub mod runner;
 
-pub use compare::{ComparisonReport, MetricDelta, Verdict, compare};
+pub use compare::{
+  ComparisonReport, MetricDelta, Verdict, compare, paired_sign_lower_tail_p_value,
+};
 pub use dataset::{CorpusDoc, Dataset, DatasetManifest, Judgment, Query, RelevanceScore};
 pub use metrics::{LatencyAggregate, MetricKind, ndcg_at_k, recall_at_k, reciprocal_rank};
 pub use retrievers::Bm25Eval;

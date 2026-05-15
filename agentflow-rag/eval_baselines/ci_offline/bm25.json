@@ -1,0 +1,456 @@
+{
+  "label": "baseline",
+  "latency": {
+    "mean_ms": 0.0856418,
+    "p50_ms": 0.08712500000000001,
+    "p95_ms": 0.11241044999999997
+  },
+  "mrr": 1.0,
+  "num_queries": 10,
+  "per_k": [
+    {
+      "k": 1,
+      "ndcg": 1.0,
+      "recall": 0.65
+    },
+    {
+      "k": 3,
+      "ndcg": 0.9873150002059138,
+      "recall": 0.95
+    },
+    {
+      "k": 5,
+      "ndcg": 0.9929588283105012,
+      "recall": 1.0
+    },
+    {
+      "k": 10,
+      "ndcg": 0.9929588283105012,
+      "recall": 1.0
+    }
+  ],
+  "per_query": [
+    {
+      "latency_ms": 0.121167,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          0.9173194127129571
+        ],
+        [
+          5,
+          0.9737576937588317
+        ],
+        [
+          10,
+          0.9737576937588317
+        ]
+      ],
+      "query_id": "q-rust-ownership",
+      "query_text": "How does Rust enforce memory safety without a garbage collector?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          0.5
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.092875,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-rust-async",
+      "query_text": "What async runtime is used for Rust networked services?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.1015,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-python-types",
+      "query_text": "What are Python type hints and how are they checked?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.047792,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-go-concurrency",
+      "query_text": "How does Go support concurrency?",
+      "recall_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.058917,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-linux-containers",
+      "query_text": "Which kernel features enable Linux containers?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.098959,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-tcp-vs-udp",
+      "query_text": "What is the difference between TCP and UDP transport protocols?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.081375,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-http-versions",
+      "query_text": "How do HTTP/2 and HTTP/3 differ from HTTP/1.1?",
+      "recall_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.080875,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          0.95583058934618
+        ],
+        [
+          5,
+          0.95583058934618
+        ],
+        [
+          10,
+          0.95583058934618
+        ]
+      ],
+      "query_id": "q-bigo-sorting",
+      "query_text": "What is the lower bound on comparison-based sorting?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.101708,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-turing-lambda",
+      "query_text": "What is the relationship between Turing machines and lambda calculus?",
+      "recall_at_k": [
+        [
+          1,
+          0.5
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    },
+    {
+      "latency_ms": 0.07125,
+      "ndcg_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "query_id": "q-pubkey-crypto",
+      "query_text": "How does public key cryptography use key pairs?",
+      "recall_at_k": [
+        [
+          1,
+          1.0
+        ],
+        [
+          3,
+          1.0
+        ],
+        [
+          5,
+          1.0
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "reciprocal_rank": 1.0
+    }
+  ],
+  "queries_with_relevant": 10,
+  "retriever": "bm25"
+}

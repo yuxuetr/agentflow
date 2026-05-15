@@ -125,13 +125,21 @@ jobs:
         run: ${{ matrix.command }}
 
   rag-eval-smoke:
-    name: rag eval schema regression
+    name: rag eval schema + baseline regression
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run RAG eval CI fixture (BM25, schema gate)
         run: cargo test -p agentflow-cli --features rag --test rag_eval_cli_tests
+      - name: Run RAG eval gate-logic unit tests
+        run: cargo test -p agentflow-cli --features rag --bin agentflow commands::rag::eval
+      - name: Run RAG eval against checked-in baseline snapshot
+        run: |
+          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+            rag eval \
+              --dataset agentflow-rag/eval_datasets/ci_offline \
+              --compare-baseline agentflow-rag/eval_baselines/ci_offline/bm25.json
 
   examples:
     name: examples compile and smoke
