@@ -290,6 +290,11 @@ pub struct HarnessSessionContext {
   /// Forwards events to live SSE subscribers. Persisting to the DB still
   /// has to happen — use [`publish_through`] for the standard path.
   pub broker: HarnessEventBroker,
+  /// Seq number the executor must use for the first event it emits.
+  /// Fresh submissions and rerun resumes use `0`; append-mode resumes
+  /// pass `MAX(existing seq) + 1` so new events extend the persisted
+  /// log without colliding with prior `(session_id, seq)` rows.
+  pub initial_seq: u64,
 }
 
 /// Default executor used until the real LLM-backed runner lands.
@@ -328,12 +333,14 @@ impl HarnessSessionExecutor for StubHarnessExecutor {
 }
 
 async fn stub_execute(ctx: &HarnessSessionContext) -> Result<(), DbError> {
+  let started_seq = ctx.initial_seq as i64;
+  let stopped_seq = started_seq + 1;
   publish_through(
     &ctx.repos,
     &ctx.broker,
     NewHarnessSessionEvent {
       session_id: ctx.session_id,
-      seq: 0,
+      seq: started_seq,
       kind: "session_started".into(),
       payload: serde_json::json!({
         "executor": "stub",
@@ -358,7 +365,7 @@ async fn stub_execute(ctx: &HarnessSessionContext) -> Result<(), DbError> {
     &ctx.broker,
     NewHarnessSessionEvent {
       session_id: ctx.session_id,
-      seq: 1,
+      seq: stopped_seq,
       kind: "stopped".into(),
       payload: serde_json::json!({
         "executor": "stub",
@@ -457,6 +464,7 @@ pub async fn submit_harness_session(
         skill_name: req.skill_name,
         repos,
         broker,
+        initial_seq: 0,
       })
       .await;
   });
@@ -584,6 +592,24 @@ pub async fn cancel_harness_session(
   }))
 }
 
+/// Resume flavour selected by the request body.
+///
+/// `Rerun` (default) clears the prior event log and restarts the seq
+/// series at `0` — the original v1 semantic. `Append` preserves the
+/// prior events and continues the seq series at `MAX(seq) + 1` so SSE
+/// consumers see the new run as an extension of the old one rather
+/// than a fresh shell. The two modes are mutually exclusive on a
+/// single resume call: pick the rerun flavour for "retry from
+/// scratch" debugging, the append flavour for "extend the
+/// conversation" workflows.
+#[derive(Debug, Deserialize, Serialize, Default, Clone, Copy, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeMode {
+  #[default]
+  Rerun,
+  Append,
+}
+
 /// Body for `POST /v1/harness/sessions/{id}:resume`.
 ///
 /// `user_input` is optional: omitting it replays the original prompt.
@@ -591,10 +617,15 @@ pub async fn cancel_harness_session(
 /// instruction. Other lifecycle fields (workspace, profile, runtime,
 /// model, skill) are taken from the existing row — operators rerun
 /// against the same shape, not a new shape.
+///
+/// `mode` defaults to [`ResumeMode::Rerun`] for full backwards
+/// compatibility with pre-append callers.
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct ResumeHarnessSessionRequest {
   #[serde(default)]
   pub user_input: Option<String>,
+  #[serde(default)]
+  pub mode: ResumeMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -602,24 +633,27 @@ pub struct ResumeHarnessSessionResponse {
   #[serde(flatten)]
   pub session: HarnessSession,
   pub resumed: bool,
+  /// Echoes the resume flavour the server actually applied, so a
+  /// caller that omits the field can confirm the default.
+  pub mode: ResumeMode,
 }
 
-/// `POST /v1/harness/sessions/{id}:resume` — rerun a session from
-/// scratch.
+/// `POST /v1/harness/sessions/{id}:resume` — restart or extend a
+/// terminated session.
 ///
-/// **Semantic (v1):** resume clears prior persisted events, flips the
-/// row back to `running`, and spawns a fresh `HarnessSessionExecutor`
-/// run with the same `session_id`. The original `user_input` is
-/// reused unless the request body overrides it.
+/// **Rerun semantic (default, `mode = "rerun"`):** clear prior
+/// persisted events, flip the row back to `running`, spawn a fresh
+/// `HarnessSessionExecutor` run with the same `session_id`. The
+/// original `user_input` is reused unless the request body overrides
+/// it. Useful for retry-with-tweak debugging or replaying after a
+/// transient LLM failure.
 ///
-/// This is the simplest semantic that works against the current
-/// `HarnessRuntime`, whose `seq` counter is local and starts at 0 on
-/// every `run()`. Append-mode resume (preserving prior events and
-/// continuing the seq series) needs a `HarnessRuntime::with_initial_seq`
-/// upstream — tracked as a P-H follow-up. Rerun semantics are
-/// nevertheless useful in practice: retry-with-tweak debugging, rerun
-/// after a transient LLM failure, swap the prompt without abandoning
-/// the row.
+/// **Append semantic (`mode = "append"`):** keep the prior event log
+/// intact, flip the row back to `running`, spawn a fresh executor run
+/// that emits new events at `MAX(existing seq) + 1`. SSE consumers see
+/// one continuous timeline. This is the natural shape for follow-up
+/// instructions ("after that finished, also do X") and for resuming
+/// from a forced cancel without losing the trace.
 ///
 /// Returns 409 Conflict when the session is still running so two
 /// reruns can't race the same row. Cancel first if needed.
@@ -660,14 +694,37 @@ pub async fn resume_harness_session(
     .map(str::to_string)
     .unwrap_or_else(|| session.user_input.clone());
 
-  // Clear the prior event log so the inner runtime's seq counter (which
-  // starts at 0 every run) doesn't collide with persisted rows. This is
-  // a destructive operation by design — see the function's docstring.
-  state
-    .repos
-    .harness_sessions
-    .reset_for_resume(id, &user_input)
-    .await?;
+  // Resolve the seq offset and reset the row in one place per mode so
+  // the spawned executor only sees a fully-prepared session.
+  let initial_seq: u64 = match body.mode {
+    ResumeMode::Rerun => {
+      // Clear the prior event log — destructive by design, see the
+      // function's docstring. The inner runtime's seq counter then
+      // restarts cleanly at 0.
+      state
+        .repos
+        .harness_sessions
+        .reset_for_resume(id, &user_input)
+        .await?;
+      0
+    }
+    ResumeMode::Append => {
+      // Keep prior events; pick `MAX(seq) + 1` as the offset for the
+      // next run so seq numbers remain monotonic across the resumes.
+      let max_seq = state.repos.harness_events.max_seq(id).await?;
+      state
+        .repos
+        .harness_sessions
+        .reset_for_append_resume(id, &user_input)
+        .await?;
+      // Map None (no prior events) → 0 so the append flavour degrades
+      // gracefully into a clean first run if the operator is calling
+      // it on a session that somehow has zero rows. Otherwise the
+      // u64 cast is safe because seqs are stored as non-negative
+      // bigints by the append path.
+      max_seq.map(|m| (m as u64) + 1).unwrap_or(0)
+    }
+  };
 
   // Spawn the executor in the background. The HTTP request returns
   // immediately with the refreshed row.
@@ -692,6 +749,7 @@ pub async fn resume_harness_session(
         skill_name,
         repos,
         broker,
+        initial_seq,
       })
       .await;
   });
@@ -707,6 +765,7 @@ pub async fn resume_harness_session(
   Ok(Json(ResumeHarnessSessionResponse {
     session,
     resumed: true,
+    mode: body.mode,
   }))
 }
 

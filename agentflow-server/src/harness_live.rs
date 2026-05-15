@@ -205,6 +205,7 @@ struct RunInputs {
   skill_name: Option<String>,
   repos: Repositories,
   broker: HarnessEventBroker,
+  initial_seq: u64,
 }
 
 fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
@@ -218,6 +219,7 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
     skill_name: ctx.skill_name.clone(),
     repos: ctx.repos.clone(),
     broker: ctx.broker.clone(),
+    initial_seq: ctx.initial_seq,
   }
 }
 
@@ -297,7 +299,8 @@ async fn run_harness_inner(
 
   let mut runtime = HarnessRuntime::new(Box::new(agent))
     .with_event_sink(server_sink.clone())
-    .with_context_providers(default_providers());
+    .with_context_providers(default_providers())
+    .with_initial_seq(inputs.initial_seq);
 
   let options = HarnessRunOptions::new(
     inputs.user_input,

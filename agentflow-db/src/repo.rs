@@ -105,6 +105,16 @@ pub trait HarnessSessionRepo: Send + Sync {
   /// session via the FK CASCADE. The transaction is atomic so a
   /// concurrent reader never observes a half-reset state.
   async fn reset_for_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError>;
+  /// Append-mode counterpart to [`Self::reset_for_resume`]. Flips the
+  /// row back to `running` and replaces `user_input` but **keeps** the
+  /// existing `harness_session_events` rows intact.
+  ///
+  /// Used by the `:resume` route's `mode=append` flavour: combined with
+  /// `HarnessRuntime::with_initial_seq(MAX(seq) + 1)`, this lets a
+  /// resumed session continue the seq series instead of restarting
+  /// from 0. The caller is responsible for supplying the correct
+  /// initial seq to the executor.
+  async fn reset_for_append_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError>;
 }
 
 /// Harness session event log persistence (P-H.5).
@@ -124,6 +134,10 @@ pub trait HarnessEventRepo: Send + Sync {
     after_seq: i64,
     limit: i64,
   ) -> Result<Vec<HarnessSessionEvent>, DbError>;
+  /// Return the largest `seq` recorded for `session_id`, or `None` if
+  /// no events exist yet. Used by the `:resume` route's append-mode
+  /// flavour to pick a non-colliding `initial_seq` for the next run.
+  async fn max_seq(&self, session_id: Uuid) -> Result<Option<i64>, DbError>;
 }
 
 // ----- Postgres implementations -----
@@ -538,6 +552,29 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
     tx.commit().await?;
     Ok(())
   }
+
+  async fn reset_for_append_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError> {
+    let result = sqlx::query(
+      r#"UPDATE harness_sessions
+         SET status = 'running',
+             finished_at = NULL,
+             final_answer = NULL,
+             error = NULL,
+             user_input = $2
+         WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(new_user_input)
+    .execute(&self.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+      return Err(DbError::NotFound {
+        entity_type: "harness_session",
+        id: id.to_string(),
+      });
+    }
+    Ok(())
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -581,6 +618,15 @@ impl HarnessEventRepo for PgHarnessEventRepo {
     .fetch_all(&self.pool)
     .await?;
     Ok(rows)
+  }
+
+  async fn max_seq(&self, session_id: Uuid) -> Result<Option<i64>, DbError> {
+    let row: Option<(Option<i64>,)> =
+      sqlx::query_as("SELECT MAX(seq) FROM harness_session_events WHERE session_id = $1")
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+    Ok(row.and_then(|(value,)| value))
   }
 }
 

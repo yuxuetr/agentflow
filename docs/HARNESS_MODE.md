@@ -1,7 +1,7 @@
 # Harness Mode — Implementation Spec
 
 Last updated: 2026-05-15
-Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. The upstream contract knob for append-mode resume — `HarnessRuntime::with_initial_seq` — has landed in `agentflow-harness`; wiring the server `:resume` route to opt into append mode is tracked as the next slice.
+Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. The follow-up append-mode resume slice is also in: the upstream contract knob `HarnessRuntime::with_initial_seq` is plumbed through the server, and the `:resume` route accepts `mode: "rerun" | "append"` so callers can preserve the prior event log and continue the seq series instead of restarting from `0`.
 
 Harness Mode is AgentFlow's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
@@ -351,16 +351,26 @@ Phase H5 slice 4 (closed) finishes the surface:
 POST /v1/harness/sessions/{id}:resume           # closed (slice 4)
 ```
 
-`:resume` ships with the **rerun semantic**: the route DELETEs every
-persisted event for the session in one Postgres transaction, flips
-the row back to `running`, optionally replaces `user_input`, and
-respawns the executor. The inner `HarnessRuntime`'s `seq` counter
-starts at 0 again. The upstream contract knob for append-mode resume
-— `HarnessRuntime::with_initial_seq` — now exists in
-`agentflow-harness`, so the server can opt the next `:resume`
-revision into append mode (preserve prior events, continue the seq
-series) without further upstream churn. That route-level wiring is
-tracked as a follow-up slice.
+`:resume` accepts a `mode` field on the request body that selects
+between two semantics:
+
+- **`mode: "rerun"`** (default; preserves backwards compat for callers
+  that omit the field): DELETE every persisted event for the session
+  in one Postgres transaction, flip the row back to `running`,
+  optionally replace `user_input`, and respawn the executor with
+  `initial_seq = 0`. Useful for retry-with-tweak debugging or
+  replaying after a transient LLM failure.
+- **`mode: "append"`**: keep the prior event log intact, flip the row
+  back to `running`, optionally replace `user_input`, look up
+  `MAX(seq)` from `harness_session_events`, and spawn the executor
+  with `initial_seq = MAX(seq) + 1`. The new run extends the
+  persisted timeline (consumers see `seq` continue past the previous
+  terminal event) instead of starting a fresh series. Natural shape
+  for follow-up instructions and for resuming a forced cancel
+  without losing the trace.
+
+Both flavours echo the applied `mode` in the response body so callers
+that omit the field can confirm the default.
 
 `POST /v1/harness/sessions/{id}:cancel` and
 `POST /v1/harness/sessions/{id}:resume` share one Axum POST handler

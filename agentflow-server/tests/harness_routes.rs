@@ -422,6 +422,157 @@ async fn resume_terminal_session_clears_events_and_restarts() {
 }
 
 #[tokio::test]
+async fn resume_append_mode_preserves_events_and_continues_seq() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping resume_append_mode_preserves_events_and_continues_seq");
+    return;
+  };
+
+  let app = create_router(state.clone());
+  let id = submit_basic_session(app.clone(), "first run").await;
+  // Stub executor finishes in ~50 ms.
+  tokio::time::sleep(Duration::from_millis(250)).await;
+
+  // Snapshot the prior log so we can assert it survives the resume.
+  let history_before = body_json(
+    app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("GET")
+          .uri(format!("/v1/harness/sessions/{id}/events/history"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+  let before = history_before
+    .as_array()
+    .expect("events history is array")
+    .clone();
+  // Stub writes exactly two events on the first run (seq 0,1).
+  assert_eq!(before.len(), 2);
+  assert_eq!(before[0]["seq"], 0);
+  assert_eq!(before[1]["seq"], 1);
+
+  // Resume in append mode with a follow-up prompt.
+  let resume = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{id}:resume"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+          serde_json::to_vec(&json!({
+            "user_input": "follow-up step",
+            "mode": "append",
+          }))
+          .unwrap(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(resume.status(), StatusCode::OK);
+  let body = body_json(resume).await;
+  assert_eq!(body["resumed"], true);
+  assert_eq!(body["mode"], "append");
+  assert_eq!(body["user_input"], "follow-up step");
+
+  // Wait for the rerun to finish (stub writes two more events).
+  tokio::time::sleep(Duration::from_millis(300)).await;
+  let history_after = body_json(
+    app
+      .oneshot(
+        Request::builder()
+          .method("GET")
+          .uri(format!("/v1/harness/sessions/{id}/events/history"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+  let after = history_after
+    .as_array()
+    .expect("events history is array")
+    .clone();
+
+  // Append mode preserves the prior log: 2 old + 2 new = 4 total, with
+  // a strictly monotonic seq series 0,1,2,3.
+  assert_eq!(
+    after.len(),
+    4,
+    "append mode must preserve all 4 events, got {after:?}"
+  );
+  let seqs: Vec<i64> = after
+    .iter()
+    .map(|event| event["seq"].as_i64().expect("seq is i64"))
+    .collect();
+  assert_eq!(seqs, vec![0, 1, 2, 3], "seq series must be continuous");
+  assert_eq!(after[0]["kind"], "session_started");
+  assert_eq!(after[1]["kind"], "stopped");
+  assert_eq!(after[2]["kind"], "session_started");
+  assert_eq!(after[3]["kind"], "stopped");
+}
+
+#[tokio::test]
+async fn resume_default_mode_is_rerun_when_field_omitted() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping resume_default_mode_is_rerun_when_field_omitted");
+    return;
+  };
+  let app = create_router(state);
+  let id = submit_basic_session(app.clone(), "baseline").await;
+  tokio::time::sleep(Duration::from_millis(250)).await;
+
+  // Body intentionally omits `mode` — the wire default must be `rerun`.
+  let resume = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{id}:resume"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(resume.status(), StatusCode::OK);
+  let body = body_json(resume).await;
+  assert_eq!(
+    body["mode"], "rerun",
+    "omitting mode must surface as rerun in the response"
+  );
+
+  tokio::time::sleep(Duration::from_millis(300)).await;
+  let history = body_json(
+    app
+      .oneshot(
+        Request::builder()
+          .method("GET")
+          .uri(format!("/v1/harness/sessions/{id}/events/history"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+  let events = history.as_array().expect("history is array").clone();
+  // Rerun semantic: prior log wiped, new run produces exactly 2 events
+  // restarting at seq 0.
+  assert_eq!(events.len(), 2);
+  assert_eq!(events[0]["seq"], 0);
+  assert_eq!(events[1]["seq"], 1);
+}
+
+#[tokio::test]
 async fn resume_rejects_running_session_with_400() {
   let Some(state) = fresh_state().await else {
     eprintln!("skipping resume_rejects_running_session_with_400");
