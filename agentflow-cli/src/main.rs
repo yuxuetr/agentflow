@@ -1,7 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 
-mod commands;
-use agentflow_cli::{config, executor, redaction};
+use agentflow_cli::commands;
 
 #[cfg(feature = "plugin")]
 use commands::plugin;

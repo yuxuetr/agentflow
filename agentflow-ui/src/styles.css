@@ -1174,3 +1174,138 @@ h1 {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ─── P6.2 Diagnostics panel ───────────────────────────────────── */
+
+.diagnostics-panel {
+  padding: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+  font-family: system-ui, sans-serif;
+}
+
+.diagnostics-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.diagnostics-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.diagnostics-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.diagnostics-controls input[type='password'] {
+  flex: 1 1 240px;
+  padding: 6px 10px;
+  border: 1px solid #d3d6db;
+  border-radius: 6px;
+  font-family: inherit;
+}
+
+.diagnostics-controls button {
+  background: #5563ff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.diagnostics-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.diag-token {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #f1f3f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.diagnostics-error {
+  background: #fff5f5;
+  border: 1px solid #ffa8a8;
+  color: #b1392b;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.diagnostics-overall {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  background: #f6f7f9;
+}
+
+.diagnostics-overall-ok { background: #ecfdf3; color: #0c6b41; }
+.diagnostics-overall-warning { background: #fff8e1; color: #8a6500; }
+.diagnostics-overall-fail { background: #fff1f0; color: #a8071a; }
+
+.diag-version,
+.diag-profile {
+  font-weight: 400;
+  font-size: 13px;
+  color: #555;
+}
+
+.diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+
+.diagnostics-table th,
+.diagnostics-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #f0f1f3;
+  vertical-align: top;
+}
+
+.diagnostics-table th {
+  background: #f6f7f9;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.diagnostics-table tr:last-child td {
+  border-bottom: none;
+}
+
+.diagnostics-empty {
+  text-align: center;
+  color: #777;
+}
+
+.diag-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.diag-badge-ok { background: #d1fae5; color: #065f46; }
+.diag-badge-warning { background: #fef3c7; color: #92400e; }
+.diag-badge-fail { background: #fee2e2; color: #991b1b; }

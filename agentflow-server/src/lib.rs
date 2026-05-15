@@ -25,6 +25,7 @@ use agentflow_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 
 pub mod auth;
 pub mod cleanup;
+pub mod diagnostics;
 pub mod error;
 pub mod events_stream;
 pub mod harness;
@@ -342,7 +343,8 @@ pub fn create_router(state: AppState) -> Router {
     .route(
       "/v1/harness/sessions/:id/approvals/:request_id",
       post(decide_approval),
-    );
+    )
+    .route("/v1/diagnostics", get(diagnostics::get_diagnostics));
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),

@@ -980,12 +980,31 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     - CI wiring for the Playwright suite (requires Chromium binary
       + reachable `agentflow serve` + Postgres).
 
-- TODO P6.2 Provider config diagnostics panel:
-  - Add UI page `/ui/diagnostics` calling `agentflow doctor --output json`
-    via a new `GET /v1/diagnostics` server route.
-  - Render results as a per-component pass/warn/fail table.
-  - Refresh button (no auto-poll).
-  - Mask API keys to last 4 chars.
+- DONE P6.2 Provider config diagnostics panel:
+  - Promoted `agentflow_cli::commands` (and the doctor module's
+    `DoctorReport` / `DoctorProfile` / `build_report`) to `pub` so
+    the server can read the same schema in-process instead of
+    shelling out.
+  - `GET /v1/diagnostics` (`agentflow-server/src/diagnostics.rs`)
+    delegates to `build_report(DoctorProfile::Local, None, false)`
+    and returns the canonical doctor JSON. Inherits the same
+    bearer-token gate as the rest of `/v1/*`. Tests cover the happy
+    shape and a defense-in-depth check that the API token value
+    never appears in the response body.
+  - `agentflow-server/tests/diagnostics_route.rs` adds the
+    route-level integration tests (no live Postgres required —
+    diagnostics handler does not touch `AppState.db`).
+  - UI: new `/ui/diagnostics` deep-link route + `DiagnosticsPanel`
+    component. Renders a per-component pass / warn / fail table
+    covering Models config, Security profile, OS sandbox, the
+    three disk dirs, and the `AGENTFLOW_API_TOKEN` env flag.
+    Refresh button only — no auto-poll. The panel never displays
+    raw token values; any token passed through the input is
+    rendered via a `maskToken(...)` helper that shows only the
+    last 4 chars.
+  - `ui_router()` registers `/ui/diagnostics` alongside the
+    existing SPA deep-link routes so direct nav from a bookmark
+    or copied URL works.
 
 - TODO P6.3 Trace comparison view:
   - Add UI page `/ui/runs/{id}/compare?against={other_id}`:

@@ -25,7 +25,7 @@ impl OutputFormat {
 }
 
 #[derive(Debug, Serialize)]
-struct DoctorReport {
+pub struct DoctorReport {
   version: &'static str,
   profile: DoctorProfile,
   features: FeatureReport,
@@ -49,7 +49,7 @@ struct DoctorReport {
 /// skills and plugins install dirs. See `docs/SERVER_BACKUP_RESTORE.md`
 /// for the rationale behind the dir set.
 #[derive(Debug, Serialize)]
-struct BackupCheckReport {
+pub struct BackupCheckReport {
   run_dir: DirCheck,
   trace_dir: DirCheck,
   marketplace_cache: DirCheck,
@@ -58,14 +58,14 @@ struct BackupCheckReport {
 }
 
 #[derive(Debug, Serialize)]
-struct FeatureReport {
+pub struct FeatureReport {
   rag: bool,
   plugin: bool,
   mcp_workflow_nodes: bool,
 }
 
 #[derive(Debug, Serialize)]
-struct PathReport {
+pub struct PathReport {
   home: Option<PathBuf>,
   config_dir: Option<PathBuf>,
   models_config: Option<PathBuf>,
@@ -76,7 +76,7 @@ struct PathReport {
 }
 
 #[derive(Debug, Serialize)]
-struct ConfigReport {
+pub struct ConfigReport {
   models_config_source: String,
   models_config_path: String,
   models_config_exists: bool,
@@ -89,7 +89,7 @@ struct ConfigReport {
 }
 
 #[derive(Debug, Serialize)]
-struct SecurityReport {
+pub struct SecurityReport {
   env_var: &'static str,
   profile: SecurityProfile,
   defaults: SecurityProfileDefaults,
@@ -97,7 +97,7 @@ struct SecurityReport {
 }
 
 #[derive(Debug, Serialize)]
-struct SandboxReport {
+pub struct SandboxReport {
   backend: &'static str,
   /// Tri-state enforcement (`enforcing` / `permissive` / `disabled`). Operators
   /// reading the JSON output can distinguish "no platform backend on this OS"
@@ -112,7 +112,7 @@ struct SandboxReport {
 }
 
 #[derive(Debug, Serialize)]
-struct EnvironmentReport {
+pub struct EnvironmentReport {
   agentflow_run_dir: Option<String>,
   agentflow_trace_dir: Option<String>,
   agentflow_api_token_set: bool,
@@ -126,14 +126,14 @@ struct EnvironmentReport {
 /// 80 % case for operators is "did I forget to mount the run-dir
 /// volume" — that case is fully covered without a new dependency.
 #[derive(Debug, Serialize)]
-struct DiskReport {
+pub struct DiskReport {
   run_dir: DirCheck,
   trace_dir: DirCheck,
   marketplace_cache: DirCheck,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DirCheck {
+pub struct DirCheck {
   /// Resolved path (override → env → default).
   path: String,
   /// Stable identifier of the source (`override`, `env`, `default`).
@@ -150,7 +150,7 @@ struct DirCheck {
 /// supplied. Issues a `GET <url>/health` with a 3 s timeout and
 /// records the HTTP status code.
 #[derive(Debug, Serialize)]
-struct ServerReport {
+pub struct ServerReport {
   url: String,
   reachable: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +164,7 @@ struct ServerReport {
 /// (`P3.4`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum DoctorStatus {
+pub enum DoctorStatus {
   Ok,
   Warning,
   Fail,
@@ -251,7 +251,7 @@ pub async fn execute(
   std::process::exit(report.status.exit_code());
 }
 
-async fn build_report(
+pub async fn build_report(
   profile: DoctorProfile,
   server: Option<&str>,
   backup_check: bool,
