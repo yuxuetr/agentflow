@@ -7,6 +7,7 @@
 //! Use [`react::ReActAgent`] for autonomous Thought/Action/Observation loops.
 
 pub mod common;
+pub mod eval;
 pub mod nodes;
 pub mod plan_execute;
 pub mod react;
