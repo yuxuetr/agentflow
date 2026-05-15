@@ -77,6 +77,7 @@ but do not implement channel adapters in this queue.
 - P3.5 (Slice 3 of 4): `skill inspect --explain-permissions` now prints a `Sandbox profile:` block that surfaces the detected platform backend (`sandbox-exec` / `seccomp` / `noop`), the tri-state `SandboxEnforcement` level, the manifest's `security.os_sandbox` opt-in, and operator notes for suspicious combinations (shell/script tools without opt-in on enforcing platforms; opt-in without an enforcing backend; opt-in without any sandboxable tool). 2 new CLI tests in `skill_cli_tests.rs` lock down the rust_expert opt-out path and the mcp-basic clean path. Slice 4 (MCP capability discovery wiring in `skill inspect`) remains TODO.
 - P3.9 (partial): Quality CI `features` job expanded from 6 to 12 combinations (cli-no-default, cli-mcp-rag-plugin, cli-all-features, tracing-postgres, mcp-all-transports, nodes-default added alongside the six existing rows). Each row was validated locally with `cargo check` before landing. Two combinations from the wishlist were found broken at HEAD and tracked under the new M.7 entry instead of being wired in as failing CI jobs.
 - M.2 `docs/AGENT_SDK.md` trait-change sync: new `cargo xtask check-agent-sdk-doc` subcommand walks every backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and asserts a `pub (trait|struct|enum|type|fn) Ident` declaration exists under any `agentflow-*/src/**/*.rs`. Allowlist covers known non-types. Quality CI gains a `check-agent-sdk-doc` job listed in `release-gate.needs`. Tests: 5 unit + 1 integration.
+- P2.7 Backup/restore expectations: `docs/SERVER_BACKUP_RESTORE.md` documents the four state surfaces, restore sequencing, and per-profile exit codes for `agentflow doctor --backup-check`. New `--backup-check` flag adds a writability probe for run_dir / trace_dir / marketplace_cache / skills_dir / plugins_dir (the last two are new env overrides `AGENTFLOW_SKILLS_DIR` / `AGENTFLOW_PLUGINS_DIR`). Production profile escalates missing dirs to Fail; non-writable always Fails. 5 new CLI tests in `doctor_cli_tests.rs`.
 
 ---
 
@@ -339,16 +340,27 @@ turning it into a channel hub.
     by tenant B.
   - Keep single-tenant local-dev defaults zero-config.
 
-- TODO P2.7 Backup/restore expectations:
-  - Author `docs/SERVER_BACKUP_RESTORE.md` covering:
-    - DB tables that must be backed up.
-    - Run artifact / trace file directories.
-    - Marketplace cache directory.
-    - Installed Skills / Plugins directories.
-    - Recovery sequencing (DB before artifacts, why).
-  - Add a `agentflow doctor --backup-check` smoke that confirms reachable
-    directories and DB are writable.
-  - Add a manual validation checklist for first stable release.
+- DONE P2.7 Backup/restore expectations:
+  - DONE: `docs/SERVER_BACKUP_RESTORE.md` documents the four state
+    surfaces (Postgres + run artifacts + trace storage + marketplace
+    cache / skills / plugins), the strict restore sequencing (DB
+    before filesystem so the P2.2 cleanup sweep doesn't reap orphan
+    artifact trees), and the per-profile exit code semantics for
+    `agentflow doctor --backup-check`.
+  - DONE: `agentflow doctor --backup-check` flag adds a `backup_check`
+    section to the doctor report with explicit writability probes for
+    `run_dir`, `trace_dir`, `marketplace_cache`, `skills_dir`,
+    `plugins_dir`. Path resolution honors new `AGENTFLOW_SKILLS_DIR`
+    and `AGENTFLOW_PLUGINS_DIR` env overrides. Production profile
+    escalates missing dirs to Fail (exit 2); local / dev escalate to
+    Warning. Non-writable always escalates to Fail.
+  - DONE: "First stable release validation checklist" section in the
+    new doc enumerates the manual gates the v1.0 release dress
+    rehearsal (P7.4) runs against a freshly provisioned host.
+  - Tests: 5 new in `doctor_cli_tests.rs` (section omitted by default,
+    pre-created HOME passes, production + missing dirs → fail, text
+    output renders the section header, env overrides for skills /
+    plugins are honored).
 
 - TODO P2.8 Worker LLM/HTTP/MCP/Agent node execution support:
   - PREREQ for the rest of P5 worker hardening.
