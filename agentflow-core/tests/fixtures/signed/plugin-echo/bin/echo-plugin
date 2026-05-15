@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stub entrypoint for the P5.2 signed plugin fixture.
+# This script is never executed by the marketplace fixture tests; it
+# exists so plugin manifest validation can confirm the entrypoint path
+# resolves to a file inside the package root.
+echo '{"jsonrpc":"2.0","id":1,"result":null}'

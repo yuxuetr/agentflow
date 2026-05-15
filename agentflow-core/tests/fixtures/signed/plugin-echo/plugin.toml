@@ -1,0 +1,16 @@
+[plugin]
+name = "echo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/echo-plugin"
+protocol = "agentflow.plugin/1"
+
+[[plugin.nodes]]
+type = "echo_node"
+description = "Locally-signed test plugin used by P5.2 marketplace fixture tests."
+
+[plugin.capabilities]
+filesystem = ["read:./inputs"]
+network = []
+processes = []
+env_vars = []

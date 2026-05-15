@@ -193,6 +193,48 @@ transparency, expiry, revocation, or key rotation. Production registries should
 install a real verifier such as minisign or sigstore and run
 `agentflow marketplace verify --strict` in release or deployment workflows.
 
+## Local signing
+
+For local development and the in-tree marketplace tests, a Skill or
+Plugin package is signed by hashing the archive bytes and pasting the
+hex digest into the entry's `signature.value`. This is what the
+default `ChecksumSha256SignatureVerifier` checks. The flow is:
+
+1. Build a deterministic `.tar.gz` of the package directory. Determinism
+   matters because the signature is derived from the bytes — any change
+   in mtime, file order, or compression settings invalidates the
+   signature. The reference build used by the fixture tests is in
+   `agentflow-skills/tests/marketplace_signed.rs::build_signed_archive`
+   (fixed mtime, fixed uid/gid, fixed mode, sorted entries).
+2. Compute `sha256_hex(archive_bytes)`.
+3. Set both `source.checksum_sha256` and `signature.value` to the
+   resulting digest. Set `signature.algorithm = "checksum-sha256"` and
+   pick a stable `signature.key_id` (e.g. `"agentflow-dev-test"`).
+4. Publish the archive at `source.artifact_url` (or, for offline
+   tests, hand the bytes to `RemoteMarketplaceCache::cache_artifact_bytes`).
+
+The cache layer accepts archives with or without a `signature` block.
+The strict policy (`--require-signature` on the CLI in the future, or
+the `marketplace.require_signature_verification` security-profile flag
+today) is layered on top: when set, callers must reject any cached
+artifact whose `CachedMarketplaceArtifact::signature_checked` is
+`false`.
+
+Tests covering both paths live alongside the fixture archives:
+
+```text
+agentflow-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md
+agentflow-core/tests/fixtures/signed/plugin-echo/plugin.toml
+agentflow-skills/tests/marketplace_signed.rs   # strict + non-strict
+agentflow-core/tests/plugin_signed_fixture.rs  # manifest sanity
+```
+
+Real registries should swap `ChecksumSha256SignatureVerifier` for a
+`MarketplaceSignatureVerifier` implementation backed by minisign,
+sigstore, or another signing system. The plumbing above only changes
+which verifier is configured on the cache — the strict / non-strict
+CLI gates are independent.
+
 ## Offline Flow
 
 After an artifact has been cached, `verify` or `install --cache-only` can run

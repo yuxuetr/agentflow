@@ -827,13 +827,32 @@ expansion) to be useful for non-trivial workloads.
   - Add tests for: signature mismatch reject, checksum mismatch reject,
     partial download retry, atomic-rollback on extract failure.
 
-- TODO P5.2 Signed fixture artifacts:
-  - Add `agentflow-skills/tests/fixtures/signed/` and
-    `agentflow-core/tests/fixtures/signed/` containing locally-signed
-    Skill and Plugin archives.
-  - Test both strict (`--require-signature`) and non-strict
-    (`--allow-unsigned`) paths.
-  - Document the signing flow in `docs/MARKETPLACE.md` "Local signing".
+- DONE P5.2 Signed fixture artifacts:
+  - Fixture archive sources are checked in under:
+    - `agentflow-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md`
+    - `agentflow-core/tests/fixtures/signed/plugin-echo/plugin.toml`
+      (+ `bin/echo-plugin` entrypoint stub).
+  - `agentflow-skills/tests/marketplace_signed.rs` builds a
+    deterministic `.tar.gz` from each fixture, computes the SHA-256,
+    and exercises the cache through 7 cases:
+    - strict signed Skill / Plugin paths succeed and report
+      `signature_checked = true`;
+    - non-strict (unsigned) Skill / Plugin paths succeed and report
+      `signature_checked = false`, with the inline strict-policy
+      gate confirming they would be rejected by
+      `--require-signature`;
+    - strict path rejects tampered signature values;
+    - strict path rejects tampered artifact bytes (checksum gate
+      fires before the signature verifier);
+    - determinism guard verifies two builds of the same fixture
+      yield byte-identical archives.
+  - `agentflow-core/tests/plugin_signed_fixture.rs` (gated on the
+    `plugin` feature) confirms the plugin manifest fixture still
+    parses + validates and its entrypoint stub resolves to a real
+    file.
+  - `docs/MARKETPLACE.md` gained a "Local signing" section
+    documenting the deterministic-archive + SHA-256-signature flow
+    and the strict / non-strict policy layering.
 
 - TODO P5.3 Marketplace unpack hardening:
   - Extend archive extraction tests for:
