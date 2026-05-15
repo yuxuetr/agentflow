@@ -82,6 +82,7 @@ but do not implement channel adapters in this queue.
 - P4.5 Memory layering design: `docs/MEMORY_LAYERING.md` defines the four-layer boundary (Session / Semantic / Preference / Entity facts) with per-layer lifetime, key, retention default, and the prompt-assembly precedence order. Spec'd trait extensions (`SemanticMemoryStore` extends `MemoryStore`; `PreferenceStore` + `EntityFactStore` separate) keep the new code from leaking into existing backends. Migration path is additive — current `SessionMemory` / `SqliteMemory` / `SemanticMemory` keep working without changes. Unblocks P4.7 implementation and P-H.4 background task context.
 - P4.3 Agent eval format design: `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for `agentflow eval run` and the JSON report envelope. JSONL+TOML layout mirrors the existing RAG eval. EvalCase fields are grounded in real `agentflow_agents::RuntimeLimits` types; six-variant closed assertion DSL (`contains` / `regex` / `tool_called` / `tool_not_called` / `step_count_below` / `final_answer_matches_skill`). Runner is one `Flow` with one `EvalCaseNode` per case — reuses concurrent scheduling, checkpoints, OTel propagation. Unblocks P4.4 implementation.
 - P4.4 Minimal agent eval implementation (3 slices): `agentflow-agents::eval` module ships `Dataset` / `Assertion` / `EvalRunner` + `AgentRuntimeFactory` trait + `EvalReport` envelope; new `AgentStopReason::CostLimitExceeded` variant flows through every workspace match site. `agentflow eval run <dataset>` CLI with `--format text|json`, `--filter <glob>`, `--fail-on-status failed|never`. Tiny `ci_offline` fixture drives the bare ReActAgent against the mock provider so the suite is hermetic. 33 unit tests in agentflow-agents + 10 unit/integration tests in agentflow-cli. Cost tracking is plumbed (cost_usd_actual = 0.0 until the LLM providers report it). Trace ids are `eval-<case_id>-<epoch hex>` so `agentflow trace replay` consumes them directly.
+- P4.4 follow-up trio (3 commits): (1) skill-aware factory + tool admission via new `SkillBuilder::build_with_admission` — `case.skill` cases now route through full skill loading with `tools_allowed/denied` filtering the registry pre-run. (2) real cost tracking via new `AgentEvent::LlmCallCompleted` + `PricingTable` (loadable from `AGENTFLOW_PRICING_TABLE` env or `~/.agentflow/pricing.yml`) — `cost_usd_actual` now reflects real per-call token usage × per-model rates, and `case.cost_limit_usd` is actually enforced. (3) `docs/SKILL_VALIDATOR_PROTOCOL.md` defines the v1 `[validation]` manifest section that backs the `final_answer_matches_skill` assertion (impl pending under P4.7 or a sibling ticket).
 
 ---
 
@@ -684,11 +685,31 @@ regression-safe.
     `agentflow-agents/eval_datasets/ci_offline/` (two cases against
     the mock provider). 6 new CLI integration tests + 4 unit tests
     for the glob/fail-threshold/format parser.
-  - Cost tracking: `cost_usd_actual` is plumbed through the report
-    but reports `0.0` today because the LLM provider doesn't yet emit
-    per-call cost. The new `CostLimitExceeded` variant is reserved
-    for the eval harness's future enforcement layer once provider
-    cost reporting lands.
+  - DONE Follow-up step 1 — skill-aware factory + per-case tool
+    admission. New `SkillBuilder::build_with_admission(manifest, dir,
+    admit)` reuses persona/registry/memory but only registers tools
+    that pass the admit closure. Eval factory routes `case.skill =
+    Some(_)` through this path with `case.tools_allowed/denied` as
+    the admission filter (P3.5/P1.9 precedence at case scope).
+    3 new CLI integration tests + 2 unit tests.
+  - DONE Follow-up step 2 — cost tracking via pricing table +
+    `AgentEvent::LlmCallCompleted`. ReActAgent emits the new event
+    after every LLM call carrying `TokenUsage`. `PricingTable`
+    loads from `AGENTFLOW_PRICING_TABLE` env or
+    `~/.agentflow/pricing.yml`; missing file is not an error
+    (everything costs $0). Runner aggregates per-case cost from
+    events, enforces `case.cost_limit_usd` (over-budget flips
+    status to Failed with `stop_reason = "cost_limit_exceeded"`).
+    8 new tests across pricing + runner + CLI.
+  - DONE Follow-up step 3 — `docs/SKILL_VALIDATOR_PROTOCOL.md`
+    defines the v1 contract behind the `final_answer_matches_skill`
+    assertion: closed `kind = "none" | "regex" | "command"`
+    discriminator in skill.toml's new `[validation]` table; command
+    validators stdin = final_answer, exit-code = verdict, 125
+    reserved for "unrunnable", inherits skill security profile +
+    OS sandbox. Implementation tracked under P4.7 (memory backends)
+    or a separate ticket — the trait + factory + manifest parsing
+    + `final_answer_matches_skill` wiring still need to land.
   - Trace replay path: every case carries a `trace_id` formatted as
     `eval-<case_id>-<epoch_ms hex>` so `agentflow trace replay
     <trace_id>` Just Works for failure debugging.
