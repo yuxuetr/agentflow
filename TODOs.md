@@ -78,6 +78,7 @@ but do not implement channel adapters in this queue.
 - P3.9 (partial): Quality CI `features` job expanded from 6 to 12 combinations (cli-no-default, cli-mcp-rag-plugin, cli-all-features, tracing-postgres, mcp-all-transports, nodes-default added alongside the six existing rows). Each row was validated locally with `cargo check` before landing. Two combinations from the wishlist were found broken at HEAD and tracked under the new M.7 entry instead of being wired in as failing CI jobs.
 - M.2 `docs/AGENT_SDK.md` trait-change sync: new `cargo xtask check-agent-sdk-doc` subcommand walks every backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and asserts a `pub (trait|struct|enum|type|fn) Ident` declaration exists under any `agentflow-*/src/**/*.rs`. Allowlist covers known non-types. Quality CI gains a `check-agent-sdk-doc` job listed in `release-gate.needs`. Tests: 5 unit + 1 integration.
 - P2.7 Backup/restore expectations: `docs/SERVER_BACKUP_RESTORE.md` documents the four state surfaces, restore sequencing, and per-profile exit codes for `agentflow doctor --backup-check`. New `--backup-check` flag adds a writability probe for run_dir / trace_dir / marketplace_cache / skills_dir / plugins_dir (the last two are new env overrides `AGENTFLOW_SKILLS_DIR` / `AGENTFLOW_PLUGINS_DIR`). Production profile escalates missing dirs to Fail; non-writable always Fails. 5 new CLI tests in `doctor_cli_tests.rs`.
+- M.7 Fix broken minimal feature combinations: `agentflow-llm --no-default-features --features openai` and `agentflow-nodes --features batch,conditional` now compile + test clean. Root causes: optional `tracing` dep (llm) and stale unit-struct constructor references in the `factories` module (nodes); secondary bugs in `conditional.rs` (stale `FlowValue::String` arm) and `batch.rs` (Debug derive on trait object + serialization mis-shape). The `factories` feature + module was deleted (unused, never compiled). CI Quality `features` matrix gains `llm-openai-only` and `nodes-batch-conditional` rows.
 
 ---
 
@@ -1284,22 +1285,36 @@ fit a P-segment.
 
 - DONE M.5 CI workflow audit (see `docs/CI_WORKFLOWS.md`).
 
-- TODO M.7 Fix broken minimal feature combinations:
-  - `agentflow-llm --no-default-features --features openai`:
-    code references `tracing::*` unconditionally but the `logging`
-    feature (which pulls in the `tracing` dep) is part of the default
-    feature set. Either gate the imports under
-    `#[cfg(feature = "logging")]` or move `tracing` to an
-    unconditional dep.
-  - `agentflow-nodes --features batch,conditional,factories`:
-    `batch`/`conditional`/`factories` reference `LlmNode::new`,
-    `HttpNode::new`, `FileNode::new`, `FlowValue::String`, and
-    `as_f64`. These require the default `llm`/`http`/`file`/`template`
-    features. Either declare the dependency in `[features]` (e.g.
-    `batch = ["llm", "http", "file", "template"]`) or relax the
-    code paths to be feature-gated.
-  - Once fixed, add the corresponding rows to the Quality CI
-    `features` matrix.
+- DONE M.7 Fix broken minimal feature combinations:
+  - DONE `agentflow-llm --no-default-features --features openai`:
+    `tracing` was declared optional under `logging`/`observability`
+    but source used `tracing::*` unconditionally. Aligned with the
+    rest of the workspace by making `tracing` a hard dep;
+    `tracing-subscriber` stays optional under `logging` (it's the
+    heavy part); `observability` is kept as an empty alias for
+    backwards compat.
+  - DONE `agentflow-nodes` `factories` feature: the gated module
+    referenced constructors (`LlmNode::new(&str, &str)`, etc.) that
+    haven't existed since the unit-struct rewrite. The module was
+    unused anywhere else in the workspace. Deleted the module and
+    the feature flag; `NodeRegistry::default()` now just returns
+    `Self::new()`.
+  - DONE `agentflow-nodes` `conditional`: stale `FlowValue::String`
+    pattern + `value.as_f64()` call. Dropped the dead arm
+    (`FlowValue::Json(Value::String)` covers it) and added a small
+    `flow_value_as_f64` helper.
+  - DONE `agentflow-nodes` `batch`: `#[derive(Debug)]` on `BatchNode`
+    pulled in `dyn AsyncNode: Debug` which isn't on the trait.
+    Hand-rolled `Debug` impl that prints `<AsyncNode>` for the
+    `child_node` field. Also fixed the batch result serialization
+    so downstream consumers get a plain JSON array instead of a
+    `{type, value}`-wrapped envelope. Clippy let-chain cleanup.
+  - DONE CI matrix: dropped the broken-combo comment block from
+    Quality `features` job and added `llm-openai-only` +
+    `nodes-batch-conditional` rows. Both now run on every PR.
+  - Tests: `cargo test -p agentflow-nodes --features
+    batch,conditional` → 30 / 0 pass; `cargo test -p agentflow-llm
+    --no-default-features --features openai --lib` → 98 / 0 pass.
 
 - DONE M.6 Workspace edition pin:
   - New `xtask/` workspace member with a single `verify-edition`
