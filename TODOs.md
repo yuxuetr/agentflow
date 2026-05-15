@@ -66,6 +66,7 @@ but do not implement channel adapters in this queue.
 - P1.8 Plugin execution policy (`agentflow-tools::plugin_policy` + per-profile defaults + `agentflow plugin install --allow-unsandboxed-plugin --signed` + production opt-in rejection + `tracing::info!` trace target).
 - P1.9 MCP capability + SkillSecurity merge policy (`agentflow-skills::policy::resolve_tool_policy` + `ResolvedToolPolicy` / `AdmissionSource` types + `docs/MCP_CAPABILITY_POLICY.md` precedence table; CLI flag wiring tracked under P3.5).
 - P2.4 SSE robustness (`EventBroker::finalise_with_grace` + `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` + public diagnostics + reconnect across active / recently-completed / long-completed runs + disconnect-no-leak tests).
+- P6.1 Run creation form (`/ui/runs/new` deep link + `RunCreateForm` with tenant / profile / workflow / inputs / file-pick / localStorage / submit→redirect + Playwright E2E spec).
 
 ---
 
@@ -702,15 +703,53 @@ console without making it a required surface.
 Design constraint: Web UI must remain a client of the same `/v1/*` and SSE
 contracts the CLI uses. Never bypass server APIs for UI-only features.
 
-- TODO P6.1 Run creation form:
-  - Add UI page `/ui/runs/new` with:
-    - Workflow YAML editor (Monaco) with `agentflow workflow validate`
-      schema integration.
-    - File-pick for workflow + input pairs.
-    - Profile selection (dev/local/production) when permitted.
-    - Submit → redirect to run detail.
-  - Persist last-used inputs in localStorage (no API tokens).
-  - Add E2E test via `playwright` headless.
+- DONE P6.1 Run creation form:
+  - New `/ui/runs/new` deep-link route. Server's `ui_router()` now
+    serves `index.html` on `/ui`, `/ui/`, and `/ui/runs/new` so the
+    SPA can pick the matching view from
+    `window.location.pathname`.
+  - Top-level `App` dispatches on `pathname`. The legacy run
+    console becomes `RunConsole`; the new form is `RunCreateForm`.
+    Both share the API token via a parent-owned state slot so the
+    token never duplicates into the new-form-specific localStorage
+    slot.
+  - `RunCreateForm` fields:
+    - Tenant + profile (`dev` / `local` / `production`) + API
+      token (last not persisted).
+    - Workflow YAML editor (monospace `<textarea>` with line
+      counter + client-side `name:` / `nodes:` structural
+      checks). Full Monaco + schema integration is documented
+      as a follow-up.
+    - Inputs (optional JSON, parsed client-side; surface error
+      under the field).
+    - File-pick for both editors (`<input type="file">`) so
+      operators can load `workflow.yaml` / `inputs.json` from
+      disk without paste.
+    - Submit calls `POST /v1/runs` and `window.location.assign`
+      to `/ui?run=<id>` so the existing run console picks the
+      new id from the query param.
+  - `localStorage` keys (`agentflow.ui.newForm.*`) persist
+    tenant / profile / workflow / inputs. The API token uses the
+    existing `agentflow.ui.apiToken` slot only — `RunCreateForm`
+    never writes a new-form-specific token slot, and the
+    third Playwright spec asserts this.
+  - Playwright suite at `agentflow-ui/e2e/runs-new.spec.ts`
+    covers: submit → redirect to `/ui?run=…`, persistence across
+    reloads, and the no-token-in-newform-slot guarantee.
+    Running it requires explicit installation
+    (`npm install --save-dev @playwright/test` +
+    `npx playwright install chromium`) — kept out of the workspace
+    install graph by design to keep the default UI build small.
+  - Bundle impact: `dist/assets/app.js` 204 KiB → 209 KiB
+    (+5 KiB). `dist/assets/styles.css` 5.7 KiB → 7.9 KiB. No new
+    npm dependencies.
+  - Deferred under P6.1:
+    - Full Monaco editor + `agentflow workflow validate` schema
+      integration (would need a server `POST /v1/workflows/validate`
+      route and a bundled JSON schema; tracked as a follow-up to
+      keep the dist bundle reasonable).
+    - CI wiring for the Playwright suite (requires Chromium binary
+      + reachable `agentflow serve` + Postgres).
 
 - TODO P6.2 Provider config diagnostics panel:
   - Add UI page `/ui/diagnostics` calling `agentflow doctor --output json`
