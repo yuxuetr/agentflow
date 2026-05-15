@@ -79,6 +79,8 @@ but do not implement channel adapters in this queue.
 - M.2 `docs/AGENT_SDK.md` trait-change sync: new `cargo xtask check-agent-sdk-doc` subcommand walks every backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and asserts a `pub (trait|struct|enum|type|fn) Ident` declaration exists under any `agentflow-*/src/**/*.rs`. Allowlist covers known non-types. Quality CI gains a `check-agent-sdk-doc` job listed in `release-gate.needs`. Tests: 5 unit + 1 integration.
 - P2.7 Backup/restore expectations: `docs/SERVER_BACKUP_RESTORE.md` documents the four state surfaces, restore sequencing, and per-profile exit codes for `agentflow doctor --backup-check`. New `--backup-check` flag adds a writability probe for run_dir / trace_dir / marketplace_cache / skills_dir / plugins_dir (the last two are new env overrides `AGENTFLOW_SKILLS_DIR` / `AGENTFLOW_PLUGINS_DIR`). Production profile escalates missing dirs to Fail; non-writable always Fails. 5 new CLI tests in `doctor_cli_tests.rs`.
 - M.7 Fix broken minimal feature combinations: `agentflow-llm --no-default-features --features openai` and `agentflow-nodes --features batch,conditional` now compile + test clean. Root causes: optional `tracing` dep (llm) and stale unit-struct constructor references in the `factories` module (nodes); secondary bugs in `conditional.rs` (stale `FlowValue::String` arm) and `batch.rs` (Debug derive on trait object + serialization mis-shape). The `factories` feature + module was deleted (unused, never compiled). CI Quality `features` matrix gains `llm-openai-only` and `nodes-batch-conditional` rows.
+- P4.5 Memory layering design: `docs/MEMORY_LAYERING.md` defines the four-layer boundary (Session / Semantic / Preference / Entity facts) with per-layer lifetime, key, retention default, and the prompt-assembly precedence order. Spec'd trait extensions (`SemanticMemoryStore` extends `MemoryStore`; `PreferenceStore` + `EntityFactStore` separate) keep the new code from leaking into existing backends. Migration path is additive — current `SessionMemory` / `SqliteMemory` / `SemanticMemory` keep working without changes. Unblocks P4.7 implementation and P-H.4 background task context.
+- P4.3 Agent eval format design: `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for `agentflow eval run` and the JSON report envelope. JSONL+TOML layout mirrors the existing RAG eval. EvalCase fields are grounded in real `agentflow_agents::RuntimeLimits` types; six-variant closed assertion DSL (`contains` / `regex` / `tool_called` / `tool_not_called` / `step_count_below` / `final_answer_matches_skill`). Runner is one `Flow` with one `EvalCaseNode` per case — reuses concurrent scheduling, checkpoints, OTel propagation. Unblocks P4.4 implementation.
 
 ---
 
@@ -620,18 +622,38 @@ regression-safe.
     configurable threshold (default: p < 0.05 + ≥3% absolute drop in
     `recall@5`).
 
-- TODO P4.3 Agent eval format design:
-  - Author `docs/AGENT_EVAL_FORMAT.md` defining the local
-    `agentflow eval` dataset:
-    - Test case fields: `id`, `prompt`, `tools_allowed`, `skill`,
-      `expected_assertions[]`, `max_steps`, `max_tool_calls`,
-      `cost_limit_usd`, `latency_limit_ms`.
-    - Assertion DSL: `contains`, `regex`, `tool_called`, `tool_not_called`,
-      `step_count_below`, `final_answer_matches_skill`.
-    - Output schema: pass/fail, trace_id, cost actual, latency actual.
-  - Cross-reference with `agentflow trace replay` for failed-case
-    debugging.
-  - Reuse `Flow` as the eval pipeline where possible.
+- DONE P4.3 Agent eval format design:
+  - `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for
+    `agentflow eval run` and the JSON report envelope. Dataset layout
+    mirrors `agentflow-rag/eval_datasets/`: one directory holding
+    `dataset.toml` (name / version / `[defaults]` block) + `cases.jsonl`
+    (one EvalCase per line) + optional `fixtures/`.
+  - `EvalCase` fields grounded in real workspace types:
+    `max_steps` / `max_tool_calls` / `latency_limit_ms` map 1:1 to
+    `agentflow_agents::RuntimeLimits`; `tools_allowed` / `tools_denied`
+    mirror the P3.5 `--allow-tool` / `--deny-tool` admission
+    precedence; `cost_limit_usd` ships a new
+    `AgentStopReason::CostLimitExceeded` variant (additive under the
+    P0.3 stop-reason contract).
+  - Assertion DSL is a closed set of six variants:
+    `contains`, `regex`, `tool_called`, `tool_not_called`,
+    `step_count_below`, `final_answer_matches_skill`.
+    `tool_not_called` is kept separate from `tool_called`+`max_count=0`
+    because the failure report reads more naturally.
+  - JSON envelope: dataset / dataset_version / started_at /
+    finished_at / summary (totals + cost + p50/p95 latency) +
+    per-case rows carrying `trace_id` for `agentflow trace replay`.
+  - Architecture: the runner is one `agentflow_core::Flow` with one
+    `EvalCaseNode` per case — reuses concurrent scheduling,
+    checkpoints, OTel propagation, and `workflow validate` without
+    duplicating that machinery.
+  - CLI sketch (lands under P4.4): `agentflow eval run <dataset>`
+    with `--format text|json`, `--filter`, `--parallelism`,
+    `--fail-on-status`, `--compare-baseline`. Exit codes 0/1/2 mirror
+    the rag eval convention.
+  - Stability tier set: EvalCase fields, six-variant DSL, JSON
+    envelope shape are stable at first land; future variants require
+    a `schema_version` bump.
 
 - TODO P4.4 Minimal agent eval implementation:
   - Implement `agentflow-agents/src/eval/runner.rs` running cases from
@@ -642,18 +664,34 @@ regression-safe.
   - Add a tiny offline dataset (mock provider) used by CI.
   - PREREQ for any release-gate quality claim.
 
-- TODO P4.5 Memory layering design:
-  - Author `docs/MEMORY_LAYERING.md` defining boundaries:
-    - Session memory: in-process token-windowed.
-    - Semantic memory: vector-backed, overlaps with RAG; document the
-      seam (when to use which).
-    - Preference memory: user-scoped key/value, durable.
-    - Entity facts memory: extracted facts with provenance.
-    - Retention/forgetting policy per layer.
-  - Define `MemoryLayer` enum + per-layer trait extending `MemoryStore`.
-  - Document migration path for current `SessionMemory` / `SqliteMemory`
-    / `SemanticMemory`.
-  - PREREQ for P4.7 implementation and P-H.4 background task context.
+- DONE P4.5 Memory layering design:
+  - `docs/MEMORY_LAYERING.md` defines four mutually exclusive memory
+    layers (Session / Semantic / Preference / Entity facts) with
+    lifetime, key, primary read API, and retention default per
+    layer. Calls out the seam with RAG using four worked examples so
+    agent-produced data and authored corpus never alias.
+  - Trait surface: `MemoryStore` (existing) stays as the Session
+    layer interface. `SemanticMemoryStore` extends `MemoryStore`
+    (every semantic backend is also a valid session backend);
+    `PreferenceStore` and `EntityFactStore` are *separate* trait
+    hierarchies because their data shapes are not `Message` —
+    keeping them separate prevents accidental dispatch through the
+    wrong read API. `MemoryLayer` enum + new types
+    (`PreferenceScope`, `EntityFact`) introduced here, implemented
+    under P4.7.
+  - Precedence at prompt-assembly time is fixed:
+    Session → Preference → Entity facts → Semantic. Rationale:
+    high-trust data first; semantic is the noisiest layer. A
+    `MemorySummaryBackend` runs *before* this list (compacts
+    overflowed session messages).
+  - Retention per layer plus a future `agentflow memory prune`
+    CLI sketch (lands with P4.7).
+  - Migration path: current `SessionMemory` / `SqliteMemory` /
+    `SemanticMemory` keep working without changes; new layers are
+    additive. Skill manifests gain optional `[memory.preference]`
+    and `[memory.entity_facts]` tables that older skills can omit.
+  - Stability: `MemoryStore` stable; new types start experimental
+    and promote to Beta after one skill ships a real integration.
 
 - TODO P4.6 Memory and prompt golden tests:
   - Add `agentflow-agents/tests/prompt_assembly_golden.rs`:
