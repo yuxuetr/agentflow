@@ -22,12 +22,15 @@ use crate::runtime::{
   AgentContext, AgentRuntime, AgentRuntimeError, AgentStopReason, RuntimeLimits,
 };
 
-use super::assertion::{AssertionContext, AssertionOutcome, SkillValidator};
+use super::assertion::{AssertionContext, AssertionOutcome, SkillValidator, SkillValidatorVerdict};
 use super::dataset::{Dataset, EvalCase};
 use super::pricing::PricingTable;
 
-/// Boxed skill validator closure returned by [`AgentRuntimeFactory::skill_validator`].
-pub type BoxedSkillValidator<'a> = Box<dyn Fn(&str) -> Option<bool> + Send + Sync + 'a>;
+/// Boxed skill validator closure returned by
+/// [`AgentRuntimeFactory::skill_validator`]. Closure returns the rich
+/// [`SkillValidatorVerdict`] so the assertion layer can surface
+/// per-verdict reason text (see `docs/SKILL_VALIDATOR_PROTOCOL.md`).
+pub type BoxedSkillValidator<'a> = Box<dyn Fn(&str) -> SkillValidatorVerdict + Send + Sync + 'a>;
 
 /// Errors surfaced by the runner. Dataset / assertion errors are kept
 /// distinct from runtime errors so a CI gate can tell "this dataset was
@@ -308,8 +311,8 @@ impl<'a> EvalRunner<'a> {
     let elapsed = started_instant.elapsed();
     let validator = self.factory.skill_validator(case);
     let validator_ref: Option<&SkillValidator<'_>> = validator
-      .as_ref()
-      .map(|boxed| boxed.as_ref() as &SkillValidator<'_>);
+      .as_deref()
+      .map(|boxed| boxed as &SkillValidator<'_>);
 
     let assertion_ctx = AssertionContext {
       steps: &run_outcome.steps,
@@ -575,7 +578,17 @@ mod tests {
 
     fn skill_validator<'a>(&'a self, case: &'a EvalCase) -> Option<BoxedSkillValidator<'a>> {
       let verdict = self.validators.lock().unwrap().get(&case.id).copied();
-      verdict.map(|v| -> BoxedSkillValidator<'a> { Box::new(move |_| v) })
+      verdict.map(|v| -> BoxedSkillValidator<'a> {
+        Box::new(move |_| match v {
+          Some(true) => SkillValidatorVerdict::Pass,
+          Some(false) => SkillValidatorVerdict::Fail {
+            reason: "stub validator rejected".to_string(),
+          },
+          None => SkillValidatorVerdict::Unrunnable {
+            reason: "stub validator unrunnable".to_string(),
+          },
+        })
+      })
     }
   }
 

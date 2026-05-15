@@ -24,6 +24,7 @@ pub mod runner;
 
 pub use assertion::{
   Assertion, AssertionContext, AssertionInScope, AssertionOutcome, AssertionTarget, SkillValidator,
+  SkillValidatorVerdict,
 };
 pub use dataset::{Dataset, DatasetManifest, EvalCase, EvalCaseDefaults, EvalError, RawEvalCase};
 pub use pricing::{ModelPricing, PricingError, PricingTable};

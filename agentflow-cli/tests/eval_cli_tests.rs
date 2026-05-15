@@ -488,6 +488,244 @@ fn cli_eval_run_cost_usd_actual_zero_when_no_pricing_table_configured() {
   assert_eq!(report["summary"]["cost_usd_total"], 0.0);
 }
 
+/// Write a skill with a `[validation] kind = "regex"` section. Used
+/// to exercise `final_answer_matches_skill` end-to-end.
+fn write_regex_validated_skill(dir: &Path, model: &str, pattern: &str) {
+  fs::write(
+    dir.join("skill.toml"),
+    format!(
+      r#"
+[skill]
+name = "validator-skill"
+version = "0.1.0"
+description = "Skill with a regex validator for eval tests"
+
+[persona]
+role = "Answer concisely."
+
+[model]
+name = "{model}"
+max_iterations = 4
+
+[validation]
+kind = "regex"
+pattern = "{pattern}"
+"#
+    ),
+  )
+  .unwrap();
+}
+
+fn write_models_yml_for(home: &Path, model: &str) {
+  let cfg = home.join(".agentflow");
+  fs::create_dir_all(&cfg).unwrap();
+  fs::write(
+    cfg.join("models.yml"),
+    format!(
+      r#"
+models:
+  {model}:
+    vendor: mock
+    type: text
+    model_id: {model}
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#
+    ),
+  )
+  .unwrap();
+}
+
+#[test]
+fn cli_eval_run_final_answer_matches_skill_passes_when_regex_validator_accepts() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let model = "mock-validator-pass";
+  let skill_dir = work.path().join("validator-pass");
+  fs::create_dir_all(&skill_dir).unwrap();
+  write_regex_validated_skill(&skill_dir, model, r"\\bOK\\b");
+  write_models_yml_for(home.path(), model);
+
+  let dataset_dir = work.path().join("ds");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "ok-case",
+        "prompt": "say ok",
+        "model": model,
+        "expected_assertions": [
+          {"type": "final_answer_matches_skill"}
+        ]
+      })
+    ),
+  );
+
+  // Mock response includes the word "OK" so the validator passes.
+  let responses =
+    serde_json::to_string(&vec![r#"{"thought":"answer","answer":"OK ready"}"#]).unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .output()
+    .unwrap();
+  assert!(
+    output.status.success(),
+    "stderr: {}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(report["summary"]["passed"], 1);
+}
+
+#[test]
+fn cli_eval_run_final_answer_matches_skill_fails_with_validator_reason_in_report() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let model = "mock-validator-fail";
+  let skill_dir = work.path().join("validator-fail");
+  fs::create_dir_all(&skill_dir).unwrap();
+  write_regex_validated_skill(&skill_dir, model, r"\\bOK\\b");
+  write_models_yml_for(home.path(), model);
+
+  let dataset_dir = work.path().join("ds");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "missing-ok-case",
+        "prompt": "should reject",
+        "model": model,
+        "expected_assertions": [
+          {"type": "final_answer_matches_skill"}
+        ]
+      })
+    ),
+  );
+
+  // Mock response intentionally omits "OK" so the regex fails.
+  let responses = serde_json::to_string(&vec![
+    r#"{"thought":"answer","answer":"totally unrelated"}"#,
+  ])
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .output()
+    .unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(report["summary"]["failed"], 1);
+  // The validator's own reason should surface verbatim into the case
+  // report's assertion outcome.
+  let case = &report["cases"][0];
+  let assertions = case["assertions"].as_array().unwrap();
+  let validator_outcome = &assertions[0];
+  let reason = validator_outcome["reason"].as_str().unwrap_or("");
+  assert!(
+    reason.contains("regex"),
+    "expected validator reason to mention the pattern; got: {reason}"
+  );
+}
+
+#[test]
+fn cli_eval_run_final_answer_matches_skill_no_validator_falls_through_to_no_validator_reason() {
+  // Skill omits the [validation] section entirely. The harness should
+  // emit the "skill declares no validator" reason rather than crashing.
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let model = "mock-no-validator";
+  let skill_dir = work.path().join("no-validator");
+  fs::create_dir_all(&skill_dir).unwrap();
+  fs::write(
+    skill_dir.join("skill.toml"),
+    format!(
+      r#"
+[skill]
+name = "no-validator"
+version = "0.1.0"
+description = "Skill without a [validation] section"
+
+[persona]
+role = "Answer."
+
+[model]
+name = "{model}"
+max_iterations = 4
+"#
+    ),
+  )
+  .unwrap();
+  write_models_yml_for(home.path(), model);
+
+  let dataset_dir = work.path().join("ds");
+  fs::create_dir_all(&dataset_dir).unwrap();
+  write_dataset_targeting_skill(
+    &dataset_dir,
+    &skill_dir,
+    &format!(
+      "{}\n",
+      serde_json::json!({
+        "id": "no-validator-case",
+        "prompt": "x",
+        "model": model,
+        "expected_assertions": [
+          {"type": "final_answer_matches_skill"}
+        ]
+      })
+    ),
+  );
+  let responses =
+    serde_json::to_string(&vec![r#"{"thought":"answer","answer":"anything"}"#]).unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      dataset_dir.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .output()
+    .unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let case = &report["cases"][0];
+  let reason = case["assertions"][0]["reason"].as_str().unwrap_or("");
+  assert!(
+    reason.contains("no validator"),
+    "expected 'skill declares no validator' reason; got: {reason}"
+  );
+}
+
 #[test]
 fn cli_eval_run_skill_load_failure_reports_factory_error() {
   let home = TempDir::new().unwrap();

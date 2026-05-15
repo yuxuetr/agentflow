@@ -88,10 +88,24 @@ pub enum AssertionInScope {
   Step { index: usize, kind: String },
 }
 
+/// Richer outcome returned by the skill validator closure. The
+/// `final_answer_matches_skill` assertion maps each variant to a
+/// distinct `AssertionOutcome.reason` text so operators can tell
+/// "skill rejected this answer" from "we couldn't ask the skill"
+/// without re-parsing the trace. See
+/// `docs/SKILL_VALIDATOR_PROTOCOL.md` for the contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillValidatorVerdict {
+  Pass,
+  Fail { reason: String },
+  Unrunnable { reason: String },
+}
+
 /// Type alias for the skill validator closure passed through
-/// [`AssertionContext`]. Returns `Some(true|false)` for a skill that
-/// declares a validator, `None` when no validator is wired.
-pub type SkillValidator<'a> = dyn Fn(&str) -> Option<bool> + 'a;
+/// [`AssertionContext`]. The closure is `None` when no validator is
+/// wired ("skill declares no validator"); when present, it returns
+/// the rich [`SkillValidatorVerdict`].
+pub type SkillValidator<'a> = dyn Fn(&str) -> SkillValidatorVerdict + Send + Sync + 'a;
 
 /// Context passed to [`Assertion::evaluate`]. Borrowed-only; the
 /// assertion never owns the agent's run output.
@@ -375,26 +389,26 @@ fn evaluate_final_answer_matches_skill(
     }
   };
   match validator(answer) {
-    Some(true) => AssertionOutcome {
+    SkillValidatorVerdict::Pass => AssertionOutcome {
       assertion,
       passed: true,
       matched_in: None,
       actual_count: None,
       reason: None,
     },
-    Some(false) => AssertionOutcome {
+    SkillValidatorVerdict::Fail { reason } => AssertionOutcome {
       assertion,
       passed: false,
       matched_in: None,
       actual_count: None,
-      reason: Some("skill validator rejected the final answer".to_string()),
+      reason: Some(reason),
     },
-    None => AssertionOutcome {
+    SkillValidatorVerdict::Unrunnable { reason } => AssertionOutcome {
       assertion,
       passed: false,
       matched_in: None,
       actual_count: None,
-      reason: Some("skill declares no validator".to_string()),
+      reason: Some(format!("validator unrunnable: {reason}")),
     },
   }
 }
@@ -772,8 +786,16 @@ mod tests {
   }
 
   #[test]
-  fn final_answer_matches_skill_passes_when_validator_returns_true() {
-    let validator = |ans: &str| -> Option<bool> { Some(ans.contains("hi")) };
+  fn final_answer_matches_skill_passes_when_validator_returns_pass() {
+    let validator = |ans: &str| -> SkillValidatorVerdict {
+      if ans.contains("hi") {
+        SkillValidatorVerdict::Pass
+      } else {
+        SkillValidatorVerdict::Fail {
+          reason: "no hi".to_string(),
+        }
+      }
+    };
     let assertion = Assertion::FinalAnswerMatchesSkill {};
     let ctx = AssertionContext {
       steps: &[final_answer_step(0, "hi there")],
@@ -785,8 +807,12 @@ mod tests {
   }
 
   #[test]
-  fn final_answer_matches_skill_fails_when_validator_returns_false() {
-    let validator = |ans: &str| -> Option<bool> { Some(ans.contains("hi")) };
+  fn final_answer_matches_skill_fails_when_validator_returns_fail_and_surfaces_reason() {
+    let validator = |_ans: &str| -> SkillValidatorVerdict {
+      SkillValidatorVerdict::Fail {
+        reason: "validator rejected: missing OK prefix".to_string(),
+      }
+    };
     let assertion = Assertion::FinalAnswerMatchesSkill {};
     let ctx = AssertionContext {
       steps: &[final_answer_step(0, "bye")],
@@ -795,7 +821,37 @@ mod tests {
     };
     let outcome = assertion.evaluate(&ctx);
     assert!(!outcome.passed);
-    assert!(outcome.reason.unwrap().contains("rejected"));
+    let reason = outcome.reason.unwrap();
+    assert!(
+      reason.contains("missing OK prefix"),
+      "reason should carry the validator's own message: {reason}"
+    );
+  }
+
+  #[test]
+  fn final_answer_matches_skill_surfaces_unrunnable_reason_distinctly() {
+    let validator = |_ans: &str| -> SkillValidatorVerdict {
+      SkillValidatorVerdict::Unrunnable {
+        reason: "command exited 125: PATH broken".to_string(),
+      }
+    };
+    let assertion = Assertion::FinalAnswerMatchesSkill {};
+    let ctx = AssertionContext {
+      steps: &[final_answer_step(0, "anything")],
+      final_answer: Some("anything"),
+      skill_validator: Some(&validator),
+    };
+    let outcome = assertion.evaluate(&ctx);
+    assert!(!outcome.passed);
+    let reason = outcome.reason.unwrap();
+    assert!(
+      reason.starts_with("validator unrunnable:"),
+      "reason should be prefixed 'validator unrunnable:'; got: {reason}"
+    );
+    assert!(
+      reason.contains("PATH broken"),
+      "reason should carry the unrunnable detail; got: {reason}"
+    );
   }
 
   // ── Serde round trip ───────────────────────────────────────────────────

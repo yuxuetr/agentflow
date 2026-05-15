@@ -10,15 +10,19 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 
+use agentflow_agents::eval::runner::BoxedSkillValidator;
 use agentflow_agents::eval::{
   AgentRuntimeFactory, CaseStatus, Dataset, EvalCase, EvalReport, EvalRunner, EvalRunnerError,
-  PricingTable,
+  PricingTable, SkillValidatorVerdict,
 };
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentRuntime;
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SessionMemory;
-use agentflow_skills::{SkillBuilder, SkillLoader};
+use agentflow_skills::{
+  SkillBuilder, SkillLoader, SkillValidator as SkillValidatorImpl, ValidatorVerdict,
+  build_validator,
+};
 use agentflow_tools::ToolRegistry;
 
 /// `agentflow eval run <dataset>` entry point.
@@ -168,16 +172,58 @@ fn load_pricing_table() -> Result<PricingTable> {
   Ok(PricingTable::empty())
 }
 
-/// Default factory: spin up a fresh bare ReActAgent per case using the
-/// case-declared model. No tool registry, no skill loading in this
-/// slice. Suitable for the CI mock-provider fixture; richer factories
-/// (skill loading, tool admission via P3.5 flags) land alongside the
-/// agent eval slot in P4.7+.
-struct ReActAgentFactory;
+/// Default factory: spin up a fresh ReActAgent per case using the
+/// case-declared model. Loads skills when `case.skill` is set and
+/// caches the resolved validator so `final_answer_matches_skill`
+/// works against the skill's declared `[validation]` table.
+struct ReActAgentFactory {
+  /// `skill_dir → resolved validator`. Cached because every
+  /// `final_answer_matches_skill` assertion needs one lookup per
+  /// case; rebuilding from the manifest on every call would re-read
+  /// the file and re-compile the regex.
+  validators:
+    std::sync::Mutex<std::collections::HashMap<String, Option<Arc<dyn SkillValidatorImpl>>>>,
+}
 
 impl ReActAgentFactory {
   fn new() -> Self {
-    Self
+    Self {
+      validators: std::sync::Mutex::new(std::collections::HashMap::new()),
+    }
+  }
+
+  /// Get-or-build the validator for the given skill directory. Loads
+  /// the manifest, validates it, and constructs the validator via
+  /// `agentflow_skills::build_validator`. Failure (bad regex, missing
+  /// manifest) is recorded as a cached `None` so subsequent cases
+  /// targeting the same skill don't repeat the work, and the
+  /// `final_answer_matches_skill` assertion falls through to "skill
+  /// declares no validator" — the same behaviour as a skill with
+  /// `kind = "none"`.
+  fn resolve_validator(&self, skill_dir: &str) -> Option<Arc<dyn SkillValidatorImpl>> {
+    if let Some(cached) = self.validators.lock().unwrap().get(skill_dir).cloned() {
+      return cached;
+    }
+    let dir = Path::new(skill_dir);
+    let resolved = (|| -> Option<Arc<dyn SkillValidatorImpl>> {
+      let manifest = SkillLoader::load(dir).ok()?;
+      let _warnings = SkillLoader::validate(&manifest, dir).ok()?;
+      build_validator(&manifest, dir).ok().flatten()
+    })();
+    self
+      .validators
+      .lock()
+      .unwrap()
+      .insert(skill_dir.to_string(), resolved.clone());
+    resolved
+  }
+}
+
+fn verdict_from_skill(verdict: ValidatorVerdict) -> SkillValidatorVerdict {
+  match verdict {
+    ValidatorVerdict::Pass => SkillValidatorVerdict::Pass,
+    ValidatorVerdict::Fail { reason } => SkillValidatorVerdict::Fail { reason },
+    ValidatorVerdict::Unrunnable { reason } => SkillValidatorVerdict::Unrunnable { reason },
   }
 }
 
@@ -189,6 +235,14 @@ impl AgentRuntimeFactory for ReActAgentFactory {
     } else {
       build_bare_agent(case)
     }
+  }
+
+  fn skill_validator<'a>(&'a self, case: &'a EvalCase) -> Option<BoxedSkillValidator<'a>> {
+    let skill_dir = case.skill.as_deref()?;
+    let validator = self.resolve_validator(skill_dir)?;
+    let closure: BoxedSkillValidator<'a> =
+      Box::new(move |answer: &str| verdict_from_skill(validator.validate(answer)));
+    Some(closure)
   }
 }
 
