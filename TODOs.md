@@ -73,6 +73,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
+- M.6 Workspace edition pin: new `xtask/` workspace member + `cargo xtask verify-edition` subcommand walks every member's `Cargo.toml` and asserts `edition = "2024"`. `.cargo/config.toml` ships the `xtask` alias; Quality CI workflow gains a `verify-edition` job listed under `release-gate.needs`. Tests: 3 unit (synthetic workspace) + 3 integration (real workspace + bad subcommand).
 
 ---
 
@@ -1238,10 +1239,24 @@ fit a P-segment.
 
 - DONE M.5 CI workflow audit (see `docs/CI_WORKFLOWS.md`).
 
-- TODO M.6 Workspace edition pin:
-  - All 15 Rust crates are on edition 2024 now. Add a `cargo xtask
-    verify-edition` step that fails CI if any new crate is added at a
-    different edition.
+- DONE M.6 Workspace edition pin:
+  - New `xtask/` workspace member with a single `verify-edition`
+    subcommand walks every member's `Cargo.toml` and asserts
+    `edition = "2024"`. Stable iteration order, structured failure
+    output, and a synthetic-workspace test matrix (pass / wrong-
+    edition fail / missing-edition error) live alongside the
+    implementation.
+  - `.cargo/config.toml` ships the canonical `xtask = "run --package
+    xtask --quiet --"` alias so `cargo xtask verify-edition` Just
+    Works from any subdirectory of the workspace.
+  - Quality CI workflow gains a `verify-edition` job listed under
+    both `release-gate.needs` and its `test` summary call, so a
+    drift fails the release gate. Today's clean state:
+    `cargo xtask verify-edition` reports `checked 17 workspace
+    member(s) against edition "2024" — OK`.
+  - Tests: 3 unit (synthetic workspace) + 3 integration (real
+    workspace, unknown subcommand, missing subcommand) — all
+    hermetic.
 
 ---
 
