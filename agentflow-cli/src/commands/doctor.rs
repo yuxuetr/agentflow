@@ -48,7 +48,48 @@ pub struct DoctorReport {
   server: Option<ServerReport>,
   #[serde(skip_serializing_if = "Option::is_none")]
   backup_check: Option<BackupCheckReport>,
+  /// Lite installation probe (P3.4): walks the local skills and plugins
+  /// dirs, lists every MCP server command + plugin entrypoint, and
+  /// checks whether each one resolves on PATH (or as a file). Only
+  /// populated when `--check-installations` is set. Heavier transport-
+  /// level reachability stays deferred until `agentflow mcp config`
+  /// + plugin `dry_run` manifest entries land.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  installations: Option<InstallationProbeReport>,
   status: DoctorStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallationProbeReport {
+  pub skills_root: Option<PathBuf>,
+  pub plugins_root: Option<PathBuf>,
+  pub mcp_servers: Vec<McpServerProbe>,
+  pub plugins: Vec<PluginInstallProbe>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpServerProbe {
+  /// Skill that declared the server.
+  pub skill: String,
+  /// Server name as declared in the manifest.
+  pub server: String,
+  /// First command segment — what we attempt to resolve on PATH.
+  pub command: String,
+  /// `true` if the binary resolves on PATH or is a reachable absolute
+  /// path. `false` means the operator will see a startup failure when
+  /// the skill is run.
+  pub reachable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PluginInstallProbe {
+  pub name: String,
+  pub version: String,
+  pub entrypoint: PathBuf,
+  /// `true` if the entrypoint exists at the resolved path. Doesn't
+  /// spawn the binary — that's reserved for the deferred `dry_run`
+  /// path. Surfaces stale installs whose binary was deleted.
+  pub entrypoint_exists: bool,
 }
 
 /// Backup-readiness report populated only when `--backup-check` is supplied.
@@ -249,8 +290,15 @@ pub async fn execute(
   profile: DoctorProfile,
   server: Option<String>,
   backup_check: bool,
+  check_installations: bool,
 ) -> Result<()> {
-  let report = build_report(profile, server.as_deref(), backup_check).await;
+  let report = build_report(
+    profile,
+    server.as_deref(),
+    backup_check,
+    check_installations,
+  )
+  .await;
   match format {
     OutputFormat::Json => {
       println!("{}", serde_json::to_string_pretty(&report)?);
@@ -268,6 +316,7 @@ pub async fn build_report(
   profile: DoctorProfile,
   server: Option<&str>,
   backup_check: bool,
+  check_installations: bool,
 ) -> DoctorReport {
   let home = dirs::home_dir();
   let config_dir = home.as_ref().map(|p| p.join(".agentflow"));
@@ -391,6 +440,34 @@ pub async fn build_report(
     None
   };
 
+  // P3.4 lite installation probe — opt-in via --check-installations.
+  // Inventories installed skills/plugins and surfaces unreachable
+  // command binaries / missing entrypoints. Heavier transport-level
+  // checks stay deferred until the prereqs land (see doctor docs).
+  let installations_report = if check_installations {
+    Some(probe_installations(home.as_deref()).await)
+  } else {
+    None
+  };
+  if let Some(probe) = installations_report.as_ref() {
+    for server_probe in &probe.mcp_servers {
+      if !server_probe.reachable {
+        status.promote(match profile {
+          DoctorProfile::Production => DoctorStatus::Fail,
+          _ => DoctorStatus::Warning,
+        });
+      }
+    }
+    for plugin_probe in &probe.plugins {
+      if !plugin_probe.entrypoint_exists {
+        status.promote(match profile {
+          DoctorProfile::Production => DoctorStatus::Fail,
+          _ => DoctorStatus::Warning,
+        });
+      }
+    }
+  }
+
   DoctorReport {
     version: env!("CARGO_PKG_VERSION"),
     profile,
@@ -420,8 +497,116 @@ pub async fn build_report(
     disk,
     server: server_report,
     backup_check: backup_check_report,
+    installations: installations_report,
     status,
   }
+}
+
+/// Walk `~/.agentflow/skills/*/` and `~/.agentflow/plugins/*/` (or the
+/// env-overridden roots) and inventory their declared MCP servers +
+/// plugin entrypoints. Returns the structured report the doctor JSON
+/// surfaces under `installations`.
+async fn probe_installations(home: Option<&Path>) -> InstallationProbeReport {
+  let skills_root = resolve_install_root(home, "AGENTFLOW_SKILLS_DIR", "skills");
+  let plugins_root = resolve_install_root(home, "AGENTFLOW_PLUGINS_DIR", "plugins");
+
+  let mcp_servers = match skills_root.as_ref() {
+    Some(root) => probe_mcp_servers(root),
+    None => Vec::new(),
+  };
+  let plugins = match plugins_root.as_ref() {
+    Some(root) => probe_plugin_installs(root),
+    None => Vec::new(),
+  };
+
+  InstallationProbeReport {
+    skills_root,
+    plugins_root,
+    mcp_servers,
+    plugins,
+  }
+}
+
+fn resolve_install_root(home: Option<&Path>, env_var: &str, default_tail: &str) -> Option<PathBuf> {
+  if let Ok(value) = std::env::var(env_var) {
+    let trimmed = value.trim();
+    if !trimmed.is_empty() {
+      return Some(PathBuf::from(trimmed));
+    }
+  }
+  home.map(|h| h.join(".agentflow").join(default_tail))
+}
+
+fn probe_mcp_servers(skills_root: &Path) -> Vec<McpServerProbe> {
+  use agentflow_skills::SkillLoader;
+  let mut out = Vec::new();
+  let Ok(entries) = std::fs::read_dir(skills_root) else {
+    return out;
+  };
+  for entry in entries.flatten() {
+    let dir = entry.path();
+    if !dir.is_dir() {
+      continue;
+    }
+    let Ok(manifest) = SkillLoader::load(&dir) else {
+      continue;
+    };
+    for server in &manifest.mcp_servers {
+      let cmd = server.command.trim();
+      // The configured command might already be an absolute path, or
+      // a bare name to resolve on PATH. `which` handles both.
+      let reachable = if cmd.is_empty() {
+        false
+      } else {
+        which::which(cmd).is_ok() || std::path::Path::new(cmd).is_file()
+      };
+      out.push(McpServerProbe {
+        skill: manifest.skill.name.clone(),
+        server: server.name.clone(),
+        command: cmd.to_string(),
+        reachable,
+      });
+    }
+  }
+  out
+}
+
+#[cfg(feature = "plugin")]
+fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
+  use agentflow_core::plugin::PluginManifest;
+  let mut out = Vec::new();
+  let Ok(entries) = std::fs::read_dir(plugins_root) else {
+    return out;
+  };
+  for entry in entries.flatten() {
+    let dir = entry.path();
+    if !dir.is_dir() {
+      continue;
+    }
+    let manifest_path = dir.join("plugin.toml");
+    if !manifest_path.is_file() {
+      continue;
+    }
+    let Ok((manifest, _)) = PluginManifest::load_from_path(&manifest_path) else {
+      continue;
+    };
+    let resolved = manifest.resolve_entrypoint(&dir);
+    out.push(PluginInstallProbe {
+      name: manifest.plugin.name.clone(),
+      version: manifest.plugin.version.clone(),
+      entrypoint: resolved.clone(),
+      entrypoint_exists: resolved.exists(),
+    });
+  }
+  out
+}
+
+#[cfg(not(feature = "plugin"))]
+fn probe_plugin_installs(_plugins_root: &Path) -> Vec<PluginInstallProbe> {
+  // Without the `plugin` feature the binary doesn't know how to parse
+  // a `plugin.toml`. The doctor still reports the configured plugins
+  // dir under `installations.plugins_root`, just with an empty list.
+  Vec::new()
 }
 
 fn disk_report(home: Option<&Path>) -> DiskReport {

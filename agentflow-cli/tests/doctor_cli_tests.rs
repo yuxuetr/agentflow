@@ -352,6 +352,155 @@ fn doctor_json_envelope_wraps_report_in_canonical_envelope() {
   assert!(result["disk"].is_object());
 }
 
+// ── P3.4 lite installation probes ─────────────────────────────────────────
+
+#[test]
+fn doctor_check_installations_section_omitted_by_default() {
+  // Without --check-installations the new section must be absent so
+  // existing callers keep the lighter shape.
+  let home = TempDir::new().unwrap();
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--profile", "dev", "--format", "json"])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert!(
+    report
+      .get("installations")
+      .map(|v| v.is_null())
+      .unwrap_or(true),
+    "installations section must be omitted by default, got: {report}"
+  );
+}
+
+#[test]
+fn doctor_check_installations_inventories_skills_and_plugins() {
+  // Stage a synthetic ~/.agentflow tree with one skill that declares an
+  // MCP server (echo, present on every macOS/Linux box) and one plugin
+  // whose entrypoint exists. Probe must surface both without errors.
+  let home = TempDir::new().unwrap();
+  let skills = home.path().join(".agentflow/skills/demo-skill");
+  std::fs::create_dir_all(&skills).unwrap();
+  std::fs::write(
+    skills.join("skill.toml"),
+    r#"
+[skill]
+name = "demo-skill"
+version = "0.1.0"
+description = "demo"
+
+[persona]
+role = "demo"
+
+[model]
+name = "mock-model"
+
+[[mcp_servers]]
+name = "demo_echo"
+command = "echo"
+args = []
+"#,
+  )
+  .unwrap();
+
+  let plugins = home.path().join(".agentflow/plugins/demo-plugin");
+  std::fs::create_dir_all(plugins.join("bin")).unwrap();
+  let entrypoint = plugins.join("bin/dummy");
+  std::fs::write(&entrypoint, "").unwrap();
+  std::fs::write(
+    plugins.join("plugin.toml"),
+    r#"
+[plugin]
+name = "demo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/dummy"
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let probe = &report["installations"];
+  assert!(probe.is_object(), "installations section must be populated");
+
+  let mcp_servers = probe["mcp_servers"].as_array().unwrap();
+  assert_eq!(mcp_servers.len(), 1);
+  assert_eq!(mcp_servers[0]["skill"], "demo-skill");
+  assert_eq!(mcp_servers[0]["server"], "demo_echo");
+  assert_eq!(mcp_servers[0]["reachable"], true);
+
+  // Plugin section is only populated when the binary was built with the
+  // `plugin` feature; without it the array is empty but the section
+  // still surfaces.
+  let plugins_arr = probe["plugins"].as_array().unwrap();
+  if !plugins_arr.is_empty() {
+    let entry = &plugins_arr[0];
+    assert_eq!(entry["name"], "demo-plugin");
+    assert_eq!(entry["entrypoint_exists"], true);
+  }
+}
+
+#[test]
+fn doctor_check_installations_flags_missing_mcp_command() {
+  // Skill declares an MCP server pointing at a binary that doesn't
+  // exist on PATH. The probe must report `reachable = false` and the
+  // overall status must promote to at least Warning under `local`.
+  let home = TempDir::new().unwrap();
+  let skills = home.path().join(".agentflow/skills/missing-cmd-skill");
+  std::fs::create_dir_all(&skills).unwrap();
+  std::fs::write(
+    skills.join("skill.toml"),
+    r#"
+[skill]
+name = "missing-cmd-skill"
+version = "0.1.0"
+description = "demo"
+
+[persona]
+role = "demo"
+
+[model]
+name = "mock-model"
+
+[[mcp_servers]]
+name = "ghost"
+command = "this-binary-definitely-does-not-exist-pls"
+args = []
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let mcp_servers = report["installations"]["mcp_servers"].as_array().unwrap();
+  assert_eq!(mcp_servers.len(), 1);
+  assert_eq!(mcp_servers[0]["reachable"], false);
+}
+
 #[test]
 fn doctor_json_envelope_field_set_is_closed_to_four_keys() {
   // Locks the envelope contract: any drift that adds a fifth top-level

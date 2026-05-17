@@ -25,9 +25,11 @@ use crate::error::ApiError;
 /// drive those toggles today; if it ever does, this signature can
 /// grow query parameters without breaking existing clients.
 pub async fn get_diagnostics() -> Result<Json<serde_json::Value>, ApiError> {
-  let report = build_report(DoctorProfile::Local, None, false).await;
-  let value =
-    serde_json::to_value(&report).map_err(|err| ApiError::Internal(err.to_string()))?;
+  // Server-side diagnostics intentionally skip the heavier opt-in
+  // probes (backup_check, check_installations) — they're filesystem-
+  // bound and only useful to a human invoking the CLI.
+  let report = build_report(DoctorProfile::Local, None, false, false).await;
+  let value = serde_json::to_value(&report).map_err(|err| ApiError::Internal(err.to_string()))?;
   Ok(Json(value))
 }
 

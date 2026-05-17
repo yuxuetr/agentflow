@@ -83,6 +83,7 @@ but do not implement channel adapters in this queue.
 - P2.5 CLI local-daemon mode (MVP): new `agentflow-cli/src/server_client.rs` is the single HTTP layer pointing at `agentflow-server`. `workflow run --server <url>` POSTs the YAML and polls to terminal; new `workflow list/cancel/graph` subcommands are server-only. `--auth-token`/`AGENTFLOW_API_TOKEN` and `--tenant`/`AGENTFLOW_TENANT` plumb auth + tenant headers (P2.6). 10 unit + 6 CLI integration tests cover the resolve helpers and the run/list/cancel/graph roundtrips against the test Postgres. Follow-ups: `workflow logs` SSE, skill server mode, P3.3 envelope output, --model / --execution-mode / --run-dir mapping over the wire.
 - P3.8 Cross-hop OTel propagation (LLM + plugin hops): new `agentflow-tracing::context` ships the canonical `scope` / `current_traceparent` task-local helper + `TRACEPARENT_ENV` constant. Plugin spawn paths (`OsSandboxPluginPreparer` + new `NoopWithTraceparent`) inject `TRACEPARENT=<value>` into the child's env so OTel-aware plugins stitch onto the parent run. 4 unit + 3 CLI integration tests prove the contract end-to-end. `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)" table with LLM ✓ + Plugin ✓ + MCP ○ + Worker gRPC ○.
 - P3.5 slice 4 MCP capability discovery: `skill inspect --explain-permissions --with-mcp-discovery` spawns each declared MCP server, groups its advertised tools into a `McpCapabilityMap`, and feeds them into `resolve_tool_policy` so MCP tools surface admission rows alongside built-ins. Off by default (spawning MCP servers is heavy). 3 new CLI integration tests.
+- P3.4 doctor MCP+plugin lite installation probe: `doctor --check-installations` adds an `installations` section that walks `~/.agentflow/skills/*` and `~/.agentflow/plugins/*`, surfaces every declared MCP server command (reports `reachable` via `which`) and every plugin entrypoint (reports `entrypoint_exists`). Promotes status to Warning / Fail when any probe fails. 3 new CLI integration tests. Heavier transport-level MCP reachability + plugin `dry_run` spawn smoke stay deferred until the prerequisite manifest fields ship.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -578,12 +579,27 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     output sections, and the unknown-profile rejection. 2 existing
     `config_cli_tests::doctor_*` tests updated to accept exit 0/1
     as expected outcomes for missing-config scenarios.
-  - TODO MCP server reachability via configured transport — defer
-    until `agentflow mcp config` ships a structured config surface
-    the doctor command can crawl.
-  - TODO Plugin runtime spawn smoke (no-op plugin, ≤1 s) — defer
-    until the plugin manifest schema includes a `dry_run` entry point
-    so the smoke test does not depend on a real plugin binary.
+  - DONE (lite) `--check-installations` flag adds an
+    `installations` section to the doctor report: walks
+    `~/.agentflow/skills/*/skill.toml`, surfaces every declared
+    `[[mcp_servers]]` command and reports `reachable = true/false`
+    based on whether the command resolves on PATH (or as an absolute
+    file). Walks `~/.agentflow/plugins/*/plugin.toml` (under
+    `feature = "plugin"`) and surfaces every plugin name + version +
+    entrypoint with `entrypoint_exists` set. Promotes the overall
+    status to Warning (or Fail under `production`) when any probe
+    fails. Doesn't replace the heavier deferred probes — see below.
+  - TODO MCP server reachability via configured transport — still
+    deferred until `agentflow mcp config` ships a structured config
+    surface the doctor command can crawl. The lite installation
+    probe above covers the most common "is my MCP server's binary
+    installed?" failure mode without it.
+  - TODO Plugin runtime spawn smoke (no-op plugin, ≤1 s) — still
+    deferred until the plugin manifest schema includes a `dry_run`
+    entry point so the smoke test does not depend on a real plugin
+    binary. The lite installation probe surfaces stale installs
+    (entrypoint deleted) but doesn't validate the binary actually
+    starts.
 
 - TODO P3.5 Permission explanation improvements:
   - DONE Slice 1 — `agentflow skill inspect --explain-permissions`

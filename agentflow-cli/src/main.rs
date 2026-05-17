@@ -125,6 +125,12 @@ struct DoctorArgs {
   /// run_dir / trace_dir / marketplace_cache / skills_dir / plugins_dir
   #[arg(long = "backup-check")]
   backup_check: bool,
+  /// Add an `installations` section: walks the local skills + plugins
+  /// dirs, surfaces every declared MCP server command + plugin
+  /// entrypoint, and flags unreachable binaries. Lite alternative to
+  /// the deferred transport-level MCP / plugin probes (P3.4).
+  #[arg(long = "check-installations")]
+  check_installations: bool,
 }
 #[derive(Args)]
 struct HarnessArgs {
@@ -1428,7 +1434,14 @@ async fn main() {
       doctor::DoctorProfile::parse(&args.profile),
     ) {
       (Ok(format), Ok(profile)) => {
-        doctor::execute(format, profile, args.server, args.backup_check).await
+        doctor::execute(
+          format,
+          profile,
+          args.server,
+          args.backup_check,
+          args.check_installations,
+        )
+        .await
       }
       (Err(err), _) | (_, Err(err)) => Err(err),
     },
