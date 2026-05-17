@@ -43,6 +43,10 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- P7.4-FU4 Production deployment runbook
+  (`docs/RELEASE_NOTES_v1.0.0-rc.1.md` DRAFT carries the six-step
+  Production Deployment Checklist closing rehearsal F4; other
+  release-notes sections stay placeholders for the tag-cut commit).
 - P7.4-FU1 Linux sandbox CI check (new `linux-sandbox-check` job in
   `.github/workflows/quality.yml` runs `cargo check --target
   x86_64-unknown-linux-gnu -p agentflow-tools --all-targets` and is
@@ -1721,22 +1725,34 @@ known characteristics, not surprises.
     agentflow-nodes mcp lib tests (30) + agentflow-tools sandbox
     tests stay green.
 
-- TODO P7.4-FU4 Production deployment runbook in release notes:
-  - **Why**: `agentflow doctor --profile production` returns
-    `status: warning` on a fresh host because the operator hasn't
-    pre-provisioned trace / marketplace cache directories or set
-    `AGENTFLOW_API_TOKEN`. These are runbook gaps, not code
-    defects.
-  - **What**: a "Production deployment checklist" section in the
-    `v1.0.0-rc.1` release notes covering:
-    - Directory pre-provisioning (`AGENTFLOW_RUN_DIR`,
-      `AGENTFLOW_TRACE_DIR`, `AGENTFLOW_MARKETPLACE_CACHE`).
-    - `AGENTFLOW_API_TOKEN` provisioning via secret manager.
-    - `AGENTFLOW_SECURITY_PROFILE=production` env wiring.
-    - Linking back to `docker-compose.yml` as the reference deploy
-      shape.
-  - **Acceptance**: a fresh operator can follow the checklist on a
-    clean VM and `agentflow doctor --profile production` exits 0.
+- DONE P7.4-FU4 Production deployment runbook in release notes:
+  - New `docs/RELEASE_NOTES_v1.0.0-rc.1.md` (DRAFT) carries a
+    `## Production Deployment Checklist` section that closes the
+    rehearsal F4 finding. Six numbered steps walk a fresh operator
+    through:
+    1. Pick + wire `AGENTFLOW_SECURITY_PROFILE=production` and what
+       it turns on (auth fail-closed, CORS deny-by-default, plugin
+       sandbox required, marketplace signed-only, SSRF protections,
+       tool admission fail-closed).
+    2. Provision `AGENTFLOW_API_TOKEN` via secret manager with
+       worked Kubernetes / systemd / docker-compose snippets.
+    3. Pre-provision the five storage roots (`AGENTFLOW_RUN_DIR`,
+       `_TRACE_DIR`, `_MARKETPLACE_CACHE`, `_SKILLS_DIR`,
+       `_PLUGINS_DIR`) with a `/var/lib/agentflow` ownership / mode
+       example.
+    4. Wire `DATABASE_URL`; embedded `sqlx::migrate!()` runs on
+       first boot.
+    5. Verify with `agentflow doctor --profile production
+       --backup-check --format json`, refuse to swing traffic
+       until exit code is 0.
+    6. Optional `docker-compose` smoke before promoting.
+  - Acceptance gate documented at the bottom of the checklist:
+    fresh-VM operator gets doctor exit 0, serve --check ok, clean
+    serve start, authenticated `POST /v1/runs` 200.
+  - The remaining release-notes sections (`What's New`, `Breaking
+    Changes`, `Known Issues`) stay as placeholders so the FU4 deliverable
+    isn't bundled with feature-summary writing that belongs to the
+    actual tag cut.
 
 ---
 
