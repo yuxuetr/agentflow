@@ -31,7 +31,7 @@ Last updated: 2026-05-17
 
 | # | Application | Status | 验证 agentflow 哪些面 | 外部依赖 |
 | --- | --- | --- | --- | --- |
-| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | TODO | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
+| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
 | A2 | [code-reviewer](examples/applications/code-reviewer/) | TODO | ReAct agent, MCP (github), skill packaging, tool admission | gh CLI / GitHub MCP server |
 | A3 | [research-assistant](examples/applications/research-assistant/) | TODO | Arxiv node, RAG, memory, scheduled run | OpenAI/任一 LLM, 可选 Qdrant |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
@@ -81,13 +81,16 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
 ```
 
 **TODO 子项**:
-- [ ] 决定方案 A 还是 B 开始（建议先 A）
-- [ ] 新建自定义节点（`src/podcast_node.rs` 或独立 `agentflow-podcast` crate）
-- [ ] 写 `workflow.yml`
-- [ ] 准备 3 篇真实 blog fixture（短/中/长各一）
-- [ ] 跑通端到端，听一遍出来的音频
-- [ ] 写 smoke 测试（self-skip if no API key）
-- [ ] 决定是否包成 skill
+- [ ] 准备真实 API key 跑一次 live `cargo test --test smoke -- --ignored`
+      （需要 `MOONSHOT_API_KEY` + `MINIMAX_API_KEY` 或 `EDGE_TTS_OK=1`），
+      听一下出来的音频质量决定要不要调 prompt / 加 BGM
+- [ ] 准备 medium / long 两个额外 blog fixture（短的已有；
+      等 short 跑通有体感再添）
+- [ ] 决定是否升级到 plan B（拆 DAG：fetch → outline → script_gen →
+      tts → assemble → subtitle）。触发条件：dogfooding 中遇到
+      「想中间编辑脚本再继续」「单段 TTS 失败想 retry」之类。
+- [ ] 决定是否包成 skill（`SKILL.md` + persona + tool admission），
+      让 `agentflow skill run podcast-producer` 直接触发
 
 **DONE 子项**:
 - [x] 写 `README.md`（架构图 + 跑法 + 所需 key）— commit 2f4d4b0
@@ -96,6 +99,31 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   TtsProvider trait，phonon-podcast `PodcastPipeline::new(MiniMaxTts::new()?)`
   即可用。16 个单测，含 hex 解码、business-error mapping、language_boost
   映射、9 种 emotion 白名单。Streaming SSE 留 follow-up。
+- [x] **Plan A 薄壳实现** — standalone Cargo project at
+  `examples/applications/blog-to-podcast/`：
+  - `Cargo.toml`：empty `[workspace]` 跳出 agentflow workspace；path
+    dep 到 agentflow-core + phonon-ai + phonon-podcast + phonon-io +
+    phonon-core
+  - `src/podcast_node.rs`：`PodcastNode` impl `AsyncNode`，内部串
+    `OpenAiScriptGenerator`（Moonshot）+ `PodcastPipeline` +
+    `phonon_io::write_audio` + `subtitle::write_srt_file`。
+    新增 `estimate_subtitle_timing` helper（按字符数比例分配时长
+    把 script segments 转成带时间的 SRT entries）。`TtsBackend` enum
+    支持 MiniMax / Edge / OpenAi 切换。
+  - `src/main.rs`：`tokio::main` + `tracing_subscriber` + 手写的
+    `--blog --output --segments --tts` CLI 解析；`Flow::new` 构造
+    2 节点 DAG（`read_blog → produce_podcast`），跑完打印 summary +
+    输出路径
+  - `fixtures/short_blog.md`：~500 字 zh-CN 关于 Rust 所有权和并发
+  - `tests/smoke.rs`：3 个 hermetic CLI 测试（`--help` / 缺 `--blog` /
+    未知 flag）+ 1 个 `#[ignore]` live end-to-end，gated 在
+    `MOONSHOT_API_KEY` + (`MINIMAX_API_KEY` 或 `EDGE_TTS_OK=1`)
+  - 8 unit tests in `podcast_node` 模块 + 3 hermetic integration
+    tests + 1 ignored live test。`cargo check` / `cargo clippy
+    --all-targets -- -D warnings` / `cargo fmt --check` 全绿。
+  - 集成路径已验证：agentflow `Flow` orchestrate + 自定义 `AsyncNode`
+    包外部 Rust 库（phonon-podcast）的 path-dep 跨 workspace 集成
+    端到端编译 + 测试都通。
 
 **Findings**: （dogfooding 中发现的 agentflow 缺陷写这里）
 

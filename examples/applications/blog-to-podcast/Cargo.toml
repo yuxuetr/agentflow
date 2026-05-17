@@ -1,0 +1,44 @@
+# Empty [workspace] tells cargo "this manifest is NOT a member of any
+# enclosing workspace" — required because the agentflow workspace at the
+# repo root has explicit `members` and would otherwise complain about
+# discovering this Cargo.toml.
+[workspace]
+
+[package]
+name = "blog-to-podcast"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "AgentFlow application: blog → two-speaker podcast (Plan A thin wrapper)"
+
+# Standalone Cargo project — NOT a workspace member of the agentflow workspace.
+# Each application under examples/applications/ owns its dependency graph so
+# that adding phonon (a 14-crate workspace) does not bloat the agentflow
+# workspace's Cargo.lock. Shared target dir lives at $HOME/.target via the
+# user-level ~/.cargo/config.toml.
+
+[dependencies]
+# AgentFlow primitives — path deps into the parent workspace.
+agentflow-core = { path = "../../../agentflow-core" }
+
+# phonon — path deps into the sibling workspace.
+phonon-ai      = { path = "../../../../../rustspace/phonon/phonon-ai" }
+phonon-podcast = { path = "../../../../../rustspace/phonon/phonon-podcast" }
+phonon-io      = { path = "../../../../../rustspace/phonon/phonon-io" }
+phonon-core    = { path = "../../../../../rustspace/phonon/phonon-core" }
+
+# Runtime + utility crates.
+tokio           = { version = "1", features = ["full"] }
+async-trait     = "0.1"
+anyhow          = "1"
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "blog-to-podcast"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

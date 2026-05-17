@@ -1,6 +1,6 @@
 # A1 — blog → two-speaker podcast
 
-**Status**: TODO (scaffold only)
+**Status**: WIP (Plan A skeleton runnable; live end-to-end smoke pending API keys)
 **Tracking entry**: [`EXAMPLES_TODOs.md` § A1](../../../EXAMPLES_TODOs.md#a1--blog-to-podcast)
 
 ## Business
@@ -66,51 +66,86 @@ emotion control for a more podcast-feel result.
 (mock works for the script structure; a real model is needed for
 actual content) + `EdgeTts` for TTS (free, no key).
 
-## Files (to be created during implementation)
+## Files (as implemented)
 
 ```
 blog-to-podcast/
 ├── README.md                # ← this file
-├── Cargo.toml               # path deps: agentflow-* + phonon-podcast
+├── Cargo.toml               # standalone Cargo project; path deps to
+│                            # agentflow-core + phonon-{ai,podcast,io,core}
 ├── src/
-│   └── podcast_node.rs      # custom AgentFlow node wrapping phonon
-├── workflow.yml             # the orchestrating DAG
+│   ├── main.rs              # binary entry; builds Flow(read_blog → produce_podcast)
+│   └── podcast_node.rs      # custom AsyncNode wrapping phonon's pipeline
 ├── fixtures/
-│   ├── short_blog.md        # ~500 words
-│   ├── medium_blog.md       # ~2000 words
-│   └── long_blog.md         # ~5000 words
-├── assets/
-│   ├── intro.wav            # 5s intro (optional)
-│   ├── outro.wav            # 5s outro (optional)
-│   └── bgm.wav              # background music loop (optional)
+│   └── short_blog.md        # ~500 chars (zh-CN, Rust topic); medium / long
+│                            # added when dogfooding demands them
 └── tests/
-    └── smoke.rs             # end-to-end smoke (self-skip if no API key)
+    └── smoke.rs             # CLI smoke (--help / missing-flag / unknown-flag)
+                             # + #[ignore]-d live end-to-end
 ```
 
-## Run (planned, not yet implemented)
+**Not yet shipped** (deferred until dogfooding shows we need them):
+- `workflow.yml` — the app is a standalone Rust binary, not a YAML
+  workflow. Plan B (split into multiple AgentFlow nodes via YAML)
+  would introduce one.
+- `assets/` — intro / outro / BGM. phonon-podcast handles them when
+  passed; this app's first run is bare voice-only.
+- `medium_blog.md` / `long_blog.md` — added as the short fixture
+  reveals limitations.
+
+## Run
+
+The binary owns its own CLI; no workflow YAML is involved (Plan A).
 
 Default Moonshot + MiniMax combo:
 
 ```bash
 cd examples/applications/blog-to-podcast
-export MOONSHOT_API_KEY=sk-...     # for LLM (outline + script)
+export MOONSHOT_API_KEY=sk-...     # for script generation
 export MINIMAX_API_KEY=eyJ...      # for TTS
-cargo run --release -- workflow run workflow.yml \
-  --input blog_source=fixtures/medium_blog.md \
-  --input output_path=/tmp/episode.wav
+
+cargo run --release -- \
+  --blog   fixtures/short_blog.md \
+  --output /tmp/episode.wav
 ```
 
 Free-tier fallback (Edge TTS, no MiniMax key):
 
 ```bash
 export MOONSHOT_API_KEY=sk-...     # still need an LLM key
-cargo run --release -- workflow run workflow.yml \
-  --input blog_source=fixtures/medium_blog.md \
-  --input output_path=/tmp/episode.wav \
-  --input tts_provider=edge \
-  --input host_voice=zh-CN-YunyangNeural \
-  --input guest_voice=zh-CN-XiaoxiaoNeural
+
+cargo run --release -- \
+  --blog   fixtures/short_blog.md \
+  --output /tmp/episode.wav \
+  --tts    edge
 ```
+
+CLI flags (also see `--help`):
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--blog <path>` | (required) | UTF-8 markdown or plain text |
+| `--output <path>` | `/tmp/episode.wav` | SRT written alongside with `.srt` extension |
+| `--segments <N>` | `10` | Approximate dialogue segment count |
+| `--tts <backend>` | `minimax` (or `$PODCAST_TTS`) | `minimax` / `edge` / `openai` |
+
+Trace output goes to stderr via `tracing`; `RUST_LOG=blog_to_podcast=debug,phonon_podcast=debug,phonon_ai=debug`
+turns on detailed per-step logs.
+
+## Live smoke test
+
+Hermetic CLI smoke tests run by default (`cargo test`). The live
+end-to-end test is marked `#[ignore]` and runs when you opt in:
+
+```bash
+export MOONSHOT_API_KEY=sk-...
+export MINIMAX_API_KEY=eyJ...   # or: export EDGE_TTS_OK=1 (and skip MINIMAX_API_KEY)
+cargo test --test smoke --release -- --ignored --nocapture
+```
+
+It points at `fixtures/short_blog.md`, requests 4 segments to keep
+cost / time low, and asserts the produced `.wav` is non-trivial and
+the `.srt` exists.
 
 ## What this validates in AgentFlow
 
