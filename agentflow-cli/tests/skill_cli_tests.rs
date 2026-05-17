@@ -714,6 +714,65 @@ fn skill_inspect_allow_deny_tool_without_explain_permissions_emits_hint() {
 }
 
 #[test]
+fn skill_inspect_with_mcp_discovery_hint_without_explain_permissions() {
+  // --with-mcp-discovery only applies to --explain-permissions mode.
+  // Without the explain flag, the CLI emits a friendly hint instead
+  // of silently doing nothing.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &mcp_basic_skill_path(),
+      "--with-mcp-discovery",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "--with-mcp-discovery is only honored with --explain-permissions",
+    ));
+}
+
+#[test]
+fn skill_inspect_explain_permissions_with_mcp_discovery_surfaces_advertised_tools() {
+  // With --with-mcp-discovery the inspect command spawns each declared
+  // MCP server and surfaces an `MCP discovery:` section listing the
+  // tools each server advertises. The mcp_basic fixture spawns the
+  // local demo MCP server which exposes `echo` and `add`.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &mcp_basic_skill_path(),
+      "--explain-permissions",
+      "--with-mcp-discovery",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("MCP discovery:"))
+    .stdout(predicate::str::contains("mcp_local_demo"));
+}
+
+#[test]
+fn skill_inspect_explain_permissions_without_mcp_discovery_skips_discovery_section() {
+  // Negative: same skill, no --with-mcp-discovery. The `MCP discovery:`
+  // header must NOT be printed — the operator hasn't opted into the
+  // (potentially slow) spawn path.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "skill",
+      "inspect",
+      &mcp_basic_skill_path(),
+      "--explain-permissions",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("MCP discovery:").not());
+}
+
+#[test]
 fn skill_list_tools_shows_mcp_tools_and_schema() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd

@@ -2,18 +2,21 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use agentflow_skills::SkillLoader;
 use agentflow_skills::policy::{
   McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission, resolve_tool_policy,
 };
+use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{Capability, EffectiveCapabilities, ToolPermission};
+
+use super::error_context::mcp_context;
 
 pub async fn execute(
   skill_dir: String,
   explain_permissions: bool,
   allow_tools: Vec<String>,
   deny_tools: Vec<String>,
+  with_mcp_discovery: bool,
 ) -> Result<()> {
   let dir = Path::new(&skill_dir);
   let manifest =
@@ -134,10 +137,29 @@ pub async fn execute(
       &manifest.security.tool_permission_allowlist,
     );
     print_sandbox_profile(manifest.security.os_sandbox, &manifest.tools);
-    let resolved = resolve_skill_policy(&manifest, &allow_tools, &deny_tools);
+    // P3.5 slice 4: optionally discover MCP-advertised tools and feed
+    // them into the policy resolver so admission rows surface for them
+    // too. Off by default — spawning MCP servers is slow / heavy.
+    let mcp_caps = if with_mcp_discovery && !manifest.mcp_servers.is_empty() {
+      Some(
+        discover_mcp_capabilities(&manifest, dir)
+          .await
+          .with_context(|| mcp_context("MCP capability discovery failed", &manifest))?,
+      )
+    } else {
+      None
+    };
+    if let Some(caps) = mcp_caps.as_ref() {
+      print_mcp_discovery_summary(caps);
+    } else if with_mcp_discovery && manifest.mcp_servers.is_empty() {
+      println!("\nMCP discovery: requested via --with-mcp-discovery but no MCP servers declared.");
+    }
+    let resolved = resolve_skill_policy(&manifest, &allow_tools, &deny_tools, mcp_caps.as_ref());
     print_policy_admissions(&resolved, &allow_tools, &deny_tools);
   } else if !allow_tools.is_empty() || !deny_tools.is_empty() {
     println!("\n(note: --allow-tool / --deny-tool are only honored with --explain-permissions)");
+  } else if with_mcp_discovery {
+    println!("\n(note: --with-mcp-discovery is only honored with --explain-permissions)");
   }
 
   if warnings.is_empty() {
@@ -273,10 +295,12 @@ fn resolve_skill_policy(
   manifest: &agentflow_skills::SkillManifest,
   cli_allow: &[String],
   cli_deny: &[String],
+  mcp_caps_override: Option<&McpCapabilityMap>,
 ) -> ResolvedToolPolicy {
   let skill_allowed: Vec<String> = manifest.tools.iter().map(|t| t.name.clone()).collect();
   let skill_denied: Vec<String> = Vec::new();
-  let mcp_caps: McpCapabilityMap = McpCapabilityMap::new();
+  let empty_caps: McpCapabilityMap = McpCapabilityMap::new();
+  let mcp_caps: &McpCapabilityMap = mcp_caps_override.unwrap_or(&empty_caps);
   let mcp_allowlist: Vec<String> = manifest.security.mcp_server_allowlist.clone();
   let tool_metadata = BTreeMap::new();
 
@@ -287,19 +311,73 @@ fn resolve_skill_policy(
   for t in cli_deny {
     known.insert(t.clone());
   }
+  // MCP-discovered tools are valid `known_tools` so the resolver
+  // produces an admission row for each one (without this they'd be
+  // filtered out before reaching the resolver and never surface).
+  for tools in mcp_caps.values() {
+    for tool in tools {
+      known.insert(tool.clone());
+    }
+  }
   let known_vec: Vec<String> = known.into_iter().collect();
 
   resolve_tool_policy(PolicyResolutionInput {
     known_tools: &known_vec,
     skill_allowed_tools: &skill_allowed,
     skill_denied_tools: &skill_denied,
-    mcp_server_capabilities: &mcp_caps,
+    mcp_server_capabilities: mcp_caps,
     skill_mcp_server_allowlist: &mcp_allowlist,
     cli_allow_tools: cli_allow,
     cli_deny_tools: cli_deny,
     fallback_policy: None,
     tool_metadata: &tool_metadata,
   })
+}
+
+/// Spawn every MCP server declared in the manifest and group the
+/// resulting tool registry by server name → tool names. This is
+/// expensive (one subprocess per server, JSON-RPC handshake each)
+/// which is why the caller only opts in via `--with-mcp-discovery`.
+async fn discover_mcp_capabilities(
+  manifest: &agentflow_skills::SkillManifest,
+  dir: &Path,
+) -> Result<McpCapabilityMap> {
+  let registry = SkillBuilder::build_registry(manifest, dir).await?;
+  let mut caps: McpCapabilityMap = McpCapabilityMap::new();
+  for tool in registry.list() {
+    let definition = tool.definition();
+    if let (Some(server), Some(mcp_tool)) = (
+      definition.metadata.mcp_server_name,
+      definition.metadata.mcp_tool_name,
+    ) {
+      caps.entry(server).or_default().push(mcp_tool);
+    }
+  }
+  // Stable order so the printed output is deterministic across runs.
+  for tools in caps.values_mut() {
+    tools.sort();
+    tools.dedup();
+  }
+  Ok(caps)
+}
+
+fn print_mcp_discovery_summary(caps: &McpCapabilityMap) {
+  println!("\nMCP discovery:");
+  if caps.is_empty() {
+    println!("  (no MCP-advertised tools found)");
+    return;
+  }
+  for (server, tools) in caps {
+    println!(
+      "  - {} ({} tool{})",
+      server,
+      tools.len(),
+      if tools.len() == 1 { "" } else { "s" }
+    );
+    for tool in tools {
+      println!("      • {tool}");
+    }
+  }
 }
 
 fn print_policy_admissions(

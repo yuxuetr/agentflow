@@ -82,6 +82,7 @@ but do not implement channel adapters in this queue.
 - P2.6 Server tenant/session boundary: migration `0003_tenant_id_columns.sql` adds `tenant_id` to `events`/`artifacts`/`skill_installs` (with backfill from `runs`), bumps `skill_installs` PK to `(tenant_id, name, version)`. New `tenant.rs` ships `TenantId` extension + `extract_tenant_id` header middleware (default `"default"`). `get_run`/`cancel_run`/`get_run_graph`/`get_run_resume_plan` 404 on cross-tenant probes; `list_runs` falls back from query param to header. 6 new tenant-boundary integration tests pass alongside the existing 9 P2.3 tests.
 - P2.5 CLI local-daemon mode (MVP): new `agentflow-cli/src/server_client.rs` is the single HTTP layer pointing at `agentflow-server`. `workflow run --server <url>` POSTs the YAML and polls to terminal; new `workflow list/cancel/graph` subcommands are server-only. `--auth-token`/`AGENTFLOW_API_TOKEN` and `--tenant`/`AGENTFLOW_TENANT` plumb auth + tenant headers (P2.6). 10 unit + 6 CLI integration tests cover the resolve helpers and the run/list/cancel/graph roundtrips against the test Postgres. Follow-ups: `workflow logs` SSE, skill server mode, P3.3 envelope output, --model / --execution-mode / --run-dir mapping over the wire.
 - P3.8 Cross-hop OTel propagation (LLM + plugin hops): new `agentflow-tracing::context` ships the canonical `scope` / `current_traceparent` task-local helper + `TRACEPARENT_ENV` constant. Plugin spawn paths (`OsSandboxPluginPreparer` + new `NoopWithTraceparent`) inject `TRACEPARENT=<value>` into the child's env so OTel-aware plugins stitch onto the parent run. 4 unit + 3 CLI integration tests prove the contract end-to-end. `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)" table with LLM ✓ + Plugin ✓ + MCP ○ + Worker gRPC ○.
+- P3.5 slice 4 MCP capability discovery: `skill inspect --explain-permissions --with-mcp-discovery` spawns each declared MCP server, groups its advertised tools into a `McpCapabilityMap`, and feeds them into `resolve_tool_policy` so MCP tools surface admission rows alongside built-ins. Off by default (spawning MCP servers is heavy). 3 new CLI integration tests.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -608,10 +609,18 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     The probe is hermetic — no subprocess spawn. 2 new CLI tests
     in `skill_cli_tests.rs` cover the rust_expert opt-out and the
     mcp-basic clean path.
-  - TODO Print MCP server permissions (per-server allowlist + the
-    capability map fed into `resolve_tool_policy`) — needs MCP
-    capability discovery to be plumbed into `skill inspect` (today
-    only `skill list-tools` actually contacts the server).
+  - DONE Slice 4 — `skill inspect --explain-permissions
+    --with-mcp-discovery` spawns each declared MCP server via the
+    existing `SkillBuilder::build_registry` path, groups the tools
+    by `(server_name, tool_names)` into a `McpCapabilityMap`, and
+    feeds it into `resolve_tool_policy`. The `MCP discovery:`
+    section lists every advertised tool per server before the
+    admission table renders, so MCP-advertised tools get admission
+    rows alongside built-ins. Off by default — spawning MCP
+    servers is slow / heavy. 3 new CLI integration tests in
+    `skill_cli_tests.rs` cover the opt-in hint (no
+    `--explain-permissions`), the discovery happy path, and the
+    negative path (no `--with-mcp-discovery` ⇒ no section).
   - DONE Slice 2 — `agentflow workflow validate --explain-permissions
     <yaml>` walks `FlowDefinitionV2` and emits a per-node permission
     report. Each node is classified into one of nine

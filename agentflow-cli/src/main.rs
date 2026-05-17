@@ -636,6 +636,13 @@ enum SkillCommands {
     /// Operator override: deny tool by name (repeatable). Highest precedence.
     #[arg(long = "deny-tool", value_name = "TOOL")]
     deny_tools: Vec<String>,
+    /// Spawn each declared MCP server and discover its advertised
+    /// tools, then feed the per-server tool list into the capability
+    /// policy so MCP-advertised tools get admission rows alongside
+    /// built-ins. Off by default because spawning MCP servers is
+    /// heavy; only set when you want a complete admission table.
+    #[arg(long = "with-mcp-discovery")]
+    with_mcp_discovery: bool,
   },
   /// Run a skill with a single message and exit
   Run {
@@ -1330,7 +1337,17 @@ async fn main() {
         explain_permissions,
         allow_tools,
         deny_tools,
-      } => skill::inspect::execute(skill_dir, explain_permissions, allow_tools, deny_tools).await,
+        with_mcp_discovery,
+      } => {
+        skill::inspect::execute(
+          skill_dir,
+          explain_permissions,
+          allow_tools,
+          deny_tools,
+          with_mcp_discovery,
+        )
+        .await
+      }
       SkillCommands::Run {
         skill_dir,
         message,
