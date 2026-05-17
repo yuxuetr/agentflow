@@ -135,14 +135,17 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
   let allow_net = caps.contains(&Capability::Net);
   let allow_fs_write = caps.contains(&Capability::FsWrite);
 
+  // The `*_syscall_numbers` helpers return `&'static [i64]`, so the
+  // for-loop binding is `&i64`. The seccomp rules map keys on owned
+  // `i64`, hence the deref on `nr`.
   if !allow_net {
     for nr in net_syscall_numbers() {
-      rules.insert(nr, vec![]);
+      rules.insert(*nr, vec![]);
     }
   }
   if !allow_fs_write {
     for nr in fs_write_syscall_numbers() {
-      rules.insert(nr, vec![]);
+      rules.insert(*nr, vec![]);
     }
   }
 
@@ -152,7 +155,10 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
     SeccompAction::Errno(libc::EPERM as u32),
     arch,
   )?;
-  filter.try_into()
+  // `TryFrom<SeccompFilter> for BpfProgram` returns `BackendError`;
+  // seccompiler 0.5 ships a `From<BackendError> for Error` impl so
+  // we can keep this function's error type unified at the boundary.
+  TryInto::<BpfProgram>::try_into(filter).map_err(seccompiler::Error::from)
 }
 
 /// Syscalls that create or use network sockets. Conservative: covers IPv4,

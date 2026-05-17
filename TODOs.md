@@ -1617,17 +1617,100 @@ known characteristics, not surprises.
     is the canonical index pointing at the per-crate examples and
     `examples/ecosystem/` (the official entry surface).
 
-- TODO P7.4 v1.0 release dress rehearsal:
-  - Tag `v1.0.0-rc.1` from a release branch.
-  - Run the full `docs/RELEASE_CHECKLIST.md`.
-  - Cut a docker image from `Dockerfile`.
-  - Verify `agentflow serve` boots in production profile against a real
-    Postgres.
-  - Verify Web UI loads in the docker image.
-  - Verify `agentflow doctor --profile production` passes on a fresh
-    machine.
-  - Capture findings in `docs/RELEASE_NOTES_DRESS_REHEARSAL.md` and
-    refile gaps as targeted tasks.
+- DONE P7.4 v1.0 release dress rehearsal:
+  - DONE: findings captured in
+    `docs/RELEASE_NOTES_DRESS_REHEARSAL.md` (5 sections — F1 fixed,
+    F2/F3 pre-existing drift, F4 advisory, F5 verified scope).
+  - DONE: docker image build via
+    `docker buildx build --build-arg PACKAGE=agentflow-server`
+    completes (post-fix). Compose stack boots Postgres +
+    agentflow-server end-to-end; `/health/live`, `/health/ready`,
+    `/ui` all return `200`; DB migrations apply automatically.
+  - DONE: `agentflow doctor --profile production --format json`
+    runs and surfaces the expected developer-host warnings
+    (trace_dir / marketplace_cache auto-create-on-first-write,
+    AGENTFLOW_API_TOKEN unset). These are runbook gaps, not code
+    defects.
+  - F1 FIX (in-rehearsal): `agentflow-tools/src/sandbox/linux.rs`
+    had two release-blocking Linux compile errors that only the
+    docker image surfaces (the macOS dev build cfg-gates the
+    backend out). Both fixed: the for-loop binding `&i64` is now
+    dereffed before `BTreeMap::insert`, and the `try_into()` →
+    `BackendError` is mapped onto the unified `seccompiler::Error`
+    via the upstream `From` impl.
+  - NOT yet DONE on this rehearsal — deferred to the actual rc.1
+    cut:
+    - Tagging `v1.0.0-rc.1` from a release branch (one-way
+      decision; human operator).
+    - `cargo publish --dry-run` for publishable crates.
+    - GitHub Release artifact publish / image push.
+    - Fresh-VM `doctor` smoke (this rehearsal ran on a developer
+      host with existing `~/.agentflow/`).
+  - Refiled follow-ups (each a separate targeted task below):
+    P7.4-FU1 (Linux sandbox CI), P7.4-FU2 (workspace rustfmt
+    sweep), P7.4-FU3 (clippy::result_large_err boxing pass),
+    P7.4-FU4 (production deployment runbook in release notes).
+
+- TODO P7.4-FU1 Linux sandbox check in CI:
+  - **Why**: F1 in the v1.0.0-rc.1 dress rehearsal (P7.4) showed two
+    Linux-only compile errors in `agentflow-tools/src/sandbox/linux.rs`
+    slipped past every existing check. The file is gated on
+    `#[cfg(target_os = "linux")]`, so macOS developer builds never
+    touch it, and the only Linux job that exercises it today is the
+    docker image build (which only runs at release time).
+  - **What**: add a `linux-sandbox-check` job to
+    `.github/workflows/quality.yml`:
+    ```yaml
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-linux-gnu
+    - run: cargo check --target x86_64-unknown-linux-gnu -p agentflow-tools
+    ```
+    Run on every PR that touches `agentflow-tools/**` or the docker /
+    sandbox subtree.
+  - **Acceptance**: a fresh PR that re-introduces F1 fails the
+    `linux-sandbox-check` job within ~2 min, instead of waiting for
+    the release-time docker image build.
+
+- TODO P7.4-FU2 Workspace rustfmt sweep before tag:
+  - **Why**: `cargo fmt --all -- --check` fails on the current
+    `main` because several benches have drifted under a newer
+    `rustfmt`. None of the drift is in worker / server source
+    paths.
+  - **What**: a single `chore(fmt): workspace rustfmt sweep` commit
+    immediately before tagging `v1.0.0-rc.1`. Do not bundle with
+    feature work.
+  - **Acceptance**: `cargo fmt --all -- --check` exits 0 on the
+    release branch.
+
+- TODO P7.4-FU3 Box `tonic::Status` to clear `clippy::result_large_err`:
+  - **Why**: `cargo clippy --workspace -- -D warnings` has 8
+    pre-existing warnings in `agentflow-server/src/scheduler/grpc.rs`
+    flagging `clippy::result_large_err` (the 176-byte
+    `tonic::Status` in `Err` variants).
+  - **What**: introduce a private `Result<T> = Result<T,
+    Box<tonic::Status>>` alias inside `grpc.rs`, box on construction,
+    and let the public surface stay unchanged.
+  - **Acceptance**: `cargo clippy --workspace --all-targets -- -D
+    warnings` exits 0. Can land in `v1.0.0-rc.2` if `rc.1` is
+    otherwise clean.
+
+- TODO P7.4-FU4 Production deployment runbook in release notes:
+  - **Why**: `agentflow doctor --profile production` returns
+    `status: warning` on a fresh host because the operator hasn't
+    pre-provisioned trace / marketplace cache directories or set
+    `AGENTFLOW_API_TOKEN`. These are runbook gaps, not code
+    defects.
+  - **What**: a "Production deployment checklist" section in the
+    `v1.0.0-rc.1` release notes covering:
+    - Directory pre-provisioning (`AGENTFLOW_RUN_DIR`,
+      `AGENTFLOW_TRACE_DIR`, `AGENTFLOW_MARKETPLACE_CACHE`).
+    - `AGENTFLOW_API_TOKEN` provisioning via secret manager.
+    - `AGENTFLOW_SECURITY_PROFILE=production` env wiring.
+    - Linking back to `docker-compose.yml` as the reference deploy
+      shape.
+  - **Acceptance**: a fresh operator can follow the checklist on a
+    clean VM and `agentflow doctor --profile production` exits 0.
 
 ---
 
