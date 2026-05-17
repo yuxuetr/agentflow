@@ -72,6 +72,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
 - P3.6 Native tool calling provider consistency tests: full `tool_choice = auto | none | required | tool` matrix per provider, 401/429/5xx coverage for every provider, Mock provider folded into the same suite, `agentflow-llm` added to the CI `test` matrix so the suite is now release-gate-blocking. 44 hermetic provider_consistency tests (19 new on top of the existing 25).
 - P4.6 Memory and prompt golden tests: `agentflow-agents/tests/prompt_assembly_golden.rs` (5 tests) locks down the prompt-assembly contract — deterministic message snapshot, summary injection at budget overflow, post-compaction token budget, tool-list surfacing. Maintained the pre-existing `agent_runtime_react_trace.json` golden fixture to include the `llm_call_completed` events introduced by P4.4 follow-up step 2.
+- P4.7 Memory backend implementations: new `layer.rs` defines the shared trait surface (`MemoryLayer`, `RetentionPolicy`, `PreferenceScope`, `PreferenceValue`, `PreferenceStore`, `EntityFact`, `EntityFactStore`, `SemanticMemoryStore`). `SqlitePreferenceStore` + `SqliteEntityFactStore` ship as the canonical SQLite-backed implementations; `SemanticMemory` gains the new `search_semantic` typed API (returns `(Message, f32)` scores). 37 hermetic tests (36 unit + 1 cross-layer integration) prove independence between the four layers.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -846,14 +847,53 @@ regression-safe.
     emitting in `fbd3ee2` (P4.4 follow-up step 2). The fixture had
     been stale on main since that commit.
 
-- TODO P4.7 Memory backend implementations (after P4.5 design):
-  - Implement `PreferenceMemory` (SQLite-backed, encrypted-at-rest
-    optional).
-  - Implement `EntityFactsMemory` (SQLite-backed with provenance).
-  - Extend `SemanticMemory` to align with the layering boundary from
-    P4.5.
-  - Add `retention.policy` config per memory layer.
-  - Add tests for each backend and for cross-layer search precedence.
+- DONE P4.7 Memory backend implementations:
+  - `agentflow-memory/src/layer.rs` introduces the shared trait
+    surface: `MemoryLayer` (4-variant enum + stable `as_str()`),
+    `RetentionPolicy::default_for(layer)`, `PreferenceScope` (with
+    a `local(user_id)` shorthand for single-tenant dev),
+    `PreferenceValue` (value / updated_at / version),
+    `EntityFact` (entity_id, fact_id, attribute, value, provenance,
+    confidence, extraction + invalidation timestamps),
+    `PreferenceStore`, `EntityFactStore`, and `SemanticMemoryStore`.
+  - `agentflow-memory/src/preference.rs` implements
+    `SqlitePreferenceStore` with `(tenant_id, user_id, key)` primary
+    key, monotonic `version` on UPSERT, scope-isolated reads, sorted
+    `list_preferences`, and `prune_older_than` driven by
+    `updated_at`. 7 unit tests in the same file cover roundtrip,
+    version bump, idempotent delete, scope isolation, sorted list,
+    prune, and complex-JSON preservation.
+  - `agentflow-memory/src/entity_facts.rs` implements
+    `SqliteEntityFactStore` with `(entity_id, fact_id)` primary key,
+    `attribute` + JSON `value` + `confidence` + `extracted_at` +
+    `invalidated_at` columns, `get_facts(include_invalidated)`
+    branching, `invalidate_fact` that errors when the fact is
+    missing or already invalidated, and `prune_invalidated` that
+    only drops rows past the retention cutoff. 8 unit tests cover
+    roundtrip, no-merge for conflicting facts, invalidate
+    visibility, double-invalidate error, replace-on-same-id,
+    prune cutoff, prune-skips-active, entity isolation.
+  - `agentflow-memory/src/semantic.rs` adds the
+    `SemanticMemoryStore` impl on top of the existing
+    `SemanticMemory`. The new `search_semantic(session, query, k)`
+    returns `Vec<(Message, f32)>` with cosine scores; degrades to
+    a keyword-search fallback (scored `0.0`) when the embedding
+    fails. The existing `MemoryStore::search` path is preserved
+    for one stability tier (Beta) per the design doc.
+  - `agentflow-memory/tests/cross_layer_precedence.rs` integration
+    test exercises all four layers in one scenario (session ⇒
+    semantic search ⇒ preference scope ⇒ entity fact lifecycle)
+    and asserts the independence guarantee: writes to one layer
+    never surface through another's read API.
+  - Encryption-at-rest: the trait shape allows a future
+    `EncryptedPreferenceStore` to slot in. Local profile ships
+    plaintext per the design doc; P5 key-management plumbing is
+    a separate scope.
+  - `agentflow memory prune` CLI is the next deliverable on top of
+    this trait surface — schema-design + trait-impl shipped here,
+    CLI command tracked as a follow-up.
+  - Test count: 36 lib + 1 integration test = 37 hermetic
+    `agentflow-memory` tests pass.
 
 ---
 

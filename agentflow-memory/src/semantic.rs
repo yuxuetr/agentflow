@@ -460,6 +460,84 @@ impl MemoryStore for SemanticMemory {
   }
 }
 
+// ── SemanticMemoryStore implementation ───────────────────────────────────────
+//
+// New typed search API introduced under P4.7. Returns each match alongside
+// its cosine similarity score so callers can apply their own threshold
+// instead of inferring one from rank. The existing `MemoryStore::search`
+// path stays for one stability tier (Beta) before being deprecated.
+
+#[async_trait]
+impl crate::layer::SemanticMemoryStore for SemanticMemory {
+  async fn search_semantic(
+    &self,
+    session_id: Option<&str>,
+    query: &str,
+    k: usize,
+  ) -> Result<Vec<(Message, f32)>, MemoryError> {
+    // Today's SemanticMemory indexes per-session; cross-session search
+    // is reserved for a future backend (Qdrant collection-level search).
+    let session_id = session_id.ok_or_else(|| {
+      MemoryError::StorageError(
+        "SemanticMemory requires a session_id for search_semantic".to_string(),
+      )
+    })?;
+
+    let query_vec = match self.embedder.embed_text(query).await {
+      Ok(v) => v,
+      Err(e) => {
+        // Mirror MemoryStore::search behaviour: degrade to keyword search,
+        // but emit empty score (0.0) since cosine isn't available.
+        tracing::warn!("query embedding failed; degrading to keyword: {e}");
+        let fallback = self.keyword_search(session_id, query, k).await?;
+        return Ok(fallback.into_iter().map(|m| (m, 0.0)).collect());
+      }
+    };
+
+    let rows = sqlx::query("SELECT message_id, vector FROM embeddings WHERE session_id = ?1")
+      .bind(session_id)
+      .fetch_all(&self.pool)
+      .await
+      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+
+    if rows.is_empty() {
+      let fallback = self.keyword_search(session_id, query, k).await?;
+      return Ok(fallback.into_iter().map(|m| (m, 0.0)).collect());
+    }
+
+    let mut scored: Vec<(String, f32)> = rows
+      .iter()
+      .filter_map(|row| {
+        let msg_id: String = row.try_get("message_id").ok()?;
+        let bytes: Vec<u8> = row.try_get("vector").ok()?;
+        let vec = Self::blob_to_vec(&bytes);
+        let score = Self::cosine_similarity(&query_vec, &vec);
+        Some((msg_id, score))
+      })
+      .collect();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+
+    let mut out = Vec::with_capacity(scored.len());
+    for (msg_id, score) in scored {
+      if let Some(row) = sqlx::query(
+        "SELECT id, session_id, role, content, timestamp, tool_name, token_count
+         FROM messages WHERE id = ?1",
+      )
+      .bind(&msg_id)
+      .fetch_optional(&self.pool)
+      .await
+      .map_err(|e| MemoryError::StorageError(e.to_string()))?
+        && let Ok(msg) = row_to_message(&row)
+      {
+        out.push((msg, score));
+      }
+    }
+    Ok(out)
+  }
+}
+
 // ── Row deserialiser (private) ────────────────────────────────────────────────
 
 fn row_to_message(row: &SqliteRow) -> Result<Message, MemoryError> {
