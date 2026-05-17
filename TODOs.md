@@ -32,17 +32,21 @@ but do not implement channel adapters in this queue.
 | P0 | V1 Contract Hardening | CLOSED |
 | P1 | Security And Tool Governance | partially closed (P1.7-P1.9 active) |
 | P2 | Local Server / Daemon Reliability | active |
-| P3 | Rust SDK And CLI Experience | active (P3.6 and P3.7 closed) |
+| P3 | Rust SDK And CLI Experience | active (P3.4 has 2 deferred MCP/plugin subitems; everything else closed) |
 | P4 | Memory, RAG, And Eval Foundations | active |
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
-| P7 | Performance And Release Engineering | NEW — active |
+| P7 | Performance And Release Engineering | closed (P7.4-FU1..FU4 all DONE; v1.0.0-rc.1 tag is unblocked) |
 | P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
 ## Recently Closed
 
+- P3.5 Permission explanation improvements — fully closed (slices
+  1-4 + slice 2 follow-up tests for MCP / skill_agent / multi_agent
+  permission output; 4 new CLI integration tests on top of the
+  existing template / http / file / shell coverage).
 - P7.4-FU4 Production deployment runbook
   (`docs/RELEASE_NOTES_v1.0.0-rc.1.md` DRAFT carries the six-step
   Production Deployment Checklist closing rehearsal F4; other
@@ -665,7 +669,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     (entrypoint deleted) but doesn't validate the binary actually
     starts.
 
-- TODO P3.5 Permission explanation improvements:
+- DONE P3.5 Permission explanation improvements:
   - DONE Slice 1 — `agentflow skill inspect --explain-permissions`
     now wires the P1.9 `resolve_tool_policy` table alongside the
     existing capability decisions. New repeatable flags
@@ -717,9 +721,26 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     counts. 4 new CLI tests in `workflow_tests.rs` cover text output,
     JSON envelope, off-by-default behaviour, and the shell-node
     capability surface.
-  - TODO Add tests for representative MCP node admission and
-    `multi_agent` / `skill_agent` permission output (slice 2 covers
-    template / http / file / shell).
+  - DONE Slice 2 follow-up — agent-flavoured node permission tests.
+    `agentflow-cli/tests/workflow_tests.rs` ships four new CLI
+    integration tests:
+    `cli_workflow_validate_explain_permissions_mcp_node` (text:
+    asserts `mcp` category + `[mcp.call, net]` capability + server_command
+    list + tool_name constraint; does NOT assert `.success()` since
+    `type: mcp` is only schema-recognised when the `mcp` feature
+    is enabled — the report still prints before the schema bail),
+    `cli_workflow_validate_explain_permissions_mcp_node_json_envelope`
+    (same workflow through `--format json`, asserts
+    `permissions.nodes[].category = "mcp"`),
+    `cli_workflow_validate_explain_permissions_skill_agent_node` (asserts
+    `agent` category + `[agent.runtime]` capability + skill / model /
+    allowed_tools constraint passthrough + advisory note),
+    `cli_workflow_validate_explain_permissions_multi_agent_node`
+    (handoff-mode multi_agent — confirms per-participant
+    `agents[].skill` is NOT surfaced and the advisory note still
+    fires). 8 explain_permissions tests pass overall (4 existing
+    template/http/file/shell + 4 new). With this, P3.5 is fully
+    closed (slices 1-4 + slice 2 follow-up).
 
 - DONE P3.6 Native tool calling provider consistency tests:
   - `agentflow-llm/tests/provider_consistency.rs` now covers all six
