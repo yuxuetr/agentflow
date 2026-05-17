@@ -42,6 +42,8 @@ pub fn ui_router() -> Router<AppState> {
     .route("/ui/harness/sessions/new", get(index_html))
     .route("/ui/harness/sessions/:id", get(index_html))
     .route("/ui/diagnostics", get(index_html))
+    // P6.3: side-by-side trace comparison view.
+    .route("/ui/runs/:id/compare", get(index_html))
     .route("/ui/assets/app.js", get(app_js))
     .route("/ui/assets/styles.css", get(styles_css))
 }

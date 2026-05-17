@@ -90,6 +90,7 @@ but do not implement channel adapters in this queue.
 - P7.2 CI perf regression gate (MVP): new `cargo xtask bench-gate` compares `target/criterion/*/new/estimates.json` against `benches/baselines/<host>.json` and exits non-zero when any bench is ≥ 1.25× baseline. New `.github/workflows/bench.yml` runs the four Criterion suites on perf-sensitive PRs + main pushes and invokes the gate. `--allow-missing` lets the job pass until a per-runner `ci-ubuntu-latest.json` baseline lands. 5 new xtask unit tests cover the comparator paths.
 - P6.4 Durable user preferences: migration `0004_user_preferences.sql` + `UserPreferenceRepo` (upsert / upsert_many / list / delete) + new `GET`/`PUT /v1/preferences` routes scoped to `X-Agentflow-Tenant`. Server-side rejection of token-shaped values (Bearer-prefixed / `sk-`/`ghp_` API-key prefixes / long hex digests / opaque alphanumeric secrets). 3 unit + 5 integration tests cover happy round-trip, tenant isolation, and rejection paths. UI wiring is the next slice.
 - P6.5 Operator event filter (client-side): tiny expression language in `agentflow-ui/src/eventFilter.ts` (`kind=` / `kind!=` / `kind~` / `step` ops + `AND` chaining); filter input above the run-detail timeline persists per `run_id` in localStorage; 18 self-test assertions in `eventFilter.test.ts`. Server-side `?filter=` pre-filter + P6.4 preferences sync tracked as follow-ups.
+- P6.3 Trace comparison view: new `RunCompare` component at `/ui/runs/:id/compare?against=<other>`. Two columns fetch `/v1/runs/{id}/events/history` independently; events keyed by `kind#step_index` get green-border `matched` styling, unmatched events get amber-border `only here` tag. Summary cards show event count / tool-call count / total + mean hop latency / final answer per run. No backend schema change needed.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1368,13 +1369,33 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     existing SPA deep-link routes so direct nav from a bookmark
     or copied URL works.
 
-- TODO P6.3 Trace comparison view:
-  - Add UI page `/ui/runs/{id}/compare?against={other_id}`:
-    - Side-by-side event timeline.
-    - Diff highlighting for tool calls and final answers.
-    - Hop latency comparison.
-  - Backend: extend `GET /v1/runs/{id}/events/history` to include the
-    fields needed for diffing.
+- DONE P6.3 Trace comparison view (MVP):
+  - New `RunCompare` component in `agentflow-ui/src/main.tsx`,
+    mounted at `/ui/runs/:id/compare?against=<other_id>`. App router
+    matches the path and renders the component with the primary run
+    id; the `against` query param seeds an editable second-run input.
+  - Server `ui_router()` adds `/ui/runs/:id/compare` to the SPA
+    deep-link list so direct navigation works.
+  - Each column independently fetches `GET /v1/runs/{id}/events/history`
+    (existing route; carries the full payload already, no schema
+    change needed). The response is treated as the source of truth
+    for diffing.
+  - Diff highlighting: every event is keyed by `${kind}#${step_index ?? seq}`;
+    events present in both runs get a green border + `matched` class,
+    events present in only one run get an amber border + an explicit
+    `only here` tag. Hop latency is computed as `ts[i] - ts[i-1]`
+    per column and rendered inline.
+  - Summary cards above the columns show: event count, tool-call
+    count, total wall-clock duration, mean hop latency, and the
+    final answer (when present in the run's terminal event).
+  - Bundle impact: app.js 233 KiB → 238 KiB. CSS adds ~3 KiB. No
+    new npm deps.
+  - Follow-ups (not blocking):
+    - Inline-diff the final-answer strings (today they render
+      side-by-side; a word-level diff would be more useful).
+    - Persistent "saved comparisons" list per tenant via the P6.4
+      preferences API.
+    - SSE auto-refresh when either run is still in flight.
 
 - DONE P6.4 Durable user preferences (server half — UI wiring is a
   follow-up):

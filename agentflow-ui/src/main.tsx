@@ -455,6 +455,295 @@ function RunCreateForm({ apiToken, onTokenChange }: { apiToken: string; onTokenC
 
 // ─── Existing run console ────────────────────────────────────────
 
+// ── P6.3 Trace comparison view ────────────────────────────────────────────
+//
+// Mounted at `/ui/runs/:id/compare?against=<other_id>`. Loads the event
+// history for both runs and renders a side-by-side timeline plus a
+// per-step diff highlight + a hop-latency summary.
+
+type CompareKey = string; // `${kind}#${step_index ?? seq}` used for cross-run pairing.
+
+function compareKey(event: StreamedEvent): CompareKey {
+  const payload = (event.payload as Record<string, unknown>) ?? {};
+  const step = typeof payload.step_index === 'number' ? payload.step_index : event.seq;
+  return `${event.kind}#${step}`;
+}
+
+function eventLatencyMs(events: StreamedEvent[], index: number): number | null {
+  if (index === 0) return 0;
+  const prev = Date.parse(events[index - 1].ts);
+  const cur = Date.parse(events[index].ts);
+  if (Number.isNaN(prev) || Number.isNaN(cur)) return null;
+  return cur - prev;
+}
+
+async function fetchEventsHistory(
+  runId: string,
+  apiToken: string,
+): Promise<StreamedEvent[]> {
+  const response = await apiFetch(
+    `/v1/runs/${encodeURIComponent(runId)}/events/history?limit=1000`,
+    apiToken,
+  );
+  if (!response.ok) {
+    throw new Error(`run ${runId}: ${response.status} ${response.statusText}`);
+  }
+  const body = (await response.json()) as { events: StreamedEvent[] };
+  return body.events ?? [];
+}
+
+function RunCompare({
+  primaryRunId,
+  apiToken,
+  onTokenChange,
+}: {
+  primaryRunId: string;
+  apiToken: string;
+  onTokenChange: (token: string) => void;
+}) {
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const against = params.get('against') ?? '';
+  const [otherRunId, setOtherRunId] = useState(against);
+  const [primaryEvents, setPrimaryEvents] = useState<StreamedEvent[]>([]);
+  const [otherEvents, setOtherEvents] = useState<StreamedEvent[]>([]);
+  const [state, setState] = useState<ConnectionState>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!primaryRunId || !otherRunId) return;
+    let cancelled = false;
+    setState('loading');
+    setError(null);
+    Promise.all([
+      fetchEventsHistory(primaryRunId, apiToken),
+      fetchEventsHistory(otherRunId, apiToken),
+    ])
+      .then(([primary, other]) => {
+        if (cancelled) return;
+        setPrimaryEvents(primary);
+        setOtherEvents(other);
+        setState('idle');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [primaryRunId, otherRunId, apiToken]);
+
+  // Compute the union of compare keys so both columns can highlight
+  // events that lack a counterpart in the other run.
+  const otherKeys = useMemo(
+    () => new Set(otherEvents.map(compareKey)),
+    [otherEvents],
+  );
+  const primaryKeys = useMemo(
+    () => new Set(primaryEvents.map(compareKey)),
+    [primaryEvents],
+  );
+
+  const primarySummary = useMemo(() => summarise(primaryEvents), [primaryEvents]);
+  const otherSummary = useMemo(() => summarise(otherEvents), [otherEvents]);
+
+  return (
+    <main className="run-compare">
+      <header className="run-compare-header">
+        <div>
+          <h1>Trace comparison</h1>
+          <p className="run-compare-subtitle">
+            Side-by-side event timelines plus per-step diff highlight + hop latency.
+          </p>
+        </div>
+        <div className="run-compare-controls">
+          <label>
+            Primary run
+            <input value={primaryRunId} readOnly />
+          </label>
+          <label>
+            Compare against
+            <input
+              value={otherRunId}
+              onChange={(ev) => setOtherRunId(ev.target.value.trim())}
+              placeholder="run id"
+            />
+          </label>
+          <label>
+            API token (optional)
+            <input
+              type="password"
+              value={apiToken}
+              onChange={(ev) => onTokenChange(ev.target.value)}
+              placeholder="bearer"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams({ against: otherRunId });
+              window.location.assign(`/ui/runs/${encodeURIComponent(primaryRunId)}/compare?${next.toString()}`);
+            }}
+            disabled={!otherRunId || otherRunId === primaryRunId}
+          >
+            Compare
+          </button>
+        </div>
+        {state === 'loading' && <p className="run-compare-status">Loading…</p>}
+        {error && (
+          <p className="run-compare-error" role="alert">
+            {error}
+          </p>
+        )}
+      </header>
+
+      <section className="run-compare-summary" aria-label="Per-run summary">
+        <SummaryCard title="Primary" runId={primaryRunId} summary={primarySummary} />
+        <SummaryCard title="Compared" runId={otherRunId} summary={otherSummary} />
+      </section>
+
+      <section className="run-compare-grid" aria-label="Event timelines">
+        <CompareColumn
+          title={`Primary · ${primaryRunId}`}
+          events={primaryEvents}
+          otherKeys={otherKeys}
+        />
+        <CompareColumn
+          title={`Compared · ${otherRunId || '—'}`}
+          events={otherEvents}
+          otherKeys={primaryKeys}
+        />
+      </section>
+    </main>
+  );
+}
+
+interface RunSummary {
+  eventCount: number;
+  toolCallCount: number;
+  finalAnswer: string | null;
+  totalLatencyMs: number;
+  meanLatencyMs: number;
+}
+
+function summarise(events: StreamedEvent[]): RunSummary {
+  let total = 0;
+  let count = 0;
+  for (let i = 1; i < events.length; i += 1) {
+    const dt = eventLatencyMs(events, i);
+    if (dt !== null) {
+      total += dt;
+      count += 1;
+    }
+  }
+  const toolCallCount = events.filter((e) => e.kind.toLowerCase().includes('tool_call')).length;
+  const finalAnswer = (() => {
+    const last = [...events].reverse().find((e) => {
+      const k = e.kind.toLowerCase();
+      return k === 'run_completed' || k === 'final_answer' || k === 'stopped';
+    });
+    if (!last) return null;
+    const payload = (last.payload as Record<string, unknown>) ?? {};
+    const candidate = payload.answer ?? payload.final_answer ?? payload.message;
+    return typeof candidate === 'string' ? candidate : null;
+  })();
+  return {
+    eventCount: events.length,
+    toolCallCount,
+    finalAnswer,
+    totalLatencyMs: total,
+    meanLatencyMs: count > 0 ? Math.round(total / count) : 0,
+  };
+}
+
+function SummaryCard({
+  title,
+  runId,
+  summary,
+}: {
+  title: string;
+  runId: string;
+  summary: RunSummary;
+}) {
+  return (
+    <article className="run-compare-card">
+      <h2>{title}</h2>
+      <p className="run-compare-card-id">{runId || '—'}</p>
+      <dl>
+        <div>
+          <dt>Events</dt>
+          <dd>{summary.eventCount}</dd>
+        </div>
+        <div>
+          <dt>Tool calls</dt>
+          <dd>{summary.toolCallCount}</dd>
+        </div>
+        <div>
+          <dt>Total wall-clock</dt>
+          <dd>{summary.totalLatencyMs} ms</dd>
+        </div>
+        <div>
+          <dt>Mean hop</dt>
+          <dd>{summary.meanLatencyMs} ms</dd>
+        </div>
+      </dl>
+      {summary.finalAnswer && (
+        <p className="run-compare-final" title="final answer">
+          <strong>Final:</strong> {summary.finalAnswer}
+        </p>
+      )}
+    </article>
+  );
+}
+
+function CompareColumn({
+  title,
+  events,
+  otherKeys,
+}: {
+  title: string;
+  events: StreamedEvent[];
+  otherKeys: Set<CompareKey>;
+}) {
+  return (
+    <div className="run-compare-column" aria-label={title}>
+      <h3>{title}</h3>
+      {events.length === 0 ? (
+        <p className="run-compare-empty">No events.</p>
+      ) : (
+        <ol className="run-compare-events">
+          {events.map((event, idx) => {
+            const key = compareKey(event);
+            const matched = otherKeys.has(key);
+            const latency = eventLatencyMs(events, idx);
+            return (
+              <li
+                key={event.seq}
+                className={`run-compare-event ${matched ? 'matched' : 'unmatched'}`}
+              >
+                <div className="run-compare-event-row">
+                  <span className={`dot dot-${eventTone(event.kind)}`} />
+                  <span className="run-compare-event-kind">{event.kind}</span>
+                  {latency !== null && (
+                    <span className="run-compare-event-latency">+{latency} ms</span>
+                  )}
+                </div>
+                {!matched && (
+                  <span className="run-compare-event-tag" title="present only in this run">
+                    only here
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChange: (token: string) => void }) {
   const [runId, setRunId] = useState('');
   const [tenantId, setTenantId] = useState(() => readStorage(tenantKey, 'default'));
@@ -2286,6 +2575,17 @@ function App() {
     return (
       <HarnessSessionDetail
         sessionId={harnessId}
+        apiToken={apiToken}
+        onTokenChange={setApiToken}
+      />
+    );
+  }
+  // P6.3: /ui/runs/<id>/compare?against=<other>
+  const compareMatch = pathname.match(/^\/ui\/runs\/([^/]+)\/compare\/?$/);
+  if (compareMatch) {
+    return (
+      <RunCompare
+        primaryRunId={decodeURIComponent(compareMatch[1])}
         apiToken={apiToken}
         onTokenChange={setApiToken}
       />
