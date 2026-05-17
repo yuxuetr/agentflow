@@ -84,6 +84,7 @@ but do not implement channel adapters in this queue.
 - P3.8 Cross-hop OTel propagation (LLM + plugin hops): new `agentflow-tracing::context` ships the canonical `scope` / `current_traceparent` task-local helper + `TRACEPARENT_ENV` constant. Plugin spawn paths (`OsSandboxPluginPreparer` + new `NoopWithTraceparent`) inject `TRACEPARENT=<value>` into the child's env so OTel-aware plugins stitch onto the parent run. 4 unit + 3 CLI integration tests prove the contract end-to-end. `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)" table with LLM ✓ + Plugin ✓ + MCP ○ + Worker gRPC ○.
 - P3.5 slice 4 MCP capability discovery: `skill inspect --explain-permissions --with-mcp-discovery` spawns each declared MCP server, groups its advertised tools into a `McpCapabilityMap`, and feeds them into `resolve_tool_policy` so MCP tools surface admission rows alongside built-ins. Off by default (spawning MCP servers is heavy). 3 new CLI integration tests.
 - P3.4 doctor MCP+plugin lite installation probe: `doctor --check-installations` adds an `installations` section that walks `~/.agentflow/skills/*` and `~/.agentflow/plugins/*`, surfaces every declared MCP server command (reports `reachable` via `which`) and every plugin entrypoint (reports `entrypoint_exists`). Promotes status to Warning / Fail when any probe fails. 3 new CLI integration tests. Heavier transport-level MCP reachability + plugin `dry_run` spawn smoke stay deferred until the prerequisite manifest fields ship.
+- P3.9 CLI feature flag CI matrix (closed): Quality CI `features` job grew 14 → 18 combinations by adding the agentflow-rag feature surface (`rag-no-default`, `rag-pdf`, `rag-html`, `rag-pdf-html`). `local-embeddings` intentionally not wired (pulls `ort` ONNX downloads; fragile on CI). Wishlist features that don't exist yet are still tracked as "wire in when they ship".
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -756,24 +757,19 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     - End-to-end integration test that walks a DAG run through
       LLM → MCP → Plugin → Worker and asserts a connected OTel trace.
 
-- TODO P3.9 CLI feature flag CI matrix:
-  - DONE (partial) — Quality CI `features` job grew from 6 to 12
-    combinations: cli-no-default, cli-mcp, cli-rag, cli-plugin,
-    cli-mcp-rag-plugin, cli-all-features, tracing-postgres,
-    mcp-local-transports, mcp-all-transports, core-observability,
-    core-plugin, nodes-default. Each was validated locally via
-    `cargo check` before landing.
-  - The wishlist's `audio`, `image`, `tracing-sqlite`, and `otel`
-    feature names do not currently exist in any workspace crate. Add
-    them only when the actual feature flags exist — promote to a
-    fresh subtask if/when those features ship.
-  - Two combinations from the original wishlist are broken at HEAD
-    and tracked under M.7 instead of being wired in as failing jobs:
-    `agentflow-llm --no-default-features --features openai` (default
-    `logging` feature is load-bearing for tracing imports) and
-    `agentflow-nodes --features batch,conditional,factories` (these
-    features assume the default llm/http/file/template are enabled
-    but Cargo strips them when `--features` is supplied).
+- DONE P3.9 CLI feature flag CI matrix (closed — final cells were
+  the agentflow-rag feature surface):
+  - Quality CI `features` job now covers 18 combinations across 6
+    crates. The 14 P3.9-partial rows from the previous slice were
+    extended with 4 agentflow-rag rows: `rag-no-default`, `rag-pdf`,
+    `rag-html`, `rag-pdf-html`. The `local-embeddings` feature is
+    intentionally not wired in because it pulls `ort`, which
+    downloads ONNX Runtime binaries at build time — fragile on CI
+    networks. It stays a manual-validation flag and is exercised
+    downstream by the existing `rag-eval-smoke` job.
+  - Wishlist `audio` / `image` / `tracing-sqlite` / `otel` feature
+    names still don't exist in any workspace crate; they'll be wired
+    in if/when the actual flags ship (per the partial-status note).
 
 - TODO P3.10 Examples smoke test CI:
   - Extend P3.2 into a CI job that runs every example in

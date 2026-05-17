@@ -119,6 +119,23 @@ jobs:
             command: cargo check -p agentflow-llm --no-default-features --features openai
           - name: nodes-batch-conditional
             command: cargo check -p agentflow-nodes --features batch,conditional
+          # P3.9 close-out — agentflow-rag feature surface. The crate ships
+          # four independent feature flags (qdrant default, plus
+          # local-embeddings / pdf / html). Each one pulls a different
+          # heavy dep tree, so breakage tends to be flag-specific.
+          - name: rag-no-default
+            command: cargo check -p agentflow-rag --no-default-features
+          - name: rag-pdf
+            command: cargo check -p agentflow-rag --no-default-features --features pdf
+          - name: rag-html
+            command: cargo check -p agentflow-rag --no-default-features --features html
+          # local-embeddings is intentionally NOT in the matrix: it
+          # pulls `ort`, which downloads ONNX Runtime binaries at build
+          # time. CI on a clean network would work but is fragile, and
+          # the operator-facing flag is already exercised by the rag
+          # eval CI job downstream. Track as a manual-validation flag.
+          - name: rag-pdf-html
+            command: cargo check -p agentflow-rag --no-default-features --features pdf,html
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
