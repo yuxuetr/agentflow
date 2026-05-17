@@ -78,6 +78,7 @@ but do not implement channel adapters in this queue.
 - P5.1 Remote marketplace install handoff: `install_directory` in `agentflow-cli/src/commands/marketplace.rs` is now atomic — stage into a sibling `.installing-<pid>-<nanos>` temp dir, move any prior install aside to `.replacing-<…>`, then `fs::rename` the staged tree into place. Failures roll back to the original install. 3 new CLI integration tests cover happy / force / collision paths with explicit "no temp-dir siblings" assertions on the install root.
 - P3.3 CLI JSON output audit (contract + first command migrated): new `CliJsonEnvelope<T>` (wire schema `agentflow.cli/1`) defines the canonical four-field envelope (`version`, `command`, `result`, `errors[]`). `docs/CLI_JSON_OUTPUT.md` is the contract; `docs/STABILITY.md` adds it at Stable tier. First migration: `agentflow doctor --format json-envelope` wraps `DoctorReport`. Per-command migrations for the remaining 10+ commands tracked as follow-ups in `TODOs.md`.
 - P2.3 Server end-to-end run tests: `RunRepo::list_filtered(tenant, status, limit, offset)` extends the list API; `GET /v1/runs` accepts validated `?status` + `?offset` query params. New `e2e_runs.rs` integration suite (9 tests) covers pagination, status filter, before/after graph snapshots, and authenticated paths under bearer-token auth.
+- M.3 agentflow-db per-repo CRUD tests (db + memory parts): grew `agentflow-db` repo tests from 2 → 12 covering every table (Run/Step/Event/Artifact/SkillInstall/McpSession/HarnessSession/HarnessEvent) plus tenant isolation and resume-mode lifecycle. Removed the racy per-test `TRUNCATE`, replaced with UUID-suffixed scope keys so re-runs are idempotent. Memory layer coverage was already shipped under P4.7.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1698,13 +1699,41 @@ fit a P-segment.
     introduces drift, which is the same outcome as a checklist
     review step but is mechanically enforced.
 
-- TODO M.3 Test coverage gaps:
-  - `agentflow-db`: currently 4 smoke tests. Add per-repo CRUD tests
-    (Run/Step/Event/Artifact/SkillInstall/McpSession), tenant isolation,
-    migration roundtrip on a fresh schema.
-  - `agentflow-memory`: currently 16 tests. After P4.5 design, add
-    backend-specific tests and cross-layer search tests.
-  - Worker (P5): coverage grows with P5.5–P5.7.
+- DONE M.3 Test coverage gaps (db + memory parts; worker part deferred
+  to P5.5–P5.7):
+  - `agentflow-db/tests/repositories.rs` grew from 2 to 12 tests.
+    New coverage:
+    - `run_repo_list_isolates_tenants` — tenant-scoped reads don't
+      bleed across tenants.
+    - `run_repo_update_status_errors_when_missing` — missing-id
+      update errors with the id in the message.
+    - `step_repo_list_for_run_returns_in_seq_order` — out-of-order
+      inserts still surface seq-ascending.
+    - `artifact_repo_create_and_list_round_trip` — full CRUD +
+      cross-run isolation.
+    - `skill_install_repo_upsert_replaces_on_conflict` — UPSERT
+      semantics + multi-version coexistence.
+    - `mcp_session_repo_open_and_close_lifecycle` — open + close
+      lifecycle + missing-id error path.
+    - `harness_session_repo_create_get_list_update` — full CRUD on
+      the harness session table.
+    - `harness_event_repo_append_list_max_seq` — append, list_after,
+      and `max_seq` (used by `:resume` mode=append).
+    - `harness_session_reset_for_resume_wipes_events` — rerun
+      resume wipes prior events as documented.
+    - `harness_session_reset_for_append_resume_keeps_events` —
+      append-mode resume keeps prior events.
+  - Test-infrastructure fix: removed the per-test `TRUNCATE` from
+    `fresh_db()` (it was racing parallel tests that share the same
+    DB and wiping each other's seeded rows mid-test). Every test
+    now uses a per-invocation UUID-suffixed tenant / skill name so
+    re-runs against the same DB don't accumulate noise into the
+    `assert_eq!(len, 1)` invariants. Migration roundtrip stays in
+    `tests/migrations.rs`.
+  - `agentflow-memory` part already closed by P4.7 (37 hermetic
+    tests covering Session / Semantic / Preference / Entity facts
+    backends + cross-layer integration test).
+  - Worker (P5) coverage tracked under P5.5–P5.7.
 
 - DONE M.4 Historical eval doc cleanup.
 
