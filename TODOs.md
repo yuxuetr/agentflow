@@ -87,6 +87,7 @@ but do not implement channel adapters in this queue.
 - P3.9 CLI feature flag CI matrix (closed): Quality CI `features` job grew 14 → 18 combinations by adding the agentflow-rag feature surface (`rag-no-default`, `rag-pdf`, `rag-html`, `rag-pdf-html`). `local-embeddings` intentionally not wired (pulls `ort` ONNX downloads; fragile on CI). Wishlist features that don't exist yet are still tracked as "wire in when they ship".
 - P3.1 SDK example matrix: new top-level `examples/README.md` is the canonical 12-row matrix index. Audit found 11/12 rows already shipped; the gap (tool policy + sandbox capability decision) is filled by the new `agentflow-tools/examples/tool_policy_sandbox_demo.rs`. All examples compile under their respective feature sets.
 - P3.2 + P3.10 + P7.3 Examples smoke CI (closed jointly): new `cargo xtask examples-smoke` subcommand runs 7 representative examples through `cargo run` with per-example wall-clock caps; total budget pinned at 5 min (P3.10 spec). Quality CI `examples` job invokes it with a 10-min job timeout. 3 new xtask unit tests lock down the list shape + budget invariants.
+- P7.2 CI perf regression gate (MVP): new `cargo xtask bench-gate` compares `target/criterion/*/new/estimates.json` against `benches/baselines/<host>.json` and exits non-zero when any bench is ≥ 1.25× baseline. New `.github/workflows/bench.yml` runs the four Criterion suites on perf-sensitive PRs + main pushes and invokes the gate. `--allow-missing` lets the job pass until a per-runner `ci-ubuntu-latest.json` baseline lands. 5 new xtask unit tests cover the comparator paths.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1413,11 +1414,41 @@ known characteristics, not surprises.
   - PERFORMANCE.md (in `agentflow-core/`) now links to the criterion
     suites alongside the legacy `cargo test` perf harness.
 
-- TODO P7.2 CI perf regression gate:
-  - Add `bench.yml` workflow that runs benches on a fixed runner.
-  - Compare against the checked-in baseline.
-  - Fail when median time ≥1.25× baseline.
-  - Post a summary comment on PRs.
+- DONE P7.2 CI perf regression gate (MVP):
+  - New `cargo xtask bench-gate` subcommand reads each
+    `target/criterion/<group>/<bench>/new/estimates.json`, looks
+    up the matching `benches/baselines/<host>.json` row, and exits
+    non-zero when any bench's current median is at least
+    `DEFAULT_REGRESSION_RATIO = 1.25×` baseline. Per-row output is
+    deterministic (`baseline=… current=… ratio=N.NN× [ok|REGRESSION]`)
+    so CI logs are diff-able.
+  - `--baseline <path>` overrides the checked-in default;
+    `--threshold <ratio>` overrides the 1.25× knob (rejects values
+    ≤ 1.0 so the gate can't be silently neutralised); `--allow-missing`
+    lets the gate pass when the baseline references benches the
+    runner didn't measure (used by CI until a per-runner baseline
+    lands).
+  - `pick_criterion_root` honors `CARGO_TARGET_DIR`, then
+    `.cargo/config.toml` `build.target-dir`, then the workspace
+    `target/` fallback — works under the
+    `~/.cargo/config.toml` `target-dir = /Users/.../target` pattern
+    documented in `CLAUDE.md`.
+  - New `.github/workflows/bench.yml` runs the four Criterion suites
+    (scheduler / provider_hop / retrieval / event_write) on PRs that
+    touch perf-sensitive crates + benches + xtask, plus pushes to
+    main. Job-level `timeout-minutes: 30`. The gate step uses
+    `--allow-missing` until `ci-ubuntu-latest.json` baseline lands;
+    today flips to hard-gate by dropping the flag.
+  - 5 new xtask unit tests cover the comparator under tempdirs
+    (happy path, regression-exceeds-threshold fail, missing-bench
+    fail, `--allow-missing` skip, invalid-threshold rejection).
+  - Follow-ups (not blocking):
+    - Capture a `ci-ubuntu-latest.json` baseline from a clean run
+      on the CI runner and drop `--allow-missing` from the
+      workflow.
+    - PR summary comment with the per-bench table (today the gate
+      writes structured stdout; CI captures it in step output
+      which the operator reads inline).
 
 - DONE P7.3 Examples smoke test in CI (closed alongside P3.2 / P3.10):
   - Quality CI `examples` job runs the new `cargo xtask

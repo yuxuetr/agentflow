@@ -8,6 +8,10 @@ description = "Internal workspace automation: edition pin, future repo-wide chec
 [dependencies]
 anyhow = "1"
 toml = "0.8"
+# Bench gate (P7.2) parses both the workspace baseline JSON and the
+# per-bench Criterion estimates.json.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

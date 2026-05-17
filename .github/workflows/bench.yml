@@ -1,0 +1,68 @@
+name: Performance Regression Gate
+
+# P7.2 perf regression gate.
+#
+# Runs the four Criterion bench suites (scheduler / provider_hop /
+# retrieval / event_write) on every push to main and on PR. The xtask
+# `bench-gate` subcommand compares each bench's median wall-clock
+# against a per-runner baseline JSON checked into
+# `benches/baselines/`; the job fails when any bench is at least
+# 1.25× the baseline median.
+#
+# Today the only checked-in baseline is `apple-m2-max.json` (the
+# author's dev box). The CI job runs `--allow-baseline-mismatch`
+# semantics by using `--allow-missing` so a baseline whose entries
+# don't match the current bench set doesn't break the gate. Once a
+# `ci-ubuntu-latest.json` baseline lands, drop the `--allow-missing`
+# flag and the job becomes a hard gate.
+#
+# Bench runtimes:
+#   - scheduler: ~1 min
+#   - provider_hop: ~30 s
+#   - retrieval: ~1 min
+#   - event_write: ~30 s
+# Job-level timeout-minutes caps the whole thing.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "agentflow-core/**"
+      - "agentflow-llm/**"
+      - "agentflow-rag/**"
+      - "agentflow-tracing/**"
+      - "benches/**"
+      - "xtask/**"
+      - ".github/workflows/bench.yml"
+  push:
+    branches:
+      - main
+
+jobs:
+  bench-gate:
+    name: criterion regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Each bench is run separately so a panic / timeout in one
+      # doesn't take the rest with it. Output goes under
+      # ./target/criterion/<group>/<bench>/new/estimates.json which
+      # the gate then walks.
+      - name: cargo bench (scheduler)
+        run: cargo bench -p agentflow-core --bench scheduler -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+      - name: cargo bench (provider_hop)
+        run: cargo bench -p agentflow-llm --bench provider_hop -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+      - name: cargo bench (retrieval)
+        run: cargo bench -p agentflow-rag --bench retrieval -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+      - name: cargo bench (event_write)
+        run: cargo bench -p agentflow-tracing --bench event_write -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+
+      # The gate fails non-zero on regression. `--allow-missing` keeps
+      # the job green when the apple-m2-max baseline references benches
+      # that didn't run on this runner (until ci-ubuntu-latest.json
+      # ships).
+      - name: bench-gate vs checked-in baseline
+        run: cargo xtask bench-gate --allow-missing
