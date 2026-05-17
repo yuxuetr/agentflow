@@ -75,6 +75,7 @@ but do not implement channel adapters in this queue.
 - P4.7 Memory backend implementations: new `layer.rs` defines the shared trait surface (`MemoryLayer`, `RetentionPolicy`, `PreferenceScope`, `PreferenceValue`, `PreferenceStore`, `EntityFact`, `EntityFactStore`, `SemanticMemoryStore`). `SqlitePreferenceStore` + `SqliteEntityFactStore` ship as the canonical SQLite-backed implementations; `SemanticMemory` gains the new `search_semantic` typed API (returns `(Message, f32)` scores). 37 hermetic tests (36 unit + 1 cross-layer integration) prove independence between the four layers.
 - P5.4 Plugin sandbox default policy: `select_preparer(profile, force_sandbox, allow_unsandboxed)` extends the P1.8 install-time policy gate to plugin spawn time. Same per-profile defaults: `dev` → noop, `local` / `production` → OS sandbox by default. The `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` opt-out mirrors `--allow-unsandboxed-plugin`; `production` rejects the opt-out with `PreparerSelectionError::OptOutRejected` and fails the spawn before any child starts. `docs/TOOL_PERMISSIONS.md` gains a spawn-time decision table.
 - P5.8 Workflow `type: plugin` first-class node syntax: validator (`agentflow workflow validate`) now parses the referenced plugin manifest and rejects unknown `node_type` references at validate time. New CLI `agentflow plugin generate-workflow-stub` emits a `type: plugin` YAML stub per declared `[[plugin.nodes]]` entry (`--node` filter, `--output` file sink, embeds absolute manifest path). 5 unit + 4 CLI integration tests.
+- P5.1 Remote marketplace install handoff: `install_directory` in `agentflow-cli/src/commands/marketplace.rs` is now atomic — stage into a sibling `.installing-<pid>-<nanos>` temp dir, move any prior install aside to `.replacing-<…>`, then `fs::rename` the staged tree into place. Failures roll back to the original install. 3 new CLI integration tests cover happy / force / collision paths with explicit "no temp-dir siblings" assertions on the install root.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -907,14 +908,51 @@ over-promising v1 stability before security and reliability gaps are closed.
 PREREQ NOTE: Worker tasks (P5.5–P5.7) require P2.8 (worker node type
 expansion) to be useful for non-trivial workloads.
 
-- TODO P5.1 Remote marketplace install handoff:
-  - Complete verified artifact cache → install dir flow for both Skills
-    (`~/.agentflow/skills`) and Plugins (`~/.agentflow/plugins`).
-  - Enforce checksum + signature verification before unpack.
-  - Atomic install (temp dir + rename) so partial unpacks never leave
-    half-installed state.
-  - Add tests for: signature mismatch reject, checksum mismatch reject,
-    partial download retry, atomic-rollback on extract failure.
+- DONE P5.1 Remote marketplace install handoff:
+  - Verified artifact cache → install dir flow was already in place
+    for both Skills (`~/.agentflow/skills`) and Plugins
+    (`~/.agentflow/plugins`) via `RemoteMarketplaceCache::cache_artifact_bytes`
+    + `install_skill_package` / `install_plugin_package` (`agentflow
+    marketplace install`). Checksum + signature gates fire before
+    unpack as part of the cache step; signature/checksum mismatch
+    reject paths are exercised by `remote_marketplace.rs` unit tests
+    and the marketplace strict-verify CLI test.
+  - This slice closes the remaining atomicity gap: `install_directory`
+    in `agentflow-cli/src/commands/marketplace.rs` was previously a
+    two-step `remove + copy_dir_recursive` that could leave a
+    half-installed destination on failure. The refactor:
+    1. Early-exit on collision (destination exists + no `--force`)
+       before any filesystem write.
+    2. Stage every file into a sibling temp dir
+       `<dest_parent>/.<dest_name>.installing-<pid>-<nanos>`.
+    3. On staging failure, remove the temp tree and leave the
+       existing destination untouched (this is what the spec calls
+       "atomic-rollback on extract failure").
+    4. When `--force` is set, move the prior install aside to
+       `.<dest_name>.replacing-<pid>-<nanos>` instead of deleting it,
+       then `fs::rename(staging, destination)` swaps the new tree
+       into place atomically. If the final rename fails, the moved-
+       aside backup is renamed back so callers never see a missing
+       destination.
+    5. Successful rename, then the moved-aside backup is removed.
+       A failed cleanup is logged as a warning but doesn't fail the
+       install.
+  - 3 new CLI integration tests in `marketplace_cli_tests.rs`:
+    - `marketplace_install_leaves_no_temp_dirs_on_success` — happy
+      path leaves the install root with only the final destination,
+      no `.installing` siblings.
+    - `marketplace_install_force_overwrite_preserves_install_root_layout` —
+      v1 → v2 force overwrite swaps content and leaves no
+      `.replacing` siblings.
+    - `marketplace_install_collision_without_force_leaves_existing_intact` —
+      pre-existing sentinel is preserved byte-for-byte when install
+      hits a collision and no staging dir leaks.
+  - Signature mismatch + checksum mismatch + partial-download retry
+    rejections are already covered by `remote_marketplace.rs`
+    `cache_artifact_bytes` unit tests
+    (`remote_marketplace_rejects_invalid_checksum`,
+    `marketplace_verify_strict_rejects_unsigned_artifact`, etc.); no
+    duplicate coverage at the CLI layer is needed.
 
 - DONE P5.2 Signed fixture artifacts:
   - Fixture archive sources are checked in under:

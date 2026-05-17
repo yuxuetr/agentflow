@@ -589,36 +589,130 @@ fn validate_marketplace_plugin_entrypoint(
   Ok(())
 }
 
+/// Atomically install a package directory at `destination` (P5.1).
+///
+/// Sequence:
+///  1. Validate the destination collision policy up front so a busy target
+///     errors before any filesystem work.
+///  2. Stage every file into a sibling temp dir
+///     `<destination_parent>/.<dest_name>.installing-<pid>-<nanos>`.
+///  3. If the staging copy fails for any reason, remove the temp dir and
+///     leave the existing destination untouched.
+///  4. If `force` is set and a destination already exists, move it aside to
+///     `<dest>.replacing-<pid>-<nanos>`. We only delete the prior install
+///     after the new directory is renamed into place — so a `rename` failure
+///     can roll back to the original install instead of leaving the target
+///     missing.
+///  5. `fs::rename(temp, destination)` swaps the staged copy in.
+///  6. Clean up the moved-aside prior install.
 fn install_directory(source: &Path, destination: &Path, force: bool, label: &str) -> Result<()> {
-  fs::create_dir_all(destination.parent().unwrap_or_else(|| Path::new("."))).with_context(
-    || {
-      format!(
-        "Failed to create {} install parent for '{}'",
-        label,
-        destination.display()
-      )
-    },
-  )?;
+  let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+  fs::create_dir_all(parent).with_context(|| {
+    format!(
+      "Failed to create {} install parent for '{}'",
+      label,
+      destination.display()
+    )
+  })?;
   prevent_recursive_install(source, destination, label)?;
 
-  if destination.exists() {
-    if !force {
-      bail!(
-        "Target {} directory '{}' already exists; pass --force to overwrite",
-        label,
-        destination.display()
-      );
-    }
-    fs::remove_dir_all(destination).with_context(|| {
-      format!(
-        "Failed to remove existing {} directory '{}'",
-        label,
-        destination.display()
-      )
-    })?;
+  // Early collision check: refuse before staging anything if the target
+  // exists without --force.
+  if destination.exists() && !force {
+    bail!(
+      "Target {} directory '{}' already exists; pass --force to overwrite",
+      label,
+      destination.display()
+    );
   }
 
-  copy_dir_recursive(source, destination)
+  let suffix = atomic_suffix();
+  let staging = staged_path(destination, "installing", &suffix);
+  if staging.exists() {
+    // Should be impossible (suffix is timestamp+pid) but guard anyway —
+    // a leftover staging dir from a hard-killed process must be cleaned
+    // before we trust the path.
+    let _ = fs::remove_dir_all(&staging);
+  }
+
+  // Stage into temp dir; on any failure remove the staging tree.
+  if let Err(err) = copy_dir_recursive(source, &staging) {
+    let _ = fs::remove_dir_all(&staging);
+    return Err(err.context(format!(
+      "Failed to stage {label} package into '{}'",
+      staging.display()
+    )));
+  }
+
+  // If the destination is occupied, move it aside instead of deleting it.
+  // The prior install stays recoverable until the rename below succeeds.
+  let moved_aside = if destination.exists() {
+    let backup = staged_path(destination, "replacing", &suffix);
+    if let Err(err) = fs::rename(destination, &backup) {
+      let _ = fs::remove_dir_all(&staging);
+      return Err(err).with_context(|| {
+        format!(
+          "Failed to move aside existing {label} directory '{}'",
+          destination.display()
+        )
+      });
+    }
+    Some(backup)
+  } else {
+    None
+  };
+
+  // Swap staged → destination.
+  if let Err(err) = fs::rename(&staging, destination) {
+    // Roll back: restore the prior install, then remove the staged tree.
+    if let Some(ref backup) = moved_aside {
+      let _ = fs::rename(backup, destination);
+    }
+    let _ = fs::remove_dir_all(&staging);
+    return Err(err).with_context(|| {
+      format!(
+        "Failed to atomically install {label} into '{}'",
+        destination.display()
+      )
+    });
+  }
+
+  // Final cleanup: drop the moved-aside prior install. Failure here is
+  // logged as a warning but does not undo a successful install.
+  if let Some(backup) = moved_aside
+    && let Err(err) = fs::remove_dir_all(&backup)
+  {
+    eprintln!(
+      "⚠  could not remove previous {label} directory '{}': {err}",
+      backup.display()
+    );
+  }
+  Ok(())
+}
+
+/// Build a unique suffix for staging directories. Uses pid + nanos since
+/// epoch — racing two installers against the same target would collide
+/// inside `copy_dir_recursive` anyway because both would try to write to
+/// the final `destination`, so the suffix only needs to disambiguate
+/// against stale leftovers.
+fn atomic_suffix() -> String {
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_nanos())
+    .unwrap_or(0);
+  format!("{}-{}", std::process::id(), nanos)
+}
+
+fn staged_path(destination: &Path, role: &str, suffix: &str) -> PathBuf {
+  let parent = destination
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| PathBuf::from("."));
+  let name = destination
+    .file_name()
+    .map(|s| s.to_string_lossy().into_owned())
+    .unwrap_or_else(|| "package".to_string());
+  parent.join(format!(".{name}.{role}-{suffix}"))
 }
 
 fn prevent_recursive_install(source: &Path, destination: &Path, label: &str) -> Result<()> {

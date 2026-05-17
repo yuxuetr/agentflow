@@ -613,6 +613,237 @@ description = "Echo node"
   );
 }
 
+// ── P5.1: atomic install handoff ───────────────────────────────────────────
+//
+// The install pipeline stages each unpack into a sibling temp dir and
+// renames it into the install dir only after the copy fully succeeds. The
+// two tests below cover the success path (no temp dir visible after) and
+// the force-overwrite happy path (prior install replaced, with no orphan
+// `.installing` or `.replacing` directories left on disk).
+
+fn list_install_root_children(install_root: &Path) -> Vec<String> {
+  if !install_root.exists() {
+    return Vec::new();
+  }
+  let mut names: Vec<String> = std::fs::read_dir(install_root)
+    .unwrap()
+    .filter_map(|e| e.ok())
+    .map(|e| e.file_name().to_string_lossy().into_owned())
+    .collect();
+  names.sort();
+  names
+}
+
+#[test]
+fn marketplace_install_leaves_no_temp_dirs_on_success() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+allowed-tools: file
+---
+
+# Rust Expert
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+  // The install root must contain *exactly* the final destination and
+  // nothing else — no `.installing` / `.replacing` siblings left behind.
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "install root must contain only the final destination after a clean install; got {children:?}"
+  );
+}
+
+#[test]
+fn marketplace_install_force_overwrite_preserves_install_root_layout() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+
+  // First install — succeeds and creates the rust-expert directory.
+  let package_v1 = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill v1
+allowed-tools: file
+---
+
+# Rust Expert v1
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package_v1);
+  write_marketplace_for_entry(&marketplace, &entry);
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, &package_v1)
+    .unwrap();
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+  // Second install — same package id, --force overwrite.
+  let package_v2 = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill v2
+allowed-tools: file
+---
+
+# Rust Expert v2
+"#,
+    0o644,
+  )]);
+  let entry_v2 = entry_for_bytes(&package_v2);
+  // Re-write the marketplace toml with the v2 checksum so install accepts it.
+  write_marketplace_for_entry(&marketplace, &entry_v2);
+  // Cache the v2 bytes under the v2 entry. The cache key is per-version,
+  // so v1 stays on disk; v2 is what install reads.
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry_v2, &package_v2)
+    .unwrap();
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+      "--force",
+    ])
+    .assert()
+    .success();
+
+  // The destination must now hold the v2 content; no temp dirs leaked.
+  let content = fs::read_to_string(install_dir.join("rust-expert").join("SKILL.md")).unwrap();
+  assert!(
+    content.contains("Rust Expert v2"),
+    "destination must hold the new install after --force, got: {content}"
+  );
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "force-overwrite must not leave .installing or .replacing siblings; got {children:?}"
+  );
+}
+
+#[test]
+fn marketplace_install_collision_without_force_leaves_existing_intact() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+
+  // Pre-create a sentinel install — a hand-rolled SKILL.md that the
+  // marketplace must NOT overwrite (collision without --force).
+  let dest_dir = install_dir.join("rust-expert");
+  fs::create_dir_all(&dest_dir).unwrap();
+  let sentinel_path = dest_dir.join("SKILL.md");
+  fs::write(&sentinel_path, "SENTINEL").unwrap();
+
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+allowed-tools: file
+---
+
+# Replacement
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  // Without --force, the install must fail and the sentinel must survive.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure();
+  let sentinel = fs::read_to_string(&sentinel_path).unwrap();
+  assert_eq!(
+    sentinel, "SENTINEL",
+    "without --force, an existing install must remain byte-identical; got {sentinel:?}"
+  );
+  // Atomic guarantee: no `.installing` staging dir leaked into the install
+  // root after the early collision check.
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "early-exit on collision must leave no staging artifacts; got {children:?}"
+  );
+}
+
 #[cfg(feature = "plugin")]
 #[test]
 fn marketplace_install_plugin_rejects_entrypoint_outside_package() {
