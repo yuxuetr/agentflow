@@ -17,9 +17,13 @@ use uuid::Uuid;
 
 use agentflow_tracing::{OtelAttribute, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelStatus};
 
+pub mod admission;
 pub mod distributed;
 pub mod grpc;
 
+pub use admission::{
+  AdmissionError, AuthenticatedControlPlane, ControlError, WorkerAdmissionPolicy, WorkerCredential,
+};
 pub use distributed::{
   DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, NodeExecutionPayload,
 };

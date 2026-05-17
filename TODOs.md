@@ -1236,16 +1236,47 @@ expansion) to be useful for non-trivial workloads.
     (3 profiles × 3 flag states) and behavioral rules, alongside
     the existing P1.8 install-time table.
 
-- TODO P5.5 Worker auth/admission checks (PREREQ: P2.8):
-  - Worker identity via signed JWT or pre-shared key (configurable).
-  - Server admission policy: allowlist of worker IDs, max workers, max
-    concurrent tasks per worker.
-  - `agentflow-server::workers::accept_admission` decides admit/reject.
-  - Tests:
-    - Rejected worker (unknown ID) cannot poll tasks.
-    - Admitted worker can poll, heartbeat, and report.
-    - Token rotation works without dropping in-flight tasks.
-  - Mark distributed worker APIs experimental until this lands.
+- DONE P5.5 Worker auth/admission checks (PREREQ: P2.8):
+  - DONE: identity flavour. `WorkerCredential { worker_id, token }`
+    pairs each call with an optional pre-shared key. Each worker may
+    have a **set** of valid PSKs to support overlap-add-then-remove
+    rotation. Signed-JWT identity is intentionally deferred — the
+    crypto-key story (issuer, audience, key rotation) belongs to the
+    broader auth track, so v0.4.0 ships PSK-only and the surface
+    stays experimental.
+  - DONE: server admission policy. `WorkerAdmissionPolicy` carries
+    four orthogonal knobs (`allowed_workers`, `pre_shared_keys`,
+    `max_workers`, `max_concurrent_tasks_per_worker`). Defaults are
+    "anything goes" so the dev / single-process path keeps working
+    unchanged.
+  - DONE: admission gate. `AuthenticatedControlPlane` wraps
+    `WorkerControlPlane`, exposes `admit / heartbeat / claim_task /
+    report_result` taking a `WorkerCredential`, and tracks both the
+    admitted-fleet count and the per-worker in-flight task counter.
+    Re-admitting an existing worker is idempotent so a returning
+    heartbeat never trips the fleet cap.
+  - DONE: tests. `agentflow-server/src/scheduler/admission.rs#tests`
+    covers the policy units (allowlist, PSK match, rotation overlap,
+    fleet cap, per-worker concurrency cap — 6 tests). The 3
+    integration tests live in `agentflow-server/tests/worker_admission.rs`:
+    - `unknown_worker_cannot_claim_or_heartbeat`
+    - `admitted_worker_can_poll_heartbeat_and_report`
+    - `token_rotation_does_not_drop_in_flight_tasks`
+  - DONE: stability stamp. `docs/STABILITY.md` adds a new row marking
+    the distributed worker control plane (`WorkerProtocol`,
+    `WorkerControlPlane`, `AuthenticatedControlPlane`, `WorkerCredential`,
+    `WorkerAdmissionPolicy`, `NodeExecutionPayload`) **Experimental**
+    with the explicit "pin the worker minor version" warning, and
+    `docs/DISTRIBUTED.md` adds a "Worker Admission (P5.5)" section
+    with the knob table, rotation flow, and test cross-references.
+  - Deferred follow-ups (tracked under P2.7 / P5.6 / P5.7 — NOT this
+    line):
+    - gRPC adapter wiring: the gRPC service still uses the bare
+      `WorkerProtocol`. Plumbing admission tokens through tonic
+      metadata + mapping `AdmissionError` onto
+      `Status::permission_denied` is scoped to P2.7 (server transport
+      hardening).
+    - Signed-JWT identity flavour: scoped to the broader auth track.
 
 - TODO P5.6 Worker resource limit tests (PREREQ: P5.5):
   - Tests for worker-executed DAG nodes respecting:

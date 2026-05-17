@@ -181,6 +181,49 @@ streams can observe real distributed execution.
 6. The control plane persists outputs, appends trace events, advances dependent
    nodes, and eventually marks the run succeeded or failed.
 
+## Worker Admission (P5.5)
+
+The control plane gates every authenticated worker call through
+`AuthenticatedControlPlane`, which sits in front of `WorkerControlPlane`
+and consults a [`WorkerAdmissionPolicy`](../agentflow-server/src/scheduler/admission.rs).
+The policy decides three orthogonal questions before letting a worker
+heartbeat, claim a task, or report a result.
+
+| Knob | Type | Default | Notes |
+|------|------|---------|-------|
+| `allowed_workers` | `Option<HashSet<WorkerId>>` | `None` (any worker) | When `Some`, only listed worker IDs are admitted. |
+| `pre_shared_keys` | `HashMap<WorkerId, HashSet<String>>` | empty (no PSK required) | Each worker may have **multiple valid PSKs** to support overlap-add-then-remove rotation. |
+| `max_workers` | `Option<usize>` | unbounded | Cap on distinct admitted workers. Re-admitting an existing worker is a no-op (idempotent). |
+| `max_concurrent_tasks_per_worker` | `Option<u32>` | unbounded | Cap on simultaneously-claimed tasks per worker. Enforced inside `claim_task`. |
+
+Rejection paths map onto closed `AdmissionError` variants
+(`UnknownWorker`, `MissingCredential`, `InvalidCredential`,
+`WorkerFleetExhausted`, `WorkerQuotaExhausted`). The gRPC adapter is
+responsible for translating these into `tonic::Status::permission_denied`
+once admission-token metadata propagation lands (deferred follow-up).
+
+**Token rotation flow:**
+
+1. Operator stages the new key by adding it to the worker's PSK set.
+2. Worker rolls over and authenticates with the new key.
+3. Operator removes the old key — in-flight tasks are unaffected
+   because admission is checked per-call, not per-task.
+
+The contract is **experimental** until N10 closes (see
+`docs/STABILITY.md` for the wire-shape promise). Signed-JWT identity,
+JWT key rotation, and gRPC-metadata propagation of admission tokens
+are deferred to the broader auth story.
+
+Test references:
+
+- `agentflow-server/src/scheduler/admission.rs#tests` — policy units
+  (allowlist, PSK match, rotation overlap, fleet cap, per-worker
+  concurrency cap).
+- `agentflow-server/tests/worker_admission.rs` — the three TODO-mandated
+  end-to-end scenarios: unknown worker rejected, admitted worker can
+  poll/heartbeat/report, and token rotation does not drop in-flight
+  tasks.
+
 ## Two-Worker Deployment Shape
 
 The target deployment shape is one control plane plus N workers:

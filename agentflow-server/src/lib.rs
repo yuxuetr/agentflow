@@ -72,11 +72,13 @@ pub use runs::{
   get_run_graph, get_run_resume_plan, list_runs, submit_run,
 };
 pub use scheduler::{
-  DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, GrpcWorkerProtocol,
-  GrpcWorkerService, InMemoryWorkerProtocol, NodeExecutionPayload, RunControlSnapshot,
-  RunControlStatus, SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent, WorkerAssignment,
-  WorkerControlPlane, WorkerControlServer, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
-  WorkerTaskResult, WorkerTraceEvent, WorkerTransport, stitched_trace_to_otel_spans,
+  AdmissionError, AuthenticatedControlPlane, ControlError, DistributedDagRunResult,
+  DistributedDagScheduler, DistributedNodeStatus, GrpcWorkerProtocol, GrpcWorkerService,
+  InMemoryWorkerProtocol, NodeExecutionPayload, RunControlSnapshot, RunControlStatus,
+  SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent, WorkerAdmissionPolicy,
+  WorkerAssignment, WorkerControlPlane, WorkerControlServer, WorkerCredential, WorkerHeartbeat,
+  WorkerId, WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
+  stitched_trace_to_otel_spans,
 };
 pub use serve::{
   AGENTFLOW_SERVE_BIND_ENV, DEFAULT_SERVE_BIND, ServeConfig, ServeError, ServeReadiness,
