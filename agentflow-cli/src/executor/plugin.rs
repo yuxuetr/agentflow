@@ -30,6 +30,7 @@ use agentflow_core::{
 };
 use agentflow_tools::capability::Capability;
 use agentflow_tools::sandbox::{SandboxBackend, SandboxScope, default_backend};
+use agentflow_tools::{PluginPolicy, SecurityProfile};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,9 +46,22 @@ fn host_cache() -> &'static Mutex<HashMap<PathBuf, Arc<PluginHost>>> {
   CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Environment variable that opts the plugin host into OS-level sandbox
-/// enforcement. Any value other than the empty string or `0` enables it.
+/// Legacy force-on opt-in: when set to a non-empty / non-`0` value, the
+/// plugin host wraps spawns with the OS sandbox preparer regardless of
+/// the active [`SecurityProfile`] default. Most useful for `dev` where
+/// the profile default is "no sandbox" — operators can flip this to
+/// stress-test the sandbox bridge without changing the global profile.
+///
+/// In `local` and `production` the policy already requires sandbox, so
+/// the env var is informational (it can't loosen the requirement).
 const PLUGIN_SANDBOX_ENV: &str = "AGENTFLOW_PLUGIN_SANDBOX";
+
+/// Operator opt-out: when set to a non-empty / non-`0` value, the host
+/// will skip sandbox wrapping if (and only if) the active
+/// [`SecurityProfile`] allows it. Mirrors the
+/// `--allow-unsandboxed-plugin` CLI flag at install time. The
+/// `production` profile rejects this opt-in and errors at spawn time.
+const PLUGIN_ALLOW_UNSANDBOXED_ENV: &str = "AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN";
 
 #[derive(Debug, Clone)]
 pub struct PluginWorkflowNode {
@@ -86,7 +100,12 @@ impl PluginWorkflowNode {
     if let Some(existing) = cache.get(&canonical) {
       return Ok(existing.clone());
     }
-    let preparer = preparer_from_env();
+    let preparer = preparer_from_env().map_err(|err| AgentFlowError::AsyncExecutionError {
+      message: format!(
+        "plugin '{}': sandbox policy rejected spawn: {err}",
+        self.workflow_node_id
+      ),
+    })?;
     let host = PluginHost::builder()
       .with_command_preparer(preparer)
       .load(&canonical)
@@ -117,17 +136,88 @@ impl AsyncNode for PluginWorkflowNode {
   }
 }
 
-/// Pick a [`CommandPreparer`] based on the `AGENTFLOW_PLUGIN_SANDBOX`
-/// environment variable. Defaults to a no-op preparer to preserve backward
-/// compatibility with v0.3 behaviour.
-fn preparer_from_env() -> Arc<dyn CommandPreparer> {
-  match std::env::var(PLUGIN_SANDBOX_ENV) {
-    Ok(value) if !matches!(value.as_str(), "" | "0") => {
-      Arc::new(OsSandboxPluginPreparer::new(default_backend()))
-    }
-    _ => Arc::new(NoopCommandPreparer),
+/// Pick a [`CommandPreparer`] based on the active [`SecurityProfile`]
+/// (resolved via `AGENTFLOW_SECURITY_PROFILE`) plus two env-var opt-ins:
+/// `AGENTFLOW_PLUGIN_SANDBOX` (force-on) and
+/// `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN` (opt-out, honored only when
+/// the profile allows).
+///
+/// Per-profile defaults (mirrors `PluginPolicy::for_profile`):
+/// - `dev`: no sandbox. `AGENTFLOW_PLUGIN_SANDBOX=1` opts in.
+/// - `local`: sandbox required. `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1`
+///   opts out.
+/// - `production`: sandbox required, opt-out rejected at spawn time.
+///
+/// Returns `Err` only under `production` + opt-out (the spawn must
+/// fail before the child starts).
+fn preparer_from_env() -> Result<Arc<dyn CommandPreparer>, PreparerSelectionError> {
+  let profile = SecurityProfile::from_env().unwrap_or_default();
+  let force_sandbox = env_truthy(PLUGIN_SANDBOX_ENV);
+  let allow_unsandboxed = env_truthy(PLUGIN_ALLOW_UNSANDBOXED_ENV);
+  select_preparer(profile, force_sandbox, allow_unsandboxed)
+}
+
+/// Pure, unit-testable variant of [`preparer_from_env`].
+///
+/// Lives behind a separate function so the integration test suite can
+/// exhaust the policy matrix without poking process-wide env vars.
+fn select_preparer(
+  profile: SecurityProfile,
+  force_sandbox: bool,
+  allow_unsandboxed: bool,
+) -> Result<Arc<dyn CommandPreparer>, PreparerSelectionError> {
+  let policy = PluginPolicy::for_profile(profile);
+
+  // Production: opt-out is rejected regardless of other flags.
+  if allow_unsandboxed && !policy.allow_sandbox_disabled_opt_in {
+    return Err(PreparerSelectionError::OptOutRejected { profile });
+  }
+
+  // Caller forced sandbox on (legacy flag): always wrap.
+  if force_sandbox {
+    return Ok(Arc::new(OsSandboxPluginPreparer::new(default_backend())));
+  }
+
+  // Operator-blessed opt-out (only honored when profile allows it).
+  if allow_unsandboxed && policy.allow_sandbox_disabled_opt_in {
+    return Ok(Arc::new(NoopCommandPreparer));
+  }
+
+  // Default by profile.
+  if policy.require_sandbox {
+    Ok(Arc::new(OsSandboxPluginPreparer::new(default_backend())))
+  } else {
+    Ok(Arc::new(NoopCommandPreparer))
   }
 }
+
+/// Read an env var as a truthy bool: non-empty and not `"0"`.
+fn env_truthy(name: &str) -> bool {
+  matches!(std::env::var(name), Ok(v) if !matches!(v.as_str(), "" | "0"))
+}
+
+/// Errors returned by [`select_preparer`]. Today there's exactly one,
+/// kept as an enum so future policy gates (signature-required, network
+/// admission band) can land additively without breaking callers.
+#[derive(Debug)]
+pub enum PreparerSelectionError {
+  /// Operator passed `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` under a
+  /// profile that rejects the opt-out (today, only `production`).
+  OptOutRejected { profile: SecurityProfile },
+}
+
+impl std::fmt::Display for PreparerSelectionError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::OptOutRejected { profile } => write!(
+        f,
+        "{profile} profile refuses AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN",
+      ),
+    }
+  }
+}
+
+impl std::error::Error for PreparerSelectionError {}
 
 /// Bridge from `agentflow-core::plugin::CommandPreparer` to the platform
 /// sandbox backend in `agentflow-tools`.
@@ -337,21 +427,73 @@ mod tests {
     assert!(err.contains("invalid filesystem capability"));
   }
 
+  // ── select_preparer policy matrix ──────────────────────────────────────
+  //
+  // The pure function exhausted here is what the CLI plugin host actually
+  // calls; the env-var glue (`preparer_from_env`) is a thin wrapper. The
+  // five test cases mirror the install-time `PluginPolicy::evaluate`
+  // matrix one-to-one so the spawn-time and install-time decisions stay
+  // synchronized.
+
   #[test]
-  fn preparer_from_env_picks_noop_when_unset() {
-    // Save and clear so the test is deterministic.
-    let prev = std::env::var(PLUGIN_SANDBOX_ENV).ok();
-    // SAFETY: tests in this crate are not run in parallel against
-    // the same env var; the surrounding restore covers cleanup.
-    unsafe {
-      std::env::remove_var(PLUGIN_SANDBOX_ENV);
-    }
-    let preparer = preparer_from_env();
+  fn select_preparer_dev_default_is_noop() {
+    // Dev profile, no env opt-ins → no sandbox wrapping at spawn time.
+    let preparer = select_preparer(SecurityProfile::Dev, false, false).unwrap();
     assert_eq!(preparer.name(), "noop-plugin");
-    if let Some(value) = prev {
-      unsafe {
-        std::env::set_var(PLUGIN_SANDBOX_ENV, value);
+  }
+
+  #[test]
+  fn select_preparer_dev_force_sandbox_opts_in() {
+    // Dev + legacy AGENTFLOW_PLUGIN_SANDBOX=1 wraps the spawn so authors
+    // can stress-test the sandbox bridge without flipping profiles.
+    let preparer = select_preparer(SecurityProfile::Dev, true, false).unwrap();
+    assert_ne!(
+      preparer.name(),
+      "noop-plugin",
+      "force-sandbox must engage the OS backend preparer"
+    );
+  }
+
+  #[test]
+  fn select_preparer_local_default_engages_sandbox() {
+    // Local profile (the install-time default) → sandbox by default at
+    // spawn time. This is the contract P5.4 closes.
+    let preparer = select_preparer(SecurityProfile::Local, false, false).unwrap();
+    assert_ne!(preparer.name(), "noop-plugin");
+  }
+
+  #[test]
+  fn select_preparer_local_honors_opt_out() {
+    // Local + AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1 mirrors the install-
+    // time --allow-unsandboxed-plugin flag.
+    let preparer = select_preparer(SecurityProfile::Local, false, true).unwrap();
+    assert_eq!(preparer.name(), "noop-plugin");
+  }
+
+  #[test]
+  fn select_preparer_production_default_engages_sandbox() {
+    let preparer = select_preparer(SecurityProfile::Production, false, false).unwrap();
+    assert_ne!(preparer.name(), "noop-plugin");
+  }
+
+  #[test]
+  fn select_preparer_production_rejects_opt_out() {
+    let err = select_preparer(SecurityProfile::Production, false, true)
+      .expect_err("production must refuse the opt-out");
+    match err {
+      PreparerSelectionError::OptOutRejected { profile } => {
+        assert_eq!(profile, SecurityProfile::Production);
       }
     }
+  }
+
+  #[test]
+  fn select_preparer_force_sandbox_overrides_opt_out_under_local() {
+    // Both flags set under local: force_sandbox wins because the user
+    // explicitly asked for the OS bridge. This stays consistent with
+    // the install-time semantics where `--allow-unsandboxed-plugin` is
+    // only meaningful when the policy default wants a sandbox.
+    let preparer = select_preparer(SecurityProfile::Local, true, true).unwrap();
+    assert_ne!(preparer.name(), "noop-plugin");
   }
 }

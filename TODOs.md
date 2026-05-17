@@ -73,6 +73,7 @@ but do not implement channel adapters in this queue.
 - P3.6 Native tool calling provider consistency tests: full `tool_choice = auto | none | required | tool` matrix per provider, 401/429/5xx coverage for every provider, Mock provider folded into the same suite, `agentflow-llm` added to the CI `test` matrix so the suite is now release-gate-blocking. 44 hermetic provider_consistency tests (19 new on top of the existing 25).
 - P4.6 Memory and prompt golden tests: `agentflow-agents/tests/prompt_assembly_golden.rs` (5 tests) locks down the prompt-assembly contract — deterministic message snapshot, summary injection at budget overflow, post-compaction token budget, tool-list surfacing. Maintained the pre-existing `agent_runtime_react_trace.json` golden fixture to include the `llm_call_completed` events introduced by P4.4 follow-up step 2.
 - P4.7 Memory backend implementations: new `layer.rs` defines the shared trait surface (`MemoryLayer`, `RetentionPolicy`, `PreferenceScope`, `PreferenceValue`, `PreferenceStore`, `EntityFact`, `EntityFactStore`, `SemanticMemoryStore`). `SqlitePreferenceStore` + `SqliteEntityFactStore` ship as the canonical SQLite-backed implementations; `SemanticMemory` gains the new `search_semantic` typed API (returns `(Message, f32)` scores). 37 hermetic tests (36 unit + 1 cross-layer integration) prove independence between the four layers.
+- P5.4 Plugin sandbox default policy: `select_preparer(profile, force_sandbox, allow_unsandboxed)` extends the P1.8 install-time policy gate to plugin spawn time. Same per-profile defaults: `dev` → noop, `local` / `production` → OS sandbox by default. The `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` opt-out mirrors `--allow-unsandboxed-plugin`; `production` rejects the opt-out with `PreparerSelectionError::OptOutRejected` and fails the spawn before any child starts. `docs/TOOL_PERMISSIONS.md` gains a spawn-time decision table.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -962,11 +963,37 @@ expansion) to be useful for non-trivial workloads.
   - Each failure case asserts the install root is left untouched
     (defense-in-depth check inside `assert_install_failure`).
 
-- TODO P5.4 Plugin sandbox default policy (tied to P1.8):
-  - Per-profile defaults wired through `agentflow-tools::policy::PluginPolicy`.
-  - Add tests that plugin execution is denied or sandboxed according to
-    the active profile.
-  - Document the policy resolution path in `docs/TOOL_PERMISSIONS.md`.
+- DONE P5.4 Plugin sandbox default policy (tied to P1.8):
+  - New `select_preparer(profile, force_sandbox, allow_unsandboxed)`
+    in `agentflow-cli/src/executor/plugin.rs` extends the P1.8
+    install-time policy gate to plugin **spawn** time. The same
+    `PluginPolicy::for_profile` defaults drive both decisions, so
+    a plugin denied at install under `production` is also denied
+    at spawn (defense in depth, not divergence).
+  - Per-profile spawn defaults:
+    - `dev` → `NoopCommandPreparer`; `AGENTFLOW_PLUGIN_SANDBOX=1`
+      force-engages the OS bridge for stress-testing manifest
+      capabilities.
+    - `local` → `OsSandboxPluginPreparer`;
+      `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` mirrors the install-
+      time `--allow-unsandboxed-plugin` opt-out.
+    - `production` → `OsSandboxPluginPreparer`; the opt-out env
+      var is rejected with `PreparerSelectionError::OptOutRejected`
+      and the spawn fails before any child process starts.
+  - `PluginWorkflowNode::ensure_loaded` now propagates the policy
+    error through `AgentFlowError::AsyncExecutionError`, so a
+    production workflow asking for an unsandboxed spawn fails fast.
+  - 7 new unit tests in `executor::plugin::tests` cover the full
+    matrix (dev default / dev force-on / local default / local
+    opt-out / production default / production opt-out reject /
+    force-on overrides opt-out under local). The legacy
+    `preparer_from_env_picks_noop_when_unset` test is dropped in
+    favor of the pure `select_preparer` function the new tests
+    exercise.
+  - `docs/TOOL_PERMISSIONS.md` gains a "Plugin sandbox at spawn
+    time (P5.4)" section with the spawn-time decision table
+    (3 profiles × 3 flag states) and behavioral rules, alongside
+    the existing P1.8 install-time table.
 
 - TODO P5.5 Worker auth/admission checks (PREREQ: P2.8):
   - Worker identity via signed JWT or pre-shared key (configurable).

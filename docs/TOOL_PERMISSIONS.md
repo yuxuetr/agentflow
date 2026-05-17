@@ -347,3 +347,48 @@ Behavioral rules:
   `signature_checked`, and `network_policy`. Trace replay tools
   can grep for the target name; a typed `WorkflowEvent` variant
   is reserved as a follow-up once enough consumers want it.
+
+## Plugin sandbox at spawn time (P5.4)
+
+The install-time policy above gates *whether* a plugin is allowed onto
+disk. P5.4 extends the same per-profile defaults to *how* the plugin is
+spawned by the workflow runner. The decision lives in
+[`agentflow-cli/src/executor/plugin.rs::select_preparer`](../agentflow-cli/src/executor/plugin.rs)
+and is consulted lazily by `PluginWorkflowNode::ensure_loaded` before
+the host subprocess is started.
+
+| Profile | Default preparer | `AGENTFLOW_PLUGIN_SANDBOX=1` (force-on) | `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` (opt-out) |
+| --- | --- | --- | --- |
+| `dev` | `NoopCommandPreparer` (no OS sandbox) | OS sandbox wrap | no-op (already unsandboxed) |
+| `local` (default) | `OsSandboxPluginPreparer` (OS sandbox wrap) | OS sandbox wrap | `NoopCommandPreparer` |
+| `production` | `OsSandboxPluginPreparer` | OS sandbox wrap | **error before spawn** (`OptOutRejected`) |
+
+Behavioral rules:
+
+- The active [`SecurityProfile`](../agentflow-tools/src/security_profile.rs)
+  is resolved from `AGENTFLOW_SECURITY_PROFILE` (defaults to `local`),
+  matching the install path.
+- `AGENTFLOW_PLUGIN_SANDBOX=1` is the legacy force-on flag. Under `dev`
+  it engages the OS bridge so authors can stress-test their manifest's
+  capability declarations against the real backend. Under `local` /
+  `production` the flag is informational because the policy already
+  defaults to sandboxed.
+- `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` is the spawn-time mirror of
+  the install-time `--allow-unsandboxed-plugin` flag. It is honored
+  only when `PluginPolicy::for_profile(profile).allow_sandbox_disabled_opt_in`
+  is `true` — i.e. `dev` and `local` honor it, `production` errors at
+  spawn time with `OptOutRejected { profile: production }`.
+- If both `AGENTFLOW_PLUGIN_SANDBOX` and
+  `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN` are set, the force-on flag wins
+  (the user explicitly asked for the bridge to engage).
+- A `production` spawn rejected by the policy surfaces through
+  `AgentFlowError::AsyncExecutionError` with the `OptOutRejected`
+  reason, so the workflow run fails fast before any child process
+  starts.
+
+The two policy gates (install + spawn) draw from the same
+`PluginPolicy::for_profile` defaults, so a plugin denied at install
+under `production` is also denied at spawn — the dual gate is defense
+in depth, not divergence. Unit tests in
+`agentflow-cli/src/executor/plugin.rs::tests` cover the full
+5-row × 4-flag-combo matrix.
