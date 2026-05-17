@@ -43,6 +43,9 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- P7.4-FU2 Workspace rustfmt sweep before tag (single `chore(fmt)`
+  commit cleared residual drift across 6 benches/tests/examples;
+  `cargo fmt --all -- --check` exits 0 on the release branch).
 - P0.1 - P0.7 V1 Contract Hardening (all seven items).
 - P1.1 Security profile model (`dev` / `local` / `production`).
 - P1.2 Server production auth fail-closed.
@@ -1672,16 +1675,19 @@ known characteristics, not surprises.
     `linux-sandbox-check` job within ~2 min, instead of waiting for
     the release-time docker image build.
 
-- TODO P7.4-FU2 Workspace rustfmt sweep before tag:
-  - **Why**: `cargo fmt --all -- --check` fails on the current
-    `main` because several benches have drifted under a newer
-    `rustfmt`. None of the drift is in worker / server source
-    paths.
-  - **What**: a single `chore(fmt): workspace rustfmt sweep` commit
-    immediately before tagging `v1.0.0-rc.1`. Do not bundle with
-    feature work.
+- DONE P7.4-FU2 Workspace rustfmt sweep before tag:
+  - Single `chore(fmt)` commit picked up the residual drift in 6
+    files identified by the P7.4 dress rehearsal: benches
+    (`agentflow-core/benches/scheduler.rs`,
+    `agentflow-llm/benches/provider_hop.rs`), tests
+    (`agentflow-core/tests/plugin_signed_fixture.rs`,
+    `agentflow-skills/tests/marketplace_signed.rs`,
+    `agentflow-worker/tests/failure_domains.rs`), and the
+    `agentflow-tools/examples/tool_policy_sandbox_demo.rs`
+    example. No functional changes; `cargo check --all-targets` on
+    every touched crate stays green.
   - **Acceptance**: `cargo fmt --all -- --check` exits 0 on the
-    release branch.
+    release branch (verified locally).
 
 - TODO P7.4-FU3 Box `tonic::Status` to clear `clippy::result_large_err`:
   - **Why**: `cargo clippy --workspace -- -D warnings` has 8
