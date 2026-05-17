@@ -338,20 +338,27 @@ impl EventSink for PersistingEventSink {
 /// refill from the DB if anything was dropped.
 pub struct WorkflowEventListener {
   run_id: Uuid,
+  tenant_id: String,
   tx: tokio::sync::mpsc::UnboundedSender<NewEvent>,
   seq: std::sync::atomic::AtomicI64,
   start_seq: i64,
 }
 
 impl WorkflowEventListener {
-  /// Create a listener for `run_id`. The drain task owns `sink` for its
-  /// lifetime; closing the channel (drop the listener) ends the task.
+  /// Create a listener for `run_id` under `tenant_id`. The drain task
+  /// owns `sink` for its lifetime; closing the channel (drop the
+  /// listener) ends the task.
   ///
   /// `start_seq` is the first event sequence number to assign — pass the
   /// last seq already persisted so the listener picks up after any
   /// pre-existing rows (avoids duplicate-key violations on the
   /// `(run_id, seq)` PK).
-  pub fn new(run_id: Uuid, sink: Arc<dyn EventSink>, start_seq: i64) -> Self {
+  pub fn new(
+    run_id: Uuid,
+    tenant_id: impl Into<String>,
+    sink: Arc<dyn EventSink>,
+    start_seq: i64,
+  ) -> Self {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewEvent>();
     tokio::spawn(async move {
       while let Some(event) = rx.recv().await {
@@ -362,6 +369,7 @@ impl WorkflowEventListener {
     });
     Self {
       run_id,
+      tenant_id: tenant_id.into(),
       tx,
       seq: std::sync::atomic::AtomicI64::new(start_seq),
       start_seq,
@@ -371,12 +379,13 @@ impl WorkflowEventListener {
   /// Construct from the standard `Repositories` + `EventBroker` pair.
   pub fn from_state(
     run_id: Uuid,
+    tenant_id: impl Into<String>,
     repos: Repositories,
     broker: EventBroker,
     start_seq: i64,
   ) -> Self {
     let sink: Arc<dyn EventSink> = Arc::new(PersistingEventSink { repos, broker });
-    Self::new(run_id, sink, start_seq)
+    Self::new(run_id, tenant_id, sink, start_seq)
   }
 
   /// First sequence number this listener will assign. Useful for tests
@@ -396,6 +405,7 @@ impl agentflow_core::events::EventListener for WorkflowEventListener {
       seq,
       kind,
       payload,
+      tenant_id: Some(self.tenant_id.clone()),
     }) {
       // Drain task gone (listener was dropped). Synchronous on_event has
       // no good way to surface this — log and move on so the Flow
@@ -768,7 +778,7 @@ mod tests {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewEvent>();
     let sink: Arc<dyn EventSink> = Arc::new(CapturingSink { tx });
     let run_id = Uuid::new_v4();
-    let listener = WorkflowEventListener::new(run_id, sink, 0);
+    let listener = WorkflowEventListener::new(run_id, "default", sink, 0);
 
     listener.on_event(&WorkflowEvent::WorkflowStarted {
       workflow_id: "demo".into(),

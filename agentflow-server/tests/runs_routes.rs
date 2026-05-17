@@ -552,6 +552,7 @@ nodes:
       seq: 0,
       kind: "node.started".into(),
       payload: json!({"node_id": "start"}),
+      tenant_id: None,
     })
     .await
     .unwrap();
@@ -563,6 +564,7 @@ nodes:
       seq: 1,
       kind: "node.completed".into(),
       payload: json!({"node_id": "start"}),
+      tenant_id: None,
     })
     .await
     .unwrap();

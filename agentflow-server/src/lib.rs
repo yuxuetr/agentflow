@@ -35,6 +35,7 @@ pub mod runs;
 pub mod scheduler;
 pub mod serve;
 pub mod skills;
+pub mod tenant;
 pub mod ui;
 
 pub use auth::{
@@ -350,6 +351,10 @@ pub fn create_router(state: AppState) -> Router {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),
     None => v1,
   };
+  // P2.6: bind X-Agentflow-Tenant header into a TenantId extension on
+  // every /v1/* request. Falls back to TenantId("default") when absent
+  // so single-tenant local-dev stays zero-config.
+  let v1 = v1.layer(middleware::from_fn(tenant::extract_tenant_id));
 
   Router::new()
     .merge(health)

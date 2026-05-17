@@ -101,7 +101,8 @@ pub struct NewStep {
 }
 
 /// One row in the `events` table. `seq` is monotonic per `run_id`; SSE
-/// subscribers use it as a resume cursor.
+/// subscribers use it as a resume cursor. `tenant_id` mirrors the
+/// owning run for direct row-level filtering (P2.6).
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Event {
   pub run_id: Uuid,
@@ -109,6 +110,12 @@ pub struct Event {
   pub kind: String,
   pub payload: serde_json::Value,
   pub ts: DateTime<Utc>,
+  #[serde(default = "default_tenant_id")]
+  pub tenant_id: String,
+}
+
+fn default_tenant_id() -> String {
+  "default".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +124,9 @@ pub struct NewEvent {
   pub seq: i64,
   pub kind: String,
   pub payload: serde_json::Value,
+  /// Tenant scope. Defaults to `"default"` if not set so single-tenant
+  /// local-dev callers stay zero-config.
+  pub tenant_id: Option<String>,
 }
 
 /// One row in the `artifacts` table.
@@ -129,6 +139,8 @@ pub struct Artifact {
   pub path_or_url: String,
   pub mime_type: Option<String>,
   pub created_at: DateTime<Utc>,
+  #[serde(default = "default_tenant_id")]
+  pub tenant_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +151,7 @@ pub struct NewArtifact {
   pub name: String,
   pub path_or_url: String,
   pub mime_type: Option<String>,
+  pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -148,6 +161,8 @@ pub struct SkillInstall {
   pub source: String,
   pub installed_at: DateTime<Utc>,
   pub checksum: Option<String>,
+  #[serde(default = "default_tenant_id")]
+  pub tenant_id: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

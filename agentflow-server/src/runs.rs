@@ -11,7 +11,7 @@
 
 use async_trait::async_trait;
 use axum::{
-  Json,
+  Extension, Json,
   extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ use agentflow_viz::{NodeStatus, OutputFormat, from_yaml, render};
 use crate::AppState;
 use crate::error::ApiError;
 use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
+use crate::tenant::TenantId;
 
 /// JSON body for `POST /v1/runs`.
 ///
@@ -87,6 +88,10 @@ pub struct RunContext {
   /// has to happen — use [`publish_through`](crate::events_stream::publish_through)
   /// for the standard path.
   pub broker: EventBroker,
+  /// Tenant the run was created under. Mirrors `runs.tenant_id` so
+  /// every event the executor emits gets stamped with the correct
+  /// scope without re-querying the run row.
+  pub tenant_id: String,
 }
 
 #[derive(Clone, Default)]
@@ -210,6 +215,7 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   let mut flow = agentflow_cli::executor::build_flow_from_yaml(&ctx.workflow, None)?;
   let listener = Arc::new(WorkflowEventListener::from_state(
     ctx.run_id,
+    ctx.tenant_id.clone(),
     ctx.repos.clone(),
     ctx.broker.clone(),
     0,
@@ -298,6 +304,7 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
       seq: 0,
       kind: "run_started".into(),
       payload: serde_json::json!({"executor": "stub"}),
+      tenant_id: Some(ctx.tenant_id.clone()),
     },
   )
   .await?;
@@ -314,6 +321,7 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
       seq: 1,
       kind: "run_completed".into(),
       payload: serde_json::json!({"executor": "stub"}),
+      tenant_id: Some(ctx.tenant_id.clone()),
     },
   )
   .await?;
@@ -363,7 +371,7 @@ pub async fn submit_run(
       workflow: workflow.clone(),
       status: RunStatus::Queued,
       run_dir: Some(run_dir.display().to_string()),
-      tenant_id,
+      tenant_id: tenant_id.clone(),
     })
     .await?;
 
@@ -384,6 +392,7 @@ pub async fn submit_run(
         run_base_dir: Some(run_base_dir),
         cancellation_token: task_token,
         broker,
+        tenant_id,
       })
       .await;
     cancellation_registry.complete(run_id);
@@ -451,17 +460,25 @@ pub struct ResumePlanQuery {
 
 /// `GET /v1/runs` — list recent runs for a tenant, newest first.
 ///
+/// Tenant resolution (P2.6): the explicit `?tenant_id=` query param
+/// wins so existing callers / dashboards keep working; otherwise the
+/// `X-Agentflow-Tenant` header bound by the middleware is used
+/// (defaults to `"default"` for single-tenant local-dev).
+///
 /// Query parameters:
-/// - `tenant_id` (default `"default"`)
+/// - `tenant_id` (override; defaults to the header-bound tenant)
 /// - `limit` (default 25, clamped to 1..=100)
 /// - `offset` (default 0, clamped to ≥ 0)
 /// - `status` (one of the canonical [`RunStatus`] strings; rejects
 ///   anything else with a 400). Omit to list all statuses.
 pub async fn list_runs(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Query(params): Query<ListRunsQuery>,
 ) -> Result<Json<ListRunsResponse>, ApiError> {
-  let tenant_id = params.tenant_id.unwrap_or_else(|| "default".into());
+  let tenant_id = params
+    .tenant_id
+    .unwrap_or_else(|| tenant.as_str().to_string());
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
   let offset = params.offset.unwrap_or(0).max(0);
   let status = match params.status.as_deref() {
@@ -491,6 +508,7 @@ fn parse_status_filter(raw: &str) -> Result<&str, ApiError> {
 /// `POST /v1/runs/{id}:cancel` — idempotently cancel a queued/running run.
 pub async fn cancel_run(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id_cancel): Path<String>,
 ) -> Result<Json<CancelRunResponse>, ApiError> {
   let id_raw = id_cancel
@@ -505,6 +523,12 @@ pub async fn cancel_run(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+  // P2.6 tenant boundary: pretend the row doesn't exist when the caller's
+  // tenant doesn't own it. 404 (not 403) so a cross-tenant probe can't
+  // infer existence by status code.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", id)));
+  }
 
   if is_terminal_status(&run.status) {
     return Ok(Json(CancelRunResponse {
@@ -519,7 +543,7 @@ pub async fn cancel_run(
     .runs
     .update_status(id, RunStatus::Cancelled, Some("cancel requested"))
     .await?;
-  publish_cancellation_event(&state.repos, &state.event_broker, id).await?;
+  publish_cancellation_event(&state.repos, &state.event_broker, id, &run.tenant_id).await?;
   state
     .event_broker
     .finalise_with_grace(id, broker_finalize_grace());
@@ -545,6 +569,7 @@ async fn publish_cancellation_event(
   repos: &Repositories,
   broker: &EventBroker,
   run_id: Uuid,
+  tenant_id: &str,
 ) -> Result<(), ApiError> {
   let seq = next_event_seq(repos, run_id).await?;
   publish_through(
@@ -558,6 +583,7 @@ async fn publish_cancellation_event(
         "workflow_id": run_id.to_string(),
         "reason": "cancel requested",
       }),
+      tenant_id: Some(tenant_id.to_string()),
     },
   )
   .await?;
@@ -585,17 +611,22 @@ async fn next_event_seq(repos: &Repositories, run_id: Uuid) -> Result<i64, ApiEr
 /// only reads the checkpoint state.
 pub async fn get_run_resume_plan(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id): Path<Uuid>,
   Query(params): Query<ResumePlanQuery>,
 ) -> Result<Json<ResumePlan>, ApiError> {
   // Confirm the run exists so the route returns a meaningful 404 even
   // when no checkpoint has been written yet.
-  let _run = state
+  let run = state
     .repos
     .runs
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+  // P2.6 tenant boundary.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", id)));
+  }
 
   let mut config = CheckpointConfig::default();
   if let Some(dir) = params.checkpoint_dir.as_ref() {
@@ -624,6 +655,7 @@ pub async fn get_run_resume_plan(
 /// `agentflow-viz` JSON/Mermaid and overlay status from persisted events.
 pub async fn get_run_graph(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id): Path<Uuid>,
 ) -> Result<Json<RunGraphResponse>, ApiError> {
   let run = state
@@ -632,6 +664,10 @@ pub async fn get_run_graph(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+  // P2.6 tenant boundary.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", id)));
+  }
 
   let mut graph = from_yaml(&run.workflow)
     .map_err(|e| ApiError::BadRequest(format!("workflow cannot be visualized: {}", e)))?;
@@ -677,6 +713,7 @@ pub async fn get_run_graph(
 /// `GET /v1/runs/{id}` — return the current run state.
 pub async fn get_run(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id): Path<Uuid>,
 ) -> Result<Json<RunResponse>, ApiError> {
   let run = state
@@ -685,6 +722,10 @@ pub async fn get_run(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", id)))?;
+  // P2.6 tenant boundary: hide cross-tenant rows behind 404.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", id)));
+  }
   Ok(Json(RunResponse { run }))
 }
 

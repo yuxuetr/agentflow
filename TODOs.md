@@ -79,6 +79,7 @@ but do not implement channel adapters in this queue.
 - P3.3 CLI JSON output audit (contract + first command migrated): new `CliJsonEnvelope<T>` (wire schema `agentflow.cli/1`) defines the canonical four-field envelope (`version`, `command`, `result`, `errors[]`). `docs/CLI_JSON_OUTPUT.md` is the contract; `docs/STABILITY.md` adds it at Stable tier. First migration: `agentflow doctor --format json-envelope` wraps `DoctorReport`. Per-command migrations for the remaining 10+ commands tracked as follow-ups in `TODOs.md`.
 - P2.3 Server end-to-end run tests: `RunRepo::list_filtered(tenant, status, limit, offset)` extends the list API; `GET /v1/runs` accepts validated `?status` + `?offset` query params. New `e2e_runs.rs` integration suite (9 tests) covers pagination, status filter, before/after graph snapshots, and authenticated paths under bearer-token auth.
 - M.3 agentflow-db per-repo CRUD tests (db + memory parts): grew `agentflow-db` repo tests from 2 → 12 covering every table (Run/Step/Event/Artifact/SkillInstall/McpSession/HarnessSession/HarnessEvent) plus tenant isolation and resume-mode lifecycle. Removed the racy per-test `TRUNCATE`, replaced with UUID-suffixed scope keys so re-runs are idempotent. Memory layer coverage was already shipped under P4.7.
+- P2.6 Server tenant/session boundary: migration `0003_tenant_id_columns.sql` adds `tenant_id` to `events`/`artifacts`/`skill_installs` (with backfill from `runs`), bumps `skill_installs` PK to `(tenant_id, name, version)`. New `tenant.rs` ships `TenantId` extension + `extract_tenant_id` header middleware (default `"default"`). `get_run`/`cancel_run`/`get_run_graph`/`get_run_resume_plan` 404 on cross-tenant probes; `list_runs` falls back from query param to header. 6 new tenant-boundary integration tests pass alongside the existing 9 P2.3 tests.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -371,15 +372,46 @@ turning it into a channel hub.
   - Add `--output json` for server-backed commands (depends on P3.3).
   - Add tests that submit via CLI and stream events back.
 
-- TODO P2.6 Server tenant/session boundary:
-  - Add `tenant_id` column to `runs`, `events`, `artifacts`, `skill_installs`
-    (single-tenant default = `"default"`).
-  - Bind tenant from authenticated context (header `X-Agentflow-Tenant`,
-    falls back to token-bound tenant when JWT/multi-tenant lands).
-  - Enforce row-level filter in repos: `WHERE tenant_id = $1`.
-  - Add tests showing a caller in tenant A cannot list/cancel a run owned
-    by tenant B.
-  - Keep single-tenant local-dev defaults zero-config.
+- DONE P2.6 Server tenant/session boundary:
+  - New migration `0003_tenant_id_columns.sql` adds
+    `tenant_id TEXT NOT NULL DEFAULT 'default'` to `events`,
+    `artifacts`, and `skill_installs` (the three tables that didn't
+    already have it). Backfills `events.tenant_id` /
+    `artifacts.tenant_id` from the owning `runs.tenant_id` so
+    historical rows surface under the correct scope after migration.
+    `skill_installs` primary key is dropped and re-created as
+    `(tenant_id, name, version)` so two tenants can install the same
+    skill at the same version independently.
+  - `agentflow_db::models` (`Event` / `Artifact` / `SkillInstall`) +
+    `NewEvent` / `NewArtifact` gain `tenant_id` fields; the `New*`
+    structs accept `Option<String>` so existing callers stay terse
+    (defaults to `"default"`).
+  - Postgres repos write the new column on INSERT/UPSERT and read
+    it on SELECT; the `(tenant_id, run_id, seq)` and
+    `(tenant_id, run_id)` composite indexes back the WHERE-by-tenant
+    filter path.
+  - New `agentflow-server/src/tenant.rs` introduces `TenantId`
+    extension + `extract_tenant_id` middleware reading the
+    `X-Agentflow-Tenant` header (default `"default"` for zero-config
+    local-dev). Layered onto `/v1/*` in `create_router`.
+  - `get_run` / `cancel_run` / `get_run_graph` / `get_run_resume_plan`
+    extract the `TenantId` and return 404 (not 403) when the run's
+    `tenant_id` mismatches — hides existence under cross-tenant probes.
+  - `list_runs` prefers the explicit `?tenant_id=` query param when
+    present (backward-compat with existing dashboards); otherwise
+    falls back to the header-bound tenant.
+  - `RunContext` gains `tenant_id: String` so the stub + Flow
+    executors stamp every persisted event under the correct scope;
+    `WorkflowEventListener::new` / `from_state` require it.
+  - 6 new CLI integration tests in `e2e_runs.rs` cover the
+    cross-tenant 404 path for read + cancel, header-bound success
+    path, header-vs-query precedence, header-absent → "default", and
+    list-via-header scoping. All 15 e2e_runs + 12 runs_routes tests
+    pass against `AGENTFLOW_DATABASE_TEST_URL`.
+  - Test infrastructure: `fresh_state()` no longer TRUNCATEs (matched
+    the M.3 cleanup); pre-existing P2.3 tests were updated to use
+    per-invocation UUID-suffixed tenants so the TRUNCATE removal
+    doesn't make them flaky.
 
 - DONE P2.7 Backup/restore expectations:
   - DONE: `docs/SERVER_BACKUP_RESTORE.md` documents the four state

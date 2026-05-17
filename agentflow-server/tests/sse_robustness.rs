@@ -69,6 +69,7 @@ async fn insert_event(state: &AppState, run_id: Uuid, seq: i64, kind: &str) {
       seq,
       kind: kind.to_string(),
       payload: json!({"seq": seq}),
+      tenant_id: None,
     })
     .await
     .unwrap();

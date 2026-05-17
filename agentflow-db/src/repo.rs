@@ -311,15 +311,17 @@ pub struct PgEventRepo {
 #[async_trait]
 impl EventRepo for PgEventRepo {
   async fn append(&self, event: NewEvent) -> Result<Event, DbError> {
+    let tenant_id = event.tenant_id.as_deref().unwrap_or("default");
     let row = sqlx::query_as::<_, Event>(
-      r#"INSERT INTO events (run_id, seq, kind, payload)
-         VALUES ($1, $2, $3, $4)
-         RETURNING run_id, seq, kind, payload, ts"#,
+      r#"INSERT INTO events (run_id, seq, kind, payload, tenant_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING run_id, seq, kind, payload, ts, tenant_id"#,
     )
     .bind(event.run_id)
     .bind(event.seq)
     .bind(&event.kind)
     .bind(&event.payload)
+    .bind(tenant_id)
     .fetch_one(&self.pool)
     .await?;
     Ok(row)
@@ -332,7 +334,7 @@ impl EventRepo for PgEventRepo {
     limit: i64,
   ) -> Result<Vec<Event>, DbError> {
     let rows = sqlx::query_as::<_, Event>(
-      r#"SELECT run_id, seq, kind, payload, ts
+      r#"SELECT run_id, seq, kind, payload, ts, tenant_id
          FROM events
          WHERE run_id = $1 AND seq > $2
          ORDER BY seq ASC
@@ -355,10 +357,11 @@ pub struct PgArtifactRepo {
 #[async_trait]
 impl ArtifactRepo for PgArtifactRepo {
   async fn create(&self, artifact: NewArtifact) -> Result<Artifact, DbError> {
+    let tenant_id = artifact.tenant_id.as_deref().unwrap_or("default");
     let row = sqlx::query_as::<_, Artifact>(
-      r#"INSERT INTO artifacts (id, run_id, node_id, name, path_or_url, mime_type)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, run_id, node_id, name, path_or_url, mime_type, created_at"#,
+      r#"INSERT INTO artifacts (id, run_id, node_id, name, path_or_url, mime_type, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id"#,
     )
     .bind(artifact.id)
     .bind(artifact.run_id)
@@ -366,6 +369,7 @@ impl ArtifactRepo for PgArtifactRepo {
     .bind(&artifact.name)
     .bind(&artifact.path_or_url)
     .bind(artifact.mime_type.as_deref())
+    .bind(tenant_id)
     .fetch_one(&self.pool)
     .await?;
     Ok(row)
@@ -373,7 +377,7 @@ impl ArtifactRepo for PgArtifactRepo {
 
   async fn list_for_run(&self, run_id: Uuid) -> Result<Vec<Artifact>, DbError> {
     let rows = sqlx::query_as::<_, Artifact>(
-      r#"SELECT id, run_id, node_id, name, path_or_url, mime_type, created_at
+      r#"SELECT id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id
          FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC"#,
     )
     .bind(run_id)
@@ -392,13 +396,14 @@ pub struct PgSkillInstallRepo {
 impl SkillInstallRepo for PgSkillInstallRepo {
   async fn upsert(&self, install: SkillInstall) -> Result<(), DbError> {
     sqlx::query(
-      r#"INSERT INTO skill_installs (name, version, source, installed_at, checksum)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (name, version) DO UPDATE SET
+      r#"INSERT INTO skill_installs (tenant_id, name, version, source, installed_at, checksum)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tenant_id, name, version) DO UPDATE SET
            source = EXCLUDED.source,
            installed_at = EXCLUDED.installed_at,
            checksum = EXCLUDED.checksum"#,
     )
+    .bind(&install.tenant_id)
     .bind(&install.name)
     .bind(&install.version)
     .bind(&install.source)
@@ -411,7 +416,7 @@ impl SkillInstallRepo for PgSkillInstallRepo {
 
   async fn list(&self) -> Result<Vec<SkillInstall>, DbError> {
     let rows = sqlx::query_as::<_, SkillInstall>(
-      r#"SELECT name, version, source, installed_at, checksum
+      r#"SELECT name, version, source, installed_at, checksum, tenant_id
          FROM skill_installs ORDER BY name ASC, version ASC"#,
     )
     .fetch_all(&self.pool)

@@ -205,7 +205,7 @@ pub async fn run_skill(
       workflow: workflow.clone(),
       status: RunStatus::Queued,
       run_dir: None,
-      tenant_id,
+      tenant_id: tenant_id.clone(),
     })
     .await?;
 
@@ -224,6 +224,7 @@ pub async fn run_skill(
         run_base_dir: None,
         cancellation_token: task_token,
         broker,
+        tenant_id,
       })
       .await;
     cancellation_registry.complete(run_id);

@@ -120,6 +120,7 @@ async fn step_and_event_repos_round_trip() {
         seq,
         kind: "node_started".into(),
         payload: json!({"seq": seq}),
+        tenant_id: None,
       })
       .await
       .expect("append event");
@@ -259,6 +260,7 @@ async fn artifact_repo_create_and_list_round_trip() {
         name: format!("artifact-{i}"),
         path_or_url: format!("/tmp/artifact-{i}"),
         mime_type: Some("text/plain".into()),
+        tenant_id: None,
       })
       .await
       .expect("create artifact");
@@ -298,6 +300,7 @@ async fn skill_install_repo_upsert_replaces_on_conflict() {
     source: "local".into(),
     installed_at: Utc::now(),
     checksum: Some("abc".into()),
+    tenant_id: "default".into(),
   };
   repos.skill_installs.upsert(install.clone()).await.unwrap();
 
@@ -327,6 +330,7 @@ async fn skill_install_repo_upsert_replaces_on_conflict() {
       source: "local".into(),
       installed_at: Utc::now(),
       checksum: None,
+      tenant_id: "default".into(),
     })
     .await
     .unwrap();
