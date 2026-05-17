@@ -43,6 +43,10 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- P7.4-FU1 Linux sandbox CI check (new `linux-sandbox-check` job in
+  `.github/workflows/quality.yml` runs `cargo check --target
+  x86_64-unknown-linux-gnu -p agentflow-tools --all-targets` and is
+  wired into `release-gate.needs`).
 - P7.4-FU3 Box `tonic::Status` + workspace clippy sweep
   (`BoxedStatusResult` alias in `agentflow-server/src/scheduler/grpc.rs`
   + 6 tag-along pre-existing clippy cleanups across server / nodes /
@@ -1659,26 +1663,19 @@ known characteristics, not surprises.
     sweep), P7.4-FU3 (clippy::result_large_err boxing pass),
     P7.4-FU4 (production deployment runbook in release notes).
 
-- TODO P7.4-FU1 Linux sandbox check in CI:
-  - **Why**: F1 in the v1.0.0-rc.1 dress rehearsal (P7.4) showed two
-    Linux-only compile errors in `agentflow-tools/src/sandbox/linux.rs`
-    slipped past every existing check. The file is gated on
-    `#[cfg(target_os = "linux")]`, so macOS developer builds never
-    touch it, and the only Linux job that exercises it today is the
-    docker image build (which only runs at release time).
-  - **What**: add a `linux-sandbox-check` job to
-    `.github/workflows/quality.yml`:
-    ```yaml
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: x86_64-unknown-linux-gnu
-    - run: cargo check --target x86_64-unknown-linux-gnu -p agentflow-tools
-    ```
-    Run on every PR that touches `agentflow-tools/**` or the docker /
-    sandbox subtree.
-  - **Acceptance**: a fresh PR that re-introduces F1 fails the
-    `linux-sandbox-check` job within ~2 min, instead of waiting for
-    the release-time docker image build.
+- DONE P7.4-FU1 Linux sandbox check in CI:
+  - New `linux-sandbox-check` job in `.github/workflows/quality.yml`
+    runs `cargo check --target x86_64-unknown-linux-gnu -p
+    agentflow-tools --all-targets` on every PR / push so a
+    re-introduction of the F1-style compile error in
+    `agentflow-tools/src/sandbox/linux.rs` fails in ~2 min instead of
+    at release time. Job listed under `release-gate.needs` so a
+    Linux-only break also blocks the release gate.
+  - Decision: run on every event (matches every other quality job —
+    no path filter), keeping the YAML simple. ~2 min wall clock so
+    the added CI cost is negligible.
+  - **Acceptance**: a PR that re-introduces F1 fails
+    `linux-sandbox-check` within ~2 min.
 
 - DONE P7.4-FU2 Workspace rustfmt sweep before tag:
   - Single `chore(fmt)` commit picked up the residual drift in 6
