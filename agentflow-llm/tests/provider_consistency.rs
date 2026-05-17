@@ -955,3 +955,454 @@ async fn stepfun_multimodal_path() {
     "StepFun request body must use the `image_url` part type, got: {captured}"
   );
 }
+
+// -----------------------------------------------------------------------------
+// Extended HTTP error-mapping coverage
+//
+// The per-provider single-status tests above lock down one code each. The TODO
+// spec for P3.6 requires every provider to map 401, 429, AND 5xx into
+// `LLMError::HttpError` preserving the status code. The blocks below close the
+// remaining matrix cells so a regression that breaks one specific status path
+// on one specific provider can't slip past CI.
+// -----------------------------------------------------------------------------
+
+async fn run_openai_status(status: u16) {
+  assert_status_maps_to_http_error(status, |base_url| async move {
+    let provider =
+      OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    provider.execute(&provider_request("gpt-4o-mini")).await
+  })
+  .await;
+}
+
+async fn run_anthropic_status(status: u16) {
+  assert_status_maps_to_http_error(status, |base_url| async move {
+    let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    provider
+      .execute(&provider_request("claude-3-5-sonnet"))
+      .await
+  })
+  .await;
+}
+
+async fn run_google_status(status: u16) {
+  assert_status_maps_to_http_error(status, |base_url| async move {
+    let provider =
+      GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    provider.execute(&provider_request("gemini-1.5-pro")).await
+  })
+  .await;
+}
+
+async fn run_moonshot_status(status: u16) {
+  assert_status_maps_to_http_error(status, |base_url| async move {
+    let provider = MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    provider.execute(&provider_request("moonshot-v1-8k")).await
+  })
+  .await;
+}
+
+async fn run_stepfun_status(status: u16) {
+  assert_status_maps_to_http_error(status, |base_url| async move {
+    let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    provider.execute(&provider_request("step-1-8k")).await
+  })
+  .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_maps_429_to_http_error() {
+  run_openai_status(429).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_maps_500_to_http_error() {
+  run_openai_status(500).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_maps_401_to_http_error() {
+  run_anthropic_status(401).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_maps_500_to_http_error() {
+  run_anthropic_status(500).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_maps_401_to_http_error() {
+  run_google_status(401).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_maps_429_to_http_error() {
+  run_google_status(429).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_maps_401_to_http_error() {
+  run_moonshot_status(401).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_maps_429_to_http_error() {
+  run_moonshot_status(429).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_maps_500_to_http_error() {
+  run_moonshot_status(500).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_maps_429_to_http_error() {
+  run_stepfun_status(429).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_maps_500_to_http_error() {
+  run_stepfun_status(500).await;
+}
+
+// -----------------------------------------------------------------------------
+// tool_choice mode consistency
+//
+// Each provider must encode the four canonical `ToolChoice` modes — Auto,
+// None, Required, Tool { name } — into its own wire format, and the wire
+// format must remain stable. Per-provider unit tests cover each mode in
+// isolation; this block locks down the cross-provider contract in one place
+// so an adapter rewrite can't quietly diverge from the documented matrix in
+// `docs/LLM_PROVIDERS_MATRIX.md`.
+//
+// Wire format expectations:
+//
+//   * OpenAI / Moonshot / StepFun:
+//       Auto     → `"auto"`
+//       None     → `"none"`
+//       Required → `"required"`
+//       Tool{n}  → `{"type":"function","function":{"name":n}}`
+//   * Anthropic:
+//       Auto     → `{"type":"auto"}`
+//       None     → `{"type":"none"}`
+//       Required → `{"type":"any"}`   (Anthropic spells "required" as "any")
+//       Tool{n}  → `{"type":"tool","name":n}`
+//   * Google: `toolConfig.functionCallingConfig`
+//       Auto     → `{"mode":"AUTO"}`
+//       None     → `{"mode":"NONE"}`
+//       Required → `{"mode":"ANY"}`
+//       Tool{n}  → `{"mode":"ANY","allowedFunctionNames":[n]}`
+// -----------------------------------------------------------------------------
+
+const TOOL_CHOICE_TOOL_NAME: &str = "get_weather";
+
+fn provider_request_with_choice(model: &str, choice: ToolChoice) -> ProviderRequest {
+  let weather_tool = ToolSpec::new(
+    TOOL_CHOICE_TOOL_NAME,
+    "Return the weather for a city",
+    json!({
+      "type": "object",
+      "properties": {"city": {"type": "string"}},
+      "required": ["city"]
+    }),
+  );
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({"role": "user", "content": "weather in Tokyo?"})],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: Some(vec![weather_tool]),
+    tool_choice: Some(choice),
+  }
+}
+
+/// Strip the HTTP request head from the captured raw bytes and parse the
+/// body as JSON. Panics if the body isn't valid JSON — the mock servers
+/// never send a body the provider can't generate, so this should never
+/// fire in practice.
+fn captured_body(raw: &str) -> serde_json::Value {
+  let body = raw
+    .split_once("\r\n\r\n")
+    .map(|(_, body)| body)
+    .unwrap_or(raw);
+  serde_json::from_str(body).unwrap_or_else(|err| panic!("body must be JSON ({err}): {body}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_tool_choice_all_modes() {
+  for (choice, expected) in [
+    (ToolChoice::Auto, json!("auto")),
+    (ToolChoice::None, json!("none")),
+    (ToolChoice::Required, json!("required")),
+    (
+      ToolChoice::Tool {
+        name: TOOL_CHOICE_TOOL_NAME.to_string(),
+      },
+      json!({"type":"function","function":{"name": TOOL_CHOICE_TOOL_NAME}}),
+    ),
+  ] {
+    let (base_url, captured) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
+    let provider =
+      OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    let _ = provider
+      .execute(&provider_request_with_choice("gpt-4o-mini", choice.clone()))
+      .await
+      .expect("ok");
+    let captured = captured.lock().await;
+    let body = captured_body(captured.as_deref().expect("body captured"));
+    assert_eq!(
+      body.get("tool_choice"),
+      Some(&expected),
+      "OpenAI tool_choice {:?} mismatch: {}",
+      choice,
+      body
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_tool_choice_all_modes() {
+  for (choice, expected) in [
+    (ToolChoice::Auto, json!("auto")),
+    (ToolChoice::None, json!("none")),
+    (ToolChoice::Required, json!("required")),
+    (
+      ToolChoice::Tool {
+        name: TOOL_CHOICE_TOOL_NAME.to_string(),
+      },
+      json!({"type":"function","function":{"name": TOOL_CHOICE_TOOL_NAME}}),
+    ),
+  ] {
+    let (base_url, captured) = spawn_mock_server(200, MOONSHOT_SUCCESS.to_string()).await;
+    let provider = MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let _ = provider
+      .execute(&provider_request_with_choice(
+        "moonshot-v1-8k",
+        choice.clone(),
+      ))
+      .await
+      .expect("ok");
+    let captured = captured.lock().await;
+    let body = captured_body(captured.as_deref().expect("body captured"));
+    assert_eq!(
+      body.get("tool_choice"),
+      Some(&expected),
+      "Moonshot tool_choice {:?} mismatch: {}",
+      choice,
+      body
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_tool_choice_all_modes() {
+  for (choice, expected) in [
+    (ToolChoice::Auto, json!("auto")),
+    (ToolChoice::None, json!("none")),
+    (ToolChoice::Required, json!("required")),
+    (
+      ToolChoice::Tool {
+        name: TOOL_CHOICE_TOOL_NAME.to_string(),
+      },
+      json!({"type":"function","function":{"name": TOOL_CHOICE_TOOL_NAME}}),
+    ),
+  ] {
+    let (base_url, captured) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
+    let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let _ = provider
+      .execute(&provider_request_with_choice("step-1-8k", choice.clone()))
+      .await
+      .expect("ok");
+    let captured = captured.lock().await;
+    let body = captured_body(captured.as_deref().expect("body captured"));
+    assert_eq!(
+      body.get("tool_choice"),
+      Some(&expected),
+      "StepFun tool_choice {:?} mismatch: {}",
+      choice,
+      body
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_tool_choice_all_modes() {
+  for (choice, expected) in [
+    (ToolChoice::Auto, json!({"type":"auto"})),
+    (ToolChoice::None, json!({"type":"none"})),
+    (ToolChoice::Required, json!({"type":"any"})),
+    (
+      ToolChoice::Tool {
+        name: TOOL_CHOICE_TOOL_NAME.to_string(),
+      },
+      json!({"type":"tool","name": TOOL_CHOICE_TOOL_NAME}),
+    ),
+  ] {
+    let (base_url, captured) = spawn_mock_server(200, ANTHROPIC_SUCCESS.to_string()).await;
+    let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+      .expect("provider");
+    let _ = provider
+      .execute(&provider_request_with_choice(
+        "claude-3-5-sonnet",
+        choice.clone(),
+      ))
+      .await
+      .expect("ok");
+    let captured = captured.lock().await;
+    let body = captured_body(captured.as_deref().expect("body captured"));
+    assert_eq!(
+      body.get("tool_choice"),
+      Some(&expected),
+      "Anthropic tool_choice {:?} mismatch: {}",
+      choice,
+      body
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_tool_choice_all_modes() {
+  for (choice, expected) in [
+    (
+      ToolChoice::Auto,
+      json!({"functionCallingConfig":{"mode":"AUTO"}}),
+    ),
+    (
+      ToolChoice::None,
+      json!({"functionCallingConfig":{"mode":"NONE"}}),
+    ),
+    (
+      ToolChoice::Required,
+      json!({"functionCallingConfig":{"mode":"ANY"}}),
+    ),
+    (
+      ToolChoice::Tool {
+        name: TOOL_CHOICE_TOOL_NAME.to_string(),
+      },
+      json!({"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":[TOOL_CHOICE_TOOL_NAME]}}),
+    ),
+  ] {
+    let (base_url, captured) = spawn_mock_server(200, GOOGLE_SUCCESS.to_string()).await;
+    let provider =
+      GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+    let _ = provider
+      .execute(&provider_request_with_choice(
+        "gemini-1.5-pro",
+        choice.clone(),
+      ))
+      .await
+      .expect("ok");
+    let captured = captured.lock().await;
+    let body = captured_body(captured.as_deref().expect("body captured"));
+    assert_eq!(
+      body.get("toolConfig"),
+      Some(&expected),
+      "Google toolConfig {:?} mismatch: {}",
+      choice,
+      body
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Mock provider consistency
+//
+// The Mock provider does not make HTTP calls, so it can't go through the
+// streaming TCP mock helpers above. The tests here lock down the behavior the
+// rest of the workspace (agentflow-agents, agentflow-cli `eval run` fixtures,
+// example smoke tests) relies on:
+//
+//   1. Default `execute()` returns text content + populated `TokenUsage` +
+//      `StopReason::Stop`.
+//   2. `with_tool_calls(...)` queues a ToolCalls response and `stop_reason`
+//      flips to `StopReason::ToolCalls`.
+//   3. `execute_streaming()` yields at least one chunk with `is_final = true`
+//      and `content_type = Some("text")`.
+//
+// These are the same invariants the per-provider HTTP tests assert; the Mock
+// provider sits in the same matrix because every offline example, eval run,
+// and hermetic CI suite drives through it.
+// -----------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mock_success_path() {
+  use agentflow_llm::providers::MockProvider;
+  let provider = MockProvider::new("", None)
+    .expect("mock")
+    .with_response("ok");
+  let response = provider
+    .execute(&provider_request("mock-model"))
+    .await
+    .expect("ok");
+  assert_text(&response.content, "ok");
+  assert_usage(&response.usage);
+  assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  assert!(
+    response.tool_calls.is_empty(),
+    "default Mock response carries no tool calls"
+  );
+}
+
+#[tokio::test]
+async fn mock_tool_call_path() {
+  use agentflow_llm::providers::MockProvider;
+  let queued = vec![ToolCallRequest {
+    id: "call_mock_1".to_string(),
+    name: TOOL_CHOICE_TOOL_NAME.to_string(),
+    arguments: json!({"city": "Tokyo"}),
+  }];
+  let provider = MockProvider::new("", None)
+    .expect("mock")
+    .with_response("ok")
+    .with_tool_calls(queued);
+  let response = provider
+    .execute(&provider_request_with_tools("mock-model"))
+    .await
+    .expect("ok");
+  assert_tool_call(&response.tool_calls, TOOL_CHOICE_TOOL_NAME, "Tokyo");
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test]
+async fn mock_streaming_path() {
+  use agentflow_llm::providers::MockProvider;
+  let provider = MockProvider::new("", None)
+    .expect("mock")
+    .with_response("Hello world");
+  let mut stream = provider
+    .execute_streaming(&provider_request_streaming("mock-model"))
+    .await
+    .expect("stream");
+
+  let mut text = String::new();
+  let mut saw_final = false;
+  while let Some(chunk) = stream.next_chunk().await.expect("chunk") {
+    assert_eq!(
+      chunk.content_type.as_deref(),
+      Some("text"),
+      "Mock provider must emit text content_type"
+    );
+    if chunk.is_final {
+      saw_final = true;
+    }
+    text.push_str(&chunk.content);
+  }
+  assert_eq!(text, "Hello world");
+  assert!(
+    saw_final,
+    "Mock stream must terminate with is_final = true on at least one chunk"
+  );
+  assert!(
+    stream
+      .next_chunk()
+      .await
+      .expect("next_chunk after drain must not error")
+      .is_none(),
+    "draining a finished Mock stream should yield Ok(None)"
+  );
+}

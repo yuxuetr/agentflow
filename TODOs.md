@@ -32,7 +32,7 @@ but do not implement channel adapters in this queue.
 | P0 | V1 Contract Hardening | CLOSED |
 | P1 | Security And Tool Governance | partially closed (P1.7-P1.9 active) |
 | P2 | Local Server / Daemon Reliability | active |
-| P3 | Rust SDK And CLI Experience | active |
+| P3 | Rust SDK And CLI Experience | active (P3.6 and P3.7 closed) |
 | P4 | Memory, RAG, And Eval Foundations | active |
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
@@ -70,6 +70,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 1 of 4): Harness Mode server schema + core routes (`harness_sessions` / `harness_session_events` tables, `HarnessSessionRepo` / `HarnessEventRepo`, `HarnessSessionExecutor` trait + `StubHarnessExecutor`, `HarnessEventBroker`, six routes including SSE backfill, integration tests `tests/harness_routes.rs` self-skipping without `AGENTFLOW_DATABASE_TEST_URL`). Slices 2–4 (approval routes + real executor + Web UI + full E2E) remain TODO.
 - P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
+- P3.6 Native tool calling provider consistency tests: full `tool_choice = auto | none | required | tool` matrix per provider, 401/429/5xx coverage for every provider, Mock provider folded into the same suite, `agentflow-llm` added to the CI `test` matrix so the suite is now release-gate-blocking. 44 hermetic provider_consistency tests (19 new on top of the existing 25).
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -522,17 +523,38 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     `multi_agent` / `skill_agent` permission output (slice 2 covers
     template / http / file / shell).
 
-- TODO P3.6 Native tool calling provider consistency tests:
-  - Add `agentflow-llm/tests/provider_consistency.rs` covering, per
-    provider (OpenAI, Anthropic, Google, Moonshot, StepFun, Mock):
-    - Streaming text deltas reach the consumer with stable framing.
-    - `tool_calls` array round-trips.
-    - `tool_choice = required|auto|none|named` semantics.
-    - Multimodal user message (text + image URL) returns text.
-    - Error mapping for 401 / 429 / 5xx.
-  - Use VCR-style recorded fixtures for non-mock providers; gate live
-    runs behind `AGENTFLOW_LIVE_PROVIDER=1`.
-  - Block release on this suite (mock provider only) in default CI.
+- DONE P3.6 Native tool calling provider consistency tests:
+  - `agentflow-llm/tests/provider_consistency.rs` now covers all six
+    providers (OpenAI / Anthropic / Google / Moonshot / StepFun /
+    Mock) across five axes:
+    - Streaming text deltas with provider-native framing
+      (OpenAI-compatible SSE / Anthropic event-named SSE / Google
+      newline-JSON) — drained via `assert_stream_yields_hello_world`.
+    - `tool_calls` array round-trip into the canonical
+      `ToolCallRequest { id, name, arguments }` shape from each
+      provider's wire format (OpenAI `tool_calls`, Anthropic
+      `tool_use` block, Google `functionCall` part).
+    - `tool_choice = auto | none | required | tool { name }` per-
+      provider wire encoding (5 new `_tool_choice_all_modes` tests
+      capture request body and assert provider-specific encoding
+      against the matrix from `docs/LLM_PROVIDERS_MATRIX.md`).
+    - Multimodal user message (text + image URL → text reply)
+      preserves the base64 marker through OpenAI / Anthropic /
+      Google / Moonshot / StepFun wire formats.
+    - Error mapping for 401 / 429 / 5xx is locked across every
+      provider (11 new `_maps_*_to_http_error` tests close the
+      remaining matrix cells alongside the 5 original).
+  - Live runs already live in
+    `agentflow-llm/tests/provider_consistency_live.rs` gated on
+    `AGENTFLOW_LIVE_LLM_TESTS=1` and individual capability env vars
+    (`AGENTFLOW_LIVE_LLM_TEXT` / `…TOOLS` / `…VISION` / etc.).
+  - CI gate: `agentflow-llm` was added to the `test` matrix in
+    `.github/workflows/quality.yml`, which is already a
+    release-gate dependency, so the consistency suite is now
+    release-blocking (mock + recorded fixtures, no live calls).
+  - Test count: 44 in `provider_consistency` (19 new on top of 25
+    existing) + 98 lib + 4 matrix-doc + 3 trace = 169 hermetic
+    agentflow-llm tests pass on every PR.
 
 - DONE P3.7 LLM provider matrix documentation:
   - `docs/LLM_PROVIDERS_MATRIX.md` gains four authoritative sections:

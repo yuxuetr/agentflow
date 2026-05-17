@@ -65,6 +65,7 @@ jobs:
           - agentflow-skills
           - agentflow-agents
           - agentflow-cli
+          - agentflow-llm
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
