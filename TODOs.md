@@ -1278,15 +1278,34 @@ expansion) to be useful for non-trivial workloads.
       hardening).
     - Signed-JWT identity flavour: scoped to the broader auth track.
 
-- TODO P5.6 Worker resource limit tests (PREREQ: P5.5):
-  - Tests for worker-executed DAG nodes respecting:
-    - Per-node timeout.
-    - Memory limit (best-effort on Linux via cgroups; document caveat
-      on macOS).
-    - Output size limit (truncate at N bytes, recorded in trace).
-    - Cancellation propagation.
-    - Retry semantics.
-  - Add a synthetic "runaway node" test fixture.
+- DONE P5.6 Worker resource limit tests (PREREQ: P5.5):
+  - DONE: per-node timeout. `WorkerResourceLimits::default_timeout`
+    wraps every inner dispatcher in `tokio::time::timeout`. Expiry
+    surfaces as `AsyncExecutionError` → `Failed { retryable: true }`
+    so the scheduler can reattempt under a longer budget.
+  - DONE: output size limit. `WorkerResourceLimits::max_output_bytes`
+    swaps the success envelope for `{"truncated": true, "limit_bytes":
+    N, "size_bytes": M}` and emits `worker.task.output_truncated`.
+  - DONE: cancellation propagation. `WorkerCancellationToken` is
+    cooperative (`AtomicBool` shared via `Arc`). `WorkerRuntime`
+    checks before claim and races the inner dispatcher against the
+    flag; cancellation surfaces as `Failed { retryable: false }`
+    with `worker.task.cancelled`.
+  - DONE: retry semantics. Existing
+    `distributed_scheduler_retries_retryable_failure` plus the new
+    `retry_semantics_honor_attempt_budget_under_timeout` test cover
+    the budget exhaustion path; timeouts feed back into the same
+    requeue logic.
+  - DONE: synthetic runaway fixture. The `mock` payload's
+    `sleep_ms` and `output_size_bytes` knobs make every guarantee
+    deterministic. Tests live in
+    `agentflow-worker/tests/resource_limits.rs` (4 tests).
+  - DEFERRED (documented gap): in-process **memory** caps. Linux
+    cgroups + macOS `setrlimit` belong to the supervising
+    process / container runtime, not the worker binary. The
+    documented operator story in `docs/DISTRIBUTED.md` (P5.6 section)
+    points at systemd `MemoryMax` / Kubernetes `resources.limits`
+    plus the `default_timeout` safety net.
 
 - TODO P5.7 Distributed failure-domain tests (PREREQ: P5.5, P5.6):
   - Cover scenarios:

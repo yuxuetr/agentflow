@@ -25,6 +25,7 @@
 //! contract and test references.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
@@ -44,6 +45,51 @@ use agentflow_tools::ToolRegistry;
 use thiserror::Error;
 use tokio::time::sleep;
 
+/// Per-worker resource limits applied to every dispatched node.
+///
+/// **Stability:** experimental — see `docs/STABILITY.md` for the
+/// distributed worker control plane row. The knobs below cover what
+/// the worker can enforce in-process today; cgroup-level memory caps
+/// are a documented gap on macOS (see `docs/DISTRIBUTED.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerResourceLimits {
+  /// Hard wall-clock cap on a single dispatch invocation. `None` means
+  /// the worker waits forever for the node to finish — only safe in
+  /// tests with built-in timeouts.
+  pub default_timeout: Option<Duration>,
+  /// Cap on the serialized size of the success output map. When
+  /// exceeded, the worker replaces the output with a small JSON marker
+  /// (`{"truncated": true, "limit": N, "size": M}`) and adds a
+  /// `worker.task.output_truncated` trace event.
+  pub max_output_bytes: Option<usize>,
+}
+
+impl Default for WorkerResourceLimits {
+  fn default() -> Self {
+    Self {
+      // Conservative production-leaning default. Specific deployments
+      // override via `WorkerConfig::with_resource_limits`.
+      default_timeout: Some(Duration::from_secs(300)),
+      // 1 MiB matches the default `MAX_OUTPUT_BYTES` used by the
+      // harness background-task runtime, so the two surfaces feel
+      // consistent.
+      max_output_bytes: Some(1024 * 1024),
+    }
+  }
+}
+
+impl WorkerResourceLimits {
+  /// "No limits" preset — useful for the existing scheduler smokes
+  /// that need to keep running 100-node fan-outs without per-task
+  /// envelopes.
+  pub fn unlimited() -> Self {
+    Self {
+      default_timeout: None,
+      max_output_bytes: None,
+    }
+  }
+}
+
 /// Worker process configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerConfig {
@@ -52,6 +98,7 @@ pub struct WorkerConfig {
   pub free_slots: u32,
   pub poll_interval: Duration,
   pub heartbeat_interval: Duration,
+  pub resource_limits: WorkerResourceLimits,
 }
 
 impl WorkerConfig {
@@ -62,7 +109,17 @@ impl WorkerConfig {
       free_slots: 1,
       poll_interval: Duration::from_millis(250),
       heartbeat_interval: Duration::from_secs(5),
+      // Existing scheduler smokes pre-date P5.6 and don't expect
+      // timeouts — keep the default unlimited so they continue to
+      // pass unchanged. Production callers should override via
+      // `with_resource_limits` with the prod-leaning preset.
+      resource_limits: WorkerResourceLimits::unlimited(),
     }
+  }
+
+  pub fn with_resource_limits(mut self, limits: WorkerResourceLimits) -> Self {
+    self.resource_limits = limits;
+    self
   }
 }
 
@@ -76,11 +133,43 @@ pub enum WorkerError {
   InvalidConfig(String),
 }
 
+/// Cooperative cancellation token shared between the supervising
+/// runtime and the worker. The runtime checks the flag before
+/// dispatching the next task and before the inner await; cancellation
+/// arriving mid-dispatch lets the current task finish and is reported
+/// as a non-retryable cancellation failure.
+///
+/// **Stability:** experimental, tracked under P5.6 (see
+/// `docs/STABILITY.md`). The shape may grow to thread per-task
+/// cancellation in later milestones.
+#[derive(Debug, Clone, Default)]
+pub struct WorkerCancellationToken {
+  flag: Arc<AtomicBool>,
+}
+
+impl WorkerCancellationToken {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Trip the cancellation flag. Subsequent dispatches return
+  /// immediately with a cancellation failure; an already-running
+  /// dispatch finishes naturally (no abort).
+  pub fn cancel(&self) {
+    self.flag.store(true, Ordering::SeqCst);
+  }
+
+  pub fn is_cancelled(&self) -> bool {
+    self.flag.load(Ordering::SeqCst)
+  }
+}
+
 /// Transport-independent worker loop.
 #[derive(Debug, Clone)]
 pub struct WorkerRuntime<P> {
   protocol: P,
   config: WorkerConfig,
+  cancellation: WorkerCancellationToken,
 }
 
 impl<P> WorkerRuntime<P>
@@ -88,7 +177,22 @@ where
   P: WorkerProtocol,
 {
   pub fn new(protocol: P, config: WorkerConfig) -> Self {
-    Self { protocol, config }
+    Self {
+      protocol,
+      config,
+      cancellation: WorkerCancellationToken::new(),
+    }
+  }
+
+  /// Replace the runtime's cancellation token. Tests and supervisors
+  /// keep a clone to signal a graceful shutdown.
+  pub fn with_cancellation(mut self, token: WorkerCancellationToken) -> Self {
+    self.cancellation = token;
+    self
+  }
+
+  pub fn cancellation_token(&self) -> WorkerCancellationToken {
+    self.cancellation.clone()
   }
 
   /// Run one heartbeat/claim/execute/report cycle.
@@ -109,7 +213,13 @@ where
     else {
       return Ok(None);
     };
-    let result = execute_stub(&self.config.worker_id, &task).await;
+    let result = execute_stub(
+      &self.config.worker_id,
+      &task,
+      &self.config.resource_limits,
+      &self.cancellation,
+    )
+    .await;
     self
       .protocol
       .report_result(self.config.worker_id.clone(), task.task_id, result)
@@ -120,15 +230,31 @@ where
   /// Run until the process is interrupted.
   pub async fn run_forever(&self) -> Result<(), WorkerError> {
     loop {
+      if self.cancellation.is_cancelled() {
+        return Ok(());
+      }
       let _ = self.run_once().await?;
       sleep(self.config.poll_interval).await;
     }
   }
 }
 
-async fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
+async fn execute_stub(
+  worker_id: &WorkerId,
+  task: &WorkerTask,
+  limits: &WorkerResourceLimits,
+  cancellation: &WorkerCancellationToken,
+) -> WorkerTaskResult {
+  // Pre-cancel check: tasks that were claimed before the runtime was
+  // asked to shut down are still rejected so we don't run extra work
+  // post-cancellation. The claim itself is allowed because that path
+  // is owned by the supervising runtime.
+  if cancellation.is_cancelled() {
+    return cancelled_result(worker_id, task);
+  }
+
   if let Ok(payload) = serde_json::from_value::<NodeExecutionPayload>(task.payload.clone()) {
-    return execute_node_payload(worker_id, task, payload).await;
+    return execute_node_payload(worker_id, task, payload, limits, cancellation).await;
   }
 
   WorkerTaskResult::Succeeded {
@@ -162,10 +288,113 @@ async fn execute_stub(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResu
   }
 }
 
+/// Future that resolves once the cancellation flag flips. Polled
+/// alongside the dispatcher so the worker reacts to cancel within one
+/// poll interval.
+async fn wait_for_cancel(token: &WorkerCancellationToken) {
+  loop {
+    if token.is_cancelled() {
+      return;
+    }
+    tokio::time::sleep(Duration::from_millis(25)).await;
+  }
+}
+
+fn cancelled_during_dispatch(
+  worker_id: &WorkerId,
+  task: &WorkerTask,
+  node_type: &str,
+  started: WorkerTraceEvent,
+) -> WorkerTaskResult {
+  WorkerTaskResult::Failed {
+    error: format!("distributed worker cancelled mid-dispatch of node '{node_type}'"),
+    retryable: false,
+    events: vec![
+      started,
+      WorkerTraceEvent {
+        seq: 1,
+        kind: "worker.task.cancelled".into(),
+        payload: serde_json::json!({
+          "worker_id": worker_id.0,
+          "task_id": task.task_id,
+          "node_id": task.node_id,
+          "node_type": node_type,
+          "attempt": task.attempt,
+        }),
+      },
+    ],
+  }
+}
+
+/// Cap the serialized success output. When `max_output_bytes` is set
+/// and the output exceeds the cap, replace it with a small marker
+/// envelope and emit a `worker.task.output_truncated` trace event so
+/// operators can audit where the cut happened.
+fn cap_success_output(
+  worker_id: &WorkerId,
+  task: &WorkerTask,
+  outputs: std::collections::HashMap<String, FlowValue>,
+  max_output_bytes: Option<usize>,
+) -> (serde_json::Value, Vec<WorkerTraceEvent>) {
+  let value = serde_json::to_value(&outputs).unwrap_or_else(|_| serde_json::json!({}));
+  let Some(max) = max_output_bytes else {
+    return (value, Vec::new());
+  };
+  let serialized = match serde_json::to_vec(&value) {
+    Ok(bytes) => bytes,
+    Err(_) => return (value, Vec::new()),
+  };
+  if serialized.len() <= max {
+    return (value, Vec::new());
+  }
+  let truncated = serde_json::json!({
+    "truncated": true,
+    "limit_bytes": max,
+    "size_bytes": serialized.len(),
+  });
+  let event = WorkerTraceEvent {
+    // `seq` here is 1; `execute_node_payload` re-indexes the event
+    // stream so this stays consistent with the `started` event.
+    seq: 1,
+    kind: "worker.task.output_truncated".into(),
+    payload: serde_json::json!({
+      "worker_id": worker_id.0,
+      "task_id": task.task_id,
+      "node_id": task.node_id,
+      "attempt": task.attempt,
+      "limit_bytes": max,
+      "size_bytes": serialized.len(),
+    }),
+  };
+  (truncated, vec![event])
+}
+
+fn cancelled_result(worker_id: &WorkerId, task: &WorkerTask) -> WorkerTaskResult {
+  WorkerTaskResult::Failed {
+    error: "worker cancelled before dispatching task".to_string(),
+    // Cancellation is operator-initiated, never a transport hiccup.
+    // The scheduler treats this as terminal so retries don't loop
+    // when the worker is draining.
+    retryable: false,
+    events: vec![WorkerTraceEvent {
+      seq: 0,
+      kind: "worker.task.cancelled".into(),
+      payload: serde_json::json!({
+        "worker_id": worker_id.0,
+        "task_id": task.task_id,
+        "node_id": task.node_id,
+        "attempt": task.attempt,
+      }),
+    }],
+  }
+}
+
 async fn execute_node_payload(
   worker_id: &WorkerId,
   task: &WorkerTask,
   payload: NodeExecutionPayload,
+  limits: &WorkerResourceLimits,
+  cancellation: &WorkerCancellationToken,
 ) -> WorkerTaskResult {
   let started = WorkerTraceEvent {
     seq: 0,
@@ -179,25 +408,55 @@ async fn execute_node_payload(
     }),
   };
 
-  let result = execute_supported_node_payload(payload, task.attempt).await;
+  let node_type = payload.node_type.clone();
+  let inner = execute_supported_node_payload(payload, task.attempt);
+  let timeout = limits.default_timeout;
+
+  let dispatch = async {
+    if let Some(deadline) = timeout {
+      match tokio::time::timeout(deadline, inner).await {
+        Ok(result) => result,
+        Err(_) => Err(AgentFlowError::AsyncExecutionError {
+          message: format!("distributed worker timeout: node '{node_type}' exceeded {deadline:?}"),
+        }),
+      }
+    } else {
+      inner.await
+    }
+  };
+
+  // Cancellation cuts the dispatch off as soon as it can yield. The
+  // inner await is the only suspension point we control, so we race
+  // it against a cancellation poll.
+  let result = tokio::select! {
+    biased;
+    () = wait_for_cancel(cancellation) => {
+      return cancelled_during_dispatch(worker_id, task, &node_type, started);
+    }
+    res = dispatch => res,
+  };
 
   match result {
-    Ok(outputs) => WorkerTaskResult::Succeeded {
-      output: serde_json::to_value(outputs).unwrap_or_else(|_| serde_json::json!({})),
-      events: vec![
-        started,
-        WorkerTraceEvent {
-          seq: 1,
-          kind: "worker.task.completed".into(),
-          payload: serde_json::json!({
-            "worker_id": worker_id.0,
-            "task_id": task.task_id,
-            "node_id": task.node_id,
-            "attempt": task.attempt,
-          }),
-        },
-      ],
-    },
+    Ok(outputs) => {
+      let (output_value, mut extra_events) =
+        cap_success_output(worker_id, task, outputs, limits.max_output_bytes);
+      let mut events = vec![started];
+      events.append(&mut extra_events);
+      events.push(WorkerTraceEvent {
+        seq: events.len() as i64,
+        kind: "worker.task.completed".into(),
+        payload: serde_json::json!({
+          "worker_id": worker_id.0,
+          "task_id": task.task_id,
+          "node_id": task.node_id,
+          "attempt": task.attempt,
+        }),
+      });
+      WorkerTaskResult::Succeeded {
+        output: output_value,
+        events,
+      }
+    }
     Err(error) => WorkerTaskResult::Failed {
       error: error.to_string(),
       retryable: matches!(error, AgentFlowError::AsyncExecutionError { .. }),
@@ -279,6 +538,18 @@ async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> A
       message: "mock node requested failure".to_string(),
     });
   }
+  // P5.6 — synthetic runaway hook: a non-zero `sleep_ms` parameter
+  // makes the mock node yield for the given wall-clock duration so
+  // the timeout / cancellation paths can be exercised deterministically
+  // without spinning up a real long-running node.
+  if let Some(sleep_ms) = payload
+    .parameters
+    .get("sleep_ms")
+    .and_then(|value| value.as_u64())
+    && sleep_ms > 0
+  {
+    tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+  }
   let mut outputs = std::collections::HashMap::new();
   let value = payload
     .parameters
@@ -286,6 +557,21 @@ async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> A
     .cloned()
     .unwrap_or_else(|| serde_json::json!(payload.node_id));
   outputs.insert("output".to_string(), FlowValue::Json(value));
+  // P5.6 — synthetic large-output hook: emit an extra `payload` key
+  // with `output_size_bytes` worth of 'x' characters so the
+  // truncation path is testable hermetically.
+  if let Some(size) = payload
+    .parameters
+    .get("output_size_bytes")
+    .and_then(|value| value.as_u64())
+    && size > 0
+  {
+    let big = "x".repeat(size.min(64 * 1024 * 1024) as usize);
+    outputs.insert(
+      "payload".to_string(),
+      FlowValue::Json(serde_json::json!(big)),
+    );
+  }
   Ok(outputs)
 }
 

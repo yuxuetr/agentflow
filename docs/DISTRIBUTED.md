@@ -224,6 +224,48 @@ Test references:
   poll/heartbeat/report, and token rotation does not drop in-flight
   tasks.
 
+## Worker Resource Limits (P5.6)
+
+Each worker enforces an in-process resource envelope around every
+dispatched node via [`WorkerResourceLimits`](../agentflow-worker/src/lib.rs):
+
+| Knob | Default | Behavior |
+|------|---------|----------|
+| `default_timeout` | `WorkerConfig::new` → unlimited (legacy smokes); `WorkerResourceLimits::default()` → 300s | Wraps the inner dispatcher in `tokio::time::timeout`. On expiry the worker reports `Failed { retryable: true }` so the scheduler can reattempt under a longer budget. |
+| `max_output_bytes` | `default()` → 1 MiB; `unlimited()` → off | When the serialized success output exceeds the cap, the worker replaces it with `{"truncated": true, "limit_bytes": N, "size_bytes": M}` and emits a `worker.task.output_truncated` trace event. |
+| Cancellation (`WorkerCancellationToken`) | n/a | Cooperative shutdown. `cancel()` flips an `AtomicBool`; the dispatcher races the inner future against the flag and reports `Failed { retryable: false }` with a `worker.task.cancelled` trace event. |
+| Retry semantics | scheduler `with_max_attempts` | Timeouts surface as retryable, cancellations as terminal, definition errors as terminal. The `DistributedDagScheduler` budget bounds total reattempts. |
+
+**Memory caps:** intentionally **not** implemented in v0.4.0. The Linux
+cgroups path (and the equivalent macOS `setrlimit` workaround) lives
+inside the supervising process, not the worker binary. Until the
+deployment story stabilizes, operators should:
+
+- Run each worker under a systemd unit / Kubernetes Pod with the
+  appropriate `MemoryMax` / `resources.limits.memory` set.
+- Rely on the existing `default_timeout` to bound long-running tasks
+  that would otherwise leak memory in a stuck dispatcher.
+
+This is a documented gap for macOS / Windows operators: the worker
+itself enforces wall-clock and output bytes; out-of-process memory
+caps come from the container / cgroup runtime.
+
+### Synthetic runaway fixture
+
+The `mock` payload now supports two test-only knobs so the resource
+caps are testable hermetically:
+
+```yaml
+parameters:
+  sleep_ms: 5000           # makes the dispatcher take this long
+  output_size_bytes: 8192  # appends an "x" * N blob to the output
+```
+
+`agentflow-worker/tests/resource_limits.rs` exercises every guarantee
+above: timeout cut-off, mid-dispatch cancellation, output truncation
+with the matching trace event, and retry semantics through the
+distributed scheduler.
+
 ## Two-Worker Deployment Shape
 
 The target deployment shape is one control plane plus N workers:
