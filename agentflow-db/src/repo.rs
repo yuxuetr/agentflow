@@ -32,8 +32,21 @@ pub trait RunRepo: Send + Sync {
     status: RunStatus,
     error: Option<&str>,
   ) -> Result<(), DbError>;
-  /// List runs for a tenant, newest first.
-  async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<Run>, DbError>;
+  /// List runs for a tenant, newest first. Convenience shim over
+  /// [`Self::list_filtered`] with no status filter and zero offset.
+  async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<Run>, DbError> {
+    self.list_filtered(tenant_id, None, limit, 0).await
+  }
+  /// List runs for a tenant, newest first, optionally filtered by status
+  /// and paginated via `offset`. `limit` and `offset` are caller-clamped;
+  /// the repo binds them unchanged.
+  async fn list_filtered(
+    &self,
+    tenant_id: &str,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+  ) -> Result<Vec<Run>, DbError>;
 }
 
 #[async_trait]
@@ -211,18 +224,44 @@ impl RunRepo for PgRunRepo {
     Ok(())
   }
 
-  async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<Run>, DbError> {
-    let rows = sqlx::query_as::<_, Run>(
-      r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
-         FROM runs
-         WHERE tenant_id = $1
-         ORDER BY started_at DESC
-         LIMIT $2"#,
-    )
-    .bind(tenant_id)
-    .bind(limit)
-    .fetch_all(&self.pool)
-    .await?;
+  async fn list_filtered(
+    &self,
+    tenant_id: &str,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+  ) -> Result<Vec<Run>, DbError> {
+    // Two query shapes — one with a status predicate, one without — so
+    // the optimizer can pick the right index without needing to read a
+    // NULL parameter at runtime.
+    let rows = if let Some(status) = status {
+      sqlx::query_as::<_, Run>(
+        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
+           FROM runs
+           WHERE tenant_id = $1 AND status = $2
+           ORDER BY started_at DESC
+           LIMIT $3 OFFSET $4"#,
+      )
+      .bind(tenant_id)
+      .bind(status)
+      .bind(limit)
+      .bind(offset)
+      .fetch_all(&self.pool)
+      .await?
+    } else {
+      sqlx::query_as::<_, Run>(
+        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
+           FROM runs
+           WHERE tenant_id = $1
+           ORDER BY started_at DESC
+           LIMIT $2 OFFSET $3"#,
+      )
+      .bind(tenant_id)
+      .bind(limit)
+      .bind(offset)
+      .fetch_all(&self.pool)
+      .await?
+    };
     Ok(rows)
   }
 }

@@ -77,6 +77,7 @@ but do not implement channel adapters in this queue.
 - P5.8 Workflow `type: plugin` first-class node syntax: validator (`agentflow workflow validate`) now parses the referenced plugin manifest and rejects unknown `node_type` references at validate time. New CLI `agentflow plugin generate-workflow-stub` emits a `type: plugin` YAML stub per declared `[[plugin.nodes]]` entry (`--node` filter, `--output` file sink, embeds absolute manifest path). 5 unit + 4 CLI integration tests.
 - P5.1 Remote marketplace install handoff: `install_directory` in `agentflow-cli/src/commands/marketplace.rs` is now atomic — stage into a sibling `.installing-<pid>-<nanos>` temp dir, move any prior install aside to `.replacing-<…>`, then `fs::rename` the staged tree into place. Failures roll back to the original install. 3 new CLI integration tests cover happy / force / collision paths with explicit "no temp-dir siblings" assertions on the install root.
 - P3.3 CLI JSON output audit (contract + first command migrated): new `CliJsonEnvelope<T>` (wire schema `agentflow.cli/1`) defines the canonical four-field envelope (`version`, `command`, `result`, `errors[]`). `docs/CLI_JSON_OUTPUT.md` is the contract; `docs/STABILITY.md` adds it at Stable tier. First migration: `agentflow doctor --format json-envelope` wraps `DoctorReport`. Per-command migrations for the remaining 10+ commands tracked as follow-ups in `TODOs.md`.
+- P2.3 Server end-to-end run tests: `RunRepo::list_filtered(tenant, status, limit, offset)` extends the list API; `GET /v1/runs` accepts validated `?status` + `?offset` query params. New `e2e_runs.rs` integration suite (9 tests) covers pagination, status filter, before/after graph snapshots, and authenticated paths under bearer-token auth.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -292,17 +293,41 @@ turning it into a channel hub.
     deferred to a follow-up; the schema would need a new table or
     JSONB column and isn't required for v1 cleanup hygiene.
 
-- TODO P2.3 Server end-to-end run tests:
-  - Add `agentflow-server/tests/e2e_runs.rs` integration suite covering:
-    - Submit → poll → complete (success path).
-    - Submit → cancel → terminal state.
-    - Submit → fail (node error) → terminal + final event.
-    - Submit invalid YAML → 400 with structured error.
-    - List runs with pagination + status filter.
-    - Get graph snapshot before / during / after run.
-  - Use real Postgres via `testcontainers` or a startup-skipped feature.
-  - Cover both authenticated and unauthenticated paths in
-    `local`/`production` profiles.
+- DONE P2.3 Server end-to-end run tests:
+  - The core happy / cancel / 4xx / mid-run-graph paths were already
+    covered by `agentflow-server/tests/runs_routes.rs` (12 tests).
+    This slice closes the remaining cells the P2.3 spec calls out.
+  - Feature additions (not just tests):
+    - `RunRepo::list_filtered(tenant, status, limit, offset)` is the
+      new repo entry point; the legacy `list` is now a default
+      shim that delegates with `status = None, offset = 0`.
+    - `GET /v1/runs` accepts `?status=` (validated against the
+      closed `RunStatus` set — typos surface as 400 with the bad
+      value echoed in the error message) and `?offset=` (clamped
+      to ≥ 0) alongside the existing `?tenant_id` / `?limit`.
+  - New `agentflow-server/tests/e2e_runs.rs` (9 tests):
+    - `list_runs_offset_pagination_returns_disjoint_pages` — two
+      adjacent pages share no ids.
+    - `list_runs_status_filter_isolates_running_rows` — `?status=running`
+      hides queued + failed rows.
+    - `list_runs_rejects_unknown_status_value` — `?status=invented_state`
+      → 400 with the bad value embedded in the error.
+    - `list_runs_offset_beyond_total_returns_empty_page` — past-end
+      offset returns `[]`, not an error.
+    - `get_run_graph_returns_snapshot_before_any_events` — pre-run
+      graph renders with no `active_node`.
+    - `get_run_graph_returns_snapshot_after_run_completes` — post-
+      terminal graph still surfaces the last-touched node as
+      `active_node` (documenting the current "last-touched, not
+      currently-running" semantic).
+    - `submit_run_without_token_is_rejected_under_auth` — auth
+      gate fires before the run handler.
+    - `submit_run_with_token_succeeds_under_auth` — happy-path
+      submit under bearer-token auth.
+    - `health_route_stays_open_under_auth` — `/health` keeps
+      working for orchestrators without a token.
+  - All 9 new tests + 12 pre-existing `runs_routes.rs` tests pass
+    against `AGENTFLOW_DATABASE_TEST_URL`; self-skip without it.
 
 - DONE P2.4 SSE robustness:
   - `EventBroker::finalise_with_grace(run_id, grace)` spawns a

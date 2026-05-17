@@ -415,6 +415,14 @@ pub struct ListRunsQuery {
   /// Max rows to return, clamped to 1..=100.
   #[serde(default)]
   pub limit: Option<i64>,
+  /// Skip the first N rows (after the limit clamp). Lets clients
+  /// paginate with `?limit=N&offset=M`. Clamped to ≥ 0.
+  #[serde(default)]
+  pub offset: Option<i64>,
+  /// Optional run-status filter. Accepts the canonical `RunStatus`
+  /// strings: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
+  #[serde(default)]
+  pub status: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -442,14 +450,42 @@ pub struct ResumePlanQuery {
 }
 
 /// `GET /v1/runs` — list recent runs for a tenant, newest first.
+///
+/// Query parameters:
+/// - `tenant_id` (default `"default"`)
+/// - `limit` (default 25, clamped to 1..=100)
+/// - `offset` (default 0, clamped to ≥ 0)
+/// - `status` (one of the canonical [`RunStatus`] strings; rejects
+///   anything else with a 400). Omit to list all statuses.
 pub async fn list_runs(
   State(state): State<AppState>,
   Query(params): Query<ListRunsQuery>,
 ) -> Result<Json<ListRunsResponse>, ApiError> {
   let tenant_id = params.tenant_id.unwrap_or_else(|| "default".into());
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
-  let runs = state.repos.runs.list(&tenant_id, limit).await?;
+  let offset = params.offset.unwrap_or(0).max(0);
+  let status = match params.status.as_deref() {
+    Some(s) => Some(parse_status_filter(s)?),
+    None => None,
+  };
+  let runs = state
+    .repos
+    .runs
+    .list_filtered(&tenant_id, status, limit, offset)
+    .await?;
   Ok(Json(ListRunsResponse { runs }))
+}
+
+/// Validate the `?status=` query parameter against the closed
+/// [`RunStatus`] set. Rejects unknown values with a 400 so a typo never
+/// silently returns "no runs found".
+fn parse_status_filter(raw: &str) -> Result<&str, ApiError> {
+  match raw {
+    "queued" | "running" | "succeeded" | "failed" | "cancelled" => Ok(raw),
+    other => Err(ApiError::BadRequest(format!(
+      "invalid status filter '{other}'; expected one of queued|running|succeeded|failed|cancelled"
+    ))),
+  }
 }
 
 /// `POST /v1/runs/{id}:cancel` — idempotently cancel a queued/running run.
