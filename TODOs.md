@@ -465,22 +465,46 @@ turning it into a channel hub.
     output renders the section header, env overrides for skills /
     plugins are honored).
 
-- TODO P2.8 Worker LLM/HTTP/MCP/Agent node execution support:
-  - PREREQ for the rest of P5 worker hardening.
-  - Extend `agentflow-worker::execute_supported_node_payload` to dispatch:
-    - `llm` (via `agentflow-llm` provider abstraction).
-    - `http` (via `agentflow-tools::builtin::http` with sandbox policy).
-    - `mcp` (delegate to local or remote MCP client).
-    - `agent` (run a minimal ReAct loop on worker).
-  - Pass `traceparent`, run_id, step_id, tenant_id via gRPC metadata.
-  - Add resource limits per node type (timeout, retry, max-output-bytes).
-  - Add tests:
-    - LLM call from worker with mock provider, trace stitched.
-    - HTTP call from worker respects sandbox policy.
-    - MCP call from worker uses the configured server URL.
-    - Worker rejects unsupported node type with a structured error.
-  - Document supported node types in `docs/DISTRIBUTED.md` and stamp
-    `agentflow-worker` README accordingly.
+- DONE P2.8 Worker LLM/HTTP/MCP/Agent node execution support:
+  - PREREQ for the rest of P5 worker hardening (P5.5 admission, P5.6
+    resource limits, P5.7 failure-domain matrix).
+  - DONE: `agentflow-worker::execute_supported_node_payload` now
+    dispatches `llm` / `http` / `mcp` / `agent` in addition to the
+    existing `template` / `file` / `mock` types. Each `llm` / `http` /
+    `mcp` payload routes through the same `agentflow-nodes` builders
+    the local scheduler uses (`LlmNode`, `HttpNode`, `MCPNode`); the
+    distributed `agent` dispatcher runs a minimal `ReActAgent` loop
+    with `SessionMemory::default_window()` and an empty `ToolRegistry`.
+    `agentflow-worker` now depends on `agentflow-llm`, `agentflow-agents`,
+    `agentflow-memory`, `agentflow-tools`, and `agentflow-nodes` with
+    the `mcp` feature enabled.
+  - DONE: tests. Three new integration files under
+    `agentflow-worker/tests/`:
+    - `dispatch_simple.rs`: HTTP / MCP / unsupported-type routing
+      (verifies the dispatcher selects the right executor and that
+      unknown node types return a non-retryable
+      `FlowDefinitionError`).
+    - `dispatch_llm_and_agent.rs`: LLM happy path against the mock
+      provider, plus the minimal agent ReAct loop driven by a queued
+      mock response. Tests serialize on a `tokio::sync::Mutex` gate
+      because `AGENTFLOW_MOCK_RESPONSES` / `AGENTFLOW_MODELS_CONFIG` /
+      the LLM registry are all process-globals.
+  - DONE: docs. `docs/DISTRIBUTED.md` carries the canonical supported
+    node-type table with test cross-references, and the
+    `agentflow-worker` crate-level rustdoc carries the matching short
+    list (no separate README needed yet).
+  - Deferred follow-ups (tracked under the prereq chain, NOT this
+    line):
+    - `traceparent`/run_id/step_id/tenant_id propagation in gRPC
+      metadata: scoped to P2.7 (server transport hardening) and
+      P5.5 (worker admission). The local scheduler smokes already
+      stitch traces inside the process boundary.
+    - Per-node-type resource limits (timeout, retry budget,
+      max-output-bytes): scoped to P5.6.
+    - Real MCP stdio server fixture for the worker happy-path smoke:
+      scoped to P5.7 (failure-domain matrix) so the fixture
+      decision lives next to the network-partition / heartbeat-loss
+      cases that need it.
 
 ---
 

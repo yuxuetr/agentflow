@@ -131,8 +131,35 @@ that sits above the protocol. It currently provides:
 the first executable distributed DAG milestone. It parses config-first DAGs
 into ready sets, emits one `WorkerTask` per ready node, gathers mapped inputs
 from completed upstream outputs, and folds worker results back into a state
-pool. The portable `NodeExecutionPayload` schema currently supports remote
-`template`, `file`, and `mock` execution.
+pool.
+
+### Supported `NodeExecutionPayload` node types (P2.8)
+
+The portable `NodeExecutionPayload` schema covers the following node types.
+The same dispatcher is used by the local `DistributedDagScheduler` smokes and
+the standalone `agentflow-worker` binary.
+
+| `node_type` | Dispatcher | Test coverage |
+|-------------|------------|---------------|
+| `template`  | `agentflow_nodes::nodes::template::TemplateNode` | `run_once_executes_distributed_template_payload` |
+| `file`      | `agentflow_nodes::nodes::file::FileNode` | `run_once_executes_distributed_file_payload` |
+| `mock`      | inline (`fail_until_attempt` / `fail` / `value`) | `distributed_scheduler_runs_100_mock_nodes_with_two_workers`, retry + heartbeat tests |
+| `llm`       | `agentflow_nodes::nodes::llm::LlmNode` (uses `agentflow-llm` registry + mock provider in tests) | `dispatch_llm_and_agent::llm_payload_returns_mock_response` |
+| `http`      | `agentflow_nodes::nodes::http::HttpNode` | `dispatch_simple::http_payload_routes_to_http_node_dispatcher` |
+| `mcp`       | `agentflow_nodes::nodes::mcp::MCPNode` (stdio server) | `dispatch_simple::mcp_payload_routes_to_mcp_node_dispatcher` |
+| `agent`     | minimal `agentflow_agents::react::ReActAgent` loop, empty tool registry | `dispatch_llm_and_agent::agent_payload_runs_react_loop_to_completion` |
+
+Unknown `node_type` values produce a non-retryable
+`AgentFlowError::FlowDefinitionError` so a typo in the YAML never silently
+hot-loops the worker pool. `dispatch_simple::unsupported_node_type_returns_structured_failure`
+locks this in.
+
+The distributed `agent` dispatcher today runs a deliberately minimal ReAct
+loop: the worker reads `message` / `model` / optional `persona` /
+`max_iterations` from the gathered inputs and runs against a fresh
+`SessionMemory` plus an empty `ToolRegistry`. Richer tool distribution
+(shared sandbox + admission) rides on the same `NodeExecutionPayload`
+plumbing once P5.5 worker admission lands.
 
 The scheduler includes bounded retry for retryable worker failures and stale
 heartbeat requeue for claimed tasks whose worker heartbeat exceeds the

@@ -8,8 +8,16 @@ license = "MIT"
 
 [dependencies]
 agentflow-core = { path = "../agentflow-core" }
-agentflow-nodes = { path = "../agentflow-nodes" }
+# P2.8 — enable the `mcp` feature so the worker can dispatch `mcp` payloads
+# via the same `MCPNode` the local scheduler uses; default features cover
+# `llm` / `http` / `file` / `template`.
+agentflow-nodes = { path = "../agentflow-nodes", features = ["mcp"] }
+agentflow-llm = { path = "../agentflow-llm" }
+agentflow-agents = { path = "../agentflow-agents" }
+agentflow-memory = { path = "../agentflow-memory" }
+agentflow-tools = { path = "../agentflow-tools" }
 agentflow-server = { path = "../agentflow-server" }
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -18,5 +26,6 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+anyhow = "1"
 serde_yaml = "0.9"
 tonic = "0.12"

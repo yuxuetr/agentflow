@@ -5,18 +5,42 @@
 //! heartbeat, claim, execute, and report-result steps. The first binary uses
 //! the in-memory protocol for local smoke tests; the gRPC adapter can plug in
 //! behind the same API.
+//!
+//! ## Supported `NodeExecutionPayload` types (P2.8)
+//!
+//! The worker dispatches on `payload.node_type`:
+//!
+//! - `template` → [`agentflow_nodes::nodes::template::TemplateNode`]
+//! - `file` → [`agentflow_nodes::nodes::file::FileNode`]
+//! - `mock` → in-crate stub used by the scheduler smoke tests
+//! - `llm` → [`agentflow_nodes::nodes::llm::LlmNode`]
+//! - `http` → [`agentflow_nodes::nodes::http::HttpNode`]
+//! - `mcp` → [`agentflow_nodes::nodes::mcp::MCPNode`]
+//! - `agent` → minimal [`agentflow_agents::react::ReActAgent`] loop with an
+//!   empty [`agentflow_tools::ToolRegistry`]
+//!
+//! Unknown node types produce a non-retryable
+//! [`AgentFlowError::FlowDefinitionError`], so a typo in YAML cannot
+//! hot-loop the pool. See `docs/DISTRIBUTED.md` for the canonical
+//! contract and test references.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_core::{
   AgentFlowError, FlowValue,
   async_node::{AsyncNode, AsyncNodeResult},
 };
-use agentflow_nodes::nodes::{file::FileNode, template::TemplateNode};
+use agentflow_memory::SessionMemory;
+use agentflow_nodes::nodes::{
+  file::FileNode, http::HttpNode, llm::LlmNode, mcp::MCPNode, template::TemplateNode,
+};
 use agentflow_server::{
   NodeExecutionPayload, SchedulerError, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
   WorkerTaskResult, WorkerTraceEvent,
 };
+use agentflow_tools::ToolRegistry;
 use thiserror::Error;
 use tokio::time::sleep;
 
@@ -203,6 +227,14 @@ async fn execute_supported_node_payload(
     "template" => execute_template_payload(&payload).await,
     "file" => execute_file_payload(&payload).await,
     "mock" => execute_mock_payload(&payload, attempt).await,
+    // P2.8: distributed support for LLM / HTTP / MCP / agent payloads.
+    // The local scheduler already inlines `parameters` into `inputs` (see
+    // `gather_inputs` in `agentflow-server::scheduler::distributed`), so
+    // each node's `execute` receives the same input map it would in-process.
+    "llm" => execute_llm_payload(&payload).await,
+    "http" => execute_http_payload(&payload).await,
+    "mcp" => execute_mcp_payload(&payload).await,
+    "agent" => execute_agent_payload(&payload).await,
     other => Err(AgentFlowError::FlowDefinitionError {
       message: format!("distributed worker does not support node type '{other}'"),
     }),
@@ -255,6 +287,104 @@ async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> A
     .unwrap_or_else(|| serde_json::json!(payload.node_id));
   outputs.insert("output".to_string(), FlowValue::Json(value));
   Ok(outputs)
+}
+
+async fn execute_llm_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  LlmNode.execute(&payload.inputs).await
+}
+
+async fn execute_http_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  HttpNode.execute(&payload.inputs).await
+}
+
+async fn execute_mcp_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  MCPNode::default().execute(&payload.inputs).await
+}
+
+/// Minimal ReAct loop dispatcher for distributed `agent` nodes.
+///
+/// The worker reads the canonical agent inputs (`message`, `model`, optional
+/// `persona` / `max_iterations`) from the gathered input map. The agent runs
+/// against a fresh `SessionMemory` and an empty `ToolRegistry`; richer tool
+/// wiring rides on the same `parameters` plumbing once the tool-distribution
+/// contract is decided (tracked under P5.5 worker admission).
+async fn execute_agent_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
+  let message = required_string_input(payload, "message")?;
+  let model = required_string_input(payload, "model")?;
+  let persona =
+    optional_string_input(payload, "persona").or_else(|| optional_string_input(payload, "system"));
+  let max_iterations = optional_u64_input(payload, "max_iterations");
+
+  let mut config = ReActConfig::new(model);
+  if let Some(persona) = persona {
+    config = config.with_persona(persona);
+  }
+  if let Some(max_iterations) = max_iterations {
+    config = config.with_max_iterations(max_iterations.min(usize::MAX as u64) as usize);
+  }
+
+  let mut agent = ReActAgent::new(
+    config,
+    Box::new(SessionMemory::default_window()),
+    Arc::new(ToolRegistry::new()),
+  );
+
+  let result =
+    agent
+      .run_with_trace(&message)
+      .await
+      .map_err(|e| AgentFlowError::AsyncExecutionError {
+        message: format!("distributed agent run failed: {e}"),
+      })?;
+
+  let stop_reason =
+    serde_json::to_value(&result.stop_reason).map_err(|e| AgentFlowError::AsyncExecutionError {
+      message: format!("failed to serialize agent stop reason: {e}"),
+    })?;
+
+  let mut outputs = std::collections::HashMap::new();
+  outputs.insert(
+    "answer".to_string(),
+    FlowValue::Json(serde_json::Value::String(
+      result.answer.clone().unwrap_or_default(),
+    )),
+  );
+  outputs.insert("stop_reason".to_string(), FlowValue::Json(stop_reason));
+  outputs.insert(
+    "session_id".to_string(),
+    FlowValue::Json(serde_json::Value::String(result.session_id.clone())),
+  );
+  outputs.insert(
+    "step_count".to_string(),
+    FlowValue::Json(serde_json::json!(result.steps.len())),
+  );
+  Ok(outputs)
+}
+
+fn required_string_input(
+  payload: &NodeExecutionPayload,
+  key: &str,
+) -> Result<String, AgentFlowError> {
+  optional_string_input(payload, key).ok_or_else(|| AgentFlowError::NodeInputError {
+    message: format!(
+      "distributed node '{}' requires string input '{}'",
+      payload.node_id, key
+    ),
+  })
+}
+
+fn optional_string_input(payload: &NodeExecutionPayload, key: &str) -> Option<String> {
+  payload.inputs.get(key).and_then(|value| match value {
+    FlowValue::Json(serde_json::Value::String(s)) => Some(s.clone()),
+    _ => None,
+  })
+}
+
+fn optional_u64_input(payload: &NodeExecutionPayload, key: &str) -> Option<u64> {
+  payload.inputs.get(key).and_then(|value| match value {
+    FlowValue::Json(serde_json::Value::Number(n)) => n.as_u64(),
+    _ => None,
+  })
 }
 
 fn string_parameter(payload: &NodeExecutionPayload, key: &str) -> Result<String, AgentFlowError> {
