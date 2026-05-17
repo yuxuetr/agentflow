@@ -63,7 +63,11 @@ fn main() {
     println!(
       "  - {} → {} (rule={}{})",
       tool.name(),
-      if decision.allowed { "ALLOWED" } else { "DENIED" },
+      if decision.allowed {
+        "ALLOWED"
+      } else {
+        "DENIED"
+      },
       decision.matched_rule,
       decision
         .deny_reason
@@ -82,7 +86,11 @@ fn main() {
     println!(
       "  - {} → {} (rule={}{})",
       tool.name(),
-      if decision.allowed { "ALLOWED" } else { "DENIED" },
+      if decision.allowed {
+        "ALLOWED"
+      } else {
+        "DENIED"
+      },
       decision.matched_rule,
       decision
         .deny_reason
@@ -103,10 +111,7 @@ fn main() {
     ..SandboxPolicy::default()
   };
   println!("Strict sandbox policy:");
-  println!(
-    "  allowed_commands: {:?}",
-    strict_sandbox.allowed_commands
-  );
+  println!("  allowed_commands: {:?}", strict_sandbox.allowed_commands);
   println!("  allowed_domains:  {:?}", strict_sandbox.allowed_domains);
   println!(
     "  allow_loopback:   {}",

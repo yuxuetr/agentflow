@@ -17,10 +17,10 @@ use agentflow_core::plugin::{PluginManifest, PluginRuntime, SUPPORTED_PROTOCOL_V
 
 #[test]
 fn signed_plugin_fixture_manifest_parses_and_validates() {
-  let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("tests/fixtures/signed/plugin-echo/plugin.toml");
-  let (manifest, manifest_dir) = PluginManifest::load_from_path(&manifest_path)
-    .expect("signed plugin fixture must parse");
+  let manifest_path =
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/signed/plugin-echo/plugin.toml");
+  let (manifest, manifest_dir) =
+    PluginManifest::load_from_path(&manifest_path).expect("signed plugin fixture must parse");
   assert_eq!(manifest.plugin.name, "echo-plugin");
   assert_eq!(manifest.plugin.runtime, PluginRuntime::Subprocess);
   assert_eq!(manifest.plugin.protocol, SUPPORTED_PROTOCOL_VERSION);

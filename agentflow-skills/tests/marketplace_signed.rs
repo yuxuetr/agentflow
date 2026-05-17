@@ -76,7 +76,11 @@ fn build_signed_archive(files: &ArchiveFiles) -> Vec<u8> {
     header.set_mtime(0);
     header.set_uid(0);
     header.set_gid(0);
-    let mode: u32 = if path.starts_with("bin/") { 0o755 } else { 0o644 };
+    let mode: u32 = if path.starts_with("bin/") {
+      0o755
+    } else {
+      0o644
+    };
     header.set_mode(mode);
     header.set_cksum();
     builder.append(&header, Cursor::new(bytes)).expect("append");
@@ -122,8 +126,7 @@ fn skill_fixture_root() -> PathBuf {
 }
 
 fn plugin_fixture_root() -> PathBuf {
-  Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("../agentflow-core/tests/fixtures/signed/plugin-echo")
+  Path::new(env!("CARGO_MANIFEST_DIR")).join("../agentflow-core/tests/fixtures/signed/plugin-echo")
 }
 
 fn signature_required_violation(cached: &agentflow_skills::CachedMarketplaceArtifact) -> bool {
@@ -237,12 +240,7 @@ fn signed_plugin_strict_path_succeeds() {
   );
   let files = collect_archive_files(&root);
   let bytes = build_signed_archive(&files);
-  let entry = signed_entry(
-    MarketplacePackageType::Plugin,
-    "echo-plugin",
-    &bytes,
-    true,
-  );
+  let entry = signed_entry(MarketplacePackageType::Plugin, "echo-plugin", &bytes, true);
 
   let tmp = TempDir::new().unwrap();
   let cache = RemoteMarketplaceCache::new(tmp.path());
@@ -257,12 +255,7 @@ fn signed_plugin_strict_path_succeeds() {
 fn unsigned_plugin_non_strict_path_succeeds() {
   let files = collect_archive_files(&plugin_fixture_root());
   let bytes = build_signed_archive(&files);
-  let entry = signed_entry(
-    MarketplacePackageType::Plugin,
-    "echo-plugin",
-    &bytes,
-    false,
-  );
+  let entry = signed_entry(MarketplacePackageType::Plugin, "echo-plugin", &bytes, false);
 
   let tmp = TempDir::new().unwrap();
   let cache = RemoteMarketplaceCache::new(tmp.path());
@@ -282,7 +275,11 @@ fn signed_archive_round_trip_is_deterministic() {
   let files = collect_archive_files(&skill_fixture_root());
   let a = build_signed_archive(&files);
   let b = build_signed_archive(&files);
-  assert_eq!(sha256_hex(&a), sha256_hex(&b), "archive build must be deterministic");
+  assert_eq!(
+    sha256_hex(&a),
+    sha256_hex(&b),
+    "archive build must be deterministic"
+  );
   // Sanity-check that the archive is a real gzipped tar by gunzip+untar
   // round-trip.
   let mut decoder = flate2::read::GzDecoder::new(Cursor::new(&a));
@@ -296,4 +293,3 @@ fn signed_archive_round_trip_is_deterministic() {
   }
   assert!(seen.contains(&"SKILL.md".to_string()));
 }
-

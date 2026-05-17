@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use agentflow_llm::providers::{LLMProvider, ProviderRequest};
 use agentflow_llm::providers::mock::MockProvider;
+use agentflow_llm::providers::{LLMProvider, ProviderRequest};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::json;
 use tokio::runtime::Runtime;
@@ -46,9 +46,8 @@ fn bench_single_hop(c: &mut Criterion) {
     let request = make_request(turns);
     group.throughput(Throughput::Elements(1));
     group.bench_with_input(BenchmarkId::new("execute", turns), &turns, |b, _| {
-      b.to_async(&rt).iter(|| async {
-        provider.execute(&request).await.expect("mock ok")
-      });
+      b.to_async(&rt)
+        .iter(|| async { provider.execute(&request).await.expect("mock ok") });
     });
   }
   group.finish();

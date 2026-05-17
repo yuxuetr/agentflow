@@ -43,7 +43,10 @@ fn runtime(
   control: WorkerControlPlane<InMemoryWorkerProtocol>,
   label: &str,
 ) -> WorkerRuntime<WorkerControlPlane<InMemoryWorkerProtocol>> {
-  WorkerRuntime::new(control, WorkerConfig::new(worker_id(label), "memory://local"))
+  WorkerRuntime::new(
+    control,
+    WorkerConfig::new(worker_id(label), "memory://local"),
+  )
 }
 
 #[tokio::test(flavor = "current_thread")]

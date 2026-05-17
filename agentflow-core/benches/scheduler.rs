@@ -14,11 +14,7 @@
 //! them as signals, not gates — host differences (CPU, OS scheduling,
 //! noise) are expected to shift absolute numbers.
 
-use std::{
-  collections::HashMap,
-  sync::Arc,
-  time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
@@ -105,29 +101,28 @@ fn bench_linear(c: &mut Criterion) {
     group.throughput(Throughput::Elements(size as u64));
     group.bench_with_input(BenchmarkId::new("serial", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
-        flow.execute_from_inputs_with_config(
-          HashMap::new(),
-          FlowExecutionConfig::default(),
-        )
-        .await
-        .expect("flow ok")
+        flow
+          .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::default())
+          .await
+          .expect("flow ok")
       });
     });
     group.bench_with_input(BenchmarkId::new("concurrent_8", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
-        flow.execute_from_inputs_with_config(
-          HashMap::new(),
-          FlowExecutionConfig {
-            mode: FlowExecutionMode::Concurrent,
-            max_concurrency: 8,
-            fail_fast: true,
-            continue_on_skip: true,
-            run_base_dir: None,
-            cancellation_token: None,
-          },
-        )
-        .await
-        .expect("flow ok")
+        flow
+          .execute_from_inputs_with_config(
+            HashMap::new(),
+            FlowExecutionConfig {
+              mode: FlowExecutionMode::Concurrent,
+              max_concurrency: 8,
+              fail_fast: true,
+              continue_on_skip: true,
+              run_base_dir: None,
+              cancellation_token: None,
+            },
+          )
+          .await
+          .expect("flow ok")
       });
     });
   }
@@ -143,29 +138,28 @@ fn bench_fanout(c: &mut Criterion) {
     group.throughput(Throughput::Elements(size as u64));
     group.bench_with_input(BenchmarkId::new("serial", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
-        flow.execute_from_inputs_with_config(
-          HashMap::new(),
-          FlowExecutionConfig::default(),
-        )
-        .await
-        .expect("flow ok")
+        flow
+          .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::default())
+          .await
+          .expect("flow ok")
       });
     });
     group.bench_with_input(BenchmarkId::new("concurrent_8", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
-        flow.execute_from_inputs_with_config(
-          HashMap::new(),
-          FlowExecutionConfig {
-            mode: FlowExecutionMode::Concurrent,
-            max_concurrency: 8,
-            fail_fast: true,
-            continue_on_skip: true,
-            run_base_dir: None,
-            cancellation_token: None,
-          },
-        )
-        .await
-        .expect("flow ok")
+        flow
+          .execute_from_inputs_with_config(
+            HashMap::new(),
+            FlowExecutionConfig {
+              mode: FlowExecutionMode::Concurrent,
+              max_concurrency: 8,
+              fail_fast: true,
+              continue_on_skip: true,
+              run_base_dir: None,
+              cancellation_token: None,
+            },
+          )
+          .await
+          .expect("flow ok")
       });
     });
   }
