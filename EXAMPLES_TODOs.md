@@ -31,7 +31,7 @@ Last updated: 2026-05-17
 
 | # | Application | Status | 验证 agentflow 哪些面 | 外部依赖 |
 | --- | --- | --- | --- | --- |
-| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | TODO | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), OpenAI/Edge TTS |
+| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | TODO | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
 | A2 | [code-reviewer](examples/applications/code-reviewer/) | TODO | ReAct agent, MCP (github), skill packaging, tool admission | gh CLI / GitHub MCP server |
 | A3 | [research-assistant](examples/applications/research-assistant/) | TODO | Arxiv node, RAG, memory, scheduled run | OpenAI/任一 LLM, 可选 Qdrant |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
@@ -61,8 +61,12 @@ Rust 库」的集成路径是否顺滑。同时这是个 phonon 作者 + agentfl
 
 **外部依赖**:
 - `phonon-podcast` 0.7（path dep 到 `/Users/hal/rustspace/phonon/phonon-podcast`）
-- TTS provider: OpenAI (`OPENAI_API_KEY`) 或 Edge (free) 或 ElevenLabs
-- LLM for script outline: 任一 agentflow-llm 支持的 provider
+- **Default 组合（零 OpenAI 依赖）**:
+  - LLM: Moonshot via OpenAI-compat base URL (`MOONSHOT_API_KEY`)
+  - TTS: MiniMax T2A v2 via phonon-ai 的 `MiniMaxTts`
+    (`MINIMAX_API_KEY`，2026-05-18 在 phonon 70daa58 commit 落地)
+- **Free-tier 备选**: Edge TTS（phonon-ai 已有，无 key）替代 MiniMax
+- **Premium 备选**: ElevenLabs（高端英文）/ OpenAI TTS
 
 **架构（薄壳方案 A）**:
 ```
@@ -77,7 +81,6 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
 ```
 
 **TODO 子项**:
-- [ ] 写 `README.md`（架构图 + 跑法 + 所需 key）
 - [ ] 决定方案 A 还是 B 开始（建议先 A）
 - [ ] 新建自定义节点（`src/podcast_node.rs` 或独立 `agentflow-podcast` crate）
 - [ ] 写 `workflow.yml`
@@ -86,7 +89,13 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
 - [ ] 写 smoke 测试（self-skip if no API key）
 - [ ] 决定是否包成 skill
 
-**DONE 子项**: （待填）
+**DONE 子项**:
+- [x] 写 `README.md`（架构图 + 跑法 + 所需 key）— commit 2f4d4b0
+- [x] **Prereq: phonon-ai 加 `MiniMaxTts` provider** — phonon repo
+  commit 70daa58（2026-05-18）。`MINIMAX_API_KEY` 走 phonon-ai 的
+  TtsProvider trait，phonon-podcast `PodcastPipeline::new(MiniMaxTts::new()?)`
+  即可用。16 个单测，含 hex 解码、business-error mapping、language_boost
+  映射、9 种 emotion 白名单。Streaming SSE 留 follow-up。
 
 **Findings**: （dogfooding 中发现的 agentflow 缺陷写这里）
 

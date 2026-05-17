@@ -48,12 +48,23 @@ between `script_gen` and `tts`. Tracked in
 | Dep | Why | How to get it |
 | --- | --- | --- |
 | `phonon-podcast` 0.7 | TTS + assembly + BGM + chapter + SRT pipeline | Path dep to `/Users/hal/rustspace/phonon/phonon-podcast` |
-| OpenAI API key | LLM for outline + TTS via phonon's `OpenAiTts` | `OPENAI_API_KEY` env |
-| *(or)* Edge TTS | Free TTS alternative (phonon's `EdgeTts`) | No key — uses Microsoft's free anonymous endpoint |
-| *(or)* ElevenLabs | Premium voice TTS | `ELEVENLABS_API_KEY` env |
+| `phonon-ai` 0.7 | Underlying TTS providers (MiniMax / OpenAI / Edge / ElevenLabs) | Re-exported from `phonon-podcast` |
 
-LLM provider for outline can be any agentflow-llm supported provider —
-pick via the workflow's `llm` node `model:` field.
+### Provider matrix
+
+| Step | Default (recommended) | Alternatives |
+| --- | --- | --- |
+| LLM (blog → outline → script) | **Moonshot** `kimi-k2-0905-preview` — long context, strong Chinese, OpenAI-compatible base URL (`https://api.moonshot.cn/v1`). Set `MOONSHOT_API_KEY`. | Any `agentflow-llm` provider (OpenAI / Anthropic / StepFun / DeepSeek / Mock). Pick via the workflow's `llm` node `model:` field. |
+| TTS (per-segment voice) | **MiniMax T2A v2** `speech-2.8-hd` via phonon-ai's `MiniMaxTts` — has documented `Cantonese_podacast_host_*` voices, 9 emotion levels (calm/whisper/happy/...), 32 kHz native. Set `MINIMAX_API_KEY`. | `EdgeTts` (free, no key; Microsoft anonymous endpoint), `OpenAiTts` (paid, English-leaning), `ElevenLabsTts` (premium, best English). |
+
+**Zero-OpenAI-key configuration**: Moonshot for LLM + MiniMax for TTS
+covers the full pipeline using only mainland-Chinese providers, which
+matters for billing / network access in PRC and gives MiniMax's
+emotion control for a more podcast-feel result.
+
+**Free-tier configuration**: any `agentflow-llm` provider for LLM
+(mock works for the script structure; a real model is needed for
+actual content) + `EdgeTts` for TTS (free, no key).
 
 ## Files (to be created during implementation)
 
@@ -78,12 +89,27 @@ blog-to-podcast/
 
 ## Run (planned, not yet implemented)
 
+Default Moonshot + MiniMax combo:
+
 ```bash
 cd examples/applications/blog-to-podcast
-export OPENAI_API_KEY=sk-...
+export MOONSHOT_API_KEY=sk-...     # for LLM (outline + script)
+export MINIMAX_API_KEY=eyJ...      # for TTS
 cargo run --release -- workflow run workflow.yml \
   --input blog_source=fixtures/medium_blog.md \
   --input output_path=/tmp/episode.wav
+```
+
+Free-tier fallback (Edge TTS, no MiniMax key):
+
+```bash
+export MOONSHOT_API_KEY=sk-...     # still need an LLM key
+cargo run --release -- workflow run workflow.yml \
+  --input blog_source=fixtures/medium_blog.md \
+  --input output_path=/tmp/episode.wav \
+  --input tts_provider=edge \
+  --input host_voice=zh-CN-YunyangNeural \
+  --input guest_voice=zh-CN-XiaoxiaoNeural
 ```
 
 ## What this validates in AgentFlow
