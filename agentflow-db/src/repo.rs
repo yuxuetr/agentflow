@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::error::DbError;
 use crate::models::{
   Artifact, Event, HarnessSession, HarnessSessionEvent, HarnessSessionStatus, McpSession,
-  NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Run,
-  RunStatus, SkillInstall, Step,
+  NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep,
+  NewUserPreference, Run, RunStatus, SkillInstall, Step, UserPreference,
 };
 
 /// Run lifecycle persistence.
@@ -688,6 +688,7 @@ pub struct Repositories {
   pub mcp_sessions: PgMcpSessionRepo,
   pub harness_sessions: PgHarnessSessionRepo,
   pub harness_events: PgHarnessEventRepo,
+  pub user_preferences: PgUserPreferenceRepo,
 }
 
 impl Repositories {
@@ -700,7 +701,105 @@ impl Repositories {
       skill_installs: PgSkillInstallRepo { pool: pool.clone() },
       mcp_sessions: PgMcpSessionRepo { pool: pool.clone() },
       harness_sessions: PgHarnessSessionRepo { pool: pool.clone() },
-      harness_events: PgHarnessEventRepo { pool },
+      harness_events: PgHarnessEventRepo { pool: pool.clone() },
+      user_preferences: PgUserPreferenceRepo { pool },
     }
+  }
+}
+
+// ── P6.4 user preferences ────────────────────────────────────────────────
+
+/// Tenant-scoped UI preference persistence (theme / default profile /
+/// pagination size / event filter, etc.). One row per `(tenant_id, key)`.
+#[async_trait]
+pub trait UserPreferenceRepo: Send + Sync {
+  /// Upsert a single preference. The repo stamps `updated_at`.
+  async fn upsert(&self, preference: NewUserPreference) -> Result<(), DbError>;
+  /// Upsert many preferences for the same tenant in a single
+  /// transaction. The `PUT /v1/preferences` route uses this so a
+  /// failed key doesn't leave others stranded with stale data.
+  async fn upsert_many(
+    &self,
+    tenant_id: &str,
+    entries: Vec<(String, serde_json::Value)>,
+  ) -> Result<(), DbError>;
+  /// Read every preference for a tenant, sorted by key for stable
+  /// rendering downstream.
+  async fn list_for_tenant(&self, tenant_id: &str) -> Result<Vec<UserPreference>, DbError>;
+  /// Delete a specific key. Used by the UI's "reset to default" path.
+  /// Returns `Ok(false)` when the row doesn't exist.
+  async fn delete(&self, tenant_id: &str, key: &str) -> Result<bool, DbError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct PgUserPreferenceRepo {
+  pub pool: PgPool,
+}
+
+#[async_trait]
+impl UserPreferenceRepo for PgUserPreferenceRepo {
+  async fn upsert(&self, preference: NewUserPreference) -> Result<(), DbError> {
+    sqlx::query(
+      r#"INSERT INTO user_preferences (tenant_id, key, value, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (tenant_id, key) DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = EXCLUDED.updated_at"#,
+    )
+    .bind(&preference.tenant_id)
+    .bind(&preference.key)
+    .bind(&preference.value)
+    .execute(&self.pool)
+    .await?;
+    Ok(())
+  }
+
+  async fn upsert_many(
+    &self,
+    tenant_id: &str,
+    entries: Vec<(String, serde_json::Value)>,
+  ) -> Result<(), DbError> {
+    if entries.is_empty() {
+      return Ok(());
+    }
+    let mut tx = self.pool.begin().await?;
+    for (key, value) in entries {
+      sqlx::query(
+        r#"INSERT INTO user_preferences (tenant_id, key, value, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (tenant_id, key) DO UPDATE SET
+             value = EXCLUDED.value,
+             updated_at = EXCLUDED.updated_at"#,
+      )
+      .bind(tenant_id)
+      .bind(&key)
+      .bind(&value)
+      .execute(&mut *tx)
+      .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+  }
+
+  async fn list_for_tenant(&self, tenant_id: &str) -> Result<Vec<UserPreference>, DbError> {
+    let rows = sqlx::query_as::<_, UserPreference>(
+      r#"SELECT tenant_id, key, value, updated_at
+         FROM user_preferences
+         WHERE tenant_id = $1
+         ORDER BY key"#,
+    )
+    .bind(tenant_id)
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(rows)
+  }
+
+  async fn delete(&self, tenant_id: &str, key: &str) -> Result<bool, DbError> {
+    let result = sqlx::query("DELETE FROM user_preferences WHERE tenant_id = $1 AND key = $2")
+      .bind(tenant_id)
+      .bind(key)
+      .execute(&self.pool)
+      .await?;
+    Ok(result.rows_affected() > 0)
   }
 }

@@ -272,6 +272,26 @@ pub struct NewHarnessSessionEvent {
   pub payload: serde_json::Value,
 }
 
+// ── P6.4 user preferences ────────────────────────────────────────────────
+
+/// One row in the `user_preferences` table — a tenant-scoped UI / operator
+/// preference (theme, default profile, event-filter expression, etc.).
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct UserPreference {
+  pub tenant_id: String,
+  pub key: String,
+  pub value: serde_json::Value,
+  pub updated_at: DateTime<Utc>,
+}
+
+/// Input row for upsert. The repo stamps `updated_at` server-side.
+#[derive(Debug, Clone)]
+pub struct NewUserPreference {
+  pub tenant_id: String,
+  pub key: String,
+  pub value: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

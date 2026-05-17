@@ -31,6 +31,7 @@ pub mod events_stream;
 pub mod harness;
 pub mod harness_approval;
 pub mod harness_live;
+pub mod preferences;
 pub mod runs;
 pub mod scheduler;
 pub mod serve;
@@ -345,7 +346,11 @@ pub fn create_router(state: AppState) -> Router {
       "/v1/harness/sessions/:id/approvals/:request_id",
       post(decide_approval),
     )
-    .route("/v1/diagnostics", get(diagnostics::get_diagnostics));
+    .route("/v1/diagnostics", get(diagnostics::get_diagnostics))
+    .route(
+      "/v1/preferences",
+      get(preferences::list_preferences).put(preferences::put_preferences),
+    );
 
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),

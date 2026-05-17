@@ -88,6 +88,7 @@ but do not implement channel adapters in this queue.
 - P3.1 SDK example matrix: new top-level `examples/README.md` is the canonical 12-row matrix index. Audit found 11/12 rows already shipped; the gap (tool policy + sandbox capability decision) is filled by the new `agentflow-tools/examples/tool_policy_sandbox_demo.rs`. All examples compile under their respective feature sets.
 - P3.2 + P3.10 + P7.3 Examples smoke CI (closed jointly): new `cargo xtask examples-smoke` subcommand runs 7 representative examples through `cargo run` with per-example wall-clock caps; total budget pinned at 5 min (P3.10 spec). Quality CI `examples` job invokes it with a 10-min job timeout. 3 new xtask unit tests lock down the list shape + budget invariants.
 - P7.2 CI perf regression gate (MVP): new `cargo xtask bench-gate` compares `target/criterion/*/new/estimates.json` against `benches/baselines/<host>.json` and exits non-zero when any bench is ≥ 1.25× baseline. New `.github/workflows/bench.yml` runs the four Criterion suites on perf-sensitive PRs + main pushes and invokes the gate. `--allow-missing` lets the job pass until a per-runner `ci-ubuntu-latest.json` baseline lands. 5 new xtask unit tests cover the comparator paths.
+- P6.4 Durable user preferences: migration `0004_user_preferences.sql` + `UserPreferenceRepo` (upsert / upsert_many / list / delete) + new `GET`/`PUT /v1/preferences` routes scoped to `X-Agentflow-Tenant`. Server-side rejection of token-shaped values (Bearer-prefixed / `sk-`/`ghp_` API-key prefixes / long hex digests / opaque alphanumeric secrets). 3 unit + 5 integration tests cover happy round-trip, tenant isolation, and rejection paths. UI wiring is the next slice.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1374,12 +1375,37 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
   - Backend: extend `GET /v1/runs/{id}/events/history` to include the
     fields needed for diffing.
 
-- TODO P6.4 Durable user preferences:
-  - Add `user_preferences` table (single tenant initial):
-    - `key`, `value` (JSONB), `updated_at`.
-  - Add `GET /v1/preferences` / `PUT /v1/preferences`.
-  - Persist UI preferences: theme, default profile, event filter,
-    pagination size. Reject token-shaped values server-side.
+- DONE P6.4 Durable user preferences (server half — UI wiring is a
+  follow-up):
+  - New `0004_user_preferences.sql` migration adds a tenant-scoped
+    `(tenant_id, key, value JSONB, updated_at)` table keyed by
+    `(tenant_id, key)`. Index on `(tenant_id, updated_at DESC)` so
+    "what changed recently" reads are cheap.
+  - `agentflow-db` ships `UserPreferenceRepo` trait +
+    `PgUserPreferenceRepo` (upsert / upsert_many / list_for_tenant /
+    delete) plus `UserPreference` + `NewUserPreference` models.
+    `Repositories::from_pool` wires it into `AppState.repos`.
+  - `agentflow-server::preferences` adds:
+    - `GET /v1/preferences` → `{ preferences: { <key>: <value>, ... } }`
+      for the tenant bound by `X-Agentflow-Tenant` (P2.6).
+    - `PUT /v1/preferences` upserts a batch in one transaction.
+  - Validation rules:
+    - Key must match `^[a-zA-Z0-9_.\-:]{1,128}$`.
+    - Value JSON serialise ≤ 16 KiB.
+    - Values screened for token-shape strings (Bearer-prefixed,
+      `sk-`/`ant-`/`ghp_`/etc. API-key prefixes, 32+ hex digests,
+      40+ char alphanumeric+`=/+` opaque strings). A match → 400
+      with the rejected key in the message.
+    - Token-screen rejections are atomic — no row from the batch
+      persists if any value is rejected.
+  - 3 unit tests + 5 server integration tests cover the happy
+    round-trip, tenant isolation, and the rejection paths. Token
+    screen is unit-tested against representative real-world prefixes
+    and against safe values that must NOT trigger.
+  - Follow-up: wire the UI (`agentflow-ui/src/main.tsx`) to read /
+    write through the new endpoints, replacing the localStorage-only
+    path. Tracked alongside P6.5 since that's the next UI surface
+    that needs to persist state.
 
 - TODO P6.5 Operator-focused event filter:
   - Add a query bar in `/ui/runs/{id}` matching the trace replay TUI
