@@ -686,6 +686,200 @@ fn cli_workflow_validate_explain_permissions_shell_node_capability() {
     ));
 }
 
+// --- P3.5: MCP / agent / multi_agent permission classification ----------
+
+fn write_mcp_permission_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("mcp_permission_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: MCP Permission Survey
+nodes:
+  - id: list_files
+    type: mcp
+    parameters:
+      server_command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      tool_name: list_directory
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_mcp_node() {
+  // The schema validator only recognises `type: mcp` when the `mcp` feature
+  // is enabled — otherwise validation fails with an unknown-node-type
+  // diagnostic. The permission report still prints to stdout before bail,
+  // so we deliberately do not assert .success() (matches the shell-node
+  // test pattern above).
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mcp_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .stdout(predicate::str::contains("Permission requirements:"))
+    .stdout(predicate::str::contains("list_files (type=mcp) → mcp"))
+    .stdout(predicate::str::contains("capabilities: [mcp.call, net]"))
+    .stdout(predicate::str::contains(
+      "server_command: [npx, -y, @modelcontextprotocol/server-filesystem, /tmp]",
+    ))
+    .stdout(predicate::str::contains("tool_name: list_directory"));
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_mcp_node_json_envelope() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_mcp_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+      "--format",
+      "json",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .stdout(predicate::str::contains("\"permissions\""))
+    .stdout(predicate::str::contains("\"category\": \"mcp\""))
+    .stdout(predicate::str::contains("\"mcp.call\""))
+    .stdout(predicate::str::contains(
+      "\"tool_name\": \"list_directory\"",
+    ));
+}
+
+fn write_skill_agent_permission_workflow(dir: &TempDir) -> std::path::PathBuf {
+  // No real skill on disk required — `workflow validate` does not load the
+  // referenced skill manifest, so a placeholder path is fine for asserting
+  // the permission classifier output.
+  let workflow = dir.path().join("skill_agent_permission_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Skill Agent Permission Survey
+nodes:
+  - id: review
+    type: skill_agent
+    parameters:
+      skill: "/opt/agentflow/skills/review-skill"
+      message: "Review this PR"
+      model: "step-2-mini"
+      allowed_tools: ["read_file", "search"]
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_skill_agent_node() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_skill_agent_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Permission requirements:"))
+    .stdout(predicate::str::contains(
+      "review (type=skill_agent) → agent",
+    ))
+    .stdout(predicate::str::contains("capabilities: [agent.runtime]"))
+    .stdout(predicate::str::contains(
+      "skill: /opt/agentflow/skills/review-skill",
+    ))
+    .stdout(predicate::str::contains("model: step-2-mini"))
+    .stdout(predicate::str::contains(
+      "allowed_tools: [read_file, search]",
+    ))
+    .stdout(predicate::str::contains(
+      "note: agent: effective capability surface depends on the embedded tool registry",
+    ));
+}
+
+fn write_multi_agent_permission_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("multi_agent_permission_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Multi Agent Permission Survey
+nodes:
+  - id: pipeline
+    type: multi_agent
+    parameters:
+      mode: handoff
+      message: "Customer wants a refund"
+      initial_agent: triage
+      max_handoffs: 3
+      agents:
+        - name: triage
+          skill: "/opt/agentflow/skills/triage"
+        - name: billing
+          skill: "/opt/agentflow/skills/billing"
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+#[test]
+fn cli_workflow_validate_explain_permissions_multi_agent_node() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_multi_agent_permission_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "validate",
+      workflow.to_str().unwrap(),
+      "--explain-permissions",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Permission requirements:"))
+    .stdout(predicate::str::contains(
+      "pipeline (type=multi_agent) → agent",
+    ))
+    .stdout(predicate::str::contains("capabilities: [agent.runtime]"))
+    // multi_agent constraints surface via the agent.skill / agent.model /
+    // agent.allowed_tools triplet on the *outer* node parameters only; the
+    // per-participant `agents[].skill` is intentionally NOT surfaced here
+    // (the participant fan-out is the multi-agent supervisor's concern,
+    // not the per-node permission report). Verify the advisory note still
+    // fires so operators know the per-node capability surface is opaque.
+    .stdout(predicate::str::contains(
+      "note: agent: effective capability surface depends on the embedded tool registry",
+    ))
+    .stdout(predicate::str::contains(
+      "1 of 1 nodes carry a host-side permission category",
+    ));
+}
+
 #[cfg(not(feature = "mcp"))]
 #[test]
 fn cli_workflow_run_reports_feature_gated_mcp_node() {

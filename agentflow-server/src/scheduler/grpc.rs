@@ -566,7 +566,9 @@ fn worker_trace_event_to_proto(event: WorkerTraceEvent) -> pb::WorkerTraceEvent 
   }
 }
 
-fn worker_trace_event_from_proto(event: pb::WorkerTraceEvent) -> BoxedStatusResult<WorkerTraceEvent> {
+fn worker_trace_event_from_proto(
+  event: pb::WorkerTraceEvent,
+) -> BoxedStatusResult<WorkerTraceEvent> {
   Ok(WorkerTraceEvent {
     seq: event.seq,
     kind: event.kind,
