@@ -51,6 +51,22 @@ jobs:
       - name: Check lints
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  linux-sandbox-check:
+    # P7.4-FU1: the Linux seccomp backend in agentflow-tools/src/sandbox/linux.rs
+    # is `#[cfg(target_os = "linux")]`-gated, so macOS dev builds skip it. This
+    # dedicated check pins a quick cargo-check pass on the Linux target so a
+    # PR that re-introduces a Linux-only compile error fails fast (~2 min)
+    # instead of waiting for the release-time docker image build.
+    name: cargo check linux sandbox backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: cargo check linux sandbox backend
+        run: cargo check --target x86_64-unknown-linux-gnu -p agentflow-tools --all-targets
+
   test:
     name: cargo test (${{ matrix.package }})
     runs-on: ubuntu-latest
@@ -201,6 +217,7 @@ jobs:
       - verify-edition
       - check-agent-sdk-doc
       - clippy
+      - linux-sandbox-check
       - test
       - doctest
       - features
@@ -214,6 +231,7 @@ jobs:
           echo "verify-edition: ${{ needs.verify-edition.result }}"
           echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
+          echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "test: ${{ needs.test.result }}"
           echo "doctest: ${{ needs.doctest.result }}"
           echo "features: ${{ needs.features.result }}"
@@ -223,6 +241,7 @@ jobs:
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
+          test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.doctest.result }}" = "success"
           test "${{ needs.features.result }}" = "success"
