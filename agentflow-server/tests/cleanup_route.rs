@@ -31,7 +31,7 @@ async fn fresh_db() -> Option<Database> {
 
 async fn insert_run(db: &Database, status: RunStatus, finished_offset_days: Option<i64>) -> Uuid {
   let id = Uuid::new_v4();
-  repos(&db)
+  repos(db)
     .runs
     .create(NewRun {
       id,
@@ -44,7 +44,7 @@ async fn insert_run(db: &Database, status: RunStatus, finished_offset_days: Opti
     .unwrap();
   if !matches!(status, RunStatus::Running | RunStatus::Queued) {
     // Mark terminal and back-date finished_at.
-    repos(&db)
+    repos(db)
       .runs
       .update_status(id, status, None)
       .await

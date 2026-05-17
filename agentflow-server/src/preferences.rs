@@ -94,7 +94,7 @@ pub async fn put_preferences(
     entries.push((key, value));
   }
 
-  let _ = state
+  state
     .repos
     .user_preferences
     .upsert_many(tenant.as_str(), entries)

@@ -488,7 +488,7 @@ mod tests {
     let mut cfg = ServeConfig::defaults();
     cfg.security_profile = SecurityProfile::Local;
     let report = run_check(cfg).await.unwrap();
-    assert_eq!(report.database.url_present, false);
+    assert!(!report.database.url_present);
     assert!(report.readiness >= ServeReadiness::Warn);
     assert!(
       report

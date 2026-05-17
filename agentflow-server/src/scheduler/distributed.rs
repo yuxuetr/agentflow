@@ -518,7 +518,7 @@ fn flow_outputs_from_json(
     .into_iter()
     .map(|(key, value)| {
       serde_json::from_value::<FlowValue>(value.clone())
-        .or_else(|_| Ok(FlowValue::Json(value)))
+        .or(Ok(FlowValue::Json(value)))
         .map(|value| (key, value))
     })
     .collect()

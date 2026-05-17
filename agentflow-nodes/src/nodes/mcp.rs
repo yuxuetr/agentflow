@@ -323,7 +323,7 @@ mod tests {
     )
     .with_params(json!({"path": "/tmp"}));
 
-    let mut inputs = AsyncNodeInputs::new();
+    let inputs = AsyncNodeInputs::new();
     let result = node.execute(&inputs).await;
 
     assert!(result.is_ok(), "MCP node execution failed: {:?}", result);

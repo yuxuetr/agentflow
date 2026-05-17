@@ -233,7 +233,7 @@ mod tests {
       SandboxEnforcement::Disabled,
     ];
     for level in levels {
-      let json = serde_json::to_value(&level).unwrap();
+      let json = serde_json::to_value(level).unwrap();
       let back: SandboxEnforcement = serde_json::from_value(json).unwrap();
       assert_eq!(level, back);
     }

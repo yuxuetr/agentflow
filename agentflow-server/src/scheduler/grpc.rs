@@ -23,6 +23,13 @@ use super::{
   WorkerTaskResult, WorkerTraceEvent,
 };
 
+/// Boxed-`Status` result used by the proto <-> domain conversion helpers in
+/// this module. `tonic::Status` is ~176 bytes (clippy::result_large_err), so
+/// every Result-returning helper that bubbles a `Status` through `?` boxes it.
+/// The public tonic trait surface still returns `Result<_, Status>` (unboxed)
+/// — callers unbox with `.map_err(|e| *e)` at the boundary.
+type BoxedStatusResult<T> = std::result::Result<T, Box<Status>>;
+
 /// Protobuf wire messages for `agentflow.scheduler.v1`.
 pub mod pb {
   #[derive(Clone, PartialEq, ::prost::Message)]
@@ -164,8 +171,9 @@ where
     let task = request
       .into_inner()
       .task
-      .ok_or_else(|| Status::invalid_argument("task is required"))
-      .and_then(worker_task_from_proto)?;
+      .ok_or_else(|| Box::new(Status::invalid_argument("task is required")))
+      .and_then(worker_task_from_proto)
+      .map_err(|e| *e)?;
     self
       .protocol
       .submit_task(task)
@@ -196,11 +204,12 @@ where
     let request = request.into_inner();
     let worker_id =
       WorkerId::new(request.worker_id).map_err(|err| Status::invalid_argument(err.to_string()))?;
-    let task_id = parse_uuid(&request.task_id, "task_id")?;
+    let task_id = parse_uuid(&request.task_id, "task_id").map_err(|e| *e)?;
     let result = request
       .result
-      .ok_or_else(|| Status::invalid_argument("result is required"))
-      .and_then(worker_task_result_from_proto)?;
+      .ok_or_else(|| Box::new(Status::invalid_argument("result is required")))
+      .and_then(worker_task_result_from_proto)
+      .map_err(|e| *e)?;
     self
       .protocol
       .report_result(worker_id, task_id, result)
@@ -213,7 +222,7 @@ where
     &self,
     request: Request<pb::HeartbeatRequest>,
   ) -> Result<Response<pb::Empty>, Status> {
-    let heartbeat = worker_heartbeat_from_proto(request.into_inner())?;
+    let heartbeat = worker_heartbeat_from_proto(request.into_inner()).map_err(|e| *e)?;
     self
       .protocol
       .heartbeat(heartbeat)
@@ -235,8 +244,9 @@ where
     let task = request
       .into_inner()
       .task
-      .ok_or_else(|| Status::invalid_argument("task is required"))
-      .and_then(worker_task_from_proto)?;
+      .ok_or_else(|| Box::new(Status::invalid_argument("task is required")))
+      .and_then(worker_task_from_proto)
+      .map_err(|e| *e)?;
     self.schedule_task(task).await.map_err(status_from_error)?;
     Ok(Response::new(pb::Empty {}))
   }
@@ -262,11 +272,12 @@ where
     let request = request.into_inner();
     let worker_id =
       WorkerId::new(request.worker_id).map_err(|err| Status::invalid_argument(err.to_string()))?;
-    let task_id = parse_uuid(&request.task_id, "task_id")?;
+    let task_id = parse_uuid(&request.task_id, "task_id").map_err(|e| *e)?;
     let result = request
       .result
-      .ok_or_else(|| Status::invalid_argument("result is required"))
-      .and_then(worker_task_result_from_proto)?;
+      .ok_or_else(|| Box::new(Status::invalid_argument("result is required")))
+      .and_then(worker_task_result_from_proto)
+      .map_err(|e| *e)?;
     self
       .report_result(worker_id, task_id, result)
       .await
@@ -278,7 +289,7 @@ where
     &self,
     request: Request<pb::HeartbeatRequest>,
   ) -> Result<Response<pb::Empty>, Status> {
-    let heartbeat = worker_heartbeat_from_proto(request.into_inner())?;
+    let heartbeat = worker_heartbeat_from_proto(request.into_inner()).map_err(|e| *e)?;
     self.heartbeat(heartbeat).await.map_err(status_from_error)?;
     Ok(Response::new(pb::Empty {}))
   }
@@ -494,7 +505,7 @@ impl WorkerProtocol for GrpcWorkerProtocol {
       .task
       .map(worker_task_from_proto)
       .transpose()
-      .map_err(scheduler_error_from_status)
+      .map_err(|boxed| scheduler_error_from_status(*boxed))
   }
 
   async fn report_result(
@@ -537,7 +548,7 @@ fn worker_task_to_proto(task: WorkerTask) -> pb::WorkerTask {
   }
 }
 
-fn worker_task_from_proto(task: pb::WorkerTask) -> Result<WorkerTask, Status> {
+fn worker_task_from_proto(task: pb::WorkerTask) -> BoxedStatusResult<WorkerTask> {
   Ok(WorkerTask {
     task_id: parse_uuid(&task.task_id, "task_id")?,
     run_id: parse_uuid(&task.run_id, "run_id")?,
@@ -555,7 +566,7 @@ fn worker_trace_event_to_proto(event: WorkerTraceEvent) -> pb::WorkerTraceEvent 
   }
 }
 
-fn worker_trace_event_from_proto(event: pb::WorkerTraceEvent) -> Result<WorkerTraceEvent, Status> {
+fn worker_trace_event_from_proto(event: pb::WorkerTraceEvent) -> BoxedStatusResult<WorkerTraceEvent> {
   Ok(WorkerTraceEvent {
     seq: event.seq,
     kind: event.kind,
@@ -592,7 +603,9 @@ fn worker_task_result_to_proto(result: WorkerTaskResult) -> pb::WorkerTaskResult
   }
 }
 
-fn worker_task_result_from_proto(result: pb::WorkerTaskResult) -> Result<WorkerTaskResult, Status> {
+fn worker_task_result_from_proto(
+  result: pb::WorkerTaskResult,
+) -> BoxedStatusResult<WorkerTaskResult> {
   let events = result
     .events
     .into_iter()
@@ -608,9 +621,9 @@ fn worker_task_result_from_proto(result: pb::WorkerTaskResult) -> Result<WorkerT
       retryable: result.retryable,
       events,
     }),
-    Ok(pb::worker_task_result::Status::Unspecified) | Err(_) => {
-      Err(Status::invalid_argument("result status is required"))
-    }
+    Ok(pb::worker_task_result::Status::Unspecified) | Err(_) => Err(Box::new(
+      Status::invalid_argument("result status is required"),
+    )),
   }
 }
 
@@ -626,9 +639,11 @@ fn worker_heartbeat_to_proto(heartbeat: WorkerHeartbeat) -> pb::HeartbeatRequest
   }
 }
 
-fn worker_heartbeat_from_proto(heartbeat: pb::HeartbeatRequest) -> Result<WorkerHeartbeat, Status> {
-  let worker_id =
-    WorkerId::new(heartbeat.worker_id).map_err(|err| Status::invalid_argument(err.to_string()))?;
+fn worker_heartbeat_from_proto(
+  heartbeat: pb::HeartbeatRequest,
+) -> BoxedStatusResult<WorkerHeartbeat> {
+  let worker_id = WorkerId::new(heartbeat.worker_id)
+    .map_err(|err| Box::new(Status::invalid_argument(err.to_string())))?;
   let active_task = if heartbeat.active_task_id.is_empty() {
     None
   } else {
@@ -638,7 +653,11 @@ fn worker_heartbeat_from_proto(heartbeat: pb::HeartbeatRequest) -> Result<Worker
     Utc::now()
   } else {
     DateTime::parse_from_rfc3339(&heartbeat.timestamp_rfc3339)
-      .map_err(|err| Status::invalid_argument(format!("invalid timestamp_rfc3339: {err}")))?
+      .map_err(|err| {
+        Box::new(Status::invalid_argument(format!(
+          "invalid timestamp_rfc3339: {err}"
+        )))
+      })?
       .with_timezone(&Utc)
   };
   Ok(WorkerHeartbeat {
@@ -649,16 +668,17 @@ fn worker_heartbeat_from_proto(heartbeat: pb::HeartbeatRequest) -> Result<Worker
   })
 }
 
-fn parse_uuid(value: &str, field: &str) -> Result<Uuid, Status> {
-  Uuid::parse_str(value).map_err(|err| Status::invalid_argument(format!("invalid {field}: {err}")))
+fn parse_uuid(value: &str, field: &str) -> BoxedStatusResult<Uuid> {
+  Uuid::parse_str(value)
+    .map_err(|err| Box::new(Status::invalid_argument(format!("invalid {field}: {err}"))))
 }
 
-fn parse_json(value: &str, field: &str) -> Result<serde_json::Value, Status> {
+fn parse_json(value: &str, field: &str) -> BoxedStatusResult<serde_json::Value> {
   if value.is_empty() {
     return Ok(serde_json::Value::Null);
   }
   serde_json::from_str(value)
-    .map_err(|err| Status::invalid_argument(format!("invalid {field}: {err}")))
+    .map_err(|err| Box::new(Status::invalid_argument(format!("invalid {field}: {err}"))))
 }
 
 fn status_from_error(error: SchedulerError) -> Status {
