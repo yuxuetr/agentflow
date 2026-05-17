@@ -43,6 +43,11 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- P7.4-FU3 Box `tonic::Status` + workspace clippy sweep
+  (`BoxedStatusResult` alias in `agentflow-server/src/scheduler/grpc.rs`
+  + 6 tag-along pre-existing clippy cleanups across server / nodes /
+  tools; `cargo clippy --workspace --all-targets -- -D warnings`
+  exits 0).
 - P7.4-FU2 Workspace rustfmt sweep before tag (single `chore(fmt)`
   commit cleared residual drift across 6 benches/tests/examples;
   `cargo fmt --all -- --check` exits 0 on the release branch).
@@ -1689,17 +1694,35 @@ known characteristics, not surprises.
   - **Acceptance**: `cargo fmt --all -- --check` exits 0 on the
     release branch (verified locally).
 
-- TODO P7.4-FU3 Box `tonic::Status` to clear `clippy::result_large_err`:
-  - **Why**: `cargo clippy --workspace -- -D warnings` has 8
-    pre-existing warnings in `agentflow-server/src/scheduler/grpc.rs`
-    flagging `clippy::result_large_err` (the 176-byte
-    `tonic::Status` in `Err` variants).
-  - **What**: introduce a private `Result<T> = Result<T,
-    Box<tonic::Status>>` alias inside `grpc.rs`, box on construction,
-    and let the public surface stay unchanged.
+- DONE P7.4-FU3 Box `tonic::Status` + workspace clippy sweep:
+  - Private `BoxedStatusResult<T> = Result<T, Box<Status>>` alias in
+    `agentflow-server/src/scheduler/grpc.rs`. Six proto<->domain
+    conversion helpers (`worker_task_from_proto`,
+    `worker_trace_event_from_proto`, `worker_task_result_from_proto`,
+    `worker_heartbeat_from_proto`, `parse_uuid`, `parse_json`) now
+    return `BoxedStatusResult<T>` and box `Status` at construction.
+    Public `WorkerControl` trait surface stays unboxed; callers in
+    the trait impls unbox with `.map_err(|e| *e)?` at the boundary.
+    The `GrpcWorkerProtocol::claim_task` client-side mapper unboxes
+    via `|boxed| scheduler_error_from_status(*boxed)`.
+  - Tag-along pre-existing clippy fixes folded into the same commit
+    so the workspace gate actually hits zero:
+    - `preferences.rs` `let _ = ...await?;` → drop binding
+      (let_unit_value).
+    - `distributed.rs` `or_else(|_| Ok(...))` → `or(Ok(...))`
+      (unnecessary_lazy_evaluations).
+    - `serve.rs` `assert_eq!(.., false)` → `assert!(!...)`
+      (bool_assert_comparison).
+    - `cleanup_route.rs` `repos(&db)` where `db: &Database`
+      (needless_borrow).
+    - `mcp.rs` unused `mut` in an integration-test fixture
+      (unused_mut).
+    - `backend.rs` `serde_json::to_value(&level)` → `(level)`
+      (needless_borrow).
   - **Acceptance**: `cargo clippy --workspace --all-targets -- -D
-    warnings` exits 0. Can land in `v1.0.0-rc.2` if `rc.1` is
-    otherwise clean.
+    warnings` exits 0. agentflow-server lib tests (75) +
+    agentflow-nodes mcp lib tests (30) + agentflow-tools sandbox
+    tests stay green.
 
 - TODO P7.4-FU4 Production deployment runbook in release notes:
   - **Why**: `agentflow doctor --profile production` returns
