@@ -89,6 +89,7 @@ but do not implement channel adapters in this queue.
 - P3.2 + P3.10 + P7.3 Examples smoke CI (closed jointly): new `cargo xtask examples-smoke` subcommand runs 7 representative examples through `cargo run` with per-example wall-clock caps; total budget pinned at 5 min (P3.10 spec). Quality CI `examples` job invokes it with a 10-min job timeout. 3 new xtask unit tests lock down the list shape + budget invariants.
 - P7.2 CI perf regression gate (MVP): new `cargo xtask bench-gate` compares `target/criterion/*/new/estimates.json` against `benches/baselines/<host>.json` and exits non-zero when any bench is ≥ 1.25× baseline. New `.github/workflows/bench.yml` runs the four Criterion suites on perf-sensitive PRs + main pushes and invokes the gate. `--allow-missing` lets the job pass until a per-runner `ci-ubuntu-latest.json` baseline lands. 5 new xtask unit tests cover the comparator paths.
 - P6.4 Durable user preferences: migration `0004_user_preferences.sql` + `UserPreferenceRepo` (upsert / upsert_many / list / delete) + new `GET`/`PUT /v1/preferences` routes scoped to `X-Agentflow-Tenant`. Server-side rejection of token-shaped values (Bearer-prefixed / `sk-`/`ghp_` API-key prefixes / long hex digests / opaque alphanumeric secrets). 3 unit + 5 integration tests cover happy round-trip, tenant isolation, and rejection paths. UI wiring is the next slice.
+- P6.5 Operator event filter (client-side): tiny expression language in `agentflow-ui/src/eventFilter.ts` (`kind=` / `kind!=` / `kind~` / `step` ops + `AND` chaining); filter input above the run-detail timeline persists per `run_id` in localStorage; 18 self-test assertions in `eventFilter.test.ts`. Server-side `?filter=` pre-filter + P6.4 preferences sync tracked as follow-ups.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1407,12 +1408,36 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     path. Tracked alongside P6.5 since that's the next UI surface
     that needs to persist state.
 
-- TODO P6.5 Operator-focused event filter:
-  - Add a query bar in `/ui/runs/{id}` matching the trace replay TUI
-    filter language: `kind=ToolCall AND step>5`, etc.
-  - Filter is applied client-side first; server-side fallback when the
-    filter expression matches a known indexed path.
-  - Persist last filter per run id (links to P6.4).
+- DONE P6.5 Operator-focused event filter (client-side; server-side
+  fallback deferred):
+  - New `agentflow-ui/src/eventFilter.ts` parses a tiny expression
+    language:
+    - `kind=<value>` / `kind!=<value>` (case-insensitive exact)
+    - `kind~<substring>` (case-insensitive substring)
+    - `step<op>N` where `<op>` ∈ `> >= < <= = !=` (matches
+      `payload.step_index`, falling back to `event.seq` when absent)
+    - `AND` between clauses (case-insensitive)
+    - Empty string ⇒ match every event.
+  - Parse errors surface as a structured `error` field so the UI
+    renders them inline instead of crashing.
+  - `agentflow-ui/src/main.tsx` adds a filter input above the run-
+    detail timeline; the input persists per `run_id` in
+    `agentflow.ui.run.eventFilter.<id>` so the same filter survives
+    a page reload. Compile error renders under the input in red.
+    The timeline header surfaces `(matched/total)` when a filter
+    is active.
+  - 18 self-test assertions in `src/eventFilter.test.ts` cover
+    empty / kind= / kind!= / kind~ / step ops / AND chaining /
+    whitespace tolerance / malformed-clause error paths. Run via
+    `bun src/eventFilter.test.ts`; `npm test` (tsc --noEmit)
+    stays clean.
+  - Follow-ups (not blocking):
+    - Server-side filter fallback (today client-side only; once
+      `/v1/runs/{id}/events/history` accepts a `?filter=` param
+      it can pre-filter for very long runs).
+    - Persist the filter through the P6.4 `/v1/preferences` API
+      under `ui.run.<id>.filter` so it survives across browsers.
+      The localStorage slot stays as the first-paint cache.
 
 ---
 

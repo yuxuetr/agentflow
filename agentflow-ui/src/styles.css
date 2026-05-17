@@ -1309,3 +1309,42 @@ h1 {
 .diag-badge-ok { background: #d1fae5; color: #065f46; }
 .diag-badge-warning { background: #fef3c7; color: #92400e; }
 .diag-badge-fail { background: #fee2e2; color: #991b1b; }
+
+/* P6.5 operator event filter */
+.event-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #f4f6fa;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+.event-filter label {
+  font-weight: 600;
+  color: #4b5563;
+}
+.event-filter input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #ffffff;
+}
+.event-filter input:focus {
+  outline: 2px solid #6366f1;
+  outline-offset: -1px;
+}
+.event-filter-error {
+  color: #b91c1c;
+  font-style: italic;
+  font-size: 11px;
+}
+.timeline-empty {
+  color: #6b7280;
+  font-style: italic;
+  padding: 12px;
+  text-align: center;
+}

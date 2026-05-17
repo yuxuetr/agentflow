@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { compileFilter, applyFilter, type FilterEvent } from './eventFilter';
 
 type RunRecord = {
   id: string;
@@ -59,6 +60,13 @@ const tokenKey = 'agentflow.ui.apiToken';
 const workflowKey = 'agentflow.ui.workflowDraft';
 const tenantKey = 'agentflow.ui.tenantId';
 // P6.1 — last-used inputs for the create form. NEVER persists the API token.
+// P6.5: per-run event filter expression. Each run_id gets its own
+// localStorage slot so navigating between runs doesn't bleed the
+// previous filter into a fresh investigation. Long-term these will
+// also persist to /v1/preferences (P6.4) under a `ui.run.<id>.filter`
+// key; the localStorage slot stays as a fast first-paint cache.
+const eventFilterKeyPrefix = 'agentflow.ui.run.eventFilter.';
+
 const newFormWorkflowKey = 'agentflow.ui.newForm.workflow';
 const newFormTenantKey = 'agentflow.ui.newForm.tenant';
 const newFormProfileKey = 'agentflow.ui.newForm.profile';
@@ -456,6 +464,10 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   const [runGraph, setRunGraph] = useState<RunGraph | null>(null);
   const [events, setEvents] = useState<StreamedEvent[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  // P6.5: event-filter expression (matches the syntax in
+  // `eventFilter.ts`). Empty string = match everything. Persisted per
+  // run id under the eventFilterKeyPrefix slot.
+  const [eventFilterExpr, setEventFilterExpr] = useState('');
   const [state, setState] = useState<ConnectionState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'cancelling'>('idle');
@@ -465,6 +477,33 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   const selectedEvent = useMemo(
     () => events.find((event) => event.seq === selectedSeq) ?? events.at(-1) ?? null,
     [events, selectedSeq],
+  );
+
+  // P6.5: load any per-run filter expression as the operator switches
+  // between runs, and persist new edits so a reload picks up where the
+  // operator left off.
+  useEffect(() => {
+    if (!runId) {
+      setEventFilterExpr('');
+      return;
+    }
+    setEventFilterExpr(readStorage(`${eventFilterKeyPrefix}${runId}`, ''));
+  }, [runId]);
+  useEffect(() => {
+    if (!runId) return;
+    writeStorage(`${eventFilterKeyPrefix}${runId}`, eventFilterExpr);
+  }, [runId, eventFilterExpr]);
+
+  // Compile the expression once per change, then apply to the event
+  // list. Parse errors don't crash the UI — we surface the message
+  // under the input.
+  const eventFilter = useMemo(() => compileFilter(eventFilterExpr), [eventFilterExpr]);
+  const filteredEvents = useMemo(
+    () =>
+      eventFilter.predicate
+        ? applyFilter(events as unknown as FilterEvent[], eventFilter)
+        : (events as unknown as FilterEvent[]),
+    [events, eventFilter],
   );
 
   const nodeSummaries = useMemo(() => {
@@ -885,10 +924,30 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         <aside className="timeline-pane" aria-label="Agent timeline">
           <div className="pane-heading">
             <span>Timeline</span>
-            <strong>{selectedEvent ? `#${selectedEvent.seq}` : '-'}</strong>
+            <strong>
+              {selectedEvent ? `#${selectedEvent.seq}` : '-'}
+              {eventFilterExpr.trim() && eventFilter.predicate ? ` (${filteredEvents.length}/${events.length})` : ''}
+            </strong>
+          </div>
+          <div className="event-filter">
+            <label htmlFor="event-filter-input">Filter</label>
+            <input
+              id="event-filter-input"
+              type="text"
+              placeholder="kind=tool_call_completed AND step>5"
+              value={eventFilterExpr}
+              onChange={(ev) => setEventFilterExpr(ev.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {eventFilter.error && (
+              <span className="event-filter-error" role="alert">
+                {eventFilter.error}
+              </span>
+            )}
           </div>
           <ol className="timeline">
-            {events.map((event) => (
+            {filteredEvents.map((event) => (
               <li key={event.seq}>
                 <button
                   className={selectedSeq === event.seq ? 'selected' : ''}
@@ -897,10 +956,13 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
                 >
                   <span className={`dot dot-${eventTone(event.kind)}`} />
                   <span>{event.kind}</span>
-                  <time>{formatTime(event.ts)}</time>
+                  <time>{formatTime(event.ts as string | null | undefined)}</time>
                 </button>
               </li>
             ))}
+            {eventFilter.predicate && filteredEvents.length === 0 && events.length > 0 && (
+              <li className="timeline-empty">No events match this filter.</li>
+            )}
           </ol>
         </aside>
       </section>
