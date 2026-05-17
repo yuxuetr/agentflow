@@ -76,6 +76,7 @@ but do not implement channel adapters in this queue.
 - P5.4 Plugin sandbox default policy: `select_preparer(profile, force_sandbox, allow_unsandboxed)` extends the P1.8 install-time policy gate to plugin spawn time. Same per-profile defaults: `dev` → noop, `local` / `production` → OS sandbox by default. The `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` opt-out mirrors `--allow-unsandboxed-plugin`; `production` rejects the opt-out with `PreparerSelectionError::OptOutRejected` and fails the spawn before any child starts. `docs/TOOL_PERMISSIONS.md` gains a spawn-time decision table.
 - P5.8 Workflow `type: plugin` first-class node syntax: validator (`agentflow workflow validate`) now parses the referenced plugin manifest and rejects unknown `node_type` references at validate time. New CLI `agentflow plugin generate-workflow-stub` emits a `type: plugin` YAML stub per declared `[[plugin.nodes]]` entry (`--node` filter, `--output` file sink, embeds absolute manifest path). 5 unit + 4 CLI integration tests.
 - P5.1 Remote marketplace install handoff: `install_directory` in `agentflow-cli/src/commands/marketplace.rs` is now atomic — stage into a sibling `.installing-<pid>-<nanos>` temp dir, move any prior install aside to `.replacing-<…>`, then `fs::rename` the staged tree into place. Failures roll back to the original install. 3 new CLI integration tests cover happy / force / collision paths with explicit "no temp-dir siblings" assertions on the install root.
+- P3.3 CLI JSON output audit (contract + first command migrated): new `CliJsonEnvelope<T>` (wire schema `agentflow.cli/1`) defines the canonical four-field envelope (`version`, `command`, `result`, `errors[]`). `docs/CLI_JSON_OUTPUT.md` is the contract; `docs/STABILITY.md` adds it at Stable tier. First migration: `agentflow doctor --format json-envelope` wraps `DoctorReport`. Per-command migrations for the remaining 10+ commands tracked as follow-ups in `TODOs.md`.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -426,21 +427,45 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
   - Add a `cargo xtask examples-smoke` runner that mirrors the CI matrix
     for local debugging.
 
-- TODO P3.3 CLI JSON output audit:
-  - Identify automation-friendly commands and unify on `--output json` /
-    `--output text` (default text):
-    - `workflow run/list/cancel/graph/logs`.
-    - `skill list/inspect/run`.
-    - `llm models`.
-    - `trace list/replay/show`.
-    - `rag search/eval`.
-    - `mcp list-tools/list-resources/call-tool`.
-    - `plugin list/install/inspect`.
-    - `doctor`.
-  - Document the JSON envelope shape (envelope: `version`, `command`,
-    `result`, `errors[]`) in `docs/CLI_JSON_OUTPUT.md`.
-  - Add round-trip + stability tests for every JSON envelope shape.
-  - Mark JSON outputs as stable surfaces in `docs/STABILITY.md`.
+- DONE P3.3 CLI JSON output audit (contract + first command migrated;
+  per-command migration tracked as follow-ups below):
+  - `agentflow-cli/src/json_envelope.rs` defines the canonical
+    envelope `CliJsonEnvelope<T>` with the closed four-field shape
+    documented in the spec: `version` (`"agentflow.cli/1"`) +
+    `command` + `result` + `errors[]` (never null, defaults to
+    empty on read). 5 unit tests cover ok/with_errors round trips,
+    the closed-key set, `serde(default)` for `errors`, and the
+    pinned wire-version constant.
+  - `docs/CLI_JSON_OUTPUT.md` is the authoritative contract:
+    envelope shape, producer/consumer rules, P0.3 additive-field
+    inheritance for per-command `result`, the per-command coverage
+    matrix (which modes are migrated vs. planned), and the
+    `agentflow.cli/N` versioning policy.
+  - `docs/STABILITY.md` gains a new "CLI JSON envelope" row at
+    Stable tier, with the wire schema name and a pointer back to
+    `docs/CLI_JSON_OUTPUT.md` for the field contract.
+  - First command migration: `agentflow doctor --format json-envelope`
+    wraps the existing `DoctorReport` in the envelope. The legacy
+    `--format json` (bare report) stays for backward compat with
+    the in-process `/v1/diagnostics` handler and CI tooling already
+    parsing the raw shape; it migrates in v1.0. 2 new CLI tests in
+    `doctor_cli_tests.rs` lock the envelope shape down end-to-end
+    (`doctor_json_envelope_wraps_report_in_canonical_envelope` +
+    `doctor_json_envelope_field_set_is_closed_to_four_keys`).
+  - Per-command migration follow-ups (each lands as its own PR):
+    - `workflow validate` — wrap `WorkflowValidationReport`.
+    - `workflow resume-plan` — wrap `ResumePlan`.
+    - `eval run` — wrap `EvalReport`.
+    - `harness run|list|inspect` — wrap summary (`stream-json`
+      keeps emitting raw events).
+    - `llm models` — add `--output json-envelope` (no JSON today).
+    - `mcp list-tools|list-resources|call-tool`.
+    - `plugin list|install|inspect|generate-workflow-stub` — add
+      `--output json-envelope` (no JSON today).
+    - `rag search|eval` — wrap existing JSON outputs.
+    - `trace list|replay|show` — add `--output json-envelope`.
+    - `workflow run|list|cancel|graph|logs` — server-backed,
+      depends on P2.5 `--server` plumbing.
 
 - TODO P3.4 `agentflow doctor` expansion:
   Library/CLI structural surface landed; deeper provider probes

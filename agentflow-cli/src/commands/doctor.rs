@@ -9,7 +9,15 @@ use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile, SecurityProfileDefa
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
   Text,
+  /// Legacy bare `DoctorReport` JSON. Preserved for backward compat with
+  /// existing consumers (the in-process `/v1/diagnostics` HTTP handler,
+  /// CI tooling parsing the raw report). Slated to migrate to the
+  /// envelope in v1.0; see `docs/CLI_JSON_OUTPUT.md`.
   Json,
+  /// Canonical CLI JSON envelope (P3.3). Wraps the `DoctorReport` in
+  /// `CliJsonEnvelope` so the field set is stable across commands. New
+  /// JSON consumers should select this mode.
+  JsonEnvelope,
 }
 
 impl OutputFormat {
@@ -17,8 +25,9 @@ impl OutputFormat {
     match value {
       "text" => Ok(Self::Text),
       "json" => Ok(Self::Json),
+      "json-envelope" => Ok(Self::JsonEnvelope),
       other => Err(anyhow::anyhow!(
-        "unsupported doctor output format '{other}', expected 'text' or 'json'"
+        "unsupported doctor output format '{other}', expected 'text', 'json', or 'json-envelope'"
       )),
     }
   }
@@ -245,6 +254,10 @@ pub async fn execute(
   match format {
     OutputFormat::Json => {
       println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    OutputFormat::JsonEnvelope => {
+      let envelope = crate::json_envelope::CliJsonEnvelope::ok("doctor", &report);
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
     OutputFormat::Text => print_text_report(&report),
   }

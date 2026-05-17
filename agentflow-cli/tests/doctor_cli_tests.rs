@@ -309,3 +309,67 @@ fn doctor_rejects_unknown_profile() {
     .failure()
     .stderr(predicate::str::contains("bogus"));
 }
+
+// ── P3.3: CLI JSON envelope ─────────────────────────────────────────────────
+
+#[test]
+fn doctor_json_envelope_wraps_report_in_canonical_envelope() {
+  let home = TempDir::new().unwrap();
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--format", "json-envelope", "--profile", "dev"])
+    .env("HOME", home.path())
+    .env_remove("AGENTFLOW_API_TOKEN");
+  let output = cmd.output().unwrap();
+  // `dev` profile exits 0 or 1 depending on whether sandbox / security
+  // basics promote to Warning (1) — never Fail (2). Either way the
+  // envelope must serialize correctly.
+  assert!(
+    matches!(output.status.code(), Some(0) | Some(1)),
+    "expected exit 0 or 1, got {:?}",
+    output.status.code()
+  );
+
+  let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+  // Envelope fields locked by P3.3:
+  assert_eq!(envelope["version"], "agentflow.cli/1");
+  assert_eq!(envelope["command"], "doctor");
+  assert!(
+    envelope["errors"].is_array(),
+    "errors must always be an array (never null)"
+  );
+  assert!(
+    envelope["errors"].as_array().unwrap().is_empty(),
+    "successful doctor run must carry an empty errors array"
+  );
+  // `result` carries the same DoctorReport the legacy `--format json`
+  // mode emits at the top level; sanity-check a few representative
+  // fields so a regression in the wrapping is caught here.
+  let result = &envelope["result"];
+  assert_eq!(result["profile"], "dev");
+  assert!(result["status"].is_string());
+  assert!(result["features"].is_object());
+  assert!(result["disk"].is_object());
+}
+
+#[test]
+fn doctor_json_envelope_field_set_is_closed_to_four_keys() {
+  // Locks the envelope contract: any drift that adds a fifth top-level
+  // key (without bumping the version constant) fails here.
+  let home = TempDir::new().unwrap();
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["doctor", "--format", "json-envelope", "--profile", "dev"])
+    .env("HOME", home.path())
+    .env_remove("AGENTFLOW_API_TOKEN");
+  let output = cmd.output().unwrap();
+  let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let mut keys: Vec<&str> = envelope
+    .as_object()
+    .expect("envelope must be a JSON object")
+    .keys()
+    .map(String::as_str)
+    .collect();
+  keys.sort();
+  assert_eq!(keys, vec!["command", "errors", "result", "version"]);
+}

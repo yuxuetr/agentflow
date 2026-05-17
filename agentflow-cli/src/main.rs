@@ -109,8 +109,11 @@ struct TraceArgs {
 }
 #[derive(Args)]
 struct DoctorArgs {
-  /// Output format
-  #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+  /// Output format. `text` (default) prints a human-readable report.
+  /// `json` emits the legacy raw `DoctorReport`. `json-envelope` wraps
+  /// the report in the canonical CLI JSON envelope from P3.3 (see
+  /// `docs/CLI_JSON_OUTPUT.md`).
+  #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
   format: String,
   /// Pass/fail threshold profile
   #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
