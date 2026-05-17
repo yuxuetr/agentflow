@@ -91,7 +91,9 @@ impl PodcastNodeConfig {
       tts_backend: TtsBackend::MiniMax,
       llm_api_key_env: "MOONSHOT_API_KEY".into(),
       llm_base_url: "https://api.moonshot.cn/v1".into(),
-      llm_model: "kimi-k2-0905-preview".into(),
+      // Stable canonical name on Moonshot; 128k context handles any
+      // realistic blog without truncation. Override via --model.
+      llm_model: "moonshot-v1-128k".into(),
     }
   }
 
@@ -100,6 +102,13 @@ impl PodcastNodeConfig {
     self.host.voice_id = "zh-CN-YunyangNeural".into();
     self.guest.voice_id = "zh-CN-XiaoxiaoNeural".into();
     self.tts_backend = TtsBackend::Edge;
+    self
+  }
+
+  /// Override the LLM model name. Useful for swapping between Moonshot
+  /// models (`moonshot-v1-128k` / `moonshot-v1-32k` / `kimi-k2.6` / …).
+  pub fn with_llm_model(mut self, model: impl Into<String>) -> Self {
+    self.llm_model = model.into();
     self
   }
 }

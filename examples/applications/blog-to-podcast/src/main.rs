@@ -67,6 +67,7 @@ struct Args {
   output: PathBuf,
   target_segments: usize,
   tts: TtsBackend,
+  model: Option<String>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -74,6 +75,7 @@ fn parse_args() -> Result<Args> {
   let mut output: Option<PathBuf> = None;
   let mut target_segments: usize = 10;
   let mut tts: Option<TtsBackend> = None;
+  let mut model: Option<String> = None;
 
   let mut args = std::env::args().skip(1);
   while let Some(flag) = args.next() {
@@ -96,6 +98,9 @@ fn parse_args() -> Result<Args> {
           other => anyhow::bail!("--tts: unknown value `{other}`"),
         });
       }
+      "--model" => {
+        model = Some(args.next().context("--model expects a model name")?);
+      }
       "-h" | "--help" => {
         print_help();
         std::process::exit(0);
@@ -109,6 +114,7 @@ fn parse_args() -> Result<Args> {
     output: output.unwrap_or_else(|| PathBuf::from("/tmp/episode.wav")),
     target_segments,
     tts: tts.unwrap_or_else(TtsBackend::from_env),
+    model,
   })
 }
 
@@ -124,6 +130,7 @@ fn print_help() {
        --output <path>     Output audio path (default: /tmp/episode.wav). SRT is written alongside.\n  \
        --segments <N>      Approx number of dialogue segments to generate (default: 10).\n  \
        --tts <backend>     TTS provider: minimax (default) / edge (free) / openai. Also via PODCAST_TTS env.\n  \
+       --model <name>      LLM model (default: moonshot-v1-128k). Examples: moonshot-v1-32k, kimi-k2.6.\n  \
        -h, --help          Show this help.\n\
      \n\
      ENV:\n  \
@@ -134,8 +141,20 @@ fn print_help() {
   );
 }
 
+/// Load `~/.agentflow/.env` if present so dogfooding doesn't require
+/// `source`-ing the file before every `cargo run`. Silent no-op when
+/// the file is missing (e.g. CI), and existing env vars take
+/// precedence — we never overwrite operator-provided values.
+fn load_agentflow_dotenv() {
+  if let Some(home) = std::env::home_dir() {
+    let path = home.join(".agentflow").join(".env");
+    let _ = dotenvy::from_path(&path);
+  }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+  load_agentflow_dotenv();
   tracing_subscriber::fmt()
     .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
     .init();
@@ -149,6 +168,9 @@ async fn main() -> Result<()> {
   if matches!(args.tts, TtsBackend::Edge) {
     // When using Edge TTS, swap voice IDs to Microsoft's zh-CN namespace.
     podcast_cfg = podcast_cfg.with_edge_tts();
+  }
+  if let Some(model) = args.model.clone() {
+    podcast_cfg = podcast_cfg.with_llm_model(model);
   }
 
   let read_node = ReadBlogNode {

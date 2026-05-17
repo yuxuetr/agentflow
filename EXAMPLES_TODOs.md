@@ -31,7 +31,7 @@ Last updated: 2026-05-17
 
 | # | Application | Status | 验证 agentflow 哪些面 | 外部依赖 |
 | --- | --- | --- | --- | --- |
-| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
+| A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP — live smoke ✅ (1st run 2026-05-18) | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
 | A2 | [code-reviewer](examples/applications/code-reviewer/) | TODO | ReAct agent, MCP (github), skill packaging, tool admission | gh CLI / GitHub MCP server |
 | A3 | [research-assistant](examples/applications/research-assistant/) | TODO | Arxiv node, RAG, memory, scheduled run | OpenAI/任一 LLM, 可选 Qdrant |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
@@ -81,16 +81,17 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
 ```
 
 **TODO 子项**:
-- [ ] 准备真实 API key 跑一次 live `cargo test --test smoke -- --ignored`
-      （需要 `MOONSHOT_API_KEY` + `MINIMAX_API_KEY` 或 `EDGE_TTS_OK=1`），
-      听一下出来的音频质量决定要不要调 prompt / 加 BGM
-- [ ] 准备 medium / long 两个额外 blog fixture（短的已有；
-      等 short 跑通有体感再添）
+- [ ] 听 `/tmp/episode-test.wav` 主观评估：voice 区分度 / 对话自然度 /
+      停顿合理性 / 是否需要 BGM 隔开
 - [ ] 决定是否升级到 plan B（拆 DAG：fetch → outline → script_gen →
       tts → assemble → subtitle）。触发条件：dogfooding 中遇到
       「想中间编辑脚本再继续」「单段 TTS 失败想 retry」之类。
 - [ ] 决定是否包成 skill（`SKILL.md` + persona + tool admission），
       让 `agentflow skill run podcast-producer` 直接触发
+- [ ] 加 medium / long 两个 blog fixture（多场景测试）
+- [ ] phonon-podcast 上游 PR：`OpenAiScriptGenerator::generate` 的
+      `#[instrument]` 在 trace fields 里 dump 全文 `topic`，长 blog
+      会把单行 trace 撑到几 KB。建议截断到 80-120 字符。
 
 **DONE 子项**:
 - [x] 写 `README.md`（架构图 + 跑法 + 所需 key）— commit 2f4d4b0
@@ -125,7 +126,60 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
     包外部 Rust 库（phonon-podcast）的 path-dep 跨 workspace 集成
     端到端编译 + 测试都通。
 
-**Findings**: （dogfooding 中发现的 agentflow 缺陷写这里）
+**Findings**:
+
+- **2026-05-18 — 默认 LLM model 名称是猜的，不存在**。我默认填了
+  `kimi-k2-0905-preview` 想用最新 preview model，第一次 live run 时
+  Moonshot API 返回 `404 Not Found the model kimi-k2-0905-preview or
+  Permission denied`。`curl https://api.moonshot.cn/v1/models` 显示
+  我账号实际可用：`moonshot-v1-{8k,32k,128k}`, `moonshot-v1-auto`,
+  `kimi-k2.5`, `kimi-k2.6`, 三个 vision-preview。改默认为
+  `moonshot-v1-128k`（长上下文、命名稳定），加 `--model` CLI flag 让
+  operator 自己挑。Lesson：**默认模型名要选 "永远不会下架" 的稳定
+  名字，preview / dated 名字必须 operator 显式 opt-in**。
+- **2026-05-18 — `target_segments` 是 hint 不是硬 cap**。我传
+  `--segments 4`，Moonshot 自然展开成 12 段（按 blog 5 个章节自然
+  分段）。这是 phonon `OpenAiScriptGenerator` 的 system prompt
+  里写的 "Generate approximately N dialogue segments"。对长 blog 想
+  限段数得 prompt 更严或加 post-process trim。**不是 bug**，但
+  EXAMPLES_TODOs.md / README 应该改 `--segments` 描述为
+  "approximate, not strict"。
+- **2026-05-18 — `.env` 自动加载是 dogfooding 必需**。第一版只读
+  process env vars，每次 `cargo run` 都得 `source ~/.agentflow/.env`，
+  太烦。加了 `dotenvy::from_path("~/.agentflow/.env")` 在 main 开头
+  silently no-op-when-missing。**这条经验值得提到所有 application
+  examples 的 convention**：默认从 `~/.agentflow/.env` 加载，但允许
+  process env vars 覆盖（dotenvy 默认行为）。
+- **2026-05-18 — phonon trace 太冗长**。每次 `OpenAiScriptGenerator
+  ::generate` / `MiniMaxTts::synthesize` 的 `#[instrument(fields(topic
+  = %...))]` 都把整个 `topic`（即整篇 blog）dump 进 trace 一行。
+  Terminal 输出基本不可读，需要 grep 才能看 trace 流程。phonon 侧的
+  PR：截断长 instrument field（>= 80 字符就 `... (N chars)`）。
+- **2026-05-18 — agentflow `ConsoleListener` events 干净好用**。
+  `[workflow.started] / [node.started] / [node.output.captured] /
+  [node.completed] / [workflow.completed]` 自动打，per-node 耗时
+  立即可见（read_blog: 189µs vs produce_podcast: 18.78s）。这是
+  agentflow 的明显 win。
+- **2026-05-18 — `FlowValue::File { mime_type, .. }` 字段叫
+  `mime_type` 不是 `media_type`**。第一版我猜错，编译报错才发现。
+  Lesson: agentflow public types 的 field naming 可以更早在 SDK 文档
+  里固化（已有 `docs/AGENT_SDK.md`，可加一节 "FlowValue field
+  reference"）。
+- **2026-05-18 — `ConsoleListener` 是 unit struct 没 `default()`**。
+  小坑；trivial fix（直接 `ConsoleListener` 实例化）。不算缺陷。
+- **2026-05-18 — 性能数据**：12 段 zh-CN 对话（2.5 分钟音频）端到端
+  ~19s wall clock（read_blog 0.2ms + Moonshot script gen 几秒 +
+  12 次 MiniMax T2A 并发 + 拼接 + 写 WAV），13MB WAV 文件。
+  MiniMax 每段 ~150-300ms 响应（含 hex 解码 + Symphonia decode）。
+  成本：估 MiniMax ~5000 字符 × 高清档定价 + Moonshot ~2000 token，
+  整条 ~¥1 / $0.15。
+- **2026-05-18 — `segments_to_srt_file` API 实际签名不带 duration**。
+  phonon 的 helper 期望 STT TranscriptSegment（带时间），不是 script
+  Segment（只有 speaker + text）。自写了 `estimate_subtitle_timing`
+  按字符数比例分配时长。**真改进方向**：phonon `PodcastPipeline` 应
+  在 render 过程中记录每段实际时长，输出 `Vec<(Segment, f64 duration)>`
+  让 SRT 用真实时长。已在 TODOs.md 末尾标了 phonon-podcast 上游 PR
+  候选。
 
 ---
 
