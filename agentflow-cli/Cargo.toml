@@ -90,3 +90,10 @@ uuid = { version = "1.6", features = ["v4"] }
 assert_cmd = "2.0"
 predicates = "3.0"
 sha2 = "0.10"
+# Used by the P2.5 server-mode integration tests to spin up the
+# `agentflow-server` HTTP gateway against the test Postgres so the
+# CLI client can drive it end-to-end. Self-skips without
+# AGENTFLOW_DATABASE_TEST_URL.
+agentflow-server = { path = "../agentflow-server" }
+agentflow-db = { path = "../agentflow-db" }
+axum = "0.7"

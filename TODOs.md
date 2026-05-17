@@ -80,6 +80,7 @@ but do not implement channel adapters in this queue.
 - P2.3 Server end-to-end run tests: `RunRepo::list_filtered(tenant, status, limit, offset)` extends the list API; `GET /v1/runs` accepts validated `?status` + `?offset` query params. New `e2e_runs.rs` integration suite (9 tests) covers pagination, status filter, before/after graph snapshots, and authenticated paths under bearer-token auth.
 - M.3 agentflow-db per-repo CRUD tests (db + memory parts): grew `agentflow-db` repo tests from 2 → 12 covering every table (Run/Step/Event/Artifact/SkillInstall/McpSession/HarnessSession/HarnessEvent) plus tenant isolation and resume-mode lifecycle. Removed the racy per-test `TRUNCATE`, replaced with UUID-suffixed scope keys so re-runs are idempotent. Memory layer coverage was already shipped under P4.7.
 - P2.6 Server tenant/session boundary: migration `0003_tenant_id_columns.sql` adds `tenant_id` to `events`/`artifacts`/`skill_installs` (with backfill from `runs`), bumps `skill_installs` PK to `(tenant_id, name, version)`. New `tenant.rs` ships `TenantId` extension + `extract_tenant_id` header middleware (default `"default"`). `get_run`/`cancel_run`/`get_run_graph`/`get_run_resume_plan` 404 on cross-tenant probes; `list_runs` falls back from query param to header. 6 new tenant-boundary integration tests pass alongside the existing 9 P2.3 tests.
+- P2.5 CLI local-daemon mode (MVP): new `agentflow-cli/src/server_client.rs` is the single HTTP layer pointing at `agentflow-server`. `workflow run --server <url>` POSTs the YAML and polls to terminal; new `workflow list/cancel/graph` subcommands are server-only. `--auth-token`/`AGENTFLOW_API_TOKEN` and `--tenant`/`AGENTFLOW_TENANT` plumb auth + tenant headers (P2.6). 10 unit + 6 CLI integration tests cover the resolve helpers and the run/list/cancel/graph roundtrips against the test Postgres. Follow-ups: `workflow logs` SSE, skill server mode, P3.3 envelope output, --model / --execution-mode / --run-dir mapping over the wire.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -360,17 +361,36 @@ turning it into a channel hub.
       `receiver_count()` accessor. They self-skip without
       `AGENTFLOW_DATABASE_TEST_URL`.
 
-- TODO P2.5 CLI local-daemon mode:
-  - Design `--server <url>` / `AGENTFLOW_SERVER_URL` plumbing for selected
-    commands. Document which commands are local-only vs server-backed:
-    - `workflow run/list/cancel/logs/graph` → server-capable.
-    - `skill run/list` → server-capable.
-    - `mcp call-tool` / `llm` / `image` / `audio` → local-only (no server
-      semantics needed for v1).
-  - Keep direct in-process execution as the default when `--server` is
-    omitted.
-  - Add `--output json` for server-backed commands (depends on P3.3).
-  - Add tests that submit via CLI and stream events back.
+- DONE P2.5 CLI local-daemon mode (MVP — run/list/cancel/graph
+  shipped; logs/skill remain follow-ups):
+  - New `agentflow-cli/src/server_client.rs` is the single HTTP layer
+    pointing at `agentflow-server`. Resolves `--server <url>` first,
+    `AGENTFLOW_SERVER_URL` env second; returns `None` to fall back to
+    the in-process executor. `--auth-token` /
+    `AGENTFLOW_API_TOKEN` populate the `Authorization: Bearer` header;
+    `--tenant` / `AGENTFLOW_TENANT` populate `X-Agentflow-Tenant` (P2.6).
+    `reqwest::Client::builder().no_proxy()` avoids the macOS
+    Clash/V2Ray loopback footgun documented in `CLAUDE.md`.
+  - `workflow run` keeps its existing in-process path as the default;
+    when `--server` is set, the workflow body is read from the file
+    and POSTed to `/v1/runs`, then polled to terminal status.
+  - New subcommands `workflow list`, `workflow cancel <run_id>`,
+    `workflow graph <run_id>` — server-only, return a friendly error
+    when `--server` / `AGENTFLOW_SERVER_URL` is absent.
+  - 10 unit tests cover the pure resolve_* helpers (flag/env
+    precedence, trimming, blank handling); 6 CLI integration tests in
+    `agentflow-cli/tests/cli_server_mode.rs` spin up an in-process
+    `agentflow-server` against `AGENTFLOW_DATABASE_TEST_URL` and
+    exercise the run/list/cancel/graph roundtrips end-to-end. Tests
+    self-skip without the Postgres URL.
+  - Follow-ups left for a separate slice:
+    - `workflow logs` (SSE event stream + history backfill).
+    - `skill run` / `skill list` server-capable paths.
+    - `--output json-envelope` mode (P3.3 envelope) on the new
+      server-mode commands — today they print the raw `serde_json::Value`.
+    - Per-run knobs (--model, --execution-mode, --run-dir, --watch,
+      --output sink, key/value --input pairs) are local-only when
+      `--server` is set; they need server-side mapping to take effect.
 
 - DONE P2.6 Server tenant/session boundary:
   - New migration `0003_tenant_id_columns.sql` adds

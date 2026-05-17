@@ -333,6 +333,54 @@ enum WorkflowCommands {
     /// Base directory for per-run workflow artifacts. Defaults to AGENTFLOW_RUN_DIR or ~/.agentflow/runs.
     #[arg(long)]
     run_dir: Option<String>,
+    /// Submit the workflow to a remote `agentflow serve` instance instead
+    /// of executing in-process. Falls back to AGENTFLOW_SERVER_URL when
+    /// the flag is omitted; if neither is set the CLI runs in-process.
+    #[arg(long)]
+    server: Option<String>,
+    /// Bearer token for the remote server (also AGENTFLOW_API_TOKEN).
+    /// Only consulted when --server is set.
+    #[arg(long)]
+    auth_token: Option<String>,
+    /// Tenant id scope for server-mode requests. Defaults to
+    /// AGENTFLOW_TENANT or "default".
+    #[arg(long)]
+    tenant: Option<String>,
+  },
+  /// List recent workflow runs from a remote server. Requires --server.
+  List {
+    #[arg(long)]
+    server: Option<String>,
+    #[arg(long)]
+    auth_token: Option<String>,
+    #[arg(long)]
+    tenant: Option<String>,
+    #[arg(long)]
+    limit: Option<i64>,
+    #[arg(long)]
+    offset: Option<i64>,
+    #[arg(long)]
+    status: Option<String>,
+  },
+  /// Cancel a queued / running workflow run on a remote server.
+  Cancel {
+    run_id: String,
+    #[arg(long)]
+    server: Option<String>,
+    #[arg(long)]
+    auth_token: Option<String>,
+    #[arg(long)]
+    tenant: Option<String>,
+  },
+  /// Fetch the run graph snapshot from a remote server.
+  Graph {
+    run_id: String,
+    #[arg(long)]
+    server: Option<String>,
+    #[arg(long)]
+    auth_token: Option<String>,
+    #[arg(long)]
+    tenant: Option<String>,
   },
   /// Validate workflow schema and dependencies without execution
   Validate {
@@ -979,6 +1027,9 @@ async fn main() {
         execution_mode,
         max_concurrency,
         run_dir,
+        server,
+        auth_token,
+        tenant,
       } => {
         if input.len() % 2 != 0 {
           eprintln!(
@@ -987,25 +1038,111 @@ async fn main() {
           );
           std::process::exit(1);
         }
-        let input_pairs = input
-          .chunks_exact(2)
-          .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
-          .collect();
-        workflow::run::execute(
-          workflow_file,
-          watch,
-          output,
-          model,
-          input_pairs,
-          dry_run,
-          timeout,
-          max_retries,
-          execution_mode,
-          max_concurrency,
-          run_dir,
-        )
-        .await
+        // Server-mode short-circuits the in-process executor when
+        // --server (or AGENTFLOW_SERVER_URL) is set. The body becomes
+        // the workflow file contents; per-run knobs (model, dry-run,
+        // execution-mode, run_dir, retries, watch, output sink, input
+        // pairs) stay local-only for now and are documented as
+        // server-mode follow-ups in TODOs.md.
+        if let Some(server_url) =
+          agentflow_cli::server_client::resolve_server_url(server.as_deref())
+        {
+          match std::fs::read_to_string(&workflow_file) {
+            Ok(body) => {
+              workflow::server_ops::run_via_server(
+                &server_url,
+                auth_token.as_deref(),
+                tenant.as_deref(),
+                &body,
+              )
+              .await
+            }
+            Err(e) => Err(anyhow::anyhow!(
+              "failed to read workflow file '{workflow_file}': {e}"
+            )),
+          }
+        } else {
+          let input_pairs = input
+            .chunks_exact(2)
+            .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+            .collect();
+          workflow::run::execute(
+            workflow_file,
+            watch,
+            output,
+            model,
+            input_pairs,
+            dry_run,
+            timeout,
+            max_retries,
+            execution_mode,
+            max_concurrency,
+            run_dir,
+          )
+          .await
+        }
       }
+      WorkflowCommands::List {
+        server,
+        auth_token,
+        tenant,
+        limit,
+        offset,
+        status,
+      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
+        Some(server_url) => {
+          workflow::server_ops::list(
+            &server_url,
+            auth_token.as_deref(),
+            tenant.as_deref(),
+            limit,
+            offset,
+            status.as_deref(),
+          )
+          .await
+        }
+        None => Err(anyhow::anyhow!(
+          "workflow list requires --server <url> or AGENTFLOW_SERVER_URL to be set"
+        )),
+      },
+      WorkflowCommands::Cancel {
+        run_id,
+        server,
+        auth_token,
+        tenant,
+      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
+        Some(server_url) => {
+          workflow::server_ops::cancel(
+            &server_url,
+            auth_token.as_deref(),
+            tenant.as_deref(),
+            &run_id,
+          )
+          .await
+        }
+        None => Err(anyhow::anyhow!(
+          "workflow cancel requires --server <url> or AGENTFLOW_SERVER_URL to be set"
+        )),
+      },
+      WorkflowCommands::Graph {
+        run_id,
+        server,
+        auth_token,
+        tenant,
+      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
+        Some(server_url) => {
+          workflow::server_ops::graph(
+            &server_url,
+            auth_token.as_deref(),
+            tenant.as_deref(),
+            &run_id,
+          )
+          .await
+        }
+        None => Err(anyhow::anyhow!(
+          "workflow graph requires --server <url> or AGENTFLOW_SERVER_URL to be set"
+        )),
+      },
       WorkflowCommands::Validate {
         workflow_file,
         format,
