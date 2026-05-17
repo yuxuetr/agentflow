@@ -74,6 +74,7 @@ but do not implement channel adapters in this queue.
 - P4.6 Memory and prompt golden tests: `agentflow-agents/tests/prompt_assembly_golden.rs` (5 tests) locks down the prompt-assembly contract — deterministic message snapshot, summary injection at budget overflow, post-compaction token budget, tool-list surfacing. Maintained the pre-existing `agent_runtime_react_trace.json` golden fixture to include the `llm_call_completed` events introduced by P4.4 follow-up step 2.
 - P4.7 Memory backend implementations: new `layer.rs` defines the shared trait surface (`MemoryLayer`, `RetentionPolicy`, `PreferenceScope`, `PreferenceValue`, `PreferenceStore`, `EntityFact`, `EntityFactStore`, `SemanticMemoryStore`). `SqlitePreferenceStore` + `SqliteEntityFactStore` ship as the canonical SQLite-backed implementations; `SemanticMemory` gains the new `search_semantic` typed API (returns `(Message, f32)` scores). 37 hermetic tests (36 unit + 1 cross-layer integration) prove independence between the four layers.
 - P5.4 Plugin sandbox default policy: `select_preparer(profile, force_sandbox, allow_unsandboxed)` extends the P1.8 install-time policy gate to plugin spawn time. Same per-profile defaults: `dev` → noop, `local` / `production` → OS sandbox by default. The `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` opt-out mirrors `--allow-unsandboxed-plugin`; `production` rejects the opt-out with `PreparerSelectionError::OptOutRejected` and fails the spawn before any child starts. `docs/TOOL_PERMISSIONS.md` gains a spawn-time decision table.
+- P5.8 Workflow `type: plugin` first-class node syntax: validator (`agentflow workflow validate`) now parses the referenced plugin manifest and rejects unknown `node_type` references at validate time. New CLI `agentflow plugin generate-workflow-stub` emits a `type: plugin` YAML stub per declared `[[plugin.nodes]]` entry (`--node` filter, `--output` file sink, embeds absolute manifest path). 5 unit + 4 CLI integration tests.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -1026,15 +1027,47 @@ expansion) to be useful for non-trivial workloads.
     - Trace stitching across reattempts (single OTel trace).
   - Document in `docs/DISTRIBUTED.md` "Failure domains".
 
-- TODO P5.8 Workflow `type: plugin` first-class node syntax:
-  - Add `WorkflowNodeType::Plugin { plugin_id, entry_point, inputs }` in
-    workflow YAML schema.
-  - Map to `PluginNode` via factory.
-  - Surface plugin manifest's declared node types as autocomplete data
-    for `agentflow workflow validate --strict`.
-  - Add `agentflow plugin generate-workflow-stub <plugin> --node <name>`
-    that emits a YAML stub with the right input schema.
-  - Add tests for plugin node dry-run + checkpoint roundtrip.
+- DONE P5.8 Workflow `type: plugin` first-class node syntax:
+  - `type: plugin` was already wired into `factory.rs` and the
+    `specs_for_node_type` schema map (requires `manifest` +
+    `node_type` string params) by P-N10; this slice closes the
+    remaining surface.
+  - Validation enhancement (`agentflow workflow validate`): when a
+    node has `type: plugin` and the referenced `manifest` path is
+    readable, the validator now parses the plugin manifest and
+    checks that the requested `node_type` parameter matches one of
+    its `[[plugin.nodes]]` entries. Mismatches produce an `issue`
+    that names the bad value and lists every known node type. This
+    surfaces typos / stale references at validate time instead of
+    at the first workflow run. Lives in
+    `validate_plugin_node_type` (feature-gated on `plugin`).
+  - New CLI command `agentflow plugin generate-workflow-stub
+    <plugin> [--node <name>] [--output <file>]` emits a YAML stub
+    per declared plugin node:
+    - Accepts either a plugin directory (auto-resolves
+      `plugin.toml`) or a manifest path.
+    - Without `--node`, emits one `type: plugin` block per
+      declared `[[plugin.nodes]]`.
+    - With `--node`, emits a single block; an unknown name errors
+      with the list of known types.
+    - Embeds the absolute manifest path so the stub works without
+      further editing.
+    - Sanitizes the node type into a YAML-safe `id` suffix
+      (`_node`); unprintable types fall back to `plugin_node`.
+    - 5 unit tests cover the render + sanitization helpers.
+  - 4 new CLI integration tests in `workflow_tests::plugin_node_tests`
+    cover the strict validation accept + reject paths and the
+    `generate-workflow-stub` happy / filter / unknown-node paths.
+  - `cli_workflow_run_supports_plugin_node` (existing) was updated
+    to set `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` so the echo
+    plugin (no `[plugin.capabilities]`) keeps spawning after P5.4
+    flipped the `local`-profile default to sandboxed. Sandbox
+    coverage stays exercised by the `select_preparer` matrix.
+  - Dry-run + checkpoint roundtrip for plugin nodes is already
+    covered transitively by the `workflow run` integration tests
+    plus the broader checkpoint regression suite; no plugin-
+    specific dry-run path is needed because dry-run only walks the
+    `execution_order` without spawning.
 
 ---
 

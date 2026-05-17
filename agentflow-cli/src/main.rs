@@ -843,6 +843,17 @@ enum PluginCommands {
     #[arg(long)]
     force: bool,
   },
+  /// Generate a workflow YAML stub for plugin-declared nodes
+  GenerateWorkflowStub {
+    /// Path to the plugin directory or plugin.toml file
+    plugin: String,
+    /// Only emit a stub for this specific node type (default: all)
+    #[arg(short, long)]
+    node: Option<String>,
+    /// Write the stub to this file instead of stdout
+    #[arg(short, long)]
+    output: Option<String>,
+  },
 }
 
 #[cfg(feature = "rag")]
@@ -1355,6 +1366,11 @@ async fn main() {
       PluginCommands::Uninstall { name, dir, force } => {
         plugin::uninstall::execute(name, dir, force).await
       }
+      PluginCommands::GenerateWorkflowStub {
+        plugin,
+        node,
+        output,
+      } => plugin::generate::execute(plugin, node, output).await,
     },
     #[cfg(not(feature = "plugin"))]
     Commands::Plugin(_) => Err(anyhow::anyhow!(

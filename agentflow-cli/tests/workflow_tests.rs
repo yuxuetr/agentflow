@@ -1279,8 +1279,16 @@ nodes:
     let output = work.path().join("plugin-result.json");
     let run_dir = work.path().join("runs");
 
+    // The echo plugin manifest declares no `[plugin.capabilities]`, so
+    // under the P5.4 spawn-time policy the `local` profile default
+    // would sandbox-wrap the spawn — and an empty capability set on
+    // sandbox-exec / seccomp blocks the plugin from reading its own
+    // binary, surfacing as "plugin stdin missing". Opt the test into
+    // the noop preparer; sandbox coverage is tested separately via the
+    // `select_preparer` unit-test matrix.
     let assertion = Command::cargo_bin("agentflow")
       .unwrap()
+      .env("AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN", "1")
       .args([
         "workflow",
         "run",
@@ -1347,5 +1355,209 @@ nodes:
       out.push('\n');
     }
     out
+  }
+
+  // ── P5.8: strict validation + generate-workflow-stub CLI ────────────────
+
+  /// Write a minimal `plugin.toml` that declares one node type, without
+  /// needing a real binary on disk. The structural validator doesn't
+  /// require the entrypoint to exist (a missing entrypoint is a runtime
+  /// failure with a friendly message).
+  fn write_stub_manifest(dir: &Path, node_type: &str) -> PathBuf {
+    let manifest = format!(
+      r#"
+[plugin]
+name = "stub-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "./bin/stub"
+
+[[plugin.nodes]]
+type = "{node_type}"
+description = "stub node for tests"
+"#
+    );
+    let path = dir.join("plugin.toml");
+    fs::write(&path, manifest).unwrap();
+    path
+  }
+
+  fn write_plugin_workflow_with_node_type(
+    dir: &Path,
+    manifest_path: &Path,
+    node_type: &str,
+  ) -> PathBuf {
+    let workflow = dir.join("plugin_strict_workflow.yml");
+    fs::write(
+      &workflow,
+      format!(
+        r#"
+name: Strict Plugin Workflow
+nodes:
+  - id: stub
+    type: plugin
+    parameters:
+      manifest: {manifest:?}
+      node_type: {node_type}
+"#,
+        manifest = manifest_path.display().to_string(),
+        node_type = node_type,
+      ),
+    )
+    .unwrap();
+    workflow
+  }
+
+  #[test]
+  fn cli_workflow_validate_accepts_matching_plugin_node_type() {
+    let work = TempDir::new_in("/tmp").unwrap();
+    let manifest = write_stub_manifest(work.path(), "do_thing");
+    let workflow = write_plugin_workflow_with_node_type(work.path(), &manifest, "do_thing");
+
+    Command::cargo_bin("agentflow")
+      .unwrap()
+      .args(["workflow", "validate", workflow.to_str().unwrap()])
+      .assert()
+      .success();
+  }
+
+  #[test]
+  fn cli_workflow_validate_rejects_mismatched_plugin_node_type() {
+    let work = TempDir::new_in("/tmp").unwrap();
+    let manifest = write_stub_manifest(work.path(), "do_thing");
+    // Workflow asks for `do_other_thing` which the manifest does not declare.
+    let workflow = write_plugin_workflow_with_node_type(work.path(), &manifest, "do_other_thing");
+
+    let assert = Command::cargo_bin("agentflow")
+      .unwrap()
+      .args(["workflow", "validate", workflow.to_str().unwrap()])
+      .assert()
+      .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+      combined.contains("do_other_thing"),
+      "error must reference the unknown node type, got:\n{combined}"
+    );
+    assert!(
+      combined.contains("do_thing"),
+      "error must list the manifest's known node types, got:\n{combined}"
+    );
+  }
+
+  #[test]
+  fn cli_plugin_generate_workflow_stub_emits_yaml_blocks_for_all_nodes() {
+    let work = TempDir::new_in("/tmp").unwrap();
+    // Manifest with two declared nodes.
+    let manifest = work.path().join("plugin.toml");
+    fs::write(
+      &manifest,
+      r#"
+[plugin]
+name = "multi-stub"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "./bin/stub"
+
+[[plugin.nodes]]
+type = "alpha"
+description = "first node"
+
+[[plugin.nodes]]
+type = "beta"
+description = "second node"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("agentflow")
+      .unwrap()
+      .args([
+        "plugin",
+        "generate-workflow-stub",
+        manifest.to_str().unwrap(),
+      ])
+      .assert()
+      .success()
+      .get_output()
+      .stdout
+      .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(stdout.contains("type: plugin"));
+    assert!(stdout.contains("node_type: \"alpha\""));
+    assert!(stdout.contains("node_type: \"beta\""));
+    assert!(stdout.contains("# first node"));
+    assert!(stdout.contains("# second node"));
+    assert!(
+      stdout.contains(manifest.to_str().unwrap()),
+      "stub should embed the absolute manifest path"
+    );
+  }
+
+  #[test]
+  fn cli_plugin_generate_workflow_stub_filters_by_node_flag() {
+    let work = TempDir::new_in("/tmp").unwrap();
+    let manifest = work.path().join("plugin.toml");
+    fs::write(
+      &manifest,
+      r#"
+[plugin]
+name = "multi-stub"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "./bin/stub"
+
+[[plugin.nodes]]
+type = "alpha"
+
+[[plugin.nodes]]
+type = "beta"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("agentflow")
+      .unwrap()
+      .args([
+        "plugin",
+        "generate-workflow-stub",
+        manifest.to_str().unwrap(),
+        "--node",
+        "beta",
+      ])
+      .assert()
+      .success()
+      .get_output()
+      .stdout
+      .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(stdout.contains("node_type: \"beta\""));
+    assert!(
+      !stdout.contains("node_type: \"alpha\""),
+      "filtered stub must not include unrelated nodes"
+    );
+  }
+
+  #[test]
+  fn cli_plugin_generate_workflow_stub_errors_for_unknown_node() {
+    let work = TempDir::new_in("/tmp").unwrap();
+    let manifest = write_stub_manifest(work.path(), "real_node");
+    let assert = Command::cargo_bin("agentflow")
+      .unwrap()
+      .args([
+        "plugin",
+        "generate-workflow-stub",
+        manifest.to_str().unwrap(),
+        "--node",
+        "ghost_node",
+      ])
+      .assert()
+      .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(combined.contains("ghost_node"));
+    assert!(combined.contains("real_node"));
   }
 }

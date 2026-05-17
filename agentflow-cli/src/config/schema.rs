@@ -220,6 +220,74 @@ fn validate_node_schema(
     "while" => validate_nested_nodes(node, path, "do", options, report),
     _ => {}
   }
+
+  #[cfg(feature = "plugin")]
+  if node.node_type == "plugin" {
+    validate_plugin_node_type(node, path, report);
+  }
+}
+
+/// Resolve the plugin manifest referenced by a `type: plugin` node and
+/// verify that its `node_type` parameter matches one of the
+/// `[[plugin.nodes]]` entries the manifest declares. Lets the operator
+/// catch a typo or stale node name at validate time instead of at the
+/// first workflow run.
+///
+/// This runs regardless of strict mode because a wrong `node_type` is
+/// never benign — the runtime would always fail. Manifests that can't
+/// be read are silently skipped (the missing-manifest case is already
+/// caught by the structural require-`manifest` check), so this gate
+/// is purely informational on top of what's already validated.
+#[cfg(feature = "plugin")]
+fn validate_plugin_node_type(
+  node: &NodeDefinitionV2,
+  path: &str,
+  report: &mut WorkflowValidationReport,
+) {
+  let Some(manifest_str) = node.parameters.get("manifest").and_then(|v| v.as_str()) else {
+    return;
+  };
+  let Some(node_type) = node.parameters.get("node_type").and_then(|v| v.as_str()) else {
+    return;
+  };
+  let manifest_path = std::path::PathBuf::from(manifest_str);
+  let resolved = if manifest_path.is_dir() {
+    manifest_path.join("plugin.toml")
+  } else {
+    manifest_path
+  };
+  if !resolved.is_file() {
+    // The structural validator already complained if the path was
+    // missing; nothing to add here.
+    return;
+  }
+  let (manifest, _dir) = match agentflow_core::plugin::PluginManifest::load_from_path(&resolved) {
+    Ok(pair) => pair,
+    Err(err) => {
+      report.warnings.push(format!(
+        "{}.{}.parameters.manifest at '{}' could not be parsed: {err}",
+        path,
+        node.id,
+        resolved.display()
+      ));
+      return;
+    }
+  };
+  let known: Vec<&str> = manifest
+    .plugin
+    .nodes
+    .iter()
+    .map(|spec| spec.node_type.as_str())
+    .collect();
+  if !known.contains(&node_type) {
+    report.issues.push(format!(
+      "{}.{}.parameters.node_type '{node_type}' is not declared by plugin '{}'. Known node types: [{}]",
+      path,
+      node.id,
+      manifest.plugin.name,
+      known.join(", "),
+    ));
+  }
 }
 
 fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
