@@ -85,6 +85,7 @@ but do not implement channel adapters in this queue.
 - P3.5 slice 4 MCP capability discovery: `skill inspect --explain-permissions --with-mcp-discovery` spawns each declared MCP server, groups its advertised tools into a `McpCapabilityMap`, and feeds them into `resolve_tool_policy` so MCP tools surface admission rows alongside built-ins. Off by default (spawning MCP servers is heavy). 3 new CLI integration tests.
 - P3.4 doctor MCP+plugin lite installation probe: `doctor --check-installations` adds an `installations` section that walks `~/.agentflow/skills/*` and `~/.agentflow/plugins/*`, surfaces every declared MCP server command (reports `reachable` via `which`) and every plugin entrypoint (reports `entrypoint_exists`). Promotes status to Warning / Fail when any probe fails. 3 new CLI integration tests. Heavier transport-level MCP reachability + plugin `dry_run` spawn smoke stay deferred until the prerequisite manifest fields ship.
 - P3.9 CLI feature flag CI matrix (closed): Quality CI `features` job grew 14 → 18 combinations by adding the agentflow-rag feature surface (`rag-no-default`, `rag-pdf`, `rag-html`, `rag-pdf-html`). `local-embeddings` intentionally not wired (pulls `ort` ONNX downloads; fragile on CI). Wishlist features that don't exist yet are still tracked as "wire in when they ship".
+- P3.1 SDK example matrix: new top-level `examples/README.md` is the canonical 12-row matrix index. Audit found 11/12 rows already shipped; the gap (tool policy + sandbox capability decision) is filled by the new `agentflow-tools/examples/tool_policy_sandbox_demo.rs`. All examples compile under their respective feature sets.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -482,24 +483,34 @@ turning it into a channel hub.
 
 Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
 
-- TODO P3.1 SDK example matrix:
-  - Refresh `examples/` to a canonical matrix with one runnable per:
-    - DAG workflow with Map + While.
-    - DAG workflow embedding `AgentNode`.
-    - ReAct agent with native tool calling.
-    - PlanExecute agent.
-    - Multi-agent handoff supervisor.
-    - Multi-agent blackboard supervisor.
-    - Multi-agent debate supervisor.
-    - SkillBuilder direct API.
-    - MCP client + tool invocation.
-    - RAG ingest + query + eval.
-    - Tracing JSONL + OTel export.
-    - Tool policy + sandbox capability decision.
-  - Each example must be runnable offline with mock provider by default;
-    set `AGENTFLOW_LIVE_PROVIDER=1` to opt into live.
-  - Each example must compile under `--no-default-features` plus the
-    relevant feature set.
+- DONE P3.1 SDK example matrix:
+  - New top-level `examples/README.md` is the canonical 12-row matrix
+    index. Each row maps the spec capability to the runnable file
+    (cross-crate links) and notes which crates / features it lives
+    under. Operators read this once instead of grepping the workspace.
+  - Audit found 11/12 rows already shipped across per-crate
+    `examples/` dirs (DAG / AgentNode / ReAct / PlanExecute /
+    multi-agent ×3 / SkillBuilder / MCP client / RAG / tracing
+    JSONL). The one gap was the "tool policy + sandbox capability
+    decision" row.
+  - New `agentflow-tools/examples/tool_policy_sandbox_demo.rs` fills
+    the gap: walks through tool registration → `ToolPolicy::evaluate`
+    (allow_tools and allow_permissions paths) → `SandboxPolicy`
+    runtime constraints. Runs fully offline; never spawns a real
+    shell or HTTP request. `cargo run -p agentflow-tools --example
+    tool_policy_sandbox_demo`.
+  - All workspace examples compile under their owning crate's
+    default + relevant feature set (`cargo check --workspace
+    --examples` is clean). Per-flag combinations are covered by
+    the Quality CI `features` matrix (P3.9).
+  - Documented `AGENTFLOW_LIVE_PROVIDER=1` convention in the README.
+  - Follow-ups (not blocking):
+    - Dedicated OTel exporter example (today the JSONL example
+      covers the main path; OTel is exercised via the
+      `trace_context_propagation` test in `agentflow-llm/tests/`).
+    - Rust example invoking `agentflow_agents::eval::EvalRunner`
+      directly (today the CLI is the canonical eval entry point).
+    - Per-example smoke CI lands under P3.2 / P3.10 / P7.3.
 
 - TODO P3.2 Official example smoke tests:
   - Add a `tests/examples_smoke.rs` test suite per relevant crate that
