@@ -223,7 +223,10 @@ fn unpack_accepts_nested_archive_as_opaque_file() {
   ]);
   let (_work, install_dir) = install_skill_package(&package);
   let nested = install_dir.join("rust-expert/assets/data.zip");
-  assert!(nested.is_file(), "nested archive must be unpacked as a file");
+  assert!(
+    nested.is_file(),
+    "nested archive must be unpacked as a file"
+  );
   assert_eq!(fs::read(&nested).unwrap(), inner_zip);
   // Sanity check: no auto-extraction of the inner zip.
   assert!(!install_dir.join("rust-expert/assets/data").exists());
@@ -303,11 +306,7 @@ fn unpack_rejects_archive_with_too_many_entries() {
     0o644,
   ));
   for i in 0..16_400 {
-    entries.push((
-      format!("rust-expert/spam_{i:06}.txt"),
-      b"x".to_vec(),
-      0o644,
-    ));
+    entries.push((format!("rust-expert/spam_{i:06}.txt"), b"x".to_vec(), 0o644));
   }
   let refs: Vec<(&str, &[u8], u32)> = entries
     .iter()
@@ -368,11 +367,7 @@ fn unpack_rejects_cumulative_bomb_total_size() {
   // `cargo test --test marketplace_unpack_hardening_tests -- --ignored`.
   let chunk = vec![b'x'; 16 * 1024 * 1024];
   let mut entries: Vec<(String, &[u8], u32)> = Vec::with_capacity(18);
-  entries.push((
-    "rust-expert/SKILL.md".to_string(),
-    MINIMAL_SKILL_MD,
-    0o644,
-  ));
+  entries.push(("rust-expert/SKILL.md".to_string(), MINIMAL_SKILL_MD, 0o644));
   for i in 0..17 {
     entries.push((format!("rust-expert/chunk_{i:02}.bin"), &chunk, 0o644));
   }

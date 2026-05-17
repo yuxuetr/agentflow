@@ -26,9 +26,7 @@ use std::time::Duration;
 
 use agentflow_tracing::TraceStorage;
 use agentflow_tracing::storage::file::FileTraceStorage;
-use agentflow_tracing::types::{
-  ExecutionTrace, NodeStatus, NodeTrace, TraceStatus,
-};
+use agentflow_tracing::types::{ExecutionTrace, NodeStatus, NodeTrace, TraceStatus};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::json;
 use tempfile::TempDir;
