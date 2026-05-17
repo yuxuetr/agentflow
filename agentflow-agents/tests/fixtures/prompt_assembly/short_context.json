@@ -1,0 +1,38 @@
+[
+  {
+    "content": [
+      {
+        "text": "You assemble golden prompts.\n\n## Available Tools\n- **echo**: Echo input back to the caller.\n  Parameters: {\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"],\"type\":\"object\"}\n- **lookup**: Lookup a value by key.\n  Parameters: {\"properties\":{\"key\":{\"type\":\"string\"}},\"required\":[\"key\"],\"type\":\"object\"}\n\nTo call a tool, respond ONLY with this JSON:\n{\"thought\": \"<your reasoning>\", \"action\": {\"tool\": \"<tool_name>\", \"params\": {<parameters>}}}\n\nTo give a final answer, respond ONLY with this JSON:\n{\"thought\": \"<your final reasoning>\", \"answer\": \"<your answer>\"}\n\nRespond ONLY with valid JSON matching one of the formats above. No additional text, no markdown, no explanation outside the JSON.",
+        "type": "text"
+      }
+    ],
+    "role": "system"
+  },
+  {
+    "content": [
+      {
+        "text": "hello",
+        "type": "text"
+      }
+    ],
+    "role": "user"
+  },
+  {
+    "content": [
+      {
+        "text": "hi there",
+        "type": "text"
+      }
+    ],
+    "role": "assistant"
+  },
+  {
+    "content": [
+      {
+        "text": "[Tool Result: echo]\nok",
+        "type": "text"
+      }
+    ],
+    "role": "user"
+  }
+]

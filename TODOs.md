@@ -71,6 +71,7 @@ but do not implement channel adapters in this queue.
 - P-H.5 (Slice 2 of 4): approval routes + LLM-backed executor (`PendingApprovalRegistry` + `ServerApprovalProvider` with timeout + drop cleanup; `GET /v1/harness/sessions/{id}/approvals` + `POST /v1/harness/sessions/{id}/approvals/{request_id}`; `LiveHarnessExecutor` wiring `HarnessRuntime` + `ReActAgent` + hook-wrapped registry + `ServerHarnessEventSink` writing through DB + broker; `agentflow serve` swaps in the live executor while tests keep the stub; integration tests gated on `AGENTFLOW_DATABASE_TEST_URL` + Moonshot E2E gated on `MOONSHOT_API_KEY`). Slices 3–4 (Web UI + full E2E render) remain TODO.
 - P-H.5 (Slice 3 of 4): Harness Mode Web UI (`/ui/harness/sessions` list + `/ui/harness/sessions/new` submit form + `/ui/harness/sessions/:id` detail page with event timeline, payload pane, pending approval cards with allow / deny / deny_and_stop × once / session / run scope dropdown, and cancel button; deep-link routes wired in `ui_router`; Playwright spec `agentflow-ui/e2e/harness-sessions.spec.ts`; live Moonshot smoke verified end-to-end through every endpoint the UI consumes). Slice 4 (`POST /v1/harness/sessions/:id:resume` + full CLI→server→UI E2E render tests) remains TODO.
 - P3.6 Native tool calling provider consistency tests: full `tool_choice = auto | none | required | tool` matrix per provider, 401/429/5xx coverage for every provider, Mock provider folded into the same suite, `agentflow-llm` added to the CI `test` matrix so the suite is now release-gate-blocking. 44 hermetic provider_consistency tests (19 new on top of the existing 25).
+- P4.6 Memory and prompt golden tests: `agentflow-agents/tests/prompt_assembly_golden.rs` (5 tests) locks down the prompt-assembly contract — deterministic message snapshot, summary injection at budget overflow, post-compaction token budget, tool-list surfacing. Maintained the pre-existing `agent_runtime_react_trace.json` golden fixture to include the `llm_call_completed` events introduced by P4.4 follow-up step 2.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -812,14 +813,38 @@ regression-safe.
   - Stability: `MemoryStore` stable; new types start experimental
     and promote to Beta after one skill ships a real integration.
 
-- TODO P4.6 Memory and prompt golden tests:
-  - Add `agentflow-agents/tests/prompt_assembly_golden.rs`:
-    - Prompt assembly determinism with session + summary + tool list.
-    - Memory compaction crossover (when summary kicks in).
-    - Token budget enforcement.
-    - Memory hook event emission order.
-  - Golden fixtures stored as JSON in `tests/fixtures/`.
-  - Tolerate additive fields per P0.3 contract.
+- DONE P4.6 Memory and prompt golden tests:
+  - `agentflow-agents/tests/prompt_assembly_golden.rs` adds 5 tests
+    that lock down the prompt-assembly contract callers (eval, Harness,
+    skills) rely on:
+    - `prompt_assembly_short_context_matches_golden` — fixed input
+      (persona + 3 history messages + 2 tools) ⇒ byte-stable
+      `MultimodalMessage` list captured in
+      `tests/fixtures/prompt_assembly/short_context.json`.
+      `AGENTFLOW_PROMPT_GOLDEN_UPDATE=1` regenerates the fixture
+      after intentional changes.
+    - `prompt_assembly_long_context_triggers_summary_message` —
+      30-message history × budget=16 ⇒ summary system message
+      injected at position 1 (after persona system); kept history
+      strictly fewer than original.
+    - `prompt_assembly_token_budget_respected_after_compaction` —
+      20-message history × ~16 tokens each × budget=32 ⇒ kept
+      history's total `token_count` ≤ 32. This is the contract
+      eval cost limits + harness budgets actually contract on.
+    - `prompt_assembly_tool_descriptions_in_system_prompt` — every
+      registered tool's name + description surfaces in
+      `## Available Tools`.
+    - `prompt_assembly_no_tools_omits_tools_section` — empty
+      registry ⇒ no Available Tools section, no tool-call JSON
+      instructions; final-answer JSON instruction still present.
+  - Assertion helper `assert_json_subset` enforces the P0.3
+    additive-field contract: keys in the fixture must appear in the
+    actual; extra keys on actual are tolerated.
+  - Maintenance: updated the pre-existing
+    `tests/fixtures/agent_runtime_react_trace.json` golden fixture
+    to include the two `llm_call_completed` events the runtime started
+    emitting in `fbd3ee2` (P4.4 follow-up step 2). The fixture had
+    been stale on main since that commit.
 
 - TODO P4.7 Memory backend implementations (after P4.5 design):
   - Implement `PreferenceMemory` (SQLite-backed, encrypted-at-rest

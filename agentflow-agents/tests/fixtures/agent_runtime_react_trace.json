@@ -82,6 +82,17 @@
       "timestamp": "<timestamp>"
     },
     {
+      "event": "llm_call_completed",
+      "session_id": "golden-session",
+      "step_index": 1,
+      "model": "mock-golden-runtime",
+      "prompt_tokens": 50,
+      "completion_tokens": 2,
+      "total_tokens": 52,
+      "duration_ms": 0,
+      "timestamp": "<timestamp>"
+    },
+    {
       "event": "tool_policy_decision",
       "session_id": "golden-session",
       "step_index": 2,
@@ -142,6 +153,17 @@
       "is_error": false,
       "duration_ms": 0,
       "source": "builtin",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "llm_call_completed",
+      "session_id": "golden-session",
+      "step_index": 4,
+      "model": "mock-golden-runtime",
+      "prompt_tokens": 50,
+      "completion_tokens": 3,
+      "total_tokens": 53,
+      "duration_ms": 0,
       "timestamp": "<timestamp>"
     },
     {
