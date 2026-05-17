@@ -81,6 +81,7 @@ but do not implement channel adapters in this queue.
 - M.3 agentflow-db per-repo CRUD tests (db + memory parts): grew `agentflow-db` repo tests from 2 → 12 covering every table (Run/Step/Event/Artifact/SkillInstall/McpSession/HarnessSession/HarnessEvent) plus tenant isolation and resume-mode lifecycle. Removed the racy per-test `TRUNCATE`, replaced with UUID-suffixed scope keys so re-runs are idempotent. Memory layer coverage was already shipped under P4.7.
 - P2.6 Server tenant/session boundary: migration `0003_tenant_id_columns.sql` adds `tenant_id` to `events`/`artifacts`/`skill_installs` (with backfill from `runs`), bumps `skill_installs` PK to `(tenant_id, name, version)`. New `tenant.rs` ships `TenantId` extension + `extract_tenant_id` header middleware (default `"default"`). `get_run`/`cancel_run`/`get_run_graph`/`get_run_resume_plan` 404 on cross-tenant probes; `list_runs` falls back from query param to header. 6 new tenant-boundary integration tests pass alongside the existing 9 P2.3 tests.
 - P2.5 CLI local-daemon mode (MVP): new `agentflow-cli/src/server_client.rs` is the single HTTP layer pointing at `agentflow-server`. `workflow run --server <url>` POSTs the YAML and polls to terminal; new `workflow list/cancel/graph` subcommands are server-only. `--auth-token`/`AGENTFLOW_API_TOKEN` and `--tenant`/`AGENTFLOW_TENANT` plumb auth + tenant headers (P2.6). 10 unit + 6 CLI integration tests cover the resolve helpers and the run/list/cancel/graph roundtrips against the test Postgres. Follow-ups: `workflow logs` SSE, skill server mode, P3.3 envelope output, --model / --execution-mode / --run-dir mapping over the wire.
+- P3.8 Cross-hop OTel propagation (LLM + plugin hops): new `agentflow-tracing::context` ships the canonical `scope` / `current_traceparent` task-local helper + `TRACEPARENT_ENV` constant. Plugin spawn paths (`OsSandboxPluginPreparer` + new `NoopWithTraceparent`) inject `TRACEPARENT=<value>` into the child's env so OTel-aware plugins stitch onto the parent run. 4 unit + 3 CLI integration tests prove the contract end-to-end. `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)" table with LLM ✓ + Plugin ✓ + MCP ○ + Worker gRPC ○.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -693,17 +694,42 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     `ModelCapabilities` flag and verification status string is
     present in the doc.
 
-- TODO P3.8 Cross-hop OpenTelemetry context propagation:
-  - LLM hop already propagates `traceparent` (closed). Extend to:
-    - MCP transport: inject `traceparent` into stdio envelope or JSON-RPC
-      `meta` field.
-    - Plugin subprocess: pass `traceparent` via env var
-      `TRACEPARENT` (W3C convention).
-    - Worker gRPC: inject `traceparent` into gRPC metadata.
-  - Add `agentflow-tracing::context::current_traceparent()` helper.
-  - Add integration tests that a single DAG run produces a connected OTel
-    trace across LLM → MCP → Plugin → Worker hops.
-  - Update `docs/TRACE_PERSISTENCE_SCHEMA.md` "Hop continuity" subsection.
+- DONE P3.8 Cross-hop OpenTelemetry context propagation (LLM +
+  plugin hops shipped; MCP + worker gRPC remain follow-ups):
+  - New `agentflow-tracing::context` module is the canonical home for
+    cross-hop W3C trace propagation. Public surface:
+    - `pub async fn scope(traceparent: String, fut: F) -> T` —
+      install for the duration of `fut` via tokio task-local.
+    - `pub fn current_traceparent() -> Option<String>` — read the
+      active value (returns `None` outside a scope so consumers
+      correctly suppress the carrier when there's no upstream
+      context).
+    - `pub const TRACEPARENT_ENV: &str = "TRACEPARENT"` — the
+      canonical env var name OTel-aware subprocesses look for.
+  - Plugin subprocess injection: `agentflow-cli` plugin preparers
+    (`OsSandboxPluginPreparer` and the new `NoopWithTraceparent`
+    shim) call `inject_traceparent_into_command(&mut Command)`
+    before spawn, which sets `TRACEPARENT=<value>` from the
+    task-local. The bare `NoopCommandPreparer` from
+    `agentflow-core` stays untouched so embedders that don't want
+    this behavior aren't affected.
+  - 4 unit tests in `agentflow-tracing::context::tests` lock down
+    the scope/current/nested-scope semantics and the env-constant
+    spelling. 3 CLI integration tests in
+    `agentflow-cli/tests/plugin_traceparent_tests.rs` spawn
+    `sh -c 'echo tp=${TRACEPARENT-}'` to prove the env var arrives
+    at the child, doesn't leak when no scope is active, and respects
+    nested scopes.
+  - `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)"
+    section with the per-hop carrier table. LLM (shipped via
+    `agentflow_llm::trace_context`) and plugin (shipped here) are
+    marked done; MCP transport (`meta.traceparent`) and worker
+    gRPC metadata are marked as follow-ups.
+  - Follow-ups (separate slices):
+    - MCP transport: inject `traceparent` into JSON-RPC `meta`.
+    - Worker gRPC: inject into request metadata.
+    - End-to-end integration test that walks a DAG run through
+      LLM → MCP → Plugin → Worker and asserts a connected OTel trace.
 
 - TODO P3.9 CLI feature flag CI matrix:
   - DONE (partial) — Quality CI `features` job grew from 6 to 12

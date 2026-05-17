@@ -45,6 +45,7 @@
 //! ```
 
 pub mod collector;
+pub mod context;
 pub mod format;
 pub mod otel;
 pub mod redaction;

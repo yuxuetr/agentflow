@@ -21,8 +21,7 @@
 //! workflow integration covered here.
 
 use agentflow_core::plugin::{
-  Capabilities, CommandPreparer, FsAccess, NoopCommandPreparer, PluginError, PluginHost,
-  PluginManifest,
+  Capabilities, CommandPreparer, FsAccess, PluginError, PluginHost, PluginManifest,
 };
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
@@ -180,14 +179,14 @@ fn select_preparer(
 
   // Operator-blessed opt-out (only honored when profile allows it).
   if allow_unsandboxed && policy.allow_sandbox_disabled_opt_in {
-    return Ok(Arc::new(NoopCommandPreparer));
+    return Ok(Arc::new(NoopWithTraceparent));
   }
 
   // Default by profile.
   if policy.require_sandbox {
     Ok(Arc::new(OsSandboxPluginPreparer::new(default_backend())))
   } else {
-    Ok(Arc::new(NoopCommandPreparer))
+    Ok(Arc::new(NoopWithTraceparent))
   }
 }
 
@@ -261,6 +260,39 @@ impl OsSandboxPluginPreparer {
   }
 }
 
+/// Inject the active `traceparent` (P3.8) into the spawn command's env
+/// as `TRACEPARENT=<value>` when a context is in scope. No-op
+/// otherwise — propagating an empty value would mask the
+/// "no upstream context" case for OTel-aware plugins.
+pub(crate) fn inject_traceparent_into_command(command: &mut Command) {
+  if let Some(value) = agentflow_tracing::context::current_traceparent() {
+    command.env(agentflow_tracing::context::TRACEPARENT_ENV, value);
+  }
+}
+
+/// `CommandPreparer` shim that mirrors `NoopCommandPreparer` but also
+/// stamps the active `traceparent` onto the spawn command's env when
+/// one is in scope. Used by [`select_preparer`] in place of the bare
+/// no-op so the trace tree stays connected when sandbox wrapping is
+/// disabled.
+#[derive(Debug, Default)]
+pub(crate) struct NoopWithTraceparent;
+
+impl CommandPreparer for NoopWithTraceparent {
+  fn name(&self) -> &str {
+    "noop-plugin"
+  }
+  fn prepare(
+    &self,
+    command: &mut Command,
+    _manifest: &PluginManifest,
+    _manifest_dir: &Path,
+  ) -> Result<(), PluginError> {
+    inject_traceparent_into_command(command);
+    Ok(())
+  }
+}
+
 impl CommandPreparer for OsSandboxPluginPreparer {
   fn name(&self) -> &str {
     self.backend.name()
@@ -272,6 +304,7 @@ impl CommandPreparer for OsSandboxPluginPreparer {
     manifest: &PluginManifest,
     manifest_dir: &Path,
   ) -> Result<(), PluginError> {
+    inject_traceparent_into_command(command);
     let caps = capabilities_for_manifest(&manifest.plugin.capabilities);
     let scope = scope_for_manifest(&manifest.plugin.capabilities, manifest_dir).map_err(|err| {
       PluginError::PreparerRejected {
