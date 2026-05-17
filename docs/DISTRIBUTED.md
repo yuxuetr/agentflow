@@ -266,6 +266,25 @@ above: timeout cut-off, mid-dispatch cancellation, output truncation
 with the matching trace event, and retry semantics through the
 distributed scheduler.
 
+## Failure Domains (P5.7)
+
+Six distributed failure scenarios are pinned down by integration
+tests in `agentflow-worker/tests/failure_domains.rs`:
+
+| Scenario | Trigger | Recovery | Test |
+|----------|---------|----------|------|
+| Stale heartbeat | Worker stops heartbeating while holding a task | Scheduler `requeue_stale_tasks()` reaps the assignment and flips the node back to `Pending` with `attempt += 1` | `stale_heartbeat_redistributes_to_another_worker` |
+| Worker crash mid-task | Externally identical to stale heartbeat (the process is gone, no fresh heartbeats) | Same reap path; the surviving worker claims and completes the redispatched task | `worker_crash_midtask_is_reattempted_elsewhere` |
+| Retryable failure | `WorkerTaskResult::Failed { retryable: true }` (e.g. timeout, transport hiccup) | Scheduler requeues until `max_attempts` is exhausted; reattempts may land on a different worker | `retryable_failure_retries_on_another_worker` |
+| Non-retryable failure | `WorkerTaskResult::Failed { retryable: false }` (e.g. unknown node type, cancellation) | Node moves to `DistributedNodeStatus::Failed` immediately; no further attempts | `non_retryable_failure_is_terminal` |
+| Duplicate completion | Same `task_id` reported twice by the worker (e.g. gRPC retry on the wire) | `WorkerProtocol::report_result` returns `SchedulerError::TaskNotClaimed` for the second call; run accounting stays consistent | `duplicate_completion_is_idempotent` |
+| Trace stitching across reattempts | Multiple attempts of the same node | Each attempt contributes worker trace fragments; the control plane appends them in global-order with monotonic `global_seq`, so a single OTel span tree covers the full lineage | `trace_stitching_preserves_both_attempts` |
+
+The mock node's `fail_until_attempt` / `sleep_ms` / `output_size_bytes`
+knobs (worker side) plus `with_heartbeat_timeout` / `with_max_attempts`
+(scheduler side) keep these tests hermetic — no real process crashes
+or wall-clock races are needed.
+
 ## Two-Worker Deployment Shape
 
 The target deployment shape is one control plane plus N workers:

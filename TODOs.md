@@ -1307,15 +1307,29 @@ expansion) to be useful for non-trivial workloads.
     points at systemd `MemoryMax` / Kubernetes `resources.limits`
     plus the `default_timeout` safety net.
 
-- TODO P5.7 Distributed failure-domain tests (PREREQ: P5.5, P5.6):
-  - Cover scenarios:
-    - Stale heartbeat → server marks worker dead, redistributes tasks.
-    - Worker crash mid-task → task reattempted on another worker.
-    - Retryable failure → retry on same or different worker.
-    - Non-retryable failure → terminal state, no replay.
-    - Duplicate completion → idempotency on result reporting.
-    - Trace stitching across reattempts (single OTel trace).
-  - Document in `docs/DISTRIBUTED.md` "Failure domains".
+- DONE P5.7 Distributed failure-domain tests (PREREQ: P5.5, P5.6):
+  - DONE: all 6 scenarios pinned down by
+    `agentflow-worker/tests/failure_domains.rs`:
+    - `stale_heartbeat_redistributes_to_another_worker` — stale
+      heartbeat → reaped + redispatched.
+    - `worker_crash_midtask_is_reattempted_elsewhere` — crash
+      modeled as permanent silence on the heartbeat channel;
+      surviving worker completes the redispatched task and shows
+      up in the stitched trace.
+    - `retryable_failure_retries_on_another_worker` — first
+      attempt fails retryably; the second worker picks up and
+      succeeds.
+    - `non_retryable_failure_is_terminal` — `FlowDefinitionError`
+      (unknown node type) terminates immediately even with a high
+      `with_max_attempts` budget.
+    - `duplicate_completion_is_idempotent` — second
+      `report_result` for the same `task_id` is rejected by the
+      protocol layer so run accounting stays consistent.
+    - `trace_stitching_preserves_both_attempts` — stitched trace
+      records both attempt starts + terminals in monotonic
+      `global_seq` order.
+  - DONE: "Failure Domains (P5.7)" table in `docs/DISTRIBUTED.md`
+    with the recovery semantics + test cross-references.
 
 - DONE P5.8 Workflow `type: plugin` first-class node syntax:
   - `type: plugin` was already wired into `factory.rs` and the
