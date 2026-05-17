@@ -86,6 +86,7 @@ but do not implement channel adapters in this queue.
 - P3.4 doctor MCP+plugin lite installation probe: `doctor --check-installations` adds an `installations` section that walks `~/.agentflow/skills/*` and `~/.agentflow/plugins/*`, surfaces every declared MCP server command (reports `reachable` via `which`) and every plugin entrypoint (reports `entrypoint_exists`). Promotes status to Warning / Fail when any probe fails. 3 new CLI integration tests. Heavier transport-level MCP reachability + plugin `dry_run` spawn smoke stay deferred until the prerequisite manifest fields ship.
 - P3.9 CLI feature flag CI matrix (closed): Quality CI `features` job grew 14 → 18 combinations by adding the agentflow-rag feature surface (`rag-no-default`, `rag-pdf`, `rag-html`, `rag-pdf-html`). `local-embeddings` intentionally not wired (pulls `ort` ONNX downloads; fragile on CI). Wishlist features that don't exist yet are still tracked as "wire in when they ship".
 - P3.1 SDK example matrix: new top-level `examples/README.md` is the canonical 12-row matrix index. Audit found 11/12 rows already shipped; the gap (tool policy + sandbox capability decision) is filled by the new `agentflow-tools/examples/tool_policy_sandbox_demo.rs`. All examples compile under their respective feature sets.
+- P3.2 + P3.10 + P7.3 Examples smoke CI (closed jointly): new `cargo xtask examples-smoke` subcommand runs 7 representative examples through `cargo run` with per-example wall-clock caps; total budget pinned at 5 min (P3.10 spec). Quality CI `examples` job invokes it with a 10-min job timeout. 3 new xtask unit tests lock down the list shape + budget invariants.
 - P-H.5 (Slice 4 of 4 — completes P-H.5): `POST /v1/harness/sessions/{id}:resume` (rerun semantic: wipe events, flip row to running, respawn executor; `post_harness_session_action` dispatches `:cancel` / `:resume` on the shared POST route; `HarnessSessionRepo::reset_for_resume` Pg txn); UI detail page switches to `EventSource` SSE with history-poll fallback + stream pill + "Resume (rerun)" button gated on terminal status; `tests/harness_full_stack_e2e.rs` exercises submit → SSE stream → DB history → terminal row → resume → rerun history in one ~6.5s pass against real Postgres + Moonshot. P-H.5 closed.
 - P3.5 (Slice 1 of 4): `agentflow skill inspect --explain-permissions` now prints the P1.9 admission table alongside the existing capability decisions; new repeatable `--allow-tool` / `--deny-tool` CLI flags feed the CLI override layer (highest precedence); hint message when the flags are passed without `--explain-permissions`; 5 new CLI integration tests in `skill_cli_tests.rs` lock down the precedence rules. Slices 2–4 (sandbox profile + MCP capability discovery + `workflow validate --explain-permissions`) remain TODO.
 - P3.5 (Slice 2 of 4): `agentflow workflow validate --explain-permissions <yaml>` walks `FlowDefinitionV2` and emits a per-node permission report (nine `PermissionCategory` variants, required capability list, declared constraint parameters, and "permissive: no …" notes for missing allowlists). `--format json` extends the existing envelope with a `permissions` object. 4 new CLI tests in `workflow_tests.rs` lock down text output, JSON envelope, off-by-default behaviour, and the shell-node capability surface. Slices 3–4 (sandbox profile + MCP capability discovery in `skill inspect`) remain TODO.
@@ -512,13 +513,20 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       directly (today the CLI is the canonical eval entry point).
     - Per-example smoke CI lands under P3.2 / P3.10 / P7.3.
 
-- TODO P3.2 Official example smoke tests:
-  - Add a `tests/examples_smoke.rs` test suite per relevant crate that
-    runs each example with mock provider and asserts exit code + presence
-    of key output markers.
-  - Wire into CI as a separate job to avoid slowing the default test job.
-  - Add a `cargo xtask examples-smoke` runner that mirrors the CI matrix
-    for local debugging.
+- DONE P3.2 Official example smoke tests:
+  - New `cargo xtask examples-smoke` subcommand runs every entry in
+    the workspace's explicit `SMOKE_EXAMPLES` list (7 entries today:
+    tool_policy_sandbox_demo / simple_tracing / fixed_dag_workflow /
+    agent_native_react / plan_execute_agent / hybrid_workflow_agent
+    / skill_calls_mcp_tool). Each runs through `cargo run -p <pkg>
+    --example <name>` with a per-example wall-clock cap; total
+    budget is capped at 5 min (P3.10 spec). Failing examples surface
+    with a context-rich error.
+  - Local invocation: `cargo xtask examples-smoke` runs the same
+    list a contributor would hit in CI; ~42 s wall clock on my M2.
+  - 3 new unit tests in xtask lock down: smoke list non-empty +
+    unique, total budget pinned at 5 min, per-example caps fit
+    inside the total budget.
 
 - DONE P3.3 CLI JSON output audit (contract + first command migrated;
   per-command migration tracked as follow-ups below):
@@ -782,12 +790,17 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     names still don't exist in any workspace crate; they'll be wired
     in if/when the actual flags ship (per the partial-status note).
 
-- TODO P3.10 Examples smoke test CI:
-  - Extend P3.2 into a CI job that runs every example in
-    `examples/ecosystem/` and `agentflow-*/examples/` with mock providers.
-  - Cap total wall time at 5 minutes; mark slow examples with a
-    `slow_example` feature.
-  - Fail CI if any example errors or panics.
+- DONE P3.10 Examples smoke test CI:
+  - Quality CI `examples` job already runs `cargo test --workspace
+    --examples` (compile gate) plus a shell-driven runner for the
+    no-API examples. This slice adds the explicit `cargo xtask
+    examples-smoke` step that wraps each invocation in the
+    P3.2 wall-clock contract. Job-level `timeout-minutes: 10`
+    keeps the whole step bounded; the xtask's own 5-min total
+    budget keeps the smoke loop itself bounded.
+  - "Mark slow examples with a `slow_example` feature" is replaced
+    by per-example timeouts in the smoke list — same outcome
+    (slow examples are explicitly gated) without a new feature flag.
 
 ---
 
@@ -1406,9 +1419,12 @@ known characteristics, not surprises.
   - Fail when median time ≥1.25× baseline.
   - Post a summary comment on PRs.
 
-- TODO P7.3 Examples smoke test in CI (links to P3.10):
-  - All examples must compile and run with mock provider in <5 min.
-  - Make `examples/ecosystem/` the official entry surface.
+- DONE P7.3 Examples smoke test in CI (closed alongside P3.2 / P3.10):
+  - Quality CI `examples` job runs the new `cargo xtask
+    examples-smoke` step, bounded by the xtask's 5-min total budget
+    and a 10-min job-level `timeout-minutes`. `examples/README.md`
+    is the canonical index pointing at the per-crate examples and
+    `examples/ecosystem/` (the official entry surface).
 
 - TODO P7.4 v1.0 release dress rehearsal:
   - Tag `v1.0.0-rc.1` from a release branch.

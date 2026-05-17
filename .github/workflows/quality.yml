@@ -162,11 +162,17 @@ jobs:
   examples:
     name: examples compile and smoke
     runs-on: ubuntu-latest
+    # 10 min ceiling so a regression in any one example can't drag the
+    # whole CI run. The xtask runner enforces a per-example cap on top
+    # (P3.10 spec target is 5 min total wall clock for the smoke job).
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Compile workspace examples
         run: cargo test --workspace --examples
+      - name: Run examples-smoke (xtask)
+        run: cargo xtask examples-smoke
       - name: Run no-API example smoke tests
         run: |
           cargo run -p agentflow-core --example fixed_dag_workflow
