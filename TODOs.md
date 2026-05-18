@@ -38,6 +38,7 @@ but do not implement channel adapters in this queue.
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | closed (P7.4-FU1..FU4 all DONE; v1.0.0-rc.1 tag is unblocked) |
 | P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
+| P9 | Dogfooding-Driven Refinements (from A1+A1.5 reflection) | NEW — active |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -2126,6 +2127,108 @@ Architectural rules (enforced via review):
   - Plugin compatibility adapters.
   - Provider subscription bridge.
   - Promote individual H6 items to TODOs only when concretely required.
+
+---
+
+## P9 — Dogfooding-Driven Refinements (NEW)
+
+Action items from `docs/L1_L3_REFLECTION_2026-05-18.md` —
+consolidates fixes / docs flagged by A1 (L1) + A1.5 (L3) live
+end-to-end validation runs against real Moonshot + MiniMax APIs.
+
+All items here are documentation, error-message, or peripheral
+fix scope. **No urgent core refactor surfaced** by the dogfooding,
+so this segment is small and time-bound.
+
+- DONE P9.1 `agentflow skill validate` surfaces underlying error message:
+  - One-line fix in `agentflow-cli/src/main.rs`: changed
+    `eprintln!("Error: {}", e)` → `eprintln!("Error: {:#}", e)`.
+    anyhow's chain display now prints outermost context plus every
+    `source()` joined by `: `. Benefits every CLI command, not just
+    `skill validate`.
+  - Verified with a synthetic skill that triggers the
+    `mcp_command_allowlist` rejection — error now reads:
+    `Error: Validation failed: Invalid skill configuration:
+    [[mcp_servers]] 'some-binary' command 'totally-disallowed-binary'
+    is not listed in security.mcp_command_allowlist` instead of the
+    previous bare `Error: Validation failed`.
+  - clippy + fmt clean.
+
+- TODO P9.2 Document `security.mcp_command_allowlist` opt-in for native binaries:
+  - **Why** (F-DOC-1): docs/MCP_SKILLS.md line 70 mentions the
+    default `["python", "python3", "node", "npx", "uvx"]` but doesn't
+    make clear that compiled binaries (Rust / Go / etc. MCP servers)
+    silently fail to register without explicit opt-in. The error
+    message "Validation failed" (per P9.1) makes this very confusing
+    for first-time skill authors integrating native MCP.
+  - **What**: add a "Spawning native binary MCP servers" subsection
+    to `docs/MCP_SKILLS.md` with the phonon-mcp worked example
+    showing the `[security] mcp_command_allowlist = [..., "phonon-mcp"]`
+    opt-in.
+
+- TODO P9.3 Auto-load `~/.agentflow/.env` from agentflow CLI:
+  - **Why** (F-AF-3): every `agentflow workflow run` / `skill run` /
+    etc. invocation currently requires `source ~/.agentflow/.env`
+    upfront. Friction at every iteration. A1 podcast app already
+    proved the `dotenvy::from_path(home/.agentflow/.env)` pattern
+    works cleanly (silent no-op when missing, respects existing env).
+  - **What**: add `dotenvy` dep to `agentflow-cli`; call at top of
+    `main()` before `Cli::parse()`. Match agentflow's own profile
+    convention (env vars take precedence — don't override
+    operator-provided values).
+  - **Acceptance**: a fresh shell with no `MOONSHOT_API_KEY`
+    exported can run `agentflow skill validate ...` and the binary
+    finds the key from `~/.agentflow/.env`.
+
+- TODO P9.4 SKILL.md `model:` frontmatter handling:
+  - **Why** (F-AF-2): SKILL.md `model:` in YAML frontmatter is
+    silently set to `Default::default()` (gpt-4o) by
+    `SkillMd::into_manifest`. Confusing for skill authors who think
+    they configured a model.
+  - **What**: either (a) parse `model.name` from SKILL.md frontmatter,
+    or (b) warn at parse time when a `model` field is present in
+    SKILL.md frontmatter ("ignored; use skill.toml for model config").
+    Recommend (a) since the data is already there and dropping it
+    on the floor is the surprise.
+  - **Priority**: medium — skill.toml is a clean workaround, but
+    the silent drop is bad ergonomics.
+
+- TODO P9.5 `FlowValue` field reference in `docs/AGENT_SDK.md`:
+  - **Why** (F-DOC-2): `FlowValue::File { mime_type, .. }` field
+    is `mime_type` not `media_type`. Easy to guess wrong when
+    authoring custom AsyncNode impls.
+  - **What**: add a "FlowValue field reference" subsection to
+    `docs/AGENT_SDK.md` enumerating exact field names per variant
+    (`Json(Value)`, `File { path, mime_type }`, `Url { url,
+    mime_type }`).
+  - **Priority**: low — discoverable via cargo errors at build
+    time; but the doc would prevent the round-trip.
+
+- TODO P9.6 phonon-side action items (batched to phonon Todos.md):
+  - **Why** (F-PH-1, F-PH-2, F-PH-3): three phonon-side fixes
+    flagged in reflection but not in agentflow's scope. Tracked
+    here as a single line for cross-reference; actual work goes
+    to `/Users/hal/rustspace/phonon/Todos.md`.
+    - F-PH-1: truncate long values in phonon `#[instrument(fields(...))]`
+    - F-PH-2: `PodcastPipeline::generate` returns per-segment durations
+    - F-PH-3: phonon-mcp `audio_info` surfaces `resampled_from`
+  - **What**: batch as a phonon v0.7.x patch release. None block
+    agentflow work.
+
+- TODO P9.7 A1.5 persona: add "re-measure LUFS before save" step:
+  - **Why** (F-EX-1): agent reports the *target* LUFS as if measured;
+    never actually re-calls `audio_loudness` after normalize_lufs.
+    Integrity issue in the final answer.
+  - **What**: edit `examples/applications/podcast-mastering/skill.toml`
+    persona — insert Step 5.5: "re-measure with `mcp_phonon_audio_loudness`
+    before save; report actual achieved LUFS in final answer".
+
+- TODO P9.8 Tighten `target_segments` docstring + A1 README:
+  - **Why** (F-DOC-3): `target_segments` is a hint, not a strict cap.
+    Caller asked for 4, got 12.
+  - **What**: phonon-podcast `ScriptRequest.target_segments` doc
+    comment + A1 README `--segments` description should say
+    "approximate, not strict".
 
 ---
 

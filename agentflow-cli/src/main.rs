@@ -1619,7 +1619,14 @@ async fn main() {
   };
 
   if let Err(e) = result {
-    eprintln!("Error: {}", e);
+    // `{:#}` is anyhow's "chain display" formatter — prints the
+    // outermost context plus every `source()` joined by ": ".
+    // Bare `{}` would only show the outermost message, hiding the
+    // underlying cause (e.g. `agentflow skill validate` was bailing
+    // with just "Error: Validation failed", swallowing the
+    // structured `SkillError::ValidationError.message` that explained
+    // *why*). See P9.1 / F-AF-1 in the L1+L3 reflection doc.
+    eprintln!("Error: {:#}", e);
     std::process::exit(1);
   }
 }
