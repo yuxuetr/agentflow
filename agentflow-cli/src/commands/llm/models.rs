@@ -4,11 +4,23 @@ use agentflow_llm::{
 };
 use anyhow::{Context, Result};
 use colored::*;
+use std::collections::BTreeSet;
 
-pub async fn execute(provider: Option<String>, detailed: bool) -> Result<()> {
+pub async fn execute(
+  provider: Option<String>,
+  detailed: bool,
+  refresh_from_api: bool,
+) -> Result<()> {
   let source = LLMConfig::resolve_default_source()?;
   for warning in &source.warnings {
     eprintln!("Warning: {warning}");
+  }
+
+  // F-A7-6: --refresh-from-api branches into the live-query path.
+  // The local-listing path stays the default so existing scripts
+  // and the offline case keep working unchanged.
+  if refresh_from_api {
+    return execute_refresh(provider, source).await;
   }
 
   let models = match source.kind {
@@ -59,6 +71,275 @@ pub async fn execute(provider: Option<String>, detailed: bool) -> Result<()> {
   }
 
   Ok(())
+}
+
+/// F-A7-6: query each OpenAI-compatible provider's `/v1/models`
+/// endpoint and print the delta vs the local registry. Read-only;
+/// doesn't write to `models.yml`. Currently supported providers:
+/// openai, moonshot, stepfun, dashscope. Anthropic and Google have
+/// different `/models` shapes (or none) and are reported as
+/// "skipped (refresh not supported)".
+///
+/// Output groups per-provider:
+///   - **new**: present on provider, missing locally — candidates
+///     to add to `models.yml`
+///   - **only_local**: in `models.yml` but not on provider — typo /
+///     deprecated / private deployment
+///   - **shared**: count only (full list available without
+///     `--refresh-from-api`)
+async fn execute_refresh(
+  provider_filter: Option<String>,
+  source: agentflow_llm::LLMConfigSource,
+) -> Result<()> {
+  let config = match source.path.as_ref() {
+    Some(path) => LLMConfig::from_file(path)
+      .await
+      .with_context(|| format!("Failed to load config file '{}'", path.display()))?,
+    None => {
+      anyhow::bail!(
+        "`--refresh-from-api` needs a real models.yml to diff against. \
+         Run `agentflow config init` first to generate one at ~/.agentflow/models.yml."
+      );
+    }
+  };
+
+  println!(
+    "{}",
+    "Refreshing model list from provider APIs (read-only diff)"
+      .bold()
+      .blue()
+  );
+  println!();
+
+  let mut any_provider_queried = false;
+  // Sorted for deterministic output.
+  let providers: std::collections::BTreeMap<_, _> = config.providers.iter().collect();
+
+  for (provider_name, provider_cfg) in providers {
+    if let Some(filter) = provider_filter.as_ref()
+      && !provider_name
+        .to_lowercase()
+        .contains(&filter.to_lowercase())
+    {
+      continue;
+    }
+    print!("{}:", provider_name.bold().green());
+
+    let Some(url) = refresh_url_for(provider_name, provider_cfg.base_url.as_deref()) else {
+      println!(" skipped (refresh not supported for this provider yet)");
+      continue;
+    };
+
+    let api_key = match std::env::var(&provider_cfg.api_key_env) {
+      Ok(k) if !k.is_empty() => k,
+      _ => {
+        println!(
+          " skipped ({} not set in environment)",
+          provider_cfg.api_key_env
+        );
+        continue;
+      }
+    };
+
+    any_provider_queried = true;
+    println!();
+    match fetch_models(&url, &api_key).await {
+      Ok(remote_ids) => {
+        let local_ids: BTreeSet<String> = config
+          .models
+          .iter()
+          .filter(|(_, m)| m.vendor == *provider_name)
+          .map(|(name, m)| m.model_id.clone().unwrap_or_else(|| name.clone()))
+          .collect();
+        print_diff(provider_name, &local_ids, &remote_ids);
+      }
+      Err(e) => {
+        println!("  {} {}", "error:".red(), e);
+      }
+    }
+    println!();
+  }
+
+  if !any_provider_queried {
+    println!(
+      "(No providers queried. Either no API keys are set, no providers in your config support refresh yet, or your --provider filter matched nothing.)"
+    );
+  }
+
+  Ok(())
+}
+
+/// F-A7-6: provider → `/v1/models` URL. Returns None for
+/// providers whose `/models` endpoint shape isn't OpenAI-compatible
+/// or doesn't exist at all (Google Gemini uses `models.list` via
+/// SDK; Anthropic does have `/v1/models` but the response shape
+/// differs — adding it is a follow-up).
+fn refresh_url_for(provider: &str, base_url: Option<&str>) -> Option<String> {
+  // Provider names map to base URLs in the bundled config; we
+  // hard-code the path suffix here because `/v1/models` is the
+  // OpenAI-compatible convention and shouldn't be configurable.
+  let fallback_base = match provider {
+    "openai" => "https://api.openai.com/v1",
+    "moonshot" => "https://api.moonshot.cn/v1",
+    "stepfun" => "https://api.stepfun.com/v1",
+    "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    _ => return None,
+  };
+  // If the user configured a non-default base_url, respect it
+  // (relevant for proxy / on-prem deployments).
+  let base = base_url.unwrap_or(fallback_base).trim_end_matches('/');
+  Some(format!("{base}/models"))
+}
+
+/// F-A7-6: fetch + parse a `{"data": [{"id": "..."}, ...]}`
+/// response. Reqwest does the heavy lifting; we just project the
+/// `id` field so the diff is independent of any vendor-specific
+/// metadata the response may carry.
+async fn fetch_models(url: &str, api_key: &str) -> Result<BTreeSet<String>> {
+  #[derive(serde::Deserialize)]
+  struct ModelsResponse {
+    data: Vec<ModelEntry>,
+  }
+  #[derive(serde::Deserialize)]
+  struct ModelEntry {
+    id: String,
+  }
+
+  let client = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(15))
+    .build()
+    .context("reqwest client init")?;
+  let resp = client
+    .get(url)
+    .bearer_auth(api_key)
+    .send()
+    .await
+    .with_context(|| format!("GET {url} failed"))?;
+
+  let status = resp.status();
+  if !status.is_success() {
+    let body = resp.text().await.unwrap_or_default();
+    anyhow::bail!("GET {url} returned {status}: {}", truncate(&body, 200));
+  }
+
+  let parsed: ModelsResponse = resp
+    .json()
+    .await
+    .with_context(|| format!("parsing /models response from {url}"))?;
+  Ok(parsed.data.into_iter().map(|m| m.id).collect())
+}
+
+fn print_diff(provider: &str, local: &BTreeSet<String>, remote: &BTreeSet<String>) {
+  let new_on_remote: Vec<_> = remote.difference(local).collect();
+  let only_local: Vec<_> = local.difference(remote).collect();
+  let shared = local.intersection(remote).count();
+
+  println!(
+    "  shared: {} model(s) present in both your config and the {} API",
+    shared.to_string().yellow(),
+    provider
+  );
+
+  if !new_on_remote.is_empty() {
+    println!(
+      "  {} on {} ({} candidates to add to models.yml):",
+      "new".bold().green(),
+      provider,
+      new_on_remote.len()
+    );
+    for id in &new_on_remote {
+      println!("    + {id}");
+    }
+  }
+
+  if !only_local.is_empty() {
+    println!(
+      "  {} (in models.yml but NOT returned by the {} API — may be deprecated, a typo, or a private deployment):",
+      "only_local".bold().yellow(),
+      provider
+    );
+    for id in &only_local {
+      println!("    - {id}");
+    }
+  }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+  if s.len() <= max {
+    s.to_string()
+  } else {
+    format!("{}…", &s[..max])
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// F-A7-6: URL constructor uses the fallback base for each known
+  /// provider when no override is configured. The path suffix
+  /// (`/models`) is invariant.
+  #[test]
+  fn refresh_url_for_known_providers_uses_default_base() {
+    assert_eq!(
+      refresh_url_for("openai", None).as_deref(),
+      Some("https://api.openai.com/v1/models")
+    );
+    assert_eq!(
+      refresh_url_for("moonshot", None).as_deref(),
+      Some("https://api.moonshot.cn/v1/models")
+    );
+    assert_eq!(
+      refresh_url_for("stepfun", None).as_deref(),
+      Some("https://api.stepfun.com/v1/models")
+    );
+    assert_eq!(
+      refresh_url_for("dashscope", None).as_deref(),
+      Some("https://dashscope.aliyuncs.com/compatible-mode/v1/models")
+    );
+  }
+
+  /// F-A7-6: a user-configured `base_url` (e.g. for proxy / on-prem)
+  /// overrides the fallback. Trailing slash on the override is
+  /// tolerated so authors don't have to know about the implementation
+  /// detail of how `/models` is appended.
+  #[test]
+  fn refresh_url_for_respects_user_base_url_override() {
+    assert_eq!(
+      refresh_url_for("moonshot", Some("https://my-proxy.example.com/v1")).as_deref(),
+      Some("https://my-proxy.example.com/v1/models")
+    );
+    // Trailing slash on override is fine.
+    assert_eq!(
+      refresh_url_for("openai", Some("https://my-proxy.example.com/v1/")).as_deref(),
+      Some("https://my-proxy.example.com/v1/models")
+    );
+  }
+
+  /// F-A7-6: unsupported providers (Google / Anthropic, or anything
+  /// agentflow-llm grows in the future before its `/models` shape
+  /// gets table-mapped here) return None so the refresh path can
+  /// skip them with a clear message instead of issuing malformed
+  /// requests.
+  #[test]
+  fn refresh_url_for_unsupported_providers_returns_none() {
+    assert!(refresh_url_for("google", None).is_none());
+    assert!(refresh_url_for("anthropic", None).is_none());
+    assert!(refresh_url_for("some-future-vendor", None).is_none());
+  }
+
+  #[test]
+  fn truncate_short_string_unchanged() {
+    assert_eq!(truncate("hello", 20), "hello");
+  }
+
+  #[test]
+  fn truncate_long_string_appends_ellipsis() {
+    let long = "x".repeat(300);
+    let t = truncate(&long, 50);
+    assert_eq!(t.len(), 50 + "…".len());
+    assert!(t.ends_with("…"));
+  }
 }
 
 #[derive(Debug, Clone)]

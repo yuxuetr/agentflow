@@ -547,6 +547,17 @@ enum LlmCommands {
     provider: Option<String>,
     #[arg(short, long)]
     detailed: bool,
+    /// Live-query each OpenAI-compatible provider's `/v1/models`
+    /// endpoint and print the delta vs the local registry: which
+    /// models are NEW on the provider (not yet in your `models.yml`)
+    /// and which LOCAL entries don't appear in the provider's list
+    /// (deprecated / typos / private models). Read-only — does not
+    /// write to `models.yml`. Requires each provider's API key in
+    /// the environment. Currently supported: openai, moonshot,
+    /// stepfun, dashscope. Other providers fall back to "skipped
+    /// (refresh not supported)". F-A7-6.
+    #[arg(long)]
+    refresh_from_api: bool,
   },
   /// Deprecated compatibility stub. Use `skill chat`, `skill run`, or workflow `skill_agent`.
   #[command(hide = true)]
@@ -1296,7 +1307,11 @@ async fn main() {
       }
     },
     Commands::Llm(args) => match args.command {
-      LlmCommands::Models { provider, detailed } => llm::models::execute(provider, detailed).await,
+      LlmCommands::Models {
+        provider,
+        detailed,
+        refresh_from_api,
+      } => llm::models::execute(provider, detailed, refresh_from_api).await,
       LlmCommands::Chat {
         model: _,
         system: _,
