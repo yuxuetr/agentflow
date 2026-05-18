@@ -311,6 +311,15 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     let parts: Vec<&str> = path.split('.').collect();
     if parts.len() == 4 && parts[0] == "nodes" && parts[2] == "outputs" {
       input_mapping.insert(k.clone(), (parts[1].to_string(), parts[3].to_string()));
+    } else if parts.len() >= 2 && parts[0] == "item" {
+      // F-A6-5: `{{ item.field }}` / `{{ item.foo.bar }}` lookups
+      // inside a map sub-flow. Encoded with the sentinel source-node
+      // id "!item" (the `!` prefix can't appear in a YAML node id, so
+      // it can't shadow a real node — `agentflow_core::Flow` will
+      // detect the sentinel at resolve time and walk the dotted path
+      // in the seeded `item` initial input).
+      let item_path = parts[1..].join(".");
+      input_mapping.insert(k.clone(), ("!item".to_string(), item_path));
     }
   }
 

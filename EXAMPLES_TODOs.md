@@ -792,6 +792,17 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   leftmost segment as `nodes` OR `item`), OR have file/llm nodes
   Tera-expand their string parameters at execute time. The first
   has smaller blast radius. Surfaced during A6 iter 2.
+  ✅ **CLOSED 2026-05-18**: factory parser now recognises
+  `{{ item.field }}` / `{{ item.foo.bar }}` in YAML
+  `input_mapping`, encoded as `(("!item", "path.path"))` tuples
+  via a sentinel source-node id (`!` is a reserved YAML char so
+  no collision with real node ids). `gather_inputs` walks the
+  dotted path against the seeded `item` initial input and inserts
+  the resolved value. A6 iter 2 refactored from 6-node sub-flows
+  to 4-node sub-flows; 8/8 still succeed, files still land on
+  disk. 2 new unit tests in `agentflow-core::flow::tests` cover
+  flat + nested item lookups + missing-path error reporting.
+  130 lib tests pass (was 128; +2).
 
 - **F-A6-4 — prompt ambiguity: "translate to English" when source
   is already English produces unrelated language output**.

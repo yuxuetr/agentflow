@@ -12,11 +12,11 @@
 #   - Output dir is a fixed `output/` sibling. Iter 3 should
 #     accept it as a parameter.
 #
-# Pre-rendered read/write paths sit in each `input_list` item so
-# the sub-flow's template nodes can pull them out directly. This
-# is verbose but works with today's `input_mapping` (it only
-# supports `{{ nodes.X.outputs.Y }}` lookups, not `{{ item.Z }}`
-# directly inside a non-template node's parameters).
+# Pre-rendered read/write paths sit in each `input_list` item.
+# Sub-flow nodes pull them out via `input_mapping: { path: "{{ item.read_path }}" }`
+# (F-A6-5 closed: input_mapping now accepts `{{ item.* }}` lookups
+# alongside `{{ nodes.X.outputs.Y }}`). Each sub-flow is 4 nodes:
+# read → build_prompt → translate → write.
 #
 # Run:
 #   agentflow workflow run examples/applications/doc-translator/workflow-iter2.yml
@@ -79,26 +79,18 @@ nodes:
           write_path: "examples/applications/doc-translator/output/zh/usage.md"
 
       template:
-        # Step 1: pull `item.read_path` into a string output we can
-        # feed to file:read's `path` input. Needed because input_mapping
-        # only supports `{{ nodes.X.outputs.Y }}` lookups today, not
-        # direct `{{ item.* }}` references in non-template parameters.
-        - id: "render_read_path"
-          type: "template"
-          dependencies: []
-          parameters:
-            template: "{{ item.read_path }}"
-
-        # Step 2: read the source markdown.
+        # Step 1: read the source markdown. `path` comes straight from
+        # the iteration item via the F-A6-5 `{{ item.* }}` lookup —
+        # no intermediate render-template node needed any more.
         - id: "read_source"
           type: "file"
-          dependencies: ["render_read_path"]
+          dependencies: []
           input_mapping:
-            path: "{{ nodes.render_read_path.outputs.output }}"
+            path: "{{ item.read_path }}"
           parameters:
             operation: "read"
 
-        # Step 3: render the per-language translation prompt with
+        # Step 2: render the per-language translation prompt with
         # the source content inlined. Tera has access to `item`
         # (the map iteration value) AND the upstream node outputs.
         - id: "build_prompt"
@@ -119,7 +111,7 @@ nodes:
               {{ source }}
               ----- END SOURCE -----
 
-        # Step 4: actual translation.
+        # Step 3: actual translation.
         - id: "translate_one"
           type: "llm"
           dependencies: ["build_prompt"]
@@ -130,22 +122,16 @@ nodes:
             temperature: 0.2
             max_tokens: 2048
 
-        # Step 5: pull `item.write_path` for the file:write.
-        - id: "render_write_path"
-          type: "template"
-          dependencies: []
-          parameters:
-            template: "{{ item.write_path }}"
-
-        # Step 6: persist the translation. File node auto-creates
+        # Step 4: persist the translation. `path` again comes from
+        # the iteration item directly (F-A6-5). File node auto-creates
         # parent dirs so `output/<lang>/` springs into existence on
         # first write.
         - id: "write_translation"
           type: "file"
-          dependencies: ["translate_one", "render_write_path"]
+          dependencies: ["translate_one"]
           input_mapping:
             content: "{{ nodes.translate_one.outputs.output }}"
-            path:    "{{ nodes.render_write_path.outputs.output }}"
+            path:    "{{ item.write_path }}"
           parameters:
             operation: "write"
 

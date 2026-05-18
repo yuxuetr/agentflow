@@ -390,7 +390,7 @@ impl Flow {
       }
 
       let mut inputs = match &graph_node.input_mapping {
-        Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool)?,
+        Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool, &initial_inputs)?,
         None => HashMap::new(),
       };
 
@@ -740,20 +740,22 @@ impl Flow {
         }
 
         let mut inputs = match &graph_node.input_mapping {
-          Some(mapping) => match self.gather_inputs(&node_id, mapping, &state_pool) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-              let result = Err(error);
-              self.persist_step_result(&run_dir, &node_id, &result)?;
-              self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
-              state_pool.insert(node_id, result);
-              if config.fail_fast {
-                fail_fast_triggered = true;
-                break;
+          Some(mapping) => {
+            match self.gather_inputs(&node_id, mapping, &state_pool, &initial_inputs) {
+              Ok(inputs) => inputs,
+              Err(error) => {
+                let result = Err(error);
+                self.persist_step_result(&run_dir, &node_id, &result)?;
+                self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
+                state_pool.insert(node_id, result);
+                if config.fail_fast {
+                  fail_fast_triggered = true;
+                  break;
+                }
+                continue;
               }
-              continue;
             }
-          },
+          }
           None => HashMap::new(),
         };
         inputs.extend(graph_node.initial_inputs.clone());
@@ -1172,9 +1174,34 @@ impl Flow {
     node_id: &str,
     input_mapping: &HashMap<String, (String, String)>,
     state_pool: &HashMap<String, AsyncNodeResult>,
+    flow_initial_inputs: &AsyncNodeInputs,
   ) -> Result<AsyncNodeInputs, AgentFlowError> {
     let mut inputs = AsyncNodeInputs::new();
     for (input_name, (source_node_id, source_output_name)) in input_mapping {
+      // F-A6-5: `{{ item.* }}` lookup. The factory encodes these
+      // with the sentinel source-node id "!item". Resolve against
+      // the flow-level initial inputs (where map seeds `item`)
+      // rather than the state pool.
+      if source_node_id == "!item" {
+        let item_value = flow_initial_inputs.get("item").ok_or_else(|| {
+          AgentFlowError::NodeInputError {
+            message: format!(
+              "input_mapping for node '{node_id}' input '{input_name}' references `item.{source_output_name}` but no `item` is in scope (only valid inside a map sub-flow)"
+            ),
+          }
+        })?;
+        let resolved =
+          resolve_item_path(item_value, source_output_name).ok_or_else(|| {
+            AgentFlowError::NodeInputError {
+              message: format!(
+                "input_mapping for node '{node_id}' input '{input_name}': path `item.{source_output_name}` did not resolve in the iteration item"
+              ),
+            }
+          })?;
+        inputs.insert(input_name.clone(), resolved);
+        continue;
+      }
+
       // Check if source node is in dependencies (required) or not (optional)
       let graph_node =
         self
@@ -1306,6 +1333,27 @@ impl Flow {
       Ok(sorted_order)
     }
   }
+}
+
+/// F-A6-5: walk a dotted path inside the JSON value of the
+/// iteration `item` to resolve `{{ item.foo.bar }}` lookups in
+/// input_mapping. Returns `None` if any segment is missing or the
+/// item isn't a JSON object at the right point in the path.
+///
+/// Strings unwrap into `FlowValue::Json(String)` (so a path like
+/// `item.read_path` becomes the literal string the downstream
+/// FileNode wants in its `path` input). Other JSON types pass
+/// through wrapped in `FlowValue::Json` so callers can still
+/// receive e.g. structured objects when that's what they intend.
+fn resolve_item_path(item_value: &FlowValue, dotted_path: &str) -> Option<FlowValue> {
+  let mut cursor = match item_value {
+    FlowValue::Json(v) => v,
+    _ => return None,
+  };
+  for segment in dotted_path.split('.') {
+    cursor = cursor.as_object()?.get(segment)?;
+  }
+  Some(FlowValue::Json(cursor.clone()))
 }
 
 /// Assemble the standard map-node output map plus the F-A6-3
@@ -2448,6 +2496,172 @@ mod tests {
         panic!("expected NodeInputError mentioning max_concurrent on the map node, got {other:?}")
       }
     }
+  }
+
+  /// F-A6-5: `input_mapping` MUST resolve the `!item` sentinel
+  /// against the map sub-flow's seeded `item`. A node downstream of
+  /// nothing (no dependencies) can pull `item.foo` directly into its
+  /// own inputs without an intermediate render-template node.
+  ///
+  /// Asserts (a) flat field access works, (b) nested dotted access
+  /// works, (c) the resolved value reaches the node's `execute`.
+  #[tokio::test]
+  async fn test_input_mapping_resolves_item_field_lookups() {
+    use_writable_home();
+    use std::sync::Mutex;
+
+    let captured = Arc::new(Mutex::new(None::<String>));
+
+    struct PathSink {
+      captured: Arc<Mutex<Option<String>>>,
+    }
+    #[async_trait]
+    impl AsyncNode for PathSink {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        // The downstream node receives a `path` input that was
+        // wired from `{{ item.read_path }}` via input_mapping.
+        let path = match inputs.get("path") {
+          Some(FlowValue::Json(Value::String(s))) => s.clone(),
+          other => panic!("expected String input on `path`, got {other:?}"),
+        };
+        let nested = match inputs.get("nested_field") {
+          Some(FlowValue::Json(Value::String(s))) => s.clone(),
+          other => panic!("expected String input on `nested_field`, got {other:?}"),
+        };
+        *self.captured.lock().unwrap() = Some(format!("{path}|{nested}"));
+        let mut outputs = HashMap::new();
+        outputs.insert("ok".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let sink_node = GraphNode {
+      id: "sink".to_string(),
+      node_type: NodeType::Standard(Arc::new(PathSink {
+        captured: captured.clone(),
+      })),
+      dependencies: vec![],
+      // F-A6-5 wire: both flat (`item.read_path`) and nested
+      // (`item.meta.tag`) lookups.
+      input_mapping: Some(HashMap::from([
+        (
+          "path".to_string(),
+          ("!item".to_string(), "read_path".to_string()),
+        ),
+        (
+          "nested_field".to_string(),
+          ("!item".to_string(), "meta.tag".to_string()),
+        ),
+      ])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "item_lookup_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sink_node],
+        parallel: false,
+        max_concurrent: None,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert(
+          "input_list".to_string(),
+          FlowValue::Json(json!([{
+            "read_path": "input/intro.md",
+            "meta": { "tag": "nested-ok" }
+          }])),
+        );
+        inputs
+      },
+    };
+
+    let state = Flow::new(vec![map_node]).run().await.unwrap();
+    let map_result = state
+      .get("item_lookup_map")
+      .unwrap()
+      .as_ref()
+      .expect("map must Ok overall");
+    let summary = match map_result.get("results_summary").unwrap() {
+      FlowValue::Json(s) => s,
+      _ => panic!(),
+    };
+    assert_eq!(summary["err"], 0, "sub-flow must not have errored");
+
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+      captured.as_deref(),
+      Some("input/intro.md|nested-ok"),
+      "item.read_path and item.meta.tag both resolved into the sink node's inputs"
+    );
+  }
+
+  /// F-A6-5: clear error when `item.X` references a path that
+  /// doesn't exist in the iteration value, instead of silently
+  /// passing through nothing.
+  #[tokio::test]
+  async fn test_input_mapping_item_missing_path_errors() {
+    use_writable_home();
+
+    struct NoopNode;
+    #[async_trait]
+    impl AsyncNode for NoopNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::new())
+      }
+    }
+
+    let sink_node = GraphNode {
+      id: "sink".to_string(),
+      node_type: NodeType::Standard(Arc::new(NoopNode)),
+      dependencies: vec![],
+      input_mapping: Some(HashMap::from([(
+        "missing".to_string(),
+        ("!item".to_string(), "nope.not_here".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "bad_lookup_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sink_node],
+        parallel: false,
+        max_concurrent: None,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert(
+          "input_list".to_string(),
+          FlowValue::Json(json!([{"read_path": "x"}])),
+        );
+        inputs
+      },
+    };
+
+    // gather_inputs runs BEFORE node.execute, so a missing item
+    // path errors at the sub-flow level and surfaces in state as a
+    // per-node Err on the map. (Per-node-execution errors get
+    // buried per F-A6-3, but gather-inputs failures bubble through
+    // the map's `?` and end up on the map node itself.)
+    let state = Flow::new(vec![map_node]).run().await.unwrap();
+    let node_result = state.get("bad_lookup_map").unwrap();
+    let err_msg = match node_result {
+      Err(AgentFlowError::NodeInputError { message }) => message.clone(),
+      other => panic!("expected NodeInputError on the map node, got {other:?}"),
+    };
+    assert!(
+      err_msg.contains("item.nope.not_here"),
+      "error must name the missing item path: {err_msg}"
+    );
   }
 
   /// F-A6-3: when one or more sub-flows have a node-level Err in

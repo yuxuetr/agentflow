@@ -109,12 +109,11 @@ doc-translator/
   Defensible — code comments are sometimes intended to be
   translated. The prompt rule "do not translate fenced code
   blocks" doesn't disambiguate code vs comment.
-- **Sub-flow shape: 6 nodes** (render_read_path → read → build_prompt
-  → translate → render_write_path → write). Two of those nodes
-  (`render_read_path`, `render_write_path`) exist only to convert
-  `item.read_path` / `item.write_path` into a string output a
-  downstream file node can consume via `input_mapping`. See
-  F-A6-5 below.
+- **Sub-flow shape: 4 nodes** (read → build_prompt → translate →
+  write), down from 6 after F-A6-5 closed the `input_mapping`
+  `{{ item.* }}` lookup gap. Both file nodes now pull their path
+  inputs directly from the iteration item instead of going through
+  intermediate render-template nodes.
 
 ## Findings (iteration 1)
 
@@ -160,19 +159,19 @@ list.
   Err-containing state.
 
 - **F-A6-5 — `input_mapping` can only reference upstream node
-  outputs, not the map iteration `item`**. Per-iteration `item`
-  fields (e.g. `item.read_path`) are visible in Tera template
-  contexts but `input_mapping: { path: "{{ item.read_path }}" }`
-  doesn't work — the factory parser only matches `{{ nodes.X.outputs.Y }}`
-  literals (see `agentflow-cli/src/executor/factory.rs:298`). The
-  workaround in iter 2 is a 2-node-per-path detour
-  (`render_read_path` template → file:read) which doubles the
-  sub-flow line count for what should be a one-line wire. **Action**:
-  extend the input_mapping grammar to support `{{ item.* }}` lookups
-  inside a map sub-flow (parse the leftmost segment as either
-  "nodes" or "item"), OR have file/llm nodes Tera-expand their
-  string parameters at execute time. The former is the smaller
-  blast radius. Surfaced during A6 iter 2.
+  outputs, not the map iteration `item`**. Surfaced during A6
+  iter 2 when the 6-node sub-flow felt unreasonably verbose.
+  ✅ **CLOSED 2026-05-18**: factory parser now recognises
+  `{{ item.field }}` and `{{ item.foo.bar }}` (any dotted path) in
+  YAML `input_mapping` values; encoded with the sentinel
+  source-node id `!item` so existing call sites are unaffected.
+  `agentflow_core::Flow::gather_inputs` walks the dotted path
+  against the seeded `item` initial input and inserts the
+  resolved value (typically a string) directly into the
+  downstream node's inputs. A6 iter 2 refactored from 6 nodes/
+  sub-flow to 4 (dropped both render-path templates). 2 new
+  unit tests in `agentflow-core` cover happy path (flat + nested
+  lookup) and missing-path error reporting.
 
 - **F-A6-4 — prompt ambiguity: "translate to {target_lang}" with
   English target produced Chinese output** on moonshot-v1-128k when
