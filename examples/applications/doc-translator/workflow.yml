@@ -1,0 +1,97 @@
+# A6 doc-translator — iteration 1
+#
+# Scope (intentionally narrow vs the full A6 spec):
+#   - 4 target languages, ONE hardcoded markdown source. No file I/O,
+#     no fan-out across multiple input files. The point is to validate
+#     `map parallel + LLM` end-to-end, capturing findings on the
+#     primitive before scaling fan-out in iter 2.
+#   - Each sub-flow is `template → llm` (2 nodes). The template node
+#     interpolates the per-iteration `item.lang_name` into a translation
+#     prompt; the llm node runs the actual translation.
+#   - Downstream `report` node fans in the 4 results into a summary.
+#
+# Run:
+#   agentflow workflow run examples/applications/doc-translator/workflow.yml
+#
+# Requires MOONSHOT_API_KEY (auto-loaded from ~/.agentflow/.env via P9.3).
+
+name: "doc-translator iteration 1"
+description: "Translate a fixed markdown blurb to 4 languages in parallel via `map parallel`."
+
+nodes:
+  - id: "translate"
+    type: "map"
+    dependencies: []
+    parameters:
+      parallel: true
+      input_list:
+        - { lang: "en", lang_name: "English" }
+        - { lang: "ja", lang_name: "Japanese" }
+        - { lang: "fr", lang_name: "French" }
+        - { lang: "de", lang_name: "German" }
+      template:
+        # Step 1: render the per-language translation prompt. `item`
+        # is the map iteration value; `item.lang_name` is the target
+        # language. Tera templating happens here (the llm node itself
+        # does NOT interpolate).
+        - id: "build_prompt"
+          type: "template"
+          dependencies: []
+          parameters:
+            template: |
+              Translate the following markdown blurb into {{ item.lang_name }}.
+              Rules:
+                - preserve markdown structure (headings, lists, links)
+                - DO NOT translate fenced code blocks
+                - DO NOT translate identifiers in inline code
+                - output ONLY the translation, no preamble or postamble
+
+              ----- SOURCE -----
+              # AgentFlow
+
+              AgentFlow is a Rust workspace for building agent-native
+              workflows. It supports both deterministic DAGs and
+              autonomous loops, with first-class LLM, tool, MCP, RAG,
+              and tracing integration.
+
+              Quick start:
+
+              ```rust
+              use agentflow_core::Flow;
+              let flow = Flow::new(nodes);
+              let result = flow.execute().await?;
+              ```
+
+              ## When to use it
+              - Pass-through pipelines → DAG workflows
+              - Agent-decides loops   → ReAct / Plan-Execute
+              ----- END SOURCE -----
+
+        # Step 2: actual LLM translation. `prompt` is the rendered
+        # template from step 1. Model + temperature + max_tokens
+        # configured here. Lower temperature for translation
+        # determinism.
+        - id: "translate_one"
+          type: "llm"
+          dependencies: ["build_prompt"]
+          input_mapping:
+            prompt: "{{ nodes.build_prompt.outputs.output }}"
+          parameters:
+            model: "moonshot-v1-128k"
+            temperature: 0.2
+            max_tokens: 1024
+
+  # Fan-in: a small summary so the run produces a single human-readable
+  # stdout line at the end. Iteration 2 would replace this with a file
+  # writer that drops one .md per (file, lang) pair.
+  - id: "report"
+    type: "template"
+    dependencies: ["translate"]
+    input_mapping:
+      results: "{{ nodes.translate.outputs.results }}"
+    parameters:
+      template: |
+        Translated AgentFlow blurb into {{ results | length }} languages
+        in parallel via `map`. First-language preview (first 120 chars):
+
+        {{ results[0].translate_one.output | truncate(length=120) }}

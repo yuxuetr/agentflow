@@ -695,15 +695,54 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 - LLM provider（Anthropic 中长文翻译质量较好）
 
 **TODO 子项**:
-- [ ] 写 `README.md`
-- [ ] 设计 prompt（保留 code fence / 链接 / 标题层级）
-- [ ] 写 `workflow.yml` 用 `map` parallel
+- [x] 写 `README.md`（iter 1 scope + observations）
+- [ ] 设计 prompt（保留 code fence / 链接 / 标题层级）— 还在 hello-world 阶段
+- [x] 写 `workflow.yml` 用 `map` parallel（iter 1: 4 langs hardcoded, no file I/O）
 - [ ] 验证 checkpoint 中途重启
 - [ ] 测 100+ 文件 fanout 时的稳定性
 
-**DONE 子项**: （待填）
+**DONE 子项 (iteration 1, 2026-05-18)**:
+- iter 1 workflow.yml ships in `examples/applications/doc-translator/`
+- Validated end-to-end: `agentflow workflow run` produces 4 sub-flows
+  in parallel, returns a fan-in result with 3 OK + 1 ERR translations
+- N=3 baseline confirms the failure mode is provider rate-limit, not
+  agentflow logic
 
-**Findings**: （待填）
+**Findings (iteration 1)**:
+
+- **F-A6-1 — `map parallel: true` has NO concurrency cap**.
+  `agentflow-core::Flow::execute_map_node_parallel` does
+  `for item in input_list { tokio::spawn(...) }` unbounded. With
+  Moonshot's org concurrency limit of 3, N=4 fan-out hits 429 on
+  the 4th item. Real A6 use case (100+ files × N langs = 300+
+  fan-out) would shred any provider's limits. **Action**: add
+  `parallel: { max_concurrent: N }` map YAML schema + plumb
+  through `tokio::sync::Semaphore` in the executor. This is the
+  blocker for iter 3+ (the stress-test pillar).
+- **F-A6-2 — `agentflow workflow validate` warns that `input_list`
+  isn't in the map schema**, even though the factory accepts it
+  (via the generic `initial_inputs` dump path). False-positive
+  warning hurts the validate UX. **Action**: declare `input_list`
+  / `parallel` / `template` as first-class fields on map nodes in
+  `agentflow-cli/src/config/schema.rs`.
+- **F-A6-3 — per-sub-flow Err is buried inside the results array**,
+  not at the map-level. The map node returns `Ok({results: [...]})`
+  with `Err` siblings nested inside results elements. A workflow
+  author only checking top-level Ok misses partial failures
+  silently. **Action**: emit `results_summary: { total, ok, err,
+  err_indexes }` alongside `results` on map output; or at minimum
+  `tracing::warn!` when any sub-flow returns an Err-containing
+  state. Note that `Flow::execute_from_inputs` returning
+  `Ok(state_with_errs)` instead of bubbling per-node Err to the
+  Flow level is the upstream cause — possibly intentional but
+  worth re-evaluating.
+- **F-A6-4 — prompt ambiguity: "translate to English" when source
+  is already English produces unrelated language output**.
+  Workflow-author trap: validate `source_lang != target_lang`
+  before dispatching. Easy guard at the `build_prompt` template
+  step (Tera `{% if %}`). **Not an agentflow bug**, but worth
+  documenting in examples conventions: "translation workflows
+  should always check source != target before LLM dispatch".
 
 ---
 
