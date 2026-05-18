@@ -2568,6 +2568,43 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+  # kimi-k2.5 / kimi-k2.6 added 2026-05-18: a Moonshot account's
+  # `/v1/models` exposes them but agentflow's static registry
+  # didn't list them (A7 dogfooding finding).
+  kimi-k2.5:
+    vendor: moonshot
+    type: text
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  kimi-k2.6:
+    vendor: moonshot
+    type: text
+    model_id: null
+    base_url: null
+    # kimi-k2.6 only accepts temperature == 1.0 — Moonshot returns
+    # 400 "invalid temperature: only 1 is allowed for this model"
+    # otherwise. Discovered during A7 changelog-writer dogfooding
+    # 2026-05-18.
+    temperature: 1.0
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
   moonshot-v1-128k-vision-preview:
     vendor: moonshot
     type: multimodal

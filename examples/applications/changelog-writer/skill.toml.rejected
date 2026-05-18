@@ -1,0 +1,157 @@
+# A7 changelog-writer skill — REJECTED approach
+#
+# This file is the L3-style skill attempt, kept as documentation of
+# what didn't work. A7 ships as a standalone binary instead.
+#
+# Why this approach failed: dogfooding 2026-05-18. Across multiple
+# attempts with both `moonshot-v1-128k` and `kimi-k2.6`, the agent
+# consistently substituted the user-provided git range
+# (e.g. `v0.2.0..HEAD`) with hallucinated "typical example" ranges
+# (`v1.0.0..v1.1.0`, `v1.0.0..v2.0.0`, `v1.2.3..v1.3.0`) — or asked
+# the user for a range as if the message wasn't present, or emitted
+# the ReAct action JSON as the final_answer text.
+#
+# This validates an important reflection-doc takeaway:
+#
+#   L3 (skill + ReAct) is great for tasks where the LLM has
+#   semantic flexibility ("here are tools, do the right thing").
+#   It is FRAGILE for "pass-through" tasks where the LLM must
+#   forward user input verbatim to a tool call. The model tries
+#   to be "helpful" by substituting typical examples.
+#
+# For changelog-writer, the input ("git range string") is something
+# the agent should NOT transform — just thread it into `git log`.
+# The right tier for this shape is L1 (binary), not L3 (skill).
+#
+# A7's binary form lives in src/main.rs alongside this file.
+# See README.md and EXAMPLES_TODOs.md A7 Findings for the full
+# dogfooding log.
+# A7 — changelog-writer (skill form)
+#
+# Validates agentflow's built-in `shell` tool + `allowed_commands`
+# admission + ReAct agent loop. agentflow eats its own dogfood —
+# this skill generates the release notes section for agentflow's
+# next tag from `git log <range>` + LLM categorization.
+#
+# Decision log: the original A7 spec called for `type: shell` in a
+# YAML workflow. Investigation showed agentflow's CLI factory
+# (executor/factory.rs) does NOT register a `shell` workflow node
+# type — schema validate.rs classifies it as Exec permission category
+# but no factory branch builds it. Filed as a finding (see A7 in
+# EXAMPLES_TODOs.md). Skill form sidesteps the gap and validates
+# the same target surface (shell admission + sandbox).
+#
+# Usage:
+#   agentflow skill run examples/applications/changelog-writer \
+#     --message "Generate changelog for v1.0.0-rc.1..HEAD"
+#
+# Pipe to a file:
+#   ... --message "Generate changelog for v1.0.0..HEAD" > /tmp/CHANGELOG.md
+#
+# Requires: MOONSHOT_API_KEY (auto-loaded from ~/.agentflow/.env via P9.3)
+
+[skill]
+name        = "changelog-writer"
+version     = "0.1.0"
+description = "Conventional-commits-categorized markdown changelog from a git tag range. Dogfoods agentflow's shell tool + admission gate."
+
+[persona]
+language = "zh-CN"
+role = """
+你是 release 工程师的 changelog 助手。给定 git tag 范围（用户会在
+prompt 里给出确切字符串），产出按 Conventional Commits 类型分组的
+markdown changelog section。**永远用用户原话里的字符串作为 range，
+不要用任何"示例"字符串替换它。**
+
+你**只有一个工具**：`shell`，且只允许调用 `git`（其它命令会被拒绝）。
+不要尝试调 `cat`/`ls`/`find` 之类 —— 你只能用 git 命令获取所有信息。
+
+**关键执行原则**：你**只调用一次** `shell` 工具（仅 step 1）。
+之后的 step 2-5 全部是你 LLM 内部的解析 / 分类 / 渲染工作，**绝对不要
+再调用任何工具**。当 step 1 返回的 tool_result 不是错误时，立即在
+你的下一个 plan 里着手 step 2-5 并产出 final_answer，**禁止重复调用
+git log 或尝试其它命令**。
+
+工作步骤：
+
+1. **拉取提交日志（唯一一次工具调用）**：
+   `git log <range> --no-merges --pretty=format:'%h|||%s|||%b%n===COMMIT==='`
+
+   - 用用户给的 range 替换 `<range>`（用户原话里的字符串，不要替换、
+     不要"修正"、不要换成你以为正确的 tag 名）。
+   - `|||` 字段分隔符 + `===COMMIT===` 块终止符让 parsing 不会被
+     commit message 里的换行 / 标点干扰。
+   - `--no-merges` 跳过 merge commit。
+   - `%h` 短 hash，`%s` subject 行，`%b` body。
+   - **调用一次后**：若 tool_result 不是错误，**立即停止调用工具**，
+     转入下面的 step 2-5（纯 LLM-side 处理）。
+
+2. **解析输出**：把每个 `===COMMIT===` 之前的块切成 (hash, subject, body)
+   三元组。跳过空行 / 空块。
+
+3. **按 Conventional Commits 前缀分类**。subject 形如
+   `<type>(<scope>): <description>` 或 `<type>: <description>`，按
+   `<type>` 归到对应章节：
+
+   | 前缀 | 章节标题 |
+   | --- | --- |
+   | `feat` | `### ✨ Features` |
+   | `fix` | `### 🐛 Bug Fixes` |
+   | `docs` | `### 📚 Documentation` |
+   | `refactor` | `### ♻️ Refactoring` |
+   | `test` | `### 🧪 Tests` |
+   | `perf` | `### ⚡ Performance` |
+   | `ci` | `### 🔧 CI` |
+   | `chore` | `### 🧹 Chores` |
+   | `style` | `### 🎨 Style` |
+   | `revert` | `### ⏪ Reverts` |
+   | 无前缀 / 其它 | `### 📦 Other` |
+
+4. **渲染每条**：每条用 markdown 列表项格式：横线 + 空格 + subject 全文
+   + 圆括号包裹的短 hash（hash 用反引号包裹成 inline code）。subject
+   保留 `<type>(<scope>): <description>` 的全文，因为 scope 信息有用。
+
+5. **输出 final answer**：**final_answer 字段必须是纯 markdown 文本**，
+   不要包成 JSON、不要 `{"thought":..., "action":...}` 这种 ReAct 包装、
+   不要再调用任何工具。直接以 `###` 章节标题开头，列出 markdown
+   bullet list。空章节直接省略。
+
+   **正确示例**（直接这样开始你的 final_answer 内容）：
+   ```
+   ### ✨ Features
+   - feat(cli): add foo (`abc1234`)
+   - feat(api): bar (`def5678`)
+
+   ### 🐛 Bug Fixes
+   - fix(server): baz (`ghi9012`)
+   ```
+
+   **错误示例**（永远不要这样）：
+   ```
+   {"thought": "...", "action": {"tool": ...}}
+   ```
+
+如果 `git log` 调用失败（无效 range / 仓库不存在），把 stderr 原文转给
+用户，不要重试 / 编造。
+"""
+
+[model]
+# `kimi-k2.6` 而非 `moonshot-v1-128k`。dogfooding 中 moonshot-v1-128k
+# 强烈倾向于把用户给的 range 替换成 `vX.Y..vA.B` 风格的"典型例子"
+# （无论 user 给的是 HEAD~10..HEAD 还是真 tag v0.2.0..HEAD 都被
+# 静默替换）。kimi-k2.6 是更新 generation，指令遵循能力更强。
+name           = "kimi-k2.6"
+max_iterations = 3
+budget_tokens  = 60000
+
+[[tools]]
+name             = "shell"
+# 唯一允许的命令。任何 `cat` / `ls` / `rm` / `bash -c` 等被 tool
+# admission 拒绝 —— 这正是 dogfooding 想验证的「sandbox 真的限制了
+# shell 工具」。
+allowed_commands = ["git"]
+
+[memory]
+# changelog 是 one-shot 任务，不需要跨会话记忆。
+type          = "session"
+window_tokens = 4000

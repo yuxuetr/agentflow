@@ -38,7 +38,7 @@ Last updated: 2026-05-17
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
 | A5 | [weekly-digest](examples/applications/weekly-digest/) | TODO | RAG, LLM, HTTP (SMTP/SendGrid), scheduled | SendGrid/Mailgun/SMTP |
 | A6 | [doc-translator](examples/applications/doc-translator/) | TODO | template, batch / map (parallel), LLM, file | LLM API |
-| A7 | [changelog-writer](examples/applications/changelog-writer/) | TODO | shell node, LLM, file（agentflow 给自己用） | 无（全本地） |
+| A7 | [changelog-writer](examples/applications/changelog-writer/) | WIP — live ✅ as L1 binary; L3 skill form rejected (2026-05-18) | custom AsyncNode + std::process git + single LlmInit::prompt call; LLM provider registry | 无（git + LLM key） |
 
 ---
 
@@ -482,13 +482,92 @@ markdown changelog 段。
 **TODO 子项**:
 - [ ] 写 `README.md`
 - [ ] 设计 prompt（conventional commits 分类规则）
-- [ ] 写 `workflow.yml`
-- [ ] 跑一次给 agentflow 自己生成 CHANGELOG
-- [ ] 把它包成 `agentflow changelog` CLI 子命令？（可能升级成 P3.x）
+- [ ] 决定要不要把它包成 `agentflow changelog` CLI 子命令（升级成 P3.x）
+- [ ] 把 `max_tokens` 在 templates/default_models.yml 里的
+  moonshot-v1-128k entry 调高（参见 F-A7-8），让长 changelog 不被
+  截断
+- [ ] 解决 F-A7-2 `shell` node 在 schema 但不在 factory 的不一致
 
-**DONE 子项**: （待填）
+**DONE 子项**:
+- [x] 决定方案：L1 binary（原计划 YAML 工作流不可行，因 `type: shell`
+  没注册；L3 skill 形态试了失败，详见 Findings）
+- [x] 实现 `RunGitLogNode` (std::process git log) + `ClassifyAndRenderNode`
+  (one-shot LlmInit::prompt) + 2-node Flow + CLI
+- [x] live 跑通：`v0.2.0..HEAD` 399 commits → 11k 字符 markdown
+  到 `/tmp/CHANGELOG-v0.2.0-to-HEAD.md`，~117s wall clock
+- [x] 给 agentflow 自己生成 CHANGELOG（dogfood 完成）
+- [x] 沉 10 个 Finding 到本文件
+- [x] 顺手在 `agentflow-llm/templates/default_models.yml` 加
+  `kimi-k2.5` + `kimi-k2.6` 进 registry（带 `temperature: 1.0`
+  for k2.6）
 
-**Findings**: （待填）
+**Findings** (2026-05-18, A7 first dogfooding pass):
+
+- **F-A7-1 — L3 skill form rejected after multi-model fail**.
+  Original spec called for `[[tools]] name = "shell" allowed_commands
+  = ["git"]` skill driving a ReAct agent. Across `moonshot-v1-128k`
+  和 `kimi-k2.6`，agent **始终把用户提供的 range 替换成 hallucinate
+  的"典型例子"**（`v1.0.0..v1.1.0`、`v1.0.0..v2.0.0`、
+  `v1.2.3..v1.3.0`）—— 即使 user message 给的是真实存在的 tag
+  (`v0.2.0..HEAD`)。多版 persona ("永远用用户原话里的字符串") 不起
+  作用。**Reflection-doc 规则现场验证**：「固定 pipeline → L1；
+  agent 在中间挑分支 → L3」。Changelog 生成 zero agent decision
+  → L1 binary 是对的，skill 形态在跟架构对抗。
+  `skill.toml.rejected` 文件保留在 binary 旁作为文档。
+- **F-A7-2 — `type: shell` 在 permission classifier 里但不在 CLI
+  factory 里**。`agentflow-cli/src/commands/workflow/validate.rs`
+  `classify_node` 把 `"shell"` 列为 `PermissionCategory::Exec`，
+  暗示它是 workflow YAML 节点类型。但
+  `agentflow-cli/src/executor/factory.rs` 没有 `"shell"` 分支 ——
+  `type: shell` 的 workflow 在 run time 会失败。要么从 classifier
+  drop `"shell"`，要么在 factory 加 branch wrap `agentflow_tools::ShellTool`。
+  不一致。
+- **F-A7-3 — Model registry 加载：per-provider `config/models/*.yml`
+  是死代码**。真实 registry source 是
+  `agentflow-llm/templates/default_models.yml`（via `include_str!`）。
+  `agentflow-llm/config/models/moonshot.yml` 等文件看上去像权威配置
+  但没被 `include_str!` 也没被 fs-load。要么删要么 wire。当前误导。
+- **F-A7-4 — 用户级 `~/.agentflow/models.yml` 静默覆盖 built-in
+  registry**。`AgentFlow::init()` 优先级是 AGENTFLOW_MODELS_CONFIG
+  > `~/.agentflow/models.yml` > built-in。意味着：往
+  `templates/default_models.yml` 加 model 对已有 user-level
+  models.yml 的用户不起作用。lib.rs rustdoc 里写了但 `agentflow
+  doctor` 不 surface 当前用的是哪个 source。应该显眼报告
+  "models config source: <path>"。
+- **F-A7-5 — `kimi-k2.6` 强制 `temperature: 1.0`**。Moonshot 拒绝
+  其它值，HTTP 400 `invalid temperature: only 1 is allowed for
+  this model`。可能是 reasoning-model 约定。已在
+  `templates/default_models.yml` 修正并带注释。手动 copy kimi-k2.6
+  到自己的 models.yml 但没读注释的用户会撞墙。值得在 agentflow-llm
+  provider 文档里 surface。
+- **F-A7-6 — `agentflow-llm` registry 滞后 Moonshot 实际 model 列表**。
+  `kimi-k2.5` 和 `kimi-k2.6` 在真实 Moonshot 账号的 `/v1/models`
+  里有，但 agentflow registry 直到这次 commit 才加。agentflow 没有
+  auto-detect drift 的机制。任何 provider 发新 model 时模式会
+  重现。可能的改进：`agentflow llm models --refresh-from-api`
+  子命令，拉各 provider 的 `/v1/models` 报告 add/drop。低优先级
+  但值得记。
+- **F-A7-7 — agentflow-cli 有 P9.3 dotenvy auto-load；A7 binary
+  又复制了一份**。binary 有自己的 `load_agentflow_dotenv()` 因为
+  它是 standalone Cargo project，不通过 agentflow CLI 调用。模式
+  能用但 duplication 是 smell。长期：抽 `agentflow-dotenv` helper
+  crate，或在 `docs/AGENT_SDK.md` 文档化标准 snippet。低优先级。
+- **F-A7-8 — moonshot-v1-128k 在 4096 max_tokens 下大输出被截断**。
+  models.yml 里默认 `max_tokens = 4096` 把 399-commit changelog
+  在第 119 行 mid-hash 截掉（~11.5k chars）。range > ~100 commits
+  时输出不全。Workaround:(a) 在 model entry 把 max_tokens 调到
+  16k+（Moonshot 支持 32k output），(b) per-category split 成 N
+  次 LLM 调用，(c) 文档化限制。建议 (a) 作为 moonshot-v1-128k
+  默认，因为长 context 的 use case 一般 output 也长。
+- **F-A7-9 — `agentflow-llm` 对 354k-char 输入在 moonshot-v1-128k
+  花了 117s**。不是 bug —— 长 context inference 在 Moonshot 这边
+  本来就慢。但 long-context dogfooding 真的烧 wall clock；workflow
+  需要迭代长 context 时 batch / cache / smaller-model 策略重要。
+- **F-A7-10 — One-shot LLM 输出质量超预期**。即便 399 commits 模型
+  也产出干净的分类，scope 保留（`feat(cli):` 正确归到 Features），
+  并且超出 prompt 加了 GitHub commit URL link。Single-shot prompt
+  approach 显然对这个任务是对的；验证 L1 + one-LLM-call 模式不仅
+  "能用"，而且结果真正可用。
 
 ---
 

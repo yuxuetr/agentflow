@@ -1,0 +1,30 @@
+[workspace]
+
+[package]
+name = "changelog-writer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "AgentFlow A7 application: git log → conventional-commits-categorized markdown changelog (Plan A binary; L3 skill form was rejected, see skill.toml.rejected)"
+
+# Standalone Cargo project — NOT a workspace member of the agentflow
+# workspace. See examples/applications/blog-to-podcast/Cargo.toml for
+# the rationale (avoids polluting agentflow's Cargo.lock with every
+# application's transitive deps).
+
+[dependencies]
+agentflow-core = { path = "../../../agentflow-core" }
+agentflow-llm  = { path = "../../../agentflow-llm" }
+
+tokio           = { version = "1", features = ["full"] }
+async-trait     = "0.1"
+anyhow          = "1"
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy         = "0.15"
+
+[[bin]]
+name = "changelog-writer"
+path = "src/main.rs"
