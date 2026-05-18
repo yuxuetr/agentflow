@@ -32,6 +32,7 @@ Last updated: 2026-05-17
 | # | Application | Status | 验证 agentflow 哪些面 | 外部依赖 |
 | --- | --- | --- | --- | --- |
 | A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP — live smoke ✅ (1st run 2026-05-18) | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
+| A1.5 | [podcast-mastering](examples/applications/podcast-mastering/) | WIP — live smoke ✅ (1st run 2026-05-18) | **L3 validation**: skill + `[[mcp_servers]]` + ReAct agent + native tool calling driving phonon-mcp subprocess | phonon-mcp binary (`cargo build --release -p phonon-mcp`), Moonshot LLM |
 | A2 | [code-reviewer](examples/applications/code-reviewer/) | TODO | ReAct agent, MCP (github), skill packaging, tool admission | gh CLI / GitHub MCP server |
 | A3 | [research-assistant](examples/applications/research-assistant/) | TODO | Arxiv node, RAG, memory, scheduled run | OpenAI/任一 LLM, 可选 Qdrant |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
@@ -173,6 +174,14 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   MiniMax 每段 ~150-300ms 响应（含 hex 解码 + Symphonia decode）。
   成本：估 MiniMax ~5000 字符 × 高清档定价 + Moonshot ~2000 token，
   整条 ~¥1 / $0.15。
+- **2026-05-18 — guest voice 选错（HK 口音）**。我默认配的
+  `Chinese (Mandarin)_HK_Flight_Attendant` 名字里 "HK" 是港式国语
+  口音，听上去跟纯普通话 host 不协调（用户反馈"一个普通话一个方言"
+  的真因）。这不是 phonon 或 agentflow 的问题 —— 是 default config
+  的 voice_id 挑错。1-line fix：换成 MiniMax 另一个纯 Mandarin
+  `Chinese (Mandarin)_*` voice。Lesson：**default voice 选择前
+  应该试听 MiniMax 提供的 sample audio**（MiniMax console 里有
+  voice library + 试听）。
 - **2026-05-18 — `segments_to_srt_file` API 实际签名不带 duration**。
   phonon 的 helper 期望 STT TranscriptSegment（带时间），不是 script
   Segment（只有 speaker + text）。自写了 `estimate_subtitle_timing`
@@ -180,6 +189,115 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   在 render 过程中记录每段实际时长，输出 `Vec<(Segment, f64 duration)>`
   让 SRT 用真实时长。已在 TODOs.md 末尾标了 phonon-podcast 上游 PR
   候选。
+
+---
+
+## A1.5 — podcast-mastering
+
+**业务**: 输入一个录好的播客 `.wav`（典型场景是 A1 的输出），输出
+mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可用。
+
+**为什么是 A1.5 而非 A2**: 它是 A1 的 sibling，验证 **L3 集成路径**
+（phonon-mcp via stdio JSON-RPC），跟 A1 用同一个 `/tmp/episode-test.wav`
+源音频但跨完全不同的代码路径。两者放一起对比能直接看出 L1 vs L3
+的工程取舍。
+
+**为什么有价值**: 这是 3-tier 架构里 L3 的最小可验证用例，证明 agent
+可以靠 ReAct + native tool calling 串起 6 个独立 MCP 工具完成端到端
+工作流，零项目特定 Rust 代码。
+
+**验证 agentflow 哪些面**:
+- `[[mcp_servers]]` 启动 native binary 子进程
+- `security.mcp_command_allowlist` 安全门把关
+- `McpClientPool` + `McpToolAdapter` 自动暴露 14 个 `mcp_phonon_*` tool
+- ReAct + Moonshot native tool calling 跨 6 步 linear workflow
+- UUID handle 在多次 tool call 之间正确传递（AssetRegistry pattern）
+
+**外部依赖**:
+- `phonon-mcp` binary（path: `/Users/hal/.target/release/phonon-mcp`）—
+  `cd /Users/hal/rustspace/phonon && cargo build --release -p phonon-mcp`
+- Moonshot key（已有，via `~/.agentflow/.env`）
+- agentflow CLI release build
+
+**TODO 子项**:
+- [ ] 听 `/tmp/episode-mastered.wav` 主观评估 master 质量
+- [ ] 验证 `mcp_phonon_audio_loudness` 在 master 后输出的 LUFS
+      跟 agent 报的 -16 对得上（agent 没有 re-measure，只是 trust
+      tool 的 target_lufs 参数）
+- [ ] 考虑加 trim silence 步骤（很多播客头尾有静音）
+- [ ] 考虑包成更通用的 audio-mastering skill（接 mp3 / flac）
+- [ ] 拼装一个 A1 + A1.5 复合 skill / workflow：blog → podcast →
+      mastered，端到端一条命令
+
+**DONE 子项**:
+- [x] phonon-mcp binary build OK（`cargo build --release -p phonon-mcp`）
+- [x] skill validate 通过，discovers 14 MCP tools
+- [x] live end-to-end skill run 通过：7 步 ReAct loop（6 tool calls
+      + final answer）；agent 严格按 persona 顺序调工具；handle 链
+      正确传递；输出 `/tmp/episode-mastered.wav` 13MB 147.99s
+      LUFS-normalized + faded
+- [x] 总耗时 ~37s（含 LLM 决策 + 6 次跨进程 MCP 调用）
+- [x] 沉 Finding 到本文件
+
+**Findings**:
+
+- **2026-05-18 — SKILL.md 不支持 `model:` 字段**。SKILL.md 的
+  frontmatter `model` 始终被 `Default::default()` 覆盖（默认 `gpt-4o`）。
+  Bug or feature？SKILL.md 跨工具 portable 不带 agentflow 特定字段
+  是合理 design，但 doc / error message 没说明白；用户配了 model
+  但被静默忽略很迷惑。**改进方向**：要么 SKILL.md 加 model 支持，
+  要么 validate 时 warn "ignoring frontmatter.model in SKILL.md;
+  use skill.toml for model config"。
+- **2026-05-18 — `agentflow skill validate` 错误信息不够具体**。
+  报 `Error: Validation failed` 没说哪一条 validation 失败。
+  实际是 `[[mcp_servers]] command '/.../phonon-mcp' executable
+  name 'phonon-mcp' is not in security.mcp_command_allowlist`，
+  但要 grep loader.rs 才知道。**改进方向**：validate command
+  应该把 underlying `SkillError::ValidationError.message` 直接打
+  出来，而不是吞掉。可能 anyhow `with_context` 链丢了底层 message。
+- **2026-05-18 — Default `mcp_command_allowlist` 设计合理但要文档化**。
+  默认只有 `["python", "python3", "node", "npx", "uvx"]` —— 解释器
+  脚本可以跑，compiled Rust binary 默认拒绝。这是好的安全 posture
+  （强迫 operator 显式审批每个 native binary），但 docs/AGENT_SDK.md
+  或 SKILL_FORMAT.md 里要明写「想跑 compiled binary MCP 一定要加
+  `security.mcp_command_allowlist`」。
+- **2026-05-18 — `mcp_phonon_*` 命名 convention 干净**。agentflow
+  自动用 `mcp_<server_name>_<tool_name>` 命名，14 个 phonon tool
+  全自动暴露 `mcp_phonon_audio_load` 等，agent 看到的名字一致、
+  好预测。
+- **2026-05-18 — Moonshot tool calling first-shot 工作正常**。`moonshot-v1-128k`
+  对 native tool calling 支持稳定，按 persona 写的步骤严格走 6 步，
+  不乱用 tool、不跳步、handle 串接正确。这是 agentflow ↔ Moonshot
+  集成的额外验证点。
+- **2026-05-18 — phonon-mcp `AssetRegistry` 在 multi-tool-call
+  pattern 下完全正常**。每个 `normalize_lufs` / `fade` 返回新 UUID
+  handle，agent 自动用新 handle 喂下一步，最终 save 用最新 handle，
+  没有用错老 handle 或 leak。
+- **2026-05-18 — phonon-mcp 内部 sample rate resample 没说明**。
+  源 wav 是 32kHz，audio_load 后 audio_info 报 44100Hz。phonon-mcp
+  内部某处做了 resample（可能 audio_load 默认转 44.1k？也可能 LUFS
+  pipeline 内部）。不影响功能但行为不可见。**改进方向**：phonon-mcp
+  的 audio_load tool description 或 audio_info 输出加一个
+  `resampled_from` 字段说清楚是不是被改采样率了。
+- **2026-05-18 — agent 没有 verify mastering 后的实际 LUFS**。
+  persona 让 agent 在 save 后汇报，但 agent 只 trust normalize_lufs
+  的 target 参数，没真的 re-call audio_loudness 量一下结果。这是
+  persona prompt 的弱点（没强制要求 post-measure 步骤）。**改进方向**：
+  persona 加 "Step 5.5: re-measure with audio_loudness before save,
+  report actual achieved LUFS"。
+- **2026-05-18 — skill run 总耗时 37s 主要花在 LLM 思考上**。tool
+  calls 本身全都 sub-second（最慢的 audio_save 也只 50ms）；agent
+  在每步 tool_call 之后要等 LLM 决定下一步，单次决策 2-15s。这是
+  L3 跨进程 + LLM-in-loop 架构的固有特性，不是 phonon-mcp 慢。
+  对比 A1 用 L1 同进程直接调，PodcastPipeline 走完 12 段 TTS 才 19s。
+- **2026-05-18 — `--trace` 输出 `RuntimeTrace` JSON 极其清晰**。
+  每个 `plan` / `tool_call` / `tool_result` / `final_answer` 都
+  带 timestamp + index，是 dogfooding / debug 利器。这是 agentflow
+  的明显 win。
+- **2026-05-18 — L1 vs L3 的真实工程取舍数据点**：A1 (L1) 19s 出
+  2.5 分钟播客；A1.5 (L3) 37s 对同一文件 mastering。L3 慢的是
+  「LLM 决策开销」，不是 IPC 序列化。意味着：**如果工作流形态
+  固定，用 L1；如果需要 agent 在中间做决策 / 工具组合，用 L3**。
 
 ---
 
