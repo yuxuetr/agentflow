@@ -163,7 +163,7 @@ Combining R1's 20 + R2's 20.
 | F-AF-2 | R1 A1.5 | TODO P9.4 | SKILL.md `model:` silently ignored | M |
 | F-AF-3 | R1 A1 | **DONE P9.3** | Auto-load `~/.agentflow/.env` in CLI entry | — |
 | F-AF-4 | R1 | TODO | Crisper Moonshot/Anthropic init error on fresh hosts | L |
-| **F-A2-1** | R2 A2 | **NEW TODO** | `skill run` prints empty `🤖 Agent:` — `AgentRunResult.answer` not populated from final_answer event | **H** |
+| **F-A2-1** | R2 A2 | **DONE 2026-05-18** | Actual root cause was different: when `max_tokens` truncates LLM response mid-JSON, parser falls to Malformed and shows the raw `{"thought":..,"answer":..` envelope. Fix: best-effort `answer` field extraction in `react/parser.rs` + `warn!` log hinting at `max_tokens`. 6 new tests. | — |
 | **F-A7-2** | R2 A7 | **NEW TODO** | `type: shell` in permission classifier but not in CLI factory; YAML workflows with `type: shell` would crash at run time | M |
 | **F-A7-3** | R2 A7 | **NEW TODO** | `agentflow-llm/config/models/*.yml` per-provider files are dead code (real source is `templates/default_models.yml`); either wire in or delete | L |
 
@@ -253,7 +253,7 @@ finding set:
 
 | Pri | ID | Action | Owner |
 | --- | --- | --- | --- |
-| **H** | F-A2-1 | Populate `AgentRunResult.answer` from `final_answer` event; `skill run` should display answer in `🤖 Agent:` line. **High because affects every skill's usability** | agentflow-agents |
+| ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | agentflow-agents |
 | **M** | F-A7-2 | Resolve `type: shell` schema-vs-factory inconsistency (either drop from classifier or add factory branch wrapping `ShellTool`) | agentflow-cli |
 | **M** | F-A7-8 | Bump `moonshot-v1-128k` `max_tokens` in templates/default_models.yml from 4096 to 16k+ | agentflow-llm |
 | M | F-A7-4 | `agentflow doctor` reports active models.yml source | agentflow-cli |

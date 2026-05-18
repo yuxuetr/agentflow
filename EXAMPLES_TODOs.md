@@ -331,8 +331,8 @@ code-reviewer` 后立即用。
   /server-github`)，验证 MCP 路径下的同样 skill
 - [ ] 跑多个 PR fixture，覆盖：超大 diff (>5000 行)、跨语言 (TS+Rust)、
   纯 docs 改动 (Strengths/Verdict 应不同) 等场景
-- [ ] 修一下 A2-finding F-A2-1：`agentflow skill run` 顶层
-  `🤖 Agent: <answer>` 行打印空字符串问题（answer 在 trace 里存在）
+- [x] 修 F-A2-1：parser truncated-JSON 健壮性（详见 commit；下面
+  Findings 段已 mark DONE）
 
 **DONE 子项**:
 - [x] persona / model / tool admission 设计：kimi-k2.6 + shell with
@@ -350,12 +350,21 @@ code-reviewer` 后立即用。
 **Findings** (2026-05-18, A2 first dogfooding pass):
 
 - **F-A2-1 — `agentflow skill run` 顶层 `🤖 Agent:` 行打印空字符串
-  即便 answer 已 produce**。`AgentRunResult.answer` 没被 final_answer
-  event 填充。需要 `--trace` 然后从 JSON 里 extract，dogfooding 很
-  烦。**改进**：在 `agentflow-agents` 的 ReAct 实现里，当 emit
-  `final_answer` event 时也写 `result.answer = Some(answer)`，
-  让 `skill run` 输出能正常显示。**优先级 High** —— 影响每个 skill
-  的可用性。
+  即便 answer 已 produce** —— **DONE 2026-05-18**。深入调查后发现
+  根因不是 `result.answer` 没被填充（实际填了），而是 **LLM 响应被
+  `max_tokens` 截断时，`serde_json::from_str` 在不完整 JSON 上失败，
+  parser fallback 到 `Malformed` 把整个 raw text（含 `{"thought":..,
+  "answer":..` JSON 外壳）当 answer 显示**。修复：`react/parser.rs`
+  在 strict-parse 失败后做 best-effort 提取 `"answer"` 字段的字符串
+  值，handle 截断在字符串内、截断在 escape 后、缺 closing `"` 等情况，
+  并 emit `warn!` 让 operator 知道发生了截断+部分恢复（暗示需要调
+  `max_tokens` —— F-A7-8）。6 new unit tests 覆盖：truncated mid-
+  string / truncated after complete answer / truncated mid-escape /
+  no answer field stays Malformed / unescape all common sequences /
+  empty answer field stays empty Answer。19 parser tests + 168 agents
+  lib tests 全绿。"empty agent line" 的初始观察可能是 LLM 偶发返回
+  `{"answer":""}` 的非确定性（这种情况下 println 正确显示空，是
+  LLM-side 问题，不是 agentflow bug）。
 - **F-A2-2 — L3 skill 在 "agent-decides" 任务上工作得很好**。跟
   A1.5 一起验证：当 agent 真有决策（不是 pass-through）时，kimi-k2.6
   能按 persona 步骤走 2-3 个 tool call、做合理决定、输出结构化结果。
