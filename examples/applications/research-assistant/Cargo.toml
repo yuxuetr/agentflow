@@ -1,0 +1,29 @@
+[workspace]
+
+[package]
+name = "research-assistant"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A3 dogfooding application: fetch arxiv category → diff against seen-papers entity-fact store → LLM summarize new papers into markdown briefing"
+
+[dependencies]
+agentflow-core   = { path = "../../../agentflow-core" }
+agentflow-llm    = { path = "../../../agentflow-llm" }
+agentflow-memory = { path = "../../../agentflow-memory" }
+
+tokio              = { version = "1", features = ["full"] }
+async-trait        = "0.1"
+anyhow             = "1"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+quick-xml          = { version = "0.36", features = ["serialize"] }
+chrono             = { version = "0.4", features = ["serde"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy            = "0.15"
+
+[[bin]]
+name = "research-assistant"
+path = "src/main.rs"
