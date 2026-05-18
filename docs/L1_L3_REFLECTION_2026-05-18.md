@@ -1,4 +1,4 @@
-# L1 + L3 Integration Validation — Reflection
+# L1 + L3 Integration Validation — Reflection (R1)
 
 **Date**: 2026-05-18
 **Trigger**: A1 (blog-to-podcast, L1 Rust dep) + A1.5 (podcast-mastering,
@@ -6,6 +6,13 @@ L3 phonon-mcp) both ran end-to-end with live Moonshot + MiniMax APIs.
 **Goal**: consolidate findings from both validation runs, decide what
 gets fixed where, settle the L2 question, and emit a prioritized
 action queue.
+
+> **⚠️ This document is R1, the first reflection round. It is superseded
+> by [R2](L1_L3_REFLECTION_R2_2026-05-18.md) (later the same day) for
+> the current action queue and the refined L1↔L3 selection rule. R2
+> incorporates A7 + A2 evidence on top of this doc's A1 + A1.5
+> evidence. R1 is retained as the historical snapshot of what
+> conclusions were reachable with only 2 applications worth of data.**
 
 ---
 
