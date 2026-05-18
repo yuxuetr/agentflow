@@ -7,6 +7,28 @@ use crate::redaction::{redact_cli_text, to_redacted_json_value};
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
+/// Resolved value of `--output` (F-A2-6). Text mode preserves the
+/// pre-existing emoji-prefixed banner + `🤖 Agent:` line; json mode
+/// emits a single JSON object to stdout suitable for piping into other
+/// tooling. All warnings and progress messages go to stderr in json
+/// mode so stdout stays pure JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+  Text,
+  Json,
+}
+
+impl OutputFormat {
+  fn parse(value: &str) -> Result<Self> {
+    match value {
+      "text" => Ok(Self::Text),
+      "json" => Ok(Self::Json),
+      other => anyhow::bail!("unsupported --output '{other}', expected text | json"),
+    }
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   skill_dir: String,
   message: String,
@@ -14,7 +36,9 @@ pub async fn execute(
   memory_override: Option<String>,
   session_id: Option<String>,
   trace: bool,
+  output: String,
 ) -> Result<()> {
+  let output = OutputFormat::parse(&output)?;
   let dir = Path::new(&skill_dir);
 
   // Load + validate manifest
@@ -28,16 +52,20 @@ pub async fn execute(
 
   let warnings =
     SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;
+  // Warnings always go to stderr; that holds for both output modes so
+  // operators don't lose them when piping json into jq.
   for w in &warnings {
     eprintln!("⚠  {}", w);
   }
 
-  println!(
-    "🚀 Running skill '{}' v{}",
-    manifest.skill.name, manifest.skill.version
-  );
-  println!("🤖 Model: {}", manifest.model.resolved_model());
-  println!("🧠 Memory: {}", memory_label(&manifest));
+  if matches!(output, OutputFormat::Text) {
+    println!(
+      "🚀 Running skill '{}' v{}",
+      manifest.skill.name, manifest.skill.version
+    );
+    println!("🤖 Model: {}", manifest.model.resolved_model());
+    println!("🧠 Memory: {}", memory_label(&manifest));
+  }
 
   // Initialise AgentFlow (loads LLM provider config)
   AgentFlow::init()
@@ -54,8 +82,10 @@ pub async fn execute(
     agent = agent.with_session_id(sid);
   }
 
-  println!("📝 Session: {}", agent.session_id);
-  println!("💬 User: {}\n", redact_cli_text(&message));
+  if matches!(output, OutputFormat::Text) {
+    println!("📝 Session: {}", agent.session_id);
+    println!("💬 User: {}\n", redact_cli_text(&message));
+  }
 
   let start = std::time::Instant::now();
   let result = agent
@@ -71,15 +101,39 @@ pub async fn execute(
   }
   let answer = result.answer.clone().unwrap_or_default();
 
-  println!("🤖 Agent: {}", redact_cli_text(&answer));
-  if trace {
-    println!("\n📋 Runtime Trace:");
-    println!(
-      "{}",
-      serde_json::to_string_pretty(&to_redacted_json_value(&result)?)?
-    );
+  match output {
+    OutputFormat::Text => {
+      println!("🤖 Agent: {}", redact_cli_text(&answer));
+      if trace {
+        println!("\n📋 Runtime Trace:");
+        println!(
+          "{}",
+          serde_json::to_string_pretty(&to_redacted_json_value(&result)?)?
+        );
+      }
+      println!("\n⏱  Completed in {:.2?}", elapsed);
+    }
+    OutputFormat::Json => {
+      // One JSON object to stdout. Stable keys; `trace` only present
+      // when --trace was passed so callers can opt-in to the larger
+      // payload. Answer is redacted just like text mode.
+      let mut payload = serde_json::json!({
+        "skill": manifest.skill.name,
+        "skill_version": manifest.skill.version,
+        "model": manifest.model.resolved_model(),
+        "memory": memory_label(&manifest),
+        "session_id": result.session_id,
+        "message": redact_cli_text(&message),
+        "answer": redact_cli_text(&answer),
+        "stop_reason": result.stop_reason,
+        "elapsed_ms": elapsed.as_millis(),
+      });
+      if trace {
+        payload["trace"] = to_redacted_json_value(&result)?;
+      }
+      println!("{}", serde_json::to_string_pretty(&payload)?);
+    }
   }
-  println!("\n⏱  Completed in {:.2?}", elapsed);
 
   Ok(())
 }

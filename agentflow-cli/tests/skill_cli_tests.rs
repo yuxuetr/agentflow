@@ -852,6 +852,89 @@ fn skill_run_can_call_mcp_tool_with_mock_llm() {
     .stdout(predicate::str::contains("answer-secret").not());
 }
 
+/// F-A2-6: --output json emits a single JSON object to stdout with
+/// the answer + run metadata. Banner / emoji lines must NOT appear in
+/// stdout (they belong on stderr in JSON mode). --trace continues to
+/// inline the runtime trace, just under the `trace` key.
+#[test]
+fn skill_run_output_json_emits_clean_json_object() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let skill = TempDir::new().unwrap();
+  write_mock_mcp_skill(skill.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let assert = cmd
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_react_responses())
+    .args([
+      "skill",
+      "run",
+      skill.path().to_str().unwrap(),
+      "--message",
+      "echo through MCP",
+      "--output",
+      "json",
+      "--trace",
+    ])
+    .assert()
+    .success()
+    // Banner emojis must stay off stdout in JSON mode.
+    .stdout(predicate::str::contains("🚀 Running").not())
+    .stdout(predicate::str::contains("🤖 Model").not())
+    .stdout(predicate::str::contains("📋 Runtime Trace").not())
+    // The actual JSON payload contains the expected keys.
+    .stdout(predicate::str::contains("\"answer\""))
+    .stdout(predicate::str::contains("\"session_id\""))
+    .stdout(predicate::str::contains("\"stop_reason\""))
+    .stdout(predicate::str::contains("\"elapsed_ms\""))
+    .stdout(predicate::str::contains("\"trace\""))
+    .stdout(predicate::str::contains("\"skill\""))
+    // Redaction still applies in JSON mode.
+    .stdout(predicate::str::contains("[REDACTED]"));
+
+  // Parse stdout as a single JSON object — this is the contract.
+  let raw = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+  let parsed: serde_json::Value =
+    serde_json::from_str(&raw).expect("--output json stdout must parse as a single JSON object");
+  assert!(parsed.get("answer").is_some(), "missing answer key");
+  assert!(parsed.get("trace").is_some(), "--trace must populate trace");
+  assert!(
+    parsed["elapsed_ms"].is_number(),
+    "elapsed_ms must be numeric"
+  );
+}
+
+/// F-A2-6: --output json without --trace omits the trace key (keeps
+/// payloads small for the common case).
+#[test]
+fn skill_run_output_json_without_trace_omits_trace_key() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let skill = TempDir::new().unwrap();
+  write_mock_mcp_skill(skill.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let assert = cmd
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_react_responses())
+    .args([
+      "skill",
+      "run",
+      skill.path().to_str().unwrap(),
+      "--message",
+      "echo through MCP",
+      "--output",
+      "json",
+    ])
+    .assert()
+    .success();
+
+  let raw = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+  let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+  assert!(parsed.get("trace").is_none(), "trace must be opt-in");
+}
+
 #[test]
 fn skill_run_model_override_replaces_manifest_model() {
   let home = TempDir::new().unwrap();

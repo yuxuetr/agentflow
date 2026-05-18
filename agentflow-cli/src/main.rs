@@ -677,9 +677,19 @@ enum SkillCommands {
     /// Reuse an existing session ID for multi-turn conversations
     #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
-    /// Print the structured AgentRuntime trace as JSON
+    /// Print the structured AgentRuntime trace as JSON (text mode only;
+    /// in `--output json` mode the trace is inlined under the `trace`
+    /// key of the response payload instead).
     #[arg(long)]
     trace: bool,
+    /// Output format. `text` (default) keeps the emoji-prefixed banner
+    /// and `🤖 Agent:` line for interactive use. `json` emits a single
+    /// JSON object to stdout suitable for piping into other tooling:
+    /// `{skill, model, session_id, message, answer, stop_reason,
+    /// elapsed_ms, trace?}`. Warnings still go to stderr in JSON mode
+    /// so stdout stays pure JSON (F-A2-6).
+    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    output: String,
   },
   /// Start an interactive multi-turn chat session with a skill
   Chat {
@@ -1388,7 +1398,8 @@ async fn main() {
         memory,
         session,
         trace,
-      } => skill::run::execute(skill_dir, message, model, memory, session, trace).await,
+        output,
+      } => skill::run::execute(skill_dir, message, model, memory, session, trace, output).await,
       SkillCommands::Chat {
         skill_dir,
         model,
