@@ -43,15 +43,50 @@ impl HarnessRuntimeKind {
 /// Security profile the Harness session is running under. Mirrors
 /// `agentflow-tools::SecurityProfile` but is kept here as a stable enum
 /// to avoid pulling the entire tools crate into UI / SDK consumers.
+///
+/// ## Approval-gate interaction (F-A2-12)
+///
+/// The profile is **load-bearing** for the approval flow run by
+/// [`crate::HookedTool`] / [`crate::wrap_registry`]:
+///
+/// - [`HarnessProfile::Production`] auto-escalates every
+///   `ToolIdempotency::NonIdempotent` call (shell, file:write, http
+///   POST, etc.) to a `RequireApproval` decision, so the approval
+///   prompt always fires before mutation.
+/// - [`HarnessProfile::Local`] (the [`Default`]) and
+///   [`HarnessProfile::Dev`] do **NOT** auto-escalate. Without an
+///   explicit pre-hook returning `PreToolDecision::RequireApproval`,
+///   tools are silently auto-allowed. This is intentional for local
+///   dev ergonomics, but is the wrong default for any binary that
+///   ships write-side tools — call
+///   [`crate::HookConfig::with_profile`] with
+///   `HarnessProfile::Production` explicitly.
+///
+/// See `examples/applications/code-reviewer-write/src/main.rs` for a
+/// reference wiring that uses Production.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessProfile {
-  /// Permissive defaults for local development.
+  /// Permissive defaults for local development. Like [`Local`] for
+  /// approval-gate purposes (no auto-escalation of mutating tools).
+  ///
+  /// [`Local`]: HarnessProfile::Local
   Dev,
   /// Conservative defaults for a personal local server.
+  ///
+  /// **Approval gate**: does NOT auto-escalate NonIdempotent calls.
+  /// Tools are auto-allowed unless a pre-hook explicitly returns
+  /// `PreToolDecision::RequireApproval`. If you want the approval
+  /// prompt to fire for write tools without writing a pre-hook,
+  /// use [`HarnessProfile::Production`] instead.
   #[default]
   Local,
   /// Fail-closed defaults for production deployments.
+  ///
+  /// **Approval gate**: auto-escalates every NonIdempotent call to
+  /// `RequireApproval`, so any shell / file:write / mutating HTTP
+  /// call must be explicitly approved by the
+  /// [`crate::ApprovalProvider`] before the inner tool executes.
   Production,
 }
 

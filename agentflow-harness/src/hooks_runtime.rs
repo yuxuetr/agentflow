@@ -90,6 +90,32 @@ impl HookConfig {
   /// [`HookConfig::with_seq_counter`] when integrating with a parent
   /// [`HarnessRuntime`] so the emitted approval events share the
   /// session's `seq` namespace.
+  ///
+  /// ## Approval-gate default is silent-allow (F-A2-12)
+  ///
+  /// The fresh config starts with [`HarnessProfile::Local`]
+  /// (the enum default). Under Local, the approval flow is **opt-in**:
+  ///
+  /// - With no [`PreToolHook`]s registered, every wrapped tool is
+  ///   silently auto-allowed — the [`ApprovalProvider`] is never
+  ///   consulted. This is intentional for low-friction local dev.
+  /// - To make NonIdempotent tools (shell, file:write, http POST)
+  ///   actually trigger the approval prompt, either (a) chain
+  ///   [`HookConfig::with_profile`] with
+  ///   [`HarnessProfile::Production`] (auto-escalates every
+  ///   NonIdempotent call), or (b) register a pre-hook that
+  ///   explicitly returns `PreToolDecision::RequireApproval`.
+  ///
+  /// Reference wiring (binary with write tools):
+  ///
+  /// ```rust,ignore
+  /// let hook_config = HookConfig::new(session_id, approval, sinks)
+  ///   .with_profile(HarnessProfile::Production);
+  /// let wrapped = wrap_registry(registry, hook_config);
+  /// ```
+  ///
+  /// See `examples/applications/code-reviewer-write/` for an
+  /// end-to-end binary that uses this exact pattern.
   pub fn new(
     session_id: impl Into<String>,
     approval_provider: Arc<dyn ApprovalProvider>,
@@ -108,6 +134,19 @@ impl HookConfig {
     }
   }
 
+  /// Set the security profile used by the approval-escalation rules
+  /// in [`HookedTool`]. See [`HarnessProfile`] for the per-variant
+  /// approval-gate semantics; the short version:
+  ///
+  /// - `Production` → NonIdempotent calls are auto-escalated to
+  ///   `RequireApproval` (the approval prompt always fires for
+  ///   mutating tools).
+  /// - `Local` / `Dev` → no auto-escalation; only explicit
+  ///   pre-hook `RequireApproval` decisions fire the prompt.
+  ///
+  /// For binaries that ship write-side tools (file:write, shell,
+  /// http POST), call this with `HarnessProfile::Production` to
+  /// avoid silently auto-allowing mutations (F-A2-12).
   pub fn with_profile(mut self, profile: HarnessProfile) -> Self {
     self.profile = profile;
     self

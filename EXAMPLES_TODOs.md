@@ -434,6 +434,12 @@ code-reviewer` 后立即用。
   at minimum.
 - **F-A2-12 — `HarnessProfile::Local` (default) doesn't trigger
   approval for NonIdempotent tools without an explicit pre-hook**.
+  ✅ **CLOSED 2026-05-18** via docs sweep: `HarnessProfile::{Local,
+  Dev,Production}` enum docs + `HookConfig::new` + `with_profile`
+  rustdoc now explicitly warn about the silent-allow default; the
+  approval-gate section of `docs/HARNESS_MODE.md` got a footgun
+  callout + an inline comment in the canonical snippet + a pointer
+  to `code-reviewer-write` as a reference binary.
   Spent ~15min debugging "why does the approval prompt never fire?"
   before reading `agentflow-harness/src/hooks_runtime.rs::
   resolve_proceed_decision` (~line 369). The escalation rule is:

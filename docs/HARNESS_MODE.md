@@ -192,6 +192,16 @@ The wrapper:
    escalates even an `Allow` to `RequireApproval` with risk
    `Critical` so production runs are fail-closed by default
    (HARNESS_MODE_EVOLUTION Risk 2).
+   - **Footgun (F-A2-12)**: under `HarnessProfile::Local` (the
+     `Default`) and `HarnessProfile::Dev`, this escalation does
+     **NOT** happen. Without an explicit pre-hook returning
+     `RequireApproval`, mutating tools are silently auto-allowed
+     and the `ApprovalProvider` is never invoked. If you wire
+     `wrap_registry` expecting "the approval prompt should fire on
+     every shell / file:write call", you MUST pair it with
+     `.with_profile(HarnessProfile::Production)` (or register a
+     pre-hook that returns `RequireApproval`). The example below
+     does this; copy that line verbatim.
 5. If approval is required: emits `HarnessEvent::ApprovalRequested`,
    delegates to the configured `ApprovalProvider`, emits
    `ApprovalDecided`. `Session` / `Run` scope decisions are cached
@@ -224,6 +234,10 @@ let approval = Arc::new(CliApprovalProvider::stdin());
 let hooked_registry = wrap_registry(
   registry,
   HookConfig::new("sess-1", approval, sinks.clone())
+    // Load-bearing: without Production (or an explicit pre-hook
+    // returning RequireApproval), Local profile silently auto-allows
+    // every NonIdempotent call and the ApprovalProvider above is
+    // never invoked. See F-A2-12.
     .with_profile(HarnessProfile::Production)
     .with_pre_hook(my_audit_hook)
     .with_hook_timeout(Duration::from_secs(2)),
@@ -234,6 +248,11 @@ let mut runtime = HarnessRuntime::new(Box::new(agent))
   .with_event_sink(jsonl_sink);
 runtime.run(options).await
 ```
+
+For a fully-runnable reference binary that wires this exact pattern
+(plus `--auto-approve` / `--prefetch-diff` modes for CI smoke and
+write-side dogfooding), see
+[`examples/applications/code-reviewer-write/`](../examples/applications/code-reviewer-write/README.md).
 
 `HookedTool` only emits approval-lifecycle events. Tool-call
 lifecycle events (`tool_call_requested` / `tool_call_completed`)

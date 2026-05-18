@@ -266,7 +266,7 @@ finding set:
 | ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
 | ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
 | M | F-A2-11 | Wire `wrap_registry(...)` into `agentflow harness run` CLI (gate on `--profile production` or skill manifest declaring write tools) so CLI ≠ HTTP behaviour goes away | agentflow-cli + agentflow-harness |
-| M | F-A2-12 | Docstring `HarnessProfile::default()` + `HookConfig::new` to call out Local-vs-Production approval-gate asymmetry; update `docs/HARNESS_MODE.md` template to use Production for examples with write tools | agentflow-harness docs |
+| ~~M~~ DONE | F-A2-12 | Docstring `HarnessProfile::{Local,Dev,Production}` + `HookConfig::new` + `with_profile` call out the silent-allow-by-default footgun; `docs/HARNESS_MODE.md` got an explicit footgun callout in the `wrap_registry` section + an inline comment in the snippet + a pointer to `code-reviewer-write` as a reference binary. Landed 2026-05-18. | agentflow-harness docs |
 | L | F-A2-13 | ReAct "identical-tool-and-params-twice" anti-loop steering message (synthesise observation reminder instead of letting the model spin to budget exhaustion) | agentflow-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
@@ -280,12 +280,11 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-22 open items (was 19): F-A2-9 closed, F-A2-11/12/13 added.
-0 High, 11 Medium, 11 Low (the formerly H F-A2-9 is now DONE).
-None require a core refactor; all are surface / docs / config /
-convention scope. F-A2-11 (CLI parity) is the highest-value of the
-new bunch since it removes a sharp edge for first-time Harness Mode
-adopters.
+21 open items (was 22): F-A2-12 docs-sweep closed.
+0 High, 10 Medium, 11 Low. None require a core refactor; all are
+surface / docs / config / convention scope. F-A2-11 (CLI parity)
+is the highest-value remaining item since it removes a sharp edge
+for first-time Harness Mode adopters.
 
 ## 7. Phonon scope reflection — still no change
 
