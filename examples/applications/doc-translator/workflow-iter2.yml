@@ -1,0 +1,168 @@
+# A6 doc-translator — iteration 2
+#
+# Real file I/O. Reads every (file, lang) pair in `input_list`,
+# translates via LLM, writes to `output/<lang>/<file>`. 2 input
+# files × 4 target languages = 8 parallel sub-flows, capped at 3
+# concurrent so we stay under Moonshot's org rate limit (F-A6-1).
+#
+# What's still hardcoded (iter 3 will fix):
+#   - The (file, lang) work list is enumerated explicitly here.
+#     A discovery step (`find input/*.md` via a shell node, cross
+#     with a target-lang list) belongs in iter 3.
+#   - Output dir is a fixed `output/` sibling. Iter 3 should
+#     accept it as a parameter.
+#
+# Pre-rendered read/write paths sit in each `input_list` item so
+# the sub-flow's template nodes can pull them out directly. This
+# is verbose but works with today's `input_mapping` (it only
+# supports `{{ nodes.X.outputs.Y }}` lookups, not `{{ item.Z }}`
+# directly inside a non-template node's parameters).
+#
+# Run:
+#   agentflow workflow run examples/applications/doc-translator/workflow-iter2.yml
+#
+# Outputs land at:
+#   examples/applications/doc-translator/output/<lang>/<file>
+
+name: "doc-translator iteration 2"
+description: "Read N markdown files, translate to M languages in parallel, write per-language output dirs."
+
+nodes:
+  - id: "translate_corpus"
+    type: "map"
+    dependencies: []
+    parameters:
+      parallel: true
+      # F-A6-1: stay under Moonshot's org concurrency cap of 3.
+      # With cap=3 and 8 sub-flows, wall clock is ~3 batches.
+      max_concurrent: 3
+      input_list:
+        - file: "intro.md"
+          lang: "ja"
+          lang_name: "Japanese"
+          read_path:  "examples/applications/doc-translator/input/intro.md"
+          write_path: "examples/applications/doc-translator/output/ja/intro.md"
+        - file: "intro.md"
+          lang: "fr"
+          lang_name: "French"
+          read_path:  "examples/applications/doc-translator/input/intro.md"
+          write_path: "examples/applications/doc-translator/output/fr/intro.md"
+        - file: "intro.md"
+          lang: "de"
+          lang_name: "German"
+          read_path:  "examples/applications/doc-translator/input/intro.md"
+          write_path: "examples/applications/doc-translator/output/de/intro.md"
+        - file: "intro.md"
+          lang: "zh"
+          lang_name: "Chinese"
+          read_path:  "examples/applications/doc-translator/input/intro.md"
+          write_path: "examples/applications/doc-translator/output/zh/intro.md"
+        - file: "usage.md"
+          lang: "ja"
+          lang_name: "Japanese"
+          read_path:  "examples/applications/doc-translator/input/usage.md"
+          write_path: "examples/applications/doc-translator/output/ja/usage.md"
+        - file: "usage.md"
+          lang: "fr"
+          lang_name: "French"
+          read_path:  "examples/applications/doc-translator/input/usage.md"
+          write_path: "examples/applications/doc-translator/output/fr/usage.md"
+        - file: "usage.md"
+          lang: "de"
+          lang_name: "German"
+          read_path:  "examples/applications/doc-translator/input/usage.md"
+          write_path: "examples/applications/doc-translator/output/de/usage.md"
+        - file: "usage.md"
+          lang: "zh"
+          lang_name: "Chinese"
+          read_path:  "examples/applications/doc-translator/input/usage.md"
+          write_path: "examples/applications/doc-translator/output/zh/usage.md"
+
+      template:
+        # Step 1: pull `item.read_path` into a string output we can
+        # feed to file:read's `path` input. Needed because input_mapping
+        # only supports `{{ nodes.X.outputs.Y }}` lookups today, not
+        # direct `{{ item.* }}` references in non-template parameters.
+        - id: "render_read_path"
+          type: "template"
+          dependencies: []
+          parameters:
+            template: "{{ item.read_path }}"
+
+        # Step 2: read the source markdown.
+        - id: "read_source"
+          type: "file"
+          dependencies: ["render_read_path"]
+          input_mapping:
+            path: "{{ nodes.render_read_path.outputs.output }}"
+          parameters:
+            operation: "read"
+
+        # Step 3: render the per-language translation prompt with
+        # the source content inlined. Tera has access to `item`
+        # (the map iteration value) AND the upstream node outputs.
+        - id: "build_prompt"
+          type: "template"
+          dependencies: ["read_source"]
+          input_mapping:
+            source: "{{ nodes.read_source.outputs.content }}"
+          parameters:
+            template: |
+              Translate the following markdown blurb into {{ item.lang_name }}.
+              Rules:
+                - preserve markdown structure (headings, lists, links)
+                - DO NOT translate fenced code blocks (anything between ```)
+                - DO NOT translate identifiers in inline code (`text in backticks`)
+                - output ONLY the translation, no preamble or postamble
+
+              ----- SOURCE -----
+              {{ source }}
+              ----- END SOURCE -----
+
+        # Step 4: actual translation.
+        - id: "translate_one"
+          type: "llm"
+          dependencies: ["build_prompt"]
+          input_mapping:
+            prompt: "{{ nodes.build_prompt.outputs.output }}"
+          parameters:
+            model: "moonshot-v1-128k"
+            temperature: 0.2
+            max_tokens: 2048
+
+        # Step 5: pull `item.write_path` for the file:write.
+        - id: "render_write_path"
+          type: "template"
+          dependencies: []
+          parameters:
+            template: "{{ item.write_path }}"
+
+        # Step 6: persist the translation. File node auto-creates
+        # parent dirs so `output/<lang>/` springs into existence on
+        # first write.
+        - id: "write_translation"
+          type: "file"
+          dependencies: ["translate_one", "render_write_path"]
+          input_mapping:
+            content: "{{ nodes.translate_one.outputs.output }}"
+            path:    "{{ nodes.render_write_path.outputs.output }}"
+          parameters:
+            operation: "write"
+
+  # Fan-in: simple summary so the run produces a human-readable
+  # stdout line at the end. Includes results_summary from F-A6-3.
+  - id: "report"
+    type: "template"
+    dependencies: ["translate_corpus"]
+    input_mapping:
+      results: "{{ nodes.translate_corpus.outputs.results }}"
+      summary: "{{ nodes.translate_corpus.outputs.results_summary }}"
+    parameters:
+      template: |
+        Translated {{ summary.ok }}/{{ summary.total }} (file, lang) pairs
+        across the corpus. Outputs under
+        `examples/applications/doc-translator/output/<lang>/<file>`.
+        {% if summary.err > 0 -%}
+        Partial failures at indexes: {{ summary.err_indexes }}.
+        Walk `results[i]` for per-sub-flow details.
+        {%- endif %}

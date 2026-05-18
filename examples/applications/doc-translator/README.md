@@ -1,7 +1,10 @@
 # A6 — doc-translator
 
-**Status**: live ✅ as iteration 1 (2026-05-18, narrow validation of
-`map parallel` + LLM fan-out; **no file I/O yet** — iter 2 expands).
+**Status**: live ✅ through iteration 2 (2026-05-18: real file I/O,
+8 sub-flows = 2 files × 4 langs, outputs persisted to
+`output/<lang>/<file>`. Iter 1 was the `map parallel + LLM` primitive
+validator; iter 2 turns it into a usable tool. Iter 3 would add file
+discovery + 100+ stress test).
 **Tracking entry**: [`EXAMPLES_TODOs.md` § A6](../../../EXAMPLES_TODOs.md#a6--doc-translator)
 **Why it's the next pillar**: per [R3 § 5](../../../docs/L1_L3_REFLECTION_R3_2026-05-18.md#5-recommended-next-pillar-a6-doc-translator),
 `map` parallel was the biggest un-validated DAG primitive after the R2
@@ -79,9 +82,39 @@ agentflow workflow validate examples/applications/doc-translator/workflow.yml
 
 ```
 doc-translator/
-├── README.md       # ← this file
-└── workflow.yml    # the map + LLM workflow (iter 1)
+├── README.md            # ← this file
+├── workflow.yml         # iter 1: map + LLM primitive validator (no file I/O)
+├── workflow-iter2.yml   # iter 2: real file I/O, 2 files × 4 langs
+├── input/
+│   ├── intro.md         # source markdown w/ code fences (for fence-preservation test)
+│   └── usage.md
+└── output/              # generated on each iter 2 run
+    ├── de/{intro,usage}.md
+    ├── fr/{intro,usage}.md
+    ├── ja/{intro,usage}.md
+    └── zh/{intro,usage}.md
 ```
+
+## Iteration 2 observations (2026-05-18)
+
+- **Wall clock**: ~25s for 8 sub-flows with `max_concurrent: 3`
+  (~3 batches of 3 + 2). All 8 succeeded; `results_summary` reads
+  `{total: 8, ok: 8, err: 0, err_indexes: []}`.
+- **Code fence preservation**: confirmed across all 4 target
+  languages — `` ```rust `` / `` ```bash `` blocks come through
+  with content untouched. Inline `` `code` `` spans also survive
+  (`agentflow-core::Flow` stays verbatim in German output).
+- **One minor model over-reach**: Chinese translated a *comment
+  inside* a code block (`/* your nodes here */` → `/* 你的节点在这里 */`).
+  Defensible — code comments are sometimes intended to be
+  translated. The prompt rule "do not translate fenced code
+  blocks" doesn't disambiguate code vs comment.
+- **Sub-flow shape: 6 nodes** (render_read_path → read → build_prompt
+  → translate → render_write_path → write). Two of those nodes
+  (`render_read_path`, `render_write_path`) exist only to convert
+  `item.read_path` / `item.write_path` into a string output a
+  downstream file node can consume via `input_mapping`. See
+  F-A6-5 below.
 
 ## Findings (iteration 1)
 
@@ -125,6 +158,21 @@ list.
   can route on failure without walking nested JSON. Or at minimum
   add a `tracing::warn!` for any sub-flow that returns an
   Err-containing state.
+
+- **F-A6-5 — `input_mapping` can only reference upstream node
+  outputs, not the map iteration `item`**. Per-iteration `item`
+  fields (e.g. `item.read_path`) are visible in Tera template
+  contexts but `input_mapping: { path: "{{ item.read_path }}" }`
+  doesn't work — the factory parser only matches `{{ nodes.X.outputs.Y }}`
+  literals (see `agentflow-cli/src/executor/factory.rs:298`). The
+  workaround in iter 2 is a 2-node-per-path detour
+  (`render_read_path` template → file:read) which doubles the
+  sub-flow line count for what should be a one-line wire. **Action**:
+  extend the input_mapping grammar to support `{{ item.* }}` lookups
+  inside a map sub-flow (parse the leftmost segment as either
+  "nodes" or "item"), OR have file/llm nodes Tera-expand their
+  string parameters at execute time. The former is the smaller
+  blast radius. Surfaced during A6 iter 2.
 
 - **F-A6-4 — prompt ambiguity: "translate to {target_lang}" with
   English target produced Chinese output** on moonshot-v1-128k when

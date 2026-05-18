@@ -1,0 +1,4 @@
+# A6 iter 2 outputs are regenerated on every workflow run — don't
+# commit them. The input/ corpus is the input of record; outputs are
+# downstream LLM artifacts that would rot as model behaviour drifts.
+output/

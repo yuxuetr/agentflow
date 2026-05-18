@@ -708,6 +708,15 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 - N=3 baseline confirms the failure mode is provider rate-limit, not
   agentflow logic
 
+**DONE 子项 (iteration 2, 2026-05-18)**:
+- iter 2 workflow-iter2.yml ships with real file I/O end-to-end
+- 2 input markdown fixtures with code fences (input/intro.md, usage.md)
+- 8 sub-flows = 2 files × 4 languages with `max_concurrent: 3`;
+  `results_summary: {total: 8, ok: 8, err: 0}` — full success
+- Outputs persisted to output/<lang>/<file>, code fences and inline
+  code preserved across all 4 target languages
+- ~25s wall clock (3 batches), ledger now real on-disk markdown
+
 **Findings (iteration 1)**:
 
 - **F-A6-1 — `map parallel: true` has NO concurrency cap**.
@@ -765,6 +774,25 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   default for fan-out workflows where one failure shouldn't tank
   the rest, and `results_summary` is the correct way to surface
   that signal without changing semantics.
+- **F-A6-5 — `input_mapping` can only reference upstream node
+  outputs, not the map iteration `item`**. Per-iteration `item`
+  fields (e.g. `item.read_path`) are visible in Tera template
+  contexts (template node uses them fine) but
+  `input_mapping: { path: "{{ item.read_path }}" }` doesn't work
+  on non-template nodes — the factory parser only matches
+  `{{ nodes.X.outputs.Y }}` literals (see
+  `agentflow-cli/src/executor/factory.rs:298`). The workaround in
+  A6 iter 2 is a 2-node-per-path detour (`render_read_path`
+  template → file:read with input_mapping pulling from it),
+  which doubles the sub-flow line count for what should be a
+  one-line wire. Friction grows linearly with how many per-iteration
+  values a sub-flow needs (read path, write path, source lang,
+  ...). **Action**: extend the input_mapping grammar to also
+  accept `{{ item.* }}` lookups inside a map sub-flow (parse
+  leftmost segment as `nodes` OR `item`), OR have file/llm nodes
+  Tera-expand their string parameters at execute time. The first
+  has smaller blast radius. Surfaced during A6 iter 2.
+
 - **F-A6-4 — prompt ambiguity: "translate to English" when source
   is already English produces unrelated language output**.
   Workflow-author trap: validate `source_lang != target_lang`
