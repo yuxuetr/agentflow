@@ -1,0 +1,133 @@
+# A6 doc-translator — iteration 4
+#
+# What's new vs iter 3:
+#   - Real file discovery via the YAML `type: shell` node (F-A7-2
+#     closed). `find input/*.md` runs at workflow startup; stdout
+#     feeds the cross-product template directly.
+#   - Adding a new markdown file to `input/` is now a zero-line
+#     workflow change — the next run picks it up automatically.
+#
+# What's STILL hardcoded (would be iter 5 if pursued):
+#   - lang_list is still a literal YAML array (could come from a
+#     workflow input or another file).
+#   - Output dir is a fixed `output/` sibling.
+#   - 100+ file stress test would need a larger input/ corpus.
+#
+# Run:
+#   agentflow workflow run examples/applications/doc-translator/workflow-iter4.yml
+
+name: "doc-translator iteration 4"
+description: "Discover *.md via shell, then translate the file × lang cross product in parallel."
+
+nodes:
+  # Step 0: discover markdown files in input/. The shell node
+  # validates `allowed_commands: ["find"]` at parse time per
+  # F-A7-2's policy-mandatory schema.
+  - id: "discover"
+    type: "shell"
+    dependencies: []
+    parameters:
+      allowed_commands: ["find"]
+      command: "find examples/applications/doc-translator/input -name '*.md' -type f"
+
+  # Step 1: parse the newline-delimited stdout into a list of paths,
+  # then render the file × lang cross product as JSON. The template
+  # node auto-detects the leading `[` and lands a JSON array per
+  # F-A6-7. Adding a new lang here is still a one-line change.
+  - id: "build_work_list"
+    type: "template"
+    dependencies: ["discover"]
+    input_mapping:
+      file_stdout: "{{ nodes.discover.outputs.stdout }}"
+    parameters:
+      lang_list:
+        - { lang: "ja", lang_name: "Japanese" }
+        - { lang: "fr", lang_name: "French" }
+        - { lang: "de", lang_name: "German" }
+        - { lang: "zh", lang_name: "Chinese" }
+      template: |
+        {%- set_global needs_comma = false -%}
+        [
+        {%- for path in file_stdout | trim | split(pat="
+        ") -%}
+          {%- set basename = path | split(pat="/") | last -%}
+          {%- for l in lang_list -%}
+            {%- if needs_comma %},{% endif -%}
+            {%- set_global needs_comma = true -%}
+            { "file":       "{{ basename }}",
+              "lang":       "{{ l.lang }}",
+              "lang_name":  "{{ l.lang_name }}",
+              "read_path":  "{{ path }}",
+              "write_path": "examples/applications/doc-translator/output/{{ l.lang }}/{{ basename }}" }
+          {%- endfor -%}
+        {%- endfor -%}
+        ]
+
+  - id: "translate_corpus"
+    type: "map"
+    dependencies: ["build_work_list"]
+    input_mapping:
+      input_list: "{{ nodes.build_work_list.outputs.output }}"
+    parameters:
+      parallel: true
+      max_concurrent: 3
+      template:
+        # Same 4-node sub-flow as iter 2 / iter 3.
+        - id: "read_source"
+          type: "file"
+          dependencies: []
+          input_mapping:
+            path: "{{ item.read_path }}"
+          parameters:
+            operation: "read"
+
+        - id: "build_prompt"
+          type: "template"
+          dependencies: ["read_source"]
+          input_mapping:
+            source: "{{ nodes.read_source.outputs.content }}"
+          parameters:
+            template: |
+              Translate the following markdown blurb into {{ item.lang_name }}.
+              Rules:
+                - preserve markdown structure (headings, lists, links)
+                - DO NOT translate fenced code blocks (anything between ```)
+                - DO NOT translate identifiers in inline code (`text in backticks`)
+                - output ONLY the translation, no preamble or postamble
+
+              ----- SOURCE -----
+              {{ source }}
+              ----- END SOURCE -----
+
+        - id: "translate_one"
+          type: "llm"
+          dependencies: ["build_prompt"]
+          input_mapping:
+            prompt: "{{ nodes.build_prompt.outputs.output }}"
+          parameters:
+            model: "moonshot-v1-128k"
+            temperature: 0.2
+            max_tokens: 2048
+
+        - id: "write_translation"
+          type: "file"
+          dependencies: ["translate_one"]
+          input_mapping:
+            content: "{{ nodes.translate_one.outputs.output }}"
+            path:    "{{ item.write_path }}"
+          parameters:
+            operation: "write"
+
+  - id: "report"
+    type: "template"
+    dependencies: ["translate_corpus"]
+    input_mapping:
+      summary: "{{ nodes.translate_corpus.outputs.results_summary }}"
+    parameters:
+      template: |
+        Translated {{ summary.ok }}/{{ summary.total }} (file, lang) pairs.
+        Files discovered via `find`; outputs under
+        `examples/applications/doc-translator/output/<lang>/<file>`.
+        {% if summary.err > 0 -%}
+        Partial failures at indexes: {{ summary.err_indexes }}.
+        {%- endif %}

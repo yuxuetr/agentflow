@@ -1,12 +1,12 @@
 # A6 — doc-translator
 
-**Status**: live ✅ through iteration 3 (2026-05-18: cross-product
-work list, parameterised file_list + lang_list. Iter 1 = `map
-parallel + LLM` primitive validator; iter 2 = real file I/O; iter 3 =
-`build_work_list` template node renders file × lang cross product as
-JSON, map consumes it via input_mapping. Adding a language is now a
-one-line YAML change. Iter 4 would add real file discovery via shell
-+ 100+ fan-out stress test).
+**Status**: live ✅ through iteration 4 (2026-05-18: real file
+discovery via the new YAML `type: shell` node — F-A7-2 closed.
+Adding a markdown file to `input/` is now a zero-line workflow
+change). Iter sequence: iter 1 primitive validator → iter 2 real
+file I/O → iter 3 cross-product list → iter 4 dynamic discovery.
+Iter 5 would add the 100+ file stress test if there's appetite for
+real-corpus translation throughput data.
 **Tracking entry**: [`EXAMPLES_TODOs.md` § A6](../../../EXAMPLES_TODOs.md#a6--doc-translator)
 **Why it's the next pillar**: per [R3 § 5](../../../docs/L1_L3_REFLECTION_R3_2026-05-18.md#5-recommended-next-pillar-a6-doc-translator),
 `map` parallel was the biggest un-validated DAG primitive after the R2
@@ -88,6 +88,7 @@ doc-translator/
 ├── workflow.yml         # iter 1: map + LLM primitive validator (no file I/O)
 ├── workflow-iter2.yml   # iter 2: real file I/O, hardcoded 8-item input_list
 ├── workflow-iter3.yml   # iter 3: cross-product work list (file_list × lang_list)
+├── workflow-iter4.yml   # iter 4: file discovery via shell + dynamic cross product
 ├── input/
 │   ├── intro.md         # source markdown w/ code fences (for fence-preservation test)
 │   └── usage.md
@@ -117,6 +118,21 @@ doc-translator/
   `{{ item.* }}` lookup gap. Both file nodes now pull their path
   inputs directly from the iteration item instead of going through
   intermediate render-template nodes.
+
+## Iteration 4 observations (2026-05-18)
+
+- **File discovery now lives in YAML**. `type: shell` with
+  `allowed_commands: ["find"]` runs at workflow startup; stdout
+  feeds the cross-product template via `input_mapping`. The Tera
+  template `split`s on newlines to recover the list shape.
+- **Same 8 sub-flows, same outputs as iter 3**. Adding a new file
+  to `input/` is now a zero-line workflow change.
+- **End-to-end loop closed**: discovery → cross product → parallel
+  translation → per-language file write, all from one YAML file
+  without dropping to a Rust binary. This was the original A6
+  spec's full shape; iter 5 (100+ file stress test) is the only
+  remaining step and is a quantity question rather than a
+  capability one.
 
 ## Iteration 3 observations (2026-05-18)
 

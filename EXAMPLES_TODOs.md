@@ -727,6 +727,15 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 - 3 new findings surfaced (F-A6-6/7/8) about template node validation,
   JSON auto-detection, and Tera loop introspection workarounds.
 
+**DONE 子项 (iteration 4, 2026-05-18)**:
+- iter 4 workflow-iter4.yml uses the new YAML `type: shell` node
+  (F-A7-2 fully closed) to `find input/*.md` at workflow startup;
+  stdout feeds the cross-product template via input_mapping. Adding
+  a markdown file to `input/` is now a zero-line workflow change.
+- 8/8 translations succeed; same outputs as iter 2/3.
+- Closes A6's original spec on the file-discovery axis. Only iter 5
+  (100+ file stress test) remains, and that's quantity not capability.
+
 **Findings (iteration 1)**:
 
 - **F-A6-1 — `map parallel: true` has NO concurrency cap**.
