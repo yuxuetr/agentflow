@@ -2154,17 +2154,19 @@ so this segment is small and time-bound.
     previous bare `Error: Validation failed`.
   - clippy + fmt clean.
 
-- TODO P9.2 Document `security.mcp_command_allowlist` opt-in for native binaries:
-  - **Why** (F-DOC-1): docs/MCP_SKILLS.md line 70 mentions the
-    default `["python", "python3", "node", "npx", "uvx"]` but doesn't
-    make clear that compiled binaries (Rust / Go / etc. MCP servers)
-    silently fail to register without explicit opt-in. The error
-    message "Validation failed" (per P9.1) makes this very confusing
-    for first-time skill authors integrating native MCP.
-  - **What**: add a "Spawning native binary MCP servers" subsection
-    to `docs/MCP_SKILLS.md` with the phonon-mcp worked example
-    showing the `[security] mcp_command_allowlist = [..., "phonon-mcp"]`
-    opt-in.
+- DONE P9.2 Document `security.mcp_command_allowlist` opt-in for native binaries:
+  - New "Spawning native binary MCP servers" subsection in
+    `docs/MCP_SKILLS.md` covers:
+    - The exact error message new skill authors will see when the
+      validation gate fires (cross-references P9.1's improved
+      chain display)
+    - Why the default is interpreter-only (deploy-time attack surface)
+    - Worked example showing `[security] mcp_command_allowlist`
+      extension (NOT replacement) of the interpreter defaults
+    - Pointer to `examples/applications/podcast-mastering/skill.toml`
+      as the concrete pattern reference
+    - 3 common pitfalls: forgetting interpreter defaults, full-path
+      instead of basename, case / extension mismatch
 
 - TODO P9.3 Auto-load `~/.agentflow/.env` from agentflow CLI:
   - **Why** (F-AF-3): every `agentflow workflow run` / `skill run` /

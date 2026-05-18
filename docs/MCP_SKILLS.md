@@ -71,6 +71,62 @@ Empty `mcp_server_allowlist` allows all declared server names. `mcp_command_allo
 
 Empty `tool_permission_allowlist` allows every registered tool permission. When set, every tool call is checked before execution; for MCP tools include both `mcp` and `network`.
 
+## Spawning native binary MCP servers
+
+The default `mcp_command_allowlist` (`python`, `python3`, `node`, `npx`, `uvx`)
+only covers script interpreters. **Compiled binary MCP servers — written in
+Rust, Go, etc. — are denied by default** and must be explicitly opted in.
+
+If you skip the opt-in, `agentflow skill validate` will reject the manifest
+with a message like:
+
+```
+Error: Validation failed: Invalid skill configuration: [[mcp_servers]]
+'<name>' command '<binary>' is not listed in security.mcp_command_allowlist
+```
+
+This is intentional: every native binary that the skill spawns as a
+subprocess increases the deploy-time attack surface. The allowlist
+forces operators to consciously approve each one.
+
+To opt in a native binary, add its executable basename to
+`security.mcp_command_allowlist` alongside the defaults:
+
+```toml
+[[mcp_servers]]
+name    = "phonon"
+command = "/Users/hal/.target/release/phonon-mcp"   # absolute path is fine
+args    = []
+
+[security]
+# Append the binary's basename (NOT the full path) to the default
+# interpreter list. The validator strips path components and matches
+# against this list, so `/opt/bin/phonon-mcp` and
+# `/Users/hal/.target/release/phonon-mcp` both pass with this entry.
+mcp_command_allowlist = [
+  "python", "python3", "node", "npx", "uvx",  # keep defaults
+  "phonon-mcp",                                # add yours
+]
+```
+
+Concrete example: see
+[`examples/applications/podcast-mastering/skill.toml`](../examples/applications/podcast-mastering/skill.toml),
+which exposes the 14 `mcp_phonon_audio_*` tools from a compiled Rust
+binary (`phonon-mcp`) via this opt-in pattern.
+
+Common pitfalls:
+
+- **Forgetting to keep the interpreter defaults**. If you replace
+  `mcp_command_allowlist` instead of extending it, you'll lose
+  `python`/`node`/etc. and break any sibling MCP server that uses them.
+- **Listing the full path instead of the basename**. The validator only
+  matches the executable's basename. `command = "/opt/bin/phonon-mcp"`
+  with allowlist entry `"phonon-mcp"` works; with allowlist entry
+  `"/opt/bin/phonon-mcp"` does NOT.
+- **Capitalisation / extension differences**. The allowlist is a literal
+  string match against the basename of `command`. `Phonon-MCP.exe` is
+  not the same as `phonon-mcp`.
+
 ## skill.toml Equivalent
 
 Use `skill.toml` when you need a structured runtime override:
