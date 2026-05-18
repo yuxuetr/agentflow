@@ -389,6 +389,19 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required("max_iterations", ParamType::Integer),
       ParamSpec::required("do", ParamType::Sequence),
     ]),
+    "shell" => Some(vec![
+      // F-A7-2 closure: shell node requires explicit `allowed_commands`
+      // to avoid permissive-by-default arbitrary code execution.
+      // `command` itself is typically wired via input_mapping from a
+      // template node's output; if it's a literal it can also live in
+      // parameters.
+      // `command` is required at the input level — typically wired via
+      // input_mapping from an upstream template node, but a literal in
+      // parameters also satisfies the check.
+      ParamSpec::required_input("command", ParamType::String),
+      ParamSpec::required("allowed_commands", ParamType::Sequence),
+      ParamSpec::optional("allowed_paths", ParamType::Sequence),
+    ]),
     "map" => Some(vec![
       ParamSpec::required("template", ParamType::Sequence),
       ParamSpec::optional("parallel", ParamType::Bool),

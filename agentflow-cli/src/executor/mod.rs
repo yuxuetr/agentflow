@@ -1,5 +1,6 @@
 pub mod factory;
 pub mod multi_agent;
+pub mod shell;
 
 #[cfg(feature = "plugin")]
 pub mod plugin;

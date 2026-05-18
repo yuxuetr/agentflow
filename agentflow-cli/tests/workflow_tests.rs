@@ -668,6 +668,58 @@ nodes:
   workflow
 }
 
+/// F-A7-2 closure: `type: shell` parses + validates cleanly when
+/// `allowed_commands` is present. Schema validate also reports
+/// no errors (no more "not supported by the CLI workflow factory"
+/// issue).
+#[test]
+fn cli_workflow_validate_accepts_shell_with_allowed_commands() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_shell_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Schema validation passed"))
+    .stdout(predicate::str::contains("not supported by the CLI workflow factory").not());
+}
+
+/// F-A7-2 closure: `type: shell` without `allowed_commands` fails
+/// the schema's required-param check. Avoids the
+/// permissive-by-default arbitrary-code-execution footgun where
+/// a typo'd workflow would either run with no allowlist (block
+/// everything) or worse if defaults were different.
+#[test]
+fn cli_workflow_validate_rejects_shell_without_allowed_commands() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = work.path().join("shell_no_allowlist.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: Shell Without Allowlist
+nodes:
+  - id: probe
+    type: shell
+    parameters:
+      command: "uname"
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("allowed_commands"));
+}
+
 #[test]
 fn cli_workflow_validate_explain_permissions_shell_node_capability() {
   let home = TempDir::new().unwrap();
@@ -691,13 +743,12 @@ fn cli_workflow_validate_explain_permissions_shell_node_capability() {
     .stdout(predicate::str::contains(
       "allowed_commands: [uname, uptime]",
     ))
-    // F-A7-2: permission report tells the truth — shell isn't wired
-    // into the CLI workflow factory yet, even though its permission
-    // shape is known. Prevents the report from misleading authors
-    // into thinking `type: shell` will run from YAML.
-    .stdout(predicate::str::contains(
-      "not wired into the CLI workflow factory",
-    ));
+    // F-A7-2 closed (2026-05-18): `type: shell` is now wired into
+    // the YAML factory, so the prior "not wired into the CLI
+    // workflow factory" note MUST NOT appear in the permission
+    // report. Workflows can now genuinely run shell from YAML
+    // (with mandatory allowed_commands enforced by the schema).
+    .stdout(predicate::str::contains("not wired into the CLI workflow factory").not());
 }
 
 // --- P3.5: MCP / agent / multi_agent permission classification ----------

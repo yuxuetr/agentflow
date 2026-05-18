@@ -75,6 +75,17 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     }
     "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
     "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
+    "shell" => {
+      // F-A7-2 closure: shell node wraps `agentflow_tools::ShellTool`
+      // with a SandboxPolicy built from YAML params. `allowed_commands`
+      // is mandatory (see `ShellWorkflowNode::from_params`); workflows
+      // without it fail at parse time rather than running with an
+      // empty allowlist that would block every command.
+      let node =
+        crate::executor::shell::ShellWorkflowNode::from_params(&node_def.id, &node_def.parameters)
+          .map_err(|err| anyhow!("shell node '{}': {}", node_def.id, err))?;
+      Ok(NodeType::Standard(Arc::new(node)))
+    }
     "template" => {
       let template_str = get_string_param_optional(&node_def.parameters, "template");
       let mut node = TemplateNode::new(&node_def.id, &template_str);

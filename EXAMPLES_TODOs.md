@@ -961,6 +961,20 @@ markdown changelog 段。
   对齐口径。Test
   `cli_workflow_validate_explain_permissions_shell_node_capability`
   updated to assert the new note。
+  ✅ **FULLY CLOSED 2026-05-18** (real factory add this time): A6
+  iter 3's reach for file discovery surfaced the need. New
+  `ShellWorkflowNode` in `agentflow-cli/src/executor/shell.rs`
+  wraps `agentflow_tools::ShellTool` with a `SandboxPolicy` built
+  from YAML params; `allowed_commands` is a REQUIRED schema field
+  so workflows fail validate at parse time if missing (no
+  permissive-by-default arbitrary code execution). `command` can
+  come from either parameters or `input_mapping`. Output keys:
+  `stdout` (string), `is_error` (bool). Honest-note removed from
+  the permission classifier. 3 new workflow tests (accepts with
+  allowlist / rejects without / explain-permissions). Live-tested
+  with `find examples/applications/doc-translator/input -name
+  '*.md'` from a YAML workflow — discovered both fixture files,
+  stdout flowed through to a downstream template node.
 - **F-A7-3 — Model registry 加载：per-provider `config/models/*.yml`
   是死代码** —— **DONE 2026-05-18**。删了 6 个 dead 文件
   (`anthropic.yml`/`dashscope.yml`/`google.yml`/`moonshot.yml`/
