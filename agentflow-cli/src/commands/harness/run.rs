@@ -2,15 +2,17 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result};
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::RuntimeLimits;
 use agentflow_harness::{
-  AgentsMdProvider, HarnessEventSink, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
-  JsonlEventSink, RoadmapMdProvider, StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider,
-  default_session_dir,
+  AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
+  CliApprovalProvider, HarnessEventSink, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
+  HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain, StdoutEventSink, TodosMdProvider,
+  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SessionMemory;
@@ -27,6 +29,7 @@ pub async fn execute(
   session: Option<String>,
   workspace: Option<String>,
   profile: String,
+  approve: String,
   runtime_kind: String,
   output: String,
   run_dir_override: Option<String>,
@@ -38,6 +41,7 @@ pub async fn execute(
   let profile = parse_profile(&profile)?;
   let output = OutputFormat::parse(&output)?;
   let runtime_kind = parse_runtime_kind(&runtime_kind)?;
+  let approve_mode = ApproveMode::parse(&approve)?;
 
   if skill_dir.is_none() && model_override.is_none() {
     anyhow::bail!("either --skill or --model is required");
@@ -54,15 +58,50 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
-  let (agent, model, skill_name) = build_agent(skill_dir.as_deref(), model_override.as_deref())
+  let (mut agent, model, skill_name) = build_agent(skill_dir.as_deref(), model_override.as_deref())
     .await
     .context("failed to construct the inner Harness agent")?;
 
   // Persist every session as JSONL. Stream-json mode additionally fans
   // out the same envelope to stdout.
   let jsonl = Arc::new(JsonlEventSink::new(session_dir.clone()));
-  let mut runtime = HarnessRuntime::new(Box::new(agent))
-    .with_event_sink(jsonl.clone() as Arc<dyn HarnessEventSink>);
+  let jsonl_sink: Arc<dyn HarnessEventSink> = jsonl.clone();
+  let stdout_sink: Option<Arc<dyn HarnessEventSink>> = matches!(output, OutputFormat::StreamJson)
+    .then(|| Arc::new(StdoutEventSink::new()) as Arc<dyn HarnessEventSink>);
+
+  // Resolve session id eagerly so HookConfig and HarnessRuntime share
+  // the same id namespace. Mirrors the server's `LiveHarnessExecutor`
+  // pattern; if the user passed --session we honour that, otherwise
+  // generate a fresh one.
+  let session_id = session.unwrap_or_else(|| format!("session-{}", uuid::Uuid::new_v4().simple()));
+
+  // ── F-A2-11: wrap the agent's tool registry with the approval-gate
+  // pipeline if requested. Without this, `agentflow harness run` had
+  // no approval flow at all (the bare ReActAgent went straight to the
+  // inner tools, even under --profile production), forcing users to
+  // hand-roll binaries to dogfood Harness Mode from the CLI.
+  if let Some(provider) = approve_mode.provider() {
+    let mut hook_sinks = SinkChain::new().push(jsonl_sink.clone());
+    if let Some(sink) = stdout_sink.as_ref() {
+      hook_sinks = hook_sinks.push(sink.clone());
+    }
+    let hook_config = HookConfig::new(session_id.clone(), provider, hook_sinks)
+      .with_profile(profile)
+      .with_seq_counter(Arc::new(AtomicU64::new(0)));
+
+    // Snapshot the agent's current registry into a fresh one so
+    // `wrap_registry` can decorate each tool. Tools come back as the
+    // same `Arc<dyn Tool>` instances so any inner state (sandbox
+    // policy, MCP session, etc.) is preserved.
+    let mut snapshot = ToolRegistry::new();
+    for tool in agent.tools().list() {
+      snapshot.register(tool);
+    }
+    let wrapped = wrap_registry(snapshot, hook_config);
+    agent = agent.with_tools(Arc::new(wrapped));
+  }
+
+  let mut runtime = HarnessRuntime::new(Box::new(agent)).with_event_sink(jsonl_sink.clone());
   if !no_default_context {
     runtime = runtime
       .with_context_provider(Arc::new(AgentsMdProvider::new()))
@@ -70,19 +109,16 @@ pub async fn execute(
       .with_context_provider(Arc::new(RoadmapMdProvider::new()))
       .with_context_provider(Arc::new(WorkspaceLayoutProvider::new()));
   }
-  if matches!(output, OutputFormat::StreamJson) {
-    runtime =
-      runtime.with_event_sink(Arc::new(StdoutEventSink::new()) as Arc<dyn HarnessEventSink>);
+  if let Some(sink) = stdout_sink.as_ref() {
+    runtime = runtime.with_event_sink(sink.clone());
   }
 
   let mut options = HarnessRunOptions::new(user_input, workspace.clone(), &model)
     .with_runtime_kind(runtime_kind)
-    .with_profile(profile);
+    .with_profile(profile)
+    .with_session_id(session_id);
   if let Some(name) = skill_name.as_ref() {
     options = options.with_skill_name(name.clone());
-  }
-  if let Some(session_id) = session {
-    options = options.with_session_id(session_id);
   }
   options = options.with_limits(RuntimeLimits {
     max_steps,
@@ -192,6 +228,47 @@ async fn build_agent(
       Arc::new(ToolRegistry::new()),
     );
     Ok((agent, model, None))
+  }
+}
+
+/// Resolved value of the `--approve` flag.
+///
+/// `None` means the legacy "no wrapping" behaviour: the inner agent
+/// drives tools directly, the `ApprovalProvider` is never instantiated,
+/// and `--profile` is only used for `HarnessContext`. Any other mode
+/// installs a [`HookConfig`] with the matching provider so every
+/// NonIdempotent tool call passes through the approval gate (and is
+/// auto-escalated to `RequireApproval` under `--profile production`).
+#[derive(Debug, Clone, Copy)]
+enum ApproveMode {
+  None,
+  Cli,
+  AutoAllow,
+  AutoDeny,
+}
+
+impl ApproveMode {
+  fn parse(value: &str) -> Result<Self> {
+    match value {
+      "none" => Ok(Self::None),
+      "cli" => Ok(Self::Cli),
+      "auto-allow" => Ok(Self::AutoAllow),
+      "auto-deny" => Ok(Self::AutoDeny),
+      other => anyhow::bail!(
+        "unsupported --approve '{other}', expected none | cli | auto-allow | auto-deny"
+      ),
+    }
+  }
+
+  fn provider(self) -> Option<Arc<dyn ApprovalProvider>> {
+    match self {
+      Self::None => None,
+      Self::Cli => Some(Arc::new(CliApprovalProvider::stdin())),
+      Self::AutoAllow => Some(Arc::new(AutoAllowApprovalProvider::new())),
+      Self::AutoDeny => Some(Arc::new(
+        AutoDenyApprovalProvider::new().with_stop_on_deny(true),
+      )),
+    }
   }
 }
 

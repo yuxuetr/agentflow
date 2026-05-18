@@ -265,7 +265,7 @@ finding set:
 | M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
 | ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
 | ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
-| M | F-A2-11 | Wire `wrap_registry(...)` into `agentflow harness run` CLI (gate on `--profile production` or skill manifest declaring write tools) so CLI ≠ HTTP behaviour goes away | agentflow-cli + agentflow-harness |
+| ~~M~~ DONE | F-A2-11 | `agentflow harness run` now wraps the agent's tool registry with `HookConfig + ApprovalProvider` when `--approve {cli,auto-allow,auto-deny}` is passed; default `--approve none` preserves the pre-existing zero-friction CLI path. Combined with `--profile production` the gate auto-escalates every NonIdempotent call. New `ReActAgent::with_tools` helper lets the CLI swap the registry after `SkillBuilder::build` without duplicating manifest wiring. 3 new CLI tests; live-tested against the `code-reviewer` skill end-to-end. Landed 2026-05-18. | agentflow-cli + agentflow-agents |
 | ~~M~~ DONE | F-A2-12 | Docstring `HarnessProfile::{Local,Dev,Production}` + `HookConfig::new` + `with_profile` call out the silent-allow-by-default footgun; `docs/HARNESS_MODE.md` got an explicit footgun callout in the `wrap_registry` section + an inline comment in the snippet + a pointer to `code-reviewer-write` as a reference binary. Landed 2026-05-18. | agentflow-harness docs |
 | L | F-A2-13 | ReAct "identical-tool-and-params-twice" anti-loop steering message (synthesise observation reminder instead of letting the model spin to budget exhaustion) | agentflow-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
@@ -280,11 +280,14 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-21 open items (was 22): F-A2-12 docs-sweep closed.
-0 High, 10 Medium, 11 Low. None require a core refactor; all are
-surface / docs / config / convention scope. F-A2-11 (CLI parity)
-is the highest-value remaining item since it removes a sharp edge
-for first-time Harness Mode adopters.
+20 open items (was 21): F-A2-11 CLI parity closed in addition to the
+earlier F-A2-12 docs sweep.
+0 High, 9 Medium, 11 Low. None require a core refactor; all are
+surface / docs / config / convention scope. The remaining big-ticket
+items are F-A7-4 (`doctor` reports active models.yml source) and
+F-AF-2 (`SKILL.md model:` field honoured or warned). F-A2-13
+(ReAct anti-loop steering) is the only agent-runtime change left
+in the queue.
 
 ## 7. Phonon scope reflection — still no change
 

@@ -295,6 +295,23 @@ impl ReActAgent {
     &self.tools
   }
 
+  /// Replace the agent's tool registry (builder-style setter).
+  ///
+  /// Used by callers that need to wrap or transform the registry after
+  /// the agent has been constructed — for example, the
+  /// `agentflow harness run` CLI uses this to install
+  /// [`agentflow_harness::wrap_registry`]'s approval-gate pipeline
+  /// around tools that came from `SkillBuilder::build`, without having
+  /// to duplicate the manifest/persona/memory wiring.
+  ///
+  /// The provided `Arc` becomes the canonical registry for the rest of
+  /// the agent's lifetime; subsequent `tools()` calls return this new
+  /// `Arc`.
+  pub fn with_tools(mut self, tools: Arc<ToolRegistry>) -> Self {
+    self.tools = tools;
+    self
+  }
+
   /// Attach a reflection strategy to the runtime trace.
   pub fn with_reflection_strategy(mut self, strategy: Arc<dyn ReflectionStrategy>) -> Self {
     self.reflection = Some(strategy);

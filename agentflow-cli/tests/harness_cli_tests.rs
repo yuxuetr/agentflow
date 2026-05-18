@@ -65,6 +65,38 @@ fn harness_run_requires_model_or_skill() {
 }
 
 #[test]
+fn harness_run_rejects_unknown_approve_mode() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args([
+    "harness",
+    "run",
+    "hello",
+    "--model",
+    "mock-model",
+    "--approve",
+    "bogus",
+  ]);
+  // clap value_parser rejects with a non-zero exit and a "possible values" hint.
+  cmd
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("possible values"))
+    .stderr(predicate::str::contains("auto-allow"));
+}
+
+#[test]
+fn harness_run_help_lists_approve_flag() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "run", "--help"]);
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("--approve"))
+    .stdout(predicate::str::contains("HookedTool"))
+    .stdout(predicate::str::contains("F-A2-11"));
+}
+
+#[test]
 fn harness_list_text_output_lists_sessions_under_run_dir() {
   let run_dir = TempDir::new().unwrap();
   write_session(run_dir.path(), "sess-list-a");

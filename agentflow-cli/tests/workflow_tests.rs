@@ -688,7 +688,9 @@ fn cli_workflow_validate_explain_permissions_shell_node_capability() {
     // into the CLI workflow factory yet, even though its permission
     // shape is known. Prevents the report from misleading authors
     // into thinking `type: shell` will run from YAML.
-    .stdout(predicate::str::contains("not wired into the CLI workflow factory"));
+    .stdout(predicate::str::contains(
+      "not wired into the CLI workflow factory",
+    ));
 }
 
 // --- P3.5: MCP / agent / multi_agent permission classification ----------

@@ -420,7 +420,20 @@ code-reviewer` 后立即用。
   跑了一段后开始模拟"如果有 PR 流程会怎样"才能更有意义。下次可能
   在另一个有真 PR 流的仓库做。
 - **F-A2-11 — `agentflow harness run` CLI doesn't wrap registry with
-  HookedTool / ApprovalProvider**. Trying to use the CLI for the
+  HookedTool / ApprovalProvider**.
+  ✅ **CLOSED 2026-05-18** via the `--approve {none,cli,auto-allow,
+  auto-deny}` flag on `agentflow harness run`. Default `none`
+  preserves pre-existing behaviour; the other modes install a
+  `HookConfig` + matching `ApprovalProvider` around the agent's
+  registry. With `--approve cli --profile production` (or
+  `auto-allow` for CI), every NonIdempotent tool call now flows
+  through the approval gate before executing. Live-tested
+  end-to-end against the existing `code-reviewer` skill — first
+  shell call fires `approval_requested` with the correct params /
+  risk / reason, then the run continues per the approval decision.
+  New `ReActAgent::with_tools` helper enabled the CLI to swap the
+  registry after `SkillBuilder::build` without duplicating
+  manifest/persona/memory wiring. Trying to use the CLI for the
   write-side validation surfaced that `agentflow-cli/src/commands/
   harness/run.rs` builds a bare `ReActAgent` from the skill but never
   calls `agentflow_harness::wrap_registry(...)`. Only the server's

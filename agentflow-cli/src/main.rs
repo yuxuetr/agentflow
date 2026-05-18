@@ -215,6 +215,7 @@ struct ServeArgs {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum HarnessCommands {
   /// Run a Harness session and stream events to disk (+ optional stdout)
   Run {
@@ -235,6 +236,16 @@ enum HarnessCommands {
     /// Security profile
     #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
     profile: String,
+    /// Approval-gate provider for the wrapped tool registry. `none` (default)
+    /// preserves the legacy behaviour — no `HookedTool` wrapping, no approval
+    /// prompt, regardless of `--profile`. Pass `cli` for an interactive
+    /// stdin prompt per NonIdempotent call, `auto-allow` for CI smoke,
+    /// or `auto-deny` for a fail-closed default that also halts the run
+    /// on first deny. Combine with `--profile production` to make every
+    /// NonIdempotent tool (shell / file:write / mutating HTTP) escalate
+    /// to a required approval before executing (F-A2-11).
+    #[arg(long, default_value = "none", value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
+    approve: String,
     /// Underlying agent runtime
     #[arg(long, default_value = "react", value_parser = ["react", "plan_execute", "plan-execute", "handoff", "blackboard", "debate"])]
     runtime: String,
@@ -1501,6 +1512,7 @@ async fn main() {
         session,
         workspace,
         profile,
+        approve,
         runtime,
         output,
         run_dir,
@@ -1516,6 +1528,7 @@ async fn main() {
           session,
           workspace,
           profile,
+          approve,
           runtime,
           output,
           run_dir,
