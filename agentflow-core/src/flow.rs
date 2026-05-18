@@ -27,6 +27,13 @@ pub enum NodeType {
   Map {
     template: Vec<GraphNode>,
     parallel: bool,
+    /// Upper bound on concurrently-running sub-flows when
+    /// `parallel == true`. `None` means unbounded (legacy
+    /// behaviour). F-A6-1: unbounded `tokio::spawn` per item
+    /// shreds provider rate limits at N>~3, so production
+    /// callers should always set this. Ignored when
+    /// `parallel == false`.
+    max_concurrent: Option<usize>,
   },
   While {
     condition: String,
@@ -406,9 +413,15 @@ impl Flow {
       });
       let result = match &graph_node.node_type {
         NodeType::Standard(node) => node.execute(&inputs).await,
-        NodeType::Map { template, parallel } => {
+        NodeType::Map {
+          template,
+          parallel,
+          max_concurrent,
+        } => {
           if *parallel {
-            self.execute_map_node_parallel(&inputs, template).await
+            self
+              .execute_map_node_parallel(&inputs, template, *max_concurrent)
+              .await
           } else {
             self.execute_map_node_sequential(&inputs, template).await
           }
@@ -861,9 +874,15 @@ impl Flow {
   ) -> AsyncNodeResult {
     match node_type {
       NodeType::Standard(node) => node.execute(inputs).await,
-      NodeType::Map { template, parallel } => {
+      NodeType::Map {
+        template,
+        parallel,
+        max_concurrent,
+      } => {
         if *parallel {
-          self.execute_map_node_parallel(inputs, template).await
+          self
+            .execute_map_node_parallel(inputs, template, *max_concurrent)
+            .await
         } else {
           self.execute_map_node_sequential(inputs, template).await
         }
@@ -1042,6 +1061,7 @@ impl Flow {
     &'a self,
     inputs: &'a AsyncNodeInputs,
     template: &'a [GraphNode],
+    max_concurrent: Option<usize>,
   ) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
     Box::pin(async move {
       let input_list = match inputs.get("input_list") {
@@ -1053,14 +1073,49 @@ impl Flow {
         }
       };
 
+      // F-A6-1: when `max_concurrent` is set, every spawned sub-flow
+      // must acquire a permit from a shared `Semaphore` before
+      // starting work. Unbounded mode (`None`) is preserved for
+      // back-compat — existing callers that didn't pass the field
+      // get the legacy "spawn everything" behaviour, which is fine
+      // for small N but pre-existing callers that ran into provider
+      // rate limits should switch to a bounded form. `0` is treated
+      // as a configuration error (would deadlock).
+      let semaphore = match max_concurrent {
+        Some(0) => {
+          return Err(AgentFlowError::NodeInputError {
+            message: "Map node 'max_concurrent' must be >= 1 (got 0)".to_string(),
+          });
+        }
+        Some(n) => Some(Arc::new(tokio::sync::Semaphore::new(n))),
+        None => None,
+      };
+
       let mut handles = Vec::new();
       for item in input_list {
         let sub_flow = Flow::new(template.to_vec());
         let mut initial_inputs = HashMap::new();
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
-        let handle =
-          tokio::spawn(async move { sub_flow.execute_from_inputs(initial_inputs).await });
+        let permit_holder = semaphore.clone();
+        let handle = tokio::spawn(async move {
+          // Hold the permit for the entire sub-flow execution so the
+          // concurrent count is a tight upper bound, not just a
+          // start-rate cap. Acquired permits drop on task end (any
+          // exit path) so cancellation / errors release them.
+          let _permit = match permit_holder.as_ref() {
+            Some(sem) => match sem.clone().acquire_owned().await {
+              Ok(p) => Some(p),
+              Err(_) => {
+                return Err(AgentFlowError::FlowExecutionFailed {
+                  message: "Map semaphore closed before sub-flow could acquire permit".to_string(),
+                });
+              }
+            },
+            None => None,
+          };
+          sub_flow.execute_from_inputs(initial_inputs).await
+        });
         handles.push(handle);
       }
 
@@ -1407,6 +1462,7 @@ mod tests {
       node_type: NodeType::Map {
         template: vec![sub_flow_node],
         parallel: false,
+        max_concurrent: None,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -2170,6 +2226,7 @@ mod tests {
       node_type: NodeType::Map {
         template: vec![sub_flow_node],
         parallel: true,
+        max_concurrent: None,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -2194,6 +2251,151 @@ mod tests {
     };
 
     assert_eq!(results_array.len(), 5);
+  }
+
+  /// F-A6-1: `max_concurrent: Some(N)` on a parallel map node MUST
+  /// hold the number of simultaneously-running sub-flows at or
+  /// below N. A probe sub-flow increments a shared counter on
+  /// entry, sleeps 30ms to keep the bound observable, then
+  /// decrements. We measure the high-water mark across the whole
+  /// map and assert it never exceeded the configured cap.
+  #[tokio::test]
+  async fn test_map_node_parallel_respects_max_concurrent_cap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use_writable_home();
+
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let max_observed = Arc::new(AtomicUsize::new(0));
+
+    struct ProbeNode {
+      concurrent: Arc<AtomicUsize>,
+      max_observed: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl AsyncNode for ProbeNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let now = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_observed.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        self.concurrent.fetch_sub(1, Ordering::SeqCst);
+        let mut outputs = HashMap::new();
+        outputs.insert("ok".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let sub_flow_node = GraphNode {
+      id: "probe".to_string(),
+      node_type: NodeType::Standard(Arc::new(ProbeNode {
+        concurrent: concurrent.clone(),
+        max_observed: max_observed.clone(),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "bounded_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: true,
+        max_concurrent: Some(3),
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        // 8 items, cap 3 — high-water mark MUST be ≤ 3 at any point.
+        inputs.insert(
+          "input_list".to_string(),
+          FlowValue::Json(json!([1, 2, 3, 4, 5, 6, 7, 8])),
+        );
+        inputs
+      },
+    };
+
+    let flow = Flow::new(vec![map_node]);
+    let final_state = flow.run().await.unwrap();
+    let map_result = final_state.get("bounded_map").unwrap().as_ref().unwrap();
+    let results_array = match map_result.get("results").unwrap() {
+      FlowValue::Json(Value::Array(arr)) => arr,
+      _ => panic!("Not an array"),
+    };
+
+    assert_eq!(results_array.len(), 8, "all 8 sub-flows must complete");
+    let high = max_observed.load(Ordering::SeqCst);
+    assert!(
+      high <= 3,
+      "max_concurrent=3 violated: observed {high} concurrent sub-flows"
+    );
+    // Sanity: parallelism should actually engage — if the cap is
+    // 3 and we sleep 30ms per item, 8 items serial would take
+    // 240ms. We don't time-assert that here (CI noise) but the
+    // high-water mark of >= 2 confirms at least *some* parallelism.
+    assert!(
+      high >= 2,
+      "expected at least 2 concurrent sub-flows (got {high}); cap may be too tight or executor isn't actually parallel"
+    );
+  }
+
+  /// F-A6-1: `max_concurrent: Some(0)` is rejected as a config
+  /// error rather than silently deadlocking (`Semaphore::new(0)`
+  /// would block every acquire forever).
+  #[tokio::test]
+  async fn test_map_node_parallel_rejects_zero_max_concurrent() {
+    use_writable_home();
+
+    struct NoopNode;
+    #[async_trait]
+    impl AsyncNode for NoopNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::new())
+      }
+    }
+
+    let sub_flow_node = GraphNode {
+      id: "noop".to_string(),
+      node_type: NodeType::Standard(Arc::new(NoopNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "zero_cap_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: true,
+        max_concurrent: Some(0),
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2])));
+        inputs
+      },
+    };
+
+    let flow = Flow::new(vec![map_node]);
+    // F-A6-3: per-node errors are buried inside the Ok(state) pool
+    // rather than bubbled as a top-level Flow Err. Walk the state to
+    // find the node's actual error.
+    let state = flow.run().await.expect("flow run itself must not Err");
+    let node_result = state
+      .get("zero_cap_map")
+      .expect("zero_cap_map node must appear in the state pool");
+    match node_result {
+      Err(AgentFlowError::NodeInputError { message }) if message.contains("max_concurrent") => {}
+      other => {
+        panic!("expected NodeInputError mentioning max_concurrent on the map node, got {other:?}")
+      }
+    }
   }
 
   #[tokio::test]

@@ -383,6 +383,15 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
     "map" => Some(vec![
       ParamSpec::required("template", ParamType::Sequence),
       ParamSpec::optional("parallel", ParamType::Bool),
+      // F-A6-1: optional `max_concurrent: N` (only meaningful when
+      // `parallel: true`). Bounds the number of simultaneously-running
+      // sub-flows so provider rate limits aren't trivially blown.
+      ParamSpec::optional("max_concurrent", ParamType::Integer),
+      // F-A6-2: `input_list` is the canonical map input but the
+      // factory was reading it as generic `initial_inputs`, leaving
+      // schema validate emitting a false-positive warning. Declare
+      // it here so `agentflow workflow validate` stays quiet.
+      ParamSpec::optional("input_list", ParamType::Sequence),
     ]),
     "mcp" if cfg!(feature = "mcp") => Some(vec![
       ParamSpec::required("server_command", ParamType::SequenceOfStrings),

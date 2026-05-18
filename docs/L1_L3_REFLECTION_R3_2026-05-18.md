@@ -202,3 +202,27 @@ the dogfooding phase here and shift to v0.3.0 release prep. The
 R2-originated items don't have anything left that's both small and
 high-value; the remaining L-priority items can be batched as a
 single "docs sweep" closer to release if needed.
+
+---
+
+## Addendum (2026-05-18, same session)
+
+After R3 landed, A6 doc-translator iteration 1 shipped
+(commit `141b993`) and surfaced 4 findings. The two most-blocking
+were closed in the next commit:
+
+- **F-A6-1** — `map parallel` had no concurrency cap. Closed:
+  `NodeType::Map` gained `max_concurrent: Option<usize>`,
+  `execute_map_node_parallel` now uses `tokio::sync::Semaphore`
+  per-sub-flow. Unbounded behaviour preserved for `None`
+  (back-compat). `Some(0)` rejected as config error rather than
+  deadlocking. Two new unit tests in `agentflow-core` assert the
+  cap holds and zero is rejected. Live A6 re-run with
+  `max_concurrent: 3` on N=4 inputs: 4/4 OK (was 3/4 before).
+- **F-A6-2** — `workflow validate` warned on undeclared map
+  fields. Closed: ParamSpec list bumped to include `input_list`
+  and `max_concurrent`. Validate now passes clean.
+
+F-A6-3 (per-sub-flow Err buried in nested results) and F-A6-4
+(prompt ambiguity for self-translation) remain open as iter 2
+follow-ups. Neither blocks A6 scaling up.

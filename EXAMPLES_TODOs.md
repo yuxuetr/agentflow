@@ -719,12 +719,27 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   `parallel: { max_concurrent: N }` map YAML schema + plumb
   through `tokio::sync::Semaphore` in the executor. This is the
   blocker for iter 3+ (the stress-test pillar).
+  ✅ **CLOSED 2026-05-18**: `NodeType::Map` gained
+  `max_concurrent: Option<usize>` field; `tokio::sync::Semaphore`
+  acquired per-sub-flow in `execute_map_node_parallel` when set
+  (legacy unbounded behaviour preserved for `None`). YAML factory
+  reads `max_concurrent: N` from the map node's parameters.
+  `Some(0)` rejected as a config error rather than deadlocking.
+  Two new unit tests assert (a) the cap is observed in
+  practice (probe node tracks high-water mark) and (b) zero is
+  rejected. Live re-run of the A6 workflow with `max_concurrent: 3`
+  on N=4 produced 4/4 successes (was 3/4 before the cap).
 - **F-A6-2 — `agentflow workflow validate` warns that `input_list`
   isn't in the map schema**, even though the factory accepts it
   (via the generic `initial_inputs` dump path). False-positive
   warning hurts the validate UX. **Action**: declare `input_list`
   / `parallel` / `template` as first-class fields on map nodes in
   `agentflow-cli/src/config/schema.rs`.
+  ✅ **CLOSED 2026-05-18**: map ParamSpec list bumped to include
+  `input_list` (optional Sequence) and `max_concurrent` (optional
+  Integer). `agentflow workflow validate` now reports `✅ Schema
+  validation passed` on the A6 workflow instead of 2 false
+  warnings.
 - **F-A6-3 — per-sub-flow Err is buried inside the results array**,
   not at the map-level. The map node returns `Ok({results: [...]})`
   with `Err` siblings nested inside results elements. A workflow

@@ -62,15 +62,16 @@ agentflow workflow validate examples/applications/doc-translator/workflow.yml
 
 ## Iteration 1 observations (2026-05-18)
 
-- **Wall clock**: ~5s for N=4 parallel (first run, all 4 fired
-  simultaneously; the 4th hit a 429, see F-A6-1). N=3 baseline:
-  ~3s for 3 clean translations.
+- **Wall clock**: ~5s for N=4 parallel. First run (before F-A6-1
+  fix) had all 4 fire simultaneously and the 4th hit a 429.
+  Second run (after `max_concurrent: 3` shipped) is 4/4 OK.
 - **Translation quality**: usable but uneven. Japanese / French /
-  German came back correct on the N=3 baseline. The English request
-  in the N=4 run produced Chinese instead — see F-A6-4 below.
-- **Rate-limit collision**: 4 parallel sub-flows blew past
-  Moonshot's org-level concurrency cap of 3, returning 429 for the
-  4th. The map node has no `max_concurrency` knob — F-A6-1.
+  German came back correct. The English request still produces
+  Chinese (separate issue — see F-A6-4).
+- **Rate-limit collision (was a finding, now fixed)**: F-A6-1's
+  unbounded `tokio::spawn` blew past Moonshot's 3-concurrent cap;
+  the closing commit adds the `max_concurrent` knob this workflow
+  now uses.
 
 ## Files
 
@@ -86,24 +87,21 @@ These are sediment, captured in [`EXAMPLES_TODOs.md` § A6
 Findings](../../../EXAMPLES_TODOs.md#a6--doc-translator) for the live
 list.
 
-- **F-A6-1 — `map parallel: true` has no concurrency cap**.
-  `agentflow-core::Flow::execute_map_node_parallel` spawns one
-  `tokio::task` per item unbounded. With Moonshot's org-level
-  concurrency limit of 3, N=4 fan-out trivially hits 429 on the
-  4th item. Real-world doc translation jobs (the eventual A6 full
-  spec mentions 100+ files × 3 langs = 300+ fan-out) would shred
-  any provider rate limit. **Action**: add `parallel: true |
-  { max_concurrent: N }` to the map YAML schema; pipe through to
-  `tokio::sync::Semaphore` in the map executor.
+- **F-A6-1 — `map parallel: true` has no concurrency cap**. ✅
+  **CLOSED 2026-05-18**: added `max_concurrent: Option<usize>` to
+  `NodeType::Map`, plumbed through YAML factory + `tokio::sync::
+  Semaphore` in `execute_map_node_parallel`. Re-running this
+  workflow with `max_concurrent: 3` on N=4 inputs now yields 4/4
+  successes (was 3/4 before). Two new unit tests in
+  `agentflow-core` assert the cap holds in practice and that
+  `Some(0)` is rejected rather than deadlocking.
 
 - **F-A6-2 — schema validator warns `input_list is not defined in
-  the CLI schema for node type 'map'`**, but the factory accepts it
-  fine (it falls into the generic `initial_inputs` dump). Friction
-  for editors with YAML LSP / for catch-typos. The schema needs to
-  declare `input_list` as a first-class field on map nodes so
-  validation passes cleanly. **Action**: update
-  `agentflow-cli/src/config/schema.rs` to whitelist `input_list`,
-  `parallel`, and `template` on map nodes.
+  the CLI schema for node type 'map'`**. ✅ **CLOSED 2026-05-18**:
+  added `input_list` and `max_concurrent` to the map ParamSpec
+  list in `agentflow-cli/src/config/schema.rs`. `agentflow workflow
+  validate` now reports `✅ Schema validation passed` on this
+  workflow.
 
 - **F-A6-3 — per-sub-flow Err is buried inside the results array**,
   not surfaced at the map node level. The top-level result is

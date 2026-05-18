@@ -24,6 +24,10 @@ nodes:
     dependencies: []
     parameters:
       parallel: true
+      # F-A6-1 (closed): keep concurrency within Moonshot's org-level
+      # cap of 3. Without this, N=4 fan-out hit 429 on the 4th item
+      # because `map parallel` used to spawn unbounded.
+      max_concurrent: 3
       input_list:
         - { lang: "en", lang_name: "English" }
         - { lang: "ja", lang_name: "Japanese" }

@@ -1223,6 +1223,7 @@ async fn test_parallel_map_workflow() {
     node_type: NodeType::Map {
       template: sub_flow_template,
       parallel: true,
+      max_concurrent: None,
     },
     dependencies: vec![],
     input_mapping: None,

@@ -199,11 +199,23 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
         .get("parallel")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+      // F-A6-1: optional `max_concurrent: N` cap when `parallel:
+      // true`. Defaults to None (legacy unbounded behaviour) for
+      // back-compat. Ignored when `parallel: false`.
+      let max_concurrent = node_def
+        .parameters
+        .get("max_concurrent")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
       let template: Vec<GraphNode> = template_nodes_def
         .iter()
         .map(create_graph_node)
         .collect::<Result<_>>()?;
-      Ok(NodeType::Map { template, parallel })
+      Ok(NodeType::Map {
+        template,
+        parallel,
+        max_concurrent,
+      })
     }
     #[cfg(feature = "mcp")]
     "mcp" => {
