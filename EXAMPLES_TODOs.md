@@ -751,6 +751,20 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   `Ok(state_with_errs)` instead of bubbling per-node Err to the
   Flow level is the upstream cause — possibly intentional but
   worth re-evaluating.
+  ✅ **CLOSED 2026-05-18**: map node now emits `results_summary:
+  {total, ok, err, err_indexes}` alongside `results` (both
+  parallel and sequential paths via a shared
+  `map_outputs_with_summary` helper). Workflows can route on
+  `results_summary.err` via `run_if` without walking the nested
+  `results` JSON. An `eprintln!` warning fires on partial failure
+  matching the existing logging idiom in `flow.rs`. Back-compat:
+  `results` keeps its legacy shape; new field is purely additive.
+  2 new unit tests assert the summary shape on partial failure
+  and clean runs. The upstream design choice (per-node Err inside
+  `Ok(state)`) is intentionally left as-is — it's the right
+  default for fan-out workflows where one failure shouldn't tank
+  the rest, and `results_summary` is the correct way to surface
+  that signal without changing semantics.
 - **F-A6-4 — prompt ambiguity: "translate to English" when source
   is already English produces unrelated language output**.
   Workflow-author trap: validate `source_lang != target_lang`

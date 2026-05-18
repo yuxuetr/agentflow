@@ -103,6 +103,16 @@ list.
   validate` now reports `✅ Schema validation passed` on this
   workflow.
 
+- **F-A6-3 — per-sub-flow Err is buried inside the results array**.
+  ✅ **CLOSED 2026-05-18**: map node now emits
+  `results_summary: {total, ok, err, err_indexes}` alongside
+  `results`. The doc-translator workflow's clean N=4 run now ships
+  `total=4 ok=4 err=0 err_indexes=[]` as a sibling output.
+  Downstream nodes can route on `results_summary.err > 0` via
+  `run_if` without walking the nested `results` JSON. Partial
+  failures also `eprintln!` to stderr so they're visible even
+  when nothing downstream routes on the summary.
+
 - **F-A6-3 — per-sub-flow Err is buried inside the results array**,
   not surfaced at the map node level. The top-level result is
   `Ok({results: [...]})`; failures live inside `results[i].

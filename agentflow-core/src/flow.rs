@@ -1038,22 +1038,23 @@ impl Flow {
       };
 
       let mut all_results = Vec::new();
-      for item in input_list {
+      let mut err_indexes: Vec<usize> = Vec::new();
+      for (idx, item) in input_list.iter().enumerate() {
         let sub_flow = Flow::new(template.to_vec());
         let mut initial_inputs = HashMap::new();
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
         let sub_flow_result = sub_flow.execute_from_inputs(initial_inputs).await?;
+        // F-A6-3: track per-sub-flow node-level failures (see the
+        // parallel branch for the design rationale).
+        if sub_flow_result.values().any(|r| r.is_err()) {
+          err_indexes.push(idx);
+        }
         let json_state = serde_json::to_value(sub_flow_result)?;
         all_results.push(json_state);
       }
 
-      let mut outputs = HashMap::new();
-      outputs.insert(
-        "results".to_string(),
-        FlowValue::Json(Value::Array(all_results)),
-      );
-      Ok(outputs)
+      Ok(map_outputs_with_summary(all_results, err_indexes))
     })
   }
 
@@ -1122,9 +1123,20 @@ impl Flow {
       let results = futures::future::join_all(handles).await;
 
       let mut all_results = Vec::new();
-      for result in results {
+      let mut err_indexes: Vec<usize> = Vec::new();
+      for (idx, result) in results.into_iter().enumerate() {
         match result {
           Ok(Ok(sub_flow_result)) => {
+            // F-A6-3: per-sub-flow Err states (a node inside the
+            // sub-flow returned Err) are otherwise buried inside
+            // `results[i]` as nested `Err` JSON. Walk the state pool
+            // here so we can emit a top-level `results_summary` that
+            // downstream nodes / operators can route on without
+            // re-parsing the nested JSON.
+            let had_err = sub_flow_result.values().any(|r| r.is_err());
+            if had_err {
+              err_indexes.push(idx);
+            }
             let json_state = serde_json::to_value(sub_flow_result)?;
             all_results.push(json_state);
           }
@@ -1137,12 +1149,7 @@ impl Flow {
         }
       }
 
-      let mut outputs = HashMap::new();
-      outputs.insert(
-        "results".to_string(),
-        FlowValue::Json(Value::Array(all_results)),
-      );
-      Ok(outputs)
+      Ok(map_outputs_with_summary(all_results, err_indexes))
     })
   }
 
@@ -1299,6 +1306,51 @@ impl Flow {
       Ok(sorted_order)
     }
   }
+}
+
+/// Assemble the standard map-node output map plus the F-A6-3
+/// `results_summary` sibling.
+///
+/// `results` keeps its legacy shape (a JSON array of sub-flow state
+/// pools, one per input item) so existing workflows that already
+/// route on it continue to work unchanged. `results_summary`
+/// surfaces the partial-failure shape: `{total, ok, err,
+/// err_indexes}`, suitable for `run_if` expressions or for
+/// downstream nodes that need to react to any per-sub-flow failure
+/// without re-parsing the nested `results` JSON.
+///
+/// Emits an `eprintln!` warning (matching the existing logging
+/// idiom in this file) when any sub-flow had a node-level failure
+/// so operators see the partial failure in stderr even when
+/// nothing downstream routes on the summary.
+fn map_outputs_with_summary(
+  all_results: Vec<Value>,
+  err_indexes: Vec<usize>,
+) -> HashMap<String, FlowValue> {
+  let total = all_results.len();
+  let err = err_indexes.len();
+  let ok = total.saturating_sub(err);
+
+  if err > 0 {
+    eprintln!(
+      "⚠️  Map node: {err} of {total} sub-flows had at least one node-level error (err_indexes={err_indexes:?}). See results[i] for details, or branch on results_summary.err_indexes."
+    );
+  }
+
+  let summary = serde_json::json!({
+    "total": total,
+    "ok": ok,
+    "err": err,
+    "err_indexes": err_indexes,
+  });
+
+  let mut outputs = HashMap::new();
+  outputs.insert(
+    "results".to_string(),
+    FlowValue::Json(Value::Array(all_results)),
+  );
+  outputs.insert("results_summary".to_string(), FlowValue::Json(summary));
+  outputs
 }
 
 #[cfg(test)]
@@ -2396,6 +2448,152 @@ mod tests {
         panic!("expected NodeInputError mentioning max_concurrent on the map node, got {other:?}")
       }
     }
+  }
+
+  /// F-A6-3: when one or more sub-flows have a node-level Err in
+  /// their state, the map node MUST emit a `results_summary`
+  /// sibling output that surfaces `{total, ok, err, err_indexes}`
+  /// so downstream consumers can route on partial failure without
+  /// walking the nested `results` JSON. `results` itself stays
+  /// shaped exactly as before (back-compat).
+  #[tokio::test]
+  async fn test_map_node_emits_results_summary_for_partial_failure() {
+    use_writable_home();
+
+    // Inner node fails iff item == 2. Three items: [1, 2, 3] →
+    // one sub-flow has a failed node, two are clean.
+    struct FailOnTwo;
+    #[async_trait]
+    impl AsyncNode for FailOnTwo {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let val = match inputs.get("item").unwrap() {
+          FlowValue::Json(Value::Number(n)) => n.as_i64().unwrap(),
+          _ => 0,
+        };
+        if val == 2 {
+          Err(AgentFlowError::AsyncExecutionError {
+            message: "synthetic failure on item=2".to_string(),
+          })
+        } else {
+          let mut outputs = HashMap::new();
+          outputs.insert("result".to_string(), FlowValue::Json(json!(val * 2)));
+          Ok(outputs)
+        }
+      }
+    }
+
+    let sub_flow_node = GraphNode {
+      id: "fail_on_two".to_string(),
+      node_type: NodeType::Standard(Arc::new(FailOnTwo)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "partial_failure_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: true,
+        max_concurrent: Some(2),
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3])));
+        inputs
+      },
+    };
+
+    let flow = Flow::new(vec![map_node]);
+    let state = flow.run().await.expect("flow itself must Ok");
+    let map_result = state
+      .get("partial_failure_map")
+      .expect("map node must appear")
+      .as_ref()
+      .expect("map must Ok overall (per-sub-flow Err doesn't bubble)");
+
+    // Back-compat: `results` still present with all 3 sub-flow
+    // states (one with an inner Err).
+    let results_array = match map_result.get("results").expect("results must exist") {
+      FlowValue::Json(Value::Array(arr)) => arr,
+      other => panic!("results must be a JSON array, got {other:?}"),
+    };
+    assert_eq!(results_array.len(), 3, "all 3 sub-flow states present");
+
+    // New: `results_summary` surfaces the partial failure.
+    let summary = match map_result
+      .get("results_summary")
+      .expect("results_summary must exist (F-A6-3)")
+    {
+      FlowValue::Json(s) => s,
+      other => panic!("results_summary must be JSON, got {other:?}"),
+    };
+    assert_eq!(summary["total"], 3);
+    assert_eq!(summary["ok"], 2);
+    assert_eq!(summary["err"], 1);
+    // The order in which sub-flows finish under parallel + cap is
+    // deterministic by index (we enumerate before spawning), so
+    // err_indexes should be exactly [1].
+    assert_eq!(summary["err_indexes"], json!([1]));
+  }
+
+  /// F-A6-3 back-compat: when every sub-flow is clean, the
+  /// summary still ships but reports `err: 0` so workflows can
+  /// rely on the field being present.
+  #[tokio::test]
+  async fn test_map_node_emits_clean_results_summary_when_all_ok() {
+    use_writable_home();
+
+    struct AlwaysOk;
+    #[async_trait]
+    impl AsyncNode for AlwaysOk {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert("ok".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let sub_flow_node = GraphNode {
+      id: "ok".to_string(),
+      node_type: NodeType::Standard(Arc::new(AlwaysOk)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "all_ok_map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: true,
+        max_concurrent: Some(2),
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3])));
+        inputs
+      },
+    };
+
+    let state = Flow::new(vec![map_node]).run().await.unwrap();
+    let map_result = state.get("all_ok_map").unwrap().as_ref().unwrap();
+    let summary = match map_result.get("results_summary").unwrap() {
+      FlowValue::Json(s) => s,
+      _ => panic!(),
+    };
+    assert_eq!(summary["total"], 3);
+    assert_eq!(summary["ok"], 3);
+    assert_eq!(summary["err"], 0);
+    assert_eq!(summary["err_indexes"], json!([]));
   }
 
   #[tokio::test]
