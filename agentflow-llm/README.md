@@ -441,9 +441,23 @@ for model in models {
 - Environment: `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 
 ### Moonshot
-- Models: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
+- Models: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k,
+  kimi-k2-0711-preview, kimi-k2.5, kimi-k2.6
 - Features: Streaming, Chinese and English, long context (up to 128k tokens)
 - Environment: `MOONSHOT_API_KEY` or `MOONSHOT_KEY`
+- **kimi-k2.6 quirk (F-A7-5)**: only accepts `temperature: 1.0`.
+  Moonshot returns `400 invalid temperature: only 1 is allowed
+  for this model` on any other value — likely a reasoning-model
+  constraint. The bundled `templates/default_models.yml` sets
+  this correctly with an inline comment, but users who hand-copy
+  the entry into `~/.agentflow/models.yml` should preserve it.
+  Other kimi-k2.x variants (`kimi-k2-0711-preview`, `kimi-k2.5`)
+  accept normal temperatures.
+- **Organisation concurrency limit**: Moonshot's default tier
+  caps simultaneous requests at 3 per org. Workflows using
+  `map parallel` should set `max_concurrent: 3` (or upgrade the
+  tier) — see [F-A6-1 in the
+  changelog](../CHANGELOG.md#unreleased--v030-candidate).
 
 ## Configuration Options
 

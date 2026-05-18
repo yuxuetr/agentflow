@@ -322,6 +322,66 @@ Two patterns:
    and [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs)
    for the standard wiring.
 
+## FlowValue field reference (F-DOC-2)
+
+`agentflow_core::value::FlowValue` is the data wrapper passed
+between nodes. Custom `AsyncNode` implementations that produce
+file / URL outputs must use the **exact** field names below — they
+won't autocomplete and `media_type` is a common wrong guess.
+
+| Variant | Fields | Example |
+| --- | --- | --- |
+| `Json(Value)` | tuple-style, one `serde_json::Value` | `FlowValue::Json(json!({"answer": 42}))` |
+| `File { path, mime_type }` | `path: PathBuf`, `mime_type: Option<String>` | `FlowValue::File { path: PathBuf::from("/tmp/x.png"), mime_type: Some("image/png".into()) }` |
+| `Url { url, mime_type }` | `url: String`, `mime_type: Option<String>` | `FlowValue::Url { url: "https://...".into(), mime_type: None }` |
+
+Field name is `mime_type` not `media_type` (matches IANA "media
+type" vernacular as `mime_type` only because that was the original
+field name; renaming would be a breaking change, kept). Both
+`File` and `Url` carry the same optional MIME hint so downstream
+nodes can dispatch on type without re-sniffing.
+
+The Serialize impl tags each variant with an explicit `type`
+field (`"json"` / `"file"` / `"url"`) so trace JSON is
+self-describing.
+
+## Loading `~/.agentflow/.env` from standalone binaries (F-A7-7)
+
+The `agentflow` CLI auto-loads `~/.agentflow/.env` on every
+invocation (P9.3). Standalone binaries that link `agentflow-llm`
+directly — e.g. `examples/applications/blog-to-podcast/`,
+`code-reviewer-write`, `research-assistant` — don't go through the
+CLI entry point and need to load the env themselves before
+`AgentFlow::init()`.
+
+Canonical snippet (used by every standalone example in this repo):
+
+```rust
+fn load_agentflow_dotenv() {
+  if let Some(home) = std::env::home_dir() {
+    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+  }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+  load_agentflow_dotenv();
+  AgentFlow::init().await?;
+  // ... rest of the binary
+}
+```
+
+`dotenvy::from_path` is best-effort by design — missing file
+returns `Err` which the snippet swallows. That's correct
+behaviour for an optional env file; production deployments that
+require specific keys should let `AgentFlow::init()` surface its
+own "missing API key" error rather than gating on dotenv presence.
+
+A future `agentflow-dotenv` helper crate could DRY this snippet
+across the example binaries; for now the duplication is
+acknowledged ergonomics-debt (F-A7-7) and the snippet above is
+the canonical form to copy.
+
 ## Where to read next
 
 - [`AGENT_RUNTIME.md`](./AGENT_RUNTIME.md) — runtime boundary, ReAct loop,

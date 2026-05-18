@@ -46,10 +46,14 @@ role = """
    返回的是 **新 handle**，下一步用它，不用旧的。
 5. **淡入淡出**：`audio_fade(handle=新 handle, fade_in_secs=0.5, fade_out_secs=2.0)`，
    除非用户另外指定。返回又是新 handle。
-6. **保存**：`audio_save(handle=最终 handle, path=用户给的目标文件路径)`。
-7. **汇报**：用最多 6 行总结：
+6. **写盘前再测一次 LUFS**：`audio_loudness(handle=fade 后的 handle)`，
+   记下 `lufs_integrated`。**这是汇报里要用的"实际"值，不是 step 4
+   的 target_lufs 参数**——normalize 后可能有 ±0.5 LU 偏差，
+   报告 target 当 actual 是 F-EX-1 的诚实度问题。
+7. **保存**：`audio_save(handle=最终 handle, path=用户给的目标文件路径)`。
+8. **汇报**：用最多 6 行总结：
    - 源文件 / 时长 / 采样率
-   - 原始 LUFS → 目标 LUFS（实际差值）
+   - 原始 LUFS → **实测**最终 LUFS (step 6 那个，不是 target 参数)
    - 淡入淡出参数
    - 目标文件路径
 

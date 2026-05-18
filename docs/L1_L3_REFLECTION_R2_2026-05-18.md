@@ -275,13 +275,13 @@ finding set:
 | ~~L~~ DONE | F-A2-13 | `ReActAgent::run_with_context` now tracks `last_tool_call: Option<(String, serde_json::Value)>` and, when iteration N+1's `(tool, params)` exactly matches iteration N, appends a steering note to the tool-result memory message: `"[agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `X` with identical parameters … (a) draw conclusions, (b) call a different tool, or (c) call `X` with materially different parameters]"`. Trace-side `AgentStepKind::ToolResult` carries the raw observation unchanged so replay/audit stay faithful. Tool still runs (steering is advisory, not a block) so legitimate retries / polling aren't broken. New unit test `repeat_tool_call_appends_steering_note_to_memory` asserts both the memory augmentation and the trace cleanliness. Landed 2026-05-18. | agentflow-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
-| L | F-DOC-2 (P9.5) | `FlowValue` field reference in docs/AGENT_SDK.md | agentflow docs |
+| ~~L~~ DONE | F-DOC-2 (P9.5) | Added "FlowValue field reference" section to `docs/AGENT_SDK.md` enumerating exact field names per variant (`Json` / `File { path, mime_type }` / `Url { url, mime_type }`). Landed 2026-05-19. | agentflow docs |
 | L | F-DOC-3 (P9.8) | `target_segments` doc tightening | phonon + examples |
 | L | F-DOC-4 | Bump phonon-mcp pre-flight prominence | examples |
-| L | F-EX-1 (P9.7) | A1.5 persona "verify LUFS before save" | examples |
-| L | F-A7-5 | document kimi-k2.6 temp constraint | agentflow-llm |
+| ~~L~~ DONE | F-EX-1 (P9.7) | A1.5 persona now requires `audio_loudness` re-measure between fade and save; step 6 inserted, step 8 (汇报) asserts "use the **实测** final LUFS, not the target param". Landed 2026-05-19. | examples |
+| ~~L~~ DONE | F-A7-5 | `agentflow-llm/README.md` § Moonshot now documents the kimi-k2.6 `temperature: 1.0` constraint with the exact Moonshot 400 error message + the bundled-config note. Org-concurrency-3 also mentioned with a link to F-A6-1. Landed 2026-05-19. | agentflow-llm |
 | L | F-A7-6 | `agentflow llm models --refresh-from-api` | agentflow-llm |
-| L | F-A7-7 | dotenvy helper crate or canonical snippet | examples / agentflow-cli |
+| ~~L~~ DONE | F-A7-7 | `docs/AGENT_SDK.md` § "Loading `~/.agentflow/.env` from standalone binaries" ships the canonical 6-line snippet used by every standalone example in this repo. Future `agentflow-dotenv` helper crate left as ergonomics-debt with a pointer; the snippet is the contract until then. Landed 2026-05-19. | examples / agentflow-cli |
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
