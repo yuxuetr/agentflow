@@ -191,7 +191,7 @@ Combining R1's 20 + R2's 20.
 | ID | Source | Status | Summary | Pri |
 | --- | --- | --- | --- | --- |
 | **F-A7-6** | R2 A7 | partial: added kimi-k2.5/2.6 in this session | agentflow-llm registry lags Moonshot's `/v1/models`; consider `agentflow llm models --refresh-from-api` | L |
-| **F-A7-8** | R2 A7 | **NEW TODO** | `moonshot-v1-128k` `max_tokens: 4096` default truncates long output (A7 hit it at 399 commits); bump to 16k+ in templates/default_models.yml | M |
+| **F-A7-8** | R2 A7 | **DONE 2026-05-18** | Bumped 94 text models in `templates/default_models.yml` from `max_tokens: 4096` → `32768` (multimodal 12 + tts 1 left at 4096 — vision outputs short, tts max_tokens semantics differ) | — |
 
 ### 5.5 Example / skill conventions (now 4 items, 0 DONE)
 
@@ -255,7 +255,7 @@ finding set:
 | --- | --- | --- | --- |
 | ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | agentflow-agents |
 | **M** | F-A7-2 | Resolve `type: shell` schema-vs-factory inconsistency (either drop from classifier or add factory branch wrapping `ShellTool`) | agentflow-cli |
-| **M** | F-A7-8 | Bump `moonshot-v1-128k` `max_tokens` in templates/default_models.yml from 4096 to 16k+ | agentflow-llm |
+| ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | agentflow-llm |
 | M | F-A7-4 | `agentflow doctor` reports active models.yml source | agentflow-cli |
 | M | F-AF-2 (P9.4) | SKILL.md `model:` field — honour or warn | agentflow-skills |
 | M | F-A2-6 | `agentflow skill run --output json` mode | agentflow-cli |

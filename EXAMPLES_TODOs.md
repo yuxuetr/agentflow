@@ -566,9 +566,9 @@ markdown changelog 段。
 - [ ] 写 `README.md`
 - [ ] 设计 prompt（conventional commits 分类规则）
 - [ ] 决定要不要把它包成 `agentflow changelog` CLI 子命令（升级成 P3.x）
-- [ ] 把 `max_tokens` 在 templates/default_models.yml 里的
-  moonshot-v1-128k entry 调高（参见 F-A7-8），让长 changelog 不被
-  截断
+- [x] 把 `max_tokens` 在 templates/default_models.yml 里调高
+  （F-A7-8，2026-05-18 commit；94 个 text 模型从 4096 → 32768，
+  multimodal/tts 不动）
 - [ ] 解决 F-A7-2 `shell` node 在 schema 但不在 factory 的不一致
 
 **DONE 子项**:
@@ -635,13 +635,17 @@ markdown changelog 段。
   它是 standalone Cargo project，不通过 agentflow CLI 调用。模式
   能用但 duplication 是 smell。长期：抽 `agentflow-dotenv` helper
   crate，或在 `docs/AGENT_SDK.md` 文档化标准 snippet。低优先级。
-- **F-A7-8 — moonshot-v1-128k 在 4096 max_tokens 下大输出被截断**。
-  models.yml 里默认 `max_tokens = 4096` 把 399-commit changelog
-  在第 119 行 mid-hash 截掉（~11.5k chars）。range > ~100 commits
-  时输出不全。Workaround:(a) 在 model entry 把 max_tokens 调到
-  16k+（Moonshot 支持 32k output），(b) per-category split 成 N
-  次 LLM 调用，(c) 文档化限制。建议 (a) 作为 moonshot-v1-128k
-  默认，因为长 context 的 use case 一般 output 也长。
+- **F-A7-8 — moonshot-v1-128k 在 4096 max_tokens 下大输出被截断**
+  —— **DONE 2026-05-18**。`templates/default_models.yml` 里把所有
+  text 类 model 的 `max_tokens: 4096` 整批 bump 到 `32768`（94 个
+  text 条目），multimodal（12 个）和 tts（1 个）保持 4096 不动
+  （vision 输出短描述够用、tts max_tokens 语义不同）。Bump 选 32k
+  是因为：(a) 现代各家 chat model 都支持 8k+ 输出，32k 是大多家
+  上限（Moonshot 32k、OpenAI gpt-4o 16k、Anthropic 8k 默认 64k 可
+  请求、Gemini 65k），保险范围足够；(b) 用户期望 "1M output" 实际
+  指 context window；输出 cap 通常 16-64k，32k 是 90 分位 safe
+  default；(c) 配 F-A2-1 truncation recovery 是双保险。Registry
+  tests 全绿。
 - **F-A7-9 — `agentflow-llm` 对 354k-char 输入在 moonshot-v1-128k
   花了 117s**。不是 bug —— 长 context inference 在 Moonshot 这边
   本来就慢。但 long-context dogfooding 真的烧 wall clock；workflow
