@@ -282,7 +282,7 @@ finding set:
 | ~~L~~ DONE | F-A7-5 | `agentflow-llm/README.md` § Moonshot now documents the kimi-k2.6 `temperature: 1.0` constraint with the exact Moonshot 400 error message + the bundled-config note. Org-concurrency-3 also mentioned with a link to F-A6-1. Landed 2026-05-19. | agentflow-llm |
 | L | F-A7-6 | `agentflow llm models --refresh-from-api` | agentflow-llm |
 | ~~L~~ DONE | F-A7-7 | `docs/AGENT_SDK.md` § "Loading `~/.agentflow/.env` from standalone binaries" ships the canonical 6-line snippet used by every standalone example in this repo. Future `agentflow-dotenv` helper crate left as ergonomics-debt with a pointer; the snippet is the contract until then. Landed 2026-05-19. | examples / agentflow-cli |
-| L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
+| ~~L~~ DONE | F-AF-4 | `LLMError::MissingApiKey` now renders an actionable one-liner: names the provider-specific env var (`MOONSHOT_API_KEY (or MOONSHOT_KEY)`, etc.), points at `~/.agentflow/.env`, suggests `agentflow config init` to generate the template, and references the README docs section for alternatives. New `env_var_hint(provider)` helper has table coverage for 6 providers (openai/anthropic/google/moonshot/stepfun/dashscope) with a generic fallback. 3 new unit tests assert the message shape + coverage. Landed 2026-05-19. | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
 15 open items (was 16): F-A2-5 closed.
