@@ -391,6 +391,15 @@ code-reviewer` 后立即用。
   但每次都覆盖一组合理的 issue 子集。dogfooding 含义：对重要 PR
   可能要 review 多次取并集。**或** 在 persona 里要求 agent 系统性
   walk 每个文件而不是挑几个深入。
+  ✅ **CLOSED 2026-05-18** as docs (no code fix): added
+  "Operating practice: LLM review is non-deterministic" section to
+  `examples/applications/code-reviewer/README.md` with the actual
+  finding-set comparison table, plus a cross-cutting bullet in
+  `examples/README.md` § Conventions covering all
+  LLM-judgement-output examples (not just code review). Practice
+  guidance: 3-5 runs + union for human use; quorum (≥2 of N) for
+  automated gates; don't try to make LLM judgement deterministic
+  — use `cargo clippy`/linters for that complementary surface.
 - **F-A2-6 — `--trace` 的 JSON 输出 schema 易解析但 stdout 既有
   人类格式又夹 JSON**。`agentflow skill run --trace` 把人类摘要
   + JSON trace 混在 stdout，从中抽 answer 需要小段 python 找 brace

@@ -262,7 +262,7 @@ finding set:
 | ~~M~~ DONE | F-A7-4 | `agentflow doctor` now leads its Config section with a human-readable source label (e.g. `"/Users/x/.agentflow/models.yml (overrides built-in)"`) plus a stable `models_config_source_kind` JSON enum (`user_models_yml` / `user_models_yaml` / `env_override` / `built_in_default`). The legacy Rust-debug `models_config_source` field is kept for back-compat. 3 new doctor unit tests lock the shadowing-suffix invariant. Landed 2026-05-18. | agentflow-cli |
 | ~~M~~ DONE | F-AF-2 (P9.4) | SKILL.md frontmatter `model:` field now honoured: `SkillMdFrontmatter` gained the field, `SkillMd` carries it through, `into_manifest()` populates `ModelConfig.name`. Empty/whitespace strings collapse to `None` so `resolved_model()` falls through to `gpt-4o`. 3 new unit tests lock present-vs-absent-vs-empty cases. Landed 2026-05-18. | agentflow-skills |
 | ~~M~~ DONE | F-A2-6 | `agentflow skill run --output {text,json}` flag landed (default text for back-compat). JSON mode emits a single stdout object `{skill, model, session_id, answer, stop_reason, elapsed_ms, trace?}` with the same redaction the text path applies. Warnings still go to stderr. 2 new integration tests assert (a) the parsed JSON shape and (b) `--trace` opt-in. Landed 2026-05-18. | agentflow-cli |
-| M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
+| ~~M~~ DONE | F-A2-5 | Documented in `examples/applications/code-reviewer/README.md` § Operating practice (concrete finding-set table from the 2 dogfooding runs + 3-5-runs-and-union recommendation + quorum guidance for automated gates), and a cross-cutting bullet in `examples/README.md` § Conventions covering all LLM-judgement examples (not just code review). Landed 2026-05-18. | examples conventions |
 | ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
 | ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
 | ~~M~~ DONE | F-A2-11 | `agentflow harness run` now wraps the agent's tool registry with `HookConfig + ApprovalProvider` when `--approve {cli,auto-allow,auto-deny}` is passed; default `--approve none` preserves the pre-existing zero-friction CLI path. Combined with `--profile production` the gate auto-escalates every NonIdempotent call. New `ReActAgent::with_tools` helper lets the CLI swap the registry after `SkillBuilder::build` without duplicating manifest wiring. 3 new CLI tests; live-tested against the `code-reviewer` skill end-to-end. Landed 2026-05-18. | agentflow-cli + agentflow-agents |
@@ -280,12 +280,13 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-16 open items (was 17): F-A2-13 closed.
-0 High, 6 Medium, 10 Low. None require a core refactor; all are
-surface / docs / config / convention scope. The only remaining
-agentflow-side M item is F-A2-5 (docs on LLM-review
-non-determinism); the other M items are phonon-external
-(F-PH-1/2). No agent-runtime changes remain in the queue.
+15 open items (was 16): F-A2-5 closed.
+0 High, 5 Medium, 10 Low. None require a core refactor; all are
+surface / docs / config / convention scope. **All agentflow-side
+findings from R2 are now resolved.** The remaining M items
+(F-PH-1/2) are phonon-external; remaining L items are minor docs,
+LLM tooling polish, and phonon-side work — none block any
+dogfooding example or v0.3.0 cut.
 
 ## 7. Phonon scope reflection — still no change
 

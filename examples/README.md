@@ -19,6 +19,20 @@ referenced file for the runnable code, comments, and run commands.
   `features` matrix (`.github/workflows/quality.yml`) covers the most
   common combinations; `cargo check --workspace --examples` is the
   catch-all locally.
+- **LLM-judgement output is non-deterministic — run multiple times,
+  union the findings** (F-A2-5). Examples whose value depends on the
+  LLM's *judgement* (code review, content critique, evaluation,
+  scoring) will produce materially different outputs on repeated runs
+  against the same input — A2's dogfooding caught 5 issues on run 1
+  and 7 different issues on run 2 with only **1 in common**, both
+  runs correct. This is intrinsic to LLM sampling, not a bug. Don't
+  treat any single run as definitive: for human consumption, prefer
+  3-5 runs and union the findings; for automated gates, define
+  acceptance on quorum (e.g. "≥2 of 3 runs flag the same issue") not
+  on a single pass. Examples whose value comes from the LLM's
+  *generation* (summarisation, translation, briefing) are usually
+  fine on one run because the output is wholly produced rather than
+  filtered down from a larger candidate space.
 
 ## Matrix
 

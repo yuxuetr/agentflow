@@ -143,6 +143,45 @@ print(json.loads(raw[j:k]).get('answer', ''))
 - `--trace` JSON dump is the system of record for the actual agent
   output when the human-readable summary line is missing.
 
+## Operating practice: LLM review is non-deterministic (F-A2-5)
+
+Two runs of this skill on the same commit (`11b3707`, identical
+persona, identical model `kimi-k2.6`) produced **almost-disjoint
+finding sets** — both correct, both useful, only 1 of ~11 unique
+issues was flagged by both passes:
+
+| Pass | Findings caught (unique) |
+| --- | --- |
+| Run 1 (live stderr trace) | unsafe `env::set_var` in tests · `/tmp` hardcoded paths · `edition = 2024` compatibility · return-vs-panic skip pattern · `media_type` case sensitivity |
+| Run 2 (saved sample fixture) | phonon path deps pointing outside the repo · `json!` hack to silence dead-code warning · 3 duplicated match arms in `render_audio` · unsafe `env::set_var` in tests · fragile speaker-name verbatim match · `&Path` vs `&PathBuf` idiom · lost error chain in `io::Error` mapping |
+
+Shared finding: `unsafe env::set_var` (1 / ~11). **The two reviews are
+each genuinely correct but explore different facets of the same diff.**
+This is intrinsic to LLM sampling; raising the temperature or
+swapping models won't make it deterministic in the way `cargo clippy`
+is.
+
+**Practice for this skill:**
+
+- For ad-hoc human review, run the skill **3–5 times on the same
+  commit** and union the findings before triaging. Iterations 3+
+  typically surface fewer new issues; coverage curves flatten quickly.
+- For PR gates, **don't fail on a single run**. Run N times and
+  accept "≥2 of N flag the same issue" as the bar for "must
+  address before merge"; treat single-pass findings as advisory.
+- Two passes that share zero findings doesn't mean either is wrong
+  — it means the model sampled different attention slices. Read both
+  and act on the union.
+- If you need true determinism, this is the wrong tool — use
+  `cargo clippy` / `rust-analyzer` diagnostics / a linter ruleset.
+  LLM review complements those by catching things they can't
+  (intent, design taste, comment vs code drift), at the cost of
+  reproducibility.
+
+The same caveat applies to any LLM-judgement skill (content
+moderation, evaluation, scoring). See `examples/README.md`
+§ Conventions for the cross-cutting version.
+
 ## Findings during dogfooding
 
 See [`EXAMPLES_TODOs.md` § A2 Findings](../../../EXAMPLES_TODOs.md#a2--code-reviewer)
