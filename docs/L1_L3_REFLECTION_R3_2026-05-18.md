@@ -2,6 +2,10 @@
 
 **Date**: 2026-05-18 (same day as R1 and R2, third reflection in the
 sequence)
+**Superseded by**: [R4](L1_L3_REFLECTION_R4_2026-05-18.md) for the
+action queue — R4 captures the A6 sweep (iter 1 → iter 2 → iter 3 +
+5 platform fixes + 3 new findings). R3 stays authoritative for the
+R2-follow-up sweep retrospective and its 6 emergent patterns.
 **Supersedes**: [R2](L1_L3_REFLECTION_R2_2026-05-18.md) for the action
 queue. R2 stays as the authoritative source for the L1↔L3 selection
 rule (unchanged by this round), the per-application matrix (A1 / A1.5
