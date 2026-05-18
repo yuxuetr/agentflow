@@ -134,6 +134,35 @@ impl AsyncNode for TemplateNode {
         }
       }
       _ => {
+        // F-A6-7: opportunistic JSON auto-detect for the default
+        // (text / unset) format. When the rendered output starts
+        // with `[` or `{` we attempt `serde_json::from_str` first
+        // so downstream consumers (e.g. a map node's `input_list`,
+        // a tool's `params`) receive a structured `FlowValue::
+        // Json(Array | Object)` instead of a `FlowValue::Json(String)`.
+        // Parse failures fall back to the legacy String wrap so
+        // prose templates that happen to start with `{` (rare but
+        // possible) stay safe.
+        //
+        // The explicit `output_format: "json"` path above remains
+        // the strict-mode override: it logs the rendered content
+        // and warns on parse failure, which is what you want when
+        // the workflow author intends JSON and a bug would
+        // otherwise hide as a downstream "wrong type" error far
+        // from the producing template.
+        let trimmed = rendered.trim_start();
+        if matches!(trimmed.chars().next(), Some('[') | Some('{'))
+          && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+        {
+          println!(
+            "✅ Template rendered successfully (auto-detected JSON {} via leading '{}')",
+            if parsed.is_array() { "array" } else { "object" },
+            trimmed.chars().next().unwrap()
+          );
+          let mut outputs = HashMap::new();
+          outputs.insert(self.output_key.clone(), FlowValue::Json(parsed));
+          return Ok(outputs);
+        }
         println!("✅ Template rendered successfully");
         let mut outputs = HashMap::new();
         outputs.insert(

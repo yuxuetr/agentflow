@@ -236,7 +236,18 @@ fn doctor_reports_missing_config_without_panicking() {
   );
   let stdout = String::from_utf8(output.stdout).unwrap();
   assert!(stdout.contains("AgentFlow doctor"));
-  assert!(stdout.contains("source: BuiltInDefault"));
+  // F-A7-4: text output leads with the friendly label
+  // ("built-in default_models.yml" when no user file shadows the
+  // bundled defaults), and the raw enum debug moved to a
+  // `source (kind):` line. Both must be present.
+  assert!(
+    stdout.contains("source: built-in default_models.yml"),
+    "expected friendly source label in:\n{stdout}"
+  );
+  assert!(
+    stdout.contains("source (kind): BuiltInDefault"),
+    "expected raw source kind in:\n{stdout}"
+  );
 }
 
 #[test]

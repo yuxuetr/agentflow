@@ -100,15 +100,22 @@ nodes:
 
 fn write_unknown_parameter_workflow(dir: &TempDir) -> std::path::PathBuf {
   let workflow = dir.path().join("unknown_parameter_workflow.yml");
+  // F-A6-6 closed: the template node now intentionally accepts
+  // arbitrary `parameters` keys (they become Tera context for the
+  // rendered template), so it can't be used to exercise the
+  // unknown-parameter validator. Use an `llm` node instead — its
+  // ParamSpec is closed (model/prompt/system/temperature/max_tokens)
+  // so a typo like `typo_param` still triggers the warning.
   fs::write(
     &workflow,
     r#"
 name: Unknown Parameter Workflow
 nodes:
-  - id: render
-    type: template
+  - id: ask
+    type: llm
     parameters:
-      template: "Hello"
+      model: "mock-model"
+      prompt: "Hello"
       typo_param: true
 "#,
   )

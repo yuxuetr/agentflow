@@ -798,6 +798,13 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   validator should permit arbitrary extra params on template nodes
   by design (since the whole point of template is to consume
   arbitrary Tera context). Surfaced during A6 iter 3.
+  ✅ **CLOSED 2026-05-18**: validator now exempts `template`
+  nodes from the unknown-parameter check (the whole point of
+  template is arbitrary Tera context). `agentflow workflow
+  validate` on the A6 iter 3 workflow now reports
+  `✅ Schema validation passed`. Existing typo-detection test
+  switched to use an `llm` node (closed ParamSpec) so the
+  validator contract is still covered for other node types.
 
 - **F-A6-7 — template node requires explicit `output_format: "json"`
   even when the rendered output starts with `[` or `{`**. The
@@ -813,6 +820,17 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   fails. Keep `output_format: "json"` as an explicit override that
   errors loudly when parse fails (current behaviour). Surfaced
   during A6 iter 3.
+  ✅ **CLOSED 2026-05-18**: default branch (text / unset) now
+  opportunistically attempts `serde_json::from_str` when the
+  trimmed rendered output starts with `[` or `{`. Successful
+  parse → `FlowValue::Json(Array|Object)`; parse failure falls
+  back to String (safe for prose templates that incidentally
+  start with `{`). The explicit `output_format: "json"` path is
+  preserved as strict mode (warns on parse failure). A6 iter 3
+  refactored to drop the explicit hint; live re-run still produces
+  8/8 successes with the auto-detect log line confirming
+  `(auto-detected JSON array via leading '[')`. All 25
+  agentflow-nodes tests + 39 agentflow-cli tests pass.
 
 - **F-A6-8 — Tera `loop.parent.*` introspection doesn't work in
   this Tera version**, so cross-product comma logic via

@@ -35,15 +35,11 @@ nodes:
     type: "template"
     dependencies: []
     parameters:
-      # output_format: "json" makes the template node parse the
-      # rendered string as JSON before storing it, so the downstream
-      # map node sees a `FlowValue::Json(Array)` for its input_list
-      # instead of a `FlowValue::Json(String)`. Without this the map
-      # node errors "Input 'input_list' must be a JSON array".
-      # F-A6-7 candidate: the template node could auto-detect JSON
-      # when the rendered output starts with `[` or `{`, eliminating
-      # the need for this explicit hint.
-      output_format: "json"
+      # F-A6-7 (closed): template node auto-detects JSON when the
+      # rendered output starts with `[` or `{`, so no explicit
+      # `output_format: "json"` is needed any more. The opportunistic
+      # parse falls back to String on failure, so prose templates
+      # that happen to start with `{` are still safe.
       file_list: ["intro.md", "usage.md"]
       lang_list:
         - { lang: "ja", lang_name: "Japanese" }

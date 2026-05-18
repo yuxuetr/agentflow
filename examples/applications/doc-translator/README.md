@@ -174,31 +174,22 @@ list.
   Err-containing state.
 
 - **F-A6-6 — template node parameters trigger false validator
-  warnings** when used as initial_inputs for Tera context. The
-  template ParamSpec in `agentflow-cli/src/config/schema.rs` only
-  declares `template`, `output_key`, `output_format`; any
-  workflow-author-defined parameter (e.g. `file_list`, `lang_list`)
-  validates as `... is not defined in the CLI schema for node type
-  'template'` even though the factory accepts them fine (dumps to
-  initial_inputs). **Action**: template's ParamSpec list should
-  accept extra keys (similar to how F-A6-2 fixed map's
-  `input_list` and `max_concurrent`), OR the schema validator
-  should permit arbitrary extra params on template nodes by
-  design. Surfaced during A6 iter 3.
+  warnings** when used as initial_inputs for Tera context.
+  ✅ **CLOSED 2026-05-18**: validator now exempts `template`
+  nodes from the unknown-parameter check (the whole point of
+  template is arbitrary Tera context). Existing typo-detection
+  contract still applies to other node types — the test fixture
+  switched from a template node to an `llm` node (closed
+  ParamSpec) so unknown-parameter detection is still covered.
 
 - **F-A6-7 — template node requires explicit `output_format: "json"`
-  even when the rendered output starts with `[` or `{`**. The
-  parser at `agentflow-nodes/src/nodes/template.rs:97` branches
-  on `output_format` rather than auto-detecting from the rendered
-  shape. Without the explicit hint, a JSON-array-rendering
-  template lands as `FlowValue::Json(String)` and downstream map
-  nodes error `Input 'input_list' must be a JSON array`. Fixing
-  iter 3 took two debug rounds. **Action**: auto-detect — if
-  `rendered.trim_start().starts_with('[' | '{')`, attempt
-  `serde_json::from_str` and fall back to String if it fails.
-  Keep `output_format: "json"` as an explicit override that
-  errors loudly when parse fails (current behaviour). Surfaced
-  during A6 iter 3.
+  even when the rendered output starts with `[` or `{`**.
+  ✅ **CLOSED 2026-05-18**: default branch now opportunistically
+  attempts `serde_json::from_str` when the trimmed rendered output
+  starts with `[` or `{`. Parse failure falls back to String
+  (safe for prose templates). Explicit `output_format: "json"`
+  remains as the strict mode (warns on parse failure). Iter 3
+  refactored to drop the explicit hint.
 
 - **F-A6-8 — Tera `loop.parent.*` introspection doesn't work in
   this Tera version**, so cross-product comma logic via

@@ -181,15 +181,24 @@ fn validate_node_schema(
     }
   }
 
-  for key in node.parameters.keys() {
-    if !known.contains(key.as_str()) {
-      let message = format!(
-        "{}.{}.parameters.{} is not defined in the CLI schema for node type '{}'",
-        path, node.id, key, node.node_type
-      );
-      match options.unknown_parameters {
-        UnknownParameterMode::Warning => report.warnings.push(message),
-        UnknownParameterMode::Error => report.issues.push(message),
+  // F-A6-6: the `template` node is designed to consume arbitrary
+  // Tera context — any key in `parameters` that isn't `template` /
+  // `output_key` / `output_format` is intentional input for the
+  // rendered template. Warning on those is friction for cross-product
+  // builders / list constructors / any list-of-N template pattern.
+  // Skip the unknown-key check for templates; the other ParamSpec
+  // checks above (required / type) still run for the known keys.
+  if node.node_type != "template" {
+    for key in node.parameters.keys() {
+      if !known.contains(key.as_str()) {
+        let message = format!(
+          "{}.{}.parameters.{} is not defined in the CLI schema for node type '{}'",
+          path, node.id, key, node.node_type
+        );
+        match options.unknown_parameters {
+          UnknownParameterMode::Warning => report.warnings.push(message),
+          UnknownParameterMode::Error => report.issues.push(message),
+        }
       }
     }
   }
