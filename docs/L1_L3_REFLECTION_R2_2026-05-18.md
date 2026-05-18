@@ -259,7 +259,7 @@ finding set:
 | ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | agentflow-agents |
 | ~~M~~ DONE | F-A7-2 | Honesty-note path landed 2026-05-18. Permission report tells the truth about shell-not-in-factory. | agentflow-cli |
 | ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | agentflow-llm |
-| M | F-A7-4 | `agentflow doctor` reports active models.yml source | agentflow-cli |
+| ~~M~~ DONE | F-A7-4 | `agentflow doctor` now leads its Config section with a human-readable source label (e.g. `"/Users/x/.agentflow/models.yml (overrides built-in)"`) plus a stable `models_config_source_kind` JSON enum (`user_models_yml` / `user_models_yaml` / `env_override` / `built_in_default`). The legacy Rust-debug `models_config_source` field is kept for back-compat. 3 new doctor unit tests lock the shadowing-suffix invariant. Landed 2026-05-18. | agentflow-cli |
 | M | F-AF-2 (P9.4) | SKILL.md `model:` field — honour or warn | agentflow-skills |
 | M | F-A2-6 | `agentflow skill run --output json` mode | agentflow-cli |
 | M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
@@ -280,14 +280,15 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-20 open items (was 21): F-A2-11 CLI parity closed in addition to the
-earlier F-A2-12 docs sweep.
-0 High, 9 Medium, 11 Low. None require a core refactor; all are
+19 open items (was 20): F-A7-4 closed; A2 follow-up trio
+(11/12/+13 still open) + F-A7-4 means 4 of the original "new from
+R2" findings are now resolved in one sitting.
+0 High, 8 Medium, 11 Low. None require a core refactor; all are
 surface / docs / config / convention scope. The remaining big-ticket
-items are F-A7-4 (`doctor` reports active models.yml source) and
-F-AF-2 (`SKILL.md model:` field honoured or warned). F-A2-13
-(ReAct anti-loop steering) is the only agent-runtime change left
-in the queue.
+M items are F-AF-2 (`SKILL.md model:` field honoured or warned)
+and F-A2-6 (`agentflow skill run --output json`). F-A2-13 (ReAct
+anti-loop steering) is the only agent-runtime change left in the
+queue.
 
 ## 7. Phonon scope reflection — still no change
 

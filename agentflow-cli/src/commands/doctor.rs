@@ -127,6 +127,23 @@ pub struct PathReport {
 
 #[derive(Debug, Serialize)]
 pub struct ConfigReport {
+  /// Stable machine-readable kind of the resolved source (snake_case
+  /// via [`LLMConfigSourceKind`]'s serde rename). Replaces the older
+  /// Rust-debug-formatted `"UserModelsYml"` string for programmatic
+  /// consumers.
+  models_config_source_kind: agentflow_llm::LLMConfigSourceKind,
+  /// Human-readable description: `"~/.agentflow/models.yml (overrides built-in)"`
+  /// when a user file shadows the bundled defaults, `"built-in default_models.yml"`
+  /// when nothing on disk is in effect. Designed for text output / `doctor`
+  /// readers who shouldn't have to translate the enum themselves.
+  ///
+  /// F-A7-4: A7's dogfooding caught the silent override only by grep;
+  /// this label makes the shadowing visible without leaving the
+  /// doctor output.
+  models_config_source_label: String,
+  /// Legacy debug-formatted enum name (e.g. `"UserModelsYml"`). Kept
+  /// for back-compat with anything that pinned to the prior wire
+  /// shape — new consumers should prefer `models_config_source_kind`.
   models_config_source: String,
   models_config_path: String,
   models_config_exists: bool,
@@ -332,6 +349,8 @@ pub async fn build_report(
   let config = match resolved_source.as_ref() {
     Some(source) => inspect_config(source, env_file.as_deref()).await,
     None => ConfigReport {
+      models_config_source_kind: agentflow_llm::LLMConfigSourceKind::BuiltInDefault,
+      models_config_source_label: "unknown (no home directory)".to_string(),
       models_config_source: "unknown".to_string(),
       models_config_path: "unknown".to_string(),
       models_config_exists: false,
@@ -730,14 +749,36 @@ fn security_report() -> SecurityReport {
   }
 }
 
+/// Render an `LLMConfigSource` into the human-friendly label surfaced
+/// by `agentflow doctor` (F-A7-4). The goal is to make the "user file
+/// is shadowing the bundled default" case immediately visible in
+/// text output, since A7's dogfooding only caught the silent override
+/// by grepping the codebase.
+fn source_label(source: &LLMConfigSource) -> String {
+  use agentflow_llm::LLMConfigSourceKind as K;
+  match source.kind {
+    K::BuiltInDefault => "built-in default_models.yml".to_string(),
+    K::UserModelsYml => format!("{} (overrides built-in)", source.display_path()),
+    K::UserModelsYaml => format!("{} (overrides built-in)", source.display_path()),
+    K::EnvOverride => format!(
+      "{} (via AGENTFLOW_MODELS_CONFIG, overrides ~/.agentflow + built-in)",
+      source.display_path()
+    ),
+  }
+}
+
 async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> ConfigReport {
+  let source_kind = source.kind;
   let source_name = format!("{:?}", source.kind);
   let source_path = source.display_path();
+  let source_label = source_label(source);
   let Some(path) = source.path.as_ref() else {
     return match LLMConfig::from_default_source().await {
       Ok((config, _)) => ConfigReport {
-        models_config_source: source_name,
-        models_config_path: source_path,
+        models_config_source_kind: source_kind,
+        models_config_source_label: source_label.clone(),
+        models_config_source: source_name.clone(),
+        models_config_path: source_path.clone(),
         models_config_exists: true,
         models_config_loadable: true,
         models: config.models.len(),
@@ -747,6 +788,8 @@ async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> Co
         error: None,
       },
       Err(e) => ConfigReport {
+        models_config_source_kind: source_kind,
+        models_config_source_label: source_label,
         models_config_source: source_name,
         models_config_path: source_path,
         models_config_exists: false,
@@ -762,6 +805,8 @@ async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> Co
 
   if !path.exists() {
     return ConfigReport {
+      models_config_source_kind: source_kind,
+      models_config_source_label: source_label,
       models_config_source: source_name,
       models_config_path: source_path,
       models_config_exists: false,
@@ -796,6 +841,8 @@ async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> Co
       missing_env_vars.dedup();
 
       ConfigReport {
+        models_config_source_kind: source_kind,
+        models_config_source_label: source_label,
         models_config_source: source_name,
         models_config_path: source_path,
         models_config_exists: true,
@@ -808,6 +855,8 @@ async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> Co
       }
     }
     Err(e) => ConfigReport {
+      models_config_source_kind: source_kind,
+      models_config_source_label: source_label,
       models_config_source: source_name,
       models_config_path: source_path,
       models_config_exists: true,
@@ -880,7 +929,15 @@ fn print_text_report(report: &DoctorReport) {
   println!();
 
   println!("Config:");
-  println!("  source: {}", report.config.models_config_source);
+  // F-A7-4: lead with the human-readable label so users can see at a
+  // glance whether their `~/.agentflow/models.yml` is shadowing the
+  // bundled defaults. The legacy enum-debug `source` line below is
+  // preserved for diff-stability with consumers that grep for it.
+  println!("  source: {}", report.config.models_config_source_label);
+  println!(
+    "  source (kind): {:?}",
+    report.config.models_config_source_kind
+  );
   println!("  path: {}", report.config.models_config_path);
   println!(
     "  models config: {}",
@@ -1079,7 +1136,11 @@ fn sandbox_warnings(backend: &str, enforcement: SandboxEnforcement) -> Vec<Strin
 
 #[cfg(test)]
 mod tests {
-  use super::{OutputFormat, SandboxEnforcement, parse_env_key, sandbox_warnings};
+  use super::{
+    LLMConfigSource, OutputFormat, SandboxEnforcement, parse_env_key, sandbox_warnings,
+    source_label,
+  };
+  use std::path::PathBuf;
 
   #[test]
   fn output_format_rejects_unknown_values() {
@@ -1121,5 +1182,48 @@ mod tests {
   fn sandbox_warnings_empty_when_enforcing() {
     let warnings = sandbox_warnings("seccomp", SandboxEnforcement::Enforcing);
     assert!(warnings.is_empty());
+  }
+
+  /// F-A7-4: built-in source renders as a static label, no path.
+  #[test]
+  fn source_label_built_in_default() {
+    let source = LLMConfigSource {
+      kind: agentflow_llm::LLMConfigSourceKind::BuiltInDefault,
+      path: None,
+      warnings: Vec::new(),
+    };
+    assert_eq!(source_label(&source), "built-in default_models.yml");
+  }
+
+  /// F-A7-4: user `~/.agentflow/models.yml` MUST flag itself as
+  /// overriding the built-in, otherwise the silent-override surprise
+  /// from A7 dogfooding can recur. Regression-locks the "(overrides
+  /// built-in)" suffix that the doctor text output relies on.
+  #[test]
+  fn source_label_user_models_yml_marks_shadow() {
+    let source = LLMConfigSource {
+      kind: agentflow_llm::LLMConfigSourceKind::UserModelsYml,
+      path: Some(PathBuf::from("/home/u/.agentflow/models.yml")),
+      warnings: Vec::new(),
+    };
+    let label = source_label(&source);
+    assert!(label.contains("/home/u/.agentflow/models.yml"), "{label}");
+    assert!(label.contains("overrides built-in"), "{label}");
+  }
+
+  /// F-A7-4: `AGENTFLOW_MODELS_CONFIG` env override should be the
+  /// loudest of the three (it shadows BOTH ~/.agentflow AND the
+  /// built-in defaults), so the label calls that out explicitly.
+  #[test]
+  fn source_label_env_override_names_env_var() {
+    let source = LLMConfigSource {
+      kind: agentflow_llm::LLMConfigSourceKind::EnvOverride,
+      path: Some(PathBuf::from("/tmp/custom-models.yml")),
+      warnings: Vec::new(),
+    };
+    let label = source_label(&source);
+    assert!(label.contains("/tmp/custom-models.yml"), "{label}");
+    assert!(label.contains("AGENTFLOW_MODELS_CONFIG"), "{label}");
+    assert!(label.contains("overrides"), "{label}");
   }
 }
