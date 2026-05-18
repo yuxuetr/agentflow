@@ -171,8 +171,9 @@ agentflow-nodes/src/
 
 **Configuration System**:
 - Built-in defaults in `agentflow-llm/templates/default_models.yml`
-- User config: `~/.agentflow/models.yml` (auto-generated on first use)
-- Provider configs in `agentflow-llm/config/models/`
+  (authoritative; embedded via `include_str!`)
+- User config: `~/.agentflow/models.yml` (takes precedence over
+  built-in when present; auto-generated on first use)
 
 **Features**:
 - ✅ Unified LLM interface (AgentFlow fluent API)

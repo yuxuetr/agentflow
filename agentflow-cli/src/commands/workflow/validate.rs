@@ -228,6 +228,19 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
       if !node.parameters.contains_key("allowed_commands") {
         notes.push("permissive: no allowed_commands constraint".to_string());
       }
+      // F-A7-2 honesty note: the CLI factory does NOT currently build a
+      // `type: shell` workflow node — schema validation catches this
+      // separately ("not supported by the CLI workflow factory"), but
+      // a reader of the permission report alone would assume shell is
+      // usable. Surface the gap explicitly so the report doesn't lie by
+      // omission. Skill / harness paths can still use `shell` via the
+      // ToolRegistry; only YAML workflows are affected.
+      notes.push(
+        "not wired into the CLI workflow factory; \
+         use the shell tool from a skill / harness instead, \
+         or shell out from a custom AsyncNode binary"
+          .to_string(),
+      );
       (PermissionCategory::Exec, vec!["exec".to_string()])
     }
     "mcp" => {

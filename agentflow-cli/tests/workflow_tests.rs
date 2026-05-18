@@ -683,7 +683,12 @@ fn cli_workflow_validate_explain_permissions_shell_node_capability() {
     .stdout(predicate::str::contains("capabilities: [exec]"))
     .stdout(predicate::str::contains(
       "allowed_commands: [uname, uptime]",
-    ));
+    ))
+    // F-A7-2: permission report tells the truth — shell isn't wired
+    // into the CLI workflow factory yet, even though its permission
+    // shape is known. Prevents the report from misleading authors
+    // into thinking `type: shell` will run from YAML.
+    .stdout(predicate::str::contains("not wired into the CLI workflow factory"));
 }
 
 // --- P3.5: MCP / agent / multi_agent permission classification ----------

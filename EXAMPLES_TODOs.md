@@ -598,18 +598,34 @@ markdown changelog 段。
   → L1 binary 是对的，skill 形态在跟架构对抗。
   `skill.toml.rejected` 文件保留在 binary 旁作为文档。
 - **F-A7-2 — `type: shell` 在 permission classifier 里但不在 CLI
-  factory 里**。`agentflow-cli/src/commands/workflow/validate.rs`
-  `classify_node` 把 `"shell"` 列为 `PermissionCategory::Exec`，
-  暗示它是 workflow YAML 节点类型。但
-  `agentflow-cli/src/executor/factory.rs` 没有 `"shell"` 分支 ——
-  `type: shell` 的 workflow 在 run time 会失败。要么从 classifier
-  drop `"shell"`，要么在 factory 加 branch wrap `agentflow_tools::ShellTool`。
-  不一致。
+  factory 里** —— **DONE 2026-05-18** (honesty-note 路线，不是 full
+  factory add)。`classify_node` 的 shell 分支保留（permission shape
+  仍然是有信息量的）但加显式 note：
+  "not wired into the CLI workflow factory; use the shell tool from
+  a skill / harness instead, or shell out from a custom AsyncNode
+  binary"。这样 `agentflow workflow validate --explain-permissions`
+  对 `type: shell` 节点诚实告知它在 YAML 不能直接跑。Full ShellNode
+  factory wrap 需要设计 SandboxPolicy 注入、allowed_commands YAML
+  schema、`Arc<SandboxPolicy>` 从 workflow config 到 Tool 的串接 ——
+  ~200-300 LOC 的真正功能而不是 small fix。A1/A1.5/A7/A2 dogfooding
+  没遇到 "shell-in-YAML 必需" 场景，可待真有需求时再做。 Schema
+  validator 一直能 catch `type: shell` 为 "not supported by the
+  CLI workflow factory"（unchanged），permission report 现在跟它
+  对齐口径。Test
+  `cli_workflow_validate_explain_permissions_shell_node_capability`
+  updated to assert the new note。
 - **F-A7-3 — Model registry 加载：per-provider `config/models/*.yml`
-  是死代码**。真实 registry source 是
-  `agentflow-llm/templates/default_models.yml`（via `include_str!`）。
-  `agentflow-llm/config/models/moonshot.yml` 等文件看上去像权威配置
-  但没被 `include_str!` 也没被 fs-load。要么删要么 wire。当前误导。
+  是死代码** —— **DONE 2026-05-18**。删了 6 个 dead 文件
+  (`anthropic.yml`/`dashscope.yml`/`google.yml`/`moonshot.yml`/
+  `openai.yml`/`step.yml`)。背景：`agentflow-llm/src/config/vendor_configs.rs`
+  是一个 split 工具（把 monolithic config.yml 切成 per-vendor 文件），
+  但 split 输出从来没被 runtime registry 读取，是 misleading dead
+  artefact。同时 update 3 个误导性文档（`AGENTS.md` × 2 处，
+  `IMPLEMENTATION_STATUS.md`，`GRANULAR_MODEL_TYPES.md`）—— 之前
+  这些文档都把 `config/models/` 当成权威路径，导致添加新 model 的
+  contributor（包括我）改错地方。现在统一指向真实源
+  `templates/default_models.yml`。`config/config.yml` + vendor_configs
+  split 工具本身保留（独立用途，跟 registry 加载是两回事）。
 - **F-A7-4 — 用户级 `~/.agentflow/models.yml` 静默覆盖 built-in
   registry**。`AgentFlow::init()` 优先级是 AGENTFLOW_MODELS_CONFIG
   > `~/.agentflow/models.yml` > built-in。意味着：往

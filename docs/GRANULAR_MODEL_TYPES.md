@@ -343,4 +343,5 @@ The granular type system is designed to accommodate future AI model types:
 
 For more examples and detailed usage, see:
 - `examples/granular_types_demo.rs` - Comprehensive examples
-- `config/models/step-granular.yml` - Configuration examples
+- `agentflow-llm/templates/default_models.yml` - authoritative model
+  registry with `type:` per model (text / multimodal / tts / etc.)

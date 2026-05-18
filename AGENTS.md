@@ -550,8 +550,12 @@ pub struct ChromaStore { /* ... */ }
 ### Key Configuration Files
 - `Cargo.toml` - Workspace configuration
 - `agentflow-cli/examples/workflows/` - Example workflow definitions
-- `agentflow-llm/config/models/` - LLM provider configurations
-- `agentflow-llm/templates/` - Default configuration templates
+- `agentflow-llm/templates/default_models.yml` - **Authoritative built-in
+  model registry** (embedded via `include_str!`). User overrides go to
+  `~/.agentflow/models.yml`. Per-provider files under
+  `agentflow-llm/config/models/` were deleted 2026-05-18 (F-A7-3 in
+  EXAMPLES_TODOs.md) — they were dead artefacts of a split utility
+  and never read at runtime.
 
 ### Important Source Files
 - `agentflow-core/src/lib.rs` - Core exports and module organization
@@ -590,8 +594,10 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 ### Adding New LLM Provider (Production-Ready)
 1. Create provider module in `agentflow-llm/src/providers/`
 2. Implement provider trait with authentication and API calls
-3. Add configuration in `agentflow-llm/config/models/`
-4. Update model registry in `agentflow-llm/src/registry/`
+3. Add model entries to `agentflow-llm/templates/default_models.yml`
+   (authoritative registry, embedded via `include_str!`)
+4. Update model registry in `agentflow-llm/src/registry/` if the new
+   provider needs new dispatch logic
 5. Add examples and tests
 
 ### Adding New Node Type (Production-Ready)

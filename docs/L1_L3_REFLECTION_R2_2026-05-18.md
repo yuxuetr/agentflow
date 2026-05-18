@@ -164,8 +164,8 @@ Combining R1's 20 + R2's 20.
 | F-AF-3 | R1 A1 | **DONE P9.3** | Auto-load `~/.agentflow/.env` in CLI entry | — |
 | F-AF-4 | R1 | TODO | Crisper Moonshot/Anthropic init error on fresh hosts | L |
 | **F-A2-1** | R2 A2 | **DONE 2026-05-18** | Actual root cause was different: when `max_tokens` truncates LLM response mid-JSON, parser falls to Malformed and shows the raw `{"thought":..,"answer":..` envelope. Fix: best-effort `answer` field extraction in `react/parser.rs` + `warn!` log hinting at `max_tokens`. 6 new tests. | — |
-| **F-A7-2** | R2 A7 | **NEW TODO** | `type: shell` in permission classifier but not in CLI factory; YAML workflows with `type: shell` would crash at run time | M |
-| **F-A7-3** | R2 A7 | **NEW TODO** | `agentflow-llm/config/models/*.yml` per-provider files are dead code (real source is `templates/default_models.yml`); either wire in or delete | L |
+| **F-A7-2** | R2 A7 | **DONE 2026-05-18** | Honesty-note path (not full factory add): permission report's shell branch now emits "not wired into the CLI workflow factory" note so authors don't see misleading "→ exec" classification and assume YAML will run. Full ShellNode factory add deferred — no real need surfaced. | — |
+| **F-A7-3** | R2 A7 | **DONE 2026-05-18** | Deleted 6 dead `config/models/*.yml` files. Updated AGENTS.md ×2, IMPLEMENTATION_STATUS.md, GRANULAR_MODEL_TYPES.md docs that misdirected contributors to the wrong file. | — |
 
 ### 5.2 phonon code changes (3 items, all unchanged from R1)
 
@@ -254,13 +254,13 @@ finding set:
 | Pri | ID | Action | Owner |
 | --- | --- | --- | --- |
 | ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | agentflow-agents |
-| **M** | F-A7-2 | Resolve `type: shell` schema-vs-factory inconsistency (either drop from classifier or add factory branch wrapping `ShellTool`) | agentflow-cli |
+| ~~M~~ DONE | F-A7-2 | Honesty-note path landed 2026-05-18. Permission report tells the truth about shell-not-in-factory. | agentflow-cli |
 | ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | agentflow-llm |
 | M | F-A7-4 | `agentflow doctor` reports active models.yml source | agentflow-cli |
 | M | F-AF-2 (P9.4) | SKILL.md `model:` field — honour or warn | agentflow-skills |
 | M | F-A2-6 | `agentflow skill run --output json` mode | agentflow-cli |
 | M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
-| M | F-A7-3 | Delete or wire-in dead `config/models/*.yml` files | agentflow-llm |
+| ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
 | L | F-DOC-2 (P9.5) | `FlowValue` field reference in docs/AGENT_SDK.md | agentflow docs |
