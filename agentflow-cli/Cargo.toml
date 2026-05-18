@@ -69,6 +69,12 @@ flate2 = "1.0"
 anyhow = "1.0"
 thiserror = "1.0"
 
+# Auto-load ~/.agentflow/.env on every CLI invocation. Silent no-op
+# when the file is missing; existing env vars take precedence over
+# file values (dotenvy's default behaviour) so operator-provided
+# overrides via `MOONSHOT_API_KEY=... agentflow ...` keep working.
+dotenvy = "0.15"
+
 # Logging and output
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

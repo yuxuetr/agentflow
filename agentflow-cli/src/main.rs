@@ -1022,8 +1022,24 @@ enum RagCommands {
   },
 }
 
+/// Load `~/.agentflow/.env` if present so operators don't have to
+/// `source` it before every CLI invocation. Silent no-op when the
+/// file is missing (e.g. CI without ~/.agentflow/) — and process
+/// env vars take precedence over file values (dotenvy default), so
+/// inline overrides like `MOONSHOT_API_KEY=other agentflow ...` keep
+/// working.
+///
+/// Called before `Cli::parse()` so any flag whose default reads an
+/// env var (none today, but future-proofing) sees the loaded values.
+fn load_agentflow_dotenv() {
+  if let Some(home) = std::env::home_dir() {
+    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+  }
+}
+
 #[tokio::main]
 async fn main() {
+  load_agentflow_dotenv();
   let cli = Cli::parse();
 
   let result = match cli.command {

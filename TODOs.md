@@ -2168,19 +2168,20 @@ so this segment is small and time-bound.
     - 3 common pitfalls: forgetting interpreter defaults, full-path
       instead of basename, case / extension mismatch
 
-- TODO P9.3 Auto-load `~/.agentflow/.env` from agentflow CLI:
-  - **Why** (F-AF-3): every `agentflow workflow run` / `skill run` /
-    etc. invocation currently requires `source ~/.agentflow/.env`
-    upfront. Friction at every iteration. A1 podcast app already
-    proved the `dotenvy::from_path(home/.agentflow/.env)` pattern
-    works cleanly (silent no-op when missing, respects existing env).
-  - **What**: add `dotenvy` dep to `agentflow-cli`; call at top of
-    `main()` before `Cli::parse()`. Match agentflow's own profile
-    convention (env vars take precedence — don't override
-    operator-provided values).
-  - **Acceptance**: a fresh shell with no `MOONSHOT_API_KEY`
-    exported can run `agentflow skill validate ...` and the binary
-    finds the key from `~/.agentflow/.env`.
+- DONE P9.3 Auto-load `~/.agentflow/.env` from agentflow CLI:
+  - `dotenvy = "0.15"` added as `agentflow-cli` dep.
+  - New `load_agentflow_dotenv()` helper in
+    `agentflow-cli/src/main.rs` called at the very top of `main()`
+    (before `Cli::parse()`); silent no-op when the file is missing.
+    Process env vars take precedence over file values (dotenvy
+    default), so inline overrides like `MOONSHOT_API_KEY=other
+    agentflow ...` continue to work.
+  - Verified with `env -i HOME=$HOME PATH=$PATH agentflow doctor`:
+    shell shows `MOONSHOT_API_KEY: NOT SET`, but `agentflow doctor`
+    reports only `ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY`
+    missing — confirms MOONSHOT/MINIMAX/STEPFUN got loaded from
+    `~/.agentflow/.env`.
+  - Skill validate still works clean; no regressions.
 
 - TODO P9.4 SKILL.md `model:` frontmatter handling:
   - **Why** (F-AF-2): SKILL.md `model:` in YAML frontmatter is
