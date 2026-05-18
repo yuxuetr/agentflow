@@ -1,6 +1,11 @@
 # L1 + L3 Integration Validation — Reflection R2
 
 **Date**: 2026-05-18 (same day as R1, later in the session)
+**Superseded by**: [R3](L1_L3_REFLECTION_R3_2026-05-18.md) for the
+action queue only — R3 records the sweep that closed all 8
+agentflow-side R2 findings. R2 stays authoritative for the L1↔L3
+selection rule, the per-application matrix, and the original
+40-finding inventory.
 **Supersedes**: [R1](L1_L3_REFLECTION_2026-05-18.md) for the action queue and
 the L1↔L3 selection rule. R1 retained as the first-pass historical
 snapshot — its analysis is still correct as far as it went; R2 just
