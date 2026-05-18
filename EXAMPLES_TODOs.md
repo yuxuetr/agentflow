@@ -33,7 +33,7 @@ Last updated: 2026-05-17
 | --- | --- | --- | --- | --- |
 | A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP — live smoke ✅ (1st run 2026-05-18) | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
 | A1.5 | [podcast-mastering](examples/applications/podcast-mastering/) | WIP — live smoke ✅ (1st run 2026-05-18) | **L3 validation**: skill + `[[mcp_servers]]` + ReAct agent + native tool calling driving phonon-mcp subprocess | phonon-mcp binary (`cargo build --release -p phonon-mcp`), Moonshot LLM |
-| A2 | [code-reviewer](examples/applications/code-reviewer/) | TODO | ReAct agent, MCP (github), skill packaging, tool admission | gh CLI / GitHub MCP server |
+| A2 | [code-reviewer](examples/applications/code-reviewer/) | WIP — live ✅ as L3 skill (2026-05-18) | ReAct agent + shell tool with git/gh allowed_commands; multi-call decision-making | gh CLI + git (system installs), kimi-k2.6 |
 | A3 | [research-assistant](examples/applications/research-assistant/) | TODO | Arxiv node, RAG, memory, scheduled run | OpenAI/任一 LLM, 可选 Qdrant |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
 | A5 | [weekly-digest](examples/applications/weekly-digest/) | TODO | RAG, LLM, HTTP (SMTP/SendGrid), scheduled | SendGrid/Mailgun/SMTP |
@@ -325,13 +325,87 @@ code-reviewer` 后立即用。
 - [ ] 写 `README.md`
 - [ ] 设计 persona（评审风格、关注点）
 - [ ] 选 MCP server vs shell 调 gh CLI
-- [ ] 写 `skill.toml` + persona prompt
-- [ ] 准备 3 个真实 PR fixture
-- [ ] 测「敏感建议先走人工审批」（Harness Mode approval flow）
+- [ ] 把 review 作为 GitHub PR comment 自动发回（write-side，Harness
+  Mode approval gate 验证 —— A2 spec 第 3 点，故意推到下一轮）
+- [ ] swap shell+gh 路径成 GitHub MCP server (`@modelcontextprotocol
+  /server-github`)，验证 MCP 路径下的同样 skill
+- [ ] 跑多个 PR fixture，覆盖：超大 diff (>5000 行)、跨语言 (TS+Rust)、
+  纯 docs 改动 (Strengths/Verdict 应不同) 等场景
+- [ ] 修一下 A2-finding F-A2-1：`agentflow skill run` 顶层
+  `🤖 Agent: <answer>` 行打印空字符串问题（answer 在 trace 里存在）
 
-**DONE 子项**: （待填）
+**DONE 子项**:
+- [x] persona / model / tool admission 设计：kimi-k2.6 + shell with
+  `allowed_commands = ["git", "gh"]`
+- [x] 写 `skill.toml`（带 persona 极度显式说明"用用户原话 reference，
+  不要替换"，应用 A7 finding F-A7-1 教训）
+- [x] live 跑通：`Review commit 11b3707`（A1 podcast commit 1166-line
+  diff），kimi-k2.6 2 个 tool call + 高质量 markdown review
+- [x] review 实际找到 5 个真实 issue 包括：phonon path dep 跨 repo
+  不可移植（🔴）、`json!` hack（🟡）、3 个重复 match arm（🟡）、
+  `unsafe env::set_var` UB（🟡）、speaker name 字符串脆弱匹配（🟡）
+- [x] 把第一次 review 输出存为 fixture：`sample-reviews/commit-11b3707-A1-podcast.md`
+- [x] 写 README（架构 + 决策日志 + 抽 answer 的 python 一行解决方案）
 
-**Findings**: （待填）
+**Findings** (2026-05-18, A2 first dogfooding pass):
+
+- **F-A2-1 — `agentflow skill run` 顶层 `🤖 Agent:` 行打印空字符串
+  即便 answer 已 produce**。`AgentRunResult.answer` 没被 final_answer
+  event 填充。需要 `--trace` 然后从 JSON 里 extract，dogfooding 很
+  烦。**改进**：在 `agentflow-agents` 的 ReAct 实现里，当 emit
+  `final_answer` event 时也写 `result.answer = Some(answer)`，
+  让 `skill run` 输出能正常显示。**优先级 High** —— 影响每个 skill
+  的可用性。
+- **F-A2-2 — L3 skill 在 "agent-decides" 任务上工作得很好**。跟
+  A1.5 一起验证：当 agent 真有决策（不是 pass-through）时，kimi-k2.6
+  能按 persona 步骤走 2-3 个 tool call、做合理决定、输出结构化结果。
+  对比 A7 changelog-writer（pass-through 失败）：这次成功侧面 confirm
+  reflection rule 选 tier 的正确性。**Positive validation**。
+- **F-A2-3 — kimi-k2.6 严格遵守 persona 的 "用用户原话 reference"
+  指令**。给 `Review commit 11b3707`，agent 直接调
+  `git show --stat 11b3707` + `git show 11b3707`，没出现 A7 那样
+  把 hash 换成 `v1.0.0..HEAD` 的 hallucination。Persona 写得明确
+  + reference 在用户原话里是唯一显眼字符串，两个条件共同生效。
+  **Positive — A7 教训直接 apply 到 A2 起作用**。
+- **F-A2-4 — Review 质量超预期**。在 1166-line diff 里找到 5 个
+  真 issue（不是 nit 灌水），severity 分类合理（🔴 vs 🟡 vs 🔵），
+  甚至给出可执行的修改建议（"用 `&Path` 而非 `&PathBuf`"、"引入
+  `serial_test`"）。Strengths 段也客观平衡，Verdict 决断果敢
+  （🟡 Approve with comments）。**Positive**。
+- **F-A2-5 — 2 次 run 的 review 不一样但都对**。第一次跑（trace 早期
+  在 stderr 里看到的）找到 unsafe env + `/tmp` hardcode + edition=2024
+  兼容性 + return-vs-panic skip pattern + media_type 大小写。第二次
+  跑（保存的 sample fixture）找到 phonon path dep 跨 repo + json!
+  hack + 3 重复 match arm + unsafe env + speaker name 脆弱匹配 +
+  `&Path` 惯用法 + io::Error chain 丢失。**共有 1 个（unsafe env），
+  其余完全不重叠**。说明 LLM-based code review 是 non-deterministic
+  但每次都覆盖一组合理的 issue 子集。dogfooding 含义：对重要 PR
+  可能要 review 多次取并集。**或** 在 persona 里要求 agent 系统性
+  walk 每个文件而不是挑几个深入。
+- **F-A2-6 — `--trace` 的 JSON 输出 schema 易解析但 stdout 既有
+  人类格式又夹 JSON**。`agentflow skill run --trace` 把人类摘要
+  + JSON trace 混在 stdout，从中抽 answer 需要小段 python 找 brace
+  匹配（README 里有 snippet）。**改进**：分两路输出 —— 人类格式
+  到 stderr，JSON 到 stdout，便于 pipe parsing。或加 `--output json`
+  / `--output stream-json` 像 harness 那样的 mode。
+- **F-A2-7 — 长 diff 推理慢**。1166-line diff → 200s wall clock
+  (kimi-k2.6)。多数时间是 LLM 思考。对 daily PR review 流来说能
+  接受；对几千行的大 PR 可能太慢。考虑：先 `git diff --stat` 让
+  agent 决定关键文件，再分批 review？或 split 成多个 LLM 调用。
+- **F-A2-8 — 顺手验证 P9.3 dotenvy auto-load 在 skill run 路径下
+  也工作**。`MOONSHOT_API_KEY` 没在 shell env 里但 skill run 能拿
+  到 key 跑 kimi-k2.6。**Positive，P9.3 的覆盖面 confirmed beyond
+  doctor / workflow run**。
+- **F-A2-9 — Harness Mode approval gate 验证 deferred**。原 A2 spec
+  第 3 点是测「敏感建议先走人工审批」。当前 iteration 是 read-only
+  跑通，没用 write-side tool，没经 Harness Mode。下一轮 iteration
+  加 `add_review_comment` 类似的写 PR comment 工具时再走 Harness
+  approval flow。**不是 finding 是 scope 显式延后**。
+- **F-A2-10 — 我意识到自己花了不少 commit 没 push 也没用 GitHub PR**。
+  整个 dogfooding 都在本地 commit，从没创建过真的 PR。A2 用 `gh pr`
+  调远程 GitHub 不在本仓库 demo 范围内。**侧面 finding**：dogfooding
+  跑了一段后开始模拟"如果有 PR 流程会怎样"才能更有意义。下次可能
+  在另一个有真 PR 流的仓库做。
 
 ---
 
