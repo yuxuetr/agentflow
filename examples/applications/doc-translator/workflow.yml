@@ -28,11 +28,19 @@ nodes:
       # cap of 3. Without this, N=4 fan-out hit 429 on the 4th item
       # because `map parallel` used to spawn unbounded.
       max_concurrent: 3
+      # F-A6-4: source is English, so we DON'T include `en` here.
+      # Asking the LLM to "translate to English" when the source is
+      # already English degenerates: moonshot-v1-128k returned
+      # Chinese (the model picked a different language because the
+      # null-op was unintelligible). Production workflows should
+      # always guard `source_lang != target_lang` before dispatch.
+      # See `examples/README.md` § Conventions for the general
+      # version of this trap.
       input_list:
-        - { lang: "en", lang_name: "English" }
         - { lang: "ja", lang_name: "Japanese" }
         - { lang: "fr", lang_name: "French" }
         - { lang: "de", lang_name: "German" }
+        - { lang: "zh", lang_name: "Chinese" }
       template:
         # Step 1: render the per-language translation prompt. `item`
         # is the map iteration value; `item.lang_name` is the target

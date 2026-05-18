@@ -772,6 +772,14 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   step (Tera `{% if %}`). **Not an agentflow bug**, but worth
   documenting in examples conventions: "translation workflows
   should always check source != target before LLM dispatch".
+  ✅ **CLOSED 2026-05-18**: added a translation-specific bullet
+  to `examples/README.md` § Conventions covering the trap +
+  recommending either filtering `input_list` or guarding via Tera.
+  The A6 workflow.yml itself drops `en` from input_list (source
+  is English) so the demo doesn't hit the trap; comment in the
+  workflow points readers at the conventions doc. Re-running A6
+  with the new `[ja, fr, de, zh]` set produces 4 distinct-language
+  translations with no en→en degeneracy.
 
 ---
 

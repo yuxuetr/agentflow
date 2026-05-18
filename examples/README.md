@@ -33,6 +33,20 @@ referenced file for the runnable code, comments, and run commands.
   *generation* (summarisation, translation, briefing) are usually
   fine on one run because the output is wholly produced rather than
   filtered down from a larger candidate space.
+- **Translation workflows: always guard `source_lang != target_lang`
+  before LLM dispatch** (F-A6-4). Asking a translation model to
+  "translate to {lang}" when the source is already in `{lang}` is a
+  null-op that the model can't represent — moonshot-v1-128k's
+  observed behaviour on en→en was to switch to Chinese (any non-en
+  language reads as a more plausible request than the
+  unintelligible identity). The trap doesn't show as a crash; it
+  silently corrupts one cell of an N×K fan-out. Fix at the
+  workflow level: either filter `input_list` to exclude degenerate
+  pairs (the doc-translator example does this for its English
+  source — see [`examples/applications/doc-translator/workflow.yml`](applications/doc-translator/workflow.yml)),
+  or add a Tera guard in the per-iteration prompt builder
+  (`{% if item.lang != source_lang %} ... {% endif %}`). Either
+  way, validate the language pair before paying for the LLM call.
 
 ## Matrix
 

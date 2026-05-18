@@ -65,9 +65,11 @@ agentflow workflow validate examples/applications/doc-translator/workflow.yml
 - **Wall clock**: ~5s for N=4 parallel. First run (before F-A6-1
   fix) had all 4 fire simultaneously and the 4th hit a 429.
   Second run (after `max_concurrent: 3` shipped) is 4/4 OK.
-- **Translation quality**: usable but uneven. Japanese / French /
-  German came back correct. The English request still produces
-  Chinese (separate issue — see F-A6-4).
+- **Translation quality**: usable. Current lang set
+  (`ja / fr / de / zh`) returns four distinct correct
+  translations. The earlier en→en degeneracy was F-A6-4 (now
+  fixed by dropping `en` from the input set since the source is
+  already English).
 - **Rate-limit collision (was a finding, now fixed)**: F-A6-1's
   unbounded `tokio::spawn` blew past Moonshot's 3-concurrent cap;
   the closing commit adds the `max_concurrent` knob this workflow
@@ -132,6 +134,13 @@ list.
   before dispatching. Easy guard at the `build_prompt` template
   step (Tera `{% if item.lang != "en" %} ... {% endif %}` or
   workflow-level filter). Not an agentflow bug.
+  ✅ **CLOSED 2026-05-18**: workflow.yml now uses
+  `[ja, fr, de, zh]` (English source → 4 non-English targets) so
+  the demo doesn't hit the trap itself. A comment in workflow.yml
+  points readers at `examples/README.md` § Conventions, which got
+  a translation-specific bullet covering the trap pattern and two
+  fix options (filter `input_list` or Tera guard in the prompt
+  builder).
 
 ## What's NOT in iteration 1 (iter 2+ roadmap)
 
