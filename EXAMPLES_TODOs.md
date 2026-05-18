@@ -410,11 +410,74 @@ code-reviewer` 后立即用。
   跑通，没用 write-side tool，没经 Harness Mode。下一轮 iteration
   加 `add_review_comment` 类似的写 PR comment 工具时再走 Harness
   approval flow。**不是 finding 是 scope 显式延后**。
+  - **Status (2026-05-18 iter 2)**: ✅ CLOSED via
+    `examples/applications/code-reviewer-write/`. End-to-end approval
+    flow validated; see F-A2-11..F-A2-13 for follow-ups surfaced
+    during validation.
 - **F-A2-10 — 我意识到自己花了不少 commit 没 push 也没用 GitHub PR**。
   整个 dogfooding 都在本地 commit，从没创建过真的 PR。A2 用 `gh pr`
   调远程 GitHub 不在本仓库 demo 范围内。**侧面 finding**：dogfooding
   跑了一段后开始模拟"如果有 PR 流程会怎样"才能更有意义。下次可能
   在另一个有真 PR 流的仓库做。
+- **F-A2-11 — `agentflow harness run` CLI doesn't wrap registry with
+  HookedTool / ApprovalProvider**. Trying to use the CLI for the
+  write-side validation surfaced that `agentflow-cli/src/commands/
+  harness/run.rs` builds a bare `ReActAgent` from the skill but never
+  calls `agentflow_harness::wrap_registry(...)`. Only the server's
+  `LiveHarnessExecutor` wires it. So Harness Mode's approval flow is
+  only reachable today via (a) the HTTP gateway or (b) hand-rolled
+  binaries (which is what `code-reviewer-write` had to do). **Action**:
+  promote the registry-wrap + approval-provider-injection step into
+  `agentflow harness run` (probably gated on a `--profile` flag or
+  on the skill's manifest declaring write tools). Until then the CLI
+  ≠ production Harness contract, and that asymmetry needs a doc fix
+  at minimum.
+- **F-A2-12 — `HarnessProfile::Local` (default) doesn't trigger
+  approval for NonIdempotent tools without an explicit pre-hook**.
+  Spent ~15min debugging "why does the approval prompt never fire?"
+  before reading `agentflow-harness/src/hooks_runtime.rs::
+  resolve_proceed_decision` (~line 369). The escalation rule is:
+  `Production` profile auto-escalates NonIdempotent → RequireApproval,
+  but `Local` profile only fires when a pre-hook explicitly returns
+  `PreToolDecision::RequireApproval`. With no pre-hooks (the
+  beginner setup), Local just auto-allows everything. This is the
+  H2 design (opt-in by profile or hook) but the default-Local
+  behaviour is **silently permissive** which makes the approval
+  feature easy to miss in dogfooding. **Action**: (a) docstring for
+  `HarnessProfile::default()` and `HookConfig::new` should call out
+  this asymmetry; (b) consider a `HarnessProfile::Strict` variant
+  that escalates everything for testing; (c) at minimum the binary
+  template in `docs/HARNESS_MODE.md` should show `.with_profile(
+  HarnessProfile::Production)`.
+- **F-A2-13 — `moonshot-v1-128k` loops on identical tool calls and
+  hallucinates commit hashes when the value lives in the user
+  prompt**. Initial persona had `git show <用户给的 commit 引用>`
+  and the model invented `4b4ab6cd0f` / `abc1234` on iteration 1
+  despite explicit "verbatim" wording. Inlining the literal commit
+  into the persona (`git show 11b3707` rendered at runtime) fixed
+  the hallucination — both calls then carried the correct hash —
+  but the model still re-called `git show` twice instead of
+  advancing to `file:write` step 2. Persona escalation ("if the
+  last observation is git-show output, you MUST call file:write
+  now") didn't dislodge the loop. **Workarounds tried**:
+  - (a) cap `max_tool_calls` (4) — bounds budget cost but only
+    validates the shell approval path.
+  - (b) **`--prefetch-diff` mode (shipped in `code-reviewer-write`)**:
+    run `git show` outside the agent, inline the diff into the user
+    prompt, register only `FileTool`. Reliably reaches the
+    file:write approval path with 1 tool call and clean
+    `FinalAnswer` stop. Recommended dogfooding path for
+    moonshot-v1-128k.
+  - (c) (not tried this run): upgrade to a stronger model
+    (kimi-k2.6 / kimi-thinking-preview) — needs API tier access,
+    both 404 on this account today.
+  - (d) (not tried this run): wrap the script in `PlanExecuteAgent`
+    for a hard pre-committed 2-step plan.
+  **Adjacent agentflow gap**: ReAct's anti-loop heuristic could
+  detect "same tool + same params, twice in a row" and synthesise
+  a stronger steering message ("you already ran this; analyse the
+  prior observation instead"). Today it just lets the model loop
+  until budget exhausts.
 
 ---
 

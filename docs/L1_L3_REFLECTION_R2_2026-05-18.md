@@ -209,8 +209,11 @@ Combining R1's 20 + R2's 20.
 | F-NA-1 | R1 A1 | HK guest voice acceptable per user |
 | F-NA-2 | R1 A1 | model name fixed in-app, no further action |
 | F-NA-3 | R1 A1 | `ConsoleListener` unit struct OK |
-| **F-A2-9** | R2 A2 | Harness Mode approval gate explicitly scoped to A2's next iteration |
+| **F-A2-9** | R2 A2 | ✅ CLOSED 2026-05-18 via `examples/applications/code-reviewer-write/` — Harness approval gate validated end-to-end (2× `approval_requested` + 2× `approval_decided` events with correct params, risk, scope) |
 | **F-A2-10** | R2 A2 | A2's "no real GitHub PR in agentflow repo to test against" — meta-observation, dogfooding on another repo is a future option |
+| **F-A2-11** | R2 A2 follow-up | `agentflow harness run` CLI doesn't wrap registry with HookedTool — only HTTP gateway does. Hand-rolled binaries are the only way to dogfood Harness Mode from CLI today |
+| **F-A2-12** | R2 A2 follow-up | `HarnessProfile::Local` (default) silently auto-allows NonIdempotent calls; need `Production` profile or explicit pre-hook to fire the approval gate |
+| **F-A2-13** | R2 A2 follow-up | `moonshot-v1-128k` hallucinates commit hashes when commit value lives in user prompt (inline into persona to fix); also loops on identical tool calls without dispatching to step 2 — ReAct could add an "identical call detected" steering hook |
 
 ### 5.7 Positive validations — recorded only (now 11 items, doubled from R1's 6)
 
@@ -261,6 +264,10 @@ finding set:
 | M | F-A2-6 | `agentflow skill run --output json` mode | agentflow-cli |
 | M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
 | ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
+| ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
+| M | F-A2-11 | Wire `wrap_registry(...)` into `agentflow harness run` CLI (gate on `--profile production` or skill manifest declaring write tools) so CLI ≠ HTTP behaviour goes away | agentflow-cli + agentflow-harness |
+| M | F-A2-12 | Docstring `HarnessProfile::default()` + `HookConfig::new` to call out Local-vs-Production approval-gate asymmetry; update `docs/HARNESS_MODE.md` template to use Production for examples with write tools | agentflow-harness docs |
+| L | F-A2-13 | ReAct "identical-tool-and-params-twice" anti-loop steering message (synthesise observation reminder instead of letting the model spin to budget exhaustion) | agentflow-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
 | L | F-DOC-2 (P9.5) | `FlowValue` field reference in docs/AGENT_SDK.md | agentflow docs |
@@ -273,8 +280,12 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-19 open items. 1 High, 9 Medium, 9 Low. None require a core refactor;
-all are surface / docs / config / convention scope.
+22 open items (was 19): F-A2-9 closed, F-A2-11/12/13 added.
+0 High, 11 Medium, 11 Low (the formerly H F-A2-9 is now DONE).
+None require a core refactor; all are surface / docs / config /
+convention scope. F-A2-11 (CLI parity) is the highest-value of the
+new bunch since it removes a sharp edge for first-time Harness Mode
+adopters.
 
 ## 7. Phonon scope reflection — still no change
 
