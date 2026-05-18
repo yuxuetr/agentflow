@@ -1,10 +1,12 @@
 # A6 — doc-translator
 
-**Status**: live ✅ through iteration 2 (2026-05-18: real file I/O,
-8 sub-flows = 2 files × 4 langs, outputs persisted to
-`output/<lang>/<file>`. Iter 1 was the `map parallel + LLM` primitive
-validator; iter 2 turns it into a usable tool. Iter 3 would add file
-discovery + 100+ stress test).
+**Status**: live ✅ through iteration 3 (2026-05-18: cross-product
+work list, parameterised file_list + lang_list. Iter 1 = `map
+parallel + LLM` primitive validator; iter 2 = real file I/O; iter 3 =
+`build_work_list` template node renders file × lang cross product as
+JSON, map consumes it via input_mapping. Adding a language is now a
+one-line YAML change. Iter 4 would add real file discovery via shell
++ 100+ fan-out stress test).
 **Tracking entry**: [`EXAMPLES_TODOs.md` § A6](../../../EXAMPLES_TODOs.md#a6--doc-translator)
 **Why it's the next pillar**: per [R3 § 5](../../../docs/L1_L3_REFLECTION_R3_2026-05-18.md#5-recommended-next-pillar-a6-doc-translator),
 `map` parallel was the biggest un-validated DAG primitive after the R2
@@ -84,11 +86,12 @@ agentflow workflow validate examples/applications/doc-translator/workflow.yml
 doc-translator/
 ├── README.md            # ← this file
 ├── workflow.yml         # iter 1: map + LLM primitive validator (no file I/O)
-├── workflow-iter2.yml   # iter 2: real file I/O, 2 files × 4 langs
+├── workflow-iter2.yml   # iter 2: real file I/O, hardcoded 8-item input_list
+├── workflow-iter3.yml   # iter 3: cross-product work list (file_list × lang_list)
 ├── input/
 │   ├── intro.md         # source markdown w/ code fences (for fence-preservation test)
 │   └── usage.md
-└── output/              # generated on each iter 2 run
+└── output/              # generated on each iter 2 / iter 3 run
     ├── de/{intro,usage}.md
     ├── fr/{intro,usage}.md
     ├── ja/{intro,usage}.md
@@ -114,6 +117,18 @@ doc-translator/
   `{{ item.* }}` lookup gap. Both file nodes now pull their path
   inputs directly from the iteration item instead of going through
   intermediate render-template nodes.
+
+## Iteration 3 observations (2026-05-18)
+
+- **Same 8 sub-flow shape as iter 2**, with the work list now
+  generated dynamically from `file_list × lang_list`. 8/8
+  translations succeed; files identical to iter 2's outputs (modulo
+  LLM sampling variance). Wall clock comparable (~25s).
+- **Adding a language is one YAML line** in `lang_list`. Adding a
+  file is one entry in `file_list`. Iter 2 required hand-editing
+  8 input_list entries for the same change.
+- **Three new findings surfaced** (F-A6-6 / F-A6-7 / F-A6-8 below)
+  about the template-as-list-builder pattern.
 
 ## Findings (iteration 1)
 
@@ -157,6 +172,43 @@ list.
   can route on failure without walking nested JSON. Or at minimum
   add a `tracing::warn!` for any sub-flow that returns an
   Err-containing state.
+
+- **F-A6-6 — template node parameters trigger false validator
+  warnings** when used as initial_inputs for Tera context. The
+  template ParamSpec in `agentflow-cli/src/config/schema.rs` only
+  declares `template`, `output_key`, `output_format`; any
+  workflow-author-defined parameter (e.g. `file_list`, `lang_list`)
+  validates as `... is not defined in the CLI schema for node type
+  'template'` even though the factory accepts them fine (dumps to
+  initial_inputs). **Action**: template's ParamSpec list should
+  accept extra keys (similar to how F-A6-2 fixed map's
+  `input_list` and `max_concurrent`), OR the schema validator
+  should permit arbitrary extra params on template nodes by
+  design. Surfaced during A6 iter 3.
+
+- **F-A6-7 — template node requires explicit `output_format: "json"`
+  even when the rendered output starts with `[` or `{`**. The
+  parser at `agentflow-nodes/src/nodes/template.rs:97` branches
+  on `output_format` rather than auto-detecting from the rendered
+  shape. Without the explicit hint, a JSON-array-rendering
+  template lands as `FlowValue::Json(String)` and downstream map
+  nodes error `Input 'input_list' must be a JSON array`. Fixing
+  iter 3 took two debug rounds. **Action**: auto-detect — if
+  `rendered.trim_start().starts_with('[' | '{')`, attempt
+  `serde_json::from_str` and fall back to String if it fails.
+  Keep `output_format: "json"` as an explicit override that
+  errors loudly when parse fails (current behaviour). Surfaced
+  during A6 iter 3.
+
+- **F-A6-8 — Tera `loop.parent.*` introspection doesn't work in
+  this Tera version**, so cross-product comma logic via
+  `{% if not loop.first or not loop.parent.first %},{% endif %}`
+  emits a comma right after the opening `[`, producing invalid
+  JSON. **Workaround** (used in iter 3): an explicit `needs_comma`
+  flag manipulated via `set_global`. **Not an agentflow bug**, but
+  worth a `templating` convention note: prefer `set_global`
+  accumulators over Tera loop introspection for any list-of-N
+  rendering pattern. Surfaced during A6 iter 3.
 
 - **F-A6-5 — `input_mapping` can only reference upstream node
   outputs, not the map iteration `item`**. Surfaced during A6

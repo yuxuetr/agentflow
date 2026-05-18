@@ -717,6 +717,16 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   code preserved across all 4 target languages
 - ~25s wall clock (3 batches), ledger now real on-disk markdown
 
+**DONE 子项 (iteration 3, 2026-05-18)**:
+- iter 3 workflow-iter3.yml computes work list as `file_list ×
+  lang_list` cross product via Tera template → JSON; map consumes
+  via `input_mapping`. Adding a language is a one-line YAML change.
+- Same 8/8 success as iter 2, files identical in shape; confirms
+  the new template-as-list-builder pattern is wire-compatible with
+  the existing map consumer.
+- 3 new findings surfaced (F-A6-6/7/8) about template node validation,
+  JSON auto-detection, and Tera loop introspection workarounds.
+
 **Findings (iteration 1)**:
 
 - **F-A6-1 — `map parallel: true` has NO concurrency cap**.
@@ -774,6 +784,47 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   default for fan-out workflows where one failure shouldn't tank
   the rest, and `results_summary` is the correct way to surface
   that signal without changing semantics.
+- **F-A6-6 — template node parameters trigger false validator
+  warnings** when used as initial_inputs for Tera context. The
+  template ParamSpec in `agentflow-cli/src/config/schema.rs` only
+  declares `template`, `output_key`, `output_format`; any
+  workflow-author-defined parameter (e.g. `file_list`, `lang_list`)
+  validates as `... is not defined in the CLI schema for node type
+  'template'` even though the factory accepts them fine (dumps to
+  initial_inputs). Friction for any pattern where the template node
+  is used as a list-builder or cross-product computer with literal
+  YAML inputs. **Action**: either declare template's ParamSpec list
+  as accepting extra keys (like F-A6-2 did for map), OR the schema
+  validator should permit arbitrary extra params on template nodes
+  by design (since the whole point of template is to consume
+  arbitrary Tera context). Surfaced during A6 iter 3.
+
+- **F-A6-7 — template node requires explicit `output_format: "json"`
+  even when the rendered output starts with `[` or `{`**. The
+  parser at `agentflow-nodes/src/nodes/template.rs:97` branches on
+  `output_format` rather than auto-detecting from the rendered
+  shape. Without the explicit hint, a JSON-array-rendering template
+  lands as `FlowValue::Json(String)` and downstream map nodes
+  error `Input 'input_list' must be a JSON array`. Fixing A6 iter 3
+  took two debug rounds because the failure message points at the
+  consumer (map) not the producer (template). **Action**:
+  auto-detect — if `rendered.trim_start().starts_with('[' | '{')`,
+  attempt `serde_json::from_str` and fall back to String if it
+  fails. Keep `output_format: "json"` as an explicit override that
+  errors loudly when parse fails (current behaviour). Surfaced
+  during A6 iter 3.
+
+- **F-A6-8 — Tera `loop.parent.*` introspection doesn't work in
+  this Tera version**, so cross-product comma logic via
+  `{% if not loop.first or not loop.parent.first %},{% endif %}`
+  emits a comma right after the opening `[`, producing invalid
+  JSON. Workaround: an explicit `needs_comma` flag manipulated via
+  `set_global`. **Not an agentflow bug** but worth recording as a
+  templating convention: prefer `set_global` accumulators over
+  Tera loop introspection for any list-of-N rendering pattern.
+  Documented in the A6 iter 3 workflow comments. Surfaced during
+  A6 iter 3.
+
 - **F-A6-5 — `input_mapping` can only reference upstream node
   outputs, not the map iteration `item`**. Per-iteration `item`
   fields (e.g. `item.read_path`) are visible in Tera template

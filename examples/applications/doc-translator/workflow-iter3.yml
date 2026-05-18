@@ -1,0 +1,136 @@
+# A6 doc-translator — iteration 3
+#
+# What's new vs iter 2:
+#   - `file_list` and `lang_list` are top-level workflow inputs (was
+#     hardcoded `input_list` with 8 pre-rendered items in iter 2).
+#   - A `build_work_list` template node Tera-renders the file × lang
+#     cross product as a JSON array. Map consumes it via input_mapping.
+#   - Adding a language or a file is a one-line change instead of
+#     editing 8 input_list entries.
+#
+# What's STILL hardcoded (would be iter 4 — needs platform work):
+#   - File discovery via shell. `agentflow-cli` doesn't expose a
+#     `type: shell` YAML node (deliberate gap per F-A7-2); for real
+#     directory walking iter 4 needs either a wired shell node or a
+#     `file` node `list_dir` operation. For iter 3 the file list is
+#     a literal YAML array so the cross product is what's validated.
+#   - Output dir is still a fixed `output/` sibling (would be a
+#     workflow-level input in iter 4).
+#
+# Run:
+#   agentflow workflow run examples/applications/doc-translator/workflow-iter3.yml
+
+name: "doc-translator iteration 3"
+description: "Compute work list as file × lang cross product, then translate in parallel."
+
+nodes:
+  # Step 0: render the work list as a JSON array. file_list and
+  # lang_list are passed as Tera context vars via the template
+  # node's `initial_inputs` (everything in `parameters` minus the
+  # literal `template` string lands as initial_inputs per factory.rs).
+  # The template node auto-parses output starting with `[` as JSON,
+  # so this lands in state as a `FlowValue::Json(Array)` rather
+  # than a String — exactly what map's `input_list` wants.
+  - id: "build_work_list"
+    type: "template"
+    dependencies: []
+    parameters:
+      # output_format: "json" makes the template node parse the
+      # rendered string as JSON before storing it, so the downstream
+      # map node sees a `FlowValue::Json(Array)` for its input_list
+      # instead of a `FlowValue::Json(String)`. Without this the map
+      # node errors "Input 'input_list' must be a JSON array".
+      # F-A6-7 candidate: the template node could auto-detect JSON
+      # when the rendered output starts with `[` or `{`, eliminating
+      # the need for this explicit hint.
+      output_format: "json"
+      file_list: ["intro.md", "usage.md"]
+      lang_list:
+        - { lang: "ja", lang_name: "Japanese" }
+        - { lang: "fr", lang_name: "French" }
+        - { lang: "de", lang_name: "German" }
+        - { lang: "zh", lang_name: "Chinese" }
+      template: |
+        {%- set_global needs_comma = false -%}
+        [
+        {%- for f in file_list -%}
+          {%- for l in lang_list -%}
+            {%- if needs_comma %},{% endif -%}
+            {%- set_global needs_comma = true -%}
+            { "file":       "{{ f }}",
+              "lang":       "{{ l.lang }}",
+              "lang_name":  "{{ l.lang_name }}",
+              "read_path":  "examples/applications/doc-translator/input/{{ f }}",
+              "write_path": "examples/applications/doc-translator/output/{{ l.lang }}/{{ f }}" }
+          {%- endfor -%}
+        {%- endfor -%}
+        ]
+
+  - id: "translate_corpus"
+    type: "map"
+    dependencies: ["build_work_list"]
+    input_mapping:
+      input_list: "{{ nodes.build_work_list.outputs.output }}"
+    parameters:
+      parallel: true
+      max_concurrent: 3
+      template:
+        # Same 4-node sub-flow as iter 2 (after F-A6-5).
+        - id: "read_source"
+          type: "file"
+          dependencies: []
+          input_mapping:
+            path: "{{ item.read_path }}"
+          parameters:
+            operation: "read"
+
+        - id: "build_prompt"
+          type: "template"
+          dependencies: ["read_source"]
+          input_mapping:
+            source: "{{ nodes.read_source.outputs.content }}"
+          parameters:
+            template: |
+              Translate the following markdown blurb into {{ item.lang_name }}.
+              Rules:
+                - preserve markdown structure (headings, lists, links)
+                - DO NOT translate fenced code blocks (anything between ```)
+                - DO NOT translate identifiers in inline code (`text in backticks`)
+                - output ONLY the translation, no preamble or postamble
+
+              ----- SOURCE -----
+              {{ source }}
+              ----- END SOURCE -----
+
+        - id: "translate_one"
+          type: "llm"
+          dependencies: ["build_prompt"]
+          input_mapping:
+            prompt: "{{ nodes.build_prompt.outputs.output }}"
+          parameters:
+            model: "moonshot-v1-128k"
+            temperature: 0.2
+            max_tokens: 2048
+
+        - id: "write_translation"
+          type: "file"
+          dependencies: ["translate_one"]
+          input_mapping:
+            content: "{{ nodes.translate_one.outputs.output }}"
+            path:    "{{ item.write_path }}"
+          parameters:
+            operation: "write"
+
+  - id: "report"
+    type: "template"
+    dependencies: ["translate_corpus"]
+    input_mapping:
+      results: "{{ nodes.translate_corpus.outputs.results }}"
+      summary: "{{ nodes.translate_corpus.outputs.results_summary }}"
+    parameters:
+      template: |
+        Translated {{ summary.ok }}/{{ summary.total }} (file, lang) pairs.
+        Outputs under `examples/applications/doc-translator/output/<lang>/<file>`.
+        {% if summary.err > 0 -%}
+        Partial failures at indexes: {{ summary.err_indexes }}.
+        {%- endif %}
