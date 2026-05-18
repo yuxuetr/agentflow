@@ -497,6 +497,14 @@ code-reviewer` 后立即用。
   a stronger steering message ("you already ran this; analyse the
   prior observation instead"). Today it just lets the model loop
   until budget exhausts.
+  ✅ **The adjacent gap is CLOSED 2026-05-18**: `ReActAgent::
+  run_with_context` now tracks the prior `(tool, params)` and
+  appends an `[agentflow steering note (F-A2-13): ...]` to the
+  tool-result memory message when iteration N+1 matches N. Trace
+  stays clean; tool still runs (advisory, not blocking). With
+  this nudge the moonshot loop pathology should self-correct
+  inside the LLM's own working memory instead of burning through
+  `MaxToolCalls`.
 
 ---
 

@@ -267,7 +267,7 @@ finding set:
 | ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
 | ~~M~~ DONE | F-A2-11 | `agentflow harness run` now wraps the agent's tool registry with `HookConfig + ApprovalProvider` when `--approve {cli,auto-allow,auto-deny}` is passed; default `--approve none` preserves the pre-existing zero-friction CLI path. Combined with `--profile production` the gate auto-escalates every NonIdempotent call. New `ReActAgent::with_tools` helper lets the CLI swap the registry after `SkillBuilder::build` without duplicating manifest wiring. 3 new CLI tests; live-tested against the `code-reviewer` skill end-to-end. Landed 2026-05-18. | agentflow-cli + agentflow-agents |
 | ~~M~~ DONE | F-A2-12 | Docstring `HarnessProfile::{Local,Dev,Production}` + `HookConfig::new` + `with_profile` call out the silent-allow-by-default footgun; `docs/HARNESS_MODE.md` got an explicit footgun callout in the `wrap_registry` section + an inline comment in the snippet + a pointer to `code-reviewer-write` as a reference binary. Landed 2026-05-18. | agentflow-harness docs |
-| L | F-A2-13 | ReAct "identical-tool-and-params-twice" anti-loop steering message (synthesise observation reminder instead of letting the model spin to budget exhaustion) | agentflow-agents |
+| ~~L~~ DONE | F-A2-13 | `ReActAgent::run_with_context` now tracks `last_tool_call: Option<(String, serde_json::Value)>` and, when iteration N+1's `(tool, params)` exactly matches iteration N, appends a steering note to the tool-result memory message: `"[agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `X` with identical parameters … (a) draw conclusions, (b) call a different tool, or (c) call `X` with materially different parameters]"`. Trace-side `AgentStepKind::ToolResult` carries the raw observation unchanged so replay/audit stay faithful. Tool still runs (steering is advisory, not a block) so legitimate retries / polling aren't broken. New unit test `repeat_tool_call_appends_steering_note_to_memory` asserts both the memory augmentation and the trace cleanliness. Landed 2026-05-18. | agentflow-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
 | L | F-DOC-2 (P9.5) | `FlowValue` field reference in docs/AGENT_SDK.md | agentflow docs |
@@ -280,12 +280,12 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-17 open items (was 18): F-AF-2 closed.
-0 High, 6 Medium, 11 Low. None require a core refactor; all are
-surface / docs / config / convention scope. Remaining agentflow-side
-M items: F-A2-5 (docs on LLM-review non-determinism). The other 5
-M items are phonon-external (F-PH-1/2). F-A2-13 (ReAct anti-loop
-steering) is the only agent-runtime change left in the queue.
+16 open items (was 17): F-A2-13 closed.
+0 High, 6 Medium, 10 Low. None require a core refactor; all are
+surface / docs / config / convention scope. The only remaining
+agentflow-side M item is F-A2-5 (docs on LLM-review
+non-determinism); the other M items are phonon-external
+(F-PH-1/2). No agent-runtime changes remain in the queue.
 
 ## 7. Phonon scope reflection — still no change
 

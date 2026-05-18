@@ -510,6 +510,20 @@ impl ReActAgent {
     let run_started_at = Instant::now();
     let mut tool_calls = 0usize;
 
+    // F-A2-13 anti-loop steering: remember the most recent
+    // single-tool call so we can detect when the model calls the
+    // exact same tool with identical params on the very next
+    // iteration. moonshot-v1-128k and other instruction-following
+    // lite models loop on `git show <hash>` / read-only tools and
+    // burn budget; instead of letting that play out to
+    // `MaxToolCalls`, we append a steering note to the observation
+    // so the model sees "this is your 2nd identical call, advance
+    // or finish" inside its own working memory. Only the iterative
+    // single-tool path is covered today — the parallel batch
+    // dispatcher (`dispatch_native_tool_calls_batch`) doesn't loop
+    // the same way and is left untouched.
+    let mut last_tool_call: Option<(String, serde_json::Value)> = None;
+
     // 1. Store user message
     self
       .add_memory_message(Message::user(&self.session_id, &context.input))
@@ -819,6 +833,23 @@ impl ReActAgent {
           params,
         } => {
           info!(iteration, tool = %tool, thought = %thought, "Tool call");
+          // F-A2-13: detect the (tool, params) == previous call
+          // shape BEFORE we touch `params` (it gets moved into
+          // `self.tools.execute` later). `serde_json::Value`
+          // implements semantic equality on Objects, so JSON key
+          // order doesn't trip the comparison.
+          let is_repeat_tool_call = matches!(
+            &last_tool_call,
+            Some((prev_tool, prev_params))
+              if prev_tool == &tool && prev_params == &params
+          );
+          if is_repeat_tool_call {
+            warn!(
+              iteration,
+              tool = %tool,
+              "Repeat tool call detected (identical params as prior iteration); appending steering note (F-A2-13)"
+            );
+          }
           if let Some(max_tool_calls) = max_tool_calls
             && tool_calls >= max_tool_calls
           {
@@ -917,6 +948,9 @@ impl ReActAgent {
           step_index += 1;
 
           let started_at = std::time::Instant::now();
+          // F-A2-13: snapshot now so we can compare on the next
+          // iteration even after `params` moves into `execute`.
+          let params_snapshot = params.clone();
           let tool_call = self.tools.execute(&tool, params);
           let tool_output = match (
             remaining_timeout(run_started_at, timeout_ms),
@@ -1114,9 +1148,34 @@ impl ReActAgent {
               .await?;
           }
 
+          // F-A2-13: when this iteration is a repeat of the prior,
+          // append a steering note ONLY to the memory the model
+          // sees on its next turn. The `AgentStepKind::ToolResult`
+          // emitted above already carries the raw observation
+          // (unchanged) so trace consumers / replay see exactly
+          // what the tool produced; the note is purely a nudge for
+          // the LLM's working memory and is namespaced clearly so
+          // operators reading transcripts can tell it apart from
+          // tool output.
+          let observation_for_memory = if is_repeat_tool_call {
+            format!(
+              "{observation}\n\n\
+               [agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `{tool}` with identical parameters. The observation above is unchanged from the prior call — calling `{tool}` again with these params will not yield new information. To make progress, choose one of: (a) draw conclusions from the observation and emit a final answer, (b) call a different tool, or (c) call `{tool}` with materially different parameters.]"
+            )
+          } else {
+            observation.clone()
+          };
+
           self
-            .add_memory_message(Message::tool_result(&self.session_id, &tool, &observation))
+            .add_memory_message(Message::tool_result(
+              &self.session_id,
+              &tool,
+              &observation_for_memory,
+            ))
             .await?;
+
+          // Track the call so the next iteration's check can run.
+          last_tool_call = Some((tool.clone(), params_snapshot));
 
           iteration += 1;
         }
@@ -3261,5 +3320,121 @@ providers:
     assert_eq!(contexts[0].budget_tokens, 8);
     assert_eq!(contexts[0].omitted_tokens, 10);
     assert_eq!(contexts[0].omitted_messages[0].content, older.content);
+  }
+
+  /// F-A2-13: When the LLM returns the same `(tool, params)` two
+  /// iterations in a row, the second tool result that lands in the
+  /// agent's working memory MUST carry a steering note nudging the
+  /// model to advance instead of looping. The tool itself still
+  /// runs both times (the steering is advisory, not a hard block),
+  /// and the trace-side `AgentStepKind::ToolResult` step keeps the
+  /// raw observation unchanged so replay/audit stay faithful.
+  #[tokio::test]
+  async fn repeat_tool_call_appends_steering_note_to_memory() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-repeat-{}", uuid::Uuid::new_v4());
+
+    // Same action twice, then a final answer. Identical params is
+    // the trigger — F-A2-13 must detect it on iteration 2. Env var
+    // MUST be set BEFORE init_mock_model so the mock provider reads
+    // the queue at registration time.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"first try","action":{"tool":"counting_echo","params":{"text":"hi"}}}"#,
+          r#"{"thought":"again","action":{"tool":"counting_echo","params":{"text":"hi"}}}"#,
+          r#"{"thought":"done","answer":"OK"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: calls.clone(),
+    }));
+
+    let memory_hook = Arc::new(RecordingMemoryHook::default());
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_memory_hook(memory_hook.clone());
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-repeat", "go", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("OK"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    // Steering is advisory — the tool MUST run both times so a
+    // legitimate retry (e.g. polling) isn't broken by F-A2-13.
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      2,
+      "tool should run both times; steering is a nudge, not a block"
+    );
+
+    // Inspect every memory write event the hook saw. The
+    // tool-result messages (role=Tool) are the ones that matter
+    // for steering; their content is what the model sees on its
+    // next turn.
+    let events = memory_hook.events.lock().unwrap().clone();
+    let tool_result_messages: Vec<Message> = events
+      .iter()
+      .filter(|c| matches!(c.kind, MemoryHookKind::Write))
+      .flat_map(|c| c.messages.iter().cloned())
+      .filter(|m| matches!(m.role, Role::Tool))
+      .collect();
+
+    assert_eq!(
+      tool_result_messages.len(),
+      2,
+      "expected exactly 2 tool results in memory, got {}",
+      tool_result_messages.len()
+    );
+    assert!(
+      !tool_result_messages[0].content.contains("steering note"),
+      "first call must NOT carry the steering note: {}",
+      tool_result_messages[0].content
+    );
+    assert!(
+      tool_result_messages[1].content.contains("F-A2-13"),
+      "second call MUST carry the F-A2-13 steering note: {}",
+      tool_result_messages[1].content
+    );
+    assert!(
+      tool_result_messages[1].content.contains("counting_echo"),
+      "steering note must name the looping tool: {}",
+      tool_result_messages[1].content
+    );
+
+    // ToolResult steps (the trace surface) carry the raw
+    // observation unchanged — F-A2-13 only touches the memory
+    // copy, not the trace.
+    let tool_result_steps: Vec<&AgentStepKind> = result
+      .steps
+      .iter()
+      .map(|s| &s.kind)
+      .filter(|k| matches!(k, AgentStepKind::ToolResult { .. }))
+      .collect();
+    assert_eq!(tool_result_steps.len(), 2);
+    for step in tool_result_steps {
+      if let AgentStepKind::ToolResult { content, .. } = step {
+        assert!(
+          !content.contains("steering note"),
+          "trace-side ToolResult must stay clean of F-A2-13 nudges: {content}"
+        );
+      }
+    }
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
   }
 }
