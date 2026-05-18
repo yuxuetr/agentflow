@@ -59,6 +59,11 @@ struct SkillMdFrontmatter {
   /// e.g. `"shell file script"`
   #[serde(rename = "allowed-tools")]
   pub allowed_tools: Option<String>,
+  /// Optional AgentFlow extension: LLM model name. When set, populates
+  /// `SkillManifest.model.name` instead of falling back to the
+  /// `gpt-4o` default. F-AF-2: previously silently dropped because
+  /// this field wasn't in the struct.
+  pub model: Option<String>,
 }
 
 // ── Public type ───────────────────────────────────────────────────────────────
@@ -81,6 +86,11 @@ pub struct SkillMd {
   /// Space-delimited tool names recognised by agentflow
   /// (`shell`, `file`, `http`, `script`).
   pub allowed_tools: Vec<String>,
+  /// AgentFlow extension: LLM model name from frontmatter (F-AF-2).
+  /// `None` when unspecified — `into_manifest` will leave
+  /// `ModelConfig::name` empty so `resolved_model()` returns the
+  /// `gpt-4o` default.
+  pub model: Option<String>,
   /// The Markdown body that becomes the agent's persona / system prompt.
   pub body: String,
 }
@@ -130,6 +140,10 @@ impl SkillMd {
       mcp_servers: fm.mcp_servers.unwrap_or_default(),
       security: fm.security.unwrap_or_default(),
       allowed_tools,
+      model: fm
+        .model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()),
       body: body.trim().to_string(),
     })
   }
@@ -177,7 +191,14 @@ impl SkillMd {
         role: self.body,
         language: self.metadata.get("language").cloned(),
       },
-      model: Default::default(),
+      // F-AF-2: honour the frontmatter `model:` field. Previously
+      // dropped on the floor because `SkillMdFrontmatter` didn't
+      // declare the field; users would set `model: kimi-k2.6` and
+      // wonder why the agent kept calling gpt-4o.
+      model: crate::manifest::ModelConfig {
+        name: self.model,
+        ..Default::default()
+      },
       security: self.security,
       tools,
       mcp_servers,
@@ -270,6 +291,59 @@ Instructions here.
     assert_eq!(skill.description, "Extract text and tables from PDF files.");
     assert!(skill.body.contains("Instructions here."));
     assert!(skill.allowed_tools.is_empty());
+  }
+
+  /// F-AF-2: `model:` in frontmatter must populate `SkillMd.model`
+  /// and survive into `SkillManifest.model.name` after conversion.
+  /// Previously this was silently dropped because the field wasn't
+  /// in `SkillMdFrontmatter`, causing user `model: kimi-k2.6` to be
+  /// ignored and the default `gpt-4o` to win.
+  #[test]
+  fn parses_model_field_into_manifest() {
+    let content = r#"---
+name: my-skill
+description: A skill with a model override.
+model: kimi-k2.6
+---
+
+Body.
+"#;
+    let skill = SkillMd::parse(content).unwrap();
+    assert_eq!(skill.model.as_deref(), Some("kimi-k2.6"));
+
+    let manifest = skill.into_manifest();
+    assert_eq!(manifest.model.name.as_deref(), Some("kimi-k2.6"));
+    assert_eq!(manifest.model.resolved_model(), "kimi-k2.6");
+  }
+
+  /// F-AF-2: absence of `model:` keeps the default behaviour
+  /// (`SkillMd.model == None`, manifest falls through to `gpt-4o`).
+  #[test]
+  fn parses_no_model_field_keeps_default() {
+    let skill = SkillMd::parse(MINIMAL).unwrap();
+    assert!(skill.model.is_none());
+
+    let manifest = skill.into_manifest();
+    assert!(manifest.model.name.is_none());
+    assert_eq!(manifest.model.resolved_model(), "gpt-4o");
+  }
+
+  /// F-AF-2: empty / whitespace-only `model:` is treated as absent.
+  /// Prevents callers from accidentally setting `model: ""` (which
+  /// would otherwise pass through to `resolved_model` as the empty
+  /// string and break LLM provider lookups).
+  #[test]
+  fn parses_empty_model_field_as_none() {
+    let content = r#"---
+name: my-skill
+description: A skill with an empty model.
+model: "   "
+---
+
+Body.
+"#;
+    let skill = SkillMd::parse(content).unwrap();
+    assert!(skill.model.is_none());
   }
 
   #[test]

@@ -260,7 +260,7 @@ finding set:
 | ~~M~~ DONE | F-A7-2 | Honesty-note path landed 2026-05-18. Permission report tells the truth about shell-not-in-factory. | agentflow-cli |
 | ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | agentflow-llm |
 | ~~M~~ DONE | F-A7-4 | `agentflow doctor` now leads its Config section with a human-readable source label (e.g. `"/Users/x/.agentflow/models.yml (overrides built-in)"`) plus a stable `models_config_source_kind` JSON enum (`user_models_yml` / `user_models_yaml` / `env_override` / `built_in_default`). The legacy Rust-debug `models_config_source` field is kept for back-compat. 3 new doctor unit tests lock the shadowing-suffix invariant. Landed 2026-05-18. | agentflow-cli |
-| M | F-AF-2 (P9.4) | SKILL.md `model:` field — honour or warn | agentflow-skills |
+| ~~M~~ DONE | F-AF-2 (P9.4) | SKILL.md frontmatter `model:` field now honoured: `SkillMdFrontmatter` gained the field, `SkillMd` carries it through, `into_manifest()` populates `ModelConfig.name`. Empty/whitespace strings collapse to `None` so `resolved_model()` falls through to `gpt-4o`. 3 new unit tests lock present-vs-absent-vs-empty cases. Landed 2026-05-18. | agentflow-skills |
 | ~~M~~ DONE | F-A2-6 | `agentflow skill run --output {text,json}` flag landed (default text for back-compat). JSON mode emits a single stdout object `{skill, model, session_id, answer, stop_reason, elapsed_ms, trace?}` with the same redaction the text path applies. Warnings still go to stderr. 2 new integration tests assert (a) the parsed JSON shape and (b) `--trace` opt-in. Landed 2026-05-18. | agentflow-cli |
 | M | F-A2-5 | Document "LLM review is non-deterministic; run multiple times" practice | examples conventions |
 | ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
@@ -280,13 +280,12 @@ finding set:
 | L | F-AF-4 | crisper Moonshot/Anthropic init error path | agentflow-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
-18 open items (was 19): F-A2-6 closed.
-0 High, 7 Medium, 11 Low. None require a core refactor; all are
-surface / docs / config / convention scope. The remaining M items
-are F-AF-2 (SKILL.md `model:` field), F-A2-5 (docs note on
-non-determinism), F-PH-1/2 (external phonon). F-A2-13 (ReAct
-anti-loop steering) is the only agent-runtime change left in the
-queue.
+17 open items (was 18): F-AF-2 closed.
+0 High, 6 Medium, 11 Low. None require a core refactor; all are
+surface / docs / config / convention scope. Remaining agentflow-side
+M items: F-A2-5 (docs on LLM-review non-determinism). The other 5
+M items are phonon-external (F-PH-1/2). F-A2-13 (ReAct anti-loop
+steering) is the only agent-runtime change left in the queue.
 
 ## 7. Phonon scope reflection — still no change
 
