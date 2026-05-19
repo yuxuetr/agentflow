@@ -502,6 +502,9 @@ impl LLMConfig {
       "moonshot" => vec!["MOONSHOT_API_KEY", "MOONSHOT_KEY"],
       "stepfun" | "step" => vec!["STEPFUN_API_KEY", "STEP_API_KEY"],
       "glm" | "bigmodel" | "zhipu" => vec!["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"],
+      "dashscope" => vec!["DASHSCOPE_API_KEY"],
+      "deepseek" => vec!["DEEPSEEK_API_KEY"],
+      "minimax" => vec!["MINIMAX_API_KEY"],
       _ => vec![],
     };
 
@@ -528,6 +531,12 @@ impl LLMConfig {
         "moonshot",
         "dashscope",
         "step",
+        "stepfun",
+        "glm",
+        "bigmodel",
+        "zhipu",
+        "deepseek",
+        "minimax",
         "mock",
       ]
       .contains(&model_config.vendor.as_str())

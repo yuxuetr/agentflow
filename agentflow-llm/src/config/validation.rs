@@ -67,6 +67,12 @@ impl ConfigValidator {
       "moonshot",
       "dashscope",
       "step",
+      "stepfun",
+      "glm",
+      "bigmodel",
+      "zhipu",
+      "deepseek",
+      "minimax",
     ];
     if !supported_vendors.contains(&model_config.vendor.as_str()) {
       return Err(LLMError::UnsupportedProvider {

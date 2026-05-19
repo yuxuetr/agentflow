@@ -124,8 +124,11 @@ fn env_var_hint(provider: &str) -> &'static str {
     "anthropic" => "ANTHROPIC_API_KEY",
     "google" => "GEMINI_API_KEY (or GOOGLE_API_KEY)",
     "moonshot" => "MOONSHOT_API_KEY (or MOONSHOT_KEY)",
-    "stepfun" => "STEP_API_KEY",
+    "stepfun" | "step" => "STEPFUN_API_KEY (or STEP_API_KEY)",
     "dashscope" => "DASHSCOPE_API_KEY",
+    "glm" | "bigmodel" | "zhipu" => "GLM_API_KEY (or BIGMODEL_API_KEY, ZHIPU_API_KEY)",
+    "deepseek" => "DEEPSEEK_API_KEY",
+    "minimax" => "MINIMAX_API_KEY",
     _ => "the provider's *_API_KEY env var",
   }
 }

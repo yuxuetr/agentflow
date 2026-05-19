@@ -248,6 +248,8 @@ pub fn create_provider(
     "stepfun" | "step" => Ok(Box::new(StepFunProvider::new(api_key, base_url)?)), // Use dedicated StepFun provider
     "dashscope" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // Dashscope is OpenAI-compatible
     "glm" | "bigmodel" | "zhipu" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // BigModel GLM is OpenAI-compatible
+    "deepseek" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // DeepSeek is OpenAI-compatible
+    "minimax" => Ok(Box::new(OpenAIProvider::new(api_key, base_url)?)), // MiniMax is OpenAI-compatible (host: api.minimaxi.com)
     _ => Err(LLMError::UnsupportedProvider {
       provider: provider_name.to_string(),
     }),

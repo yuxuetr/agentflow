@@ -3057,6 +3057,138 @@ models:
     native_tool_calling: true
     supports_multimodal: true
     response_format: null
+
+  # DeepSeek Chat Models (OpenAI-compatible)
+  deepseek-chat:
+    vendor: deepseek
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  deepseek-reasoner:
+    vendor: deepseek
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  deepseek-v4-flash:
+    vendor: deepseek
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  deepseek-v4-pro:
+    vendor: deepseek
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+
+  # MiniMax (海螺 AI) Chat Models (OpenAI-compatible; host api.minimaxi.com)
+  MiniMax-M2:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.5-highspeed:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.7:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.7-highspeed:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
 providers:
   moonshot:
     api_key_env: MOONSHOT_API_KEY
@@ -3103,6 +3235,20 @@ providers:
   glm:
     api_key_env: GLM_API_KEY
     base_url: https://open.bigmodel.cn/api/paas/v4
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  deepseek:
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    timeout_seconds: 60
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 80000
+  minimax:
+    api_key_env: MINIMAX_API_KEY
+    base_url: https://api.minimaxi.com/v1
     timeout_seconds: 60
     rate_limit:
       requests_per_minute: 500
