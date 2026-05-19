@@ -2394,14 +2394,39 @@ general chat models that happened to accept image input).
     STEPFUN_API_KEY-gated integration tests). Workspace clippy
     clean.
 
-- TODO P-LLM.4 Clean up `lib.rs` re-exports:
-  - Delete `pub use providers::stepfun::*` at `lib.rs:107` and the
-    public StepFun helper methods at `lib.rs:427-464` (text2image
-    / text_to_speech builders, specialized client constructors).
-  - Demote StepFun builder / request types from
-    `agentflow_llm::providers::stepfun` to crate-local visibility
-    (`pub(crate)`) so external callers can't bypass the modality
-    trait surface. Anti-regression gate.
+- DONE P-LLM.4 Clean up `lib.rs` re-exports:
+  - Removed the crate-root `pub use providers::stepfun::*` block
+    (ASRRequest, TTSBuilder, TTSRequest, Text2ImageBuilder,
+    Text2ImageRequest, Image2ImageRequest, ImageEditRequest,
+    ImageGenerationResponse, VoiceCloningRequest /Response,
+    VoiceListResponse, StepFunSpecializedClient).
+  - Removed `AgentFlow::stepfun_client` / `stepfun_client_with_base_url`
+    / `text2image(...)` / `text_to_speech(...)` — these handed
+    callers a StepFun-internal builder, bypassing the dispatcher.
+  - Modality types now win at the crate root: `agentflow_llm::
+    Text2ImageRequest` / `Image2ImageRequest` / `ImageEditRequest`
+    / `ImageGenerationResponse` all resolve to the
+    `providers::modality::*` variants. P-LLM.3 node imports that
+    used the full path can be shortened in a follow-up, but the
+    short path now points at the right type.
+  - StepFun specialized types stay reachable via the long path
+    `agentflow_llm::providers::stepfun::*` for the live integration
+    tests that intentionally exercise StepFun-specific wire shapes
+    (`tests/provider_consistency_live.rs` — gated on
+    `AGENTFLOW_LIVE_LLM_TESTS=1`). Not promoted at the crate root,
+    so new external code that wants to bypass the modality surface
+    has to make the long-path access explicit and discoverable in
+    review.
+  - Pure cleanup of the CLI's remaining dead StepFun direct calls:
+    `agentflow-cli/src/commands/audio/{asr,clone,tts}.rs` and
+    `commands/image/generate.rs` were the last consumers — all now
+    go through the dispatcher. The `clone.rs` voice-cloning CLI
+    stays a documented stub (no `VoiceCloningProvider` trait yet;
+    flagged for a future P-LLM follow-up).
+  - agentflow-llm lib: 115 / 115 passing. agentflow-nodes lib:
+    25 / 25 passing. Workspace `cargo clippy --workspace
+    --all-targets -- -D warnings` clean. Live integration tests
+    (`provider_consistency_live`) still compile.
 
 - TODO P-LLM.5 Second vendor for trait shape validation:
   - Add OpenAI Whisper as the second `AsrProvider` impl. Whisper

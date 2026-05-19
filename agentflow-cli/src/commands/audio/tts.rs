@@ -1,6 +1,5 @@
-use agentflow_llm::{AgentFlow, TTSBuilder};
+use agentflow_llm::{AgentFlow, TtsRequest};
 use anyhow::Result;
-use std::env;
 use tokio::fs;
 
 pub async fn execute(
@@ -14,12 +13,10 @@ pub async fn execute(
 ) -> Result<()> {
   let model = model.unwrap_or_else(|| "step-tts-mini".to_string());
 
-  // Get API key from environment
-  let api_key = env::var("STEPFUN_API_KEY")
-    .or_else(|_| env::var("STEP_API_KEY"))
-    .map_err(|_| {
-      anyhow::anyhow!("STEPFUN_API_KEY or STEP_API_KEY environment variable must be set")
-    })?;
+  // Initialize AgentFlow so the registry knows about all configured
+  // models. The TTS dispatcher then resolves vendor + API key from
+  // the registered model entry (`type: tts`).
+  AgentFlow::init().await?;
 
   println!("🎙️  AgentFlow Text-to-Speech");
   println!("Model: {}", model);
@@ -27,42 +24,43 @@ pub async fn execute(
   println!("Voice: {}", voice);
   println!("Format: {}", format);
   println!("Speed: {}", speed);
-  if let Some(emotion) = &emotion {
-    println!("Emotion: {}", emotion);
+  if emotion.is_some() {
+    // `emotion` was a StepFun voice-label extension. The cross-vendor
+    // TtsRequest doesn't carry it; the dispatcher hides vendor-specific
+    // niceties for now. Surface the warning so operators know it's
+    // dropped rather than silently ignored.
+    println!("⚠️  --emotion is currently dropped (vendor-specific knob).");
   }
   println!("Output: {}", output);
   println!();
 
-  // Create StepFun specialized client directly (no need for general AgentFlow init)
-  println!("📡 Creating StepFun client...");
-  let stepfun_client = AgentFlow::stepfun_client(&api_key).await?;
+  let provider = AgentFlow::tts(&model).await?;
+  println!(
+    "🎵 Synthesising via provider '{}' (model '{}')...",
+    provider.name(),
+    model
+  );
 
-  // Build TTS request
-  println!("🎵 Building text-to-speech request...");
-  let mut tts_builder = TTSBuilder::new(&model, &text, &voice)
-    .response_format(&format)
-    .speed(speed);
+  let request = TtsRequest {
+    model: model.clone(),
+    input: text,
+    voice,
+    response_format: Some(format),
+    speed: Some(speed),
+    volume: None,
+    sample_rate: None,
+  };
 
-  if let Some(emotion) = emotion {
-    tts_builder = tts_builder.emotion(&emotion);
-  }
-
-  let request = tts_builder.build();
-
-  // Generate speech
-  println!("🚀 Generating speech...");
   let start_time = std::time::Instant::now();
-
-  let audio_data = stepfun_client.text_to_speech(request).await?;
-
+  let response = provider.synthesize(request).await?;
   let duration = start_time.elapsed();
+
   println!("✅ Speech generated in {:?}", duration);
-  println!("💾 Audio size: {} bytes", audio_data.len());
+  println!("💾 Audio size: {} bytes ({})", response.audio.len(), response.mime_type);
   println!();
 
-  // Save audio file
   println!("💾 Saving audio to: {}", output);
-  fs::write(&output, &audio_data).await?;
+  fs::write(&output, &response.audio).await?;
   println!("✅ Audio saved successfully");
 
   println!("🎉 Text-to-speech conversion completed successfully!");

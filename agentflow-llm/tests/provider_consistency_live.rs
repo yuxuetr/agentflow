@@ -25,9 +25,10 @@ use agentflow_llm::providers::{
   ProviderRequest, StepFunProvider, TokenUsage,
 };
 use agentflow_llm::tool_calling::{StopReason, ToolChoice, ToolSpec};
-use agentflow_llm::{
-  ASRRequest, AgentFlow, LLMConfig, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
+use agentflow_llm::providers::stepfun::{
+  ASRRequest, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
 };
+use agentflow_llm::{AgentFlow, LLMConfig};
 use serde_json::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

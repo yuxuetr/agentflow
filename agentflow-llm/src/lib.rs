@@ -107,13 +107,8 @@ pub use model_types::{InputType, ModelCapabilities, ModelType, OutputType};
 pub use multimodal::{ImageData, ImageUrl, MessageContent, MultimodalMessage};
 pub use providers::modality::{
   AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider,
-  ImageEditProvider, ImageGenerationResponse as ModalityImageGenerationResponse,
-  Text2ImageProvider, TtsProvider, TtsRequest, TtsResponse,
-};
-pub use providers::stepfun::{
-  ASRRequest, Image2ImageRequest, ImageEditRequest, ImageGenerationResponse,
-  StepFunSpecializedClient, TTSBuilder, TTSRequest, Text2ImageBuilder, Text2ImageRequest,
-  VoiceCloningRequest, VoiceCloningResponse, VoiceListResponse,
+  Image2ImageRequest, ImageEditProvider, ImageEditRequest, ImageGenerationResponse,
+  Text2ImageProvider, Text2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
 };
 pub use registry::ModelRegistry;
 pub use tool_calling::{LLMResponse, StopReason, ToolCallRequest, ToolChoice, ToolSpec};
@@ -408,67 +403,16 @@ impl AgentFlow {
     validator.suggest_similar_models(target_model, vendor).await
   }
 
-  /// Create a StepFun specialized client for image generation, TTS, ASR, and voice cloning
-  ///
-  /// Example:
-  /// ```ignore
-  /// let stepfun_client = AgentFlow::stepfun_client(api_key).await?;
-  ///
-  /// // Generate image from text
-  /// let image_request = Text2ImageBuilder::new("step-1x-medium", "A beautiful sunset")
-  ///     .size("1024x1024")
-  ///     .response_format("b64_json")
-  ///     .build();
-  /// let image_response = stepfun_client.text_to_image(image_request).await?;
-  ///
-  /// // Convert text to speech
-  /// let tts_request = TTSBuilder::new("step-tts-mini", "Hello world", "default_voice")
-  ///     .response_format("mp3")
-  ///     .speed(1.2)
-  ///     .build();
-  /// let audio_data = stepfun_client.text_to_speech(tts_request).await?;
-  /// ```
-  pub async fn stepfun_client(
-    api_key: &str,
-  ) -> Result<providers::stepfun::StepFunSpecializedClient> {
-    providers::stepfun::StepFunSpecializedClient::new(api_key, None)
-  }
-
-  /// Create a StepFun specialized client with custom base URL
-  pub async fn stepfun_client_with_base_url(
-    api_key: &str,
-    base_url: &str,
-  ) -> Result<providers::stepfun::StepFunSpecializedClient> {
-    providers::stepfun::StepFunSpecializedClient::new(api_key, Some(base_url.to_string()))
-  }
-
-  /// Create a Text2Image builder for StepFun image generation
-  ///
-  /// Example:
-  /// ```ignore
-  /// let image_request = AgentFlow::text2image("step-1x-medium", "A cyberpunk cityscape")
-  ///     .size("1280x800")
-  ///     .cfg_scale(7.5)
-  ///     .steps(50)
-  ///     .build();
-  /// ```
-  pub fn text2image(model: &str, prompt: &str) -> providers::stepfun::Text2ImageBuilder {
-    providers::stepfun::Text2ImageBuilder::new(model, prompt)
-  }
-
-  /// Create a TTS builder for StepFun text-to-speech
-  ///
-  /// Example:
-  /// ```ignore
-  /// let tts_request = AgentFlow::text_to_speech("step-tts-vivid", "Welcome to AgentFlow!", "default_voice")
-  ///     .response_format("wav")
-  ///     .speed(1.0)
-  ///     .emotion("高兴")
-  ///     .build();
-  /// ```
-  pub fn text_to_speech(model: &str, input: &str, voice: &str) -> providers::stepfun::TTSBuilder {
-    providers::stepfun::TTSBuilder::new(model, input, voice)
-  }
+  // P-LLM.4 removed:
+  // - `stepfun_client` / `stepfun_client_with_base_url`
+  // - `text2image(model, prompt)` returning `Text2ImageBuilder`
+  // - `text_to_speech(model, input, voice)` returning `TTSBuilder`
+  //
+  // These directly handed callers a StepFun-internal builder, bypassing
+  // the modality dispatcher. Replaced by `AgentFlow::asr` / `tts` /
+  // `text2image_for` / `image2image` / `image_edit` below, which route
+  // through the registry by model name and return a vendor-agnostic
+  // trait object.
 
   // -------------------------------------------------------------
   // P-LLM.2: per-modality registry dispatchers
