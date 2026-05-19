@@ -45,6 +45,23 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (DashScope + DeepSeek + MiniMax wired into live nightly) —
+  workflow run `26105740468` passed 24 / 24 in 21.88s with the
+  newly-wired 3 providers + the original 6 all green:
+  - DashScope · qwen-plus ✓ (Alibaba Bailian OpenAI-compat
+    endpoint at `dashscope.aliyuncs.com/compatible-mode/v1`)
+  - DeepSeek · deepseek-chat ✓ (V3 alias, `api.deepseek.com/v1`)
+  - MiniMax · MiniMax-M2 ✓ (`api.minimaxi.com/v1` — note the `i`)
+  All three drive through `OpenAIProvider::with_client(...)` with
+  custom base URLs, mirroring GLM's test-layer-only pattern (no
+  dedicated provider module). Per-provider helpers
+  (`<provider>_live_lock` / `_base_url` / `_live_context`) and
+  capability-profile rows added to `provider_consistency_live.rs`;
+  workflow `env:` block exports `DASHSCOPE_API_KEY` /
+  `DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` from repository secrets;
+  each test self-skips when its key is missing so forks without
+  secrets stay green. The full 9-provider nightly verified by
+  triggering `gh workflow run llm-live.yml` (no filter).
 - N9 (live nightly CI verified end-to-end) — final dry-run
   `26103718043` after the model refresh and `max_tokens` headroom
   bump: **21 passed / 0 failed in 20.48s**. Every shipped provider's
