@@ -1,6 +1,6 @@
 # AgentFlow TODOs
 
-Last updated: 2026-05-14
+Last updated: 2026-05-19
 
 ## 维护约定
 
@@ -38,8 +38,8 @@ but do not implement channel adapters in this queue.
 | P6 | Web UI Productization | NEW — active |
 | P7 | Performance And Release Engineering | closed (P7.4-FU1..FU4 all DONE; v1.0.0-rc.1 tag is unblocked) |
 | P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
-| P9 | Dogfooding-Driven Refinements (from A1+A1.5 reflection) | NEW — active |
-| P-LLM | Modality Provider Traits + Model Schema Cleanup | NEW — active |
+| P9 | Dogfooding-Driven Refinements (from A1+A1.5 reflection) | CLOSED (all in-repo items DONE; P9.6 + half of P9.8 are cross-project phonon work) |
+| P-LLM | Modality Provider Traits + Model Schema Cleanup | CLOSED (P-LLM.0–.5 all DONE; P-LLM.6 video DEFERRED) |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -2184,55 +2184,70 @@ so this segment is small and time-bound.
     `~/.agentflow/.env`.
   - Skill validate still works clean; no regressions.
 
-- TODO P9.4 SKILL.md `model:` frontmatter handling:
-  - **Why** (F-AF-2): SKILL.md `model:` in YAML frontmatter is
-    silently set to `Default::default()` (gpt-4o) by
-    `SkillMd::into_manifest`. Confusing for skill authors who think
-    they configured a model.
-  - **What**: either (a) parse `model.name` from SKILL.md frontmatter,
-    or (b) warn at parse time when a `model` field is present in
-    SKILL.md frontmatter ("ignored; use skill.toml for model config").
-    Recommend (a) since the data is already there and dropping it
-    on the floor is the surprise.
-  - **Priority**: medium — skill.toml is a clean workaround, but
-    the silent drop is bad ergonomics.
+- DONE P9.4 SKILL.md `model:` frontmatter handling:
+  - F-AF-2 closed via option (a) — frontmatter `model:` field now
+    parses into `SkillMd.model: Option<String>` and survives into
+    `SkillManifest.model.name`. Whitespace-only values get
+    normalised to `None` so callers can't accidentally configure
+    the empty string. Implementation in
+    `agentflow-skills/src/skill_md.rs` (frontmatter field at line
+    66, manifest conversion at lines 198-201).
+  - Tests (3 new in `skill_md::tests`):
+    - `parses_model_field_into_manifest` — `model: kimi-k2.6` in
+      frontmatter ends up as `manifest.model.resolved_model() ==
+      "kimi-k2.6"` (not the `gpt-4o` default).
+    - `parses_no_model_field_keeps_default` — absent field keeps
+      the historic `resolved_model() == "gpt-4o"` fallback.
+    - `parses_empty_model_field_as_none` — `model: "   "` ⇒
+      `SkillMd.model == None`, preserving the default-fallback
+      behaviour rather than passing an empty string to the LLM
+      provider lookup.
+  - Status discovered to be already shipped via an earlier commit;
+    only this TODOs.md status update was outstanding.
 
-- TODO P9.5 `FlowValue` field reference in `docs/AGENT_SDK.md`:
-  - **Why** (F-DOC-2): `FlowValue::File { mime_type, .. }` field
-    is `mime_type` not `media_type`. Easy to guess wrong when
-    authoring custom AsyncNode impls.
-  - **What**: add a "FlowValue field reference" subsection to
-    `docs/AGENT_SDK.md` enumerating exact field names per variant
-    (`Json(Value)`, `File { path, mime_type }`, `Url { url,
-    mime_type }`).
-  - **Priority**: low — discoverable via cargo errors at build
-    time; but the doc would prevent the round-trip.
+- DONE P9.5 `FlowValue` field reference in `docs/AGENT_SDK.md`:
+  - `docs/AGENT_SDK.md` "FlowValue field reference (F-DOC-2)"
+    section (line 325) enumerates the three variants with exact
+    field names: `Json(Value)` (tuple), `File { path: PathBuf,
+    mime_type: Option<String> }`, `Url { url: String, mime_type:
+    Option<String> }`. Includes worked examples and an explicit
+    callout that the field is `mime_type` not `media_type`. Notes
+    the `Serialize` impl's type tag (`"json"` / `"file"` / `"url"`)
+    so trace JSON is self-describing.
+  - Status discovered to be already shipped via the prior
+    `docs/AGENT_SDK.md` writing pass; only this TODOs.md status
+    update was outstanding.
 
-- TODO P9.6 phonon-side action items (batched to phonon Todos.md):
-  - **Why** (F-PH-1, F-PH-2, F-PH-3): three phonon-side fixes
-    flagged in reflection but not in agentflow's scope. Tracked
-    here as a single line for cross-reference; actual work goes
-    to `/Users/hal/rustspace/phonon/Todos.md`.
-    - F-PH-1: truncate long values in phonon `#[instrument(fields(...))]`
-    - F-PH-2: `PodcastPipeline::generate` returns per-segment durations
-    - F-PH-3: phonon-mcp `audio_info` surfaces `resampled_from`
-  - **What**: batch as a phonon v0.7.x patch release. None block
-    agentflow work.
+- DONE (cross-project) P9.6 phonon-side action items:
+  - F-PH-1 (`#[instrument(fields(...))]` truncation), F-PH-2
+    (`PodcastPipeline::generate` per-segment durations), and
+    F-PH-3 (`phonon-mcp audio_info` surfaces `resampled_from`)
+    are entirely in `/Users/hal/rustspace/phonon/Todos.md`. This
+    line stays as the agentflow-side cross-reference but the
+    agentflow checkbox is closed — none of the three block any
+    agentflow work, and their implementation is outside this
+    repo's scope.
 
-- TODO P9.7 A1.5 persona: add "re-measure LUFS before save" step:
-  - **Why** (F-EX-1): agent reports the *target* LUFS as if measured;
-    never actually re-calls `audio_loudness` after normalize_lufs.
-    Integrity issue in the final answer.
-  - **What**: edit `examples/applications/podcast-mastering/skill.toml`
-    persona — insert Step 5.5: "re-measure with `mcp_phonon_audio_loudness`
-    before save; report actual achieved LUFS in final answer".
+- DONE P9.7 A1.5 persona: add "re-measure LUFS before save" step:
+  - `examples/applications/podcast-mastering/skill.toml` persona
+    Step 6 "写盘前再测一次 LUFS": explicit
+    `audio_loudness(handle=fade 后的 handle)` call after the fade
+    step. Step 8 reporting now says "**实测**最终 LUFS (step 6
+    那个，不是 target 参数)" so the agent reports the measured
+    value, not the target. F-EX-1 integrity closed.
+  - Status discovered to be already shipped via the podcast-
+    mastering skill writing pass; only this TODOs.md status
+    update was outstanding.
 
-- TODO P9.8 Tighten `target_segments` docstring + A1 README:
-  - **Why** (F-DOC-3): `target_segments` is a hint, not a strict cap.
-    Caller asked for 4, got 12.
-  - **What**: phonon-podcast `ScriptRequest.target_segments` doc
-    comment + A1 README `--segments` description should say
-    "approximate, not strict".
+- DONE P9.8 Tighten `target_segments` docstring + A1 README:
+  - In-repo half (A1 README): `examples/applications/blog-to-podcast/
+    README.md` line 129 reads `--segments <N> | 10 | Approximate
+    dialogue segment count` — explicitly conveys the "approximate,
+    not strict" semantic. Status discovered to be already shipped.
+  - Cross-project half (`phonon-podcast::ScriptRequest::
+    target_segments` docstring) lives in
+    `/Users/hal/rustspace/phonon/Todos.md` and is outside this repo;
+    closed on the agentflow side.
 
 ---
 
