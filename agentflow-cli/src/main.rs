@@ -364,6 +364,13 @@ enum WorkflowCommands {
     /// AGENTFLOW_TENANT or "default".
     #[arg(long)]
     tenant: Option<String>,
+    /// Output format when running via `--server`: text (default;
+    /// emoji progress + final JSON row on stdout) or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema;
+    /// progress lines go to stderr so stdout stays parseable JSON).
+    /// Ignored for in-process runs.
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// List recent workflow runs from a remote server. Requires --server.
   List {
@@ -1193,6 +1200,7 @@ async fn main() {
         server,
         auth_token,
         tenant,
+        format,
       } => {
         if input.len() % 2 != 0 {
           eprintln!(
@@ -1217,6 +1225,7 @@ async fn main() {
                 auth_token.as_deref(),
                 tenant.as_deref(),
                 &body,
+                &format,
               )
               .await
             }

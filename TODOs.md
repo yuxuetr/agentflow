@@ -742,19 +742,27 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       hand-crafted JSON trace fixture, `--json` legacy flag silent
       ignore in envelope mode, default-text regression guard,
       help-surface + value-parser guards.
-    - DONE (partial) `workflow list|cancel|graph` — three
-      server-backed read/control commands gained `--format
-      json|json-envelope` (json default for back-compat — these
-      commands have always emitted bare JSON; the envelope variant
-      wraps the same body via the canonical `CliJsonEnvelope`).
-      `print_server_response` helper in `server_ops.rs` centralises
-      the format branching so future server-backed commands plug in
-      with one line. 6 new help-surface + value-parser tests.
-      `workflow run --server` envelope migration deferred — the
-      current path also prints a human progress line
-      ("📋 Submitted run X") plus the final JSON, so envelope mode
-      needs a separate slice that unifies stdout output.
-      `workflow logs` doesn't exist on the CLI surface today.
+    - DONE `workflow run --server` + `workflow list|cancel|graph`
+      — three server-backed read/control commands and the
+      server-backed `workflow run` path all accept `--format` flags.
+      `workflow list|cancel|graph` default to `json` (legacy bare
+      body for back-compat — these always emitted bare JSON);
+      `workflow run` defaults to `text` (emoji submit line + final
+      pretty JSON on stdout — current behaviour). The
+      envelope variant on `workflow run --server` routes the
+      "📋 Submitted run X" progress line to stderr so stdout stays a
+      single parseable `CliJsonEnvelope`. Non-success terminal status
+      populates `errors[]` (e.g. `"run X ended with status
+      'failed'"`). `print_server_response` helper in `server_ops.rs`
+      centralises the format branching so future server-backed
+      commands plug in with one line. 8 new help-surface +
+      value-parser tests across list / cancel / graph / run.
+      `workflow logs` doesn't exist on the CLI surface today;
+      `workflow run` local-mode envelope (without `--server`) is
+      a separate slice tracked under output unification — local
+      mode currently has its own colored progress + node output
+      that needs its own design rather than the surgical stdout/
+      stderr split this server-mode change uses.
 
 - DONE P3.4 `agentflow doctor` expansion:
   Library/CLI structural surface + deeper provider probes all closed.

@@ -1096,6 +1096,30 @@ fn harness_list_rejects_unknown_output_format() {
 // ────────────────────────────────────────────────────────────────────────────
 
 #[test]
+fn workflow_run_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "run", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn workflow_run_rejects_unknown_format() {
+  // Value-parser fires on `--format` before workflow file reading
+  // and before the in-process executor spins up, so this test
+  // catches clap wiring regressions without needing a real server
+  // or a valid workflow file.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "run", "smoke.yml", "--format", "yaml"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
+#[test]
 fn workflow_list_help_lists_json_envelope_format() {
   Command::cargo_bin("agentflow")
     .unwrap()
