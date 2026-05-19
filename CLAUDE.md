@@ -184,7 +184,7 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 
 Tag-cut + production deployment rehearsal (P7.4-FU4 checklist) remain the only operational steps before the actual `v1.0.0-rc.1` tag.
 
-See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-14.md` for the most recent evaluation (the 2026-05-01 evaluation is retained as historical context). For change history, prefer `git log` over a doc summary.
+See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.md` for the most recent evaluation (2026-05-14 and 2026-05-01 evaluations are retained as historical context). For change history, prefer `git log` over a doc summary.
 
 ## File Organization
 
@@ -270,4 +270,4 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-14.
 **Last Updated**: 2026-05-14
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
-**Composite Maturity Rating**: B+ (per `docs/archive/PROJECT_EVALUATION_2026-05-14.md`)
+**Composite Maturity Rating**: A (per `docs/archive/PROJECT_EVALUATION_2026-05-19.md`)

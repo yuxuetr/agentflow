@@ -45,13 +45,18 @@ Live at the repository root:
 
 Archived under `docs/archive/`:
 
-- [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
-  historical module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
+- [`PROJECT_EVALUATION_2026-05-19.md`](archive/PROJECT_EVALUATION_2026-05-19.md):
+  **most recent evaluation** (HEAD `daaa912`, A overall) — v1.0.0-rc.1 candidate;
+  all N1–N10 segments closed.
 - [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):
   follow-up evaluation that drove the P6/P7/P-H/M segment additions.
+- [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
+  historical module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
 - [`TODOs-archive-2026-05-09-n1-n10.md`](archive/TODOs-archive-2026-05-09-n1-n10.md)
   and [`TODOs-archive-2026-05-10-p0-p4.md`](archive/TODOs-archive-2026-05-10-p0-p4.md):
   completed execution-plan history.
+- [`TODOs-archive-2026-05-19-recently-closed.md`](archive/TODOs-archive-2026-05-19-recently-closed.md):
+  Recently-Closed entries swept out of the active `TODOs.md` on 2026-05-19.
 
 ## Historical Release References
 

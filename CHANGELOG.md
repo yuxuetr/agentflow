@@ -210,5 +210,6 @@ across the 200+ tests touched.
 
 No structured changelog kept before this entry. For change history
 prior to v0.3.0 prep, see `git log` (most commits follow
-Conventional Commits) and `docs/archive/PROJECT_EVALUATION_2026-05-14.md`
-for the cumulative project evaluation through that date.
+Conventional Commits) and `docs/archive/PROJECT_EVALUATION_2026-05-19.md`
+for the most recent cumulative project evaluation (or
+`docs/archive/PROJECT_EVALUATION_2026-05-14.md` for the prior one).

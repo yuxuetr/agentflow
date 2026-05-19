@@ -80,6 +80,10 @@ The next active cleanup is documentation convergence:
 
 ## Historical References
 
+- [`PROJECT_EVALUATION_2026-05-19.md`](archive/PROJECT_EVALUATION_2026-05-19.md):
+  most recent module-by-module evaluation (A overall, v1.0.0-rc.1 candidate).
+- [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):
+  prior evaluation that informed the P6/P7/P-H/M segment additions.
 - [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
   historical module-by-module evaluation that informed the P0-P4 task queue.
 - [`RoadMap.md`](../RoadMap.md): roadmap and future direction.

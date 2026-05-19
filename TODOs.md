@@ -2982,9 +2982,11 @@ For each task:
 - `docs/CURRENT_STATUS.md` — what currently exists.
 - `docs/STABILITY.md` and `docs/API_COMPATIBILITY.md` — stable surfaces.
 - `HARNESS_MODE_EVOLUTION.md` — full Harness Mode design spec.
-- `docs/archive/PROJECT_EVALUATION_2026-05-14.md` — most recent project
-  evaluation; drove the P6/P7/P-H/M segment additions.
+- `docs/archive/PROJECT_EVALUATION_2026-05-19.md` — **most recent** project
+  evaluation (A overall, v1.0.0-rc.1 candidate; all N1–N10 closed).
+- `docs/archive/PROJECT_EVALUATION_2026-05-14.md` — prior evaluation that
+  drove the P6/P7/P-H/M segment additions (B+ overall).
 - `docs/archive/PROJECT_EVALUATION_2026-05-01.md` — historical evaluation
-  that drove the original P0-P5 task queue.
+  that drove the original P0-P5 task queue (B+ overall).
 - `docs/archive/TODOs-archive-2026-05-09-n1-n10.md` and
   `docs/archive/TODOs-archive-2026-05-10-p0-p4.md` — completed history.
