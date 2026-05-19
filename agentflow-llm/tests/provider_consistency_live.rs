@@ -92,6 +92,10 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
     name: "glm",
     capabilities: &[LiveCapability::Llm, LiveCapability::Multimodal],
   },
+  LiveProviderProfile {
+    name: "dashscope",
+    capabilities: &[LiveCapability::Llm],
+  },
 ];
 
 fn provider_supports_capability(provider_name: &str, capability: LiveCapability) -> bool {
@@ -111,6 +115,41 @@ fn no_proxy_client() -> reqwest::Client {
 fn glm_live_lock() -> &'static tokio::sync::Mutex<()> {
   static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
   LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+fn dashscope_live_lock() -> &'static tokio::sync::Mutex<()> {
+  static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+  LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Resolve the DashScope OpenAI-compatible endpoint. Honors the bundled
+/// `default_models.yml` provider entry (which points at
+/// `https://dashscope.aliyuncs.com/compatible-mode/v1`); falls back to the
+/// same hard-coded URL when the config is unreadable so the test is robust
+/// against `~/.agentflow/models.yml` corruption.
+async fn dashscope_base_url() -> Option<String> {
+  let Ok((config, _source)) = LLMConfig::from_default_source().await else {
+    return Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string());
+  };
+
+  config
+    .get_provider("dashscope")
+    .and_then(|provider| provider.base_url.clone())
+    .or_else(|| Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()))
+}
+
+async fn dashscope_live_context(capability: LiveCapability) -> Option<(String, Option<String>)> {
+  if !prepare_live_provider("dashscope", capability).await {
+    return None;
+  }
+
+  let Some((env_used, api_key)) = pick_api_key(&["DASHSCOPE_API_KEY"]) else {
+    eprintln!("[live] dashscope: skipped (DASHSCOPE_API_KEY not set; live gate is on)");
+    return None;
+  };
+  eprintln!("[live] dashscope: using API key from {env_used}");
+
+  Some((api_key, dashscope_base_url().await))
 }
 
 fn env_truthy(value: &str) -> bool {
@@ -1158,6 +1197,40 @@ async fn glm_live_vision_path() {
   .unwrap_or_else(|e| panic!("glm: live vision request failed: {e}"));
 
   assert_text_non_empty(&response.content);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashscope_live_text_path() {
+  // DashScope (Alibaba Bailian) exposes an OpenAI-compatible chat completions
+  // endpoint at `<base>/compatible-mode/v1`, so we drive it through
+  // `OpenAIProvider::with_client` like GLM. `qwen-plus` is a long-standing
+  // stable alias that Alibaba maintains across model generations — it
+  // currently points at the latest qwen-plus revision and 91 dashscope
+  // entries in `default_models.yml` use it. Override at workflow level
+  // via `AGENTFLOW_LIVE_DASHSCOPE_TEXT_MODEL` if the alias ever decays.
+  let _guard = dashscope_live_lock().lock().await;
+  let Some((api_key, base_url)) = dashscope_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("dashscope provider");
+  let model = live_text_model("dashscope", "qwen-plus");
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("dashscope: live text request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("dashscope: live text request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "dashscope");
+  assert_eq!(
+    response.stop_reason,
+    Some(StopReason::Stop),
+    "dashscope: expected StopReason::Stop on a single-turn text completion"
+  );
 }
 
 #[tokio::test]

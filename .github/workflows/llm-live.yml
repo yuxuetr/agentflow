@@ -45,6 +45,11 @@ jobs:
       GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
       ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+      # DashScope (Alibaba Bailian) — drives Qwen models through the
+      # OpenAI-compatible endpoint at
+      # `https://dashscope.aliyuncs.com/compatible-mode/v1`. Live test
+      # self-skips when the secret is empty.
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
