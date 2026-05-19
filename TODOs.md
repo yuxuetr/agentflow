@@ -45,6 +45,14 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (status reconciliation, no code change) — CLAUDE.md's N9
+  status line was reconciled with shipped state. `.github/workflows/
+  llm-live.yml` (live-LLM nightly CI) was already shipped in
+  `68febae` and extended with GLM env aliases in `1afcd17`; with
+  all 6 provider API-key secrets now configured (OPENAI / ANTHROPIC
+  / GEMINI / MOONSHOT / STEPFUN / ZHIPU) the workflow runs end-to-
+  end on schedule. N9 segment is closed; CLAUDE.md updated to drop
+  the stale "Pending: live-LLM nightly CI" line.
 - N9 (multimodal + tool_choice cross-provider invariants) —
   extends the 7 invariant tests landed in `1afcd17` with the two
   axes CLAUDE.md still listed as pending. New tests in
