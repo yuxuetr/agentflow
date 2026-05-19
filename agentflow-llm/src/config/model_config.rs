@@ -115,34 +115,10 @@ impl ModelConfig {
   /// → all collapse to `Chat` semantics; `generateimage` →
   /// `Text2Image`; `image` → `Image2Image`; `editimage` → `ImageEdit`).
   pub fn granular_type(&self) -> ModelType {
-    let type_str = self.model_type();
-
-    match type_str {
-      // Canonical post-P-LLM.0 names (chat-shaped collapsed onto Text variant
-      // until Slice 3 renames the variant itself).
-      "chat" => ModelType::Text,
-      "text_to_image" | "text2image" => ModelType::Text2Image,
-      "image_to_image" | "image2image" => ModelType::Image2Image,
-      "image_edit" | "imageedit" => ModelType::ImageEdit,
-      "text_to_video" | "text2video" => ModelType::Text2Video,
-      "tts" => ModelType::Tts,
-      "asr" => ModelType::Asr,
-      "embedding" => ModelType::Embedding,
-      // Legacy chat-shaped aliases (all map to ModelType::Text today;
-      // Slice 3 collapses them to ModelType::Chat).
-      "text" => ModelType::Text,
-      "imageunderstand" => ModelType::ImageUnderstand,
-      "videounderstand" => ModelType::VideoUnderstand,
-      "codegen" => ModelType::CodeGen,
-      "docunderstand" => ModelType::DocUnderstand,
-      "functioncalling" => ModelType::FunctionCalling,
-      // Legacy image-generation aliases.
-      "generateimage" => ModelType::Text2Image,
-      "editimage" => ModelType::ImageEdit,
-      // Everything else: fall back to the From<&str> mapping
-      // (legacy "multimodal" / "image" / "audio" still resolve there).
-      _ => ModelType::from(type_str),
-    }
+    // The full string-to-variant table is centralised in
+    // `ModelType::from(&str)`. Keep this method as the historical
+    // entry point so external callers keep working.
+    ModelType::from(self.model_type())
   }
 
   /// Input modalities this model accepts.
@@ -169,6 +145,17 @@ impl ModelConfig {
     } else {
       // Compute capabilities from model type and config
       let mut capabilities = ModelCapabilities::from_model_type(self.granular_type());
+
+      // Authoritative `accepts` lives on ModelConfig — copy it into
+      // capabilities so downstream consumers (`llm_client.rs`,
+      // `validate_request`) see the right set. Explicit `accepts:
+      // [...]` wins; `supports_multimodal: true` legacy field adds
+      // Image as a tolerated input for callers that haven't migrated.
+      let accepts = self.accepts();
+      capabilities.accepts = accepts;
+      if self.supports_multimodal.unwrap_or(false) {
+        capabilities.accepts.insert(InputType::Image);
+      }
 
       // Override with explicit config values
       if let Some(streaming) = self.supports_streaming {
@@ -754,10 +741,7 @@ models:
 "#;
     let config = LLMConfig::from_yaml(yaml).unwrap();
     let model = config.get_model("gpt-4o").unwrap();
-    // Today `chat` collapses onto ModelType::Text; Slice 3 will rename
-    // the variant to `Chat`. The acceptance contract here is that the
-    // canonical `chat` type string is recognised at parse time.
-    assert_eq!(model.granular_type(), ModelType::Text);
+    assert_eq!(model.granular_type(), ModelType::Chat);
   }
 
   #[test]
@@ -786,17 +770,20 @@ models:
     type: image
 "#;
     let config = LLMConfig::from_yaml(yaml).unwrap();
+    // Post-P-LLM.0 Slice 3: all three chat-shaped legacy labels
+    // collapse onto `Chat`. Distinguishing image-capable from text-
+    // only is the job of `accepts`, not of the variant.
     assert_eq!(
       config.get_model("text-model").unwrap().granular_type(),
-      ModelType::Text
+      ModelType::Chat
     );
     assert_eq!(
       config.get_model("multimodal-model").unwrap().granular_type(),
-      ModelType::ImageUnderstand
+      ModelType::Chat
     );
     assert_eq!(
       config.get_model("vision-model").unwrap().granular_type(),
-      ModelType::ImageUnderstand
+      ModelType::Chat
     );
     assert_eq!(
       config

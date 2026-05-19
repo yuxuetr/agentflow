@@ -2261,33 +2261,47 @@ entries onto a single `chat` type and drops the misleading
 `multimodal` / `imageunderstand` labels (both were mostly applied to
 general chat models that happened to accept image input).
 
-- TODO P-LLM.0 ModelType collapse to `Chat` + `accepts:` field +
+- DONE P-LLM.0 ModelType collapse to `Chat` + `accepts:` field +
   YAML migration:
-  - Slice 1 (additive, no breaking): add `accepts:
-    Option<Vec<InputType>>` field to `ModelConfig`; teach the
-    YAML parser to accept `"chat"` as the canonical type string;
-    keep `"text"` / `"multimodal"` / `"imageunderstand"` as
-    backward-compat aliases at parse time. `ModelConfig::accepts()`
-    accessor returns the explicit field if set, falls back to
-    `granular_type().supported_inputs()` otherwise.
-  - Slice 2 (YAML migration): one-shot reclassification of
-    `agentflow-llm/templates/default_models.yml`. 161 `type: text`
-    → `type: chat, accepts: [text]`; 14 `type: multimodal` →
-    `type: chat, accepts: [text, image]`; 5 `type: imageunderstand`
-    → `type: chat, accepts: [text, image]`; 2 `generateimage` →
-    `text_to_image`; 3 `image` → `image_to_image`; 1 `editimage`
-    → `image_edit`. Manual diff review on each of the 196 entries
-    against the model's real capability.
-  - Slice 3 (enum consolidation): collapse `ModelType::{Text,
-    ImageUnderstand, VideoUnderstand, DocUnderstand, CodeGen,
-    FunctionCalling}` into a single `Chat` variant. Update every
-    match arm. Most live inside `model_types.rs` itself; a small
-    number in `model_config.rs` + `client/llm_client.rs` need
-    updating. Internal `stepfun.rs:22` private enum stays as-is.
-  - Tests: snapshot test on the 196-entry migrated YAML;
-    `granular_type` parser legacy-alias coverage; `accepts()`
-    precedence (explicit > inferred) coverage; capability
-    derivation works for `Chat + accepts: [text, image]`.
+  - Slice 1 (commit `35278ef`): additive — `accepts: Option<Vec
+    <InputType>>` field on `ModelConfig`; `granular_type()` recognises
+    canonical `chat` / `text_to_image` / `image_to_image` /
+    `image_edit` / `text_to_video` and every legacy alias
+    (`text`, `multimodal`, `imageunderstand`, `videounderstand`,
+    `docunderstand`, `codegen`, `functioncalling`, `generateimage`,
+    `editimage`, `image`); `ModelConfig::accepts()` accessor
+    (explicit > inferred).
+  - Slice 2 (commit `35278ef`): YAML migration done. 180 / 196
+    entries collapse onto `type: chat` (was 161 text + 14
+    multimodal + 5 imageunderstand). 65 of those gained explicit
+    `accepts: [text, image]`. 5 → `text_to_image` (was 2
+    generateimage + 3 image / Imagen). 1 → `image_edit`. The
+    remaining 10 (tts / asr / embedding) unchanged. Snapshot test
+    `bundled_default_models_yaml_uses_post_pllm0_schema` locks the
+    post-migration shape down. Also repaired a pre-existing single-
+    line corruption at `default_models.yml:3035` left by commit
+    `42c3225` (F-A7-8).
+  - Slice 3 (this slice): `ModelType` collapsed from 13 variants to
+    8 — `Chat` / `Embedding` / `Text2Image` / `Image2Image` /
+    `ImageEdit` / `Tts` / `Asr` / `Text2Video`. `Text`,
+    `ImageUnderstand`, `VideoUnderstand`, `DocUnderstand`,
+    `CodeGen`, `FunctionCalling` all collapse onto `Chat`.
+    `ModelCapabilities` gains an `accepts: HashSet<InputType>`
+    field — authoritative per-model input modality answer. The
+    `From<&str>` parser is now centralised in `model_types.rs`;
+    `granular_type()` is a thin delegate. `is_multimodal()` and
+    `validate_request()` consult `accepts` (not the variant).
+    `ModelConfig::get_capabilities()` injects the explicit
+    `accepts` from YAML so downstream code sees the right set.
+    Internal `agentflow-llm/src/providers/stepfun.rs:22` file-local
+    `ModelType` enum stays untouched (StepFun's own endpoint-
+    selection heuristics; not part of the public surface).
+  - Tests: 110 lib tests pass; 9 new tests in `model_types::tests`
+    cover Chat default behaviour, ModelCapabilities accepts
+    override, validate_request paths, canonical-name parsing,
+    legacy-alias collapse, image/audio alias mapping, and
+    round-trip stability. Workspace `cargo clippy --workspace
+    --all-targets -- -D warnings` clean.
 
 - TODO P-LLM.1 Per-modality Provider trait surface:
   - New `agentflow-llm/src/providers/modality/{asr,tts,

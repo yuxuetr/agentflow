@@ -1,80 +1,88 @@
 //! # Model Type System
 //!
-//! This module defines granular model types with specific input/output capabilities.
-//! This enables automatic validation of requests and proper handling of different
-//! model capabilities.
+//! Defines the closed set of model types AgentFlow routes through. Each
+//! variant maps to a distinct API shape (chat completion, embedding,
+//! image generation, etc.) — what input modalities a chat model
+//! actually accepts is carried separately on `ModelConfig::accepts`.
+//!
+//! P-LLM.0 Slice 3 collapsed `Text`, `ImageUnderstand`, `VideoUnderstand`,
+//! `DocUnderstand`, `CodeGen`, and `FunctionCalling` into a single
+//! `Chat` variant. Those labels were misleading: most models tagged
+//! "vision" or "multimodal" in the registry are general chat models
+//! that happen to accept image input (GPT-4o, Claude, Qwen-VL, Step-1v,
+//! GLM-4.5V), not dedicated vision-specialist APIs. Input-modality
+//! detail moved to the explicit `accepts: [...]` field per model entry.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Granular model types with specific input/output requirements
+/// Closed set of model types AgentFlow can route to.
+///
+/// One variant per distinct API shape. Input-modality detail
+/// (text only, +image, +audio, +video, +document) lives on
+/// `ModelConfig::accepts`, not here — see the module docs for the
+/// rationale behind the P-LLM.0 collapse.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ModelType {
-  /// Text-based large model - input: text, output: text
-  Text,
-  /// Image understanding - input: text + image, output: text  
-  ImageUnderstand,
-  /// Text-to-image - input: text, output: image
+  /// Chat-shaped text-reasoning model.
+  ///
+  /// Output is text. Input is text plus whatever extra modalities are
+  /// listed in `ModelConfig::accepts` (image / audio / video / doc).
+  /// This is the canonical category for GPT / Claude / Gemini / Qwen /
+  /// Moonshot / DeepSeek / Step-1 / GLM and every other chat-completion
+  /// endpoint, regardless of whether the model accepts image input.
+  Chat,
+  /// Text-to-image generation.
   Text2Image,
-  /// Image-to-image - input: image, output: image
+  /// Image-to-image transformation.
   Image2Image,
-  /// Image editing - input: image + text, output: image
+  /// Image editing with text instructions.
   ImageEdit,
-  /// Text-to-speech - input: text, output: audio
+  /// Text-to-speech synthesis.
   Tts,
-  /// Automatic speech recognition - input: audio, output: text
+  /// Automatic speech recognition (audio → text).
   Asr,
-  /// Video understanding - input: text + video, output: text
-  VideoUnderstand,
-  /// Text-to-video - input: text, output: video
+  /// Text-to-video generation.
   Text2Video,
-  /// Code generation - input: text, output: text (specialized for code)
-  CodeGen,
-  /// Document understanding - input: text + document, output: text
-  DocUnderstand,
-  /// Embedding generation - input: text, output: vector
+  /// Text embedding generation.
   Embedding,
-  /// Function calling - input: text + function schemas, output: function calls
-  FunctionCalling,
 }
 
 impl ModelType {
   /// Get human-readable description of the model type
   pub fn description(&self) -> &'static str {
     match self {
-      ModelType::Text => "Text-based language model",
-      ModelType::ImageUnderstand => "Image understanding and analysis",
+      ModelType::Chat => "Chat-shaped text reasoning model",
       ModelType::Text2Image => "Text-to-image generation",
       ModelType::Image2Image => "Image-to-image transformation",
       ModelType::ImageEdit => "Image editing with text instructions",
       ModelType::Tts => "Text-to-speech synthesis",
       ModelType::Asr => "Automatic speech recognition",
-      ModelType::VideoUnderstand => "Video understanding and analysis",
       ModelType::Text2Video => "Text-to-video generation",
-      ModelType::CodeGen => "Code generation and completion",
-      ModelType::DocUnderstand => "Document understanding and analysis",
       ModelType::Embedding => "Text embedding generation",
-      ModelType::FunctionCalling => "Function calling and tool usage",
     }
   }
 
-  /// Get supported input types for this model
+  /// Default input modalities for this model type when an entry has no
+  /// explicit `accepts:` field.
+  ///
+  /// `Chat` defaults to `[Text]` only — a chat model that accepts image
+  /// (or audio / video) input must declare it via `ModelConfig::accepts`.
+  /// This is the post-P-LLM.0 contract; the previous behaviour where
+  /// `ImageUnderstand` implicitly meant `[Text, Image]` no longer
+  /// applies because the variant itself is gone.
   pub fn supported_inputs(&self) -> HashSet<InputType> {
     let mut inputs = HashSet::new();
-
     match self {
-      ModelType::Text | ModelType::CodeGen | ModelType::FunctionCalling => {
+      ModelType::Chat => {
         inputs.insert(InputType::Text);
       }
-      ModelType::ImageUnderstand | ModelType::ImageEdit => {
-        inputs.insert(InputType::Text);
-        inputs.insert(InputType::Image);
-      }
-      ModelType::Text2Image => {
+      ModelType::Text2Image | ModelType::Text2Video => {
         inputs.insert(InputType::Text);
       }
-      ModelType::Image2Image => {
+      ModelType::Image2Image | ModelType::ImageEdit => {
+        inputs.insert(InputType::Text);
         inputs.insert(InputType::Image);
       }
       ModelType::Tts => {
@@ -83,80 +91,55 @@ impl ModelType {
       ModelType::Asr => {
         inputs.insert(InputType::Audio);
       }
-      ModelType::VideoUnderstand => {
-        inputs.insert(InputType::Text);
-        inputs.insert(InputType::Video);
-      }
-      ModelType::Text2Video => {
-        inputs.insert(InputType::Text);
-      }
-      ModelType::DocUnderstand => {
-        inputs.insert(InputType::Text);
-        inputs.insert(InputType::Document);
-      }
       ModelType::Embedding => {
         inputs.insert(InputType::Text);
       }
     }
-
     inputs
   }
 
   /// Get the primary output type for this model
   pub fn primary_output(&self) -> OutputType {
     match self {
-      ModelType::Text
-      | ModelType::ImageUnderstand
-      | ModelType::VideoUnderstand
-      | ModelType::DocUnderstand
-      | ModelType::CodeGen
-      | ModelType::Asr => OutputType::Text,
+      ModelType::Chat | ModelType::Asr => OutputType::Text,
       ModelType::Text2Image | ModelType::Image2Image | ModelType::ImageEdit => OutputType::Image,
       ModelType::Tts => OutputType::Audio,
       ModelType::Text2Video => OutputType::Video,
       ModelType::Embedding => OutputType::Vector,
-      ModelType::FunctionCalling => OutputType::FunctionCall,
     }
   }
 
-  /// Check if this model type supports streaming
+  /// Whether this model type supports streaming responses by default.
   pub fn supports_streaming(&self) -> bool {
     match self {
-      ModelType::Text
-      | ModelType::ImageUnderstand
-      | ModelType::VideoUnderstand
-      | ModelType::DocUnderstand
-      | ModelType::CodeGen
-      | ModelType::FunctionCalling => true,
+      ModelType::Chat => true,
       ModelType::Text2Image
       | ModelType::Image2Image
       | ModelType::ImageEdit
-      | ModelType::Text2Video => false, // Generation models typically don't stream
-      ModelType::Tts => true,        // TTS can stream audio
-      ModelType::Asr => false,       // ASR processes complete audio files
-      ModelType::Embedding => false, // Embeddings are single vectors
+      | ModelType::Text2Video => false,
+      ModelType::Tts => true,
+      ModelType::Asr | ModelType::Embedding => false,
     }
   }
 
-  /// Check if this model requires streaming (no non-streaming mode)
+  /// Whether this model requires streaming mode (no non-streaming path).
   pub fn requires_streaming(&self) -> bool {
     false
   }
 
-  /// Check if this model supports tools/function calling
+  /// Whether this model type supports tool / function calling.
+  ///
+  /// Only `Chat` does today. Generation, TTS, ASR, and Embedding
+  /// endpoints don't have a tool-call surface.
   pub fn supports_tools(&self) -> bool {
-    matches!(
-      self,
-      ModelType::Text
-        | ModelType::ImageUnderstand
-        | ModelType::VideoUnderstand
-        | ModelType::DocUnderstand
-        | ModelType::CodeGen
-        | ModelType::FunctionCalling
-    )
+    matches!(self, ModelType::Chat)
   }
 
-  /// Check if this is a multimodal model (accepts multiple input types)
+  /// Whether this model type's default `supported_inputs()` covers more
+  /// than text. **Note**: this is the model-type-default view only.
+  /// For the authoritative per-model answer (including explicit
+  /// `accepts: [text, image]` on chat models), use
+  /// `ModelConfig::is_multimodal()` or `ModelCapabilities::is_multimodal()`.
   pub fn is_multimodal(&self) -> bool {
     self.supported_inputs().len() > 1
   }
@@ -164,28 +147,22 @@ impl ModelType {
   /// Get typical use cases for this model type
   pub fn use_cases(&self) -> Vec<&'static str> {
     match self {
-      ModelType::Text => vec!["Conversation", "Q&A", "Text generation", "Summarization"],
-      ModelType::ImageUnderstand => vec![
-        "Image description",
-        "Visual Q&A",
-        "Object detection",
-        "Scene analysis",
+      ModelType::Chat => vec![
+        "Conversation",
+        "Q&A",
+        "Reasoning",
+        "Code generation",
+        "Tool use",
+        "Vision Q&A (when accepts includes image)",
+        "Document understanding (when accepts includes document)",
       ],
       ModelType::Text2Image => vec!["Art generation", "Concept visualization", "Design mockups"],
       ModelType::Image2Image => vec!["Style transfer", "Image enhancement", "Format conversion"],
       ModelType::ImageEdit => vec!["Photo editing", "Object removal", "Style modification"],
       ModelType::Tts => vec!["Voice assistants", "Audio books", "Accessibility"],
       ModelType::Asr => vec!["Transcription", "Voice commands", "Meeting notes"],
-      ModelType::VideoUnderstand => vec!["Video analysis", "Content moderation", "Scene detection"],
       ModelType::Text2Video => vec!["Animation", "Video content creation", "Demonstrations"],
-      ModelType::CodeGen => vec!["Code completion", "Bug fixing", "Code explanation"],
-      ModelType::DocUnderstand => vec![
-        "Document analysis",
-        "Information extraction",
-        "Summarization",
-      ],
       ModelType::Embedding => vec!["Semantic search", "Similarity matching", "Classification"],
-      ModelType::FunctionCalling => vec!["API integration", "Tool usage", "Workflow automation"],
     }
   }
 }
@@ -283,6 +260,15 @@ impl OutputType {
 pub struct ModelCapabilities {
   /// Model type with specific input/output requirements
   pub model_type: ModelType,
+  /// Input modalities this model actually accepts.
+  ///
+  /// This is the source of truth post-P-LLM.0 — it is populated from
+  /// `ModelConfig::accepts` (explicit) when present, otherwise from
+  /// `ModelType::supported_inputs()` (model-type default). Callers
+  /// asking "can this model take image input?" should check
+  /// `accepts.contains(&InputType::Image)`, not match on `model_type`.
+  #[serde(default)]
+  pub accepts: HashSet<InputType>,
   /// Whether the model supports streaming responses
   pub supports_streaming: bool,
   /// Whether the model requires streaming (no non-streaming mode)
@@ -314,34 +300,37 @@ fn default_native_tool_calling() -> bool {
 impl ModelCapabilities {
   /// Create capabilities from a model type with defaults.
   ///
-  /// `native_tool_calling` is left `false` here; callers configure it from
-  /// the model registry (most modern OpenAI / Anthropic / Google models opt
-  /// in via the YAML `native_tool_calling: true` field).
+  /// `native_tool_calling` is left `false` here; callers configure it
+  /// from the model registry (most modern OpenAI / Anthropic / Google
+  /// models opt in via the YAML `native_tool_calling: true` field).
+  /// `accepts` is initialised from the model-type default — to override
+  /// it (e.g., a chat model that accepts image input), set the
+  /// `accepts` field on `ModelConfig` and rebuild via
+  /// `ModelConfig::get_capabilities()`.
   pub fn from_model_type(model_type: ModelType) -> Self {
+    let accepts = model_type.supported_inputs();
+    let supports_system_messages = matches!(model_type, ModelType::Chat);
     Self {
       supports_streaming: model_type.supports_streaming(),
       requires_streaming: model_type.requires_streaming(),
       supports_tools: model_type.supports_tools(),
       native_tool_calling: false,
-      supports_system_messages: matches!(
-        model_type,
-        ModelType::Text
-          | ModelType::ImageUnderstand
-          | ModelType::VideoUnderstand
-          | ModelType::DocUnderstand
-          | ModelType::CodeGen
-          | ModelType::FunctionCalling
-      ),
+      supports_system_messages,
       max_context_tokens: None,
       max_output_tokens: None,
       custom_capabilities: std::collections::HashMap::new(),
+      accepts,
       model_type,
     }
   }
 
-  /// Validate if an input type is supported
+  /// Validate if an input type is supported.
+  ///
+  /// Checks against the authoritative `accepts` set, so a chat model
+  /// with `accepts: [text, image]` correctly returns `true` for
+  /// `Image`.
   pub fn supports_input(&self, input_type: &InputType) -> bool {
-    self.model_type.supported_inputs().contains(input_type)
+    self.accepts.contains(input_type)
   }
 
   /// Get the expected output type
@@ -349,9 +338,9 @@ impl ModelCapabilities {
     self.model_type.primary_output()
   }
 
-  /// Check if the model can handle multimodal input
+  /// Whether the model accepts more than one input modality. Authoritative.
   pub fn is_multimodal(&self) -> bool {
-    self.model_type.is_multimodal()
+    self.accepts.len() > 1
   }
 
   /// Validate a request against model capabilities
@@ -364,19 +353,17 @@ impl ModelCapabilities {
     requires_streaming: bool,
     uses_tools: bool,
   ) -> Result<(), String> {
-    let supported_inputs = self.model_type.supported_inputs();
-
-    // Check input types
-    if has_text && !supported_inputs.contains(&InputType::Text) {
+    // Check input types against the authoritative `accepts` set.
+    if has_text && !self.accepts.contains(&InputType::Text) {
       return Err("Model does not support text input".to_string());
     }
-    if has_images && !supported_inputs.contains(&InputType::Image) {
+    if has_images && !self.accepts.contains(&InputType::Image) {
       return Err("Model does not support image input".to_string());
     }
-    if has_audio && !supported_inputs.contains(&InputType::Audio) {
+    if has_audio && !self.accepts.contains(&InputType::Audio) {
       return Err("Model does not support audio input".to_string());
     }
-    if has_video && !supported_inputs.contains(&InputType::Video) {
+    if has_video && !self.accepts.contains(&InputType::Video) {
       return Err("Model does not support video input".to_string());
     }
 
@@ -397,37 +384,65 @@ impl ModelCapabilities {
   }
 }
 
-/// Legacy model type mapping for backward compatibility
+/// Parse a YAML / config type string into a `ModelType`.
+///
+/// Accepts:
+///   - Canonical post-P-LLM.0 names: `chat`, `embedding`, `tts`, `asr`,
+///     `text_to_image`, `image_to_image`, `image_edit`, `text_to_video`.
+///   - Pre-P-LLM.0 chat-shaped aliases (`text`, `multimodal`,
+///     `imageunderstand`, `videounderstand`, `docunderstand`,
+///     `codegen`, `functioncalling`) all collapse to `Chat` — that's
+///     the entire point of the P-LLM.0 cleanup.
+///   - Pre-P-LLM.0 image-generation aliases (`generateimage` /
+///     `text2image` → `Text2Image`; `image` → `Text2Image` per the
+///     pre-P-LLM.0 contract that `type: image` was used by Imagen
+///     entries; `image2image` → `Image2Image`; `editimage` /
+///     `imageedit` → `ImageEdit`; `text2video` → `Text2Video`).
+///   - Unknown values default to `Chat` (safest fallback — preserves
+///     historical default-fallback behaviour).
 impl From<&str> for ModelType {
   fn from(legacy_type: &str) -> Self {
     match legacy_type {
-      "text" => ModelType::Text,
-      "multimodal" => ModelType::ImageUnderstand, // Default multimodal to image understanding
-      "image" => ModelType::Text2Image,
-      "audio" => ModelType::Tts,
+      // Canonical post-P-LLM.0 names.
+      "chat" => ModelType::Chat,
+      "embedding" => ModelType::Embedding,
       "tts" => ModelType::Tts,
       "asr" => ModelType::Asr,
-      "embedding" => ModelType::Embedding,
-      _ => ModelType::Text, // Default fallback
+      "text_to_image" | "text2image" => ModelType::Text2Image,
+      "image_to_image" | "image2image" => ModelType::Image2Image,
+      "image_edit" | "imageedit" => ModelType::ImageEdit,
+      "text_to_video" | "text2video" => ModelType::Text2Video,
+      // Pre-P-LLM.0 chat-shaped aliases (all collapse to Chat).
+      "text" | "multimodal" | "imageunderstand" | "videounderstand" | "docunderstand"
+      | "codegen" | "functioncalling" => ModelType::Chat,
+      // Pre-P-LLM.0 image-generation aliases.
+      "generateimage" => ModelType::Text2Image,
+      "image" => ModelType::Text2Image, // Historical Imagen mapping.
+      "editimage" => ModelType::ImageEdit,
+      // Pre-P-LLM.0 audio alias.
+      "audio" => ModelType::Tts,
+      // Unknown → safest default.
+      _ => ModelType::Chat,
     }
   }
 }
 
-/// Convert to legacy string format for backward compatibility
 impl ModelType {
+  /// Canonical post-P-LLM.0 YAML string for this variant.
+  ///
+  /// Used when serialising back to disk (`agentflow llm models
+  /// --refresh-from-api`) and for diagnostic output. Naming matches
+  /// `From<&str>` — round-tripping through the string form is stable.
   pub fn to_legacy_string(&self) -> &'static str {
     match self {
-      ModelType::Text | ModelType::CodeGen => "text",
-      ModelType::ImageUnderstand
-      | ModelType::ImageEdit
-      | ModelType::VideoUnderstand
-      | ModelType::DocUnderstand => "multimodal",
-      ModelType::Text2Image | ModelType::Image2Image => "image",
-      ModelType::Text2Video => "video",
+      ModelType::Chat => "chat",
+      ModelType::Text2Image => "text_to_image",
+      ModelType::Image2Image => "image_to_image",
+      ModelType::ImageEdit => "image_edit",
+      ModelType::Text2Video => "text_to_video",
       ModelType::Tts => "tts",
       ModelType::Asr => "asr",
       ModelType::Embedding => "embedding",
-      ModelType::FunctionCalling => "text", // Function calling is still primarily text-based
     }
   }
 }
@@ -437,21 +452,54 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_model_type_capabilities() {
-    let text_model = ModelType::Text;
-    assert!(text_model.supported_inputs().contains(&InputType::Text));
-    assert!(!text_model.is_multimodal());
-    assert_eq!(text_model.primary_output(), OutputType::Text);
-
-    let vision_model = ModelType::ImageUnderstand;
-    assert!(vision_model.supported_inputs().contains(&InputType::Text));
-    assert!(vision_model.supported_inputs().contains(&InputType::Image));
-    assert!(vision_model.is_multimodal());
-    assert_eq!(vision_model.primary_output(), OutputType::Text);
+  fn chat_type_capabilities_default_to_text_only() {
+    let chat = ModelType::Chat;
+    assert_eq!(chat.supported_inputs(), {
+      let mut s = HashSet::new();
+      s.insert(InputType::Text);
+      s
+    });
+    // is_multimodal at the type level is false — vision capability
+    // is expressed via ModelConfig::accepts, not the variant.
+    assert!(!chat.is_multimodal());
+    assert_eq!(chat.primary_output(), OutputType::Text);
+    assert!(chat.supports_tools());
+    assert!(chat.supports_streaming());
   }
 
   #[test]
-  fn test_input_type_formats() {
+  fn capabilities_with_explicit_accepts_report_multimodal() {
+    // ModelCapabilities::accepts is the authoritative set. Building
+    // it from a chat ModelType gives `[Text]` only; setting the
+    // explicit accepts field to `[Text, Image]` makes `is_multimodal`
+    // return true and `supports_input(Image)` return true — without
+    // changing the variant.
+    let mut caps = ModelCapabilities::from_model_type(ModelType::Chat);
+    caps.accepts.insert(InputType::Image);
+    assert!(caps.is_multimodal());
+    assert!(caps.supports_input(&InputType::Image));
+    assert!(caps.supports_input(&InputType::Text));
+    assert!(!caps.supports_input(&InputType::Audio));
+  }
+
+  #[test]
+  fn capabilities_validate_request_uses_accepts_set() {
+    // Default chat caps reject image input...
+    let chat = ModelCapabilities::from_model_type(ModelType::Chat);
+    assert!(chat.validate_request(true, true, false, false, false, false).is_err());
+
+    // ...but adding Image to accepts unlocks the path. Same variant,
+    // different accepts → different behaviour.
+    let mut vision_chat = chat.clone();
+    vision_chat.accepts.insert(InputType::Image);
+    assert!(vision_chat.validate_request(true, true, false, false, false, false).is_ok());
+
+    // Audio is still rejected since accepts doesn't include it.
+    assert!(vision_chat.validate_request(true, false, true, false, false, false).is_err());
+  }
+
+  #[test]
+  fn input_type_mime_format_recognition() {
     let image_input = InputType::Image;
     assert!(image_input.supports_mime_type("image/jpeg"));
     assert!(image_input.supports_mime_type("image/png"));
@@ -459,28 +507,61 @@ mod tests {
   }
 
   #[test]
-  fn test_capabilities_validation() {
-    let capabilities = ModelCapabilities::from_model_type(ModelType::ImageUnderstand);
-
-    // Should accept text + image
-    assert!(
-      capabilities
-        .validate_request(true, true, false, false, false, false)
-        .is_ok()
-    );
-
-    // Should reject audio for image understanding model
-    assert!(
-      capabilities
-        .validate_request(true, false, true, false, false, false)
-        .is_err()
-    );
+  fn from_str_recognises_post_pllm0_canonical_names() {
+    assert_eq!(ModelType::from("chat"), ModelType::Chat);
+    assert_eq!(ModelType::from("text_to_image"), ModelType::Text2Image);
+    assert_eq!(ModelType::from("image_to_image"), ModelType::Image2Image);
+    assert_eq!(ModelType::from("image_edit"), ModelType::ImageEdit);
+    assert_eq!(ModelType::from("text_to_video"), ModelType::Text2Video);
+    assert_eq!(ModelType::from("tts"), ModelType::Tts);
+    assert_eq!(ModelType::from("asr"), ModelType::Asr);
+    assert_eq!(ModelType::from("embedding"), ModelType::Embedding);
   }
 
   #[test]
-  fn test_legacy_compatibility() {
-    assert_eq!(ModelType::from("text"), ModelType::Text);
-    assert_eq!(ModelType::from("multimodal"), ModelType::ImageUnderstand);
-    assert_eq!(ModelType::Text.to_legacy_string(), "text");
+  fn from_str_collapses_legacy_chat_aliases_onto_chat() {
+    for legacy in [
+      "text",
+      "multimodal",
+      "imageunderstand",
+      "videounderstand",
+      "docunderstand",
+      "codegen",
+      "functioncalling",
+    ] {
+      assert_eq!(
+        ModelType::from(legacy),
+        ModelType::Chat,
+        "legacy alias '{legacy}' should collapse to Chat"
+      );
+    }
+  }
+
+  #[test]
+  fn from_str_maps_legacy_image_and_audio_aliases() {
+    assert_eq!(ModelType::from("generateimage"), ModelType::Text2Image);
+    assert_eq!(ModelType::from("image"), ModelType::Text2Image);
+    assert_eq!(ModelType::from("editimage"), ModelType::ImageEdit);
+    assert_eq!(ModelType::from("text2image"), ModelType::Text2Image);
+    assert_eq!(ModelType::from("image2image"), ModelType::Image2Image);
+    assert_eq!(ModelType::from("imageedit"), ModelType::ImageEdit);
+    assert_eq!(ModelType::from("audio"), ModelType::Tts);
+  }
+
+  #[test]
+  fn legacy_string_round_trip_is_stable() {
+    for variant in [
+      ModelType::Chat,
+      ModelType::Text2Image,
+      ModelType::Image2Image,
+      ModelType::ImageEdit,
+      ModelType::Text2Video,
+      ModelType::Tts,
+      ModelType::Asr,
+      ModelType::Embedding,
+    ] {
+      let s = variant.to_legacy_string();
+      assert_eq!(ModelType::from(s), variant, "round-trip failed for '{s}'");
+    }
   }
 }
