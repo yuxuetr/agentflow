@@ -1027,11 +1027,32 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     `agentflow_llm::trace_context`) and plugin (shipped here) are
     marked done; MCP transport (`meta.traceparent`) and worker
     gRPC metadata are marked as follow-ups.
-  - Follow-ups (separate slices):
-    - MCP transport: inject `traceparent` into JSON-RPC `meta`.
-    - Worker gRPC: inject into request metadata.
+  - Follow-ups status (all four hops now stitched):
+    - DONE (commit `7b03e02`) MCP transport — `params._meta.
+      traceparent` injected by `agentflow_mcp::client::session` on
+      every outbound `send_request` / `send_notification`. New
+      `protocol::traceparent` module ships `inject_traceparent_into_
+      request` + `extract_traceparent_from_request` helpers with 14
+      unit tests covering every shape branch (none / object /
+      array / primitive params, non-object `_meta`, empty-string
+      value, env-driven injection). 3 integration tests prove the
+      wire round-trip through `MockTransport::sent_messages_handle`.
+    - DONE (this commit) Worker gRPC — `traceparent` metadata
+      injected client-side by `GrpcWorkerProtocol::unary` via the
+      new `inject_traceparent_into_grpc_request`, and the four
+      tonic dispatch stubs in `WorkerControlServer::call` extract +
+      install via `run_in_traceparent_scope` before calling the
+      `WorkerControl` trait method. Covers both `GrpcWorkerService`
+      and `WorkerControlPlane` `WorkerControl` impls since
+      propagation is at the tonic boundary. 7 unit tests cover
+      inject / extract / scope helper + round-trip.
+      `docs/TRACE_PERSISTENCE_SCHEMA.md` "Hop continuity (P3.8)"
+      table now lists all four carriers as ✓.
     - End-to-end integration test that walks a DAG run through
-      LLM → MCP → Plugin → Worker and asserts a connected OTel trace.
+      LLM → MCP → Plugin → Worker and asserts a connected OTel
+      trace remains the natural next slice; today each hop's own
+      tests prove the per-hop contract, and the OTel exporter's
+      existing replay tooling can stitch traces post-hoc.
 
 - DONE P3.9 CLI feature flag CI matrix (closed — final cells were
   the agentflow-rag feature surface):

@@ -42,8 +42,8 @@ canonical env var on outbound spawns is
 | --- | --- | --- |
 | LLM HTTP call | `traceparent` HTTP header (via `agentflow_llm::trace_context::LlmTraceContext` task-local) | ✓ |
 | Plugin subprocess spawn | `TRACEPARENT` env var, injected by `agentflow-cli` plugin preparers (`OsSandboxPluginPreparer` + `NoopWithTraceparent`) | ✓ |
-| MCP transport (JSON-RPC stdio) | JSON-RPC `meta.traceparent` field | ○ follow-up |
-| Worker gRPC | gRPC `traceparent` metadata entry | ○ follow-up |
+| MCP transport (JSON-RPC stdio) | JSON-RPC `params._meta.traceparent` (per `agentflow_mcp::protocol::traceparent`; injected on every outbound `send_request` / `send_notification`) | ✓ |
+| Worker gRPC | gRPC `traceparent` metadata entry on the tonic `Request` (injected by `GrpcWorkerProtocol::unary` client-side; extracted + installed via `agentflow_tracing::context::scope` server-side by the four unary handler stubs in `WorkerControlServer::call`) | ✓ |
 
 When no context is in scope, `current_traceparent()` returns `None`
 and consumers MUST NOT emit a carrier — propagating an empty value

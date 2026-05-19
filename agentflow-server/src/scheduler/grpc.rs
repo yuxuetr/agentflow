@@ -337,7 +337,13 @@ where
 
           fn call(&mut self, request: Request<pb::SubmitTaskRequest>) -> Self::Future {
             let inner = self.0.clone();
-            Box::pin(async move { inner.submit_task(request).await })
+            // P3.8: install upstream traceparent for the duration of
+            // the trait dispatch so any tracing/agent code the
+            // handler triggers stitches onto the caller's span.
+            let traceparent = extract_traceparent_from_grpc_request(&request);
+            Box::pin(run_in_traceparent_scope(traceparent, async move {
+              inner.submit_task(request).await
+            }))
           }
         }
         Box::pin(async move {
@@ -357,7 +363,10 @@ where
 
           fn call(&mut self, request: Request<pb::ClaimTaskRequest>) -> Self::Future {
             let inner = self.0.clone();
-            Box::pin(async move { inner.claim_task(request).await })
+            let traceparent = extract_traceparent_from_grpc_request(&request);
+            Box::pin(run_in_traceparent_scope(traceparent, async move {
+              inner.claim_task(request).await
+            }))
           }
         }
         Box::pin(async move {
@@ -377,7 +386,10 @@ where
 
           fn call(&mut self, request: Request<pb::ReportResultRequest>) -> Self::Future {
             let inner = self.0.clone();
-            Box::pin(async move { inner.report_result(request).await })
+            let traceparent = extract_traceparent_from_grpc_request(&request);
+            Box::pin(run_in_traceparent_scope(traceparent, async move {
+              inner.report_result(request).await
+            }))
           }
         }
         Box::pin(async move {
@@ -397,7 +409,10 @@ where
 
           fn call(&mut self, request: Request<pb::HeartbeatRequest>) -> Self::Future {
             let inner = self.0.clone();
-            Box::pin(async move { inner.heartbeat(request).await })
+            let traceparent = extract_traceparent_from_grpc_request(&request);
+            Box::pin(run_in_traceparent_scope(traceparent, async move {
+              inner.heartbeat(request).await
+            }))
           }
         }
         Box::pin(async move {
@@ -470,10 +485,79 @@ impl GrpcWorkerProtocol {
       })?;
     let path = http::uri::PathAndQuery::from_static(path);
     let codec = tonic::codec::ProstCodec::default();
-    inner
-      .unary(Request::new(request), path, codec)
-      .await
-      .map_err(scheduler_error_from_status)
+
+    // P3.8: cross-hop W3C traceparent propagation. When the caller
+    // is running inside an `agentflow_tracing::context::scope`,
+    // inject the active value as a gRPC `traceparent` metadata
+    // entry. Mirrors the lowercase HTTP-header spelling so OTel
+    // tools that already grep "traceparent" match without
+    // translation. Outside any scope, the metadata is omitted —
+    // consumers can tell apart "no upstream trace" from "upstream
+    // trace exists but is malformed".
+    let mut req = Request::new(request);
+    inject_traceparent_into_grpc_request(&mut req);
+    inner.unary(req, path, codec).await.map_err(scheduler_error_from_status)
+  }
+}
+
+/// Inject the active `agentflow_tracing::context::current_traceparent`
+/// into a tonic `Request`'s gRPC metadata as the `traceparent` key.
+/// No-op when there is no active context — see the module-level
+/// comment for the rationale behind omitting (not emitting an empty
+/// value).
+///
+/// Public-in-crate so the integration tests can reach in to verify
+/// the metadata shape without having to spin up a full server.
+pub(crate) fn inject_traceparent_into_grpc_request<T>(request: &mut Request<T>) {
+  let Some(traceparent) = agentflow_tracing::context::current_traceparent() else {
+    return;
+  };
+  match tonic::metadata::AsciiMetadataValue::try_from(traceparent.as_str()) {
+    Ok(value) => {
+      request.metadata_mut().insert("traceparent", value);
+    }
+    Err(_err) => {
+      // Defensive: a traceparent that contains non-ASCII bytes
+      // would be a bug upstream. Drop it silently rather than
+      // poisoning the entire RPC — tracing is observability, not
+      // a correctness path.
+      tracing::warn!(
+        "skipping traceparent gRPC injection: value contains non-ASCII bytes"
+      );
+    }
+  }
+}
+
+/// Extract the `traceparent` gRPC metadata value from an incoming
+/// `Request`. Returns `None` when the metadata key is absent or
+/// holds a non-ASCII value. Servers use this to install the parent
+/// context via `agentflow_tracing::context::scope` before dispatch.
+pub fn extract_traceparent_from_grpc_request<T>(request: &Request<T>) -> Option<String> {
+  request
+    .metadata()
+    .get("traceparent")
+    .and_then(|value| value.to_str().ok())
+    .map(str::to_owned)
+}
+
+/// Run `fut` inside `agentflow_tracing::context::scope` when
+/// `traceparent` is `Some`, or plain otherwise. Centralises the
+/// scope-vs-no-scope branch the gRPC handler stubs all need.
+///
+/// Public-in-crate so the four inner unary handler `Svc` structs
+/// share one implementation. Generic over the future type so each
+/// `WorkerControl` method (which returns a different `Response<R>`)
+/// can use it without boxing.
+pub(crate) async fn run_in_traceparent_scope<F, T>(
+  traceparent: Option<String>,
+  fut: F,
+) -> T
+where
+  F: std::future::Future<Output = T>,
+{
+  match traceparent {
+    Some(tp) => agentflow_tracing::context::scope(tp, fut).await,
+    None => fut.await,
   }
 }
 
@@ -701,4 +785,100 @@ fn scheduler_error_from_status(status: Status) -> SchedulerError {
 
 fn empty_body() -> BoxBody {
   tonic::body::empty_body()
+}
+
+#[cfg(test)]
+mod traceparent_tests {
+  //! Unit coverage for P3.8 worker gRPC traceparent propagation.
+  //!
+  //! Inject and extract are pure metadata-manipulation helpers, so
+  //! the contract can be verified without spinning up a real
+  //! channel. End-to-end coverage (real tonic client + server with
+  //! cross-process scope propagation) lives in the integration test
+  //! suite under `agentflow-worker/tests/` so it can race a real
+  //! channel against admission + heartbeat flows that already exist
+  //! there.
+  use super::*;
+  use tonic::Request;
+
+  #[test]
+  fn inject_outside_any_scope_leaves_metadata_empty() {
+    let mut req = Request::new(pb::SubmitTaskRequest { task: None });
+    inject_traceparent_into_grpc_request(&mut req);
+    assert!(
+      req.metadata().get("traceparent").is_none(),
+      "no scope ⇒ no traceparent key; consumers rely on absence"
+    );
+  }
+
+  #[tokio::test]
+  async fn inject_inside_scope_writes_traceparent_metadata() {
+    let mut req = Request::new(pb::ClaimTaskRequest {
+      worker_id: "worker-1".into(),
+    });
+    agentflow_tracing::context::scope(
+      "00-trace-id-span-01".to_string(),
+      async {
+        inject_traceparent_into_grpc_request(&mut req);
+      },
+    )
+    .await;
+    let value = req
+      .metadata()
+      .get("traceparent")
+      .expect("traceparent metadata populated inside scope");
+    assert_eq!(value.to_str().unwrap(), "00-trace-id-span-01");
+  }
+
+  #[test]
+  fn extract_returns_none_for_missing_traceparent_metadata() {
+    let req = Request::new(pb::SubmitTaskRequest { task: None });
+    assert!(extract_traceparent_from_grpc_request(&req).is_none());
+  }
+
+  #[test]
+  fn extract_returns_traceparent_when_metadata_populated() {
+    let mut req = Request::new(pb::SubmitTaskRequest { task: None });
+    req
+      .metadata_mut()
+      .insert("traceparent", "00-deadbeef-cafebabe-01".parse().unwrap());
+    assert_eq!(
+      extract_traceparent_from_grpc_request(&req).as_deref(),
+      Some("00-deadbeef-cafebabe-01")
+    );
+  }
+
+  #[tokio::test]
+  async fn run_in_traceparent_scope_with_some_installs_context_for_future() {
+    let observed = run_in_traceparent_scope(
+      Some("00-scoped-test-01".to_string()),
+      async { agentflow_tracing::context::current_traceparent() },
+    )
+    .await;
+    assert_eq!(observed.as_deref(), Some("00-scoped-test-01"));
+  }
+
+  #[tokio::test]
+  async fn run_in_traceparent_scope_with_none_runs_future_outside_any_scope() {
+    let observed =
+      run_in_traceparent_scope(None, async { agentflow_tracing::context::current_traceparent() })
+        .await;
+    assert!(observed.is_none());
+  }
+
+  #[tokio::test]
+  async fn round_trip_inject_then_extract_round_trips_value_under_active_scope() {
+    let mut req = Request::new(pb::HeartbeatRequest::default());
+    agentflow_tracing::context::scope(
+      "00-roundtrip-test-01".to_string(),
+      async {
+        inject_traceparent_into_grpc_request(&mut req);
+      },
+    )
+    .await;
+    assert_eq!(
+      extract_traceparent_from_grpc_request(&req).as_deref(),
+      Some("00-roundtrip-test-01")
+    );
+  }
 }
