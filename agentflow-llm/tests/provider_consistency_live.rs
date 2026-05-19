@@ -652,8 +652,13 @@ where
   let provider = build(&api_key);
   let model = match provider_name {
     "openai" => live_text_model(provider_name, "gpt-4o-mini"),
-    "anthropic" => live_text_model(provider_name, "claude-3-5-haiku-20241022"),
-    "google" => live_text_model(provider_name, "gemini-1.5-flash"),
+    // Use the rolling `-latest` alias so test fixtures don't decay every
+    // time Anthropic retires a dated revision.
+    "anthropic" => live_text_model(provider_name, "claude-3-5-haiku-latest"),
+    // `gemini-1.5-flash` was retired from the `v1beta` endpoint the
+    // adapter hits; `gemini-2.0-flash` is the current stable cheap-tier
+    // model that ships in the bundled `default_models.yml`.
+    "google" => live_text_model(provider_name, "gemini-2.0-flash"),
     "moonshot" => live_text_model(provider_name, "moonshot-v1-8k"),
     "stepfun" => live_text_model(provider_name, "step-1-8k"),
     other => panic!("unknown provider in live harness: {other}"),

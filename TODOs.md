@@ -45,6 +45,19 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (live nightly CI model refresh) — second dry-run after the
+  init-validation fix passed 19 / 21 tests but surfaced 2 model-
+  not-found 404s from vendor-side deprecations:
+  Anthropic returned 404 for the hard-coded
+  `claude-3-5-haiku-20241022` dated revision, Google returned 404
+  for `gemini-1.5-flash` ("not found for API version v1beta"). Both
+  fixed by updating the defaults in `provider_consistency_live.rs::
+  run_text_path` to the rolling alias `claude-3-5-haiku-latest`
+  (Anthropic) and the current stable `gemini-2.0-flash` (Google);
+  both are also entries in the bundled `default_models.yml`. The
+  `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL` env override path was
+  already supported, so future drift can be patched at the workflow
+  level without code changes.
 - N9 (live nightly CI repro fix) — first dry-run of
   `LLM Live Smoke` revealed `AgentFlow::init()` in
   `prepare_live_provider` was force-validating EVERY provider in
