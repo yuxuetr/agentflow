@@ -661,7 +661,18 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       integration tests (plugin feature-gated): full-shape round-
       trip for both subcommands + help-surface guards.
     - `rag search|eval` — wrap existing JSON outputs.
-    - `trace list|replay|show` — add `--output json-envelope`.
+    - DONE (partial) `trace replay` — gained `--format
+      text|json-envelope`. The legacy `--json` flag (append raw JSON
+      after the text replay) is preserved in text mode; in envelope
+      mode it's ignored since the envelope already carries the full
+      (redacted) `ExecutionTrace` as `result`. `trace tui` stays
+      interactive-only (no envelope). `list` / `show` subcommands
+      mentioned in the original TODO don't exist on the trace
+      command surface today — descoped from this segment.
+      5 new CLI integration tests: full-shape round-trip via a
+      hand-crafted JSON trace fixture, `--json` legacy flag silent
+      ignore in envelope mode, default-text regression guard,
+      help-surface + value-parser guards.
     - `workflow run|list|cancel|graph|logs` — server-backed,
       depends on P2.5 `--server` plumbing.
 

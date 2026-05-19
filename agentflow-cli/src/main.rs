@@ -914,12 +914,18 @@ enum TraceCommands {
     /// Directory containing file-backed traces (default: AGENTFLOW_TRACE_DIR or ~/.agentflow/traces)
     #[arg(long)]
     dir: Option<String>,
-    /// Include raw trace JSON after the replay timeline
+    /// Include raw trace JSON after the replay timeline (text format only)
     #[arg(long)]
     json: bool,
     /// Maximum characters printed for prompt, response, params, and output fields
     #[arg(long, default_value_t = 160)]
     max_field_chars: usize,
+    /// Output format: text (default; pairs with `--json` for trailing
+    /// JSON) or json-envelope (canonical `CliJsonEnvelope` —
+    /// `agentflow.cli/1` wire schema; skips text replay, `--json` is
+    /// ignored since the envelope already carries the full trace).
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Inspect a persisted trace as a focused terminal timeline
   Tui {
@@ -1553,7 +1559,8 @@ async fn main() {
         dir,
         json,
         max_field_chars,
-      } => trace::replay::execute(run_id, dir, json, max_field_chars).await,
+        format,
+      } => trace::replay::execute(run_id, dir, json, max_field_chars, format).await,
       TraceCommands::Tui {
         run_id,
         dir,

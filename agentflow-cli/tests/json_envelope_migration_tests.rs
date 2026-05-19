@@ -508,6 +508,159 @@ fn plugin_inspect_help_lists_json_envelope_format() {
     .stdout(predicate::str::contains("json-envelope"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// trace replay
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Write a minimal valid `ExecutionTrace` JSON to the format
+/// `FileTraceStorage` expects (one file per trace,
+/// `{base_path}/{workflow_id}.json`). Returns the trace directory
+/// so the test can pass it via `--dir`.
+fn write_trace_fixture(workflow_id: &str) -> TempDir {
+  let tmp = TempDir::new().unwrap();
+  let trace_json = serde_json::json!({
+    "workflow_id": workflow_id,
+    "context": {
+      "run_id": workflow_id,
+      "trace_id": workflow_id,
+      "span_id": "workflow"
+    },
+    "workflow_name": "envelope-smoke",
+    "started_at": "2026-05-19T00:00:00Z",
+    "completed_at": "2026-05-19T00:00:01Z",
+    "status": { "type": "completed" },
+    "nodes": [],
+    "metadata": {
+      "tags": ["smoke", "test"],
+      "environment": "development"
+    }
+  });
+  std::fs::write(
+    tmp.path().join(format!("{workflow_id}.json")),
+    serde_json::to_string_pretty(&trace_json).unwrap(),
+  )
+  .unwrap();
+  tmp
+}
+
+#[test]
+fn trace_replay_json_envelope_emits_full_trace_as_result() {
+  let dir = write_trace_fixture("envelope-test-trace");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "trace",
+      "replay",
+      "envelope-test-trace",
+      "--dir",
+      dir.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "trace replay --format json-envelope must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "trace replay");
+
+  // The result body IS the (redacted) ExecutionTrace — operators get
+  // every field the storage layer persisted.
+  let result = &envelope["result"];
+  assert_eq!(result["workflow_id"], "envelope-test-trace");
+  assert_eq!(result["workflow_name"], "envelope-smoke");
+  assert_eq!(result["status"]["type"], "completed");
+  assert!(result["nodes"].is_array());
+  // Metadata round-trips through the envelope verbatim.
+  assert_eq!(
+    result["metadata"]["environment"]
+      .as_str()
+      .unwrap_or_default(),
+    "development"
+  );
+  let tags = result["metadata"]["tags"].as_array().unwrap();
+  assert_eq!(tags.len(), 2);
+}
+
+#[test]
+fn trace_replay_json_envelope_ignores_json_flag_silently() {
+  // `--json` is the legacy "append raw JSON after text replay" flag.
+  // In envelope mode it's redundant (envelope already carries the
+  // trace) so we ignore it without erroring — orthogonal flags
+  // shouldn't need to compose.
+  let dir = write_trace_fixture("envelope-with-json-flag");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "trace",
+      "replay",
+      "envelope-with-json-flag",
+      "--dir",
+      dir.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+      "--json", // legacy flag — ignored in envelope mode
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "envelope mode must succeed even with legacy --json flag");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "trace replay");
+}
+
+#[test]
+fn trace_replay_default_text_format_unchanged() {
+  // Regression guard: the legacy text replay path must keep working
+  // without specifying `--format`. Default = text = current behavior.
+  let dir = write_trace_fixture("envelope-text-default");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "trace",
+      "replay",
+      "envelope-text-default",
+      "--dir",
+      dir.path().to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("envelope-text-default"));
+}
+
+#[test]
+fn trace_replay_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["trace", "replay", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn trace_replay_rejects_unknown_format() {
+  let dir = write_trace_fixture("envelope-rejects-format");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "trace",
+      "replay",
+      "envelope-rejects-format",
+      "--dir",
+      dir.path().to_str().unwrap(),
+      "--format",
+      "yaml",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th
