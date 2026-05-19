@@ -10,6 +10,7 @@ use std::collections::HashMap;
 pub mod anthropic;
 pub mod google;
 pub mod mock;
+pub mod modality;
 pub mod moonshot;
 pub mod openai;
 pub mod stepfun;

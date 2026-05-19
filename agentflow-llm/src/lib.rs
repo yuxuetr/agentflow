@@ -104,6 +104,11 @@ pub use discovery::{ConfigUpdater, ModelFetcher, ModelValidator};
 pub use error::{LLMError, Result};
 pub use model_types::{InputType, ModelCapabilities, ModelType, OutputType};
 pub use multimodal::{ImageData, ImageUrl, MessageContent, MultimodalMessage};
+pub use providers::modality::{
+  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider,
+  ImageEditProvider, ImageGenerationResponse as ModalityImageGenerationResponse,
+  Text2ImageProvider, TtsProvider, TtsRequest, TtsResponse,
+};
 pub use providers::stepfun::{
   ASRRequest, Image2ImageRequest, ImageEditRequest, ImageGenerationResponse,
   StepFunSpecializedClient, TTSBuilder, TTSRequest, Text2ImageBuilder, Text2ImageRequest,

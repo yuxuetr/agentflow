@@ -1198,6 +1198,177 @@ impl TTSBuilder {
   }
 }
 
+// ============================================================================
+// P-LLM.1 modality trait adapters
+// ----------------------------------------------------------------------------
+// Wires `StepFunSpecializedClient` into the per-modality trait surface in
+// `crate::providers::modality::*`. Each impl translates the modality-level
+// request type into the StepFun-internal one, calls the existing client
+// method, and translates the response back. No new wire behaviour — these
+// are pure shape adapters.
+// ============================================================================
+
+use crate::providers::modality::{
+  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider,
+  Image2ImageRequest as ModalityImage2ImageRequest, ImageEditProvider,
+  ImageEditRequest as ModalityImageEditRequest,
+  ImageGenerationResponse as ModalityImageGenerationResponse, Text2ImageProvider,
+  Text2ImageRequest as ModalityText2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
+};
+
+fn into_modality_image_response(stepfun: ImageGenerationResponse) -> ModalityImageGenerationResponse {
+  let images = stepfun
+    .data
+    .into_iter()
+    .map(|data| GeneratedImage {
+      // StepFun uses either `image` (legacy field) or `b64_json` for base64;
+      // collapse both onto the modality-level `b64_json` slot to keep the
+      // contract minimal.
+      url: data.url,
+      b64_json: data.b64_json.or(data.image),
+      seed: Some(data.seed),
+    })
+    .collect();
+  ModalityImageGenerationResponse {
+    created: stepfun.created,
+    images,
+    metadata: None,
+  }
+}
+
+fn tts_mime_type_for(response_format: Option<&str>) -> &'static str {
+  match response_format {
+    Some("mp3") => "audio/mpeg",
+    Some("flac") => "audio/flac",
+    Some("opus") => "audio/opus",
+    Some("wav") | None | Some(_) => "audio/wav",
+  }
+}
+
+#[async_trait]
+impl AsrProvider for StepFunSpecializedClient {
+  fn name(&self) -> &str {
+    "stepfun"
+  }
+
+  async fn transcribe(&self, request: AsrRequest) -> Result<AsrResponse> {
+    // StepFun's ASR endpoint ignores `language` / `temperature` today.
+    // We accept them at the trait surface so the contract works for
+    // Whisper (P-LLM.5) without breaking the call site.
+    let text = self
+      .speech_to_text(ASRRequest {
+        model: request.model,
+        response_format: request.response_format,
+        audio_data: request.audio_data,
+        filename: request.filename,
+      })
+      .await?;
+    Ok(AsrResponse {
+      text,
+      metadata: None,
+    })
+  }
+}
+
+#[async_trait]
+impl TtsProvider for StepFunSpecializedClient {
+  fn name(&self) -> &str {
+    "stepfun"
+  }
+
+  async fn synthesize(&self, request: TtsRequest) -> Result<TtsResponse> {
+    let mime_type = tts_mime_type_for(request.response_format.as_deref()).to_string();
+    let stepfun_request = TTSRequest {
+      model: request.model,
+      input: request.input,
+      voice: request.voice,
+      response_format: request.response_format,
+      speed: request.speed,
+      volume: request.volume,
+      voice_label: None,
+      sample_rate: request.sample_rate,
+    };
+    let audio = self.text_to_speech(stepfun_request).await?;
+    Ok(TtsResponse { audio, mime_type })
+  }
+}
+
+#[async_trait]
+impl Text2ImageProvider for StepFunSpecializedClient {
+  fn name(&self) -> &str {
+    "stepfun"
+  }
+
+  async fn generate(
+    &self,
+    request: ModalityText2ImageRequest,
+  ) -> Result<ModalityImageGenerationResponse> {
+    let stepfun_request = Text2ImageRequest {
+      model: request.model,
+      prompt: request.prompt,
+      size: request.size,
+      n: request.n,
+      response_format: request.response_format,
+      seed: request.seed,
+      steps: request.steps,
+      cfg_scale: request.cfg_scale,
+      style_reference: None,
+    };
+    Ok(into_modality_image_response(self.text_to_image(stepfun_request).await?))
+  }
+}
+
+#[async_trait]
+impl Image2ImageProvider for StepFunSpecializedClient {
+  fn name(&self) -> &str {
+    "stepfun"
+  }
+
+  async fn transform(
+    &self,
+    request: ModalityImage2ImageRequest,
+  ) -> Result<ModalityImageGenerationResponse> {
+    let stepfun_request = Image2ImageRequest {
+      model: request.model,
+      prompt: request.prompt,
+      source_url: request.source_url,
+      source_weight: request.source_weight,
+      size: request.size,
+      n: request.n,
+      response_format: request.response_format,
+      seed: request.seed,
+      steps: request.steps,
+      cfg_scale: request.cfg_scale,
+    };
+    Ok(into_modality_image_response(self.image_to_image(stepfun_request).await?))
+  }
+}
+
+#[async_trait]
+impl ImageEditProvider for StepFunSpecializedClient {
+  fn name(&self) -> &str {
+    "stepfun"
+  }
+
+  async fn edit(
+    &self,
+    request: ModalityImageEditRequest,
+  ) -> Result<ModalityImageGenerationResponse> {
+    let stepfun_request = ImageEditRequest {
+      model: request.model,
+      image_data: request.image_data,
+      image_filename: request.image_filename,
+      prompt: request.prompt,
+      seed: request.seed,
+      steps: request.steps,
+      cfg_scale: request.cfg_scale,
+      size: request.size,
+      response_format: request.response_format,
+    };
+    Ok(into_modality_image_response(self.edit_image(stepfun_request).await?))
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1307,5 +1478,81 @@ mod tests {
       request.voice_label.unwrap().emotion,
       Some("高兴".to_string())
     );
+  }
+
+  #[test]
+  fn stepfun_specialized_client_implements_all_modality_traits() {
+    // Compile-time check: StepFunSpecializedClient implements every
+    // trait in `providers::modality`, so the dispatcher (P-LLM.2) can
+    // route any of the 5 modalities to it without per-trait casting.
+    // This is a hermetic trait-object materialisation test — no
+    // network calls.
+    fn make() -> StepFunSpecializedClient {
+      StepFunSpecializedClient::new("test-key", None).expect("specialized client creation")
+    }
+    let _: Box<dyn AsrProvider> = Box::new(make());
+    let _: Box<dyn TtsProvider> = Box::new(make());
+    let _: Box<dyn Text2ImageProvider> = Box::new(make());
+    let _: Box<dyn Image2ImageProvider> = Box::new(make());
+    let _: Box<dyn ImageEditProvider> = Box::new(make());
+
+    // Also assert each trait reports the canonical provider name.
+    let asr: Box<dyn AsrProvider> = Box::new(make());
+    assert_eq!(asr.name(), "stepfun");
+  }
+
+  #[test]
+  fn modality_to_stepfun_image_response_translates_url_and_b64() {
+    // Verifies the `into_modality_image_response` shape adapter: both
+    // the `url` and `b64_json` (or legacy `image`) fields surface
+    // through the modality envelope.
+    let stepfun_response = ImageGenerationResponse {
+      created: 1234,
+      data: vec![
+        ImageData {
+          finish_reason: "success".into(),
+          seed: 42,
+          image: None,
+          url: Some("https://cdn.example/a.png".into()),
+          b64_json: None,
+        },
+        ImageData {
+          finish_reason: "success".into(),
+          seed: 99,
+          image: Some("legacy-b64".into()),
+          url: None,
+          b64_json: None,
+        },
+        ImageData {
+          finish_reason: "success".into(),
+          seed: 7,
+          image: None,
+          url: None,
+          b64_json: Some("modern-b64".into()),
+        },
+      ],
+    };
+    let modality = into_modality_image_response(stepfun_response);
+    assert_eq!(modality.created, 1234);
+    assert_eq!(modality.images.len(), 3);
+    assert_eq!(modality.images[0].url.as_deref(), Some("https://cdn.example/a.png"));
+    assert_eq!(modality.images[0].b64_json, None);
+    assert_eq!(modality.images[0].seed, Some(42));
+    // Legacy `image` field collapses onto `b64_json`.
+    assert_eq!(modality.images[1].b64_json.as_deref(), Some("legacy-b64"));
+    // Modern `b64_json` field passes through.
+    assert_eq!(modality.images[2].b64_json.as_deref(), Some("modern-b64"));
+  }
+
+  #[test]
+  fn tts_mime_type_falls_back_to_wav_for_unknown_or_missing() {
+    assert_eq!(tts_mime_type_for(Some("mp3")), "audio/mpeg");
+    assert_eq!(tts_mime_type_for(Some("flac")), "audio/flac");
+    assert_eq!(tts_mime_type_for(Some("opus")), "audio/opus");
+    assert_eq!(tts_mime_type_for(Some("wav")), "audio/wav");
+    assert_eq!(tts_mime_type_for(None), "audio/wav");
+    // Unknown format ⇒ default to wav (matches the existing TTS node
+    // fallback behaviour, so the post-P-LLM.3 routing change is a no-op).
+    assert_eq!(tts_mime_type_for(Some("aac")), "audio/wav");
   }
 }

@@ -2303,17 +2303,37 @@ general chat models that happened to accept image input).
     round-trip stability. Workspace `cargo clippy --workspace
     --all-targets -- -D warnings` clean.
 
-- TODO P-LLM.1 Per-modality Provider trait surface:
-  - New `agentflow-llm/src/providers/modality/{asr,tts,
-    text_to_image,image_to_image,image_edit}.rs`. Each file
-    defines one trait + minimal request / response types.
-    Signatures: `AsrProvider::transcribe(audio_bytes, format, lang)
-    -> Transcript`, `TtsProvider::synthesize(text, voice, format)
-    -> AudioBytes`, etc. No common parent trait — modality shapes
-    diverge enough that a generic `MultimodalProvider` would leak.
-  - `StepFun` is the first impl for all 5 modalities. Wrappers
-    delegate to existing `providers::stepfun::*` builders so wire
-    behavior is identical.
+- DONE P-LLM.1 Per-modality Provider trait surface:
+  - New `agentflow-llm/src/providers/modality/` module with 5 trait
+    files (`asr.rs` / `tts.rs` / `text_to_image.rs` /
+    `image_to_image.rs` / `image_edit.rs`) + shared types in
+    `mod.rs` (`ImageGenerationResponse` + `GeneratedImage`, used by
+    the three image-generation traits since the response shape is
+    identical). Each trait keeps its own narrow request type — no
+    generic parent.
+  - `StepFunSpecializedClient` implements all 5 traits via thin
+    shape adapters appended to `providers/stepfun.rs`. Each impl
+    translates the modality-level request → StepFun-internal request
+    → calls the existing method → translates response back. No new
+    wire behaviour; identical surface to today.
+  - `lib.rs` re-exports the modality traits (`AsrProvider`,
+    `TtsProvider`, `Text2ImageProvider`, `Image2ImageProvider`,
+    `ImageEditProvider`) + request/response types
+    (`AsrRequest` / `AsrResponse` / `TtsRequest` / `TtsResponse` /
+    `GeneratedImage` / `ModalityImageGenerationResponse`). Legacy
+    `providers::stepfun::*` exports stay — P-LLM.4 removes them
+    once P-LLM.3 has migrated the node call sites.
+  - Tests (3 new in `providers::stepfun::tests`):
+    - `stepfun_specialized_client_implements_all_modality_traits`:
+      compile-time `Box<dyn TraitT>` materialisation for all 5
+      traits; assert name() == "stepfun".
+    - `modality_to_stepfun_image_response_translates_url_and_b64`:
+      shape adapter correctness — url field, legacy `image` field,
+      modern `b64_json` field all surface through.
+    - `tts_mime_type_falls_back_to_wav_for_unknown_or_missing`:
+      MIME mapping table.
+  - agentflow-llm lib: 113 / 113 passing (was 110). Workspace
+    clippy `--all-targets -- -D warnings` clean.
   - No video this slice. `Text2VideoProvider` /
     `VideoUnderstandProvider` deferred to P-LLM.6.
 
