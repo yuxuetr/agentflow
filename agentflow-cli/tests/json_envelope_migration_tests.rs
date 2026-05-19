@@ -370,6 +370,144 @@ fn mcp_list_tools_rejects_unknown_format() {
     .stderr(predicate::str::contains("yaml"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// plugin list / inspect (gated on `plugin` feature)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "plugin")]
+fn write_plugin_fixture(plugins_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+  use std::fs;
+  let plugin_dir = plugins_root.join(name);
+  fs::create_dir_all(plugin_dir.join("bin")).unwrap();
+  fs::write(plugin_dir.join("bin/echo"), "").unwrap();
+  fs::write(
+    plugin_dir.join("plugin.toml"),
+    format!(
+      r#"
+[plugin]
+name = "{name}"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/echo"
+
+[[plugin.nodes]]
+type = "echo_node"
+description = "Demo node"
+
+[plugin.capabilities]
+filesystem = ["read:/tmp"]
+network = []
+processes = []
+env_vars = ["FOO"]
+"#
+    ),
+  )
+  .unwrap();
+  plugin_dir
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_list_json_envelope_emits_structured_payload() {
+  let tmp = TempDir::new().unwrap();
+  write_plugin_fixture(tmp.path(), "echo-plugin");
+  write_plugin_fixture(tmp.path(), "another-plugin");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "list",
+      "--dir",
+      tmp.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "plugin list must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin list");
+  let result = &envelope["result"];
+  assert_eq!(result["total"], 2);
+  let plugins = result["plugins"].as_array().unwrap();
+  assert_eq!(plugins.len(), 2);
+  let names: Vec<&str> = plugins
+    .iter()
+    .map(|p| p["name"].as_str().unwrap())
+    .collect();
+  assert!(names.contains(&"echo-plugin"));
+  assert!(names.contains(&"another-plugin"));
+  // Each entry must expose the structured fields the text view
+  // collapses into a single line.
+  for plugin in plugins {
+    assert_eq!(plugin["manifest_valid"], true);
+    assert_eq!(plugin["entrypoint_exists"], true);
+    assert_eq!(plugin["nodes"].as_array().unwrap().len(), 1);
+    let caps = &plugin["capabilities"];
+    assert_eq!(caps["filesystem"].as_array().unwrap().len(), 1);
+    assert_eq!(caps["env_vars"].as_array().unwrap().len(), 1);
+  }
+  // No validation errors expected on the fixture.
+  assert!(envelope["errors"].as_array().unwrap().is_empty());
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_inspect_json_envelope_carries_resolved_entrypoint_metadata() {
+  let tmp = TempDir::new().unwrap();
+  let plugin_dir = write_plugin_fixture(tmp.path(), "demo-plugin");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "inspect",
+      plugin_dir.to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "plugin inspect must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin inspect");
+  let result = &envelope["result"];
+  assert_eq!(result["manifest_valid"], true);
+  assert_eq!(result["entrypoint_exists"], true);
+  // Resolved entrypoint must be absolute — operators reading the
+  // envelope shouldn't have to know about the manifest dir to figure
+  // out where the binary actually lives.
+  let resolved = result["resolved_entrypoint"].as_str().unwrap();
+  assert!(
+    std::path::Path::new(resolved).is_absolute(),
+    "resolved_entrypoint must be absolute: {resolved}"
+  );
+  assert_eq!(result["manifest"]["plugin"]["name"], "demo-plugin");
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_list_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "list", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_inspect_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "inspect", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th

@@ -645,8 +645,21 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       artifact is self-describing. 4 new CLI integration tests:
       help-surface lists `json-envelope` for all 3 subcommands,
       value-parser rejects unknown formats.
-    - `plugin list|install|inspect|generate-workflow-stub` — add
-      `--output json-envelope` (no JSON today).
+    - DONE (partial) `plugin list` + `plugin inspect` — both
+      gained `--format text|json-envelope` (`install` + `uninstall`
+      + `generate-workflow-stub` left as the next batch). `list`
+      result: `{ plugins_dir, plugins: [{ name, version, runtime,
+      entrypoint, entrypoint_exists, nodes, capabilities: {fs/net/
+      proc/env_vars arrays}, install_dir, manifest_valid,
+      manifest_error? }], total }` — capability arrays are full
+      (not just counts) so JSON consumers can answer "which plugin
+      writes /tmp" without re-reading manifests. `inspect` result:
+      full `PluginManifest` + `resolved_entrypoint` (absolute) +
+      `entrypoint_exists` + `entrypoint_executable` +
+      `manifest_valid` + `manifest_error?`. Validation failures
+      surface in `errors[]` for both commands. 4 new CLI
+      integration tests (plugin feature-gated): full-shape round-
+      trip for both subcommands + help-surface guards.
     - `rag search|eval` — wrap existing JSON outputs.
     - `trace list|replay|show` — add `--output json-envelope`.
     - `workflow run|list|cancel|graph|logs` — server-backed,

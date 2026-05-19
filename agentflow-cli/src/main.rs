@@ -967,11 +967,19 @@ enum PluginCommands {
     /// Plugins directory (default: ~/.agentflow/plugins)
     #[arg(short, long)]
     dir: Option<String>,
+    /// Output format: text (default) or json-envelope (canonical
+    /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Inspect a plugin manifest without spawning the subprocess
   Inspect {
     /// Path to a plugin directory or its plugin.toml file
     plugin: String,
+    /// Output format: text (default) or json-envelope (canonical
+    /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Remove an installed plugin
   Uninstall {
@@ -1658,8 +1666,10 @@ async fn main() {
         allow_unsandboxed_plugin,
         signed,
       } => plugin::install::execute(source_dir, dir, force, allow_unsandboxed_plugin, signed).await,
-      PluginCommands::List { dir } => plugin::list::execute(dir).await,
-      PluginCommands::Inspect { plugin } => plugin::inspect::execute(plugin).await,
+      PluginCommands::List { dir, format } => plugin::list::execute(dir, format).await,
+      PluginCommands::Inspect { plugin, format } => {
+        plugin::inspect::execute(plugin, format).await
+      }
       PluginCommands::Uninstall { name, dir, force } => {
         plugin::uninstall::execute(name, dir, force).await
       }
