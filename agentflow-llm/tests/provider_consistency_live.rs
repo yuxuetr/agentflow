@@ -1299,18 +1299,18 @@ async fn dashscope_live_text_path() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deepseek_live_text_path() {
-  // DeepSeek (https://api.deepseek.com) is OpenAI-compatible. `deepseek-chat`
-  // is the long-standing stable alias (V3 family today); per their docs it
-  // remains the canonical entry point through at least 2026-07-24. If a
-  // future model rolls and breaks the alias, override at workflow level via
-  // `AGENTFLOW_LIVE_DEEPSEEK_TEXT_MODEL`.
+  // DeepSeek (https://api.deepseek.com) is OpenAI-compatible.
+  // `deepseek-chat` is on DeepSeek's deprecation list (2026-07-24);
+  // `deepseek-v4-flash` is the current cheapest V4 model per the API
+  // docs. Override at workflow level via
+  // `AGENTFLOW_LIVE_DEEPSEEK_TEXT_MODEL` when the lineup shifts again.
   let _guard = deepseek_live_lock().lock().await;
   let Some((api_key, base_url)) = deepseek_live_context(LiveCapability::Llm).await else {
     return;
   };
   let provider =
     OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("deepseek provider");
-  let model = live_text_model("deepseek", "deepseek-chat");
+  let model = live_text_model("deepseek", "deepseek-v4-flash");
 
   let response = tokio::time::timeout(
     Duration::from_secs(30),
