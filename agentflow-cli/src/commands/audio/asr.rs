@@ -53,6 +53,7 @@ pub async fn execute(
     filename,
     language: language.clone(),
     temperature: None,
+    prompt: None,
   };
 
   let start_time = std::time::Instant::now();

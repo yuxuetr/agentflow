@@ -2428,15 +2428,61 @@ general chat models that happened to accept image input).
     --all-targets -- -D warnings` clean. Live integration tests
     (`provider_consistency_live`) still compile.
 
-- TODO P-LLM.5 Second vendor for trait shape validation:
-  - Add OpenAI Whisper as the second `AsrProvider` impl. Whisper
-    is the de-facto ASR standard, API is small, validates
-    `lang` / `format` / `timestamp_granularity` field shape.
-  - `default_models.yml` gains a `whisper-1` entry under
-    `vendor: openai, type: asr, accepts: [audio]`.
-  - Run `agentflow-nodes::asr` integration test against Whisper.
-    Refactor `AsrProvider` trait if leaks appear (e.g., StepFun-
-    specific fields that don't fit Whisper).
+- DONE P-LLM.5 Second vendor for trait shape validation:
+  - New `agentflow-llm/src/providers/openai_asr.rs` ships
+    `OpenAIAsrProvider`. Hits `POST {base_url}/audio/transcriptions`
+    with `multipart/form-data` per the OpenAI API spec. Supports
+    `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`.
+  - Trait-shape calibration: `AsrRequest` gained a `prompt:
+    Option<String>` field (Whisper's bias-prompt for domain
+    vocabulary — capped at 224 tokens by Whisper, silently ignored
+    by StepFun). Updated the 2 call sites (`agentflow-nodes/src/
+    nodes/asr.rs` + `agentflow-cli/src/commands/audio/asr.rs`).
+    `language` and `temperature` already on the trait now actually
+    flow through to Whisper as documented.
+  - `default_models.yml` gained three OpenAI ASR entries:
+    `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`
+    (all `vendor: openai, type: asr, accepts: [audio]`).
+  - `modality_dispatch::asr_provider` routes `vendor == "openai"`
+    to `OpenAIAsrProvider`; StepFun still wins for `"stepfun" |
+    "step"`. Anyone else still gets `UnsupportedProvider`.
+  - MIME mapping helper covers OpenAI's 7 documented formats
+    (mp3 / mp4 / mpeg / mpga / m4a / wav / webm) plus flac / ogg
+    / opus that reqwest will happily send (server reads codec
+    from bytes). Unknown extensions fall back to
+    `application/octet-stream`.
+  - Response parsing dispatches by `response_format`: `json` /
+    `verbose_json` parse JSON and pull the `text` field, with the
+    full payload preserved in `AsrResponse::metadata` for
+    timestamps / segments / language detection. `text` / `srt` /
+    `vtt` use the response body verbatim, no metadata.
+  - Tests (8 new in `openai_asr::tests`):
+    - `mime_for_filename_covers_documented_formats` — every OpenAI-
+      documented audio extension plus the unknown-extension fallback,
+      case-insensitive.
+    - `parse_json_response_pulls_text_and_preserves_metadata`,
+      `parse_verbose_json_response_pulls_text_and_preserves_segments`
+      — JSON paths return text + carry metadata (language /
+      duration / segments).
+    - `parse_text_response_uses_body_verbatim_without_metadata`,
+      `parse_srt_response_uses_body_verbatim` — non-JSON paths.
+    - `parse_json_with_missing_text_field_returns_typed_error`,
+      `parse_json_with_invalid_payload_returns_typed_error` —
+      typed-error contracts so callers can handle response-shape
+      drift.
+    - `empty_api_key_is_rejected_at_construction`,
+      `build_form_smoke_test` — construction + form-building
+      smoke without HTTP.
+  - Live end-to-end test:
+    `provider_consistency_live::whisper_via_modality_dispatcher_transcribes_audio`
+    gated on `AGENTFLOW_LIVE_AUDIO_TESTS=1` + `OPENAI_API_KEY`.
+    Walks the full dispatcher → registry → OpenAIAsrProvider →
+    HTTP → response-parsing path. Uses StepFun TTS to produce
+    the audio fixture when StepFun is configured; otherwise
+    falls back to a 1-second silent WAV so the multipart path
+    still exercises against Whisper.
+  - agentflow-llm lib: 124 / 124 passing (was 115; +8 from
+    openai_asr + 1 live test slot). Workspace clippy clean.
 
 - DEFERRED P-LLM.6 Video modality:
   - Trigger: Veo / Sora / Runway becomes Rust-callable + stable

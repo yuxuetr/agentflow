@@ -87,6 +87,7 @@ impl AsyncNode for ASRNode {
       filename: resolved_source,
       language: None,
       temperature: None,
+      prompt: None,
     };
 
     println!("   Transcribing audio via provider '{}'...", provider.name());

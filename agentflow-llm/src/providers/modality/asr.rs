@@ -29,6 +29,12 @@ pub struct AsrRequest {
   /// it (e.g. Whisper); StepFun ignores it.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub temperature: Option<f32>,
+  /// Optional context prompt — vendors like OpenAI Whisper use this to
+  /// bias recognition toward domain vocabulary (acronyms, proper nouns,
+  /// product names). StepFun ignores it. Capped at 224 tokens by
+  /// Whisper; longer values are silently truncated by the API.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub prompt: Option<String>,
 }
 
 /// Transcript result for an [`AsrRequest`].

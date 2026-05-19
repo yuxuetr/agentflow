@@ -13,6 +13,7 @@ pub mod mock;
 pub mod modality;
 pub mod moonshot;
 pub mod openai;
+pub mod openai_asr;
 pub mod stepfun;
 
 pub use anthropic::AnthropicProvider;

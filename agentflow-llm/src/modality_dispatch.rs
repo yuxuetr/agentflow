@@ -17,6 +17,7 @@ use crate::{
     modality::{
       AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, TtsProvider,
     },
+    openai_asr::OpenAIAsrProvider,
     stepfun::StepFunSpecializedClient,
   },
   registry::ModelRegistry,
@@ -79,6 +80,10 @@ pub async fn asr_provider(model_name: &str) -> Result<Box<dyn AsrProvider>> {
   let resolved = resolve(model_name, ModelType::Asr).await?;
   match resolved.vendor.as_str() {
     "stepfun" | "step" => Ok(Box::new(StepFunSpecializedClient::new(
+      &resolved.api_key,
+      resolved.base_url,
+    )?)),
+    "openai" => Ok(Box::new(OpenAIAsrProvider::new(
       &resolved.api_key,
       resolved.base_url,
     )?)),

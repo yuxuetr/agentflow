@@ -2935,7 +2935,28 @@ models:
     supports_multimodal: true
     response_format: null
 
-  # StepFun Image Generation Models  
+  # OpenAI Whisper / GPT-4o transcription models — second ASR vendor
+  # validates the trait-shape (P-LLM.5). All three accept the same
+  # multipart shape; per-model parameter constraints (e.g. `gpt-4o-
+  # transcribe` only supports `response_format: json | text`) are
+  # surfaced at call time as HTTP 400 from the API.
+  whisper-1:
+    vendor: openai
+    type: asr
+    accepts: [audio]
+    base_url: null
+  gpt-4o-transcribe:
+    vendor: openai
+    type: asr
+    accepts: [audio]
+    base_url: null
+  gpt-4o-mini-transcribe:
+    vendor: openai
+    type: asr
+    accepts: [audio]
+    base_url: null
+
+  # StepFun Image Generation Models
   step-2x-large:
     vendor: step
     type: text_to_image

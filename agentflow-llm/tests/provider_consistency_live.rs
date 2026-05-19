@@ -61,7 +61,11 @@ struct LiveProviderProfile {
 const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   LiveProviderProfile {
     name: "openai",
-    capabilities: &[LiveCapability::Llm, LiveCapability::Multimodal],
+    capabilities: &[
+      LiveCapability::Llm,
+      LiveCapability::Multimodal,
+      LiveCapability::Audio,
+    ],
   },
   LiveProviderProfile {
     name: "anthropic",
@@ -1205,4 +1209,124 @@ fn live_provider_profiles_probe_supported_capabilities() {
     "unknown",
     LiveCapability::Llm
   ));
+}
+
+// ============================================================================
+// P-LLM.5 — OpenAI Whisper via the modality dispatcher
+//
+// Validates that `AgentFlow::asr("whisper-1")` resolves through the registry
+// to the OpenAI vendor, builds an `OpenAIAsrProvider`, and successfully
+// transcribes a tiny audio clip. Gated on `AGENTFLOW_LIVE_AUDIO_TESTS=1` AND
+// `OPENAI_API_KEY` so the workspace stays hermetic without the key.
+//
+// Uses StepFun TTS to produce the audio fixture (live), then runs the
+// transcript through Whisper. If StepFun isn't reachable the audio
+// fixture falls back to a small WAV header so the test still validates
+// the dispatcher / multipart / response-parsing path even when only
+// OPENAI_API_KEY is configured.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn whisper_via_modality_dispatcher_transcribes_audio() {
+  if !live_gate_enabled(LiveCapability::Audio) {
+    eprintln!("[live] whisper: skipped (AGENTFLOW_LIVE_AUDIO_TESTS not enabled)");
+    return;
+  }
+  let api_key = match std::env::var("OPENAI_API_KEY") {
+    Ok(v) if !v.trim().is_empty() => v,
+    _ => {
+      eprintln!("[live] whisper: skipped (OPENAI_API_KEY missing)");
+      return;
+    }
+  };
+
+  // Ensure the test process has the OpenAI key registered before
+  // dispatcher key resolution.
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("OPENAI_API_KEY", api_key);
+  }
+
+  // Generate the audio fixture FIRST — `stepfun_live_context` triggers
+  // `AgentFlow::init()` which reloads the user's `~/.agentflow/models.yml`,
+  // so any registry mutation must happen after this point.
+  let audio: Vec<u8> = if let Some((sf_key, sf_base)) =
+    stepfun_live_context(LiveCapability::Audio).await
+  {
+    let client = StepFunSpecializedClient::with_client(no_proxy_client(), &sf_key, sf_base)
+      .expect("stepfun specialized client");
+    let req = TTSBuilder::new("step-tts-mini", "agentflow whisper test", "cixingnansheng")
+      .response_format("mp3")
+      .build();
+    match tokio::time::timeout(Duration::from_secs(30), client.text_to_speech(req)).await {
+      Ok(Ok(bytes)) => bytes,
+      _ => silent_wav_one_second(),
+    }
+  } else {
+    silent_wav_one_second()
+  };
+
+  // Now seed the hermetic whisper-1 entry. This wins over the user's
+  // ~/.agentflow/models.yml (which may predate the P-LLM.5 registry
+  // additions). The bundled `default_models.yml` already carries
+  // whisper-1; this seed just makes the test independent of the host's
+  // local registry choices.
+  let hermetic_registry_yaml = r#"
+models:
+  whisper-1:
+    vendor: openai
+    type: asr
+    accepts: [audio]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic whisper-1 entry");
+
+  let provider = AgentFlow::asr("whisper-1")
+    .await
+    .expect("whisper-1 resolves through dispatcher");
+  assert_eq!(provider.name(), "openai", "whisper-1 must route to openai");
+
+  let request = agentflow_llm::AsrRequest {
+    model: "whisper-1".to_string(),
+    audio_data: audio,
+    filename: "agentflow-whisper-test.mp3".to_string(),
+    response_format: "json".to_string(),
+    language: Some("en".to_string()),
+    temperature: Some(0.0),
+    prompt: Some("agentflow, whisper, modality dispatcher".to_string()),
+  };
+  let response = tokio::time::timeout(Duration::from_secs(60), provider.transcribe(request))
+    .await
+    .unwrap_or_else(|_| panic!("whisper transcription timed out after 60s"))
+    .unwrap_or_else(|e| panic!("whisper transcription failed: {e}"));
+
+  // Silent fallback may produce empty transcript; only assert that the
+  // call succeeded and the metadata round-tripped. For the StepFun-
+  // produced fixture the transcript is usually non-empty.
+  assert!(
+    response.metadata.is_some(),
+    "json response_format must carry metadata"
+  );
+}
+
+fn silent_wav_one_second() -> Vec<u8> {
+  // Minimal 1-second mono 8kHz silent WAV. Whisper happily accepts
+  // empty audio; the transcript is usually an empty string.
+  let mut wav = Vec::with_capacity(44 + 8000 * 2);
+  wav.extend_from_slice(b"RIFF");
+  wav.extend_from_slice(&(36u32 + 8000u32 * 2).to_le_bytes());
+  wav.extend_from_slice(b"WAVE");
+  wav.extend_from_slice(b"fmt ");
+  wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+  wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+  wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+  wav.extend_from_slice(&8000u32.to_le_bytes()); // sample rate
+  wav.extend_from_slice(&16000u32.to_le_bytes()); // byte rate
+  wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+  wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+  wav.extend_from_slice(b"data");
+  wav.extend_from_slice(&(8000u32 * 2).to_le_bytes());
+  wav.extend(std::iter::repeat_n(0u8, 8000 * 2));
+  wav
 }
