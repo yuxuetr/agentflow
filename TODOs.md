@@ -2337,17 +2337,30 @@ general chat models that happened to accept image input).
   - No video this slice. `Text2VideoProvider` /
     `VideoUnderstandProvider` deferred to P-LLM.6.
 
-- TODO P-LLM.2 Registry dispatcher for modality providers:
-  - `AgentFlow::asr(model_name)` / `::tts(...)` / `::text2image(...)`
-    / `::image2image(...)` / `::image_edit(...)` entry points.
-    Each queries the registry for `(vendor, type)`, asserts the
-    type matches the requested modality (`ModelTypeMismatch` with
-    model_name + expected + actual on mismatch), and routes to the
-    per-modality factory.
-  - Factory `create_<modality>_provider(vendor, api_key, base_url)`
-    returns `Box<dyn ...>`. Today only `stepfun`; other vendors
-    return `UnsupportedProvider` with a descriptive message.
-  - Chat path (`AgentFlow::model(...)`) is untouched.
+- DONE P-LLM.2 Registry dispatcher for modality providers:
+  - New `agentflow-llm/src/modality_dispatch.rs` module exposes 5
+    free functions (`asr_provider` / `tts_provider` /
+    `text2image_provider` / `image2image_provider` /
+    `image_edit_provider`), each returning a boxed trait object
+    from `providers::modality`. Plus thin `AgentFlow::asr(...)` /
+    `::tts(...)` / `::text2image_for(...)` / `::image2image(...)` /
+    `::image_edit(...)` method aliases on the main entry point.
+  - Each function resolves the model from `ModelRegistry::global()`,
+    asserts the registered `type:` matches the requested modality
+    (mismatch ⇒ `InvalidModelConfig` with a message naming both
+    actual and expected types — operator-actionable), resolves the
+    vendor's API key via existing `LLMConfig::get_api_key` precedence,
+    and routes to the per-vendor factory.
+  - Today only StepFun routing is implemented for all 5 modalities;
+    other vendors return `UnsupportedProvider` with the modality name
+    embedded ("openai (no ASR implementation yet)"). P-LLM.5 adds
+    Whisper as the second ASR vendor.
+  - Chat path (`AgentFlow::model(...)`) untouched.
+  - 2 new unit tests cover the error-message shapes (type mismatch
+    + unsupported vendor) — both checking the messages name the
+    actual/expected/modality so callers get an actionable signal.
+  - agentflow-llm lib: 115 / 115 passing (was 113). Workspace
+    clippy clean.
 
 - TODO P-LLM.3 Refactor 5 multimodal nodes to dispatcher:
   - Delete every `use providers::stepfun::*` from

@@ -87,6 +87,7 @@ pub mod client;
 pub mod config;
 pub mod discovery;
 pub mod error;
+pub mod modality_dispatch;
 pub mod model_types;
 pub mod multimodal;
 pub mod providers;
@@ -467,6 +468,41 @@ impl AgentFlow {
   /// ```
   pub fn text_to_speech(model: &str, input: &str, voice: &str) -> providers::stepfun::TTSBuilder {
     providers::stepfun::TTSBuilder::new(model, input, voice)
+  }
+
+  // -------------------------------------------------------------
+  // P-LLM.2: per-modality registry dispatchers
+  //
+  // Each method looks up `model_name` in the global registry,
+  // asserts its declared `type` matches the requested modality,
+  // resolves the vendor's API key, and returns a boxed trait
+  // object from `providers::modality`. Used by `agentflow-nodes`
+  // multimodal nodes after P-LLM.3 wires them up.
+  // -------------------------------------------------------------
+
+  /// Build a boxed [`AsrProvider`] for `model_name`.
+  pub async fn asr(model_name: &str) -> Result<Box<dyn AsrProvider>> {
+    modality_dispatch::asr_provider(model_name).await
+  }
+
+  /// Build a boxed [`TtsProvider`] for `model_name`.
+  pub async fn tts(model_name: &str) -> Result<Box<dyn TtsProvider>> {
+    modality_dispatch::tts_provider(model_name).await
+  }
+
+  /// Build a boxed [`Text2ImageProvider`] for `model_name`.
+  pub async fn text2image_for(model_name: &str) -> Result<Box<dyn Text2ImageProvider>> {
+    modality_dispatch::text2image_provider(model_name).await
+  }
+
+  /// Build a boxed [`Image2ImageProvider`] for `model_name`.
+  pub async fn image2image(model_name: &str) -> Result<Box<dyn Image2ImageProvider>> {
+    modality_dispatch::image2image_provider(model_name).await
+  }
+
+  /// Build a boxed [`ImageEditProvider`] for `model_name`.
+  pub async fn image_edit(model_name: &str) -> Result<Box<dyn ImageEditProvider>> {
+    modality_dispatch::image_edit_provider(model_name).await
   }
 }
 
