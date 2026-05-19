@@ -620,8 +620,33 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       `agentflow-cli/tests/json_envelope_migration_tests.rs` lock
       the envelope shape down and prove `result == legacy json
       body` on a hermetic workflow fixture.
-    - `harness run|list|inspect` — wrap summary (`stream-json`
-      keeps emitting raw events).
+    - DONE `harness run|list|inspect|resume` — all four
+      subcommands accept `--output json-envelope` (added on top of
+      the existing `text | json | stream-json` set). `stream-json`
+      keeps emitting raw events per line (envelope wrapping per
+      line would defeat the stream framing operators rely on for
+      live tailing); `json-envelope` wraps the same summary the
+      `json` mode emits in the canonical `CliJsonEnvelope`.
+      - `run` envelope: `result` = full run summary (session_id,
+        answer, stop_reason, final_event_seq, context items
+        admitted/dropped, model, skill, session_log_path,
+        elapsed_ms). Non-success stop reason populates `errors[]`.
+      - `list` envelope: `result.sessions[]` carries
+        `{session_id, event_count, size_bytes, modified_secs_epoch}`
+        per persisted log; sorted by mtime desc.
+      - `inspect` envelope: `result` = summariser output
+        (session_id, event_count, counts_by_kind, session_metadata?,
+        stop_reason?, final_answer?).
+      - `resume` envelope: `result` = `{session_id, event_count,
+        events[]}` — full event log inside the envelope.
+      Shared `OutputFormat::JsonEnvelope` variant in
+      `commands/harness/mod.rs` so all 4 dispatchers parse the
+      same wire string. 9 new CLI integration tests in
+      `json_envelope_migration_tests.rs`: full-shape round-trip
+      for list / inspect / resume against hermetic JSONL session
+      fixtures (`harness/sessions/<id>.jsonl`), help-surface
+      guards for all 4 subcommands, value-parser rejects unknown
+      formats.
     - DONE `llm models` — gained `--format text|json-envelope`
       (first machine-readable surface for the command; text mode
       unchanged). `result` body: `{ source, source_kind,

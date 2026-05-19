@@ -64,11 +64,21 @@ pub(crate) fn parse_profile(value: &str) -> Result<HarnessProfile> {
 }
 
 /// Parse `--output` flag.
+///
+/// - `text`: colored human-readable output (default).
+/// - `json`: bare JSON summary (legacy; preserved for back-compat).
+/// - `stream-json`: one JSON event per line (event stream — `run`
+///   emits live, `list` / `inspect` / `resume` stream from disk).
+/// - `json-envelope`: canonical `CliJsonEnvelope` wrapping the same
+///   summary `json` emits. `stream-json` events stay raw because
+///   wrapping each line in an envelope would defeat the purpose of
+///   stream-friendly framing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputFormat {
   Text,
   Json,
   StreamJson,
+  JsonEnvelope,
 }
 
 impl OutputFormat {
@@ -77,8 +87,11 @@ impl OutputFormat {
       "text" => Ok(Self::Text),
       "json" => Ok(Self::Json),
       "stream-json" => Ok(Self::StreamJson),
+      "json-envelope" => Ok(Self::JsonEnvelope),
       other => {
-        anyhow::bail!("unsupported --output '{other}', expected text | json | stream-json")
+        anyhow::bail!(
+          "unsupported --output '{other}', expected text | json | stream-json | json-envelope"
+        )
       }
     }
   }

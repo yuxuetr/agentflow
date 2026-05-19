@@ -661,6 +661,222 @@ fn trace_replay_rejects_unknown_format() {
     .stderr(predicate::str::contains("yaml"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// harness list / inspect / resume / run
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Stage a synthetic `harness/sessions/<id>.jsonl` log under `run_dir`.
+/// `events_json` is the JSONL body (one event per line).
+fn write_harness_session_log(run_dir: &std::path::Path, session_id: &str, events_jsonl: &str) {
+  let session_dir = run_dir.join("harness").join("sessions");
+  std::fs::create_dir_all(&session_dir).unwrap();
+  std::fs::write(session_dir.join(format!("{session_id}.jsonl")), events_jsonl).unwrap();
+}
+
+/// Minimal valid `HarnessEvent` JSONL body — one `stopped` event so
+/// `harness inspect`'s summariser has at least one entry to bucket.
+fn minimal_stopped_event_jsonl(session_id: &str) -> String {
+  // Match the serde `tag = "kind", content = "payload",
+  // rename_all = "snake_case"` discriminator on `HarnessEventBody`.
+  let event = serde_json::json!({
+    "seq": 0,
+    "session_id": session_id,
+    "ts": "2026-05-19T00:00:00Z",
+    "kind": "stopped",
+    "payload": {
+      "reason": "completed",
+      "final_answer": "smoke-ok",
+      "error": null
+    }
+  });
+  format!("{}\n", serde_json::to_string(&event).unwrap())
+}
+
+#[test]
+fn harness_list_json_envelope_emits_structured_sessions_array() {
+  let tmp = TempDir::new().unwrap();
+  write_harness_session_log(tmp.path(), "session-a", "{\"line\":1}\n{\"line\":2}\n");
+  write_harness_session_log(tmp.path(), "session-b", "{\"line\":1}\n");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "harness",
+      "list",
+      "--run-dir",
+      tmp.path().to_str().unwrap(),
+      "--output",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "harness list must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "harness list");
+  let sessions = envelope["result"]["sessions"].as_array().unwrap();
+  assert_eq!(sessions.len(), 2);
+  // Both ids must surface; counts must reflect non-empty line counts.
+  let ids: Vec<&str> = sessions
+    .iter()
+    .map(|s| s["session_id"].as_str().unwrap())
+    .collect();
+  assert!(ids.contains(&"session-a"));
+  assert!(ids.contains(&"session-b"));
+  let a_count = sessions
+    .iter()
+    .find(|s| s["session_id"] == "session-a")
+    .unwrap()["event_count"]
+    .as_u64()
+    .unwrap();
+  assert_eq!(a_count, 2);
+}
+
+#[test]
+fn harness_list_json_envelope_handles_empty_session_dir() {
+  // No sessions persisted yet — envelope must still surface the
+  // expected shape with an empty array.
+  let tmp = TempDir::new().unwrap();
+  // Don't stage any session files — the harness/sessions dir is
+  // created on first persist, not on first list.
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "harness",
+      "list",
+      "--run-dir",
+      tmp.path().to_str().unwrap(),
+      "--output",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success());
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "harness list");
+  assert_eq!(envelope["result"]["sessions"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn harness_inspect_json_envelope_carries_summary_with_metadata() {
+  let tmp = TempDir::new().unwrap();
+  write_harness_session_log(
+    tmp.path(),
+    "session-stopped",
+    &minimal_stopped_event_jsonl("session-stopped"),
+  );
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "harness",
+      "inspect",
+      "session-stopped",
+      "--run-dir",
+      tmp.path().to_str().unwrap(),
+      "--output",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "harness inspect must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "harness inspect");
+  let result = &envelope["result"];
+  assert_eq!(result["session_id"], "session-stopped");
+  assert_eq!(result["event_count"], 1);
+  let counts = result["counts_by_kind"].as_object().unwrap();
+  assert_eq!(counts.get("stopped").and_then(|v| v.as_u64()), Some(1));
+  assert_eq!(result["final_answer"], "smoke-ok");
+}
+
+#[test]
+fn harness_resume_json_envelope_returns_events_in_array() {
+  let tmp = TempDir::new().unwrap();
+  let jsonl = minimal_stopped_event_jsonl("session-resume");
+  write_harness_session_log(tmp.path(), "session-resume", &jsonl);
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "harness",
+      "resume",
+      "session-resume",
+      "--run-dir",
+      tmp.path().to_str().unwrap(),
+      "--output",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "harness resume must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "harness resume");
+  let result = &envelope["result"];
+  assert_eq!(result["session_id"], "session-resume");
+  assert_eq!(result["event_count"], 1);
+  let events = result["events"].as_array().unwrap();
+  assert_eq!(events.len(), 1);
+  assert_eq!(events[0]["kind"], "stopped");
+}
+
+#[test]
+fn harness_list_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["harness", "list", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn harness_inspect_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["harness", "inspect", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn harness_resume_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["harness", "resume", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn harness_run_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["harness", "run", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn harness_list_rejects_unknown_output_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["harness", "list", "--output", "yaml"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th

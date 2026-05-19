@@ -187,6 +187,43 @@ pub async fn execute(
       });
       println!("{}", serde_json::to_string(&payload)?);
     }
+    OutputFormat::JsonEnvelope => {
+      // P3.3 migration: wrap the same summary the `json` mode emits
+      // in the canonical envelope. `stream-json` keeps its raw
+      // per-line event format because envelope-per-line would
+      // defeat stream framing — operators wanting the run summary
+      // alongside live events can run with stream-json and parse
+      // the trailing `harness_run_summary` line.
+      let payload = serde_json::json!({
+        "session_id": result.session_id,
+        "answer": result.answer,
+        "stop_reason": result.stop_reason,
+        "final_event_seq": result.final_event_seq,
+        "context_items_admitted": result.context_items_admitted,
+        "context_items_dropped": result.context_items_dropped,
+        "model": model,
+        "skill": skill_name,
+        "session_log_path": jsonl.session_path(&result.session_id),
+        "elapsed_ms": elapsed.as_millis(),
+      });
+      // Surface a non-success stop reason as an actionable error
+      // string so shell consumers can branch on `errors.length > 0`
+      // without inspecting `result.stop_reason`.
+      let errors: Vec<String> = if result.stop_reason.is_success() {
+        Vec::new()
+      } else {
+        vec![format!(
+          "Harness session stopped before final answer: {:?}",
+          result.stop_reason
+        )]
+      };
+      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
+        "harness run",
+        &payload,
+        errors,
+      );
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
+    }
   }
 
   if !result.stop_reason.is_success() {

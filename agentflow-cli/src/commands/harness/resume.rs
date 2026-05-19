@@ -63,6 +63,20 @@ pub async fn execute(
       });
       println!("{}", serde_json::to_string(&payload)?);
     }
+    OutputFormat::JsonEnvelope => {
+      // P3.3 migration: wrap the same `{session_id, event_count,
+      // events}` body the `json` mode emits. `stream-json` keeps
+      // its per-line raw event format because the envelope would
+      // defeat stream framing.
+      let payload = serde_json::json!({
+        "session_id": session_id,
+        "event_count": events.len(),
+        "events": events,
+      });
+      let envelope =
+        crate::json_envelope::CliJsonEnvelope::ok("harness resume", &payload);
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
+    }
   }
 
   Ok(())

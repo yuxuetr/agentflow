@@ -251,7 +251,7 @@ enum HarnessCommands {
     #[arg(long, default_value = "react", value_parser = ["react", "plan_execute", "plan-execute", "handoff", "blackboard", "debate"])]
     runtime: String,
     /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
     /// Override the run-dir (session log root). Defaults to AGENTFLOW_RUN_DIR or ~/.agentflow/runs
     #[arg(long)]
@@ -277,7 +277,7 @@ enum HarnessCommands {
     #[arg(long)]
     run_dir: Option<String>,
     /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
   },
   /// List persisted Harness session logs
@@ -286,7 +286,7 @@ enum HarnessCommands {
     #[arg(long)]
     run_dir: Option<String>,
     /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
   },
   /// Inspect a single persisted Harness session log
@@ -297,7 +297,7 @@ enum HarnessCommands {
     #[arg(long)]
     run_dir: Option<String>,
     /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json"])]
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
   },
 }

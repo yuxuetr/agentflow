@@ -56,7 +56,7 @@ pub async fn execute(run_dir_override: Option<String>, output: String) -> Result
         );
       }
     }
-    OutputFormat::Json | OutputFormat::StreamJson => {
+    OutputFormat::Json | OutputFormat::StreamJson | OutputFormat::JsonEnvelope => {
       let payload = serde_json::json!({
         "session_dir": session_dir,
         "sessions": sessions
@@ -69,7 +69,18 @@ pub async fn execute(run_dir_override: Option<String>, output: String) -> Result
           }))
           .collect::<Vec<_>>(),
       });
-      println!("{}", serde_json::to_string_pretty(&payload)?);
+      if matches!(output, OutputFormat::JsonEnvelope) {
+        // P3.3 migration: wrap the same summary `json` mode emits in
+        // the canonical envelope. `stream-json` keeps emitting the
+        // bare body because consumers in that mode already expect a
+        // single JSON object stream-shaped — wrapping each call in
+        // an envelope would defeat the purpose.
+        let envelope =
+          crate::json_envelope::CliJsonEnvelope::ok("harness list", &payload);
+        println!("{}", serde_json::to_string_pretty(&envelope)?);
+      } else {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+      }
     }
   }
   Ok(())
