@@ -11,9 +11,10 @@ file's first entry).
 The R1 → R4 reflection arc (see `docs/L1_L3_REFLECTION_R*.md`) drove
 this set of changes. Most landed via a multi-session dogfooding loop:
 build an application that exercises a platform surface, capture
-findings as it goes, close the findings, repeat. **24 dogfooding
-findings closed across 4 reflection cycles** with no regressions
-across the 180+ tests touched.
+findings as it goes, close the findings, repeat. **31 dogfooding
+findings closed across 4 reflection cycles** (every
+agentflow-internal item in the action queue), with no regressions
+across the 200+ tests touched.
 
 ### Added
 
@@ -59,6 +60,14 @@ across the 180+ tests touched.
   built-in)") instead of the bare Rust-debug enum (F-A7-4,
   `bdaff36`). JSON output gains `models_config_source_kind` as a
   stable snake_case enum.
+- **`agentflow llm models --refresh-from-api`** live-queries each
+  OpenAI-compatible provider's `/v1/models` endpoint and prints the
+  delta vs the local registry (F-A7-6, `6290ca9`). Output groups
+  per-provider: `new` (provider-side additions to add to
+  `models.yml`), `only_local` (deprecated / typo / private
+  deployment), `shared` (count). Read-only; respects `--provider`
+  filter. Currently supports openai / moonshot / stepfun /
+  dashscope. 5 new unit tests on URL construction + truncation.
 
 #### Agent runtime
 
@@ -129,6 +138,18 @@ across the 180+ tests touched.
 - **94 text models bumped from `max_tokens: 4096` to `32768`**
   (F-A7-8, `42c3225`). 1M+ context models can sustain much
   longer outputs; the previous cap was too conservative.
+- **`LLMError::MissingApiKey` renders an actionable one-liner**
+  (F-AF-4, `6b89317`). Names the provider-specific env var (e.g.
+  `MOONSHOT_API_KEY (or MOONSHOT_KEY)`), points at
+  `~/.agentflow/.env`, suggests `agentflow config init` to
+  generate the template, and references the docs. New
+  `env_var_hint(provider)` helper has table coverage for 6
+  providers with a generic fallback. 3 new unit tests.
+- **A1.5 persona now re-measures LUFS before save** (F-EX-1,
+  `b35f371`). Adds a step 6 audio_loudness call after
+  normalize_lufs / fade so the final report uses the **实测**
+  value rather than the target parameter (integrity issue
+  caught in R1 dogfooding).
 
 ### Removed
 
@@ -153,6 +174,18 @@ across the 180+ tests touched.
 - **`docs/HARNESS_MODE.md`** got a footgun callout for the
   Local-vs-Production approval-gate asymmetry + an inline comment
   in the canonical snippet (F-A2-12, `c552d3c`).
+- **`docs/AGENT_SDK.md` gained two reference sections**
+  (`b35f371`): a `FlowValue` field reference table enumerating
+  exact field names per variant (F-DOC-2; prevents `media_type`
+  vs `mime_type` round-trips), and a "Loading
+  `~/.agentflow/.env` from standalone binaries" canonical 6-line
+  snippet (F-A7-7; standardises the pattern used by every
+  standalone example binary).
+- **`agentflow-llm/README.md` § Moonshot** documents the
+  kimi-k2.6 `temperature: 1.0` constraint with the exact API 400
+  error message (F-A7-5, `b35f371`), plus the org-level
+  concurrency limit of 3 that motivates `max_concurrent: 3` in
+  `map parallel` workflows.
 
 ### Known still-open
 
@@ -164,11 +197,12 @@ across the 180+ tests touched.
   axes are now in place; iter 5 is a quantity question rather
   than a capability one. Probably worth running once before any
   v0.3.0 cut.
-- **Phonon-external items** (F-PH-1/2/3): not in the agentflow
-  workspace; tracked separately.
-- **Low-pri docs / LLM tooling polish** (F-DOC-2/3/4, F-A7-5/6/7,
-  F-EX-1, F-AF-4): no app blocks on any of these; can batch as a
-  single docs sweep closer to release if needed.
+- **Phonon-external items** (F-PH-1/2/3, plus F-DOC-3/4 docs that
+  live phonon-side): not in the agentflow workspace; tracked
+  separately.
+- **All other agentflow-internal items from the R1 → R4 sweep
+  are now closed** (F-DOC-2, F-A7-5, F-A7-6, F-A7-7, F-AF-4,
+  F-EX-1 all landed; see Added / Fixed / Docs above).
 
 ---
 
