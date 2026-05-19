@@ -175,12 +175,14 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - ✅ Cross-provider streaming / multimodal / tool-calling consistency tests: streaming covered by the `cross_provider_streaming_paths_yield_uniform_hello_world_concatenation` invariant; multimodal covered by `cross_provider_multimodal_paths_produce_uniform_response_shape`; tool-calling covered by `cross_provider_tool_call_paths_produce_uniform_canonical_shape` (basic) plus four `cross_provider_tool_choice_<variant>_is_honored_by_every_provider` invariants (`auto` / `none` / `required` / specific-tool)
 - ✅ Live-LLM nightly CI: `.github/workflows/llm-live.yml` runs `provider_consistency_live` against all 9 providers (OpenAI / Anthropic / Google / Moonshot / StepFun / GLM·Zhipu / DashScope·Alibaba / DeepSeek / MiniMax) nightly at 09:30 UTC; per-provider tests self-skip when the corresponding API-key secret is absent; not wired into the `release-gate` aggregate so PRs are never gated on live API calls. `workflow_dispatch` accepts an optional comma-separated `providers` filter for ad-hoc subsets. The 3 extra OpenAI-compat vendors (DashScope, DeepSeek, MiniMax) are wired through `OpenAIProvider::with_client(...)` with custom base URLs — they're test-layer only, no dedicated provider module yet (analogous to GLM's pattern).
 
-**N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):** in progress
+**N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):** ✅ closed
 - ✅ `docs/AGENT_SDK.md` extension guide + runnable examples (`custom_runtime` / `custom_reflection` / `custom_memory_summary`); core extension traits rustdoc-clean
 - ✅ Plugin / Custom Node foundation: subprocess JSON-RPC runtime, manifest/lifecycle, sandbox bridge, `type: plugin` workflow node, plugin CLI, and marketplace signature/version handoff
 - ✅ Distributed scheduling foundation: `WorkerProtocol`, gRPC transport choice, server control-plane façade, `agentflow-worker` runtime/binary, stitched worker traces mapped to OTel spans
 - ✅ Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates
 - ✅ Plugin marketplace remote registry foundation: unified Skill/Plugin manifest, read-only HTTP client, artifact cache, signature verifier, marketplace CLI, and docs
+
+Tag-cut + production deployment rehearsal (P7.4-FU4 checklist) remain the only operational steps before the actual `v1.0.0-rc.1` tag.
 
 See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-14.md` for the most recent evaluation (the 2026-05-01 evaluation is retained as historical context). For change history, prefer `git log` over a doc summary.
 
