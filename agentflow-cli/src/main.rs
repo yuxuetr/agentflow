@@ -611,6 +611,30 @@ enum McpCommands {
     #[arg(long, default_value_t = 3)]
     max_retries: u32,
   },
+  /// Manage `~/.agentflow/mcp.toml` — the top-level MCP server registry
+  Config {
+    #[command(subcommand)]
+    command: McpConfigCommands,
+  },
+}
+
+#[derive(Subcommand)]
+enum McpConfigCommands {
+  /// Print the resolved `mcp.toml` path (or "<no mcp.toml configured>")
+  Path,
+  /// Parse + validate the config and report the server count
+  Validate,
+  /// List configured MCP servers (text by default, `--format json` for tooling)
+  List {
+    /// Emit a JSON object with `source` + `servers` keys instead of text
+    #[arg(long, value_parser = ["text", "json"], default_value = "text")]
+    format: String,
+  },
+  /// Print one server's full config (env, args, timeouts) as JSON
+  Show {
+    /// Server name to look up
+    name: String,
+  },
 }
 
 #[derive(Subcommand)]
@@ -1350,6 +1374,12 @@ async fn main() {
         timeout_ms,
         max_retries,
       } => mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await,
+      McpCommands::Config { command } => match command {
+        McpConfigCommands::Path => mcp::config::run_path(),
+        McpConfigCommands::Validate => mcp::config::run_validate(),
+        McpConfigCommands::List { format } => mcp::config::run_list(format == "json"),
+        McpConfigCommands::Show { name } => mcp::config::run_show(&name),
+      },
     },
     Commands::Skill(args) => match args.command {
       SkillCommands::Index(args) => match args.command {

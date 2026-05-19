@@ -664,6 +664,19 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     surface the doctor command can crawl. The lite installation
     probe above covers the most common "is my MCP server's binary
     installed?" failure mode without it.
+    - DONE P3.4-PR.2 `agentflow mcp config` schema + CLI surface
+      (the upstream prereq). New `~/.agentflow/mcp.toml` top-level
+      registry with the same `McpServerConfig` shape skill manifests
+      already use (name / command / args / env / timeout_secs /
+      max_concurrent_calls). Resolution mirrors the LLM models
+      config: `AGENTFLOW_MCP_CONFIG` env override →
+      `~/.agentflow/mcp.toml` → empty config. Validator catches
+      duplicate names, empty `name`, empty `command`. CLI:
+      `agentflow mcp config {path | validate | list [--format
+      text|json] | show <name>}` — covered by 10 unit tests +
+      8 CLI integration tests (env-injected fixture mcp.toml).
+      P3.4-PR.3 will plumb this into the doctor's MCP reachability
+      probe.
   - TODO Plugin runtime spawn smoke (no-op plugin, ≤1 s) — still
     deferred until the plugin manifest schema includes a `dry_run`
     entry point so the smoke test does not depend on a real plugin
