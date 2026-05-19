@@ -37,13 +37,21 @@ working references.
 
 ## Project Status And Roadmap
 
-These live at the repository root, not inside `docs/`:
+Live at the repository root:
 
-- [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md):
-  historical module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
 - [`RoadMap.md`](../RoadMap.md): N1–N10 status, including the closed N8/N9
   foundations and the N10 plugin, distributed, Web UI, and marketplace base.
 - [`TODOs.md`](../TODOs.md): active task queue derived from the evaluation and roadmap.
+
+Archived under `docs/archive/`:
+
+- [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
+  historical module-by-module evaluation (HEAD `41ed3f8`, B+ overall).
+- [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):
+  follow-up evaluation that drove the P6/P7/P-H/M segment additions.
+- [`TODOs-archive-2026-05-09-n1-n10.md`](archive/TODOs-archive-2026-05-09-n1-n10.md)
+  and [`TODOs-archive-2026-05-10-p0-p4.md`](archive/TODOs-archive-2026-05-10-p0-p4.md):
+  completed execution-plan history.
 
 ## Historical Release References
 

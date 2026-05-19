@@ -3,8 +3,8 @@
 > Historical reference: this report captured the project state on
 > 2026-04-28 and informed the early N6/N7 productisation tracks. For the
 > maintained current status, see `docs/CURRENT_STATUS.md`; subsequent
-> evaluations live in `PROJECT_EVALUATION_2026-05-01.md` and
-> `PROJECT_EVALUATION_2026-05-14.md`.
+> evaluations live in `docs/archive/PROJECT_EVALUATION_2026-05-01.md` and
+> `docs/archive/PROJECT_EVALUATION_2026-05-14.md`.
 
 评估日期：2026-04-28  
 评估范围：workspace 全部 crate、核心文档、CLI 执行路径、DAG 与 agent-native 能力边界。  

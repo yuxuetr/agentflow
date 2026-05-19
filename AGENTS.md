@@ -272,7 +272,7 @@ pub enum LLMError {
 - Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates ✅
 - `docs/AGENT_SDK.md` five-minute extension tutorial ✅
 
-See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-01.md` for the 2026-05-01 evaluation that drove the prioritization.
+See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-01.md` for the 2026-05-01 evaluation that drove the prioritization.
 
 ## Implementation Roadmap
 
@@ -795,7 +795,7 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
   test count: ≈500 (TTS env-dependent test still pending API key, unaffected).
 
 ### May 1, 2026 - Project Evaluation 2026-05-01 ✅
-- ✅ **`PROJECT_EVALUATION_2026-05-01.md`** completed against HEAD `41ed3f8`
+- ✅ **`docs/archive/PROJECT_EVALUATION_2026-05-01.md`** completed against HEAD `41ed3f8`
 - ✅ **Composite rating: B+** — 架构 A-, DAG 内核 A-, agent-native B+, CLI/config-first B, 可观测性 B+, 平台化 C-
 - ✅ **N1–N7 fully closed** — agent runtime productionization, observability/replay, security/tool governance, Skill CLI, CI quality gates, CLI productionization, unified trace/recovery
 - ✅ **Confirmed dual-paradigm support** — DAG with concurrent dependency-ready scheduler + agent-native ReAct/Plan-Execute/Reflection + hybrid via `AgentNode`/`WorkflowTool`
@@ -868,4 +868,4 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
 **agentflow-rag Version**: 0.3.0-alpha
 **Rust Edition**: 2024 (all workspace members)
 **Test Status**: ✅ 479/479 passing (100%, verified 2025-11-17)
-**Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-01.md`)
+**Composite Maturity Rating**: B+ (per `docs/archive/PROJECT_EVALUATION_2026-05-01.md`)

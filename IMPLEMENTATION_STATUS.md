@@ -5,8 +5,8 @@
 > authoritative source. The workspace has since grown from the 6 crates
 > described below to 15 Rust crates + 1 Web UI crate; subsequent
 > evaluations live in `OVERALL_EVALUATION_REPORT.md` (2026-04-28),
-> `PROJECT_EVALUATION_2026-05-01.md`, and
-> `PROJECT_EVALUATION_2026-05-14.md`. The content below is preserved as
+> `docs/archive/PROJECT_EVALUATION_2026-05-01.md`, and
+> `docs/archive/PROJECT_EVALUATION_2026-05-14.md`. The content below is preserved as
 > a snapshot, not as a description of current state.
 
 ## Executive Summary

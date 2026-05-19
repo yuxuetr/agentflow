@@ -80,7 +80,7 @@ The next active cleanup is documentation convergence:
 
 ## Historical References
 
-- [`PROJECT_EVALUATION_2026-05-01.md`](../PROJECT_EVALUATION_2026-05-01.md):
+- [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
   historical module-by-module evaluation that informed the P0-P4 task queue.
 - [`RoadMap.md`](../RoadMap.md): roadmap and future direction.
 - [`TODOs.md`](../TODOs.md): active execution queue and task completion record.

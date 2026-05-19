@@ -9,7 +9,7 @@ stability boundaries, see:
 - `docs/STABILITY.md`
 - `docs/API_COMPATIBILITY.md`
 
-Historical evaluation context remains in `PROJECT_EVALUATION_2026-05-01.md`.
+Historical evaluation context remains in `docs/archive/PROJECT_EVALUATION_2026-05-01.md`.
 Short-term execution items live in `TODOs.md`.
 
 ## Direction

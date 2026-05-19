@@ -4,13 +4,13 @@ Last updated: 2026-05-19
 
 ## 维护约定
 
-- 旧执行计划已归档为 `TODOs-archive-2026-05-09-n1-n10.md` 和
-  `TODOs-archive-2026-05-10-p0-p4.md`。
+- 旧执行计划已归档为 `docs/archive/TODOs-archive-2026-05-09-n1-n10.md` 和
+  `docs/archive/TODOs-archive-2026-05-10-p0-p4.md`。
 - 本文件是短期执行队列，按 P-segment 组织。
 - `docs/CURRENT_STATUS.md` 记录当前已实现状态。
 - `RoadMap.md` 保留中长期路线。
-- `PROJECT_EVALUATION_2026-05-01.md` 和 `PROJECT_EVALUATION_2026-05-14.md`
-  保留为历史评估上下文。
+- `docs/archive/PROJECT_EVALUATION_2026-05-01.md` 和
+  `docs/archive/PROJECT_EVALUATION_2026-05-14.md` 保留为历史评估上下文。
 - `HARNESS_MODE_EVOLUTION.md` 是 Harness Agent Mode 的设计规范，本文件 P-H
   段是它的可执行任务化展开。
 - 任务状态只使用:
@@ -3061,9 +3061,9 @@ For each task:
 - `docs/CURRENT_STATUS.md` — what currently exists.
 - `docs/STABILITY.md` and `docs/API_COMPATIBILITY.md` — stable surfaces.
 - `HARNESS_MODE_EVOLUTION.md` — full Harness Mode design spec.
-- `PROJECT_EVALUATION_2026-05-14.md` — most recent project evaluation;
-  drove the P6/P7/P-H/M segment additions.
-- `PROJECT_EVALUATION_2026-05-01.md` — historical evaluation that drove
-  the original P0-P5 task queue.
-- `TODOs-archive-2026-05-09-n1-n10.md` and
-  `TODOs-archive-2026-05-10-p0-p4.md` — completed history.
+- `docs/archive/PROJECT_EVALUATION_2026-05-14.md` — most recent project
+  evaluation; drove the P6/P7/P-H/M segment additions.
+- `docs/archive/PROJECT_EVALUATION_2026-05-01.md` — historical evaluation
+  that drove the original P0-P5 task queue.
+- `docs/archive/TODOs-archive-2026-05-09-n1-n10.md` and
+  `docs/archive/TODOs-archive-2026-05-10-p0-p4.md` — completed history.

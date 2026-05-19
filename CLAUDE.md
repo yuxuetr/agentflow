@@ -182,7 +182,7 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - ✅ Web UI debugger: React + Vite + TypeScript SPA embedded at `/ui`, run list, DAG graph/status, event history replay, and SSE updates
 - ✅ Plugin marketplace remote registry foundation: unified Skill/Plugin manifest, read-only HTTP client, artifact cache, signature verifier, marketplace CLI, and docs
 
-See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-14.md` for the most recent evaluation (the 2026-05-01 evaluation is retained as historical context). For change history, prefer `git log` over a doc summary.
+See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-14.md` for the most recent evaluation (the 2026-05-01 evaluation is retained as historical context). For change history, prefer `git log` over a doc summary.
 
 ## File Organization
 
@@ -268,4 +268,4 @@ See `RoadMap.md` for the full plan; `PROJECT_EVALUATION_2026-05-14.md` for the m
 **Last Updated**: 2026-05-14
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
-**Composite Maturity Rating**: B+ (per `PROJECT_EVALUATION_2026-05-14.md`)
+**Composite Maturity Rating**: B+ (per `docs/archive/PROJECT_EVALUATION_2026-05-14.md`)
