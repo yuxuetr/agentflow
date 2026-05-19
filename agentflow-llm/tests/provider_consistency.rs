@@ -1825,3 +1825,305 @@ async fn cross_provider_token_usage_populated_uniformly_on_success() {
     );
   }
 }
+
+// -----------------------------------------------------------------------------
+// N9 cross-provider invariants — multimodal + tool_choice
+//
+// The per-provider `*_multimodal_path` and `*_tool_choice_all_modes` tests
+// pin every provider's request-encoding wire shape individually. The
+// invariants below take that one step further: fire all 5 providers in ONE
+// test and assert the canonical contract holds across the matrix.
+//
+// **Multimodal invariant** (`cross_provider_multimodal_paths_produce_uniform_response_shape`):
+// drives each provider through its native multimodal request shape and
+// asserts the parsed `ProviderResponse` is uniform (text == "ok",
+// StopReason::Stop, usage populated, no tool_calls). Catches the drift mode
+// where one provider's multimodal adapter starts mis-parsing the success
+// response (e.g. dropping usage on image inputs).
+//
+// **Tool-choice invariants** (4 tests, one per `ToolChoice` variant):
+// drives each provider with the given variant and captures the request body.
+// Asserts every provider's body has a *non-empty* mode-bearing
+// `tool_choice` (or `toolConfig` for Google) field whose stringified form
+// contains the expected mode marker. This is the silent-drop / silent-
+// downgrade invariant: a provider that starts dropping the field, or
+// silently maps Required → Auto, fails here.
+// -----------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_multimodal_paths_produce_uniform_response_shape() {
+  // Each provider's multimodal adapter takes a different request shape
+  // (OpenAI/Moonshot/StepFun: `image_url` parts; Anthropic: `image` parts
+  // with base64 `source`; Google rewrites OpenAI-style input into
+  // `inline_data`). The success response shape, however, must be
+  // identical across the matrix.
+  let mut responses: Vec<(&str, agentflow_llm::providers::ProviderResponse)> = Vec::new();
+
+  let (base_url, _) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
+  responses.push((
+    "openai",
+    provider
+      .execute(&provider_request_multimodal_openai_style("gpt-4o-mini"))
+      .await
+      .expect("openai multimodal ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, ANTHROPIC_SUCCESS.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  responses.push((
+    "anthropic",
+    provider
+      .execute(&provider_request_multimodal_anthropic_style(
+        "claude-3-5-sonnet",
+      ))
+      .await
+      .expect("anthropic multimodal ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, GOOGLE_SUCCESS.to_string()).await;
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
+  responses.push((
+    "google",
+    provider
+      .execute(&provider_request_multimodal_openai_style("gemini-1.5-pro"))
+      .await
+      .expect("google multimodal ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, MOONSHOT_SUCCESS.to_string()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  responses.push((
+    "moonshot",
+    provider
+      .execute(&provider_request_multimodal_openai_style("moonshot-v1-8k"))
+      .await
+      .expect("moonshot multimodal ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
+  responses.push((
+    "stepfun",
+    provider
+      .execute(&provider_request_multimodal_openai_style("step-1-8k"))
+      .await
+      .expect("stepfun multimodal ok"),
+  ));
+
+  assert_eq!(responses.len(), 5, "5 mainstream providers covered");
+
+  let mut texts: Vec<String> = Vec::new();
+  for (name, response) in &responses {
+    assert_text(&response.content, "ok");
+    assert_eq!(
+      response.stop_reason,
+      Some(StopReason::Stop),
+      "{name} multimodal success must report StopReason::Stop"
+    );
+    assert_usage(&response.usage);
+    assert!(
+      response.tool_calls.is_empty(),
+      "{name} multimodal success must not emit tool_calls; got {:?}",
+      response.tool_calls
+    );
+    texts.push(response.content.to_string());
+  }
+  let first = &texts[0];
+  for (i, text) in texts.iter().enumerate() {
+    assert_eq!(
+      text, first,
+      "provider #{i} ({}) multimodal text diverged: expected {first:?}, got {text:?}",
+      responses[i].0
+    );
+  }
+}
+
+/// Drive every provider with the given [`ToolChoice`] through its success
+/// fixture and return `(name, captured_body_json)` tuples. Each provider
+/// runs on its own ephemeral mock; the helper awaits sequentially so the
+/// capture path stays deterministic.
+async fn drive_all_providers_through_tool_choice(
+  choice: ToolChoice,
+) -> Vec<(&'static str, serde_json::Value)> {
+  let mut out = Vec::new();
+
+  let (base_url, captured) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
+  let _ = provider
+    .execute(&provider_request_with_choice("gpt-4o-mini", choice.clone()))
+    .await
+    .expect("openai tool_choice ok");
+  let raw = captured.lock().await.clone().expect("openai body captured");
+  out.push(("openai", captured_body(&raw)));
+
+  let (base_url, captured) = spawn_mock_server(200, ANTHROPIC_SUCCESS.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  let _ = provider
+    .execute(&provider_request_with_choice(
+      "claude-3-5-sonnet",
+      choice.clone(),
+    ))
+    .await
+    .expect("anthropic tool_choice ok");
+  let raw = captured
+    .lock()
+    .await
+    .clone()
+    .expect("anthropic body captured");
+  out.push(("anthropic", captured_body(&raw)));
+
+  let (base_url, captured) = spawn_mock_server(200, GOOGLE_SUCCESS.to_string()).await;
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
+  let _ = provider
+    .execute(&provider_request_with_choice(
+      "gemini-1.5-pro",
+      choice.clone(),
+    ))
+    .await
+    .expect("google tool_choice ok");
+  let raw = captured.lock().await.clone().expect("google body captured");
+  out.push(("google", captured_body(&raw)));
+
+  let (base_url, captured) = spawn_mock_server(200, MOONSHOT_SUCCESS.to_string()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  let _ = provider
+    .execute(&provider_request_with_choice(
+      "moonshot-v1-8k",
+      choice.clone(),
+    ))
+    .await
+    .expect("moonshot tool_choice ok");
+  let raw = captured
+    .lock()
+    .await
+    .clone()
+    .expect("moonshot body captured");
+  out.push(("moonshot", captured_body(&raw)));
+
+  let (base_url, captured) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
+  let _ = provider
+    .execute(&provider_request_with_choice("step-1-8k", choice))
+    .await
+    .expect("stepfun tool_choice ok");
+  let raw = captured
+    .lock()
+    .await
+    .clone()
+    .expect("stepfun body captured");
+  out.push(("stepfun", captured_body(&raw)));
+
+  out
+}
+
+/// Extract the provider-specific tool-choice field for cross-provider mode
+/// assertions. OpenAI / Anthropic / Moonshot / StepFun all use the
+/// canonical `tool_choice` key; Google's Gemini wire shape moves the same
+/// information into `toolConfig`.
+fn provider_tool_choice_field<'a>(
+  provider: &str,
+  body: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+  let field = match provider {
+    "google" => "toolConfig",
+    _ => "tool_choice",
+  };
+  body.get(field).unwrap_or_else(|| {
+    panic!("{provider} body must encode tool_choice; missing `{field}` field in {body}")
+  })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_tool_choice_auto_is_honored_by_every_provider() {
+  // Auto = let the model decide. Per the provider matrix:
+  //   openai / moonshot / stepfun → `tool_choice: "auto"`
+  //   anthropic → `tool_choice: {"type":"auto"}`
+  //   google → `toolConfig.functionCallingConfig.mode: "AUTO"`
+  // The invariant we pin here is "every provider's mode-bearing field
+  // contains the case-insensitive substring `auto` and is non-empty" — the
+  // silent-drop / silent-downgrade drift catches against this.
+  let bodies = drive_all_providers_through_tool_choice(ToolChoice::Auto).await;
+  assert_eq!(bodies.len(), 5);
+  for (name, body) in &bodies {
+    let field = provider_tool_choice_field(name, body);
+    let serialized = field.to_string().to_lowercase();
+    assert!(
+      serialized.contains("auto"),
+      "{name} must encode ToolChoice::Auto in its tool-choice field; got {field}"
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_tool_choice_none_is_honored_by_every_provider() {
+  // None = explicitly forbid tool calls. This is the highest-stakes
+  // invariant: a provider silently dropping `None` would re-enable tool
+  // calls the caller explicitly forbade. Per the provider matrix:
+  //   openai / moonshot / stepfun → `tool_choice: "none"`
+  //   anthropic → `tool_choice: {"type":"none"}`
+  //   google → `toolConfig.functionCallingConfig.mode: "NONE"`
+  let bodies = drive_all_providers_through_tool_choice(ToolChoice::None).await;
+  assert_eq!(bodies.len(), 5);
+  for (name, body) in &bodies {
+    let field = provider_tool_choice_field(name, body);
+    let serialized = field.to_string().to_lowercase();
+    assert!(
+      serialized.contains("none"),
+      "{name} must encode ToolChoice::None in its tool-choice field; got {field}"
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_tool_choice_required_is_honored_by_every_provider() {
+  // Required = force the model to call at least one tool. The wire token
+  // varies across providers (`required` for OpenAI-shape vendors, `any` for
+  // Anthropic, `ANY` for Google), so the invariant is "the field encodes a
+  // non-Auto, non-None directive". We pin that by asserting one of the
+  // known wire tokens is present.
+  let bodies = drive_all_providers_through_tool_choice(ToolChoice::Required).await;
+  assert_eq!(bodies.len(), 5);
+  for (name, body) in &bodies {
+    let field = provider_tool_choice_field(name, body);
+    let serialized = field.to_string().to_lowercase();
+    assert!(
+      serialized.contains("required") || serialized.contains("any"),
+      "{name} must encode ToolChoice::Required as `required` or `any`; got {field}"
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_tool_choice_specific_tool_is_honored_by_every_provider() {
+  // Specific tool = force the model to call this exact tool. Every
+  // provider's wire shape must embed the requested tool name. Per the
+  // matrix:
+  //   openai / moonshot / stepfun → `tool_choice: {"type":"function","function":{"name":"get_weather"}}`
+  //   anthropic → `tool_choice: {"type":"tool","name":"get_weather"}`
+  //   google → `toolConfig.functionCallingConfig.allowedFunctionNames: ["get_weather"]`
+  // The invariant: the captured field contains the tool name string.
+  let bodies = drive_all_providers_through_tool_choice(ToolChoice::Tool {
+    name: TOOL_CHOICE_TOOL_NAME.to_string(),
+  })
+  .await;
+  assert_eq!(bodies.len(), 5);
+  for (name, body) in &bodies {
+    let field = provider_tool_choice_field(name, body);
+    let serialized = field.to_string();
+    assert!(
+      serialized.contains(TOOL_CHOICE_TOOL_NAME),
+      "{name} must embed the requested tool name `{TOOL_CHOICE_TOOL_NAME}` in its tool-choice field; got {field}"
+    );
+  }
+}

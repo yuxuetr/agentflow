@@ -45,6 +45,35 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (multimodal + tool_choice cross-provider invariants) —
+  extends the 7 invariant tests landed in `1afcd17` with the two
+  axes CLAUDE.md still listed as pending. New tests in
+  `agentflow-llm/tests/provider_consistency.rs`:
+  (1) `cross_provider_multimodal_paths_produce_uniform_response_shape`
+  drives each of the 5 providers through its native multimodal
+  request shape (OpenAI / Moonshot / StepFun via `image_url` parts;
+  Anthropic via `image` parts with base64 `source`; Google via the
+  OpenAI-style input its adapter rewrites to `inline_data`) and
+  asserts the parsed `ProviderResponse` is uniform (text == "ok",
+  `StopReason::Stop`, populated usage, empty `tool_calls`). Catches
+  the drift where a multimodal adapter mis-parses the success
+  response. (2–5) Four new
+  `cross_provider_tool_choice_<variant>_is_honored_by_every_provider`
+  tests (one per `ToolChoice` variant) drive all 5 providers and
+  assert each captured request body contains the provider-specific
+  mode-bearing field with the expected wire token (`auto` / `none` /
+  `required`-or-`any` / the literal tool name). The `None` invariant
+  is the highest-stakes — a provider silently dropping it would
+  re-enable tool calls the caller explicitly forbade. Shared helper
+  `drive_all_providers_through_tool_choice(choice)` mirrors the
+  pattern from the existing `drive_all_providers_through_status`
+  helper. `provider_tool_choice_field(provider, body)` abstracts
+  Google's `toolConfig` field-path divergence from the canonical
+  `tool_choice` key. Total: 5 new tests; `provider_consistency`
+  suite now 56 / 56 (44 per-provider + 12 invariant). `cargo fmt
+  --all` + `cargo clippy -p agentflow-llm --tests -- -D warnings`
+  + `cargo test -p agentflow-llm --test provider_consistency` all
+  clean.
 - N8 (final follow-ups) — closed the two remaining items called out
   in CLAUDE.md's N8 status line. (1) Tool idempotency metadata for
   partial-resume auto-replay: new

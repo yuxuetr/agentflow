@@ -172,7 +172,8 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 
 **N9 — Multi-agent + ecosystem (v0.4.0 candidate):** mostly closed
 - ✅ Handoff/blackboard/debate; ✅ OS sandbox; ✅ OTel `traceparent` propagation; ✅ RAG eval harness; ✅ LLM provider consistency suite (foundation)
-- Pending: cross-provider streaming / multimodal / tool-calling consistency tests; live-LLM nightly CI
+- ✅ Cross-provider streaming / multimodal / tool-calling consistency tests: streaming covered by the `cross_provider_streaming_paths_yield_uniform_hello_world_concatenation` invariant; multimodal covered by `cross_provider_multimodal_paths_produce_uniform_response_shape`; tool-calling covered by `cross_provider_tool_call_paths_produce_uniform_canonical_shape` (basic) plus four `cross_provider_tool_choice_<variant>_is_honored_by_every_provider` invariants (`auto` / `none` / `required` / specific-tool)
+- Pending: live-LLM nightly CI
 
 **N10 — Plugin / distributed / Web UI (v1.0.0-rc candidate):** in progress
 - ✅ `docs/AGENT_SDK.md` extension guide + runnable examples (`custom_runtime` / `custom_reflection` / `custom_memory_summary`); core extension traits rustdoc-clean
