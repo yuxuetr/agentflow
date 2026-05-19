@@ -257,6 +257,58 @@ fn eval_run_rejects_unknown_format() {
 // envelope contract regression guard
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// mcp list-tools / list-resources / call-tool
+// ────────────────────────────────────────────────────────────────────────────
+
+/// All three MCP subcommands require a live MCP server to do real
+/// work. We exercise the format-flag wiring + help surface here so
+/// the value-parser strings stay in sync; end-to-end JSON-shape
+/// assertions need an actual server which lives outside the hermetic
+/// CLI suite.
+#[test]
+fn mcp_list_tools_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["mcp", "list-tools", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn mcp_list_resources_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["mcp", "list-resources", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn mcp_call_tool_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["mcp", "call-tool", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn mcp_list_tools_rejects_unknown_format() {
+  // Empty server command short-circuits before any network — but the
+  // value-parser fires first on `--format`, which is what we want
+  // to lock down here.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["mcp", "list-tools", "--format", "yaml", "--", "echo"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th

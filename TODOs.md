@@ -623,7 +623,17 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     - `harness run|list|inspect` — wrap summary (`stream-json`
       keeps emitting raw events).
     - `llm models` — add `--output json-envelope` (no JSON today).
-    - `mcp list-tools|list-resources|call-tool`.
+    - DONE `mcp list-tools|list-resources|call-tool` — each gained
+      a `--format text|json-envelope` flag. text mode preserves the
+      colored progress / table output operators expect; envelope
+      mode suppresses progress lines (so stdout is parseable JSON)
+      and emits `{ version, command, result, errors }` with the
+      full structured payload (`tools[]` / `resources[]` /
+      `{tool,params,result}`). `mcp call-tool --output <path>` in
+      envelope mode writes the envelope-wrapped file so the on-disk
+      artifact is self-describing. 4 new CLI integration tests:
+      help-surface lists `json-envelope` for all 3 subcommands,
+      value-parser rejects unknown formats.
     - `plugin list|install|inspect|generate-workflow-stub` — add
       `--output json-envelope` (no JSON today).
     - `rag search|eval` — wrap existing JSON outputs.

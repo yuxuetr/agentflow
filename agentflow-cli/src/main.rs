@@ -586,6 +586,10 @@ enum McpCommands {
     timeout_ms: u64,
     #[arg(long, default_value_t = 3)]
     max_retries: u32,
+    /// Output format: text (colored progress) or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Call a tool on an MCP server
   CallTool {
@@ -604,6 +608,11 @@ enum McpCommands {
     /// Output file path to save the result
     #[arg(short, long)]
     output: Option<String>,
+    /// Output format: text (default) or json-envelope. In envelope
+    /// mode the file written by `--output` carries the envelope, not
+    /// the bare result, so the file is self-describing.
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// List available resources from an MCP server
   ListResources {
@@ -613,6 +622,10 @@ enum McpCommands {
     timeout_ms: u64,
     #[arg(long, default_value_t = 3)]
     max_retries: u32,
+    /// Output format: text (colored progress) or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Manage `~/.agentflow/mcp.toml` — the top-level MCP server registry
   Config {
@@ -1353,7 +1366,16 @@ async fn main() {
         server_command,
         timeout_ms,
         max_retries,
-      } => mcp::list_tools::execute(server_command, Some(timeout_ms), Some(max_retries)).await,
+        format,
+      } => {
+        mcp::list_tools::execute(
+          server_command,
+          Some(timeout_ms),
+          Some(max_retries),
+          format,
+        )
+        .await
+      }
       McpCommands::CallTool {
         server_command,
         tool,
@@ -1361,6 +1383,7 @@ async fn main() {
         timeout_ms,
         max_retries,
         output,
+        format,
       } => {
         mcp::call_tool::execute(
           server_command,
@@ -1369,6 +1392,7 @@ async fn main() {
           Some(timeout_ms),
           Some(max_retries),
           output,
+          format,
         )
         .await
       }
@@ -1376,7 +1400,16 @@ async fn main() {
         server_command,
         timeout_ms,
         max_retries,
-      } => mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries)).await,
+        format,
+      } => {
+        mcp::list_resources::execute(
+          server_command,
+          Some(timeout_ms),
+          Some(max_retries),
+          format,
+        )
+        .await
+      }
       McpCommands::Config { command } => match command {
         McpConfigCommands::Path => mcp::config::run_path(),
         McpConfigCommands::Validate => mcp::config::run_validate(),

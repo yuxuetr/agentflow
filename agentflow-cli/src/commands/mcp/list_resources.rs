@@ -8,6 +8,7 @@ pub async fn execute(
   server_command: Vec<String>,
   timeout_ms: Option<u64>,
   max_retries: Option<u32>,
+  format: String,
 ) -> Result<()> {
   if server_command.is_empty() {
     anyhow::bail!(
@@ -15,12 +16,16 @@ pub async fn execute(
     );
   }
 
-  println!(
-    "{}",
-    format!("🔌 Connecting to MCP server: {:?}", server_command)
-      .bold()
-      .blue()
-  );
+  let is_json_envelope = format == "json-envelope";
+
+  if !is_json_envelope {
+    println!(
+      "{}",
+      format!("🔌 Connecting to MCP server: {:?}", server_command)
+        .bold()
+        .blue()
+    );
+  }
 
   // Build MCP client with configuration
   let mut client_builder = ClientBuilder::new().with_stdio(server_command.clone());
@@ -44,7 +49,9 @@ pub async fn execute(
     .await
     .context("Failed to connect to MCP server")?;
 
-  println!("{}", "✅ Connected to MCP server".green());
+  if !is_json_envelope {
+    println!("{}", "✅ Connected to MCP server".green());
+  }
 
   // List available resources
   let resources = client
@@ -55,7 +62,21 @@ pub async fn execute(
   // Disconnect gracefully
   client.disconnect().await.ok();
 
-  // Display results
+  if is_json_envelope {
+    // P3.3 migration: envelope-wrap the full `Resource` list
+    // (preserves uri + name + description + mime_type).
+    let payload = serde_json::json!({
+      "server_command": server_command,
+      "resources": &resources,
+      "total": resources.len(),
+    });
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::ok("mcp list-resources", &payload);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    return Ok(());
+  }
+
+  // Display results (text mode)
   if resources.is_empty() {
     println!("{}", "⚠️  No resources found".yellow());
     return Ok(());
