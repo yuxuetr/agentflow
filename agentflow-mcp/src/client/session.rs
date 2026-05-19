@@ -313,6 +313,14 @@ impl MCPClient {
   pub(super) async fn send_request(&mut self, request: JsonRpcRequest) -> MCPResult<Value> {
     use crate::client::retry::{RetryConfig, retry_with_backoff};
 
+    // P3.8: stitch the OTel trace across the MCP hop. When an active
+    // `agentflow_tracing::context::current_traceparent()` is in
+    // scope, inject it as `params._meta.traceparent` on every
+    // outbound request. No-op when there's no upstream context — we
+    // never emit an empty `_meta` so consumers can tell apart "no
+    // upstream trace" from "upstream trace exists but is empty".
+    let mut request = request;
+    crate::protocol::traceparent::inject_traceparent_into_request(&mut request);
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
@@ -355,6 +363,12 @@ impl MCPClient {
   /// This method applies timeout enforcement from client configuration.
   /// Notifications typically don't get retried as they don't expect responses.
   pub(super) async fn send_notification(&mut self, notification: JsonRpcRequest) -> MCPResult<()> {
+    // P3.8: traceparent injection on notifications too. The MCP
+    // server side may correlate notifications with their parent
+    // span (e.g. `notifications/progress` emitted during a long
+    // tool call); without the carrier those records would orphan.
+    let mut notification = notification;
+    crate::protocol::traceparent::inject_traceparent_into_request(&mut notification);
     let notification_value = serde_json::to_value(&notification)
       .map_err(|e| MCPError::from(e).context("Failed to serialize notification"))?;
 

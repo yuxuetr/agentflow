@@ -206,6 +206,7 @@ dependencies = [
 name = "agentflow-mcp"
 version = "0.2.0"
 dependencies = [
+ "agentflow-tracing",
  "anyhow",
  "async-trait",
  "futures",

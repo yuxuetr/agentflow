@@ -75,6 +75,15 @@ impl MockTransport {
     self.sent_messages.lock().unwrap().clone()
   }
 
+  /// Return a clone of the inner `Arc<Mutex<...>>` so tests can read
+  /// `sent_messages` AFTER moving the transport into
+  /// `ClientBuilder::with_transport`. Mirrors the share-by-handle
+  /// pattern used by tokio's `OneShot` cell — necessary because the
+  /// `Transport` trait consumes the value when registering.
+  pub fn sent_messages_handle(&self) -> Arc<Mutex<Vec<Value>>> {
+    self.sent_messages.clone()
+  }
+
   /// Get the last sent message
   pub fn last_sent_message(&self) -> Option<Value> {
     self.sent_messages.lock().unwrap().last().cloned()
