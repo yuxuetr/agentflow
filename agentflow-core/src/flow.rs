@@ -639,8 +639,7 @@ impl Flow {
           serde_json::Value::Object(map) => map
             .iter()
             .map(|(key, value)| {
-              let flow_value = serde_json::from_value::<FlowValue>(value.clone())
-                .unwrap_or_else(|_| FlowValue::Json(value.clone()));
+              let flow_value = decode_checkpoint_flow_value(node_id, key, value);
               (key.clone(), flow_value)
             })
             .collect(),
@@ -652,7 +651,55 @@ impl Flow {
       })
       .collect()
   }
+}
 
+/// Decode one checkpoint output value back into a [`FlowValue`].
+///
+/// Three cases:
+///
+/// 1. **Tagged value** (object with a recognized `type: "json" | "file"
+///    | "url"`): decode via `FlowValue`'s deserializer. If decode fails
+///    the value was tagged but corrupt — log a warning so operators
+///    can see the partial loss instead of silently downgrading to
+///    `FlowValue::Json`. The function still returns a fallback so
+///    resume / replay can proceed.
+/// 2. **Untagged value** (no `type` field, or a `type` field that
+///    doesn't match a known tag): treat as a legacy raw-JSON
+///    checkpoint and wrap as `FlowValue::Json` without warning.
+///    Pre-0.2 checkpoints relied on this implicit encoding (see
+///    `tests/flow_value_checkpoint_compat.rs::legacy_raw_json_checkpoint_values_read_as_json_flow_values`).
+/// 3. **Non-object value**: wrap as `FlowValue::Json` — primitives,
+///    arrays, and `null` never used the tagged form.
+fn decode_checkpoint_flow_value(node_id: &str, key: &str, value: &serde_json::Value) -> FlowValue {
+  let tag = value
+    .as_object()
+    .and_then(|map| map.get("type"))
+    .and_then(serde_json::Value::as_str);
+
+  match tag {
+    Some("json") | Some("file") | Some("url") => {
+      // Tagged value — caller expects a specific variant. Only fall
+      // back to `Json` if decoding genuinely fails, and warn loudly
+      // so the regression is debuggable.
+      serde_json::from_value::<FlowValue>(value.clone()).unwrap_or_else(|err| {
+        eprintln!(
+          "⚠️  Warning: checkpoint for node '{}' field '{}' is tagged \
+           `type: \"{}\"` but failed to deserialize as FlowValue: {}. \
+           Falling back to FlowValue::Json — downstream consumers that \
+           pattern-match on File/Url will not see this output.",
+          node_id,
+          key,
+          tag.unwrap_or("unknown"),
+          err
+        );
+        FlowValue::Json(value.clone())
+      })
+    }
+    _ => FlowValue::Json(value.clone()),
+  }
+}
+
+impl Flow {
   async fn execute_concurrently(
     &self,
     run_id: String,
@@ -1489,6 +1536,71 @@ mod tests {
     assert_eq!(restored_outputs.get("json"), outputs.get("json"));
     assert_eq!(restored_outputs.get("file"), Some(&file_value));
     assert_eq!(restored_outputs.get("url"), Some(&url_value));
+  }
+
+  #[test]
+  fn legacy_untagged_checkpoint_values_decode_as_json() {
+    // Pre-tag-schema checkpoints stored raw JSON without the
+    // `{"type": "json", "value": ...}` envelope. The fallback must
+    // still accept them, wrapping into `FlowValue::Json` without
+    // warning.
+    let mut node = serde_json::Map::new();
+    node.insert("legacy_string".to_string(), json!("hello"));
+    node.insert("legacy_number".to_string(), json!(42));
+    node.insert("legacy_object".to_string(), json!({"answer": 42}));
+    node.insert("legacy_array".to_string(), json!([1, 2, 3]));
+
+    let mut checkpoint_state = HashMap::new();
+    checkpoint_state.insert("legacy_node".to_string(), Value::Object(node));
+
+    let restored = Flow::checkpoint_state_to_state_pool(&checkpoint_state);
+    let outputs = restored.get("legacy_node").unwrap().as_ref().unwrap();
+
+    assert_eq!(
+      outputs.get("legacy_string"),
+      Some(&FlowValue::Json(json!("hello")))
+    );
+    assert_eq!(
+      outputs.get("legacy_number"),
+      Some(&FlowValue::Json(json!(42)))
+    );
+    assert_eq!(
+      outputs.get("legacy_object"),
+      Some(&FlowValue::Json(json!({"answer": 42})))
+    );
+    assert_eq!(
+      outputs.get("legacy_array"),
+      Some(&FlowValue::Json(json!([1, 2, 3])))
+    );
+  }
+
+  #[test]
+  fn malformed_tagged_checkpoint_value_falls_back_to_json() {
+    // A checkpoint claims `type: "file"` but is missing the required
+    // `path` field. The decoder must NOT panic and must NOT pretend
+    // it decoded successfully — it falls back to `FlowValue::Json`
+    // (preserving the raw object) while loudly logging the
+    // regression so operators can investigate. Pre-bridge code did
+    // the same fallback silently, swallowing corruption.
+    let malformed = json!({
+      "type": "file",
+      "mime_type": "text/plain"
+      // `path` is missing on purpose
+    });
+    let restored = decode_checkpoint_flow_value("node", "file_output", &malformed);
+
+    match restored {
+      FlowValue::Json(value) => {
+        assert_eq!(
+          value, malformed,
+          "fallback must preserve the raw object so operators can inspect it"
+        );
+      }
+      other => panic!(
+        "malformed tagged value must fall back to FlowValue::Json (so resume can still proceed), got {:?}",
+        other
+      ),
+    }
   }
 
   #[tokio::test]

@@ -24,6 +24,7 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
+use agentflow_tools::{ToolIdempotency, ToolRegistry};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -117,10 +118,42 @@ pub struct AgentNodeResumeContract {
 }
 
 impl AgentNodeResumeContract {
+  /// Build the resume contract without consulting a tool registry.
+  ///
+  /// Tools that did not embed `_agentflow.side_effect_class` in their
+  /// params will be classified using only the params hint, defaulting
+  /// to `External` (i.e. `ManualRequired` on partial-resume) when no
+  /// hint is present. Prefer [`Self::from_result_with_tools`] when the
+  /// caller has a [`ToolRegistry`] available — tools that declared
+  /// `ToolIdempotency::Idempotent` via [`agentflow_tools::Tool::idempotency`]
+  /// or [`agentflow_tools::ToolMetadata::with_idempotency`] will then be
+  /// recognized as replay-safe without requiring an inline hint.
   pub fn from_result(
     node_name: impl Into<String>,
     runtime_name: impl Into<String>,
     result: &AgentRunResult,
+  ) -> Self {
+    // The empty registry is a no-op fallback — every `tool_idempotency`
+    // lookup returns `None`, so behaviour matches the pre-bridge path.
+    Self::from_result_with_tools(node_name, runtime_name, result, &ToolRegistry::new())
+  }
+
+  /// Build the resume contract using a [`ToolRegistry`] as the
+  /// fallback source of idempotency metadata.
+  ///
+  /// The classification precedence is:
+  /// 1. `params._agentflow.side_effect_class` / `params.side_effect_class`
+  ///    when set to a recognized variant (operator/agent intent wins).
+  /// 2. `tools.tool_idempotency(tool_name, params)` when the registry
+  ///    knows this tool — `Idempotent` becomes `Idempotent`,
+  ///    `NonIdempotent` becomes `Mutating`.
+  /// 3. `External` (i.e. `ManualRequired` on partial-resume) when no
+  ///    hint and no registry record exist.
+  pub fn from_result_with_tools(
+    node_name: impl Into<String>,
+    runtime_name: impl Into<String>,
+    result: &AgentRunResult,
+    tools: &ToolRegistry,
   ) -> Self {
     let completed = result.stop_reason.is_success();
     let partial_run_resume_supported =
@@ -145,7 +178,7 @@ impl AgentNodeResumeContract {
       stop_reason: result.stop_reason.clone(),
       step_count: result.steps.len(),
       last_step_index: result.steps.last().map(|step| step.index),
-      tool_calls: extract_tool_resume_records(result),
+      tool_calls: extract_tool_resume_records(result, tools),
       completed_run_replay_safe: completed,
       partial_run_resume_supported,
       restart_requires_idempotent_tools: !completed && has_unresolved_tool_call(result),
@@ -251,8 +284,9 @@ impl AsyncNode for AgentNode {
           message: format!("AgentNode '{}': {}", self.name, e),
         })?
     };
+    let tools = agent.tools().clone();
     if !result.stop_reason.is_success() {
-      let partial_outputs = build_outputs(&self.name, &result)?;
+      let partial_outputs = build_outputs(&self.name, &result, &tools)?;
       return Err(AgentFlowError::NodePartialExecutionFailed {
         message: format!(
           "AgentNode '{}': agent stopped before final answer: {:?}",
@@ -261,7 +295,7 @@ impl AsyncNode for AgentNode {
         partial_outputs,
       });
     }
-    build_outputs(&self.name, &result)
+    build_outputs(&self.name, &result, &tools)
   }
 }
 
@@ -283,7 +317,11 @@ fn parse_prior_agent_result(
     })
 }
 
-fn build_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
+fn build_outputs(
+  node_name: &str,
+  result: &AgentRunResult,
+  tools: &ToolRegistry,
+) -> AsyncNodeResult {
   let response = result.answer.clone().unwrap_or_default();
   let stop_reason =
     serde_json::to_value(&result.stop_reason).map_err(|e| AgentFlowError::NodeExecutionFailed {
@@ -299,8 +337,8 @@ fn build_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
         node_name, e
       ),
     })?;
-  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result(
-    node_name, "react", result,
+  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result_with_tools(
+    node_name, "react", result, tools,
   ))
   .map_err(|e| AgentFlowError::NodeExecutionFailed {
     message: format!(
@@ -321,7 +359,10 @@ fn build_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
   Ok(outputs)
 }
 
-fn extract_tool_resume_records(result: &AgentRunResult) -> Vec<AgentNodeToolResumeRecord> {
+fn extract_tool_resume_records(
+  result: &AgentRunResult,
+  tools: &ToolRegistry,
+) -> Vec<AgentNodeToolResumeRecord> {
   let mut records = Vec::new();
   for step in &result.steps {
     let AgentStepKind::ToolCall { tool, params } = &step.kind else {
@@ -344,7 +385,7 @@ fn extract_tool_resume_records(result: &AgentRunResult) -> Vec<AgentNodeToolResu
       }
     });
     let idempotency_key = tool_idempotency_key(params);
-    let side_effect_class = tool_side_effect_class(params);
+    let side_effect_class = tool_side_effect_class(params, tool, tools);
     let replay_policy = tool_replay_policy(result_step.is_some(), &side_effect_class);
 
     records.push(AgentNodeToolResumeRecord {
@@ -393,19 +434,40 @@ fn tool_idempotency_key(params: &Value) -> Option<String> {
     .map(ToString::to_string)
 }
 
-fn tool_side_effect_class(params: &Value) -> AgentNodeToolSideEffectClass {
+fn tool_side_effect_class(
+  params: &Value,
+  tool_name: &str,
+  tools: &ToolRegistry,
+) -> AgentNodeToolSideEffectClass {
   let raw = params
     .get("_agentflow")
     .and_then(|value| value.get("side_effect_class"))
     .or_else(|| params.get("side_effect_class"))
     .and_then(Value::as_str);
 
+  // 1) An explicit, recognized params hint always wins — operator /
+  //    agent intent shouldn't be silently overridden by registry
+  //    defaults.
   match raw {
-    Some("read_only") => AgentNodeToolSideEffectClass::ReadOnly,
-    Some("idempotent") => AgentNodeToolSideEffectClass::Idempotent,
-    Some("mutating") => AgentNodeToolSideEffectClass::Mutating,
-    Some("external") => AgentNodeToolSideEffectClass::External,
-    _ => AgentNodeToolSideEffectClass::External,
+    Some("read_only") => return AgentNodeToolSideEffectClass::ReadOnly,
+    Some("idempotent") => return AgentNodeToolSideEffectClass::Idempotent,
+    Some("mutating") => return AgentNodeToolSideEffectClass::Mutating,
+    Some("external") => return AgentNodeToolSideEffectClass::External,
+    Some(_) | None => {}
+  }
+
+  // 2) Fall back to the tool's own idempotency declaration. This is
+  //    the bridge that lets `Tool::idempotency()` /
+  //    `ToolMetadata::with_idempotency` from `agentflow-tools` reach
+  //    the resume planner without requiring callers to embed
+  //    `_agentflow.side_effect_class` in every params payload.
+  match tools.tool_idempotency(tool_name, params) {
+    Some(ToolIdempotency::Idempotent) => AgentNodeToolSideEffectClass::Idempotent,
+    Some(ToolIdempotency::NonIdempotent) => AgentNodeToolSideEffectClass::Mutating,
+    // 3) Unknown / unregistered ⇒ default to `External` so partial-
+    //    resume gates the call as `ManualRequired`. Operators can
+    //    upgrade with `--force-replay` once they've vetted the tool.
+    Some(ToolIdempotency::Unknown) | None => AgentNodeToolSideEffectClass::External,
   }
 }
 

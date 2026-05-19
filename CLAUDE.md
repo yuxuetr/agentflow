@@ -167,7 +167,8 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 
 **N8 — Platform skeleton + native tool calling (v0.3.0 candidate):** ✅ closed
 - LLM `tool_calls` / `tool_choice` native ✅ / Server gateway core routes ✅ / DB schema ✅
-- Pending: `Tool` idempotency metadata for partial-resume auto-replay; `FlowValue::File`/`Url` checkpoint round-trip type fidelity
+- ✅ `Tool` idempotency metadata bridge: `AgentNodeResumeContract::from_result_with_tools` consults `Tool::idempotency()` so registry-declared `Idempotent` tools auto-replay on partial-resume (DAG + skill_agent paths wired)
+- ✅ `FlowValue::File`/`Url` checkpoint round-trip type fidelity: disk save→load preserves variant tags; tagged-but-corrupt payloads warn loudly instead of silently downgrading to `Json`
 
 **N9 — Multi-agent + ecosystem (v0.4.0 candidate):** mostly closed
 - ✅ Handoff/blackboard/debate; ✅ OS sandbox; ✅ OTel `traceparent` propagation; ✅ RAG eval harness; ✅ LLM provider consistency suite (foundation)

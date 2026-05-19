@@ -13,6 +13,7 @@ use agentflow_nodes::nodes::{
   markmap::MarkMapNode, template::TemplateNode, text_to_image::TextToImageNode, tts::TTSNode,
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
+use agentflow_tools::ToolRegistry;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -431,8 +432,9 @@ impl AsyncNode for SkillAgentWorkflowNode {
           message: format!("skill_agent '{}': agent run failed: {}", self.name, err),
         })?;
 
+    let tools = agent.tools().clone();
     if !result.stop_reason.is_success() {
-      let partial_outputs = build_skill_agent_outputs(&self.name, &result)?;
+      let partial_outputs = build_skill_agent_outputs(&self.name, &result, &tools)?;
       return Err(AgentFlowError::NodePartialExecutionFailed {
         message: format!(
           "skill_agent '{}': agent stopped before final answer: {:?}",
@@ -442,7 +444,7 @@ impl AsyncNode for SkillAgentWorkflowNode {
       });
     }
 
-    build_skill_agent_outputs(&self.name, &result)
+    build_skill_agent_outputs(&self.name, &result, &tools)
   }
 }
 
@@ -461,7 +463,11 @@ fn get_optional_string<'a>(
   }
 }
 
-fn build_skill_agent_outputs(node_name: &str, result: &AgentRunResult) -> AsyncNodeResult {
+fn build_skill_agent_outputs(
+  node_name: &str,
+  result: &AgentRunResult,
+  tools: &ToolRegistry,
+) -> AsyncNodeResult {
   let response = result.answer.clone().unwrap_or_default();
   let stop_reason = serde_json::to_value(&result.stop_reason).map_err(|err| {
     AgentFlowError::NodeExecutionFailed {
@@ -478,10 +484,11 @@ fn build_skill_agent_outputs(node_name: &str, result: &AgentRunResult) -> AsyncN
         node_name, err
       ),
     })?;
-  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result(
+  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result_with_tools(
     node_name,
     "skill_agent",
     result,
+    tools,
   ))
   .map_err(|err| AgentFlowError::NodeExecutionFailed {
     message: format!(

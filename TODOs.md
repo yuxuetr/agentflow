@@ -45,6 +45,30 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N8 (final follow-ups) — closed the two remaining items called out
+  in CLAUDE.md's N8 status line. (1) Tool idempotency metadata for
+  partial-resume auto-replay: new
+  `AgentNodeResumeContract::from_result_with_tools(node, runtime,
+  result, &ToolRegistry)` consults `Tool::idempotency()` /
+  `ToolMetadata::with_idempotency` when params don't carry
+  `_agentflow.side_effect_class`, so tools registered as `Idempotent`
+  get `ReplayAllowed` on partial resume automatically; legacy
+  `from_result(...)` retained as a thin wrapper for zero-impact on
+  existing callers; `AgentNode::execute` (DAG path) and
+  `build_skill_agent_outputs` (skill_agent path) both wired through;
+  6 new bridge tests in
+  `agentflow-agents/tests/agent_node_resume_contract.rs`. (2)
+  `FlowValue::File` / `FlowValue::Url` checkpoint round-trip type
+  fidelity: new `flow_value_file_and_url_survive_disk_round_trip`
+  proves File/Url variants survive `CheckpointManager` save → load
+  with full type fidelity (no silent collapse to `Json`); new
+  `decode_checkpoint_flow_value` in `agentflow-core/src/flow.rs`
+  distinguishes tagged-but-corrupt values (warn via `eprintln!`) from
+  genuinely untagged legacy values (silent fallback), with 2 new
+  tests pinning both behaviors. `cargo fmt --all`,
+  `cargo clippy -p agentflow-core -p agentflow-agents -p agentflow-cli
+  -- -D warnings`, and full test suites for those three crates all
+  clean.
 - P3.5 Permission explanation improvements — fully closed (slices
   1-4 + slice 2 follow-up tests for MCP / skill_agent / multi_agent
   permission output; 4 new CLI integration tests on top of the
