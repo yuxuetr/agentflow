@@ -178,7 +178,13 @@ fn provider_request(model: &str) -> ProviderRequest {
     stream: false,
     parameters: HashMap::from([
       ("temperature".to_string(), json!(0.0)),
-      ("max_tokens".to_string(), json!(16)),
+      // 16-token budget is enough for "ok" on the classic chat models
+      // (openai / anthropic / moonshot / stepfun / glm) but Gemini 2.5
+      // Flash burns the entire budget on internal thinking tokens before
+      // emitting any output, surfacing as StopReason::Length. 256 is
+      // still a tiny cap (~$0.0001/call) but gives reasoning models
+      // enough headroom to actually finish.
+      ("max_tokens".to_string(), json!(256)),
     ]),
     tools: None,
     tool_choice: None,
