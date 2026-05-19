@@ -262,7 +262,10 @@ impl TextToImageNode {
       AgentFlow::text2image_for(&model)
         .await
         .map_err(|e| AgentFlowError::ConfigurationError {
-          message: format!("Failed to resolve text-to-image provider for '{}': {}", model, e),
+          message: format!(
+            "Failed to resolve text-to-image provider for '{}': {}",
+            model, e
+          ),
         })?;
 
     let response_format = match &self.response_format {

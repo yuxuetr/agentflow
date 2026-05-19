@@ -32,8 +32,7 @@ pub async fn execute(
     // legacy `--json` flag is ignored in envelope mode since the
     // envelope already carries the full trace; orthogonal flags
     // don't need to compose.
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("trace replay", &trace);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("trace replay", &trace);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

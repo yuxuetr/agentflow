@@ -56,7 +56,11 @@ pub async fn execute(
   let duration = start_time.elapsed();
 
   println!("✅ Speech generated in {:?}", duration);
-  println!("💾 Audio size: {} bytes ({})", response.audio.len(), response.mime_type);
+  println!(
+    "💾 Audio size: {} bytes ({})",
+    response.audio.len(),
+    response.mime_type
+  );
   println!();
 
   println!("💾 Saving audio to: {}", output);

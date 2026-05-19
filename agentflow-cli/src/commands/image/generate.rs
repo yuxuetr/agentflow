@@ -104,7 +104,10 @@ pub async fn execute(
         .ok_or_else(|| anyhow::anyhow!("No base64 image data received"))?;
       let image_bytes = general_purpose::STANDARD.decode(b64_data)?;
       fs::write(&output, &image_bytes).await?;
-      println!("✅ Image saved as base64 data ({} bytes)", image_bytes.len());
+      println!(
+        "✅ Image saved as base64 data ({} bytes)",
+        image_bytes.len()
+      );
     }
     "url" => {
       let url = first_image

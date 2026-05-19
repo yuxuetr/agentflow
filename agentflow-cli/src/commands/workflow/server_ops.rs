@@ -24,11 +24,7 @@ pub fn build_client(
 
 /// Render the server response — either as the legacy bare JSON
 /// body (default) or wrapped in the canonical `CliJsonEnvelope`.
-fn print_server_response(
-  command: &str,
-  format: &str,
-  body: &serde_json::Value,
-) -> Result<()> {
+fn print_server_response(command: &str, format: &str, body: &serde_json::Value) -> Result<()> {
   if format == "json-envelope" {
     let envelope = crate::json_envelope::CliJsonEnvelope::ok(command, body);
     println!("{}", serde_json::to_string_pretty(&envelope)?);

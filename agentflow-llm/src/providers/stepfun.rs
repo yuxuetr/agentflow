@@ -1216,7 +1216,9 @@ use crate::providers::modality::{
   Text2ImageRequest as ModalityText2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
 };
 
-fn into_modality_image_response(stepfun: ImageGenerationResponse) -> ModalityImageGenerationResponse {
+fn into_modality_image_response(
+  stepfun: ImageGenerationResponse,
+) -> ModalityImageGenerationResponse {
   let images = stepfun
     .data
     .into_iter()
@@ -1314,7 +1316,9 @@ impl Text2ImageProvider for StepFunSpecializedClient {
       cfg_scale: request.cfg_scale,
       style_reference: None,
     };
-    Ok(into_modality_image_response(self.text_to_image(stepfun_request).await?))
+    Ok(into_modality_image_response(
+      self.text_to_image(stepfun_request).await?,
+    ))
   }
 }
 
@@ -1340,7 +1344,9 @@ impl Image2ImageProvider for StepFunSpecializedClient {
       steps: request.steps,
       cfg_scale: request.cfg_scale,
     };
-    Ok(into_modality_image_response(self.image_to_image(stepfun_request).await?))
+    Ok(into_modality_image_response(
+      self.image_to_image(stepfun_request).await?,
+    ))
   }
 }
 
@@ -1365,7 +1371,9 @@ impl ImageEditProvider for StepFunSpecializedClient {
       size: request.size,
       response_format: request.response_format,
     };
-    Ok(into_modality_image_response(self.edit_image(stepfun_request).await?))
+    Ok(into_modality_image_response(
+      self.edit_image(stepfun_request).await?,
+    ))
   }
 }
 
@@ -1535,7 +1543,10 @@ mod tests {
     let modality = into_modality_image_response(stepfun_response);
     assert_eq!(modality.created, 1234);
     assert_eq!(modality.images.len(), 3);
-    assert_eq!(modality.images[0].url.as_deref(), Some("https://cdn.example/a.png"));
+    assert_eq!(
+      modality.images[0].url.as_deref(),
+      Some("https://cdn.example/a.png")
+    );
     assert_eq!(modality.images[0].b64_json, None);
     assert_eq!(modality.images[0].seed, Some(42));
     // Legacy `image` field collapses onto `b64_json`.

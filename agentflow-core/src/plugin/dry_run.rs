@@ -66,10 +66,7 @@ pub enum DryRunFailure {
 ///
 /// The function holds no global state and is safe to call from
 /// concurrent tasks (each call gets its own child process).
-pub async fn run_dry_run(
-  manifest: &PluginManifest,
-  manifest_dir: &Path,
-) -> DryRunOutcome {
+pub async fn run_dry_run(manifest: &PluginManifest, manifest_dir: &Path) -> DryRunOutcome {
   let Some(spec) = manifest.plugin.dry_run.as_ref() else {
     return DryRunOutcome::Skipped;
   };
@@ -81,7 +78,8 @@ pub async fn run_dry_run(
 /// entrypoint path and a [`DryRunSpec`], spawn and wait.
 pub async fn run_dry_run_spec(entrypoint: &Path, spec: &DryRunSpec) -> DryRunOutcome {
   let mut cmd = Command::new(entrypoint);
-  cmd.args(&spec.args)
+  cmd
+    .args(&spec.args)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
@@ -228,7 +226,10 @@ mod tests {
     match outcome {
       DryRunOutcome::Failed(DryRunFailure::SpawnFailed { reason }) => {
         // Don't assert exact OS-specific message; just check it surfaces.
-        assert!(!reason.is_empty(), "spawn-failed reason should be populated");
+        assert!(
+          !reason.is_empty(),
+          "spawn-failed reason should be populated"
+        );
       }
       other => panic!("expected SpawnFailed, got {other:?}"),
     }

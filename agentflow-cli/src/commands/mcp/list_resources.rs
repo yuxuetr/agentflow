@@ -70,8 +70,7 @@ pub async fn execute(
       "resources": &resources,
       "total": resources.len(),
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("mcp list-resources", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("mcp list-resources", &payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

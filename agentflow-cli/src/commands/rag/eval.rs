@@ -174,11 +174,8 @@ pub async fn execute(
       )],
       _ => Vec::new(),
     };
-    let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
-      "rag eval",
-      &report_payload,
-      errors,
-    );
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::with_errors("rag eval", &report_payload, errors);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
   }
 

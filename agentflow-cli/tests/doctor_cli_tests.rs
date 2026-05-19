@@ -580,7 +580,10 @@ args = []
 
   // Both servers appear; the top-level entries have no `skill` field.
   let mcp_servers = probe["mcp_servers"].as_array().unwrap();
-  let top_level: Vec<&Value> = mcp_servers.iter().filter(|s| s["skill"].is_null()).collect();
+  let top_level: Vec<&Value> = mcp_servers
+    .iter()
+    .filter(|s| s["skill"].is_null())
+    .collect();
   assert_eq!(
     top_level.len(),
     2,

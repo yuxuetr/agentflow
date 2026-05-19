@@ -6,9 +6,7 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{
-  AgentFlow, providers::modality::ImageEditRequest as ModalityImageEditRequest,
-};
+use agentflow_llm::{AgentFlow, providers::modality::ImageEditRequest as ModalityImageEditRequest};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,12 +84,13 @@ impl AsyncNode for ImageEditNode {
     };
 
     println!("   Editing image via provider '{}'...", provider.name());
-    let response = provider
-      .edit(request)
-      .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
-        message: format!("Image edit failed: {}", e),
-      })?;
+    let response =
+      provider
+        .edit(request)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("Image edit failed: {}", e),
+        })?;
 
     let first_image =
       response

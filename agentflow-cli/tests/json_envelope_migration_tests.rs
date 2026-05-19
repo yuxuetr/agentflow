@@ -242,13 +242,7 @@ fn eval_run_help_lists_json_envelope_format() {
 fn eval_run_rejects_unknown_format() {
   Command::cargo_bin("agentflow")
     .unwrap()
-    .args([
-      "eval",
-      "run",
-      "/nonexistent/dataset",
-      "--format",
-      "yaml",
-    ])
+    .args(["eval", "run", "/nonexistent/dataset", "--format", "yaml"])
     .assert()
     .failure();
 }
@@ -589,7 +583,10 @@ fn plugin_uninstall_force_on_missing_returns_not_installed_reason() {
     ])
     .output()
     .unwrap();
-  assert!(env_out.status.success(), "--force must not error on missing");
+  assert!(
+    env_out.status.success(),
+    "--force must not error on missing"
+  );
   let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
   assert_envelope_shape(&envelope, "plugin uninstall");
   assert_eq!(envelope["result"]["removed"], false);
@@ -621,7 +618,10 @@ fn plugin_generate_workflow_stub_json_envelope_inlines_stub_when_no_output_set()
   assert_eq!(result["plugin"], "stub-source");
   // No --output supplied ⇒ stub gets inlined as a string.
   let stub = result["stub"].as_str().unwrap();
-  assert!(stub.contains("type: plugin"), "stub must contain plugin node yaml: {stub}");
+  assert!(
+    stub.contains("type: plugin"),
+    "stub must contain plugin node yaml: {stub}"
+  );
   assert!(result["output_path"].is_null());
   let selected = result["selected_node_types"].as_array().unwrap();
   assert_eq!(selected.len(), 1);
@@ -817,7 +817,10 @@ fn trace_replay_json_envelope_ignores_json_flag_silently() {
     ])
     .output()
     .unwrap();
-  assert!(env_out.status.success(), "envelope mode must succeed even with legacy --json flag");
+  assert!(
+    env_out.status.success(),
+    "envelope mode must succeed even with legacy --json flag"
+  );
   let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
   assert_envelope_shape(&envelope, "trace replay");
 }
@@ -879,7 +882,11 @@ fn trace_replay_rejects_unknown_format() {
 fn write_harness_session_log(run_dir: &std::path::Path, session_id: &str, events_jsonl: &str) {
   let session_dir = run_dir.join("harness").join("sessions");
   std::fs::create_dir_all(&session_dir).unwrap();
-  std::fs::write(session_dir.join(format!("{session_id}.jsonl")), events_jsonl).unwrap();
+  std::fs::write(
+    session_dir.join(format!("{session_id}.jsonl")),
+    events_jsonl,
+  )
+  .unwrap();
 }
 
 /// Minimal valid `HarnessEvent` JSONL body — one `stopped` event so
@@ -1226,7 +1233,13 @@ fn rag_eval_json_envelope_emits_canonical_envelope_against_ci_offline() {
   // Top-level keys the legacy --output file mode emits; the envelope
   // wraps the same body so existing baseline-comparison tools can
   // migrate by reading `envelope.result.<field>`.
-  for key in ["dataset", "baseline", "candidate", "comparison", "regression"] {
+  for key in [
+    "dataset",
+    "baseline",
+    "candidate",
+    "comparison",
+    "regression",
+  ] {
     assert!(
       result.get(key).is_some(),
       "result must contain '{key}': {result}"

@@ -496,7 +496,10 @@ impl GrpcWorkerProtocol {
     // trace exists but is malformed".
     let mut req = Request::new(request);
     inject_traceparent_into_grpc_request(&mut req);
-    inner.unary(req, path, codec).await.map_err(scheduler_error_from_status)
+    inner
+      .unary(req, path, codec)
+      .await
+      .map_err(scheduler_error_from_status)
   }
 }
 
@@ -522,9 +525,7 @@ pub fn inject_traceparent_into_grpc_request<T>(request: &mut Request<T>) {
       // would be a bug upstream. Drop it silently rather than
       // poisoning the entire RPC — tracing is observability, not
       // a correctness path.
-      tracing::warn!(
-        "skipping traceparent gRPC injection: value contains non-ASCII bytes"
-      );
+      tracing::warn!("skipping traceparent gRPC injection: value contains non-ASCII bytes");
     }
   }
 }
@@ -549,10 +550,7 @@ pub fn extract_traceparent_from_grpc_request<T>(request: &Request<T>) -> Option<
 /// share one implementation. Generic over the future type so each
 /// `WorkerControl` method (which returns a different `Response<R>`)
 /// can use it without boxing.
-pub(crate) async fn run_in_traceparent_scope<F, T>(
-  traceparent: Option<String>,
-  fut: F,
-) -> T
+pub(crate) async fn run_in_traceparent_scope<F, T>(traceparent: Option<String>, fut: F) -> T
 where
   F: std::future::Future<Output = T>,
 {
@@ -817,12 +815,9 @@ mod traceparent_tests {
     let mut req = Request::new(pb::ClaimTaskRequest {
       worker_id: "worker-1".into(),
     });
-    agentflow_tracing::context::scope(
-      "00-trace-id-span-01".to_string(),
-      async {
-        inject_traceparent_into_grpc_request(&mut req);
-      },
-    )
+    agentflow_tracing::context::scope("00-trace-id-span-01".to_string(), async {
+      inject_traceparent_into_grpc_request(&mut req);
+    })
     .await;
     let value = req
       .metadata()
@@ -851,31 +846,28 @@ mod traceparent_tests {
 
   #[tokio::test]
   async fn run_in_traceparent_scope_with_some_installs_context_for_future() {
-    let observed = run_in_traceparent_scope(
-      Some("00-scoped-test-01".to_string()),
-      async { agentflow_tracing::context::current_traceparent() },
-    )
+    let observed = run_in_traceparent_scope(Some("00-scoped-test-01".to_string()), async {
+      agentflow_tracing::context::current_traceparent()
+    })
     .await;
     assert_eq!(observed.as_deref(), Some("00-scoped-test-01"));
   }
 
   #[tokio::test]
   async fn run_in_traceparent_scope_with_none_runs_future_outside_any_scope() {
-    let observed =
-      run_in_traceparent_scope(None, async { agentflow_tracing::context::current_traceparent() })
-        .await;
+    let observed = run_in_traceparent_scope(None, async {
+      agentflow_tracing::context::current_traceparent()
+    })
+    .await;
     assert!(observed.is_none());
   }
 
   #[tokio::test]
   async fn round_trip_inject_then_extract_round_trips_value_under_active_scope() {
     let mut req = Request::new(pb::HeartbeatRequest::default());
-    agentflow_tracing::context::scope(
-      "00-roundtrip-test-01".to_string(),
-      async {
-        inject_traceparent_into_grpc_request(&mut req);
-      },
-    )
+    agentflow_tracing::context::scope("00-roundtrip-test-01".to_string(), async {
+      inject_traceparent_into_grpc_request(&mut req);
+    })
     .await;
     assert_eq!(
       extract_traceparent_from_grpc_request(&req).as_deref(),

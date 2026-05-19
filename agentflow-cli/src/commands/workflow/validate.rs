@@ -64,11 +64,8 @@ pub async fn execute(
           report.issues.len()
         ));
       }
-      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
-        "workflow validate",
-        &payload,
-        errors,
-      );
+      let envelope =
+        crate::json_envelope::CliJsonEnvelope::with_errors("workflow validate", &payload, errors);
       println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
     _ => {

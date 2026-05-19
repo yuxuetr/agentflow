@@ -335,7 +335,9 @@ GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}"
     assert_eq!(s.timeout_secs, Some(30));
     assert_eq!(s.max_concurrent_calls, Some(4));
     assert_eq!(
-      s.env.get("GITHUB_PERSONAL_ACCESS_TOKEN").map(String::as_str),
+      s.env
+        .get("GITHUB_PERSONAL_ACCESS_TOKEN")
+        .map(String::as_str),
       Some("${GITHUB_TOKEN}")
     );
   }

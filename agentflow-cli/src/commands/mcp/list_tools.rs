@@ -72,8 +72,7 @@ pub async fn execute(
       "tools": &tools,
       "total": tools.len(),
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("mcp list-tools", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("mcp list-tools", &payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

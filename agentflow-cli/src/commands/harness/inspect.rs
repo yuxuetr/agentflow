@@ -61,8 +61,7 @@ pub async fn execute(
     OutputFormat::JsonEnvelope => {
       // P3.3 migration: same summary the `json` mode emits, wrapped
       // in the canonical envelope.
-      let envelope =
-        crate::json_envelope::CliJsonEnvelope::ok("harness inspect", &summary);
+      let envelope = crate::json_envelope::CliJsonEnvelope::ok("harness inspect", &summary);
       println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
   }

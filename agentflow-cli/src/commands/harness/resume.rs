@@ -73,8 +73,7 @@ pub async fn execute(
         "event_count": events.len(),
         "events": events,
       });
-      let envelope =
-        crate::json_envelope::CliJsonEnvelope::ok("harness resume", &payload);
+      let envelope = crate::json_envelope::CliJsonEnvelope::ok("harness resume", &payload);
       println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
   }

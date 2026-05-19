@@ -1438,8 +1438,8 @@ async fn drive_all_providers_through_success_path()
   let mut out = Vec::new();
 
   let (base_url, _) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
-  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("openai provider");
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
   out.push((
     "openai",
     provider
@@ -1460,8 +1460,8 @@ async fn drive_all_providers_through_success_path()
   ));
 
   let (base_url, _) = spawn_mock_server(200, GOOGLE_SUCCESS.to_string()).await;
-  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("google provider");
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
   out.push((
     "google",
     provider
@@ -1482,8 +1482,8 @@ async fn drive_all_providers_through_success_path()
   ));
 
   let (base_url, _) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
-  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("stepfun provider");
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   out.push((
     "stepfun",
     provider
@@ -1547,8 +1547,8 @@ async fn cross_provider_tool_call_paths_produce_uniform_canonical_shape() {
   let mut responses: Vec<(&str, agentflow_llm::providers::ProviderResponse)> = Vec::new();
 
   let (base_url, _) = spawn_mock_server(200, OPENAI_TOOL_CALL.to_string()).await;
-  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("openai provider");
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
   responses.push((
     "openai",
     provider
@@ -1569,8 +1569,8 @@ async fn cross_provider_tool_call_paths_produce_uniform_canonical_shape() {
   ));
 
   let (base_url, _) = spawn_mock_server(200, GOOGLE_TOOL_CALL.to_string()).await;
-  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("google provider");
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
   responses.push((
     "google",
     provider
@@ -1591,8 +1591,8 @@ async fn cross_provider_tool_call_paths_produce_uniform_canonical_shape() {
   ));
 
   let (base_url, _) = spawn_mock_server(200, STEPFUN_TOOL_CALL.to_string()).await;
-  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("stepfun provider");
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   responses.push((
     "stepfun",
     provider
@@ -1644,8 +1644,8 @@ async fn drive_all_providers_through_status(status: u16) -> Vec<(&'static str, L
   let mut errors: Vec<(&'static str, LLMError)> = Vec::new();
 
   let (base_url, _) = spawn_mock_server(status, body.clone()).await;
-  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("openai provider");
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
   errors.push((
     "openai",
     provider
@@ -1666,8 +1666,8 @@ async fn drive_all_providers_through_status(status: u16) -> Vec<(&'static str, L
   ));
 
   let (base_url, _) = spawn_mock_server(status, body.clone()).await;
-  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("google provider");
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
   errors.push((
     "google",
     provider
@@ -1688,8 +1688,8 @@ async fn drive_all_providers_through_status(status: u16) -> Vec<(&'static str, L
   ));
 
   let (base_url, _) = spawn_mock_server(status, body).await;
-  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("stepfun provider");
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   errors.push((
     "stepfun",
     provider
@@ -1750,8 +1750,8 @@ async fn cross_provider_streaming_paths_yield_uniform_hello_world_concatenation(
   // "hello world" and the stream terminates cleanly.
 
   let base_url = spawn_streaming_mock_server(openai_compat_stream_events("gpt-4o-mini")).await;
-  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("openai provider");
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("openai provider");
   let stream = provider
     .execute_streaming(&provider_request_streaming("gpt-4o-mini"))
     .await
@@ -1768,8 +1768,8 @@ async fn cross_provider_streaming_paths_yield_uniform_hello_world_concatenation(
   assert_stream_yields_hello_world(stream).await;
 
   let base_url = spawn_streaming_mock_server(google_stream_events()).await;
-  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("google provider");
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("google provider");
   let stream = provider
     .execute_streaming(&provider_request_streaming("gemini-1.5-pro"))
     .await
@@ -1786,8 +1786,8 @@ async fn cross_provider_streaming_paths_yield_uniform_hello_world_concatenation(
   assert_stream_yields_hello_world(stream).await;
 
   let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-1-8k")).await;
-  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
-    .expect("stepfun provider");
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   let stream = provider
     .execute_streaming(&provider_request_streaming("step-1-8k"))
     .await

@@ -25,7 +25,10 @@ use crate::{
 
 /// Look up `model_name` in the global registry, assert its `type`
 /// matches `expected`, and return `(vendor, base_url)`.
-async fn resolve_for_modality(model_name: &str, expected: ModelType) -> Result<(String, Option<String>)> {
+async fn resolve_for_modality(
+  model_name: &str,
+  expected: ModelType,
+) -> Result<(String, Option<String>)> {
   let registry = ModelRegistry::global();
   let model_config = registry.get_model(model_name)?;
 
@@ -70,7 +73,11 @@ struct ResolvedModel {
 async fn resolve(model_name: &str, expected: ModelType) -> Result<ResolvedModel> {
   let (vendor, base_url) = resolve_for_modality(model_name, expected).await?;
   let api_key = resolve_api_key(&vendor).await?;
-  Ok(ResolvedModel { vendor, base_url, api_key })
+  Ok(ResolvedModel {
+    vendor,
+    base_url,
+    api_key,
+  })
 }
 
 /// Build an [`AsrProvider`] for the named ASR model. Returns
@@ -176,5 +183,4 @@ mod tests {
     assert!(msg.contains("openai"), "vendor missing: {msg}");
     assert!(msg.contains("ASR"), "modality missing: {msg}");
   }
-
 }

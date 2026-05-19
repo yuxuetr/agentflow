@@ -167,8 +167,7 @@ pub async fn execute(
       std::fs::write(output_path, serde_json::to_string_pretty(&bare)?)
         .context(format!("Failed to write results to {output_path}"))?;
     }
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("rag search", &result_payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("rag search", &result_payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

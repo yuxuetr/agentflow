@@ -107,8 +107,7 @@ pub async fn execute(
       "params": params,
       "result": result_json,
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("mcp call-tool", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("mcp call-tool", &payload);
     let envelope_str = serde_json::to_string_pretty(&envelope)?;
     println!("{}", envelope_str);
     if let Some(output_path) = output_file {

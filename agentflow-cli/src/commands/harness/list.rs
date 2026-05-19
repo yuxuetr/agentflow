@@ -75,8 +75,7 @@ pub async fn execute(run_dir_override: Option<String>, output: String) -> Result
         // bare body because consumers in that mode already expect a
         // single JSON object stream-shaped — wrapping each call in
         // an envelope would defeat the purpose.
-        let envelope =
-          crate::json_envelope::CliJsonEnvelope::ok("harness list", &payload);
+        let envelope = crate::json_envelope::CliJsonEnvelope::ok("harness list", &payload);
         println!("{}", serde_json::to_string_pretty(&envelope)?);
       } else {
         println!("{}", serde_json::to_string_pretty(&payload)?);

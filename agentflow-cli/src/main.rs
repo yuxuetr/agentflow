@@ -1446,13 +1446,7 @@ async fn main() {
         max_retries,
         format,
       } => {
-        mcp::list_tools::execute(
-          server_command,
-          Some(timeout_ms),
-          Some(max_retries),
-          format,
-        )
-        .await
+        mcp::list_tools::execute(server_command, Some(timeout_ms), Some(max_retries), format).await
       }
       McpCommands::CallTool {
         server_command,
@@ -1480,13 +1474,8 @@ async fn main() {
         max_retries,
         format,
       } => {
-        mcp::list_resources::execute(
-          server_command,
-          Some(timeout_ms),
-          Some(max_retries),
-          format,
-        )
-        .await
+        mcp::list_resources::execute(server_command, Some(timeout_ms), Some(max_retries), format)
+          .await
       }
       McpCommands::Config { command } => match command {
         McpConfigCommands::Path => mcp::config::run_path(),
@@ -1743,9 +1732,7 @@ async fn main() {
         .await
       }
       PluginCommands::List { dir, format } => plugin::list::execute(dir, format).await,
-      PluginCommands::Inspect { plugin, format } => {
-        plugin::inspect::execute(plugin, format).await
-      }
+      PluginCommands::Inspect { plugin, format } => plugin::inspect::execute(plugin, format).await,
       PluginCommands::Uninstall {
         name,
         dir,

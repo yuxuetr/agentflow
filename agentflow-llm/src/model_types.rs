@@ -486,16 +486,28 @@ mod tests {
   fn capabilities_validate_request_uses_accepts_set() {
     // Default chat caps reject image input...
     let chat = ModelCapabilities::from_model_type(ModelType::Chat);
-    assert!(chat.validate_request(true, true, false, false, false, false).is_err());
+    assert!(
+      chat
+        .validate_request(true, true, false, false, false, false)
+        .is_err()
+    );
 
     // ...but adding Image to accepts unlocks the path. Same variant,
     // different accepts → different behaviour.
     let mut vision_chat = chat.clone();
     vision_chat.accepts.insert(InputType::Image);
-    assert!(vision_chat.validate_request(true, true, false, false, false, false).is_ok());
+    assert!(
+      vision_chat
+        .validate_request(true, true, false, false, false, false)
+        .is_ok()
+    );
 
     // Audio is still rejected since accepts doesn't include it.
-    assert!(vision_chat.validate_request(true, false, true, false, false, false).is_err());
+    assert!(
+      vision_chat
+        .validate_request(true, false, true, false, false, false)
+        .is_err()
+    );
   }
 
   #[test]

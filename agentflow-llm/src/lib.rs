@@ -106,9 +106,9 @@ pub use error::{LLMError, Result};
 pub use model_types::{InputType, ModelCapabilities, ModelType, OutputType};
 pub use multimodal::{ImageData, ImageUrl, MessageContent, MultimodalMessage};
 pub use providers::modality::{
-  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider,
-  Image2ImageRequest, ImageEditProvider, ImageEditRequest, ImageGenerationResponse,
-  Text2ImageProvider, Text2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
+  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider, Image2ImageRequest,
+  ImageEditProvider, ImageEditRequest, ImageGenerationResponse, Text2ImageProvider,
+  Text2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
 };
 pub use registry::ModelRegistry;
 pub use tool_calling::{LLMResponse, StopReason, ToolCallRequest, ToolChoice, ToolSpec};

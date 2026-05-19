@@ -26,8 +26,7 @@
 
 use agentflow_llm::{LlmTraceContext, trace_context as llm_trace};
 use agentflow_mcp::protocol::{
-  JsonRpcRequest, RequestId, extract_traceparent_from_request,
-  inject_traceparent_into_request,
+  JsonRpcRequest, RequestId, extract_traceparent_from_request, inject_traceparent_into_request,
 };
 use agentflow_server::scheduler::grpc::{
   extract_traceparent_from_grpc_request, inject_traceparent_into_grpc_request,
@@ -94,51 +93,47 @@ async fn one_agentflow_scope_propagates_into_all_four_carriers() {
   // After the scope returns, each captured carrier MUST carry the
   // same traceparent value verbatim — that's the cross-hop
   // continuity contract.
-  let (
-    mcp_observed,
-    grpc_observed,
-    plugin_observed,
-    llm_observed,
-  ) = agentflow_tracing::context::scope(SHARED_TRACEPARENT.to_string(), async {
-    // ── MCP hop ────────────────────────────────────────────────
-    let mut mcp_req = JsonRpcRequest::new(
-      RequestId::Number(1),
-      "tools/call",
-      Some(json!({ "name": "search", "arguments": { "q": "foo" } })),
-    );
-    let injected = inject_traceparent_into_request(&mut mcp_req);
-    assert!(injected, "MCP inject must succeed inside an active scope");
-    let mcp_observed = extract_traceparent_from_request(&mcp_req);
+  let (mcp_observed, grpc_observed, plugin_observed, llm_observed) =
+    agentflow_tracing::context::scope(SHARED_TRACEPARENT.to_string(), async {
+      // ── MCP hop ────────────────────────────────────────────────
+      let mut mcp_req = JsonRpcRequest::new(
+        RequestId::Number(1),
+        "tools/call",
+        Some(json!({ "name": "search", "arguments": { "q": "foo" } })),
+      );
+      let injected = inject_traceparent_into_request(&mut mcp_req);
+      assert!(injected, "MCP inject must succeed inside an active scope");
+      let mcp_observed = extract_traceparent_from_request(&mcp_req);
 
-    // ── Worker gRPC hop ────────────────────────────────────────
-    // inject is generic over `T` so we use `()` here — the body
-    // type is irrelevant for metadata-only injection. Production
-    // call sites use `pb::ClaimTaskRequest` etc., covered by the
-    // per-hop unit tests.
-    let mut grpc_req: Request<()> = Request::new(());
-    inject_traceparent_into_grpc_request(&mut grpc_req);
-    let grpc_observed = extract_traceparent_from_grpc_request(&grpc_req);
+      // ── Worker gRPC hop ────────────────────────────────────────
+      // inject is generic over `T` so we use `()` here — the body
+      // type is irrelevant for metadata-only injection. Production
+      // call sites use `pb::ClaimTaskRequest` etc., covered by the
+      // per-hop unit tests.
+      let mut grpc_req: Request<()> = Request::new(());
+      inject_traceparent_into_grpc_request(&mut grpc_req);
+      let grpc_observed = extract_traceparent_from_grpc_request(&grpc_req);
 
-    // ── Plugin subprocess hop ──────────────────────────────────
-    // `sh -c 'echo tp=${TRACEPARENT-}'` prints whatever the env
-    // var was set to (empty if unset). The plugin preparer mirror
-    // above writes the env var from the active scope.
-    let mut plugin_cmd = TokioCommand::new("sh");
-    plugin_cmd.args(["-c", "echo tp=${TRACEPARENT-}"]);
-    plugin_inject(&mut plugin_cmd);
-    let plugin_observed = capture_plugin_subprocess_traceparent(&mut plugin_cmd).await;
+      // ── Plugin subprocess hop ──────────────────────────────────
+      // `sh -c 'echo tp=${TRACEPARENT-}'` prints whatever the env
+      // var was set to (empty if unset). The plugin preparer mirror
+      // above writes the env var from the active scope.
+      let mut plugin_cmd = TokioCommand::new("sh");
+      plugin_cmd.args(["-c", "echo tp=${TRACEPARENT-}"]);
+      plugin_inject(&mut plugin_cmd);
+      let plugin_observed = capture_plugin_subprocess_traceparent(&mut plugin_cmd).await;
 
-    // ── LLM HTTP header hop ────────────────────────────────────
-    let mut llm_headers = HeaderMap::new();
-    llm_inject_into_headers(&mut llm_headers).await;
-    let llm_observed = llm_headers
-      .get("traceparent")
-      .and_then(|v| v.to_str().ok())
-      .map(str::to_owned);
+      // ── LLM HTTP header hop ────────────────────────────────────
+      let mut llm_headers = HeaderMap::new();
+      llm_inject_into_headers(&mut llm_headers).await;
+      let llm_observed = llm_headers
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
 
-    (mcp_observed, grpc_observed, plugin_observed, llm_observed)
-  })
-  .await;
+      (mcp_observed, grpc_observed, plugin_observed, llm_observed)
+    })
+    .await;
 
   // ── Single-value cross-hop assertion ─────────────────────────
   // Every carrier surfaces the same agentflow-wide traceparent
@@ -237,8 +232,7 @@ async fn nested_scope_shadows_outer_value_across_all_four_carriers() {
         let mut plugin_cmd = TokioCommand::new("sh");
         plugin_cmd.args(["-c", "echo tp=${TRACEPARENT-}"]);
         plugin_inject(&mut plugin_cmd);
-        let plugin_observed =
-          capture_plugin_subprocess_traceparent(&mut plugin_cmd).await;
+        let plugin_observed = capture_plugin_subprocess_traceparent(&mut plugin_cmd).await;
 
         let mut headers = HeaderMap::new();
         llm_inject_into_headers(&mut headers).await;

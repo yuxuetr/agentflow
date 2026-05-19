@@ -95,11 +95,15 @@ impl AsyncNode for TTSNode {
     // P-LLM.3: route through the modality dispatcher. The registry
     // entry for `self.model` decides which vendor handles the call
     // (today only StepFun; future vendors plug in transparently).
-    let provider = AgentFlow::tts(&self.model)
-      .await
-      .map_err(|e| AgentFlowError::ConfigurationError {
-        message: format!("Failed to resolve TTS provider for model '{}': {}", self.model, e),
-      })?;
+    let provider =
+      AgentFlow::tts(&self.model)
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!(
+            "Failed to resolve TTS provider for model '{}': {}",
+            self.model, e
+          ),
+        })?;
 
     let response_format = self.response_format.as_wire_str().to_string();
     let request = TtsRequest {
@@ -112,7 +116,10 @@ impl AsyncNode for TTSNode {
       sample_rate: None,
     };
 
-    println!("   Synthesizing speech via provider '{}'...", provider.name());
+    println!(
+      "   Synthesizing speech via provider '{}'...",
+      provider.name()
+    );
     let tts_response =
       provider
         .synthesize(request)

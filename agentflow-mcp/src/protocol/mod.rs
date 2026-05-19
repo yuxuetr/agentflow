@@ -8,8 +8,8 @@ pub mod types;
 
 // Re-export commonly used types
 pub use traceparent::{
-  META_FIELD, TRACEPARENT_FIELD, extract_traceparent_from_request,
-  inject_traceparent_into_request, inject_traceparent_into_request_with,
+  META_FIELD, TRACEPARENT_FIELD, extract_traceparent_from_request, inject_traceparent_into_request,
+  inject_traceparent_into_request_with,
 };
 pub use types::{
   ClientCapabilities, Implementation, InitializeParams, InitializeResult, JsonRpcError,

@@ -778,7 +778,10 @@ models:
       ModelType::Chat
     );
     assert_eq!(
-      config.get_model("multimodal-model").unwrap().granular_type(),
+      config
+        .get_model("multimodal-model")
+        .unwrap()
+        .granular_type(),
       ModelType::Chat
     );
     assert_eq!(
@@ -850,19 +853,25 @@ models:
     let yaml = include_str!("../../templates/default_models.yml");
     let config = LLMConfig::from_yaml(yaml).unwrap();
 
-    let mut counts: std::collections::BTreeMap<&str, usize> =
-      std::collections::BTreeMap::new();
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let mut accepts_image_count = 0usize;
     for model in config.models.values() {
       let t = model.model_type();
-      *counts.entry(Box::leak(t.to_string().into_boxed_str())).or_default() += 1;
+      *counts
+        .entry(Box::leak(t.to_string().into_boxed_str()))
+        .or_default() += 1;
       if model.accepts().contains(&InputType::Image) {
         accepts_image_count += 1;
       }
     }
 
     // No legacy strings should appear.
-    for legacy in ["multimodal", "imageunderstand", "generateimage", "editimage"] {
+    for legacy in [
+      "multimodal",
+      "imageunderstand",
+      "generateimage",
+      "editimage",
+    ] {
       assert!(
         !counts.contains_key(legacy),
         "legacy type label '{legacy}' must be migrated out of default_models.yml; \

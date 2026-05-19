@@ -159,8 +159,7 @@ pub async fn execute(
         "network_policy": decision.network_policy.as_str(),
       },
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("plugin install", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("plugin install", &payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

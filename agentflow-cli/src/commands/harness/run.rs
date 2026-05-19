@@ -217,11 +217,8 @@ pub async fn execute(
           result.stop_reason
         )]
       };
-      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
-        "harness run",
-        &payload,
-        errors,
-      );
+      let envelope =
+        crate::json_envelope::CliJsonEnvelope::with_errors("harness run", &payload, errors);
       println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
   }

@@ -67,11 +67,15 @@ impl AsyncNode for ASRNode {
 
     // P-LLM.3: route through the modality dispatcher. The registry
     // entry for `self.model` decides which vendor handles the call.
-    let provider = AgentFlow::asr(&self.model)
-      .await
-      .map_err(|e| AgentFlowError::ConfigurationError {
-        message: format!("Failed to resolve ASR provider for model '{}': {}", self.model, e),
-      })?;
+    let provider =
+      AgentFlow::asr(&self.model)
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!(
+            "Failed to resolve ASR provider for model '{}': {}",
+            self.model, e
+          ),
+        })?;
 
     let format_str = match self.response_format {
       ASRResponseFormat::Json => "json",
@@ -90,7 +94,10 @@ impl AsyncNode for ASRNode {
       prompt: None,
     };
 
-    println!("   Transcribing audio via provider '{}'...", provider.name());
+    println!(
+      "   Transcribing audio via provider '{}'...",
+      provider.name()
+    );
     let asr_response =
       provider
         .transcribe(request)

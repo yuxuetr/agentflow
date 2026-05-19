@@ -50,11 +50,8 @@ pub async fn execute(
           plan.summary.requires_manual
         ));
       }
-      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
-        "workflow resume-plan",
-        &plan,
-        errors,
-      );
+      let envelope =
+        crate::json_envelope::CliJsonEnvelope::with_errors("workflow resume-plan", &plan, errors);
       println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
   }
@@ -83,9 +80,9 @@ impl OutputFormat {
       "text" => Ok(Self::Text),
       "json" => Ok(Self::Json),
       "json-envelope" => Ok(Self::JsonEnvelope),
-      other => anyhow::bail!(
-        "unsupported --format '{other}', expected text | json | json-envelope"
-      ),
+      other => {
+        anyhow::bail!("unsupported --format '{other}', expected text | json | json-envelope")
+      }
     }
   }
 }

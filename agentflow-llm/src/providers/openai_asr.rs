@@ -148,18 +148,15 @@ pub(crate) fn parse_transcription_response(
 ) -> Result<AsrResponse> {
   match response_format {
     "json" | "verbose_json" => {
-      let value: serde_json::Value = serde_json::from_str(body).map_err(|e| {
-        LLMError::ResponseParsingError {
+      let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| LLMError::ResponseParsingError {
           message: format!("OpenAI transcription JSON parse failed: {e}"),
-        }
-      })?;
+        })?;
       let text = value
         .get("text")
         .and_then(|v| v.as_str())
         .ok_or_else(|| LLMError::ResponseParsingError {
-          message: format!(
-            "OpenAI transcription response missing 'text' field. Body: {body}"
-          ),
+          message: format!("OpenAI transcription response missing 'text' field. Body: {body}"),
         })?
         .to_string();
       Ok(AsrResponse {
@@ -228,7 +225,10 @@ mod tests {
     assert_eq!(mime_for_filename("clip.opus"), "audio/ogg");
     // Unknown extension falls back to octet-stream so the request
     // still goes out — the server reads the codec from the bytes.
-    assert_eq!(mime_for_filename("clip.unknown"), "application/octet-stream");
+    assert_eq!(
+      mime_for_filename("clip.unknown"),
+      "application/octet-stream"
+    );
     // Case insensitive.
     assert_eq!(mime_for_filename("CLIP.MP3"), "audio/mpeg");
   }
@@ -253,7 +253,9 @@ mod tests {
     }"#;
     let response = parse_transcription_response("verbose_json", body).expect("parse ok");
     assert_eq!(response.text, "hello world");
-    let metadata = response.metadata.expect("metadata preserved for verbose_json");
+    let metadata = response
+      .metadata
+      .expect("metadata preserved for verbose_json");
     assert_eq!(
       metadata
         .get("segments")
@@ -266,9 +268,8 @@ mod tests {
   #[test]
   fn parse_text_response_uses_body_verbatim_without_metadata() {
     // Plain text format: body IS the transcript.
-    let response =
-      parse_transcription_response("text", "transcript line one\ntranscript line two")
-        .expect("parse ok");
+    let response = parse_transcription_response("text", "transcript line one\ntranscript line two")
+      .expect("parse ok");
     assert_eq!(response.text, "transcript line one\ntranscript line two");
     assert!(response.metadata.is_none());
   }

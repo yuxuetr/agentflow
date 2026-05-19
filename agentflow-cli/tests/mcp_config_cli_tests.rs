@@ -103,10 +103,7 @@ timeout_secs = 30
   let out = cmd.assert().success();
   let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
   let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-  assert_eq!(
-    parsed.get("name").and_then(|v| v.as_str()),
-    Some("github")
-  );
+  assert_eq!(parsed.get("name").and_then(|v| v.as_str()), Some("github"));
   assert_eq!(
     parsed.get("timeout_secs").and_then(|v| v.as_u64()),
     Some(30)

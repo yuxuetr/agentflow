@@ -242,9 +242,7 @@ mod tests {
 
   #[test]
   fn extract_returns_traceparent_when_meta_is_populated() {
-    let req = sample_request_with_params(Some(
-      json!({ "_meta": { "traceparent": "tp-extract" } }),
-    ));
+    let req = sample_request_with_params(Some(json!({ "_meta": { "traceparent": "tp-extract" } })));
     assert_eq!(
       extract_traceparent_from_request(&req).as_deref(),
       Some("tp-extract")

@@ -38,8 +38,7 @@ pub async fn execute(
           "removed": false,
           "reason": "not_installed_force_acked",
         });
-        let envelope =
-          crate::json_envelope::CliJsonEnvelope::ok("plugin uninstall", &payload);
+        let envelope = crate::json_envelope::CliJsonEnvelope::ok("plugin uninstall", &payload);
         println!("{}", serde_json::to_string_pretty(&envelope)?);
       } else {
         println!("ℹ  {msg}");
@@ -89,8 +88,7 @@ pub async fn execute(
       "removed": true,
       "reason": "removed",
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("plugin uninstall", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("plugin uninstall", &payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
   } else {
     println!(

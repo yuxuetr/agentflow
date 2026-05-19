@@ -764,9 +764,7 @@ async fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
           // `dry_run.is_some()` above, but treat it defensively.
           None
         }
-        CoreDryRunOutcome::Passed { exit_code } => {
-          Some(DryRunOutcomeReport::Passed { exit_code })
-        }
+        CoreDryRunOutcome::Passed { exit_code } => Some(DryRunOutcomeReport::Passed { exit_code }),
         CoreDryRunOutcome::Failed(failure) => Some(DryRunOutcomeReport::Failed {
           kind: match failure {
             CoreDryRunFailure::WrongExitCode { expected, actual } => {
@@ -775,12 +773,8 @@ async fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
             CoreDryRunFailure::KilledBySignal { signal } => {
               DryRunFailureKind::KilledBySignal { signal }
             }
-            CoreDryRunFailure::Timeout { timeout_ms } => {
-              DryRunFailureKind::Timeout { timeout_ms }
-            }
-            CoreDryRunFailure::SpawnFailed { reason } => {
-              DryRunFailureKind::SpawnFailed { reason }
-            }
+            CoreDryRunFailure::Timeout { timeout_ms } => DryRunFailureKind::Timeout { timeout_ms },
+            CoreDryRunFailure::SpawnFailed { reason } => DryRunFailureKind::SpawnFailed { reason },
           },
         }),
       };

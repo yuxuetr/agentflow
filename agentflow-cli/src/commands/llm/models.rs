@@ -78,8 +78,7 @@ pub async fn execute(
       "models": &filtered_models,
       "total": filtered_models.len(),
     });
-    let envelope =
-      crate::json_envelope::CliJsonEnvelope::ok("llm models", &payload);
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok("llm models", &payload);
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }

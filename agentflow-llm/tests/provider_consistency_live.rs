@@ -20,14 +20,14 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use agentflow_llm::providers::stepfun::{
+  ASRRequest, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
+};
 use agentflow_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
   ProviderRequest, StepFunProvider, TokenUsage,
 };
 use agentflow_llm::tool_calling::{StopReason, ToolChoice, ToolSpec};
-use agentflow_llm::providers::stepfun::{
-  ASRRequest, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
-};
 use agentflow_llm::{AgentFlow, LLMConfig};
 use serde_json::json;
 
@@ -1249,21 +1249,20 @@ async fn whisper_via_modality_dispatcher_transcribes_audio() {
   // Generate the audio fixture FIRST — `stepfun_live_context` triggers
   // `AgentFlow::init()` which reloads the user's `~/.agentflow/models.yml`,
   // so any registry mutation must happen after this point.
-  let audio: Vec<u8> = if let Some((sf_key, sf_base)) =
-    stepfun_live_context(LiveCapability::Audio).await
-  {
-    let client = StepFunSpecializedClient::with_client(no_proxy_client(), &sf_key, sf_base)
-      .expect("stepfun specialized client");
-    let req = TTSBuilder::new("step-tts-mini", "agentflow whisper test", "cixingnansheng")
-      .response_format("mp3")
-      .build();
-    match tokio::time::timeout(Duration::from_secs(30), client.text_to_speech(req)).await {
-      Ok(Ok(bytes)) => bytes,
-      _ => silent_wav_one_second(),
-    }
-  } else {
-    silent_wav_one_second()
-  };
+  let audio: Vec<u8> =
+    if let Some((sf_key, sf_base)) = stepfun_live_context(LiveCapability::Audio).await {
+      let client = StepFunSpecializedClient::with_client(no_proxy_client(), &sf_key, sf_base)
+        .expect("stepfun specialized client");
+      let req = TTSBuilder::new("step-tts-mini", "agentflow whisper test", "cixingnansheng")
+        .response_format("mp3")
+        .build();
+      match tokio::time::timeout(Duration::from_secs(30), client.text_to_speech(req)).await {
+        Ok(Ok(bytes)) => bytes,
+        _ => silent_wav_one_second(),
+      }
+    } else {
+      silent_wav_one_second()
+    };
 
   // Now seed the hermetic whisper-1 entry. This wins over the user's
   // ~/.agentflow/models.yml (which may predate the P-LLM.5 registry

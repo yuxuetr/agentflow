@@ -67,15 +67,14 @@ impl AsyncNode for ImageToImageNode {
     let source_url = load_data_uri_from_source(&self.source_image, inputs).await?;
 
     // P-LLM.3: route through the modality dispatcher.
-    let provider =
-      AgentFlow::image2image(&self.model)
-        .await
-        .map_err(|e| AgentFlowError::ConfigurationError {
-          message: format!(
-            "Failed to resolve image-to-image provider for '{}': {}",
-            self.model, e
-          ),
-        })?;
+    let provider = AgentFlow::image2image(&self.model).await.map_err(|e| {
+      AgentFlowError::ConfigurationError {
+        message: format!(
+          "Failed to resolve image-to-image provider for '{}': {}",
+          self.model, e
+        ),
+      }
+    })?;
 
     let request = ModalityImage2ImageRequest {
       model: self.model.clone(),
