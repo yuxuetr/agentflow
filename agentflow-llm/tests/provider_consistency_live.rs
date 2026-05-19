@@ -100,6 +100,10 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
     name: "deepseek",
     capabilities: &[LiveCapability::Llm],
   },
+  LiveProviderProfile {
+    name: "minimax",
+    capabilities: &[LiveCapability::Llm],
+  },
 ];
 
 fn provider_supports_capability(provider_name: &str, capability: LiveCapability) -> bool {
@@ -183,6 +187,33 @@ async fn deepseek_live_context(capability: LiveCapability) -> Option<(String, Op
   eprintln!("[live] deepseek: using API key from {env_used}");
 
   Some((api_key, deepseek_base_url().await))
+}
+
+fn minimax_live_lock() -> &'static tokio::sync::Mutex<()> {
+  static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+  LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Resolve the MiniMax OpenAI-compatible endpoint. Note the host is
+/// `api.minimaxi.com` (with an `i`), NOT `api.minimax.com` — the
+/// `minimaxi.com` (海螺 AI domain) is the canonical API host. The
+/// hardcoded fallback matches what the docs publish.
+async fn minimax_base_url() -> Option<String> {
+  Some("https://api.minimaxi.com/v1".to_string())
+}
+
+async fn minimax_live_context(capability: LiveCapability) -> Option<(String, Option<String>)> {
+  if !prepare_live_provider("minimax", capability).await {
+    return None;
+  }
+
+  let Some((env_used, api_key)) = pick_api_key(&["MINIMAX_API_KEY"]) else {
+    eprintln!("[live] minimax: skipped (MINIMAX_API_KEY not set; live gate is on)");
+    return None;
+  };
+  eprintln!("[live] minimax: using API key from {env_used}");
+
+  Some((api_key, minimax_base_url().await))
 }
 
 fn env_truthy(value: &str) -> bool {
@@ -1295,6 +1326,38 @@ async fn deepseek_live_text_path() {
     response.stop_reason,
     Some(StopReason::Stop),
     "deepseek: expected StopReason::Stop on a single-turn text completion"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minimax_live_text_path() {
+  // MiniMax (https://api.minimaxi.com — note the `i` in `minimaxi`) advertises
+  // OpenAI SDK compatibility per their API overview. `MiniMax-M2` is the
+  // cheapest current model in the M2 family per the docs. Override at the
+  // workflow level via `AGENTFLOW_LIVE_MINIMAX_TEXT_MODEL` if the lineup
+  // shifts.
+  let _guard = minimax_live_lock().lock().await;
+  let Some((api_key, base_url)) = minimax_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("minimax provider");
+  let model = live_text_model("minimax", "MiniMax-M2");
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("minimax: live text request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("minimax: live text request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "minimax");
+  assert_eq!(
+    response.stop_reason,
+    Some(StopReason::Stop),
+    "minimax: expected StopReason::Stop on a single-turn text completion"
   );
 }
 

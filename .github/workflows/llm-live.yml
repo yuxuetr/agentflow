@@ -53,6 +53,10 @@ jobs:
       # DeepSeek — OpenAI-compatible API at `https://api.deepseek.com/v1`.
       # Default cheap model: `deepseek-chat` (the V3-family alias).
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # MiniMax — OpenAI-compatible API at `https://api.minimaxi.com/v1`
+      # (note the `i` in `minimaxi`, this is 海螺 AI's official host).
+      # Default cheap model: `MiniMax-M2`.
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
