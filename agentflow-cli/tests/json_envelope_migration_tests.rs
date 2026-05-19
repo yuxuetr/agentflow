@@ -296,6 +296,67 @@ fn mcp_call_tool_help_lists_json_envelope_format() {
     .stdout(predicate::str::contains("json-envelope"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// llm models
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn llm_models_json_envelope_emits_structured_models_list() {
+  // Uses the bundled `default_models.yml` (built-in source). We
+  // don't assert exact counts — the registry changes — only the
+  // envelope shape + that the result carries the expected keys.
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["llm", "models", "--format", "json-envelope"])
+    .env_remove("AGENTFLOW_MODELS_CONFIG")
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "llm models --format json-envelope must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "llm models");
+  // result must have models array + total
+  let result = envelope["result"].as_object().expect("result is object");
+  assert!(result.contains_key("models"), "result must carry models");
+  assert!(result.contains_key("total"), "result must carry total");
+  assert!(result.contains_key("source"), "result must carry source");
+  let total = result["total"].as_u64().expect("total is number");
+  let models = result["models"].as_array().expect("models is array");
+  assert_eq!(models.len() as u64, total);
+  // Spot-check: every model entry has the expected keys.
+  if let Some(first) = models.first() {
+    for key in ["name", "vendor", "model_id"] {
+      assert!(
+        first.get(key).is_some(),
+        "model entry missing '{key}': {first}"
+      );
+    }
+  }
+}
+
+#[test]
+fn llm_models_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["llm", "models", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn llm_models_rejects_unknown_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["llm", "models", "--format", "yaml"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
 #[test]
 fn mcp_list_tools_rejects_unknown_format() {
   // Empty server command short-circuits before any network — but the

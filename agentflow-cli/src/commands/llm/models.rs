@@ -4,12 +4,14 @@ use agentflow_llm::{
 };
 use anyhow::{Context, Result};
 use colored::*;
+use serde::Serialize;
 use std::collections::BTreeSet;
 
 pub async fn execute(
   provider: Option<String>,
   detailed: bool,
   refresh_from_api: bool,
+  format: String,
 ) -> Result<()> {
   let source = LLMConfig::resolve_default_source()?;
   for warning in &source.warnings {
@@ -61,6 +63,24 @@ pub async fn execute(
       "No models found for provider: {}",
       provider.unwrap_or_default()
     );
+    return Ok(());
+  }
+
+  if format == "json-envelope" {
+    // P3.3 migration: emit the canonical `CliJsonEnvelope` (no
+    // prior JSON path existed; this is the first machine-readable
+    // surface for `llm models`). `result.models[]` carries the
+    // same data the detailed text view renders.
+    let payload = serde_json::json!({
+      "source": source.display_path(),
+      "source_kind": source.kind,
+      "provider_filter": provider,
+      "models": &filtered_models,
+      "total": filtered_models.len(),
+    });
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::ok("llm models", &payload);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
     return Ok(());
   }
 
@@ -342,13 +362,16 @@ mod tests {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct PrintableModel {
   name: String,
   vendor: String,
   model_id: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
   base_url: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   temperature: Option<f32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   max_tokens: Option<u32>,
   supports_streaming: bool,
 }

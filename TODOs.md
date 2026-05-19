@@ -622,7 +622,18 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       body` on a hermetic workflow fixture.
     - `harness run|list|inspect` — wrap summary (`stream-json`
       keeps emitting raw events).
-    - `llm models` — add `--output json-envelope` (no JSON today).
+    - DONE `llm models` — gained `--format text|json-envelope`
+      (first machine-readable surface for the command; text mode
+      unchanged). `result` body: `{ source, source_kind,
+      provider_filter, models: [{ name, vendor, model_id,
+      base_url?, temperature?, max_tokens?, supports_streaming }],
+      total }` — mirrors the detailed text view. Mutually
+      exclusive with `--refresh-from-api` for now; the
+      refresh-diff JSON shape is a separate follow-up. 3 new CLI
+      integration tests, including a full round-trip against the
+      bundled `default_models.yml` that proves the envelope
+      contains a non-empty `models[]` with `name`/`vendor`/
+      `model_id` on each entry.
     - DONE `mcp list-tools|list-resources|call-tool` — each gained
       a `--format text|json-envelope` flag. text mode preserves the
       colored progress / table output operators expect; envelope

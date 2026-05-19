@@ -561,6 +561,11 @@ enum LlmCommands {
     /// (refresh not supported)". F-A7-6.
     #[arg(long)]
     refresh_from_api: bool,
+    /// Output format: text (default) or json-envelope (canonical
+    /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema; mutually
+    /// exclusive with `--refresh-from-api`).
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Deprecated compatibility stub. Use `skill chat`, `skill run`, or workflow `skill_agent`.
   #[command(hide = true)]
@@ -1351,7 +1356,8 @@ async fn main() {
         provider,
         detailed,
         refresh_from_api,
-      } => llm::models::execute(provider, detailed, refresh_from_api).await,
+        format,
+      } => llm::models::execute(provider, detailed, refresh_from_api, format).await,
       LlmCommands::Chat {
         model: _,
         system: _,
