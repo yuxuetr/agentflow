@@ -1,11 +1,12 @@
 # AgentFlow LLM Configuration
 # Auto-updated with discovered models
-# Last updated: 2025-07-31 16:46:26 UTC
+# Last updated: 2026-05-19 (P-LLM.0 Slice 2 schema migration)
 
 models:
   gemini-2.5-pro:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-pro
     base_url: null
     temperature: 0.7
@@ -20,7 +21,8 @@ models:
     response_format: null
   gemini-2.5-pro-preview-06-05:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-pro-preview-06-05
     base_url: null
     temperature: 0.7
@@ -35,7 +37,7 @@ models:
     response_format: null
   qwen-max-0428:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -65,7 +67,7 @@ models:
     response_format: null
   qvq-max-2025-05-15:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -80,7 +82,7 @@ models:
     response_format: null
   deepseek-r1-distill-qwen-1.5b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -95,7 +97,7 @@ models:
     response_format: null
   qwen-max-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -110,7 +112,7 @@ models:
     response_format: null
   qwen-coder-plus-1106:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -125,7 +127,7 @@ models:
     response_format: null
   qwen2.5-14b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -140,7 +142,8 @@ models:
     response_format: null
   claude-3-opus-20240229:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -170,7 +173,8 @@ models:
     response_format: null
   gemini-2.5-flash-preview-tts:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-preview-tts
     base_url: null
     temperature: 0.7
@@ -185,7 +189,7 @@ models:
     response_format: null
   gemma-3-27b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3-27b-it
     base_url: null
     temperature: 0.7
@@ -200,7 +204,7 @@ models:
     response_format: null
   imagen-3.0-generate-002:
     vendor: google
-    type: image
+    type: text_to_image
     model_id: models/imagen-3.0-generate-002
     base_url: null
     temperature: 0.7
@@ -215,7 +219,7 @@ models:
     response_format: null
   qwen2.5-0.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -230,7 +234,7 @@ models:
     response_format: null
   imagen-4.0-ultra-generate-preview-06-06:
     vendor: google
-    type: image
+    type: text_to_image
     model_id: models/imagen-4.0-ultra-generate-preview-06-06
     base_url: null
     temperature: 0.7
@@ -245,7 +249,7 @@ models:
     response_format: null
   qwen-1.8b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -260,7 +264,7 @@ models:
     response_format: null
   qwen-1.8b-longcontext-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -275,7 +279,7 @@ models:
     response_format: null
   qwen-plus-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -290,7 +294,7 @@ models:
     response_format: null
   qwen-14b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -305,7 +309,8 @@ models:
     response_format: null
   claude-3-5-sonnet-20241022:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -320,7 +325,7 @@ models:
     response_format: null
   qwen-max-0107:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -335,7 +340,7 @@ models:
     response_format: null
   qwen-turbo-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -350,7 +355,7 @@ models:
     response_format: null
   veo-2.0-generate-001:
     vendor: google
-    type: text
+    type: chat
     model_id: models/veo-2.0-generate-001
     base_url: null
     temperature: 0.7
@@ -365,7 +370,7 @@ models:
     response_format: null
   qwen-coder-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -380,7 +385,7 @@ models:
     response_format: null
   kimi-latest:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -395,7 +400,8 @@ models:
     response_format: null
   gemini-1.5-flash-002:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash-002
     base_url: null
     temperature: 0.7
@@ -425,7 +431,7 @@ models:
     response_format: null
   gemma-3n-e4b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3n-e4b-it
     base_url: null
     temperature: 0.7
@@ -440,7 +446,8 @@ models:
     response_format: null
   gemini-1.5-pro:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-pro
     base_url: null
     temperature: 0.7
@@ -455,7 +462,8 @@ models:
     response_format: null
   gemini-2.5-pro-preview-03-25:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-pro-preview-03-25
     base_url: null
     temperature: 0.7
@@ -470,7 +478,8 @@ models:
     response_format: null
   gemini-2.0-flash:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash
     base_url: null
     temperature: 0.7
@@ -485,7 +494,8 @@ models:
     response_format: null
   gemini-2.5-flash-preview-05-20:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-preview-05-20
     base_url: null
     temperature: 0.7
@@ -500,7 +510,8 @@ models:
     response_format: null
   gemini-2.0-flash-001:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-001
     base_url: null
     temperature: 0.7
@@ -530,7 +541,7 @@ models:
     response_format: null
   qwen3-30b-a3b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -545,7 +556,7 @@ models:
     response_format: null
   moonshot-v1-32k:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -560,7 +571,8 @@ models:
     response_format: null
   gpt-4o:
     vendor: openai
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -575,7 +587,8 @@ models:
     response_format: null
   gpt-4:
     vendor: openai
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -590,7 +603,7 @@ models:
     response_format: null
   qwen2-1.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -605,7 +618,8 @@ models:
     response_format: null
   gemini-1.5-flash-8b:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash-8b
     base_url: null
     temperature: 0.7
@@ -620,7 +634,8 @@ models:
     response_format: null
   gemini-1.5-flash:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash
     base_url: null
     temperature: 0.7
@@ -635,7 +650,7 @@ models:
     response_format: null
   gemma-3-1b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3-1b-it
     base_url: null
     temperature: 0.7
@@ -650,7 +665,7 @@ models:
     response_format: null
   qvq-plus-2025-05-15:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -665,7 +680,8 @@ models:
     response_format: null
   gemini-2.5-pro-preview-05-06:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-pro-preview-05-06
     base_url: null
     temperature: 0.7
@@ -680,7 +696,7 @@ models:
     response_format: null
   deepseek-v3:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -695,7 +711,7 @@ models:
     response_format: null
   qwen2-72b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -710,7 +726,8 @@ models:
     response_format: null
   moonshot-v1-32k-vision-preview:
     vendor: moonshot
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -725,7 +742,8 @@ models:
     response_format: null
   claude-3-5-sonnet:
     vendor: anthropic
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: claude-3-5-sonnet-20241022
     base_url: null
     temperature: 0.6
@@ -740,7 +758,7 @@ models:
     response_format: null
   qwen-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -770,7 +788,7 @@ models:
     response_format: null
   deepseek-r1-distill-qwen-14b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -800,7 +818,7 @@ models:
     response_format: null
   qwen1.5-110b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -815,7 +833,7 @@ models:
     response_format: null
   qwen1.5-14b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -830,7 +848,7 @@ models:
     response_format: null
   qwen-max:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -845,7 +863,7 @@ models:
     response_format: null
   qwen-max-1201:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -860,7 +878,8 @@ models:
     response_format: null
   gemini-live-2.5-flash-preview:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-live-2.5-flash-preview
     base_url: null
     temperature: 0.7
@@ -875,7 +894,8 @@ models:
     response_format: null
   gemini-2.0-pro-exp-02-05:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-pro-exp-02-05
     base_url: null
     temperature: 0.7
@@ -890,7 +910,8 @@ models:
     response_format: null
   gemini-2.0-flash-lite-preview-02-05:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-lite-preview-02-05
     base_url: null
     temperature: 0.7
@@ -905,7 +926,8 @@ models:
     response_format: null
   gemini-2.5-flash-live-preview:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-live-preview
     base_url: null
     temperature: 0.7
@@ -920,7 +942,8 @@ models:
     response_format: null
   claude-3-7-sonnet-20250219:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -935,7 +958,7 @@ models:
     response_format: null
   deepseek-r1-distill-qwen-32b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -950,7 +973,7 @@ models:
     response_format: null
   imagen-4.0-generate-preview-06-06:
     vendor: google
-    type: image
+    type: text_to_image
     model_id: models/imagen-4.0-generate-preview-06-06
     base_url: null
     temperature: 0.7
@@ -965,7 +988,8 @@ models:
     response_format: null
   claude-3-5-haiku-20241022:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -980,7 +1004,7 @@ models:
     response_format: null
   qwen3-14b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1010,7 +1034,8 @@ models:
     response_format: null
   qwen-vl-ocr-latest:
     vendor: dashscope
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1025,7 +1050,7 @@ models:
     response_format: null
   qwen-math-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1040,7 +1065,7 @@ models:
     response_format: null
   qwen3-coder-plus-2025-07-22:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1055,7 +1080,8 @@ models:
     response_format: null
   qwen-vl-max:
     vendor: dashscope
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1070,7 +1096,8 @@ models:
     response_format: null
   gemini-2.5-flash-lite:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-lite
     base_url: null
     temperature: 0.7
@@ -1085,7 +1112,7 @@ models:
     response_format: null
   qwen2.5-coder-32b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1100,7 +1127,8 @@ models:
     response_format: null
   claude-3-haiku-20240307:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -1115,7 +1143,7 @@ models:
     response_format: null
   qwen-coder-plus-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1130,7 +1158,7 @@ models:
     response_format: null
   qwen2-0.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1145,7 +1173,8 @@ models:
     response_format: null
   gemini-exp-1206:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-exp-1206
     base_url: null
     temperature: 0.7
@@ -1160,7 +1189,7 @@ models:
     response_format: null
   qwen1.5-0.5b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1175,7 +1204,7 @@ models:
     response_format: null
   qwen-coder-turbo:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1190,7 +1219,8 @@ models:
     response_format: null
   gemini-2.0-flash-live-001:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-live-001
     base_url: null
     temperature: 0.7
@@ -1205,7 +1235,7 @@ models:
     response_format: null
   qwen3-coder-480b-a35b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1220,7 +1250,8 @@ models:
     response_format: null
   gemini-1.5-flash-latest:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash-latest
     base_url: null
     temperature: 0.7
@@ -1235,7 +1266,7 @@ models:
     response_format: null
   qwen-math-turbo-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1250,7 +1281,8 @@ models:
     response_format: null
   claude-sonnet-4-20250514:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -1265,7 +1297,7 @@ models:
     response_format: null
   qwen-math-plus-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1280,7 +1312,7 @@ models:
     response_format: null
   qwen2.5-math-72b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1295,7 +1327,8 @@ models:
     response_format: null
   gemini-2.0-flash-thinking-exp-01-21:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-thinking-exp-01-21
     base_url: null
     temperature: 0.7
@@ -1310,7 +1343,8 @@ models:
     response_format: null
   gemini-2.0-flash-lite:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-lite
     base_url: null
     temperature: 0.7
@@ -1325,7 +1359,7 @@ models:
     response_format: null
   aqa:
     vendor: google
-    type: text
+    type: chat
     model_id: models/aqa
     base_url: null
     temperature: 0.7
@@ -1340,7 +1374,7 @@ models:
     response_format: null
   qvq-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1355,7 +1389,7 @@ models:
     response_format: null
   deepseek-r1-distill-llama-70b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1370,7 +1404,7 @@ models:
     response_format: null
   qwen-mt-turbo:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1385,7 +1419,7 @@ models:
     response_format: null
   qwen-plus-2025-07-14:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1400,7 +1434,7 @@ models:
     response_format: null
   qwen-math-plus-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1415,7 +1449,7 @@ models:
     response_format: null
   moonshot-v1-128k:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1430,7 +1464,8 @@ models:
     response_format: null
   qwen-vl-plus:
     vendor: dashscope
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1445,7 +1480,7 @@ models:
     response_format: null
   qwen3-8b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1460,7 +1495,7 @@ models:
     response_format: null
   qwen2.5-1.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1475,7 +1510,8 @@ models:
     response_format: null
   moonshot-v1-8k-vision-preview:
     vendor: moonshot
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1490,7 +1526,8 @@ models:
     response_format: null
   gemini-2.5-flash-preview-native-audio-dialog:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-preview-native-audio-dialog
     base_url: null
     temperature: 0.7
@@ -1505,7 +1542,7 @@ models:
     response_format: null
   qwen2.5-math-1.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1520,7 +1557,7 @@ models:
     response_format: null
   qwen-max-0403:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1535,7 +1572,7 @@ models:
     response_format: null
   qwen1.5-7b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1550,7 +1587,7 @@ models:
     response_format: null
   qwen-coder-turbo-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1565,7 +1602,8 @@ models:
     response_format: null
   gemini-1.5-pro-latest:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-pro-latest
     base_url: null
     temperature: 0.7
@@ -1580,7 +1618,7 @@ models:
     response_format: null
   moonshot-v1-8k:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1595,7 +1633,7 @@ models:
     response_format: null
   deepseek-r1:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1610,7 +1648,7 @@ models:
     response_format: null
   qwen-long:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1625,7 +1663,7 @@ models:
     response_format: null
   qwen2.5-72b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1640,7 +1678,8 @@ models:
     response_format: null
   gpt-4o-mini:
     vendor: openai
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1655,7 +1694,7 @@ models:
     response_format: null
   qwen-plus-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1670,7 +1709,7 @@ models:
     response_format: null
   qwen2.5-coder-14b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1685,7 +1724,7 @@ models:
     response_format: null
   qwen-72b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1700,7 +1739,8 @@ models:
     response_format: null
   gemini-1.5-pro-002:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-pro-002
     base_url: null
     temperature: 0.7
@@ -1715,7 +1755,8 @@ models:
     response_format: null
   gemini-2.0-flash-preview-image-generation:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-preview-image-generation
     base_url: null
     temperature: 0.7
@@ -1730,7 +1771,7 @@ models:
     response_format: null
   gemma-3n-e2b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3n-e2b-it
     base_url: null
     temperature: 0.7
@@ -1745,7 +1786,7 @@ models:
     response_format: null
   qwen2.5-3b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1760,7 +1801,7 @@ models:
     response_format: null
   qwen-math-turbo-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1775,7 +1816,8 @@ models:
     response_format: null
   gemini-2.5-flash-exp-native-audio-thinking-dialog:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-exp-native-audio-thinking-dialog
     base_url: null
     temperature: 0.7
@@ -1790,7 +1832,8 @@ models:
     response_format: null
   gemini-2.0-flash-thinking-exp:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-thinking-exp
     base_url: null
     temperature: 0.7
@@ -1805,7 +1848,7 @@ models:
     response_format: null
   qwen3-coder-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1820,7 +1863,8 @@ models:
     response_format: null
   qwen-vl-ocr:
     vendor: dashscope
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1835,7 +1879,7 @@ models:
     response_format: null
   qwen1.5-72b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1850,7 +1894,7 @@ models:
     response_format: null
   gemma-3-4b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3-4b-it
     base_url: null
     temperature: 0.7
@@ -1865,7 +1909,8 @@ models:
     response_format: null
   gemini-2.5-flash-lite-preview-06-17:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash-lite-preview-06-17
     base_url: null
     temperature: 0.7
@@ -1880,7 +1925,7 @@ models:
     response_format: null
   gemma-3-12b-it:
     vendor: google
-    type: text
+    type: chat
     model_id: models/gemma-3-12b-it
     base_url: null
     temperature: 0.7
@@ -1895,7 +1940,8 @@ models:
     response_format: null
   qwen-vl-max-2025-04-02:
     vendor: dashscope
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1910,7 +1956,7 @@ models:
     response_format: null
   qwen-max-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1925,7 +1971,7 @@ models:
     response_format: null
   qwen2.5-math-7b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1940,7 +1986,7 @@ models:
     response_format: null
   qwen2-57b-a14b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1955,7 +2001,7 @@ models:
     response_format: null
   qwen2.5-7b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1970,7 +2016,7 @@ models:
     response_format: null
   qwen1.5-32b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -1985,7 +2031,8 @@ models:
     response_format: null
   gemini-1.5-flash-8b-latest:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash-8b-latest
     base_url: null
     temperature: 0.7
@@ -2000,7 +2047,8 @@ models:
     response_format: null
   gemini-2.0-flash-exp-image-generation:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-exp-image-generation
     base_url: null
     temperature: 0.7
@@ -2015,7 +2063,7 @@ models:
     response_format: null
   veo-3.0-generate-preview:
     vendor: google
-    type: text
+    type: chat
     model_id: models/veo-3.0-generate-preview
     base_url: null
     temperature: 0.7
@@ -2030,7 +2078,7 @@ models:
     response_format: null
   qwen-math-turbo:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2045,7 +2093,8 @@ models:
     response_format: null
   gemini-1.5-flash-8b-001:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-1.5-flash-8b-001
     base_url: null
     temperature: 0.7
@@ -2060,7 +2109,8 @@ models:
     response_format: null
   gemini-2.0-flash-lite-001:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-lite-001
     base_url: null
     temperature: 0.7
@@ -2075,7 +2125,7 @@ models:
     response_format: null
   kimi-thinking-preview:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2090,7 +2140,7 @@ models:
     response_format: null
   deepseek-r1-distill-qwen-7b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2105,7 +2155,7 @@ models:
     response_format: null
   qwen2.5-coder-0.5b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2120,7 +2170,7 @@ models:
     response_format: null
   qwen3-0.6b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2135,7 +2185,8 @@ models:
     response_format: null
   gemini-2.5-pro-preview-tts:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-pro-preview-tts
     base_url: null
     temperature: 0.7
@@ -2150,7 +2201,7 @@ models:
     response_format: null
   qwen2.5-32b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2165,7 +2216,7 @@ models:
     response_format: null
   claude-opus-4-20250514:
     vendor: anthropic
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.6
@@ -2180,7 +2231,7 @@ models:
     response_format: null
   qwen-mt-plus:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2195,7 +2246,7 @@ models:
     response_format: null
   qwen-max-longcontext:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2210,7 +2261,8 @@ models:
     response_format: null
   gemini-2.0-flash-exp:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-exp
     base_url: null
     temperature: 0.7
@@ -2225,7 +2277,7 @@ models:
     response_format: null
   qwen-coder-turbo-0919:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2240,7 +2292,8 @@ models:
     response_format: null
   gemini-2.0-pro-exp:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-pro-exp
     base_url: null
     temperature: 0.7
@@ -2255,7 +2308,7 @@ models:
     response_format: null
   qwen3-32b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2270,7 +2323,7 @@ models:
     response_format: null
   qwen3-235b-a22b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2285,7 +2338,7 @@ models:
     response_format: null
   qwen2.5-coder-3b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2300,7 +2353,8 @@ models:
     response_format: null
   gemini-2.0-flash-thinking-exp-1219:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-thinking-exp-1219
     base_url: null
     temperature: 0.7
@@ -2315,7 +2369,7 @@ models:
     response_format: null
   qwen-7b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2330,7 +2384,7 @@ models:
     response_format: null
   qwen2-7b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2345,7 +2399,7 @@ models:
     response_format: null
   moonshot-v1-auto:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2360,7 +2414,7 @@ models:
     response_format: null
   codeqwen1.5-7b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2375,7 +2429,7 @@ models:
     response_format: null
   qwen2.5-coder-7b-instruct:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2390,7 +2444,7 @@ models:
     response_format: null
   qwen-turbo-latest:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2405,7 +2459,7 @@ models:
     response_format: null
   deepseek-r1-distill-llama-8b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2420,7 +2474,7 @@ models:
     response_format: null
   qwen1.5-1.8b-chat:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2435,7 +2489,8 @@ models:
     response_format: null
   gemini-2.0-flash-lite-preview:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.0-flash-lite-preview
     base_url: null
     temperature: 0.7
@@ -2450,7 +2505,7 @@ models:
     response_format: null
   qwen3-1.7b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2465,7 +2520,8 @@ models:
     response_format: null
   claude-3-5-sonnet-20240620:
     vendor: anthropic
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -2480,7 +2536,7 @@ models:
     response_format: null
   qwen-turbo:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2495,7 +2551,8 @@ models:
     response_format: null
   claude-3-haiku:
     vendor: anthropic
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: claude-3-haiku-20240307
     base_url: null
     temperature: 0.3
@@ -2510,7 +2567,7 @@ models:
     response_format: null
   learnlm-2.0-flash-experimental:
     vendor: google
-    type: text
+    type: chat
     model_id: models/learnlm-2.0-flash-experimental
     base_url: null
     temperature: 0.7
@@ -2525,7 +2582,8 @@ models:
     response_format: null
   gemini-2.5-flash:
     vendor: google
-    type: text
+    type: chat
+    accepts: [text, image]
     model_id: models/gemini-2.5-flash
     base_url: null
     temperature: 0.7
@@ -2540,7 +2598,7 @@ models:
     response_format: null
   veo-3.0-fast-generate-preview:
     vendor: google
-    type: text
+    type: chat
     model_id: models/veo-3.0-fast-generate-preview
     base_url: null
     temperature: 0.7
@@ -2555,7 +2613,7 @@ models:
     response_format: null
   kimi-k2-0711-preview:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2573,7 +2631,7 @@ models:
   # didn't list them (A7 dogfooding finding).
   kimi-k2.5:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2588,7 +2646,7 @@ models:
     response_format: null
   kimi-k2.6:
     vendor: moonshot
-    type: text
+    type: chat
     model_id: null
     base_url: null
     # kimi-k2.6 only accepts temperature == 1.0 — Moonshot returns
@@ -2607,7 +2665,8 @@ models:
     response_format: null
   moonshot-v1-128k-vision-preview:
     vendor: moonshot
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2622,7 +2681,7 @@ models:
     response_format: null
   qwen3-4b:
     vendor: dashscope
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2639,7 +2698,7 @@ models:
   # StepFun Text Models
   step-1-8k:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2654,7 +2713,7 @@ models:
     response_format: null
   step-1-32k:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2669,7 +2728,7 @@ models:
     response_format: null
   step-1-256k:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2684,7 +2743,7 @@ models:
     response_format: null
   step-2-16k:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2699,7 +2758,7 @@ models:
     response_format: null
   step-2-mini:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2714,7 +2773,7 @@ models:
     response_format: null
   step-2-16k-202411:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2729,7 +2788,7 @@ models:
     response_format: null
   step-2-16k-exp:
     vendor: step
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2746,7 +2805,8 @@ models:
   # StepFun Image Understanding Models
   step-1o-turbo-vision:
     vendor: step
-    type: imageunderstand
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2761,7 +2821,8 @@ models:
     response_format: null
   step-1o-vision-32k:
     vendor: step
-    type: imageunderstand
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2776,7 +2837,8 @@ models:
     response_format: null
   step-1v-8k:
     vendor: step
-    type: imageunderstand
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2791,7 +2853,8 @@ models:
     response_format: null
   step-1v-32k:
     vendor: step
-    type: imageunderstand
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2808,7 +2871,8 @@ models:
   # StepFun Multimodal Models
   step-3:
     vendor: step
-    type: multimodal
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2874,7 +2938,7 @@ models:
   # StepFun Image Generation Models  
   step-2x-large:
     vendor: step
-    type: generateimage
+    type: text_to_image
     model_id: null
     base_url: null
     temperature: null
@@ -2889,7 +2953,7 @@ models:
     response_format: null
   step-1x-medium:
     vendor: step
-    type: generateimage
+    type: text_to_image
     model_id: null
     base_url: null
     temperature: null
@@ -2906,7 +2970,7 @@ models:
   # StepFun Image Editing Models
   step-1x-edit:
     vendor: step
-    type: editimage
+    type: image_edit
     model_id: null
     base_url: null
     temperature: null
@@ -2923,7 +2987,7 @@ models:
   # BigModel GLM Text Models
   glm-5.1:
     vendor: glm
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2939,7 +3003,7 @@ models:
     response_format: null
   glm-4.5-flash:
     vendor: glm
-    type: text
+    type: chat
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2957,7 +3021,8 @@ models:
   # BigModel GLM Vision Models
   glm-4.5v:
     vendor: glm
-    type: imageunderstand
+    type: chat
+    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -2967,8 +3032,7 @@ models:
     stop: null
     n: null
     supports_streaming: true
-    supports_to(awk: 94 entries bumped)
-ols: true
+    supports_tools: true
     native_tool_calling: true
     supports_multimodal: true
     response_format: null

@@ -39,6 +39,7 @@ but do not implement channel adapters in this queue.
 | P7 | Performance And Release Engineering | closed (P7.4-FU1..FU4 all DONE; v1.0.0-rc.1 tag is unblocked) |
 | P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
 | P9 | Dogfooding-Driven Refinements (from A1+A1.5 reflection) | NEW — active |
+| P-LLM | Modality Provider Traits + Model Schema Cleanup | NEW — active |
 | M | Maintenance Tasks | NEW — ongoing |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
@@ -2232,6 +2233,123 @@ so this segment is small and time-bound.
   - **What**: phonon-podcast `ScriptRequest.target_segments` doc
     comment + A1 README `--segments` description should say
     "approximate, not strict".
+
+---
+
+## P-LLM — Modality Provider Traits And Model Schema Cleanup (NEW)
+
+Goal: collapse the chat-shaped `text` / `multimodal` / `imageunderstand`
+labels into a single `chat` `ModelType`, and add per-modality provider
+traits so the 5 multimodal nodes
+(`asr` / `tts` / `text_to_image` / `image_to_image` / `image_edit`)
+stop hardcoding StepFun.
+
+Context: today
+`agentflow-nodes/src/nodes/{asr,tts,text_to_image,image_to_image,image_edit}.rs`
+directly import `agentflow_llm::providers::stepfun::*` — they bypass
+the registry, so swapping vendors requires rewriting the node. The
+chat path (`agentflow-nodes/src/nodes/llm.rs`) already routes through
+the 6-provider `LLMProvider` trait; this segment brings the non-chat
+modalities up to the same abstraction level.
+
+Naming decision (recorded for posterity): `ModelType::Chat` is the
+canonical label for all chat-shaped text-reasoning models, regardless
+of input modality. What a chat model can accept (text only, +image,
++audio, +video) is carried in a separate `accepts: Vec<InputType>`
+field per model entry. This collapses 180 of 196 current registry
+entries onto a single `chat` type and drops the misleading
+`multimodal` / `imageunderstand` labels (both were mostly applied to
+general chat models that happened to accept image input).
+
+- TODO P-LLM.0 ModelType collapse to `Chat` + `accepts:` field +
+  YAML migration:
+  - Slice 1 (additive, no breaking): add `accepts:
+    Option<Vec<InputType>>` field to `ModelConfig`; teach the
+    YAML parser to accept `"chat"` as the canonical type string;
+    keep `"text"` / `"multimodal"` / `"imageunderstand"` as
+    backward-compat aliases at parse time. `ModelConfig::accepts()`
+    accessor returns the explicit field if set, falls back to
+    `granular_type().supported_inputs()` otherwise.
+  - Slice 2 (YAML migration): one-shot reclassification of
+    `agentflow-llm/templates/default_models.yml`. 161 `type: text`
+    → `type: chat, accepts: [text]`; 14 `type: multimodal` →
+    `type: chat, accepts: [text, image]`; 5 `type: imageunderstand`
+    → `type: chat, accepts: [text, image]`; 2 `generateimage` →
+    `text_to_image`; 3 `image` → `image_to_image`; 1 `editimage`
+    → `image_edit`. Manual diff review on each of the 196 entries
+    against the model's real capability.
+  - Slice 3 (enum consolidation): collapse `ModelType::{Text,
+    ImageUnderstand, VideoUnderstand, DocUnderstand, CodeGen,
+    FunctionCalling}` into a single `Chat` variant. Update every
+    match arm. Most live inside `model_types.rs` itself; a small
+    number in `model_config.rs` + `client/llm_client.rs` need
+    updating. Internal `stepfun.rs:22` private enum stays as-is.
+  - Tests: snapshot test on the 196-entry migrated YAML;
+    `granular_type` parser legacy-alias coverage; `accepts()`
+    precedence (explicit > inferred) coverage; capability
+    derivation works for `Chat + accepts: [text, image]`.
+
+- TODO P-LLM.1 Per-modality Provider trait surface:
+  - New `agentflow-llm/src/providers/modality/{asr,tts,
+    text_to_image,image_to_image,image_edit}.rs`. Each file
+    defines one trait + minimal request / response types.
+    Signatures: `AsrProvider::transcribe(audio_bytes, format, lang)
+    -> Transcript`, `TtsProvider::synthesize(text, voice, format)
+    -> AudioBytes`, etc. No common parent trait — modality shapes
+    diverge enough that a generic `MultimodalProvider` would leak.
+  - `StepFun` is the first impl for all 5 modalities. Wrappers
+    delegate to existing `providers::stepfun::*` builders so wire
+    behavior is identical.
+  - No video this slice. `Text2VideoProvider` /
+    `VideoUnderstandProvider` deferred to P-LLM.6.
+
+- TODO P-LLM.2 Registry dispatcher for modality providers:
+  - `AgentFlow::asr(model_name)` / `::tts(...)` / `::text2image(...)`
+    / `::image2image(...)` / `::image_edit(...)` entry points.
+    Each queries the registry for `(vendor, type)`, asserts the
+    type matches the requested modality (`ModelTypeMismatch` with
+    model_name + expected + actual on mismatch), and routes to the
+    per-modality factory.
+  - Factory `create_<modality>_provider(vendor, api_key, base_url)`
+    returns `Box<dyn ...>`. Today only `stepfun`; other vendors
+    return `UnsupportedProvider` with a descriptive message.
+  - Chat path (`AgentFlow::model(...)`) is untouched.
+
+- TODO P-LLM.3 Refactor 5 multimodal nodes to dispatcher:
+  - Delete every `use providers::stepfun::*` from
+    `agentflow-nodes/src/nodes/{asr,tts,text_to_image,
+    image_to_image,image_edit}.rs`. Replace direct StepFun client
+    calls with `AgentFlow::<modality>(...).method(...)`.
+  - Node YAML surface unchanged: same `model:` field, same input
+    and output shapes. User-visible behavior identical for StepFun
+    models.
+  - Mock provider implementations in test-only code so node
+    routing can be unit-tested without API keys.
+
+- TODO P-LLM.4 Clean up `lib.rs` re-exports:
+  - Delete `pub use providers::stepfun::*` at `lib.rs:107` and the
+    public StepFun helper methods at `lib.rs:427-464` (text2image
+    / text_to_speech builders, specialized client constructors).
+  - Demote StepFun builder / request types from
+    `agentflow_llm::providers::stepfun` to crate-local visibility
+    (`pub(crate)`) so external callers can't bypass the modality
+    trait surface. Anti-regression gate.
+
+- TODO P-LLM.5 Second vendor for trait shape validation:
+  - Add OpenAI Whisper as the second `AsrProvider` impl. Whisper
+    is the de-facto ASR standard, API is small, validates
+    `lang` / `format` / `timestamp_granularity` field shape.
+  - `default_models.yml` gains a `whisper-1` entry under
+    `vendor: openai, type: asr, accepts: [audio]`.
+  - Run `agentflow-nodes::asr` integration test against Whisper.
+    Refactor `AsrProvider` trait if leaks appear (e.g., StepFun-
+    specific fields that don't fit Whisper).
+
+- DEFERRED P-LLM.6 Video modality:
+  - Trigger: Veo / Sora / Runway becomes Rust-callable + stable
+    AND a concrete agentflow workflow needs video.
+  - Add `Text2VideoProvider` / `VideoUnderstandProvider` traits +
+    `text_to_video` / `video_understand` nodes at that time.
 
 ---
 

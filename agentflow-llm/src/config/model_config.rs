@@ -14,10 +14,39 @@ pub struct ModelConfig {
   /// The vendor/provider name (e.g., "openai", "anthropic", "google")
   pub vendor: String,
 
-  /// The model type (granular classification with input/output types)
-  /// New granular types: text, imageunderstand, text2image, image2image, imageedit, tts, asr, etc.
-  /// Legacy types: text, multimodal, image, audio (maintained for backward compatibility)
+  /// The model type (granular classification with input/output types).
+  ///
+  /// Canonical (post P-LLM.0) values:
+  ///   - `chat` for all chat-shaped text-reasoning models
+  ///     (regardless of whether they accept image / audio / video
+  ///     input — that's expressed via `accepts`)
+  ///   - `embedding`
+  ///   - `text_to_image` / `image_to_image` / `image_edit`
+  ///   - `text_to_video`
+  ///   - `tts` / `asr`
+  ///
+  /// Legacy values still parsed for backward compatibility:
+  /// `text`, `multimodal`, `imageunderstand`, `videounderstand`,
+  /// `docunderstand`, `codegen`, `functioncalling` (all → `chat`),
+  /// `generateimage` (→ `text_to_image`),
+  /// `image` (→ `image_to_image`),
+  /// `editimage` (→ `image_edit`).
   pub r#type: Option<String>,
+
+  /// Input modalities this model accepts (`text` / `image` / `audio` /
+  /// `video` / `document`).
+  ///
+  /// When `Some`, this is the authoritative source for what the model
+  /// can ingest — `ModelConfig::accepts()` returns it directly.
+  /// When `None`, the value is inferred from `granular_type()` (e.g.,
+  /// `Chat` defaults to `[text]`, `Asr` to `[audio]`, etc.).
+  ///
+  /// Use this to distinguish e.g. GPT-4o (`type: chat,
+  /// accepts: [text, image]`) from DeepSeek-Chat (`type: chat,
+  /// accepts: [text]`) — both are chat-shaped but only the former
+  /// can be wired into vision nodes.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub accepts: Option<Vec<InputType>>,
 
   /// Detailed model capabilities (computed from type)
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,28 +105,61 @@ impl ModelConfig {
     self.r#type.as_deref().unwrap_or("text")
   }
 
-  /// Get the granular model type enum
+  /// Get the granular model type enum.
+  ///
+  /// Recognises both the canonical post-P-LLM.0 type strings
+  /// (`chat`, `text_to_image`, `image_to_image`, `image_edit`,
+  /// `text_to_video`, `embedding`, `tts`, `asr`) and the historical
+  /// pre-P-LLM.0 strings (`text`, `multimodal`, `imageunderstand`,
+  /// `videounderstand`, `docunderstand`, `codegen`, `functioncalling`
+  /// → all collapse to `Chat` semantics; `generateimage` →
+  /// `Text2Image`; `image` → `Image2Image`; `editimage` → `ImageEdit`).
   pub fn granular_type(&self) -> ModelType {
     let type_str = self.model_type();
 
-    // Handle granular types first
     match type_str {
-      "text" => ModelType::Text,
-      "imageunderstand" => ModelType::ImageUnderstand,
-      "text2image" => ModelType::Text2Image,
-      "image2image" => ModelType::Image2Image,
-      "imageedit" => ModelType::ImageEdit,
+      // Canonical post-P-LLM.0 names (chat-shaped collapsed onto Text variant
+      // until Slice 3 renames the variant itself).
+      "chat" => ModelType::Text,
+      "text_to_image" | "text2image" => ModelType::Text2Image,
+      "image_to_image" | "image2image" => ModelType::Image2Image,
+      "image_edit" | "imageedit" => ModelType::ImageEdit,
+      "text_to_video" | "text2video" => ModelType::Text2Video,
       "tts" => ModelType::Tts,
       "asr" => ModelType::Asr,
+      "embedding" => ModelType::Embedding,
+      // Legacy chat-shaped aliases (all map to ModelType::Text today;
+      // Slice 3 collapses them to ModelType::Chat).
+      "text" => ModelType::Text,
+      "imageunderstand" => ModelType::ImageUnderstand,
       "videounderstand" => ModelType::VideoUnderstand,
-      "text2video" => ModelType::Text2Video,
       "codegen" => ModelType::CodeGen,
       "docunderstand" => ModelType::DocUnderstand,
-      "embedding" => ModelType::Embedding,
       "functioncalling" => ModelType::FunctionCalling,
-      // Legacy type mapping
+      // Legacy image-generation aliases.
+      "generateimage" => ModelType::Text2Image,
+      "editimage" => ModelType::ImageEdit,
+      // Everything else: fall back to the From<&str> mapping
+      // (legacy "multimodal" / "image" / "audio" still resolve there).
       _ => ModelType::from(type_str),
     }
+  }
+
+  /// Input modalities this model accepts.
+  ///
+  /// Returns the explicit `accepts` field when set; otherwise derives
+  /// the default from `granular_type()` (e.g., a `Chat` model with no
+  /// explicit `accepts` returns `[Text]`; an `Asr` model returns
+  /// `[Audio]`).
+  ///
+  /// Callers that need to filter models by input capability — e.g.,
+  /// "any chat model that takes image input" — should use this rather
+  /// than `granular_type()` directly.
+  pub fn accepts(&self) -> std::collections::HashSet<InputType> {
+    if let Some(explicit) = self.accepts.as_ref() {
+      return explicit.iter().cloned().collect();
+    }
+    self.granular_type().supported_inputs()
   }
 
   /// Get or compute model capabilities
@@ -680,6 +742,195 @@ models:
 
     assert_eq!(source.kind, LLMConfigSourceKind::EnvOverride);
     assert_eq!(source.path.as_ref(), Some(&override_path));
+  }
+
+  #[test]
+  fn chat_type_string_parses_to_chat_shaped_model_type() {
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+    type: chat
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let model = config.get_model("gpt-4o").unwrap();
+    // Today `chat` collapses onto ModelType::Text; Slice 3 will rename
+    // the variant to `Chat`. The acceptance contract here is that the
+    // canonical `chat` type string is recognised at parse time.
+    assert_eq!(model.granular_type(), ModelType::Text);
+  }
+
+  #[test]
+  fn legacy_type_aliases_still_parse() {
+    // Pre-P-LLM.0 YAML used three labels for chat-shaped models; all
+    // three must keep working so existing model registries don't break.
+    let yaml = r#"
+models:
+  text-model:
+    vendor: openai
+    type: text
+  multimodal-model:
+    vendor: openai
+    type: multimodal
+  vision-model:
+    vendor: stepfun
+    type: imageunderstand
+  legacy-gen-image:
+    vendor: stepfun
+    type: generateimage
+  legacy-edit-image:
+    vendor: stepfun
+    type: editimage
+  legacy-imagen:
+    vendor: google
+    type: image
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    assert_eq!(
+      config.get_model("text-model").unwrap().granular_type(),
+      ModelType::Text
+    );
+    assert_eq!(
+      config.get_model("multimodal-model").unwrap().granular_type(),
+      ModelType::ImageUnderstand
+    );
+    assert_eq!(
+      config.get_model("vision-model").unwrap().granular_type(),
+      ModelType::ImageUnderstand
+    );
+    assert_eq!(
+      config
+        .get_model("legacy-gen-image")
+        .unwrap()
+        .granular_type(),
+      ModelType::Text2Image
+    );
+    assert_eq!(
+      config
+        .get_model("legacy-edit-image")
+        .unwrap()
+        .granular_type(),
+      ModelType::ImageEdit
+    );
+    // Historical `type: image` carried the "text → image generation"
+    // meaning (Google Imagen entries used it pre-P-LLM.0); keep that
+    // mapping stable so existing registries don't silently change
+    // dispatch class on upgrade.
+    assert_eq!(
+      config.get_model("legacy-imagen").unwrap().granular_type(),
+      ModelType::Text2Image
+    );
+  }
+
+  #[test]
+  fn accepts_field_overrides_inferred_modalities() {
+    // Explicit `accepts` must win over what the type alone would imply.
+    // This is the mechanism that lets us encode "GPT-4o is chat-shaped
+    // AND accepts images" without inventing a separate type.
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+    type: chat
+    accepts: [text, image]
+  claude-text-only:
+    vendor: anthropic
+    type: chat
+    accepts: [text]
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+
+    let gpt4o = config.get_model("gpt-4o").unwrap();
+    let gpt4o_accepts = gpt4o.accepts();
+    assert!(gpt4o_accepts.contains(&InputType::Text));
+    assert!(gpt4o_accepts.contains(&InputType::Image));
+    assert_eq!(gpt4o_accepts.len(), 2);
+
+    let claude = config.get_model("claude-text-only").unwrap();
+    let claude_accepts = claude.accepts();
+    assert!(claude_accepts.contains(&InputType::Text));
+    assert!(!claude_accepts.contains(&InputType::Image));
+    assert_eq!(claude_accepts.len(), 1);
+  }
+
+  #[test]
+  fn bundled_default_models_yaml_uses_post_pllm0_schema() {
+    // Snapshot test for the P-LLM.0 Slice 2 migration. Locks down the
+    // post-migration shape of the bundled `default_models.yml` so a
+    // future edit can't accidentally re-introduce the legacy
+    // `text` / `multimodal` / `imageunderstand` / `generateimage` /
+    // `editimage` / `image` strings.
+    let yaml = include_str!("../../templates/default_models.yml");
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+
+    let mut counts: std::collections::BTreeMap<&str, usize> =
+      std::collections::BTreeMap::new();
+    let mut accepts_image_count = 0usize;
+    for model in config.models.values() {
+      let t = model.model_type();
+      *counts.entry(Box::leak(t.to_string().into_boxed_str())).or_default() += 1;
+      if model.accepts().contains(&InputType::Image) {
+        accepts_image_count += 1;
+      }
+    }
+
+    // No legacy strings should appear.
+    for legacy in ["multimodal", "imageunderstand", "generateimage", "editimage"] {
+      assert!(
+        !counts.contains_key(legacy),
+        "legacy type label '{legacy}' must be migrated out of default_models.yml; \
+         still present in {counts:?}"
+      );
+    }
+
+    // Canonical chat type dominates the registry.
+    let chat_count = counts.get("chat").copied().unwrap_or(0);
+    assert!(
+      chat_count >= 180,
+      "expected ≥ 180 chat-shaped entries after migration, got {chat_count}"
+    );
+
+    // Generation/editing types use the new canonical names.
+    assert!(counts.get("text_to_image").copied().unwrap_or(0) >= 1);
+    assert!(counts.get("image_edit").copied().unwrap_or(0) >= 1);
+
+    // At least the 65 image-accepting chat models surface their
+    // capability via the explicit `accepts: [text, image]` field.
+    assert!(
+      accepts_image_count >= 65,
+      "expected ≥ 65 entries with image in accepts, got {accepts_image_count}"
+    );
+  }
+
+  #[test]
+  fn accepts_falls_back_to_type_default_when_unset() {
+    // The fallback path is the back-compat seam: a YAML entry written
+    // before P-LLM.0 has no `accepts` field, so we derive it from the
+    // historic `granular_type().supported_inputs()` behaviour.
+    let yaml = r#"
+models:
+  legacy-text:
+    vendor: openai
+    type: text
+  legacy-asr:
+    vendor: openai
+    type: asr
+  legacy-tts:
+    vendor: openai
+    type: tts
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let text_accepts = config.get_model("legacy-text").unwrap().accepts();
+    assert!(text_accepts.contains(&InputType::Text));
+    assert_eq!(text_accepts.len(), 1);
+
+    let asr_accepts = config.get_model("legacy-asr").unwrap().accepts();
+    assert!(asr_accepts.contains(&InputType::Audio));
+    assert_eq!(asr_accepts.len(), 1);
+
+    let tts_accepts = config.get_model("legacy-tts").unwrap().accepts();
+    assert!(tts_accepts.contains(&InputType::Text));
+    assert_eq!(tts_accepts.len(), 1);
   }
 
   #[test]
