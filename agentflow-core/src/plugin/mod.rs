@@ -20,16 +20,18 @@
 //! # Ok(()) }
 //! ```
 
+pub mod dry_run;
 pub mod host;
 pub mod manifest;
 pub mod node;
 pub mod protocol;
 pub mod registry;
 
+pub use dry_run::{DryRunFailure, DryRunOutcome, run_dry_run, run_dry_run_spec};
 pub use host::{CommandPreparer, NoopCommandPreparer, PluginError, PluginHost, PluginHostBuilder};
 pub use manifest::{
-  Capabilities, FilesystemEntry, FsAccess, ManifestError, NodeSpec, PluginManifest, PluginRuntime,
-  PluginSection, SUPPORTED_PROTOCOL_VERSION,
+  Capabilities, DryRunSpec, FilesystemEntry, FsAccess, ManifestError, NodeSpec, PluginManifest,
+  PluginRuntime, PluginSection, SUPPORTED_PROTOCOL_VERSION,
 };
 pub use node::PluginNode;
 pub use protocol::{ExecuteParams, ExecuteResult, InitializeParams, InitializeResult};

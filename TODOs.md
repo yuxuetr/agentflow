@@ -670,6 +670,24 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     binary. The lite installation probe surfaces stale installs
     (entrypoint deleted) but doesn't validate the binary actually
     starts.
+    - DONE P3.4-PR.1 plugin manifest `dry_run` field + smoke
+      runner (the upstream prereq). New optional
+      `[plugin.dry_run]` TOML sub-table on `PluginSection`
+      (`args: Vec<String>`, `timeout_ms: u32` default 1000,
+      `expected_exit: i32` default 0). `PluginManifest::validate`
+      rejects empty args / zero timeout. New
+      `agentflow_core::plugin::run_dry_run` /
+      `run_dry_run_spec` async API that spawns the entrypoint
+      (no sandbox wrapping — host diagnostic only,
+      side-effect-free by contract), time-bounds it, returns
+      `DryRunOutcome::{Skipped, Passed{exit_code}, Failed(...)}`.
+      Failure variants cover `WrongExitCode`, `KilledBySignal`,
+      `Timeout`, `SpawnFailed`. 9 unit tests cover validation +
+      every outcome path against `/bin/sh` (Unix-gated for the
+      spawn-driven ones, hermetic for the others).
+      `docs/PLUGIN_DESIGN.md` §6.2 documents the new sub-table.
+      Workspace `cargo clippy --workspace --all-targets
+      --features agentflow-core/plugin -- -D warnings` clean.
 
 - DONE P3.5 Permission explanation improvements:
   - DONE Slice 1 — `agentflow skill inspect --explain-permissions`

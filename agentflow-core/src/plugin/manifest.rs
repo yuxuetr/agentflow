@@ -50,6 +50,66 @@ pub struct PluginSection {
   pub nodes: Vec<NodeSpec>,
   #[serde(default)]
   pub capabilities: Capabilities,
+  /// Optional `[plugin.dry_run]` sub-table. When set, the host can ask
+  /// `agentflow doctor` (or any other operator-facing diagnostic) to
+  /// spawn the entrypoint with the configured args and verify the
+  /// binary at least starts cleanly — without depending on the full
+  /// JSON-RPC handshake. Plugins are expected to honor a fast,
+  /// side-effect-free invocation (e.g. `--smoke` / `--version`) that
+  /// exits 0 well within the timeout.
+  ///
+  /// Absent / `None` ⇒ doctor skips the smoke for this plugin.
+  /// Present ⇒ doctor runs the smoke and surfaces pass / fail.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub dry_run: Option<DryRunSpec>,
+}
+
+/// `[plugin.dry_run]` configuration.
+///
+/// Describes a fast, side-effect-free invocation the host can use to
+/// verify the plugin entrypoint binary works. See
+/// [`PluginSection::dry_run`].
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DryRunSpec {
+  /// Arguments to pass to the entrypoint (e.g. `["--smoke"]`,
+  /// `["--version"]`). Must be non-empty — passing no args usually
+  /// boots the plugin into JSON-RPC mode, which is exactly what the
+  /// dry-run smoke is trying to avoid.
+  pub args: Vec<String>,
+  /// Wall-clock timeout in milliseconds. The smoke is "fast by
+  /// design" — anything past 5s is almost certainly a hang.
+  /// Defaults to 1000 (1s) which is what the original P3.4 spec asks
+  /// for, but plugins with first-run JIT or signature checks can bump
+  /// it as long as they document the reason.
+  #[serde(default = "default_dry_run_timeout_ms")]
+  pub timeout_ms: u32,
+  /// Exit code that signals success. Defaults to 0. Non-zero allows
+  /// plugins that conventionally exit `1` (or `64` for "usage")
+  /// without polluting the standard.
+  #[serde(default)]
+  pub expected_exit: i32,
+}
+
+fn default_dry_run_timeout_ms() -> u32 {
+  1000
+}
+
+impl DryRunSpec {
+  /// Validate the spec at load time. Empty `args` is the only hard
+  /// error today — every other field has a meaningful default.
+  pub fn validate(&self) -> Result<(), ManifestError> {
+    if self.args.is_empty() {
+      return Err(ManifestError::InvalidDryRun(
+        "[plugin.dry_run].args must contain at least one argument".to_string(),
+      ));
+    }
+    if self.timeout_ms == 0 {
+      return Err(ManifestError::InvalidDryRun(
+        "[plugin.dry_run].timeout_ms must be > 0".to_string(),
+      ));
+    }
+    Ok(())
+  }
 }
 
 /// One declared node type. The host pre-registers a `PluginNode` for each
@@ -210,6 +270,8 @@ pub enum ManifestError {
     value: String,
     reason: &'static str,
   },
+  #[error("invalid [plugin.dry_run] configuration: {0}")]
+  InvalidDryRun(String),
 }
 
 impl PluginManifest {
@@ -240,6 +302,9 @@ impl PluginManifest {
       return Err(ManifestError::UnsupportedRuntime {
         runtime: self.plugin.runtime.clone(),
       });
+    }
+    if let Some(dry_run) = &self.plugin.dry_run {
+      dry_run.validate()?;
     }
     Ok(())
   }
@@ -275,6 +340,74 @@ description = "A demo node."
     assert_eq!(manifest.plugin.runtime, PluginRuntime::Subprocess);
     assert_eq!(manifest.plugin.nodes.len(), 1);
     assert_eq!(manifest.plugin.nodes[0].node_type, "demo_node");
+    // Default — no `[plugin.dry_run]` section means doctor smoke
+    // is opt-in, not silently enabled.
+    assert!(manifest.plugin.dry_run.is_none());
+  }
+
+  #[test]
+  fn parses_manifest_with_dry_run_section() {
+    let raw = r#"
+[plugin]
+name = "smoke-aware"
+version = "0.1.0"
+entrypoint = "bin/smoke"
+
+[plugin.dry_run]
+args = ["--smoke", "--quiet"]
+timeout_ms = 2000
+expected_exit = 0
+"#;
+    let manifest: PluginManifest = toml::from_str(raw).unwrap();
+    let dry_run = manifest.plugin.dry_run.expect("dry_run parsed");
+    assert_eq!(dry_run.args, vec!["--smoke", "--quiet"]);
+    assert_eq!(dry_run.timeout_ms, 2000);
+    assert_eq!(dry_run.expected_exit, 0);
+    assert!(dry_run.validate().is_ok());
+  }
+
+  #[test]
+  fn parses_manifest_dry_run_applies_defaults_for_optional_fields() {
+    // Only `args` is required; `timeout_ms` and `expected_exit` use
+    // crate-level defaults (1000 / 0).
+    let raw = r#"
+[plugin]
+name = "minimal-smoke"
+version = "0.1.0"
+entrypoint = "bin/x"
+
+[plugin.dry_run]
+args = ["--version"]
+"#;
+    let manifest: PluginManifest = toml::from_str(raw).unwrap();
+    let dry_run = manifest.plugin.dry_run.expect("dry_run parsed");
+    assert_eq!(dry_run.args, vec!["--version"]);
+    assert_eq!(dry_run.timeout_ms, 1000);
+    assert_eq!(dry_run.expected_exit, 0);
+  }
+
+  #[test]
+  fn manifest_validate_rejects_empty_dry_run_args() {
+    let manifest = PluginManifest {
+      plugin: PluginSection {
+        name: "bad-smoke".into(),
+        version: "0.1.0".into(),
+        runtime: PluginRuntime::Subprocess,
+        entrypoint: PathBuf::from("bin/x"),
+        protocol: SUPPORTED_PROTOCOL_VERSION.into(),
+        nodes: vec![],
+        capabilities: Capabilities::default(),
+        dry_run: Some(DryRunSpec {
+          args: vec![],
+          timeout_ms: 1000,
+          expected_exit: 0,
+        }),
+      },
+    };
+    assert!(matches!(
+      manifest.validate(),
+      Err(ManifestError::InvalidDryRun(_))
+    ));
   }
 
   #[test]
@@ -288,6 +421,7 @@ description = "A demo node."
         protocol: "agentflow.plugin/999".into(),
         nodes: vec![],
         capabilities: Capabilities::default(),
+        dry_run: None,
       },
     };
     assert!(matches!(
@@ -309,6 +443,7 @@ description = "A demo node."
         protocol: SUPPORTED_PROTOCOL_VERSION.into(),
         nodes: vec![],
         capabilities: Capabilities::default(),
+        dry_run: None,
       },
     };
     assert!(matches!(
@@ -328,6 +463,7 @@ description = "A demo node."
         protocol: SUPPORTED_PROTOCOL_VERSION.into(),
         nodes: vec![],
         capabilities: Capabilities::default(),
+        dry_run: None,
       },
     };
     assert_eq!(

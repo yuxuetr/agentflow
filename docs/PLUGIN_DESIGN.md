@@ -265,6 +265,25 @@ env_vars    = ["TESSDATA_PREFIX"]
 algorithm   = "ed25519"
 public_key  = "..."
 signature   = "..."
+
+# Optional (P3.4-PR.1): dry-run smoke invocation. When present, lets
+# `agentflow doctor` verify the entrypoint binary at least starts
+# cleanly without speaking the JSON-RPC protocol. Plugins are
+# expected to honor a fast, side-effect-free invocation that exits
+# `expected_exit` (default 0) well within the timeout.
+#
+#   `args`           — required, non-empty CLI argv passed to the entrypoint.
+#                      Typical values: `["--smoke"]`, `["--version"]`.
+#   `timeout_ms`     — optional, default 1000. Wall-clock cap; anything
+#                      past ~5s is almost certainly a hang.
+#   `expected_exit`  — optional, default 0. Allows plugins that exit
+#                      `64` (usage) or similar as their dry-run success.
+#
+# Absent / commented out ⇒ doctor skips the smoke for this plugin.
+[plugin.dry_run]
+args            = ["--smoke"]
+timeout_ms      = 1000
+expected_exit   = 0
 ```
 
 Why TOML, not YAML: matches `skill.toml` and `Cargo.toml` precedent in the
