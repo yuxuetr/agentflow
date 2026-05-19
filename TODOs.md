@@ -1048,11 +1048,21 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       inject / extract / scope helper + round-trip.
       `docs/TRACE_PERSISTENCE_SCHEMA.md` "Hop continuity (P3.8)"
       table now lists all four carriers as ✓.
-    - End-to-end integration test that walks a DAG run through
-      LLM → MCP → Plugin → Worker and asserts a connected OTel
-      trace remains the natural next slice; today each hop's own
-      tests prove the per-hop contract, and the OTel exporter's
-      existing replay tooling can stitch traces post-hoc.
+    - DONE (this commit) E2E cross-hop acceptance —
+      `agentflow-cli/tests/p3_8_cross_hop_e2e.rs` is the single
+      always-on test proving the 4 carriers (LLM HTTP header,
+      plugin TRACEPARENT env, MCP `params._meta.traceparent`,
+      worker gRPC `traceparent` metadata) agree on the wire value
+      when fired inside one shared `agentflow_tracing::context::
+      scope`. 3 tests cover the happy path (single scope ⇒ all 4
+      carriers carry the same value byte-for-byte), the inverse
+      contract (no scope ⇒ no carrier emits a value), and nested-
+      scope shadowing (inner value wins for every carrier). Fully
+      hermetic — no live HTTP, no live MCP server, no plugin
+      binary, no tonic Channel — so it runs in every CI cycle
+      without env-var gating. `inject_traceparent_into_grpc_request`
+      was promoted from `pub(crate)` to `pub` to support the
+      cross-crate import.
 
 - DONE P3.9 CLI feature flag CI matrix (closed — final cells were
   the agentflow-rag feature surface):

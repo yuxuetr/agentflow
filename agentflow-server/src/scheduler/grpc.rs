@@ -506,9 +506,10 @@ impl GrpcWorkerProtocol {
 /// comment for the rationale behind omitting (not emitting an empty
 /// value).
 ///
-/// Public-in-crate so the integration tests can reach in to verify
-/// the metadata shape without having to spin up a full server.
-pub(crate) fn inject_traceparent_into_grpc_request<T>(request: &mut Request<T>) {
+/// Exposed as `pub` so cross-hop integration tests (and any
+/// downstream consumers wiring custom RPC paths) can reuse the
+/// canonical injection logic without re-implementing it.
+pub fn inject_traceparent_into_grpc_request<T>(request: &mut Request<T>) {
   let Some(traceparent) = agentflow_tracing::context::current_traceparent() else {
     return;
   };

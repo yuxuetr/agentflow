@@ -107,3 +107,7 @@ sha2 = "0.10"
 agentflow-server = { path = "../agentflow-server" }
 agentflow-db = { path = "../agentflow-db" }
 axum = "0.7"
+# P3.8 E2E cross-hop acceptance test constructs a tonic Request
+# (the worker gRPC carrier) without going through a full Channel.
+# Test-only; the cli library itself doesn't speak gRPC.
+tonic = "0.12"
