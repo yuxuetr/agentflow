@@ -137,9 +137,22 @@ async fn prepare_live_provider(provider_name: &str, capability: LiveCapability) 
     return false;
   }
 
-  AgentFlow::init()
-    .await
-    .unwrap_or_else(|err| panic!("{provider_name}: failed to initialize AgentFlow config: {err}"));
+  // Live tests construct providers directly via `<Provider>::with_client`
+  // and resolve API keys with `pick_api_key()`; the only registry use is the
+  // hermetic-seed `whisper_via_modality_dispatcher_transcribes_audio` test
+  // below, which seeds its own one-row config. Calling `AgentFlow::init()`
+  // here would force-validate every model in the bundled `default_models.yml`
+  // (which includes `dashscope` / `alibaba` entries unrelated to the
+  // 6-provider live matrix), so a single missing unrelated key would fail-
+  // close the entire suite. We instead load `~/.agentflow/.env` only — that's
+  // the part that helps devs running the suite outside CI; in CI the workflow
+  // sets every needed env var via the `env:` block directly.
+  if let Some(home_dir) = dirs::home_dir() {
+    let user_env = home_dir.join(".agentflow").join(".env");
+    if user_env.exists() {
+      dotenvy::from_path(&user_env).ok();
+    }
+  }
   true
 }
 

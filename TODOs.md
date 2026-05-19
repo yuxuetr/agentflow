@@ -45,6 +45,20 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (live nightly CI repro fix) — first dry-run of
+  `LLM Live Smoke` revealed `AgentFlow::init()` in
+  `prepare_live_provider` was force-validating EVERY provider in
+  the bundled `default_models.yml` (including dashscope), so a
+  single missing unrelated key would fail-close the entire suite
+  even when only one provider was requested via the
+  `workflow_dispatch` `providers` filter. Replaced the strict init
+  call with a `~/.agentflow/.env` loader only — live tests already
+  construct providers directly via `<Provider>::with_client(...)`
+  and look up model names through the non-validating
+  `LLMConfig::from_default_source()`, so strict init was redundant.
+  Verified by `cargo check` + `cargo clippy -p agentflow-llm
+  --tests -- -D warnings` locally; nightly workflow re-trigger is
+  the next step after push.
 - N9 (status reconciliation, no code change) — CLAUDE.md's N9
   status line was reconciled with shipped state. `.github/workflows/
   llm-live.yml` (live-LLM nightly CI) was already shipped in
