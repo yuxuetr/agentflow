@@ -706,7 +706,30 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       surface in `errors[]` for both commands. 4 new CLI
       integration tests (plugin feature-gated): full-shape round-
       trip for both subcommands + help-surface guards.
-    - `rag search|eval` — wrap existing JSON outputs.
+    - DONE `rag search|eval` — both gained
+      `--format text|json-envelope` (text default). File output
+      (`--output <path>`) keeps the legacy bare-body shape unchanged
+      so downstream baseline / comparison tooling that parses
+      `agentflow-rag/eval_baselines/<dataset>/<retriever>.json`
+      keeps working. Envelope mode wraps the SAME payload `--output`
+      writes on stdout, with two augmentations:
+      - `rag search` envelope result: `{ query, collection,
+        search_type, top_k, total, results[] }` — identical to the
+        file shape with `total` added so consumers can skip
+        `results.len()`. When both `--format json-envelope` and
+        `--output <path>` are set, the file still gets the legacy
+        bare body for back-compat.
+      - `rag eval` envelope result: `{ dataset: {path, manifest,
+        corpus_size, queries, judgments}, baseline, candidate,
+        comparison, regression }`. Detected regressions populate
+        `errors[]` so shell tooling can `jq '.errors[]'` without
+        walking `result.regression.regression_detected`. The
+        regression gate still exits 1 in envelope mode for CI.
+      4 new tests in `json_envelope_migration_tests.rs` (rag
+      feature-gated): full envelope-shape round-trip against the
+      bundled `agentflow-rag/eval_datasets/ci_offline` fixture +
+      help-surface guards for both `search` and `eval` + value-
+      parser rejection.
     - DONE (partial) `trace replay` — gained `--format
       text|json-envelope`. The legacy `--json` flag (append raw JSON
       after the text replay) is preserved in text mode; in envelope

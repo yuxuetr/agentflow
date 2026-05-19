@@ -36,7 +36,10 @@ pub async fn execute(
   regression_recall_threshold: Option<f64>,
   regression_p_value: Option<f64>,
   output: Option<PathBuf>,
+  format: String,
 ) -> Result<()> {
+  let is_envelope = format == "json-envelope";
+
   if compare_to.is_some() && compare_baseline.is_some() {
     bail!("--compare-to and --compare-baseline are mutually exclusive — pick one");
   }
@@ -44,21 +47,23 @@ pub async fn execute(
   let dataset = Dataset::load_from_dir(&dataset_dir)
     .with_context(|| format!("loading dataset from {}", dataset_dir.display()))?;
 
-  println!(
-    "{}",
-    format!("Loaded dataset: {}", dataset_dir.display())
-      .bold()
-      .blue()
-  );
-  if let Some(name) = &dataset.manifest.name {
-    println!("  manifest: name={}", name);
+  if !is_envelope {
+    println!(
+      "{}",
+      format!("Loaded dataset: {}", dataset_dir.display())
+        .bold()
+        .blue()
+    );
+    if let Some(name) = &dataset.manifest.name {
+      println!("  manifest: name={}", name);
+    }
+    println!(
+      "  corpus={} queries={} judgments={}",
+      dataset.corpus.len(),
+      dataset.queries.len(),
+      dataset.judgments.len()
+    );
   }
-  println!(
-    "  corpus={} queries={} judgments={}",
-    dataset.corpus.len(),
-    dataset.queries.len(),
-    dataset.judgments.len()
-  );
 
   let k_values = if k_values.is_empty() {
     vec![1usize, 3, 5, 10]
@@ -67,19 +72,23 @@ pub async fn execute(
   };
 
   let baseline_report = run_eval(&dataset, &retriever, &k_values, "baseline")?;
-  println!();
-  println!("{}", baseline_report.render_table());
+  if !is_envelope {
+    println!();
+    println!("{}", baseline_report.render_table());
+  }
 
   let mut comparison: Option<ComparisonReport> = None;
   let mut candidate_report: Option<EvalReport> = None;
   let mut regression_decision: Option<RegressionDecision> = None;
   if let Some(spec) = &compare_to {
     let candidate = run_compare_candidate(&dataset, spec, &k_values)?;
-    println!();
-    println!("{}", candidate.render_table());
     let cmp = compare(&baseline_report, &candidate);
-    println!();
-    println!("{}", cmp.render_table().bold());
+    if !is_envelope {
+      println!();
+      println!("{}", candidate.render_table());
+      println!();
+      println!("{}", cmp.render_table().bold());
+    }
     candidate_report = Some(candidate);
     comparison = Some(cmp);
   } else if let Some(path) = &compare_baseline {
@@ -88,63 +97,89 @@ pub async fn execute(
     // candidate. We then check the regression criteria.
     let stored_baseline = load_baseline_from_path(path)?;
     let candidate = baseline_report.clone();
-    println!();
-    println!(
-      "{}",
-      format!("Comparing against baseline: {}", path.display())
-        .bold()
-        .yellow()
-    );
     let cmp = compare(&stored_baseline, &candidate);
-    println!();
-    println!("{}", cmp.render_table().bold());
     let decision = evaluate_regression(
       &cmp,
       regression_recall_threshold.unwrap_or(DEFAULT_REGRESSION_RECALL_DROP),
       regression_p_value.unwrap_or(DEFAULT_REGRESSION_P_VALUE),
     );
-    print_regression_decision(&decision);
+    if !is_envelope {
+      println!();
+      println!(
+        "{}",
+        format!("Comparing against baseline: {}", path.display())
+          .bold()
+          .yellow()
+      );
+      println!();
+      println!("{}", cmp.render_table().bold());
+      print_regression_decision(&decision);
+    }
     candidate_report = Some(candidate);
     comparison = Some(cmp);
     regression_decision = Some(decision);
   }
 
-  if let Some(path) = output {
-    let regression_json: Value = match &regression_decision {
-      Some(d) => json!({
-        "regression_detected": d.regression_detected,
-        "reason": d.reason,
-        "recall_at_k_drop": d.recall_at_k_drop,
-        "p_value": d.p_value,
-        "threshold_recall_drop": d.threshold_recall_drop,
-        "threshold_p_value": d.threshold_p_value,
-      }),
-      None => Value::Null,
-    };
-    let payload = json!({
-      "dataset": {
-        "path": dataset_dir.display().to_string(),
-        "manifest": {
-          "name": dataset.manifest.name,
-          "version": dataset.manifest.version,
-          "source": dataset.manifest.source,
-          "license": dataset.manifest.license,
-        },
-        "corpus_size": dataset.corpus.len(),
-        "queries": dataset.queries.len(),
-        "judgments": dataset.judgments.len(),
+  // Build the payload once so file + envelope outputs share the same body.
+  let regression_json: Value = match &regression_decision {
+    Some(d) => json!({
+      "regression_detected": d.regression_detected,
+      "reason": d.reason,
+      "recall_at_k_drop": d.recall_at_k_drop,
+      "p_value": d.p_value,
+      "threshold_recall_drop": d.threshold_recall_drop,
+      "threshold_p_value": d.threshold_p_value,
+    }),
+    None => Value::Null,
+  };
+  let report_payload = json!({
+    "dataset": {
+      "path": dataset_dir.display().to_string(),
+      "manifest": {
+        "name": dataset.manifest.name,
+        "version": dataset.manifest.version,
+        "source": dataset.manifest.source,
+        "license": dataset.manifest.license,
       },
-      "baseline": baseline_report,
-      "candidate": candidate_report,
-      "comparison": comparison,
-      "regression": regression_json,
-    });
-    std::fs::write(&path, serde_json::to_string_pretty(&payload)?)
+      "corpus_size": dataset.corpus.len(),
+      "queries": dataset.queries.len(),
+      "judgments": dataset.judgments.len(),
+    },
+    "baseline": baseline_report,
+    "candidate": candidate_report,
+    "comparison": comparison,
+    "regression": regression_json,
+  });
+
+  if let Some(path) = output {
+    std::fs::write(&path, serde_json::to_string_pretty(&report_payload)?)
       .with_context(|| format!("writing report to {}", path.display()))?;
-    println!(
-      "{}",
-      format!("Report written to {}", path.display()).green()
+    if !is_envelope {
+      println!(
+        "{}",
+        format!("Report written to {}", path.display()).green()
+      );
+    }
+  }
+
+  if is_envelope {
+    // P3.3 migration: wrap the same payload `--output` writes in
+    // the canonical envelope. Regression detection surfaces via
+    // `errors[]` so shell consumers can `jq '.errors[]'` without
+    // walking `result.regression.regression_detected`.
+    let errors: Vec<String> = match &regression_decision {
+      Some(d) if d.regression_detected => vec![format!(
+        "regression detected: {} (recall_drop={:?}, p_value={:?})",
+        d.reason, d.recall_at_k_drop, d.p_value
+      )],
+      _ => Vec::new(),
+    };
+    let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
+      "rag eval",
+      &report_payload,
+      errors,
     );
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
   }
 
   // Exit nonzero when the regression gate flagged a real regression so

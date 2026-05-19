@@ -7,6 +7,7 @@ use colored::*;
 use serde_json::json;
 
 /// Execute the RAG search command
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   qdrant_url: String,
   collection: String,
@@ -18,27 +19,34 @@ pub async fn execute(
   lambda: f32,
   _embedding_model: String,
   output: Option<String>,
+  format: String,
 ) -> Result<()> {
-  println!(
-    "{}",
-    format!(
-      "🔍 Searching collection '{}' for: \"{}\"",
-      collection, query
-    )
-    .bold()
-    .blue()
-  );
-  println!(
-    "{}",
-    format!("   Search type: {}, Top-K: {}", search_type, top_k).dimmed()
-  );
+  let is_envelope = format == "json-envelope";
+
+  if !is_envelope {
+    println!(
+      "{}",
+      format!(
+        "🔍 Searching collection '{}' for: \"{}\"",
+        collection, query
+      )
+      .bold()
+      .blue()
+    );
+    println!(
+      "{}",
+      format!("   Search type: {}, Top-K: {}", search_type, top_k).dimmed()
+    );
+  }
 
   // Connect to Qdrant
   let store = QdrantStore::new(&qdrant_url)
     .await
     .context("Failed to connect to Qdrant")?;
 
-  println!("{}", "✅ Connected to Qdrant".green());
+  if !is_envelope {
+    println!("{}", "✅ Connected to Qdrant".green());
+  }
 
   // Perform search based on type
   let results = match search_type.as_str() {
@@ -107,10 +115,12 @@ pub async fn execute(
 
   // Apply MMR re-ranking if requested
   let final_results = if rerank {
-    println!(
-      "{}",
-      format!("   Applying MMR re-ranking (λ={})", lambda).dimmed()
-    );
+    if !is_envelope {
+      println!(
+        "{}",
+        format!("   Applying MMR re-ranking (λ={})", lambda).dimmed()
+      );
+    }
 
     use agentflow_rag::reranking::{MMRReRanking, ReRankingStrategy};
     let mmr = MMRReRanking::new(lambda);
@@ -121,6 +131,47 @@ pub async fn execute(
 
   // Disconnect from Qdrant
   drop(store);
+
+  if is_envelope {
+    // P3.3 migration: structured stdout output. Same payload shape
+    // the legacy `--output <path>` file mode emits, just wrapped
+    // in the canonical `CliJsonEnvelope`. The file output (when
+    // `--output` is set) keeps the bare body for back-compat with
+    // downstream RAG eval tooling that parses these files.
+    let result_payload = serde_json::json!({
+      "query": query,
+      "collection": collection,
+      "search_type": search_type,
+      "top_k": top_k,
+      "total": final_results.len(),
+      "results": final_results.iter().map(|r| json!({
+        "id": r.id,
+        "content": r.content,
+        "score": r.score,
+        "metadata": r.metadata,
+      })).collect::<Vec<_>>(),
+    });
+    // Optionally also persist the legacy bare body to `--output`.
+    if let Some(output_path) = &output {
+      let bare = json!({
+        "query": query,
+        "search_type": search_type,
+        "top_k": top_k,
+        "results": final_results.iter().map(|r| json!({
+          "id": r.id,
+          "content": r.content,
+          "score": r.score,
+          "metadata": r.metadata,
+        })).collect::<Vec<_>>()
+      });
+      std::fs::write(output_path, serde_json::to_string_pretty(&bare)?)
+        .context(format!("Failed to write results to {output_path}"))?;
+    }
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::ok("rag search", &result_payload);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    return Ok(());
+  }
 
   // Display results
   if final_results.is_empty() {

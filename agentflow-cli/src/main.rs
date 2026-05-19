@@ -1070,9 +1070,17 @@ enum RagCommands {
     /// OpenAI embedding model
     #[arg(short = 'm', long, default_value = "text-embedding-3-small")]
     embedding_model: String,
-    /// Output file path to save results as JSON
+    /// Output file path to save results as JSON (legacy bare body —
+    /// preserved unchanged for back-compat with RAG eval baseline
+    /// tooling that parses these files)
     #[arg(short, long)]
     output: Option<String>,
+    /// Stdout output format: text (default — colored table) or
+    /// json-envelope (canonical `CliJsonEnvelope` — wraps the same
+    /// payload the legacy `--output` file mode emits). `--output`
+    /// still writes the legacy bare body to disk regardless.
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Index documents into a RAG collection
   Index {
@@ -1134,9 +1142,17 @@ enum RagCommands {
     /// (when paired with a recall drop). Default 0.05.
     #[arg(long)]
     regression_p_value: Option<f64>,
-    /// Optional JSON report output path
+    /// Optional JSON report output path (legacy bare body — preserved
+    /// unchanged for back-compat with baseline comparison tooling
+    /// that parses `eval_baselines/<dataset>/<retriever>.json`)
     #[arg(short, long)]
     output: Option<std::path::PathBuf>,
+    /// Stdout output format: text (default — colored progress +
+    /// tables) or json-envelope (canonical `CliJsonEnvelope` wraps
+    /// the same payload `--output` writes). `--output` still writes
+    /// the legacy bare body to disk regardless.
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
 }
 
@@ -1751,6 +1767,7 @@ async fn main() {
         lambda,
         embedding_model,
         output,
+        format,
       } => {
         rag::search::execute(
           qdrant_url,
@@ -1763,6 +1780,7 @@ async fn main() {
           lambda,
           embedding_model,
           output,
+          format,
         )
         .await
       }
@@ -1790,6 +1808,7 @@ async fn main() {
         regression_recall_threshold,
         regression_p_value,
         output,
+        format,
       } => {
         rag::eval::execute(
           dataset,
@@ -1800,6 +1819,7 @@ async fn main() {
           regression_recall_threshold,
           regression_p_value,
           output,
+          format,
         )
         .await
       }

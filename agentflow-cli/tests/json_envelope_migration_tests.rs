@@ -1157,6 +1157,103 @@ fn workflow_graph_rejects_unknown_format() {
     .stderr(predicate::str::contains("xml"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// rag search / eval (gated on `rag` feature)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "rag")]
+fn rag_ci_offline_fixture_path() -> String {
+  // Mirror `rag_eval_cli_tests.rs::fixture_path`: the ci_offline
+  // dataset lives next door in `agentflow-rag/`, two levels up from
+  // the per-test target dir.
+  format!(
+    "{}/../agentflow-rag/eval_datasets/ci_offline",
+    env!("CARGO_MANIFEST_DIR")
+  )
+}
+
+#[cfg(feature = "rag")]
+#[test]
+fn rag_eval_json_envelope_emits_canonical_envelope_against_ci_offline() {
+  // Drives the existing ci_offline fixture through `--format
+  // json-envelope`. Asserts the envelope shape + that the result
+  // carries the same top-level keys the legacy `--output` file
+  // emits (`dataset`, `baseline`, etc.).
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &rag_ci_offline_fixture_path(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "rag eval --format json-envelope must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "rag eval");
+  let result = &envelope["result"];
+  // Top-level keys the legacy --output file mode emits; the envelope
+  // wraps the same body so existing baseline-comparison tools can
+  // migrate by reading `envelope.result.<field>`.
+  for key in ["dataset", "baseline", "candidate", "comparison", "regression"] {
+    assert!(
+      result.get(key).is_some(),
+      "result must contain '{key}': {result}"
+    );
+  }
+  // No --compare-* flag ⇒ no regression decision ⇒ regression is null.
+  assert!(result["regression"].is_null());
+  // No regression ⇒ errors[] empty.
+  assert!(envelope["errors"].as_array().unwrap().is_empty());
+}
+
+#[cfg(feature = "rag")]
+#[test]
+fn rag_eval_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["rag", "eval", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[cfg(feature = "rag")]
+#[test]
+fn rag_eval_rejects_unknown_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &rag_ci_offline_fixture_path(),
+      "--format",
+      "yaml",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
+#[cfg(feature = "rag")]
+#[test]
+fn rag_search_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["rag", "search", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th
