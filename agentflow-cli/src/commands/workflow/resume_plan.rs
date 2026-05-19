@@ -38,6 +38,25 @@ pub async fn execute(
   match format {
     OutputFormat::Text => print_text(&plan),
     OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&plan)?),
+    OutputFormat::JsonEnvelope => {
+      // P3.3 migration: wrap the same `ResumePlan` body in
+      // `CliJsonEnvelope` for tooling that wants the canonical
+      // `agentflow.cli/1` shape. Legacy `--format json` stays bare.
+      let mut errors: Vec<String> = Vec::new();
+      if !plan.summary.can_auto_resume() && !force_replay {
+        errors.push(format!(
+          "{} tool call(s) require manual recovery; re-run with --force-replay only after \
+           confirming each non-idempotent call is safe to repeat.",
+          plan.summary.requires_manual
+        ));
+      }
+      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
+        "workflow resume-plan",
+        &plan,
+        errors,
+      );
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
+    }
   }
 
   if !plan.summary.can_auto_resume() && !force_replay {
@@ -55,6 +74,7 @@ pub async fn execute(
 enum OutputFormat {
   Text,
   Json,
+  JsonEnvelope,
 }
 
 impl OutputFormat {
@@ -62,7 +82,10 @@ impl OutputFormat {
     match value {
       "text" => Ok(Self::Text),
       "json" => Ok(Self::Json),
-      other => anyhow::bail!("unsupported --format '{other}', expected text | json"),
+      "json-envelope" => Ok(Self::JsonEnvelope),
+      other => anyhow::bail!(
+        "unsupported --format '{other}', expected text | json | json-envelope"
+      ),
     }
   }
 }

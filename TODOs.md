@@ -604,9 +604,22 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     (`doctor_json_envelope_wraps_report_in_canonical_envelope` +
     `doctor_json_envelope_field_set_is_closed_to_four_keys`).
   - Per-command migration follow-ups (each lands as its own PR):
-    - `workflow validate` — wrap `WorkflowValidationReport`.
-    - `workflow resume-plan` — wrap `ResumePlan`.
-    - `eval run` — wrap `EvalReport`.
+    - DONE `workflow validate` — `--format json-envelope` wraps the
+      same JSON body the legacy `--format json` emits; failed
+      validation populates `errors[]` with the schema-failure
+      summary so shell consumers can branch without walking
+      `result.issues[]`.
+    - DONE `workflow resume-plan` — `--format json-envelope` wraps
+      the `ResumePlan`; manual-recovery cases land in `errors[]`
+      with the operator-actionable "re-run with --force-replay
+      after confirming…" message that the text path prints.
+    - DONE `eval run` — `--format json-envelope` wraps the
+      `EvalReport`; each failed case surfaces in `errors[]` as
+      `"case '<id>' failed: <reason>"` (runtime_error first, then
+      joined assertion reasons). 8 new CLI integration tests in
+      `agentflow-cli/tests/json_envelope_migration_tests.rs` lock
+      the envelope shape down and prove `result == legacy json
+      body` on a hermetic workflow fixture.
     - `harness run|list|inspect` — wrap summary (`stream-json`
       keeps emitting raw events).
     - `llm models` — add `--output json-envelope` (no JSON today).

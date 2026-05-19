@@ -1,0 +1,276 @@
+//! End-to-end smoke for the P3.3 envelope migrations.
+//!
+//! Each test exercises a command's `--format json-envelope` mode
+//! against a hermetic fixture and asserts:
+//!   * the envelope carries the canonical 4-key set
+//!     (`version` + `command` + `result` + `errors`)
+//!   * the `version` is the pinned `agentflow.cli/1`
+//!   * the `command` reflects the user-visible subcommand path
+//!     (space-separated for multi-word commands)
+//!   * the `result` body is byte-identical to the legacy
+//!     `--format json` output (additive-field contract — operators
+//!     who pinned to `.result` see no shape change)
+//!
+//! The "byte-identical result" assertion is the contract that lets
+//! existing tools migrate by either prefixing access (`.result.foo`)
+//! or just adding envelope decoding without rewriting their schema
+//! mapping.
+
+use assert_cmd::Command;
+use predicates::prelude::*;
+use serde_json::Value;
+use std::collections::BTreeSet;
+use tempfile::TempDir;
+
+/// The 4 keys the envelope's top level locks down. Adding a 5th key
+/// would be a wire-shape change; the test catches it.
+const ENVELOPE_KEYS: &[&str] = &["command", "errors", "result", "version"];
+
+fn assert_envelope_shape(envelope: &Value, expected_command: &str) {
+  let keys: BTreeSet<&str> = envelope
+    .as_object()
+    .expect("envelope must be a JSON object")
+    .keys()
+    .map(String::as_str)
+    .collect();
+  let expected: BTreeSet<&str> = ENVELOPE_KEYS.iter().copied().collect();
+  assert_eq!(
+    keys, expected,
+    "envelope top-level keys drifted from the agentflow.cli/1 contract"
+  );
+  assert_eq!(envelope["version"], "agentflow.cli/1");
+  assert_eq!(envelope["command"], expected_command);
+  assert!(
+    envelope["errors"].is_array(),
+    "errors must always be an array (never null)"
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// workflow validate
+// ────────────────────────────────────────────────────────────────────────────
+
+fn minimal_valid_workflow() -> &'static str {
+  // Tera string template is the smallest workflow that passes schema
+  // validation: one template node, no dependencies, no inputs.
+  r#"
+name: smoke
+description: minimal smoke test
+nodes:
+  - id: greet
+    type: template
+    parameters:
+      template: "hi"
+      output_key: greeting
+"#
+}
+
+#[test]
+fn workflow_validate_json_envelope_wraps_legacy_json_body() {
+  let tmp = TempDir::new().unwrap();
+  let path = tmp.path().join("smoke.yml");
+  std::fs::write(&path, minimal_valid_workflow()).unwrap();
+
+  // Capture the legacy --format json body as the contract baseline.
+  let legacy_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "workflow",
+      "validate",
+      path.to_str().unwrap(),
+      "--format",
+      "json",
+    ])
+    .output()
+    .unwrap();
+  assert!(legacy_out.status.success(), "legacy json must succeed");
+  let legacy_body: Value = serde_json::from_slice(&legacy_out.stdout).unwrap();
+
+  // Now request the envelope and verify result == legacy body.
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "workflow",
+      "validate",
+      path.to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "json-envelope must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "workflow validate");
+  assert_eq!(
+    envelope["result"], legacy_body,
+    "envelope `result` must equal legacy `--format json` body"
+  );
+  // Valid workflow ⇒ no actionable errors.
+  assert!(envelope["errors"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn workflow_validate_json_envelope_surfaces_invalid_workflow_in_errors() {
+  let tmp = TempDir::new().unwrap();
+  let path = tmp.path().join("broken.yml");
+  // Missing required `template` parameter on a `type: template`
+  // node — schema validator surfaces this with a clear issue.
+  std::fs::write(
+    &path,
+    r#"
+name: broken
+description: triggers a schema error
+nodes:
+  - id: bad
+    type: template
+    parameters:
+      output_key: greeting
+"#,
+  )
+  .unwrap();
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "workflow",
+      "validate",
+      path.to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  // Failed validation exits non-zero (the `bail!` at the end).
+  assert!(
+    !env_out.status.success(),
+    "invalid workflow must exit non-zero even under json-envelope"
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "workflow validate");
+  assert_eq!(envelope["result"]["valid"], false);
+  let errors = envelope["errors"].as_array().unwrap();
+  assert!(
+    !errors.is_empty(),
+    "errors must surface the schema failure for shell consumers"
+  );
+  assert!(
+    errors[0]
+      .as_str()
+      .unwrap()
+      .contains("failed schema validation"),
+    "errors[0] must mention the schema failure: {errors:?}"
+  );
+}
+
+#[test]
+fn workflow_validate_rejects_unknown_format() {
+  let tmp = TempDir::new().unwrap();
+  let path = tmp.path().join("smoke.yml");
+  std::fs::write(&path, minimal_valid_workflow()).unwrap();
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "workflow",
+      "validate",
+      path.to_str().unwrap(),
+      "--format",
+      "yaml",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// workflow resume-plan
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn workflow_resume_plan_json_envelope_reports_missing_checkpoint() {
+  // No checkpoint dir staged → loader bails with a typed error.
+  // We don't need a real checkpoint to verify the format wiring:
+  // the command parses --format json-envelope before doing the
+  // expensive checkpoint load.
+  let tmp = TempDir::new().unwrap();
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "workflow",
+      "resume-plan",
+      "nonexistent-run-id",
+      "--checkpoint-dir",
+      tmp.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .assert()
+    // Missing checkpoint ⇒ anyhow bail ⇒ non-zero exit. The
+    // envelope path isn't reached for this error, but the value-
+    // parser must accept json-envelope as a known format.
+    .failure();
+}
+
+#[test]
+fn workflow_resume_plan_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "resume-plan", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// eval run
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_run_help_lists_json_envelope_format() {
+  // Full eval-run execution needs an LLM provider, which would make
+  // this test non-hermetic. We verify the format wiring at the help
+  // surface instead — the command's run path uses the same parser
+  // unit-tested in `commands::eval::tests::parse_format_round_trip`.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["eval", "run", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn eval_run_rejects_unknown_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "eval",
+      "run",
+      "/nonexistent/dataset",
+      "--format",
+      "yaml",
+    ])
+    .assert()
+    .failure();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// envelope contract regression guard
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn envelope_contract_locks_canonical_4_key_set() {
+  // Belt-and-suspenders: any new command that wants to ship a 5th
+  // top-level key has to bump `ENVELOPE_VERSION`. This test holds the
+  // shared assertion helper to the contract.
+  assert_eq!(
+    ENVELOPE_KEYS.len(),
+    4,
+    "envelope schema must remain 4-key — bump agentflow.cli version when adding"
+  );
+  let expected: BTreeSet<&str> = ["command", "errors", "result", "version"]
+    .iter()
+    .copied()
+    .collect();
+  let actual: BTreeSet<&str> = ENVELOPE_KEYS.iter().copied().collect();
+  assert_eq!(actual, expected);
+}

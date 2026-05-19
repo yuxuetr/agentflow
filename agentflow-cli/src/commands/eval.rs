@@ -58,6 +58,40 @@ pub async fn execute(
       let json = serde_json::to_string_pretty(&report)?;
       println!("{json}");
     }
+    OutputFormat::JsonEnvelope => {
+      // P3.3 migration: wrap the existing `EvalReport` in the
+      // canonical `CliJsonEnvelope` (`agentflow.cli/1`). Failed
+      // cases surface as user-actionable strings in `errors[]` so
+      // shell consumers can branch on `errors.length > 0` without
+      // having to walk the per-case array.
+      let errors: Vec<String> = report
+        .cases
+        .iter()
+        .filter(|c| matches!(c.status, CaseStatus::Failed))
+        .map(|c| {
+          format!(
+            "case '{}' failed: {}",
+            c.id,
+            c.runtime_error.clone().unwrap_or_else(|| {
+              let failed_assertions: Vec<&str> = c
+                .assertions
+                .iter()
+                .filter(|a| !a.passed)
+                .filter_map(|a| a.reason.as_deref())
+                .collect();
+              if failed_assertions.is_empty() {
+                "assertion failure (no reason recorded)".to_string()
+              } else {
+                failed_assertions.join("; ")
+              }
+            })
+          )
+        })
+        .collect();
+      let envelope =
+        crate::json_envelope::CliJsonEnvelope::with_errors("eval run", &report, errors);
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
+    }
   }
 
   if exceeds_fail_threshold(&report, fail_threshold) {
@@ -72,13 +106,15 @@ pub async fn execute(
 enum OutputFormat {
   Text,
   Json,
+  JsonEnvelope,
 }
 
 fn parse_format(value: &str) -> Result<OutputFormat> {
   match value {
     "text" => Ok(OutputFormat::Text),
     "json" => Ok(OutputFormat::Json),
-    other => bail!("unsupported --format '{other}', expected 'text' or 'json'"),
+    "json-envelope" => Ok(OutputFormat::JsonEnvelope),
+    other => bail!("unsupported --format '{other}', expected 'text', 'json', or 'json-envelope'"),
   }
 }
 
@@ -417,6 +453,10 @@ mod tests {
   fn parse_format_round_trip() {
     assert!(matches!(parse_format("text"), Ok(OutputFormat::Text)));
     assert!(matches!(parse_format("json"), Ok(OutputFormat::Json)));
+    assert!(matches!(
+      parse_format("json-envelope"),
+      Ok(OutputFormat::JsonEnvelope)
+    ));
     assert!(parse_format("xml").is_err());
   }
 }

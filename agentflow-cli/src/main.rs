@@ -150,8 +150,9 @@ enum EvalCommands {
   Run {
     /// Path to the eval dataset directory (`dataset.toml` + `cases.jsonl`)
     dataset_dir: String,
-    /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    /// Output format: text, json (legacy bare body), or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
     format: String,
     /// Glob filter applied to case ids (supports `*` and `?`); non-
     /// matching cases are reported as skipped.
@@ -402,8 +403,9 @@ enum WorkflowCommands {
   /// Validate workflow schema and dependencies without execution
   Validate {
     workflow_file: String,
-    /// Output format: text or json
-    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    /// Output format: text, json (legacy bare body), or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
     format: String,
     /// Treat schema warnings for unknown node parameters as validation errors
     #[arg(long)]
@@ -422,8 +424,9 @@ enum WorkflowCommands {
     /// Treat `Unknown` idempotency calls as safe to replay
     #[arg(long)]
     force_replay: bool,
-    /// Output format
-    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    /// Output format: text, json (legacy bare body), or json-envelope
+    /// (canonical `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
     format: String,
   },
   /// Debug and inspect workflow structure

@@ -33,18 +33,43 @@ pub async fn execute(
 
   let permissions = explain_permissions.then(|| build_permission_report(&flow_def));
 
+  // Shared payload — produced once and reused by both JSON paths so
+  // the envelope's `result` field is byte-identical to the legacy
+  // `--format json` body (P0.3 additive-field contract).
+  let mut payload = serde_json::json!({
+    "workflow": &flow_def.name,
+    "valid": report.is_valid(),
+    "issues": &report.issues,
+    "warnings": &report.warnings,
+  });
+  if let Some(perm) = &permissions {
+    payload["permissions"] = serde_json::to_value(perm)?;
+  }
+
   match format.as_str() {
     "json" => {
-      let mut payload = serde_json::json!({
-        "workflow": &flow_def.name,
-        "valid": report.is_valid(),
-        "issues": &report.issues,
-        "warnings": &report.warnings,
-      });
-      if let Some(perm) = &permissions {
-        payload["permissions"] = serde_json::to_value(perm)?;
-      }
       println!("{}", serde_json::to_string_pretty(&payload)?);
+    }
+    "json-envelope" => {
+      // P3.3 envelope migration: wrap the same JSON body in the
+      // canonical `CliJsonEnvelope` (`agentflow.cli/1`) so downstream
+      // tooling can parse `version` + `command` + `errors` uniformly
+      // across every command. The legacy `--format json` stays for
+      // back-compat with consumers pinned to the bare body.
+      let mut errors: Vec<String> = Vec::new();
+      if !report.is_valid() {
+        errors.push(format!(
+          "workflow '{}' failed schema validation with {} issue(s)",
+          flow_def.name,
+          report.issues.len()
+        ));
+      }
+      let envelope = crate::json_envelope::CliJsonEnvelope::with_errors(
+        "workflow validate",
+        &payload,
+        errors,
+      );
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
     }
     _ => {
       print_schema_report(&flow_def.name, &report);
