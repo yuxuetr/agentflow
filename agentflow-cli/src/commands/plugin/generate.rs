@@ -17,7 +17,12 @@ use std::path::{Path, PathBuf};
 use agentflow_core::plugin::PluginManifest;
 use anyhow::{Context, Result, anyhow, bail};
 
-pub async fn execute(plugin: String, node: Option<String>, output: Option<String>) -> Result<()> {
+pub async fn execute(
+  plugin: String,
+  node: Option<String>,
+  output: Option<String>,
+  format: String,
+) -> Result<()> {
   let manifest_path = resolve_manifest_path(&plugin)?;
   let (manifest, _manifest_dir) =
     PluginManifest::load_from_path(&manifest_path).with_context(|| {
@@ -70,6 +75,33 @@ pub async fn execute(plugin: String, node: Option<String>, output: Option<String
   };
 
   let stub = render_stub(&manifest.plugin.name, &manifest_path, &selected);
+
+  if format == "json-envelope" {
+    // P3.3 migration: envelope-wrap the stub + metadata. When
+    // `--output <path>` is set, the file gets the raw YAML stub
+    // (unchanged) and the envelope reports the path; without
+    // `--output` the envelope carries the stub inline as a string
+    // so consumers can `jq -r '.result.stub'` to extract it.
+    let stub_yaml = if let Some(out_path) = &output {
+      fs::write(out_path, &stub)
+        .with_context(|| format!("failed to write stub to '{}'", out_path))?;
+      None
+    } else {
+      Some(stub.clone())
+    };
+    let selected_types: Vec<&str> = selected.iter().map(|n| n.node_type.as_str()).collect();
+    let payload = serde_json::json!({
+      "plugin": manifest.plugin.name,
+      "manifest_path": manifest_path,
+      "selected_node_types": selected_types,
+      "output_path": output,
+      "stub": stub_yaml,
+    });
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::ok("plugin generate-workflow-stub", &payload);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    return Ok(());
+  }
 
   if let Some(out_path) = output {
     fs::write(&out_path, &stub)

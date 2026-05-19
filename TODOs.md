@@ -670,9 +670,30 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       artifact is self-describing. 4 new CLI integration tests:
       help-surface lists `json-envelope` for all 3 subcommands,
       value-parser rejects unknown formats.
-    - DONE (partial) `plugin list` + `plugin inspect` — both
-      gained `--format text|json-envelope` (`install` + `uninstall`
-      + `generate-workflow-stub` left as the next batch). `list`
+    - DONE `plugin list` + `inspect` + `install` + `uninstall` +
+      `generate-workflow-stub` — all five plugin subcommands accept
+      `--format text|json-envelope`. Write-side payloads:
+      - `install` result: `{name, version, source, destination,
+        manifest_path, entrypoint, nodes[], policy: {profile,
+        allowed, sandbox_active, signature_checked,
+        network_policy}}` — includes the P1.8 plugin-policy decision
+        so audit consumers can trace which profile gated the
+        install.
+      - `uninstall` result: `{name, plugins_dir, target, removed,
+        reason}`. `reason` distinguishes `"removed"` from
+        `"not_installed_force_acked"` so shell tooling can branch
+        on the `--force` short-circuit without parsing stdout text.
+      - `generate-workflow-stub` result: `{plugin, manifest_path,
+        selected_node_types[], output_path?, stub?}`. When
+        `--output <path>` is set, the file gets the raw YAML stub
+        (unchanged) and the envelope carries `output_path` with
+        `stub: null`. Without `--output`, the envelope inlines the
+        stub as a string for `jq -r '.result.stub'` extraction.
+      6 new CLI integration tests (plugin feature-gated): install
+      round-trip + uninstall happy / force-on-missing /
+      generate-workflow-stub stdout-inline / generate-workflow-stub
+      file-output + 3 help-surface guards.
+      `list`
       result: `{ plugins_dir, plugins: [{ name, version, runtime,
       entrypoint, entrypoint_exists, nodes, capabilities: {fs/net/
       proc/env_vars arrays}, install_dir, manifest_valid,

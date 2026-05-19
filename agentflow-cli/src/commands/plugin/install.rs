@@ -14,12 +14,14 @@ use agentflow_core::plugin::PluginManifest;
 use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{PluginEvaluationInput, PluginPolicy, SecurityProfile};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   source_dir: String,
   target_dir: Option<String>,
   force: bool,
   allow_unsandboxed_plugin: bool,
   has_signature: bool,
+  format: String,
 ) -> Result<()> {
   let source = Path::new(&source_dir);
   if !source.is_dir() {
@@ -131,6 +133,37 @@ pub async fn execute(
       destination.display()
     )
   })?;
+
+  if format == "json-envelope" {
+    // P3.3 migration: structured install result. Carries everything
+    // the text view prints plus the policy decision so consumers
+    // can audit which security profile gated the install.
+    let payload = serde_json::json!({
+      "name": manifest.plugin.name,
+      "version": manifest.plugin.version,
+      "source": source,
+      "destination": destination,
+      "manifest_path": destination.join("plugin.toml"),
+      "entrypoint": destination.join(&manifest.plugin.entrypoint),
+      "nodes": manifest
+        .plugin
+        .nodes
+        .iter()
+        .map(|n| n.node_type.clone())
+        .collect::<Vec<_>>(),
+      "policy": {
+        "profile": decision.profile.to_string(),
+        "allowed": decision.allowed,
+        "sandbox_active": decision.sandbox_active,
+        "signature_checked": decision.signature_checked,
+        "network_policy": decision.network_policy.as_str(),
+      },
+    });
+    let envelope =
+      crate::json_envelope::CliJsonEnvelope::ok("plugin install", &payload);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    return Ok(());
+  }
 
   println!(
     "🔌 Installed plugin: {} @ {}",

@@ -488,6 +488,215 @@ fn plugin_inspect_json_envelope_carries_resolved_entrypoint_metadata() {
 
 #[cfg(feature = "plugin")]
 #[test]
+fn plugin_install_json_envelope_emits_structured_install_record() {
+  let src = TempDir::new().unwrap();
+  write_plugin_fixture(src.path(), "stub-plugin");
+  let dest_root = TempDir::new().unwrap();
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      src.path().join("stub-plugin").to_str().unwrap(),
+      "--dir",
+      dest_root.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .env("AGENTFLOW_SECURITY_PROFILE", "dev")
+    .output()
+    .unwrap();
+  assert!(
+    env_out.status.success(),
+    "install must succeed; stderr: {}",
+    String::from_utf8_lossy(&env_out.stderr)
+  );
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin install");
+  let result = &envelope["result"];
+  assert_eq!(result["name"], "stub-plugin");
+  assert_eq!(result["version"], "0.1.0");
+  // Destination must be an absolute path under the dest_root.
+  let dest = result["destination"].as_str().unwrap();
+  assert!(
+    dest.contains("stub-plugin"),
+    "destination must end at the plugin dir: {dest}"
+  );
+  assert_eq!(result["policy"]["profile"], "dev");
+  assert_eq!(result["policy"]["allowed"], true);
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_uninstall_json_envelope_reports_removal() {
+  let src = TempDir::new().unwrap();
+  // Stage a fixture, install it, then uninstall via the CLI to
+  // verify the envelope contract for the happy path.
+  write_plugin_fixture(src.path(), "to-remove");
+  let dest_root = TempDir::new().unwrap();
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      src.path().join("to-remove").to_str().unwrap(),
+      "--dir",
+      dest_root.path().to_str().unwrap(),
+    ])
+    .env("AGENTFLOW_SECURITY_PROFILE", "dev")
+    .assert()
+    .success();
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "uninstall",
+      "to-remove",
+      "--dir",
+      dest_root.path().to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "uninstall must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin uninstall");
+  assert_eq!(envelope["result"]["name"], "to-remove");
+  assert_eq!(envelope["result"]["removed"], true);
+  assert_eq!(envelope["result"]["reason"], "removed");
+  // Directory really is gone.
+  assert!(!dest_root.path().join("to-remove").exists());
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_uninstall_force_on_missing_returns_not_installed_reason() {
+  let dest_root = TempDir::new().unwrap();
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "uninstall",
+      "ghost-plugin",
+      "--dir",
+      dest_root.path().to_str().unwrap(),
+      "--force",
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "--force must not error on missing");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin uninstall");
+  assert_eq!(envelope["result"]["removed"], false);
+  assert_eq!(envelope["result"]["reason"], "not_installed_force_acked");
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_generate_workflow_stub_json_envelope_inlines_stub_when_no_output_set() {
+  let src = TempDir::new().unwrap();
+  write_plugin_fixture(src.path(), "stub-source");
+  let plugin_dir = src.path().join("stub-source");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "generate-workflow-stub",
+      plugin_dir.to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success(), "stub generation must succeed");
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  assert_envelope_shape(&envelope, "plugin generate-workflow-stub");
+  let result = &envelope["result"];
+  assert_eq!(result["plugin"], "stub-source");
+  // No --output supplied ⇒ stub gets inlined as a string.
+  let stub = result["stub"].as_str().unwrap();
+  assert!(stub.contains("type: plugin"), "stub must contain plugin node yaml: {stub}");
+  assert!(result["output_path"].is_null());
+  let selected = result["selected_node_types"].as_array().unwrap();
+  assert_eq!(selected.len(), 1);
+  assert_eq!(selected[0], "echo_node");
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_generate_workflow_stub_json_envelope_omits_stub_when_output_set() {
+  let src = TempDir::new().unwrap();
+  write_plugin_fixture(src.path(), "stub-with-output");
+  let plugin_dir = src.path().join("stub-with-output");
+  let out_dir = TempDir::new().unwrap();
+  let out_path = out_dir.path().join("stub.yml");
+
+  let env_out = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "generate-workflow-stub",
+      plugin_dir.to_str().unwrap(),
+      "--output",
+      out_path.to_str().unwrap(),
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_out.status.success());
+  let envelope: Value = serde_json::from_slice(&env_out.stdout).unwrap();
+  let result = &envelope["result"];
+  // Stub went to disk; envelope reports the path, not the content.
+  assert!(result["stub"].is_null());
+  let reported = result["output_path"].as_str().unwrap();
+  assert_eq!(reported, out_path.to_str().unwrap());
+  // File actually carries the raw YAML.
+  let on_disk = std::fs::read_to_string(&out_path).unwrap();
+  assert!(on_disk.contains("type: plugin"));
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_install_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "install", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_uninstall_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "uninstall", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn plugin_generate_workflow_stub_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["plugin", "generate-workflow-stub", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[cfg(feature = "plugin")]
+#[test]
 fn plugin_list_help_lists_json_envelope_format() {
   Command::cargo_bin("agentflow")
     .unwrap()

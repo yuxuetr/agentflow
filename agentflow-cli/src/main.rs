@@ -967,6 +967,10 @@ enum PluginCommands {
     /// profile requires this).
     #[arg(long)]
     signed: bool,
+    /// Output format: text (default) or json-envelope (canonical
+    /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// List installed plugins and the node types each one declares
   List {
@@ -997,6 +1001,10 @@ enum PluginCommands {
     /// Succeed even if the plugin is not installed
     #[arg(long)]
     force: bool,
+    /// Output format: text (default) or json-envelope (canonical
+    /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
   /// Generate a workflow YAML stub for plugin-declared nodes
   GenerateWorkflowStub {
@@ -1008,6 +1016,12 @@ enum PluginCommands {
     /// Write the stub to this file instead of stdout
     #[arg(short, long)]
     output: Option<String>,
+    /// Output format: text (default) or json-envelope. In envelope
+    /// mode the file written by `--output` carries the raw stub
+    /// (unchanged); stdout always carries the envelope with the
+    /// stub inlined as a string when no `--output` is set.
+    #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
+    format: String,
   },
 }
 
@@ -1672,19 +1686,34 @@ async fn main() {
         force,
         allow_unsandboxed_plugin,
         signed,
-      } => plugin::install::execute(source_dir, dir, force, allow_unsandboxed_plugin, signed).await,
+        format,
+      } => {
+        plugin::install::execute(
+          source_dir,
+          dir,
+          force,
+          allow_unsandboxed_plugin,
+          signed,
+          format,
+        )
+        .await
+      }
       PluginCommands::List { dir, format } => plugin::list::execute(dir, format).await,
       PluginCommands::Inspect { plugin, format } => {
         plugin::inspect::execute(plugin, format).await
       }
-      PluginCommands::Uninstall { name, dir, force } => {
-        plugin::uninstall::execute(name, dir, force).await
-      }
+      PluginCommands::Uninstall {
+        name,
+        dir,
+        force,
+        format,
+      } => plugin::uninstall::execute(name, dir, force, format).await,
       PluginCommands::GenerateWorkflowStub {
         plugin,
         node,
         output,
-      } => plugin::generate::execute(plugin, node, output).await,
+        format,
+      } => plugin::generate::execute(plugin, node, output, format).await,
     },
     #[cfg(not(feature = "plugin"))]
     Commands::Plugin(_) => Err(anyhow::anyhow!(
