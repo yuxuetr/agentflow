@@ -1406,3 +1406,422 @@ async fn mock_streaming_path() {
     "draining a finished Mock stream should yield Ok(None)"
   );
 }
+
+// =============================================================================
+// N9 cross-provider invariant tests
+// =============================================================================
+//
+// The 35+ per-provider tests above each fire ONE provider through its native
+// wire format and assert the canonical `ProviderResponse` / `LLMError` shape.
+// They prove every provider individually maps to the contract.
+//
+// The tests below take this one step further: they fire ALL providers in ONE
+// test function and assert the canonical outputs agree byte-for-byte.
+// Per-provider drift (e.g. one provider starts returning `stop_reason: None`
+// when it used to return `Some(Stop)`) fails here as a single test, with
+// every provider's actual output visible in the panic message.
+//
+// These are the "cross-provider invariant" tests the N9 follow-up calls for.
+// They share the per-provider success / tool-call / streaming / error
+// fixtures already defined above so the wire formats stay in lockstep with
+// the per-provider suite.
+
+/// Build every supported provider against its native success-path fixture and
+/// return the parsed [`ProviderResponse`]s in deterministic order so the
+/// caller can assert structural equivalence.
+///
+/// Each provider runs on its own mock server (separate ephemeral TCP port);
+/// the helper awaits them sequentially so the test stays single-threaded-
+/// deterministic on the request capture path.
+async fn drive_all_providers_through_success_path()
+-> Vec<(&'static str, agentflow_llm::providers::ProviderResponse)> {
+  let mut out = Vec::new();
+
+  let (base_url, _) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
+  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("openai provider");
+  out.push((
+    "openai",
+    provider
+      .execute(&provider_request("gpt-4o-mini"))
+      .await
+      .expect("openai ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, ANTHROPIC_SUCCESS.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  out.push((
+    "anthropic",
+    provider
+      .execute(&provider_request("claude-3-5-sonnet"))
+      .await
+      .expect("anthropic ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, GOOGLE_SUCCESS.to_string()).await;
+  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("google provider");
+  out.push((
+    "google",
+    provider
+      .execute(&provider_request("gemini-1.5-pro"))
+      .await
+      .expect("google ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, MOONSHOT_SUCCESS.to_string()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  out.push((
+    "moonshot",
+    provider
+      .execute(&provider_request("moonshot-v1-8k"))
+      .await
+      .expect("moonshot ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
+  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("stepfun provider");
+  out.push((
+    "stepfun",
+    provider
+      .execute(&provider_request("step-1-8k"))
+      .await
+      .expect("stepfun ok"),
+  ));
+
+  out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_success_paths_produce_uniform_response_shape() {
+  // Single test that fires all 5 providers through their native success
+  // fixtures and asserts the parsed `ProviderResponse` shape is uniform.
+  // Catches drift the per-provider tests would miss (e.g. one provider
+  // stops surfacing usage metadata while the others still do).
+  let responses = drive_all_providers_through_success_path().await;
+  assert_eq!(responses.len(), 5, "5 mainstream providers covered");
+
+  // Per-provider shape is already pinned by `*_success_path` tests. Here
+  // we assert the cross-provider equality on every field that's part of
+  // the canonical contract.
+  let mut texts: Vec<String> = Vec::new();
+  for (name, response) in &responses {
+    assert_text(&response.content, "ok");
+    assert_eq!(
+      response.stop_reason,
+      Some(StopReason::Stop),
+      "{name} must report StopReason::Stop on the success path"
+    );
+    assert_usage(&response.usage);
+    assert!(
+      response.tool_calls.is_empty(),
+      "{name} must not emit tool_calls on a plain success path; got {:?}",
+      response.tool_calls
+    );
+    texts.push(response.content.to_string());
+  }
+  let first = &texts[0];
+  for (i, text) in texts.iter().enumerate() {
+    assert_eq!(
+      text, first,
+      "provider #{i} ({}) text diverged: expected {first:?}, got {text:?}",
+      responses[i].0
+    );
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_tool_call_paths_produce_uniform_canonical_shape() {
+  // Same idea for the tool-call path. Each provider has its own wire
+  // format (`tool_calls` / `tool_use` / `functionCall`); the canonical
+  // `ToolCallRequest { name, arguments, id }` must be identical
+  // regardless of source. The shape pins are:
+  //   - exactly one tool call per response
+  //   - name == "get_weather"
+  //   - arguments.city == "Tokyo"
+  //   - id is non-empty (synthesised for providers without one)
+  //   - stop_reason == ToolCalls
+  let mut responses: Vec<(&str, agentflow_llm::providers::ProviderResponse)> = Vec::new();
+
+  let (base_url, _) = spawn_mock_server(200, OPENAI_TOOL_CALL.to_string()).await;
+  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("openai provider");
+  responses.push((
+    "openai",
+    provider
+      .execute(&provider_request_with_tools("gpt-4o-mini"))
+      .await
+      .expect("openai tool ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, ANTHROPIC_TOOL_CALL.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  responses.push((
+    "anthropic",
+    provider
+      .execute(&provider_request_with_tools("claude-3-5-sonnet"))
+      .await
+      .expect("anthropic tool ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, GOOGLE_TOOL_CALL.to_string()).await;
+  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("google provider");
+  responses.push((
+    "google",
+    provider
+      .execute(&provider_request_with_tools("gemini-1.5-pro"))
+      .await
+      .expect("google tool ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, MOONSHOT_TOOL_CALL.to_string()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  responses.push((
+    "moonshot",
+    provider
+      .execute(&provider_request_with_tools("moonshot-v1-8k"))
+      .await
+      .expect("moonshot tool ok"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(200, STEPFUN_TOOL_CALL.to_string()).await;
+  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("stepfun provider");
+  responses.push((
+    "stepfun",
+    provider
+      .execute(&provider_request_with_tools("step-1-8k"))
+      .await
+      .expect("stepfun tool ok"),
+  ));
+
+  assert_eq!(responses.len(), 5);
+  for (name, response) in &responses {
+    assert_eq!(
+      response.tool_calls.len(),
+      1,
+      "{name} must emit exactly one tool call; got {} for {:?}",
+      response.tool_calls.len(),
+      response.tool_calls
+    );
+    let call = &response.tool_calls[0];
+    assert_eq!(call.name, "get_weather", "{name} tool name diverged");
+    let city = call
+      .arguments
+      .get("city")
+      .and_then(|v| v.as_str())
+      .unwrap_or_else(|| panic!("{name} tool arguments missing city: {:?}", call.arguments));
+    assert_eq!(city, "Tokyo", "{name} tool city diverged");
+    assert!(
+      !call.id.is_empty(),
+      "{name} tool call id must be non-empty (synthesised if vendor omitted)"
+    );
+    assert_eq!(
+      response.stop_reason,
+      Some(StopReason::ToolCalls),
+      "{name} must report StopReason::ToolCalls when emitting a tool call"
+    );
+  }
+}
+
+/// Helper for the cross-provider HTTP-error invariant tests. Drives every
+/// provider through `spawn_mock_server(status, body)` with a vendor-shaped
+/// error payload and returns `(provider_name, observed_error)` tuples so the
+/// caller can assert uniformity across the matrix.
+async fn drive_all_providers_through_status(status: u16) -> Vec<(&'static str, LLMError)> {
+  // Provider-agnostic JSON error body. `LLMError::HttpError` only pins
+  // `status_code`, not body parsing, so any well-formed JSON works for the
+  // cross-provider mapping invariant. `status` flows through to
+  // `spawn_mock_server` below — it's the actual variable under test.
+  let body = r#"{"error":{"message":"mock failure","type":"mock"}}"#.to_string();
+
+  let mut errors: Vec<(&'static str, LLMError)> = Vec::new();
+
+  let (base_url, _) = spawn_mock_server(status, body.clone()).await;
+  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("openai provider");
+  errors.push((
+    "openai",
+    provider
+      .execute(&provider_request("gpt-4o-mini"))
+      .await
+      .expect_err("openai must surface error"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(status, body.clone()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  errors.push((
+    "anthropic",
+    provider
+      .execute(&provider_request("claude-3-5-sonnet"))
+      .await
+      .expect_err("anthropic must surface error"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(status, body.clone()).await;
+  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("google provider");
+  errors.push((
+    "google",
+    provider
+      .execute(&provider_request("gemini-1.5-pro"))
+      .await
+      .expect_err("google must surface error"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(status, body.clone()).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  errors.push((
+    "moonshot",
+    provider
+      .execute(&provider_request("moonshot-v1-8k"))
+      .await
+      .expect_err("moonshot must surface error"),
+  ));
+
+  let (base_url, _) = spawn_mock_server(status, body).await;
+  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("stepfun provider");
+  errors.push((
+    "stepfun",
+    provider
+      .execute(&provider_request("step-1-8k"))
+      .await
+      .expect_err("stepfun must surface error"),
+  ));
+
+  errors
+}
+
+fn assert_cross_provider_http_error(errors: Vec<(&'static str, LLMError)>, expected_status: u16) {
+  assert_eq!(errors.len(), 5, "5 providers in the cross-provider matrix");
+  for (name, err) in &errors {
+    match err {
+      LLMError::HttpError { status_code, .. } => {
+        assert_eq!(
+          *status_code, expected_status,
+          "{name} surfaced status {status_code} but matrix expects {expected_status}"
+        );
+      }
+      other => panic!(
+        "{name} surfaced {other:?}; matrix expects LLMError::HttpError {{ status_code: {expected_status}, .. }}"
+      ),
+    }
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_401_maps_uniformly_to_http_error() {
+  let errors = drive_all_providers_through_status(401).await;
+  assert_cross_provider_http_error(errors, 401);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_429_maps_uniformly_to_http_error() {
+  // P0.3 invariant: every provider's 429 must surface as
+  // `LLMError::HttpError { status_code: 429, .. }`. Per-provider
+  // `*_maps_429_to_http_error` tests pin this individually; the
+  // cross-provider variant catches "one provider silently downgrades
+  // rate-limit to a different error variant" the moment it lands.
+  let errors = drive_all_providers_through_status(429).await;
+  assert_cross_provider_http_error(errors, 429);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_500_maps_uniformly_to_http_error() {
+  let errors = drive_all_providers_through_status(500).await;
+  assert_cross_provider_http_error(errors, 500);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_streaming_paths_yield_uniform_hello_world_concatenation() {
+  // Each provider's streaming path produces 2 chunks ("hello" + " world")
+  // with `is_final=true` on the last. The per-provider tests pin the
+  // wire-format-specific framing; this test asserts the cross-provider
+  // invariant: regardless of framing, the drained text is exactly
+  // "hello world" and the stream terminates cleanly.
+
+  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("gpt-4o-mini")).await;
+  let provider = OpenAIProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("openai provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("gpt-4o-mini"))
+    .await
+    .expect("openai stream");
+  assert_stream_yields_hello_world(stream).await;
+
+  let base_url = spawn_streaming_mock_server(anthropic_stream_events()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("anthropic provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("claude-3-5-sonnet"))
+    .await
+    .expect("anthropic stream");
+  assert_stream_yields_hello_world(stream).await;
+
+  let base_url = spawn_streaming_mock_server(google_stream_events()).await;
+  let provider = GoogleProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("google provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("gemini-1.5-pro"))
+    .await
+    .expect("google stream");
+  assert_stream_yields_hello_world(stream).await;
+
+  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("moonshot-v1-8k")).await;
+  let provider = MoonshotProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("moonshot provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("moonshot-v1-8k"))
+    .await
+    .expect("moonshot stream");
+  assert_stream_yields_hello_world(stream).await;
+
+  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-1-8k")).await;
+  let provider = StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url))
+    .expect("stepfun provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("step-1-8k"))
+    .await
+    .expect("stepfun stream");
+  assert_stream_yields_hello_world(stream).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_provider_token_usage_populated_uniformly_on_success() {
+  // Token usage is part of the canonical contract — billing / cost
+  // tracking depends on it. This test pins that every provider's
+  // success-path response surfaces a populated `TokenUsage` with
+  // `total_tokens` non-zero. Per-provider tests assert this individually;
+  // the cross-provider variant catches drift cheaply.
+  let responses = drive_all_providers_through_success_path().await;
+  for (name, response) in &responses {
+    let usage = response
+      .usage
+      .as_ref()
+      .unwrap_or_else(|| panic!("{name} usage must be populated on success"));
+    assert!(
+      usage.total_tokens.unwrap_or(0) > 0,
+      "{name} must surface total_tokens > 0; got {:?}",
+      usage.total_tokens
+    );
+    assert!(
+      usage.prompt_tokens.unwrap_or(0) > 0,
+      "{name} must surface prompt_tokens > 0; got {:?}",
+      usage.prompt_tokens
+    );
+    assert!(
+      usage.completion_tokens.unwrap_or(0) > 0,
+      "{name} must surface completion_tokens > 0; got {:?}",
+      usage.completion_tokens
+    );
+  }
+}

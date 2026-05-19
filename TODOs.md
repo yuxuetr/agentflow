@@ -966,6 +966,42 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
   - Test count: 44 in `provider_consistency` (19 new on top of 25
     existing) + 98 lib + 4 matrix-doc + 3 trace = 169 hermetic
     agentflow-llm tests pass on every PR.
+  - N9 cross-provider invariant addition (this slice): 7 new tests
+    appended to `provider_consistency.rs` that fire ALL providers in
+    ONE test and assert the parsed `ProviderResponse` shape is
+    cross-provider uniform. Per-provider tests already pin each
+    provider's wire mapping individually; the cross-provider variants
+    catch drift across the matrix in a single failure.
+    - `cross_provider_success_paths_produce_uniform_response_shape`
+      — text content + StopReason::Stop + populated usage + empty
+      tool_calls across all 5 providers.
+    - `cross_provider_tool_call_paths_produce_uniform_canonical_shape`
+      — exactly one tool call with name == "get_weather", arguments.
+      city == "Tokyo", non-empty id, StopReason::ToolCalls,
+      regardless of provider wire format.
+    - `cross_provider_401_maps_uniformly_to_http_error`,
+      `cross_provider_429_maps_uniformly_to_http_error`,
+      `cross_provider_500_maps_uniformly_to_http_error` — every
+      provider must surface `LLMError::HttpError { status_code: N }`
+      for the matching status; cross-provider variant catches the
+      "one provider silently downgrades to a different error variant"
+      scenario.
+    - `cross_provider_streaming_paths_yield_uniform_hello_world_concatenation`
+      — every provider's streaming path produces text concatenating
+      to "hello world" with `is_final=true` on the last chunk.
+    - `cross_provider_token_usage_populated_uniformly_on_success` —
+      every provider surfaces non-zero `total_tokens` / `prompt_tokens`
+      / `completion_tokens` on the success path (billing /cost
+      contract).
+    Helper functions `drive_all_providers_through_success_path` and
+    `drive_all_providers_through_status` capture the provider-iteration
+    boilerplate so future invariants land in 5 lines instead of 50.
+    Test count: 51 in `provider_consistency` (was 44; +7 new
+    cross-provider).
+  - Nightly live-LLM CI (`.github/workflows/llm-live.yml`): now wires
+    GLM_API_KEY / BIGMODEL_API_KEY / ZHIPU_API_KEY (the 6th provider
+    in `LIVE_PROVIDER_PROFILES`) alongside the existing 5. Workflow
+    dispatch help string updated to list `glm` as a valid filter.
 
 - DONE P3.7 LLM provider matrix documentation:
   - `docs/LLM_PROVIDERS_MATRIX.md` gains four authoritative sections:

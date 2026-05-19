@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       providers:
-        description: "Comma-separated subset (openai,anthropic,google,moonshot,stepfun); empty = all"
+        description: "Comma-separated subset (openai,anthropic,google,moonshot,stepfun,glm); empty = all"
         required: false
         default: ""
 
@@ -37,6 +37,14 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       STEPFUN_API_KEY: ${{ secrets.STEPFUN_API_KEY }}
+      # GLM (Zhipu / BigModel) — the 6th `LIVE_PROVIDER_PROFILES` row in
+      # provider_consistency_live.rs. Optional like the others; the
+      # live test self-skips when the secret is empty. Three env-var
+      # aliases match agentflow-llm's resolution order so operators can
+      # set whichever matches their vault's naming.
+      GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+      ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
