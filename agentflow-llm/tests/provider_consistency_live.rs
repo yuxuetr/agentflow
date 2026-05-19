@@ -96,6 +96,10 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
     name: "dashscope",
     capabilities: &[LiveCapability::Llm],
   },
+  LiveProviderProfile {
+    name: "deepseek",
+    capabilities: &[LiveCapability::Llm],
+  },
 ];
 
 fn provider_supports_capability(provider_name: &str, capability: LiveCapability) -> bool {
@@ -150,6 +154,35 @@ async fn dashscope_live_context(capability: LiveCapability) -> Option<(String, O
   eprintln!("[live] dashscope: using API key from {env_used}");
 
   Some((api_key, dashscope_base_url().await))
+}
+
+fn deepseek_live_lock() -> &'static tokio::sync::Mutex<()> {
+  static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+  LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Resolve the DeepSeek OpenAI-compatible endpoint. DeepSeek explicitly
+/// supports both `https://api.deepseek.com/v1/chat/completions` and the
+/// non-versioned `https://api.deepseek.com/chat/completions`; we use the
+/// `/v1` form to match how `OpenAIProvider` appends `/chat/completions`
+/// to the base URL. There's no `default_models.yml` provider entry yet,
+/// so this is the unconditional fallback.
+async fn deepseek_base_url() -> Option<String> {
+  Some("https://api.deepseek.com/v1".to_string())
+}
+
+async fn deepseek_live_context(capability: LiveCapability) -> Option<(String, Option<String>)> {
+  if !prepare_live_provider("deepseek", capability).await {
+    return None;
+  }
+
+  let Some((env_used, api_key)) = pick_api_key(&["DEEPSEEK_API_KEY"]) else {
+    eprintln!("[live] deepseek: skipped (DEEPSEEK_API_KEY not set; live gate is on)");
+    return None;
+  };
+  eprintln!("[live] deepseek: using API key from {env_used}");
+
+  Some((api_key, deepseek_base_url().await))
 }
 
 fn env_truthy(value: &str) -> bool {
@@ -1230,6 +1263,38 @@ async fn dashscope_live_text_path() {
     response.stop_reason,
     Some(StopReason::Stop),
     "dashscope: expected StopReason::Stop on a single-turn text completion"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deepseek_live_text_path() {
+  // DeepSeek (https://api.deepseek.com) is OpenAI-compatible. `deepseek-chat`
+  // is the long-standing stable alias (V3 family today); per their docs it
+  // remains the canonical entry point through at least 2026-07-24. If a
+  // future model rolls and breaks the alias, override at workflow level via
+  // `AGENTFLOW_LIVE_DEEPSEEK_TEXT_MODEL`.
+  let _guard = deepseek_live_lock().lock().await;
+  let Some((api_key, base_url)) = deepseek_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("deepseek provider");
+  let model = live_text_model("deepseek", "deepseek-chat");
+
+  let response = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute(&provider_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("deepseek: live text request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("deepseek: live text request failed: {e}"));
+
+  assert_text_non_empty(&response.content);
+  assert_usage_populated(&response.usage, "deepseek");
+  assert_eq!(
+    response.stop_reason,
+    Some(StopReason::Stop),
+    "deepseek: expected StopReason::Stop on a single-turn text completion"
   );
 }
 

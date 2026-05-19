@@ -50,6 +50,9 @@ jobs:
       # `https://dashscope.aliyuncs.com/compatible-mode/v1`. Live test
       # self-skips when the secret is empty.
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      # DeepSeek — OpenAI-compatible API at `https://api.deepseek.com/v1`.
+      # Default cheap model: `deepseek-chat` (the V3-family alias).
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
