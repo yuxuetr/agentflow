@@ -522,3 +522,270 @@ fn doctor_json_envelope_field_set_is_closed_to_four_keys() {
   keys.sort();
   assert_eq!(keys, vec!["command", "errors", "result", "version"]);
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// P3.4-PR.3 — wire dry_run + mcp.toml into doctor
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn doctor_surfaces_top_level_mcp_config_entries_alongside_skill_declared() {
+  // Stage a synthetic `~/.agentflow/mcp.toml` with two top-level
+  // servers — one whose binary resolves on PATH (`echo`), one whose
+  // doesn't. They must appear in the same `mcp_servers` array as
+  // skill-declared entries (with `skill` field absent) so existing
+  // consumers see one unified list. The new `mcp_config_source`
+  // report-level field documents where the top-level entries came
+  // from.
+  let home = TempDir::new().unwrap();
+  let mcp_toml = home.path().join(".agentflow/mcp.toml");
+  std::fs::create_dir_all(mcp_toml.parent().unwrap()).unwrap();
+  std::fs::write(
+    &mcp_toml,
+    r#"
+[[mcp_servers]]
+name = "echo_server"
+command = "echo"
+args = []
+
+[[mcp_servers]]
+name = "ghost_server"
+command = "definitely-not-on-path-pls"
+args = []
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MCP_CONFIG", &mcp_toml);
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let probe = &report["installations"];
+
+  // Source path round-trips through the new field.
+  let source = probe["mcp_config_source"].as_str().unwrap_or("");
+  assert!(
+    source.contains(".agentflow/mcp.toml") || source.contains("mcp.toml"),
+    "expected source to reference mcp.toml, got: {source}"
+  );
+
+  // Both servers appear; the top-level entries have no `skill` field.
+  let mcp_servers = probe["mcp_servers"].as_array().unwrap();
+  let top_level: Vec<&Value> = mcp_servers.iter().filter(|s| s["skill"].is_null()).collect();
+  assert_eq!(
+    top_level.len(),
+    2,
+    "expected 2 top-level entries (skill field absent), got: {mcp_servers:?}"
+  );
+
+  let echo_probe = top_level
+    .iter()
+    .find(|s| s["server"] == "echo_server")
+    .expect("echo_server entry present");
+  assert_eq!(echo_probe["reachable"], true);
+
+  let ghost_probe = top_level
+    .iter()
+    .find(|s| s["server"] == "ghost_server")
+    .expect("ghost_server entry present");
+  assert_eq!(ghost_probe["reachable"], false);
+}
+
+#[test]
+fn doctor_top_level_mcp_unreachable_promotes_status() {
+  // A top-level mcp.toml entry whose binary doesn't resolve must
+  // promote the overall doctor status to at least Warning (matches
+  // the existing behaviour for skill-declared servers).
+  let home = TempDir::new().unwrap();
+  let mcp_toml = home.path().join(".agentflow/mcp.toml");
+  std::fs::create_dir_all(mcp_toml.parent().unwrap()).unwrap();
+  std::fs::write(
+    &mcp_toml,
+    r#"
+[[mcp_servers]]
+name = "ghost"
+command = "totally-not-on-path"
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "local",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MCP_CONFIG", &mcp_toml);
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(
+    report["status"], "warning",
+    "unreachable top-level mcp server should promote status"
+  );
+}
+
+#[cfg(all(feature = "plugin", unix))]
+#[test]
+fn doctor_dry_run_passes_for_plugin_with_smoke_aware_entrypoint() {
+  // Stage a plugin whose entrypoint is `/bin/sh` and whose
+  // `[plugin.dry_run]` is `["-c", "exit 0"]`. The smoke must pass
+  // and the report must carry the outcome.
+  let home = TempDir::new().unwrap();
+  let plugins = home.path().join(".agentflow/plugins/sh-smoke");
+  std::fs::create_dir_all(&plugins).unwrap();
+  std::fs::write(
+    plugins.join("plugin.toml"),
+    r#"
+[plugin]
+name = "sh-smoke"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "/bin/sh"
+
+[plugin.dry_run]
+args = ["-c", "exit 0"]
+timeout_ms = 5000
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let plugins_arr = report["installations"]["plugins"].as_array().unwrap();
+  let entry = plugins_arr
+    .iter()
+    .find(|p| p["name"] == "sh-smoke")
+    .expect("sh-smoke plugin present");
+  let dry_run = entry["dry_run"].as_object().expect("dry_run populated");
+  let outcome = dry_run["outcome"].as_object().expect("outcome present");
+  assert_eq!(outcome["status"], "passed");
+  assert_eq!(outcome["exit_code"], 0);
+}
+
+#[cfg(all(feature = "plugin", unix))]
+#[test]
+fn doctor_dry_run_failure_promotes_status_to_warning() {
+  // Stage a plugin whose dry_run intentionally exits 1 → smoke fails
+  // → doctor status promotes to Warning under local profile (matches
+  // missing-entrypoint behaviour).
+  let home = TempDir::new().unwrap();
+  let plugins = home.path().join(".agentflow/plugins/sh-failing-smoke");
+  std::fs::create_dir_all(&plugins).unwrap();
+  std::fs::write(
+    plugins.join("plugin.toml"),
+    r#"
+[plugin]
+name = "sh-failing-smoke"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "/bin/sh"
+
+[plugin.dry_run]
+args = ["-c", "exit 1"]
+timeout_ms = 5000
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "local",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+  let plugins_arr = report["installations"]["plugins"].as_array().unwrap();
+  let entry = plugins_arr
+    .iter()
+    .find(|p| p["name"] == "sh-failing-smoke")
+    .expect("plugin present");
+  let outcome = &entry["dry_run"]["outcome"];
+  assert_eq!(outcome["status"], "failed");
+  assert_eq!(outcome["kind"], "wrong_exit_code");
+  assert_eq!(outcome["expected"], 0);
+  assert_eq!(outcome["actual"], 1);
+
+  assert_eq!(
+    report["status"], "warning",
+    "failed dry_run should promote local-profile status to warning"
+  );
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn doctor_dry_run_absent_when_manifest_does_not_configure_it() {
+  // Plugins without `[plugin.dry_run]` keep their existing report
+  // shape — no `dry_run` field, no status promotion (operator
+  // opted out of the smoke).
+  let home = TempDir::new().unwrap();
+  let plugins = home.path().join(".agentflow/plugins/no-smoke");
+  std::fs::create_dir_all(plugins.join("bin")).unwrap();
+  std::fs::write(plugins.join("bin/dummy"), "").unwrap();
+  std::fs::write(
+    plugins.join("plugin.toml"),
+    r#"
+[plugin]
+name = "no-smoke"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/dummy"
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "doctor",
+      "--profile",
+      "dev",
+      "--format",
+      "json",
+      "--check-installations",
+    ])
+    .env("HOME", home.path());
+  let output = cmd.output().unwrap();
+  let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let plugins_arr = report["installations"]["plugins"].as_array().unwrap();
+  let entry = plugins_arr
+    .iter()
+    .find(|p| p["name"] == "no-smoke")
+    .expect("no-smoke plugin present");
+  assert!(
+    entry["dry_run"].is_null(),
+    "dry_run must be absent for opt-out plugins"
+  );
+  assert_eq!(entry["entrypoint_exists"], true);
+}

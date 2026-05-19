@@ -32,7 +32,7 @@ but do not implement channel adapters in this queue.
 | P0 | V1 Contract Hardening | CLOSED |
 | P1 | Security And Tool Governance | partially closed (P1.7-P1.9 active) |
 | P2 | Local Server / Daemon Reliability | active |
-| P3 | Rust SDK And CLI Experience | active (P3.4 has 2 deferred MCP/plugin subitems; everything else closed) |
+| P3 | Rust SDK And CLI Experience | CLOSED (P3.4 deep probes shipped via P3.4-PR.1/.2/.3) |
 | P4 | Memory, RAG, And Eval Foundations | active |
 | P5 | Plugin, Marketplace, And Worker Hardening | active |
 | P6 | Web UI Productization | NEW — active |
@@ -618,9 +618,10 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     - `workflow run|list|cancel|graph|logs` — server-backed,
       depends on P2.5 `--server` plumbing.
 
-- TODO P3.4 `agentflow doctor` expansion:
-  Library/CLI structural surface landed; deeper provider probes
-  (MCP reachability + plugin spawn smoke) remain. Subtasks:
+- DONE P3.4 `agentflow doctor` expansion:
+  Library/CLI structural surface + deeper provider probes all closed.
+  PR.1 (plugin dry_run runner), PR.2 (mcp.toml + `agentflow mcp config`
+  CLI), and PR.3 (doctor wiring) shipped in three commits. Subtasks:
   - DONE Tri-state `DoctorStatus` (`ok` / `warning` / `fail`) with
     exit codes `0` / `1` / `2`. Existing `--format text|json` modes
     keep their JSON envelope; new fields are additive.
@@ -659,11 +660,17 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     entrypoint with `entrypoint_exists` set. Promotes the overall
     status to Warning (or Fail under `production`) when any probe
     fails. Doesn't replace the heavier deferred probes — see below.
-  - TODO MCP server reachability via configured transport — still
-    deferred until `agentflow mcp config` ships a structured config
-    surface the doctor command can crawl. The lite installation
-    probe above covers the most common "is my MCP server's binary
-    installed?" failure mode without it.
+  - DONE (PR.3) MCP server reachability via configured transport —
+    `doctor --check-installations` now walks `~/.agentflow/mcp.toml`
+    (via `AGENTFLOW_MCP_CONFIG` env-override-aware loader) in
+    addition to skill-declared `[[mcp_servers]]`. Top-level entries
+    appear in the same `mcp_servers` array with `skill` field
+    absent; report-level `mcp_config_source` field documents where
+    the top-level entries came from. Unreachable top-level servers
+    promote status the same way unreachable skill-declared ones do
+    (Warning under local, Fail under production). Heavier
+    transport-level handshake (spawn + `initialize` JSON-RPC +
+    drain) stays a future enhancement when there's concrete demand.
     - DONE P3.4-PR.2 `agentflow mcp config` schema + CLI surface
       (the upstream prereq). New `~/.agentflow/mcp.toml` top-level
       registry with the same `McpServerConfig` shape skill manifests
@@ -677,12 +684,18 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       8 CLI integration tests (env-injected fixture mcp.toml).
       P3.4-PR.3 will plumb this into the doctor's MCP reachability
       probe.
-  - TODO Plugin runtime spawn smoke (no-op plugin, ≤1 s) — still
-    deferred until the plugin manifest schema includes a `dry_run`
-    entry point so the smoke test does not depend on a real plugin
-    binary. The lite installation probe surfaces stale installs
-    (entrypoint deleted) but doesn't validate the binary actually
-    starts.
+  - DONE (PR.3) Plugin runtime spawn smoke — `doctor
+    --check-installations` now invokes `agentflow_core::plugin::
+    run_dry_run` for every plugin whose manifest declares
+    `[plugin.dry_run]`. Outcome lands under
+    `installations.plugins[].dry_run` as `{ duration_ms, outcome }`,
+    with `outcome.status` being `"passed"` or `"failed"` and the
+    failure variants `wrong_exit_code` / `killed_by_signal` /
+    `timeout` / `spawn_failed` distinguishing the failure mode.
+    Failed smoke promotes status the same way a missing entrypoint
+    does (Warning under local, Fail under production). Plugins
+    without `[plugin.dry_run]` leave the field absent — opt-in by
+    design.
     - DONE P3.4-PR.1 plugin manifest `dry_run` field + smoke
       runner (the upstream prereq). New optional
       `[plugin.dry_run]` TOML sub-table on `PluginSection`

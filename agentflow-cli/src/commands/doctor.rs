@@ -63,21 +63,33 @@ pub struct DoctorReport {
 pub struct InstallationProbeReport {
   pub skills_root: Option<PathBuf>,
   pub plugins_root: Option<PathBuf>,
+  /// Where the top-level MCP config (`~/.agentflow/mcp.toml`) was
+  /// loaded from. `None` when no such file exists / env-override
+  /// resolved nothing. Populated by the P3.4-PR.3 wiring.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub mcp_config_source: Option<String>,
   pub mcp_servers: Vec<McpServerProbe>,
   pub plugins: Vec<PluginInstallProbe>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct McpServerProbe {
-  /// Skill that declared the server.
-  pub skill: String,
+  /// Skill that declared the server. Absent (serialised as missing
+  /// field) when the entry comes from the top-level `mcp.toml`
+  /// registry rather than a skill manifest. Existing consumers
+  /// who keyed on `.skill` for skill-declared servers see the same
+  /// shape; consumers reading the new top-level entries learn the
+  /// source via this field's presence + `InstallationProbeReport.
+  /// mcp_config_source`.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub skill: Option<String>,
   /// Server name as declared in the manifest.
   pub server: String,
   /// First command segment — what we attempt to resolve on PATH.
   pub command: String,
   /// `true` if the binary resolves on PATH or is a reachable absolute
   /// path. `false` means the operator will see a startup failure when
-  /// the skill is run.
+  /// the skill / config entry is invoked.
   pub reachable: bool,
 }
 
@@ -86,10 +98,68 @@ pub struct PluginInstallProbe {
   pub name: String,
   pub version: String,
   pub entrypoint: PathBuf,
-  /// `true` if the entrypoint exists at the resolved path. Doesn't
-  /// spawn the binary — that's reserved for the deferred `dry_run`
-  /// path. Surfaces stale installs whose binary was deleted.
+  /// `true` if the entrypoint exists at the resolved path. Surfaces
+  /// stale installs whose binary was deleted. The dry-run smoke
+  /// below validates the binary actually starts.
   pub entrypoint_exists: bool,
+  /// Smoke outcome from running the manifest's `[plugin.dry_run]`
+  /// invocation. `None` when the manifest didn't declare a
+  /// `dry_run` block (operator opted out) — doctor reports the
+  /// presence of the entrypoint without trying to spawn anything.
+  /// `Some(report)` when the smoke ran; check `report.outcome` for
+  /// pass / fail variants and `report.duration_ms` for the
+  /// wall-clock cost.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub dry_run: Option<DryRunReport>,
+}
+
+/// Smoke-run result for a single plugin (P3.4-PR.3).
+///
+/// Mirrors `agentflow_core::plugin::DryRunOutcome` for the
+/// wire-readable surface. `outcome` carries the discriminator the
+/// status calculation keys on; `duration_ms` lets operators
+/// distinguish "fast pass" from "slow pass" without re-running.
+#[derive(Debug, Serialize)]
+pub struct DryRunReport {
+  pub duration_ms: u64,
+  pub outcome: DryRunOutcomeReport,
+}
+
+/// JSON-shaped projection of [`agentflow_core::plugin::DryRunOutcome`].
+///
+/// Discriminator: `"status"` — `"passed"` for success, `"failed"`
+/// for any negative outcome (with `kind` distinguishing the failure
+/// mode). Operators consuming the doctor JSON can branch on
+/// `status` alone for the binary pass/fail check.
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DryRunOutcomeReport {
+  Passed {
+    exit_code: i32,
+  },
+  Failed {
+    #[serde(flatten)]
+    kind: DryRunFailureKind,
+  },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DryRunFailureKind {
+  WrongExitCode {
+    expected: i32,
+    actual: i32,
+  },
+  KilledBySignal {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signal: Option<i32>,
+  },
+  Timeout {
+    timeout_ms: u32,
+  },
+  SpawnFailed {
+    reason: String,
+  },
 }
 
 /// Backup-readiness report populated only when `--backup-check` is supplied.
@@ -483,6 +553,20 @@ pub async fn build_report(
           DoctorProfile::Production => DoctorStatus::Fail,
           _ => DoctorStatus::Warning,
         });
+        continue;
+      }
+      // P3.4-PR.3: a dry-run smoke that exists but failed (timed
+      // out / wrong exit / killed / spawn error) promotes the
+      // overall status, same as a missing entrypoint. A plugin
+      // without a configured dry_run leaves status untouched —
+      // operators opted out of the smoke.
+      if let Some(report) = &plugin_probe.dry_run
+        && matches!(report.outcome, DryRunOutcomeReport::Failed { .. })
+      {
+        status.promote(match profile {
+          DoctorProfile::Production => DoctorStatus::Fail,
+          _ => DoctorStatus::Warning,
+        });
       }
     }
   }
@@ -529,20 +613,70 @@ async fn probe_installations(home: Option<&Path>) -> InstallationProbeReport {
   let skills_root = resolve_install_root(home, "AGENTFLOW_SKILLS_DIR", "skills");
   let plugins_root = resolve_install_root(home, "AGENTFLOW_PLUGINS_DIR", "plugins");
 
-  let mcp_servers = match skills_root.as_ref() {
+  let mut mcp_servers = match skills_root.as_ref() {
     Some(root) => probe_mcp_servers(root),
     None => Vec::new(),
   };
+
+  // P3.4-PR.3: also probe servers configured in the top-level
+  // ~/.agentflow/mcp.toml (or AGENTFLOW_MCP_CONFIG override). These
+  // appear in the same `mcp_servers` list with `skill: None` so
+  // existing consumers see one unified collection; the new
+  // `mcp_config_source` field at the report level documents where
+  // the top-level entries came from.
+  let (mcp_config_source, top_level_probes) = probe_top_level_mcp_config();
+  mcp_servers.extend(top_level_probes);
+
   let plugins = match plugins_root.as_ref() {
-    Some(root) => probe_plugin_installs(root),
+    Some(root) => probe_plugin_installs(root).await,
     None => Vec::new(),
   };
 
   InstallationProbeReport {
     skills_root,
     plugins_root,
+    mcp_config_source,
     mcp_servers,
     plugins,
+  }
+}
+
+/// Walk the top-level MCP registry (`~/.agentflow/mcp.toml` or its
+/// `AGENTFLOW_MCP_CONFIG` env override). Errors loading the file
+/// (parse / validation) are swallowed and reported as `source =
+/// Some("<err message>")` so doctor still completes; the caller
+/// surfaces this via status promotion.
+fn probe_top_level_mcp_config() -> (Option<String>, Vec<McpServerProbe>) {
+  use crate::commands::mcp::config::McpConfigFile;
+  match McpConfigFile::load_default() {
+    Ok((config, source)) => {
+      let source_str = source.path().map(|_| source.display_path());
+      let probes = config
+        .mcp_servers
+        .iter()
+        .map(|server| {
+          let cmd = server.command.trim();
+          let reachable = if cmd.is_empty() {
+            false
+          } else {
+            which::which(cmd).is_ok() || std::path::Path::new(cmd).is_file()
+          };
+          McpServerProbe {
+            skill: None,
+            server: server.name.clone(),
+            command: cmd.to_string(),
+            reachable,
+          }
+        })
+        .collect();
+      (source_str, probes)
+    }
+    Err(e) => (
+      // Surface the load failure so operators see it in the report
+      // rather than getting a silently-empty list.
+      Some(format!("error loading mcp.toml: {e}")),
+      Vec::new(),
+    ),
   }
 }
 
@@ -580,7 +714,7 @@ fn probe_mcp_servers(skills_root: &Path) -> Vec<McpServerProbe> {
         which::which(cmd).is_ok() || std::path::Path::new(cmd).is_file()
       };
       out.push(McpServerProbe {
-        skill: manifest.skill.name.clone(),
+        skill: Some(manifest.skill.name.clone()),
         server: server.name.clone(),
         command: cmd.to_string(),
         reachable,
@@ -591,8 +725,11 @@ fn probe_mcp_servers(skills_root: &Path) -> Vec<McpServerProbe> {
 }
 
 #[cfg(feature = "plugin")]
-fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
-  use agentflow_core::plugin::PluginManifest;
+async fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
+  use agentflow_core::plugin::{
+    DryRunFailure as CoreDryRunFailure, DryRunOutcome as CoreDryRunOutcome, PluginManifest,
+    run_dry_run,
+  };
   let mut out = Vec::new();
   let Ok(entries) = std::fs::read_dir(plugins_root) else {
     return out;
@@ -610,18 +747,64 @@ fn probe_plugin_installs(plugins_root: &Path) -> Vec<PluginInstallProbe> {
       continue;
     };
     let resolved = manifest.resolve_entrypoint(&dir);
+    let entrypoint_exists = resolved.exists();
+
+    // P3.4-PR.3: run the manifest's `[plugin.dry_run]` smoke when
+    // configured. Only run when the entrypoint actually exists —
+    // SpawnFailed would otherwise dominate the report for missing
+    // binaries, and the entrypoint_exists field already covers that
+    // case explicitly.
+    let dry_run = if entrypoint_exists && manifest.plugin.dry_run.is_some() {
+      let started_at = std::time::Instant::now();
+      let outcome = run_dry_run(&manifest, &dir).await;
+      let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+      let outcome_report = match outcome {
+        CoreDryRunOutcome::Skipped => {
+          // Shouldn't hit this branch since we gated on
+          // `dry_run.is_some()` above, but treat it defensively.
+          None
+        }
+        CoreDryRunOutcome::Passed { exit_code } => {
+          Some(DryRunOutcomeReport::Passed { exit_code })
+        }
+        CoreDryRunOutcome::Failed(failure) => Some(DryRunOutcomeReport::Failed {
+          kind: match failure {
+            CoreDryRunFailure::WrongExitCode { expected, actual } => {
+              DryRunFailureKind::WrongExitCode { expected, actual }
+            }
+            CoreDryRunFailure::KilledBySignal { signal } => {
+              DryRunFailureKind::KilledBySignal { signal }
+            }
+            CoreDryRunFailure::Timeout { timeout_ms } => {
+              DryRunFailureKind::Timeout { timeout_ms }
+            }
+            CoreDryRunFailure::SpawnFailed { reason } => {
+              DryRunFailureKind::SpawnFailed { reason }
+            }
+          },
+        }),
+      };
+      outcome_report.map(|outcome| DryRunReport {
+        duration_ms,
+        outcome,
+      })
+    } else {
+      None
+    };
+
     out.push(PluginInstallProbe {
       name: manifest.plugin.name.clone(),
       version: manifest.plugin.version.clone(),
       entrypoint: resolved.clone(),
-      entrypoint_exists: resolved.exists(),
+      entrypoint_exists,
+      dry_run,
     });
   }
   out
 }
 
 #[cfg(not(feature = "plugin"))]
-fn probe_plugin_installs(_plugins_root: &Path) -> Vec<PluginInstallProbe> {
+async fn probe_plugin_installs(_plugins_root: &Path) -> Vec<PluginInstallProbe> {
   // Without the `plugin` feature the binary doesn't know how to parse
   // a `plugin.toml`. The doctor still reports the configured plugins
   // dir under `installations.plugins_root`, just with an empty list.
