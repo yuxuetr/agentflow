@@ -30,17 +30,18 @@ but do not implement channel adapters in this queue.
 | Segment | Theme | Status |
 | --- | --- | --- |
 | P0 | V1 Contract Hardening | CLOSED |
-| P1 | Security And Tool Governance | partially closed (P1.7-P1.9 active) |
-| P2 | Local Server / Daemon Reliability | active |
-| P3 | Rust SDK And CLI Experience | CLOSED (P3.4 deep probes shipped via P3.4-PR.1/.2/.3) |
-| P4 | Memory, RAG, And Eval Foundations | active |
-| P5 | Plugin, Marketplace, And Worker Hardening | active |
-| P6 | Web UI Productization | NEW — active |
-| P7 | Performance And Release Engineering | closed (P7.4-FU1..FU4 all DONE; v1.0.0-rc.1 tag is unblocked) |
-| P-H | Harness Agent Mode (parallel track) | H0 + H1 + H2 + H3 + H4 closed; H5 next (gated on P2.1/P2.2/P2.4/P6.1) |
-| P9 | Dogfooding-Driven Refinements (from A1+A1.5 reflection) | CLOSED (all in-repo items DONE; P9.6 + half of P9.8 are cross-project phonon work) |
+| P1 | Security And Tool Governance | CLOSED (P1.1–P1.9 all DONE) |
+| P2 | Local Server / Daemon Reliability | CLOSED (P2.1–P2.8 all DONE) |
+| P3 | Rust SDK And CLI Experience | CLOSED (P3.1–P3.10 all DONE) |
+| P4 | Memory, RAG, And Eval Foundations | CLOSED (P4.1–P4.7 all DONE) |
+| P5 | Plugin, Marketplace, And Worker Hardening | CLOSED (P5.1–P5.8 all DONE) |
+| P6 | Web UI Productization | CLOSED (P6.1–P6.5 all DONE) |
+| P7 | Performance And Release Engineering | CLOSED (P7.1–P7.4-FU4 all DONE; v1.0.0-rc.1 tag unblocked) |
+| P-H | Harness Agent Mode (parallel track) | CLOSED (H0–H5 all closed; H6 DEFERRED) |
+| P9 | Dogfooding-Driven Refinements | CLOSED |
 | P-LLM | Modality Provider Traits + Model Schema Cleanup | CLOSED (P-LLM.0–.5 all DONE; P-LLM.6 video DEFERRED) |
-| M | Maintenance Tasks | NEW — ongoing |
+| M | Maintenance Tasks | CLOSED (M.1–M.7 all DONE; ongoing housekeeping) |
+| **P10** | **Optimization Backlog (post-2026-05-19 evaluation)** | **NEW — active** |
 | Deferred | Channel adapters / OS control / SaaS | non-goal |
 
 ## Recently Closed
@@ -167,6 +168,376 @@ but do not implement channel adapters in this queue.
 > P6 / P7 / M / P-LLM, all closed before this session) were moved to
 > [`docs/archive/TODOs-archive-2026-05-19-recently-closed.md`](docs/archive/TODOs-archive-2026-05-19-recently-closed.md)
 > on 2026-05-19 to keep this section focused on the latest changes.
+
+---
+
+## P10 — Optimization Backlog (post-2026-05-19 evaluation)
+
+Action items derived from
+[`docs/archive/PROJECT_EVALUATION_2026-05-19.md`](docs/archive/PROJECT_EVALUATION_2026-05-19.md)
+§4 (per-crate gaps), §6 (remaining risks R15–R17), and §7.1–§7.3
+(v1.0.0-rc.1 → v1.0 GA → v1.x recommendations).
+
+All entries start as `TODO`. Promote individual items to a P10.x or
+crate-named sub-segment only when picked up; the buckets below are
+the long-form backlog, not the next sprint.
+
+### P10.0 — v1.0.0-rc.1 release engineering (non-code ops, gates GA)
+
+Each step below is a manual `ops` action. None are code work; they
+all map to the P7.4-FU4 production-deployment checklist in
+`docs/RELEASE_NOTES_v1.0.0-rc.1.md` DRAFT.
+
+- TODO P10.0.1 Production deployment dress-rehearsal walkthrough
+  - Run the 6-step `Production Deployment Checklist` from
+    `docs/RELEASE_NOTES_v1.0.0-rc.1.md` on a fresh VM. Cross off
+    each step + record `agentflow doctor --profile production
+    --backup-check --format json` exit code.
+- TODO P10.0.2 `cargo publish --dry-run` for all publishable crates
+  - Order: `agentflow-core` → `agentflow-tools` → `agentflow-tracing`
+    → `agentflow-llm` → `agentflow-nodes` → `agentflow-mcp` →
+    `agentflow-memory` → `agentflow-rag` → `agentflow-agents` →
+    `agentflow-skills` → `agentflow-harness` → `agentflow-viz` →
+    `agentflow-db` → `agentflow-server` → `agentflow-worker` →
+    `agentflow-cli`. xtask, ui not published.
+- TODO P10.0.3 Tag `v1.0.0-rc.1`
+  - One-way decision; human operator only.
+- TODO P10.0.4 GitHub Release artifact + docker image push
+  - Build per-arch CLI binaries, docker buildx image for
+    `agentflow-server`, attach to GitHub Release.
+- TODO P10.0.5 Fresh-VM doctor smoke
+  - Provision a clean Ubuntu 24.04 VM with zero `~/.agentflow/`
+    state, install released `agentflow` binary, run
+    `agentflow doctor --profile production --backup-check`,
+    expect exit code 0 (or document why not).
+
+### P10.1 — agentflow-core (A — already strong, micro-polish only)
+
+- TODO P10.1.1 (Stretch) Benchmark hot-path scheduler / FlowValue
+  decode / checkpoint roundtrip
+  - Criterion suites already exist (`benches/scheduler.rs`); compare
+    against the perf-regression gate baseline and look for any 1.10×
+    regressions accumulated during P3.3 envelope work.
+- TODO P10.1.2 (Stretch) Document `decode_checkpoint_flow_value`'s
+  warn-vs-silent fallback in `docs/CHECKPOINT_SCHEMA.md`
+  - One paragraph; helps future readers understand pre-0.2 legacy
+    handling and why the two paths diverge.
+
+### P10.2 — agentflow-nodes (A-)
+
+No active gaps from the evaluation. Future opportunities:
+
+- TODO P10.2.1 (Stretch) Add a node-level latency bench for the
+  16+ built-in nodes
+  - Currently only `agentflow-core/benches/scheduler.rs` benches
+    DAG mechanics; per-node hot-path benches would catch
+    e.g. template-render regressions.
+
+### P10.3 — agentflow-llm (A — but `init()` UX is the single biggest pre-GA fix)
+
+- TODO P10.3.1 (HIGH — pre-GA) Lenient `LLMConfig::validate()` for
+  missing provider keys (R15)
+  - Current behavior: any provider in `default_models.yml` whose
+    `api_key_env` is unset causes `AgentFlow::init()` to fail-close.
+    Result: a fresh user with only `OPENAI_API_KEY` set cannot
+    even call `init()` because DASHSCOPE/DEEPSEEK/MINIMAX/etc.
+    keys are missing.
+  - Proposed change: `validate()` emits `eprintln!` warnings for
+    missing keys (naming the affected models so users know what
+    they're losing) but does NOT return `Err`. Fail-fast moves to
+    the lookup path: `get_provider(name)` returns
+    `LLMError::MissingApiKey` only when the user actually asks for
+    a model whose provider has no key.
+  - Tests: extend `agentflow-llm/src/config/validation.rs` unit
+    tests + verify `agentflow doctor --profile production` still
+    fails-closed on missing `AGENTFLOW_API_TOKEN` (auth, not LLM
+    key).
+  - Risk: behavior change. Anyone depending on strict-init for
+    correctness needs a migration note in `CHANGELOG.md`.
+
+- TODO P10.3.2 (Medium — v1.x) Promote DashScope / DeepSeek /
+  MiniMax to dedicated provider modules (R16)
+  - Current: 4 OpenAI-compat vendors (GLM + these 3) share
+    `OpenAIProvider` via `create_provider`. Works for the wire
+    shape match.
+  - Trigger to do this: vendor introduces wire-format divergence
+    that `OpenAIProvider` can't cleanly handle (custom tool-call
+    format, multimodal extension, etc.).
+  - Until then: keep the shared-adapter approach. Estimate when
+    needed: ~300-500 LoC per vendor.
+
+- TODO P10.3.3 (Medium — v1.x) Provider-specific tokenizers
+  - Today the `PricingTable` cost tracking + `RuntimeLimits`
+    token budgets use char-count or rough heuristics. Wire each
+    provider to its real tokenizer (tiktoken for OpenAI, etc.) for
+    accurate budget enforcement.
+
+- TODO P10.3.4 (Low — v1.x) Auto-rotate live nightly default models
+  on 404
+  - The live nightly went through 4 rounds of vendor-side model
+    deprecation in May 2026 (claude-3-5-haiku-20241022 →
+    claude-haiku-4-5; gemini-1.5-flash → gemini-2.0-flash →
+    gemini-2.5-flash; deepseek-chat → deepseek-v4-flash).
+  - Build a `cargo xtask refresh-live-models` that pings each
+    provider's models-list endpoint and rotates the workflow `env:`
+    block's `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL` overrides.
+  - Reduces manual `chore` toil after vendor deprecation
+    announcements.
+
+### P10.4 — agentflow-tools (A-)
+
+No gaps from the evaluation. Future opportunities:
+
+- TODO P10.4.1 (Stretch) Sandbox profile per-tool override
+  - Today `security.os_sandbox` is a manifest-level flag. Future:
+    `[security.tools.<name>] os_sandbox = "enforcing"` to override
+    per individual tool when the skill needs heterogeneous
+    enforcement.
+
+### P10.5 — agentflow-mcp (A-)
+
+- TODO P10.5.1 (Medium) Remove `client_old` historical baggage
+  - The old MCP client module sits alongside the current one. Audit
+    references; if none, delete + drop the rustdoc that mentions it.
+- TODO P10.5.2 (Medium — v1.x) Promote MCP server from
+  `experimental` to `beta`
+  - Spec the contract that's actually stable today, add backward-
+    compat tests, update `docs/STABILITY.md`.
+
+### P10.6 — agentflow-rag (A-)
+
+- TODO P10.6.1 (HIGH — pre-GA) Pluggable retriever trait
+  - Today BM25 is hardcoded in `agentflow-rag/src/eval/runner.rs`.
+    Define a `Retriever` trait with `Bm25`, `Dense`, and `Hybrid`
+    implementations; let the eval CLI accept `--retriever <name>`.
+  - Unblocks dense / hybrid baselines (currently only `bm25.json`).
+  - Effort: medium (~400-600 LoC + Qdrant integration for dense).
+
+- TODO P10.6.2 (Medium) Additional eval baselines
+  - Once P10.6.1 lands, ship `dense.json` + `hybrid.json` baselines
+    alongside the existing `bm25.json` so regressions across all
+    three retrievers gate releases.
+
+- TODO P10.6.3 (Low — Stretch) Latency profile per chunk size
+  - Today the eval reports p50/p95 latency but not per-chunk-size.
+    Add a benchmark dimension so chunking strategy regressions
+    surface.
+
+### P10.7 — agentflow-memory (B+)
+
+- TODO P10.7.1 (Medium) `agentflow memory prune` CLI command
+  - The trait surface (`MemoryStore::prune_*`) exists from P4.7;
+    the CLI front-end was deferred. Wire it up so operators can
+    prune memory layers from the command line.
+
+- TODO P10.7.2 (Low — v1.x) Encryption-at-rest implementation
+  - `EncryptedPreferenceStore` trait stub is in place per the P4.5
+    design doc. Pick a KMS strategy (envelope encryption via
+    `age` / `sops` / cloud KMS?) and ship a real impl.
+
+- TODO P10.7.3 (Low — v1.x) Cross-session memory linking strategy
+  - The 4-layer design separates Session / Semantic / Preference /
+    Entity facts cleanly. A "memory graph" linking entities across
+    sessions is a v2 design conversation.
+
+### P10.8 — agentflow-agents (A-)
+
+No active gaps. Future opportunities:
+
+- TODO P10.8.1 (Stretch) ReAct trace replay diff tool
+  - `agentflow trace replay` exists; an
+    `agentflow agent replay --diff <baseline>` would compare a
+    fresh ReAct run against a golden trace and surface step-level
+    divergence (tool-call order, message tokens, stop-reason).
+
+### P10.9 — agentflow-skills (A-)
+
+- TODO P10.9.1 (Medium) Promote `skill inspect --with-mcp-discovery`
+  to default-on
+  - Today opt-in because spawning MCP servers is heavy. Add a
+    progress indicator + cache the discovery result so subsequent
+    invocations are fast; then flip the default.
+
+- TODO P10.9.2 (Low — Stretch) Skill marketplace search UX
+  - Today `agentflow marketplace search` is text-only. Optional:
+    JSON-envelope output + Web UI marketplace browser tab.
+
+### P10.10 — agentflow-harness (A-)
+
+- TODO P10.10.1 (Medium — v1.x) Promote individual H6 items from
+  `Later Tracks` on concrete demand
+  - Slash-command ecosystem expansion
+  - TUI product shell (separate from CLI run)
+  - OpenHarness-style config import
+  - Plugin compatibility adapters
+  - Provider subscription bridge
+  - Each requires its own RFC. Don't pull en bloc.
+
+- TODO P10.10.2 (Low — Stretch) Harness session replay
+  - `harness list` shows session ids; a
+    `harness replay <id> --speed 2x` would re-stream the JSONL
+    log through a JSONL→TUI renderer for debugging long sessions
+    after the fact.
+
+### P10.11 — agentflow-cli (A-)
+
+- TODO P10.11.1 (Medium — pre-GA) `agentflow workflow logs <run_id>`
+  SSE follow command
+  - The server-side SSE endpoint exists (`/v1/runs/{id}/events`).
+    The CLI surface to consume it (`workflow logs --follow`) was
+    deferred. Build it on top of `server_client.rs`.
+  - Effort: small (~100-200 LoC).
+
+- TODO P10.11.2 (Medium — pre-GA) `agentflow skill run --server`
+  server-backed mode
+  - Today only `workflow run --server` exists. Extend the
+    server-backed pattern to `skill run` so platform users don't
+    have to local-spawn skills.
+
+- TODO P10.11.3 (Low — Stretch) Remaining `--format json-envelope`
+  migrations
+  - Audit which commands still lack `--format json-envelope`
+    (likely a few small ones like `mcp config`, `marketplace
+    search`, `config show`). Migrate them so the envelope contract
+    is universal.
+
+- TODO P10.11.4 (Medium — pre-GA) Server-side mapping for
+  `--model` / `--execution-mode` / `--run-dir` flags
+  - When `--server` is set, these per-run knobs are silently
+    local-only. Either: (a) wire them through to the server's POST
+    body, OR (b) error out with a clear message naming the
+    incompatibility.
+
+### P10.12 — agentflow-tracing (A)
+
+No active gaps. Future opportunities:
+
+- TODO P10.12.1 (Stretch) Hybrid TUI view (timeline + DAG side-by-
+  side)
+  - Today `trace replay` and `trace tui` are separate paths. A
+    split-pane view that shows DAG topology on the left + step
+    timeline on the right would be valuable for debugging fan-out
+    workflows. (Web UI already has trace-compare for this.)
+
+### P10.13 — agentflow-viz (B — needs a strategic decision)
+
+- TODO P10.13.1 (Medium — v1.x) Decide: merge with `agentflow-ui`
+  OR establish live-trace interop protocol
+  - `agentflow-viz` is static-only (YAML → Mermaid / DOT / JSON).
+    `agentflow-ui` already renders DAG with live state. Two
+    options:
+    - **Merge**: deprecate `agentflow-viz`, fold its rendering
+      logic into the UI's static-export path. Smaller workspace.
+    - **Live interop**: keep `agentflow-viz` as the "static export"
+      crate and have the UI call into it for printable snapshots.
+      Cleaner separation.
+  - Either way, document the decision in `docs/WEB_UI.md`.
+
+### P10.14 — agentflow-server (A-)
+
+No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
+
+- TODO P10.14.1 (Medium — v1.x) Per-run retention override via
+  POST body
+  - Today retention is per-tenant + per-profile. P2.2 left
+    per-run override as deferred. A `retention_overrides:
+    {events_days, artifacts_days}` field on `POST /v1/runs` body
+    would let users keep critical runs longer than the global
+    sweep.
+
+- TODO P10.14.2 (Low — v1.x) Operational dashboards (Grafana
+  templates)
+  - Server emits Prometheus metrics; a checked-in Grafana
+    dashboard JSON would let operators import in 1 click. Today
+    they have to build it themselves.
+
+### P10.15 — agentflow-db (B+)
+
+- TODO P10.15.1 (Medium — v1.x) Real backup/restore implementation
+  - Today: docs (`SERVER_BACKUP_RESTORE.md`) + `agentflow doctor
+    --backup-check` probes. Production backup is `pg_dump` +
+    filesystem snapshot. An `agentflow backup --output <path>`
+    CLI that orchestrates both would close the loop for operators.
+
+- TODO P10.15.2 (Low — v1.x) Read-replica support
+  - All repos write through the primary. For read-heavy gateways,
+    a `--database-read-url` option that routes `list_*` /
+    `get_*` reads to a replica would scale better.
+
+### P10.16 — agentflow-worker (B)
+
+- TODO P10.16.1 (Medium — v1.x) Signed-JWT identity flavour for
+  worker admission (P5.5 deferred)
+  - Today: PSK-only auth via `WorkerCredential`. JWT is documented
+    as the next iteration when the broader auth track ships
+    issuer/audience/key rotation primitives.
+
+- TODO P10.16.2 (Low — v1.x) Worker pool admission heuristics
+  - Today: `max_workers` + `max_concurrent_tasks_per_worker` are
+    static. Add: capacity-aware load balancing, locality hints
+    (`run_dir` co-location), and per-worker capability advertising
+    (which node types each worker can run).
+
+### P10.17 — agentflow-ui (B → "operator dashboard")
+
+- TODO P10.17.1 (HIGH — v1.x) Decide product positioning
+  - Today: "debugger" per the RoadMap. Real-world Web UIs for
+    workflow platforms tend to grow into "operator dashboards"
+    (cost / retry rates / policy decisions / worker utilization).
+    Decide whether to commit to that productization arc or stay
+    debugger-only.
+  - Either way: write the answer in `docs/WEB_UI.md` so future
+    contributors know the bar.
+
+- TODO P10.17.2 (Medium — v1.x) Preference UI wiring to P6.4 API
+  - The `/v1/preferences` API exists (P6.4). The UI still reads /
+    writes localStorage. Switch to the API so preferences sync
+    across browsers.
+
+- TODO P10.17.3 (Medium — v1.x) Server-side `?filter=` pre-filter
+  for very long runs
+  - P6.5 client-side event filter works for <10k events. For
+    longer runs the server should pre-filter via `/v1/runs/{id}/
+    events/history?filter=...`.
+
+- TODO P10.17.4 (Low — v1.x) Playwright suite in CI
+  - The e2e specs exist (`agentflow-ui/e2e/`) but are not in
+    `quality.yml` because they need Chromium + a live server +
+    Postgres. Either: (a) ship a `docker-compose` test harness +
+    new CI job, or (b) keep them as local-only smoke.
+
+### P10.18 — xtask (A-)
+
+No active gaps. Future opportunities:
+
+- TODO P10.18.1 (Stretch) `cargo xtask refresh-live-models` (also
+  listed under P10.3.4)
+- TODO P10.18.2 (Stretch) `cargo xtask check-changelog` to ensure
+  every PR touches `CHANGELOG.md` or has a `chore(skip-changelog)`
+  marker
+
+### P10.19 — Cross-crate / workspace level
+
+- TODO P10.19.1 (HIGH — pre-GA) WASM plugin runtime evaluation
+  - From eval §7.2 item #9. Subprocess JSON-RPC plugin runtime is
+    stable. WASM is the natural "v2 plugin runtime" — sandbox is
+    free, distribution is single-file, startup is faster.
+  - Action: write a 1-pager comparing wasmtime / wasmer / extism
+    plugin frameworks against the current subprocess `Plugin`
+    trait surface. Decide whether to invest before v1.0 GA or
+    push to v2.0.
+
+- TODO P10.19.2 (Medium — v1.x) Workspace-wide perf regression
+  detection
+  - `bench-gate` exists for criterion benches. Extend to capture
+    `cargo test --workspace` total wall-clock per crate and gate
+    on 1.5× regressions to catch test-suite bloat early.
+
+- TODO P10.19.3 (Low — Stretch) Centralized `docs/ROADMAP_v2.md`
+  for post-v1.0 direction
+  - Today the v1.x ideas are scattered across this file, the eval
+    report §7.3, and `RoadMap.md` "Later Tracks". A consolidated
+    v2 roadmap (once v1.0 GA cuts) would help align contributors.
 
 ---
 
