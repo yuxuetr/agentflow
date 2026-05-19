@@ -379,6 +379,11 @@ enum WorkflowCommands {
     offset: Option<i64>,
     #[arg(long)]
     status: Option<String>,
+    /// Output format: json (default — legacy bare body) or
+    /// json-envelope (canonical `CliJsonEnvelope` —
+    /// `agentflow.cli/1` wire schema)
+    #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
+    format: String,
   },
   /// Cancel a queued / running workflow run on a remote server.
   Cancel {
@@ -389,6 +394,10 @@ enum WorkflowCommands {
     auth_token: Option<String>,
     #[arg(long)]
     tenant: Option<String>,
+    /// Output format: json (default — legacy bare body) or
+    /// json-envelope (canonical `CliJsonEnvelope`)
+    #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
+    format: String,
   },
   /// Fetch the run graph snapshot from a remote server.
   Graph {
@@ -399,6 +408,10 @@ enum WorkflowCommands {
     auth_token: Option<String>,
     #[arg(long)]
     tenant: Option<String>,
+    /// Output format: json (default — legacy bare body) or
+    /// json-envelope (canonical `CliJsonEnvelope`)
+    #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
+    format: String,
   },
   /// Validate workflow schema and dependencies without execution
   Validate {
@@ -1223,6 +1236,7 @@ async fn main() {
         limit,
         offset,
         status,
+        format,
       } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
         Some(server_url) => {
           workflow::server_ops::list(
@@ -1232,6 +1246,7 @@ async fn main() {
             limit,
             offset,
             status.as_deref(),
+            &format,
           )
           .await
         }
@@ -1244,6 +1259,7 @@ async fn main() {
         server,
         auth_token,
         tenant,
+        format,
       } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
         Some(server_url) => {
           workflow::server_ops::cancel(
@@ -1251,6 +1267,7 @@ async fn main() {
             auth_token.as_deref(),
             tenant.as_deref(),
             &run_id,
+            &format,
           )
           .await
         }
@@ -1263,6 +1280,7 @@ async fn main() {
         server,
         auth_token,
         tenant,
+        format,
       } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
         Some(server_url) => {
           workflow::server_ops::graph(
@@ -1270,6 +1288,7 @@ async fn main() {
             auth_token.as_deref(),
             tenant.as_deref(),
             &run_id,
+            &format,
           )
           .await
         }

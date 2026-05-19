@@ -22,6 +22,23 @@ pub fn build_client(
   ServerClient::new(server_url.to_string(), token, tenant_id)
 }
 
+/// Render the server response — either as the legacy bare JSON
+/// body (default) or wrapped in the canonical `CliJsonEnvelope`.
+fn print_server_response(
+  command: &str,
+  format: &str,
+  body: &serde_json::Value,
+) -> Result<()> {
+  if format == "json-envelope" {
+    let envelope = crate::json_envelope::CliJsonEnvelope::ok(command, body);
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+  } else {
+    println!("{}", serde_json::to_string_pretty(body)?);
+  }
+  Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn list(
   server_url: &str,
   auth_token: Option<&str>,
@@ -29,11 +46,11 @@ pub async fn list(
   limit: Option<i64>,
   offset: Option<i64>,
   status: Option<&str>,
+  format: &str,
 ) -> Result<()> {
   let client = build_client(server_url, auth_token, tenant)?;
   let body = client.list_runs(limit, offset, status).await?;
-  println!("{}", serde_json::to_string_pretty(&body)?);
-  Ok(())
+  print_server_response("workflow list", format, &body)
 }
 
 pub async fn cancel(
@@ -41,11 +58,11 @@ pub async fn cancel(
   auth_token: Option<&str>,
   tenant: Option<&str>,
   run_id: &str,
+  format: &str,
 ) -> Result<()> {
   let client = build_client(server_url, auth_token, tenant)?;
   let body = client.cancel_run(run_id).await?;
-  println!("{}", serde_json::to_string_pretty(&body)?);
-  Ok(())
+  print_server_response("workflow cancel", format, &body)
 }
 
 pub async fn graph(
@@ -53,11 +70,11 @@ pub async fn graph(
   auth_token: Option<&str>,
   tenant: Option<&str>,
   run_id: &str,
+  format: &str,
 ) -> Result<()> {
   let client = build_client(server_url, auth_token, tenant)?;
   let body = client.get_run_graph(run_id).await?;
-  println!("{}", serde_json::to_string_pretty(&body)?);
-  Ok(())
+  print_server_response("workflow graph", format, &body)
 }
 
 /// Submit a workflow body via the server and poll until terminal.

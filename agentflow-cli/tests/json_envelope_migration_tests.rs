@@ -1086,6 +1086,77 @@ fn harness_list_rejects_unknown_output_format() {
     .stderr(predicate::str::contains("yaml"));
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// workflow list / cancel / graph (server-backed)
+//
+// Real envelope-shape round-trips need a Postgres-backed server (covered by
+// `agentflow-cli/tests/cli_server_mode.rs` gated on
+// `AGENTFLOW_DATABASE_TEST_URL`). Here we exercise the clap wiring + help
+// surface so the value-parser strings stay locked.
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn workflow_list_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "list", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn workflow_cancel_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "cancel", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn workflow_graph_help_lists_json_envelope_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "graph", "--help"])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("json-envelope"));
+}
+
+#[test]
+fn workflow_list_rejects_unknown_format() {
+  // value-parser fires before the "requires --server" bail, so this
+  // tests the format wiring cleanly without needing a live server.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "list", "--format", "yaml"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("yaml"));
+}
+
+#[test]
+fn workflow_cancel_rejects_unknown_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "cancel", "run-abc", "--format", "text"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("text"));
+}
+
+#[test]
+fn workflow_graph_rejects_unknown_format() {
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["workflow", "graph", "run-abc", "--format", "xml"])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("xml"));
+}
+
 #[test]
 fn envelope_contract_locks_canonical_4_key_set() {
   // Belt-and-suspenders: any new command that wants to ship a 5th

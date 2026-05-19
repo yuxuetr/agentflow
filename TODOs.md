@@ -719,8 +719,19 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       hand-crafted JSON trace fixture, `--json` legacy flag silent
       ignore in envelope mode, default-text regression guard,
       help-surface + value-parser guards.
-    - `workflow run|list|cancel|graph|logs` — server-backed,
-      depends on P2.5 `--server` plumbing.
+    - DONE (partial) `workflow list|cancel|graph` — three
+      server-backed read/control commands gained `--format
+      json|json-envelope` (json default for back-compat — these
+      commands have always emitted bare JSON; the envelope variant
+      wraps the same body via the canonical `CliJsonEnvelope`).
+      `print_server_response` helper in `server_ops.rs` centralises
+      the format branching so future server-backed commands plug in
+      with one line. 6 new help-surface + value-parser tests.
+      `workflow run --server` envelope migration deferred — the
+      current path also prints a human progress line
+      ("📋 Submitted run X") plus the final JSON, so envelope mode
+      needs a separate slice that unifies stdout output.
+      `workflow logs` doesn't exist on the CLI surface today.
 
 - DONE P3.4 `agentflow doctor` expansion:
   Library/CLI structural surface + deeper provider probes all closed.
