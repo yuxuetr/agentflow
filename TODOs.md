@@ -45,6 +45,18 @@ but do not implement channel adapters in this queue.
 
 ## Recently Closed
 
+- N9 (live nightly CI verified end-to-end) — final dry-run
+  `26103718043` after the model refresh and `max_tokens` headroom
+  bump: **21 passed / 0 failed in 20.48s**. Every shipped provider's
+  default text path now actually hits the real API on every nightly
+  scheduled run + every `workflow_dispatch`:
+  OpenAI `gpt-4o-mini` / Anthropic `claude-haiku-4-5` / Google
+  `gemini-2.5-flash` / Moonshot `moonshot-v1-8k` / StepFun
+  `step-1-8k` / GLM·Zhipu `glm-4.5-flash`. Capability gates
+  (`AGENTFLOW_LIVE_MULTIMODAL_TESTS` / `_AUDIO_TESTS` /
+  `_IMAGE_TESTS`) still keep vision / audio / image tests behind
+  opt-in env vars to avoid cost surprises. N9 segment is fully
+  closed.
 - N9 (live nightly CI model refresh) — second dry-run after the
   init-validation fix passed 19 / 21 tests but surfaced 2 model-
   not-found 404s from vendor-side deprecations:
