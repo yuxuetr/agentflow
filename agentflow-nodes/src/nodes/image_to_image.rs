@@ -6,7 +6,9 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, providers::stepfun::Image2ImageRequest};
+use agentflow_llm::{
+  AgentFlow, providers::modality::Image2ImageRequest as ModalityImage2ImageRequest,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -64,19 +66,18 @@ impl AsyncNode for ImageToImageNode {
 
     let source_url = load_data_uri_from_source(&self.source_image, inputs).await?;
 
-    let api_key = std::env::var("STEPFUN_API_KEY")
-      .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-      .map_err(|_| AgentFlowError::ConfigurationError {
-        message: "StepFun API key not found".to_string(),
-      })?;
+    // P-LLM.3: route through the modality dispatcher.
+    let provider =
+      AgentFlow::image2image(&self.model)
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!(
+            "Failed to resolve image-to-image provider for '{}': {}",
+            self.model, e
+          ),
+        })?;
 
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await.map_err(|e| {
-      AgentFlowError::ConfigurationError {
-        message: format!("Failed to create stepfun client: {}", e),
-      }
-    })?;
-
-    let request = Image2ImageRequest {
+    let request = ModalityImage2ImageRequest {
       model: self.model.clone(),
       prompt: resolved_prompt,
       source_url,
@@ -89,26 +90,29 @@ impl AsyncNode for ImageToImageNode {
       cfg_scale: self.cfg_scale,
     };
 
-    println!("   Calling StepFun image_to_image API...");
-    let response = stepfun_client.image_to_image(request).await.map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
-        message: format!("StepFun image_to_image failed: {}", e),
-      }
-    })?;
+    println!("   Transforming via provider '{}'...", provider.name());
+    let response =
+      provider
+        .transform(request)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("Image-to-image transform failed: {}", e),
+        })?;
 
-    let output_data = if let Some(first_image) = response.data.first() {
-      if let Some(b64) = &first_image.b64_json {
-        format!("data:image/png;base64,{}", b64)
-      } else if let Some(url) = &first_image.url {
-        url.clone()
-      } else {
-        return Err(AgentFlowError::AsyncExecutionError {
-          message: "No image data in response".to_string(),
-        });
-      }
+    let first_image =
+      response
+        .images
+        .first()
+        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+          message: "No images returned in response".to_string(),
+        })?;
+    let output_data = if let Some(b64) = &first_image.b64_json {
+      format!("data:image/png;base64,{}", b64)
+    } else if let Some(url) = &first_image.url {
+      url.clone()
     } else {
       return Err(AgentFlowError::AsyncExecutionError {
-        message: "No images returned in response".to_string(),
+        message: "No image data in response".to_string(),
       });
     };
 

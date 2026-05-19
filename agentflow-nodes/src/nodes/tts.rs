@@ -1,11 +1,16 @@
-//! TTS Node - Converts text to speech using a specified model and voice.
+//! TTS Node — converts text to speech via the modality dispatcher.
+//!
+//! Post-P-LLM.3 this node no longer talks to StepFun directly. It picks
+//! the vendor via the registry by model name: `AgentFlow::tts(&self.model)`
+//! returns a boxed [`agentflow_llm::TtsProvider`] which routes to the
+//! right vendor implementation (today StepFun; P-LLM.5 will add others).
 
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, providers::stepfun::TTSBuilder};
+use agentflow_llm::{AgentFlow, TtsRequest};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -19,6 +24,17 @@ pub enum AudioResponseFormat {
   Mp3,
   Flac,
   Opus,
+}
+
+impl AudioResponseFormat {
+  fn as_wire_str(&self) -> &'static str {
+    match self {
+      AudioResponseFormat::Wav => "wav",
+      AudioResponseFormat::Mp3 => "mp3",
+      AudioResponseFormat::Flac => "flac",
+      AudioResponseFormat::Opus => "opus",
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,50 +92,37 @@ impl AsyncNode for TTSNode {
       }
     }
 
-    let api_key = std::env::var("STEPFUN_API_KEY")
-      .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-      .map_err(|_| AgentFlowError::ConfigurationError {
-        message: "StepFun API key not found".to_string(),
+    // P-LLM.3: route through the modality dispatcher. The registry
+    // entry for `self.model` decides which vendor handles the call
+    // (today only StepFun; future vendors plug in transparently).
+    let provider = AgentFlow::tts(&self.model)
+      .await
+      .map_err(|e| AgentFlowError::ConfigurationError {
+        message: format!("Failed to resolve TTS provider for model '{}': {}", self.model, e),
       })?;
 
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await.map_err(|e| {
-      AgentFlowError::ConfigurationError {
-        message: format!("Failed to create stepfun client: {}", e),
-      }
-    })?;
-
-    let format_str = match self.response_format {
-      AudioResponseFormat::Wav => "wav",
-      AudioResponseFormat::Mp3 => "mp3",
-      AudioResponseFormat::Flac => "flac",
-      AudioResponseFormat::Opus => "opus",
+    let response_format = self.response_format.as_wire_str().to_string();
+    let request = TtsRequest {
+      model: self.model.clone(),
+      input: resolved_input,
+      voice: self.voice.clone(),
+      response_format: Some(response_format),
+      speed: self.speed,
+      volume: None,
+      sample_rate: None,
     };
 
-    let mut builder =
-      TTSBuilder::new(&self.model, &resolved_input, &self.voice).response_format(format_str);
+    println!("   Synthesizing speech via provider '{}'...", provider.name());
+    let tts_response =
+      provider
+        .synthesize(request)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("TTS synthesis failed: {}", e),
+        })?;
 
-    if let Some(speed) = self.speed {
-      builder = builder.speed(speed);
-    }
-
-    let request = builder.build();
-
-    println!("   Calling StepFun text_to_speech API...");
-    let audio_data = stepfun_client.text_to_speech(request).await.map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
-        message: format!("StepFun text_to_speech failed: {}", e),
-      }
-    })?;
-
-    let mime_type = match self.response_format {
-      AudioResponseFormat::Wav => "audio/wav",
-      AudioResponseFormat::Mp3 => "audio/mpeg",
-      AudioResponseFormat::Flac => "audio/flac",
-      AudioResponseFormat::Opus => "audio/opus",
-    };
-
-    let base64_data = STANDARD.encode(&audio_data);
-    let data_uri = format!("data:{};base64,{}", mime_type, base64_data);
+    let base64_data = STANDARD.encode(&tts_response.audio);
+    let data_uri = format!("data:{};base64,{}", tts_response.mime_type, base64_data);
 
     println!("✅ TTSNode execution successful.");
     let mut outputs = HashMap::new();

@@ -3,7 +3,9 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, providers::stepfun::Text2ImageBuilder};
+use agentflow_llm::{
+  AgentFlow, providers::modality::Text2ImageRequest as ModalityText2ImageRequest,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -224,118 +226,103 @@ impl TextToImageNode {
     Ok(Value::Object(config))
   }
 
-  /// Execute real image generation using StepFun API
+  /// Execute real image generation through the modality dispatcher.
+  ///
+  /// Post-P-LLM.3: vendor selection comes from the model registry, not
+  /// a hardcoded StepFun client. `self.style_reference` is currently
+  /// dropped because it's StepFun-specific and the cross-vendor
+  /// `Text2ImageRequest` trait surface doesn't carry it; if a future
+  /// trait extension adds vendor extras (`extra: Map<String, Value>`),
+  /// the conversion below regains it.
   async fn execute_real_image_generation(
     &self,
     config: &serde_json::Map<String, Value>,
   ) -> Result<String, AgentFlowError> {
-    let prompt = config.get("prompt").unwrap().as_str().unwrap();
-    let model = config.get("model").unwrap().as_str().unwrap();
+    let prompt = config
+      .get("prompt")
+      .and_then(|v| v.as_str())
+      .unwrap_or("")
+      .to_string();
+    let model = config
+      .get("model")
+      .and_then(|v| v.as_str())
+      .unwrap_or(self.model.as_str())
+      .to_string();
     let size = config
       .get("size")
-      .map(|s| s.as_str().unwrap_or("1024x1024"))
+      .and_then(|s| s.as_str())
       .unwrap_or("1024x1024");
 
-    println!("🎨 Executing Text-to-Image request (StepFun API):");
+    println!("🎨 Executing Text-to-Image request via modality dispatcher:");
     println!("   Model: {}", model);
     println!("   Prompt: {}", prompt);
     println!("   Size: {}", size);
 
-    // Get API key from environment
-    let api_key = std::env::var("STEPFUN_API_KEY")
-            .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-            .map_err(|_| AgentFlowError::ConfigurationError {
-                message: "StepFun API key not found. Set STEPFUN_API_KEY or AGENTFLOW_STEPFUN_API_KEY environment variable".to_string(),
-            })?;
+    let provider =
+      AgentFlow::text2image_for(&model)
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!("Failed to resolve text-to-image provider for '{}': {}", model, e),
+        })?;
 
-    // Initialize StepFun client
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await.map_err(|e| {
-      AgentFlowError::ConfigurationError {
-        message: format!("Failed to initialize StepFun client: {}", e),
-      }
-    })?;
-
-    // Build Text2Image request using Text2ImageBuilder
-    let mut image_builder = Text2ImageBuilder::new(model, prompt);
-
-    // Add size if specified
-    image_builder = image_builder.size(size);
-
-    // Map response format
     let response_format = match &self.response_format {
       ImageResponseFormat::Base64Json => "b64_json",
       ImageResponseFormat::Url => "url",
     };
-    image_builder = image_builder.response_format(response_format);
 
-    // Add optional parameters
-    if let Some(steps) = self.steps {
-      image_builder = image_builder.steps(steps);
-    }
+    let request = ModalityText2ImageRequest {
+      model: model.clone(),
+      prompt,
+      size: Some(size.to_string()),
+      n: self.n,
+      response_format: Some(response_format.to_string()),
+      seed: self.seed.map(|s| s as i32),
+      steps: self.steps,
+      cfg_scale: self.cfg_scale,
+    };
 
-    if let Some(cfg_scale) = self.cfg_scale {
-      image_builder = image_builder.cfg_scale(cfg_scale);
-    }
+    let image_response =
+      provider
+        .generate(request)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("Text-to-image generation failed: {}", e),
+        })?;
 
-    if let Some(seed) = self.seed {
-      image_builder = image_builder.seed(seed as i32);
-    }
+    let first_image =
+      image_response
+        .images
+        .first()
+        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+          message: "No images returned from text-to-image provider".to_string(),
+        })?;
 
-    // Add style reference if present
-    if let Some(ref style) = self.style_reference
-      && let Some(ref image_url) = style.image_url
-    {
-      image_builder = image_builder.style_reference(image_url, style.style_weight);
-    }
-
-    let image_request = image_builder.build();
-
-    // Execute image generation request
-    let image_response = stepfun_client
-      .text_to_image(image_request)
-      .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
-        message: format!("StepFun text-to-image execution failed: {}", e),
-      })?;
-
-    // Process response based on format
-    let result = if let Some(first_image) = image_response.data.first() {
-      match response_format {
-        "b64_json" => {
-          if let Some(ref b64_data) = first_image.b64_json {
-            format!("data:image/png;base64,{}", b64_data)
-          } else if let Some(ref image_data) = first_image.image {
-            format!("data:image/png;base64,{}", image_data)
-          } else {
-            return Err(AgentFlowError::AsyncExecutionError {
-              message: "No image data returned from StepFun API".to_string(),
-            });
-          }
-        }
-        "url" => {
-          if let Some(ref url) = first_image.url {
-            url.clone()
-          } else {
-            return Err(AgentFlowError::AsyncExecutionError {
-              message: "No image URL returned from StepFun API".to_string(),
-            });
-          }
-        }
-        _ => {
-          return Err(AgentFlowError::AsyncExecutionError {
-            message: format!("Unsupported response format: {}", response_format),
-          });
-        }
+    let result = match response_format {
+      "b64_json" => first_image
+        .b64_json
+        .as_ref()
+        .map(|b| format!("data:image/png;base64,{}", b))
+        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+          message: "No base64 image data returned from provider".to_string(),
+        })?,
+      "url" => first_image
+        .url
+        .clone()
+        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+          message: "No image URL returned from provider".to_string(),
+        })?,
+      other => {
+        return Err(AgentFlowError::AsyncExecutionError {
+          message: format!("Unsupported response format: {}", other),
+        });
       }
-    } else {
-      return Err(AgentFlowError::AsyncExecutionError {
-        message: "No images returned from StepFun API".to_string(),
-      });
     };
 
     println!(
-      "✅ Image Generation: Generated {} image ({})",
-      size, response_format
+      "✅ Image Generation via '{}': size {} format {}",
+      provider.name(),
+      size,
+      response_format
     );
     Ok(result)
   }

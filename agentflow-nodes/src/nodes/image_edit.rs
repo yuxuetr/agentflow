@@ -6,7 +6,9 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, providers::stepfun::ImageEditRequest};
+use agentflow_llm::{
+  AgentFlow, providers::modality::ImageEditRequest as ModalityImageEditRequest,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -60,19 +62,18 @@ impl AsyncNode for ImageEditNode {
 
     let image_data = load_bytes_from_source(&self.image_source, inputs).await?;
 
-    let api_key = std::env::var("STEPFUN_API_KEY")
-      .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-      .map_err(|_| AgentFlowError::ConfigurationError {
-        message: "StepFun API key not found".to_string(),
-      })?;
+    // P-LLM.3: route through the modality dispatcher.
+    let provider =
+      AgentFlow::image_edit(&self.model)
+        .await
+        .map_err(|e| AgentFlowError::ConfigurationError {
+          message: format!(
+            "Failed to resolve image-edit provider for '{}': {}",
+            self.model, e
+          ),
+        })?;
 
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await.map_err(|e| {
-      AgentFlowError::ConfigurationError {
-        message: format!("Failed to create stepfun client: {}", e),
-      }
-    })?;
-
-    let request = ImageEditRequest {
+    let request = ModalityImageEditRequest {
       model: self.model.clone(),
       prompt: resolved_prompt,
       image_data,
@@ -84,26 +85,28 @@ impl AsyncNode for ImageEditNode {
       response_format: self.response_format.clone(),
     };
 
-    println!("   Calling StepFun edit_image API...");
-    let response = stepfun_client.edit_image(request).await.map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
-        message: format!("StepFun edit_image failed: {}", e),
-      }
-    })?;
+    println!("   Editing image via provider '{}'...", provider.name());
+    let response = provider
+      .edit(request)
+      .await
+      .map_err(|e| AgentFlowError::AsyncExecutionError {
+        message: format!("Image edit failed: {}", e),
+      })?;
 
-    let output_data = if let Some(first_image) = response.data.first() {
-      if let Some(b64) = &first_image.b64_json {
-        format!("data:image/png;base64,{}", b64)
-      } else if let Some(url) = &first_image.url {
-        url.clone()
-      } else {
-        return Err(AgentFlowError::AsyncExecutionError {
-          message: "No image data in response".to_string(),
-        });
-      }
+    let first_image =
+      response
+        .images
+        .first()
+        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+          message: "No images returned in response".to_string(),
+        })?;
+    let output_data = if let Some(b64) = &first_image.b64_json {
+      format!("data:image/png;base64,{}", b64)
+    } else if let Some(url) = &first_image.url {
+      url.clone()
     } else {
       return Err(AgentFlowError::AsyncExecutionError {
-        message: "No images returned in response".to_string(),
+        message: "No image data in response".to_string(),
       });
     };
 

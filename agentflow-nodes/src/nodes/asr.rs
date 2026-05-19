@@ -6,7 +6,7 @@ use agentflow_core::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_llm::{AgentFlow, providers::stepfun::ASRRequest};
+use agentflow_llm::{AgentFlow, AsrRequest};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -65,17 +65,13 @@ impl AsyncNode for ASRNode {
 
     let audio_data = load_bytes_from_source(&resolved_source, inputs).await?;
 
-    let api_key = std::env::var("STEPFUN_API_KEY")
-      .or_else(|_| std::env::var("AGENTFLOW_STEPFUN_API_KEY"))
-      .map_err(|_| AgentFlowError::ConfigurationError {
-        message: "StepFun API key not found".to_string(),
+    // P-LLM.3: route through the modality dispatcher. The registry
+    // entry for `self.model` decides which vendor handles the call.
+    let provider = AgentFlow::asr(&self.model)
+      .await
+      .map_err(|e| AgentFlowError::ConfigurationError {
+        message: format!("Failed to resolve ASR provider for model '{}': {}", self.model, e),
       })?;
-
-    let stepfun_client = AgentFlow::stepfun_client(&api_key).await.map_err(|e| {
-      AgentFlowError::ConfigurationError {
-        message: format!("Failed to create stepfun client: {}", e),
-      }
-    })?;
 
     let format_str = match self.response_format {
       ASRResponseFormat::Json => "json",
@@ -84,19 +80,24 @@ impl AsyncNode for ASRNode {
       ASRResponseFormat::Vtt => "vtt",
     };
 
-    let request = ASRRequest {
+    let request = AsrRequest {
       model: self.model.clone(),
       response_format: format_str.to_string(),
       audio_data,
       filename: resolved_source,
+      language: None,
+      temperature: None,
     };
 
-    println!("   Calling StepFun speech_to_text API...");
-    let transcript = stepfun_client.speech_to_text(request).await.map_err(|e| {
-      AgentFlowError::AsyncExecutionError {
-        message: format!("StepFun speech_to_text failed: {}", e),
-      }
-    })?;
+    println!("   Transcribing audio via provider '{}'...", provider.name());
+    let asr_response =
+      provider
+        .transcribe(request)
+        .await
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("ASR transcription failed: {}", e),
+        })?;
+    let transcript = asr_response.text;
 
     println!("✅ ASRNode execution successful.");
     let mut outputs = HashMap::new();

@@ -2362,16 +2362,37 @@ general chat models that happened to accept image input).
   - agentflow-llm lib: 115 / 115 passing (was 113). Workspace
     clippy clean.
 
-- TODO P-LLM.3 Refactor 5 multimodal nodes to dispatcher:
-  - Delete every `use providers::stepfun::*` from
-    `agentflow-nodes/src/nodes/{asr,tts,text_to_image,
-    image_to_image,image_edit}.rs`. Replace direct StepFun client
-    calls with `AgentFlow::<modality>(...).method(...)`.
-  - Node YAML surface unchanged: same `model:` field, same input
-    and output shapes. User-visible behavior identical for StepFun
-    models.
-  - Mock provider implementations in test-only code so node
-    routing can be unit-tested without API keys.
+- DONE P-LLM.3 Refactor 5 multimodal nodes to dispatcher:
+  - `agentflow-nodes/src/nodes/{asr,tts,text_to_image,
+    image_to_image,image_edit}.rs` all dropped their direct
+    StepFun coupling. Each now resolves the provider through
+    `AgentFlow::<modality>(&self.model).await?` (registry-driven
+    vendor selection) and submits a modality-level request.
+  - Node YAML surface unchanged — `model:` / input keys / output
+    keys all preserve identical shape. User-visible behavior
+    identical for StepFun models.
+  - Modality request types (`Text2ImageRequest`,
+    `Image2ImageRequest`, `ImageEditRequest`) name-collide with
+    the StepFun-internal types at the crate root, so node code
+    imports them via the full module path
+    (`agentflow_llm::providers::modality::Text2ImageRequest as
+    ModalityText2ImageRequest`). P-LLM.4 will demote the StepFun
+    types and let the modality ones win at the crate root.
+  - Known limitation surfaced: `TextToImageNode::style_reference`
+    was StepFun-specific; the cross-vendor `Text2ImageRequest`
+    trait doesn't carry it today. The field stays on
+    `TextToImageNode` for API compat but is dropped when
+    constructing the trait request — a future trait extension
+    (vendor extras map, P-LLM.5 follow-up if needed) can route
+    it back through.
+  - Removed `STEPFUN_API_KEY` direct env lookups from all 5 node
+    files — the dispatcher resolves API keys via
+    `LLMConfig::get_api_key(vendor)` with the same precedence the
+    chat path uses, so YAML configs and `~/.agentflow/.env`
+    handling stays consistent.
+  - agentflow-nodes lib: 25 / 25 passing (4 ignored are pre-existing
+    STEPFUN_API_KEY-gated integration tests). Workspace clippy
+    clean.
 
 - TODO P-LLM.4 Clean up `lib.rs` re-exports:
   - Delete `pub use providers::stepfun::*` at `lib.rs:107` and the
