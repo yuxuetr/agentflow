@@ -106,6 +106,8 @@ async fn cli_workflow_list_via_server_returns_tenant_scoped_rows() {
         status: RunStatus::Queued,
         run_dir: None,
         tenant_id: tenant.clone(),
+        events_retention_days: None,
+        artifacts_retention_days: None,
       })
       .await
       .unwrap();
@@ -157,6 +159,8 @@ async fn cli_workflow_cancel_via_server_marks_run_cancelled() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: tenant.clone(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -231,6 +235,8 @@ async fn cli_workflow_run_via_server_404s_against_unknown_tenant() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: owner_tenant.clone(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();

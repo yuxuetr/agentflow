@@ -68,8 +68,9 @@ pub use harness_approval::{
 pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
-  ListRunsResponse, ResumePlanQuery, RunCancellationRegistry, RunContext, RunExecutor, RunResponse,
-  StubExecutor, cancel_run, default_executor, get_run, get_run_resume_plan, list_runs, submit_run,
+  ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunCancellationRegistry, RunContext,
+  RunExecutor, RunResponse, StubExecutor, cancel_run, default_executor, get_run,
+  get_run_resume_plan, list_runs, submit_run,
 };
 pub use scheduler::{
   AdmissionError, AuthenticatedControlPlane, ControlError, DistributedDagRunResult,

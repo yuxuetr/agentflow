@@ -183,14 +183,22 @@ pub async fn cleanup_expired(
 }
 
 async fn list_terminal_runs(pool: &PgPool, days: i64) -> Result<Vec<Uuid>, CleanupError> {
-  let interval = format!("{days} days");
+  // Per-run override (P10.14.1): a run with an events_/artifacts_
+  // retention override stays alive until the longest of the three
+  // windows expires. Otherwise the run row would cascade-DELETE
+  // events/artifacts ahead of their own per-run cutoff and the
+  // override would do nothing.
   let rows = sqlx::query(
     r#"SELECT id FROM runs
        WHERE status IN ('succeeded', 'failed', 'cancelled')
          AND finished_at IS NOT NULL
-         AND finished_at < NOW() - $1::INTERVAL"#,
+         AND finished_at < NOW() - GREATEST(
+           $1,
+           COALESCE(events_retention_days, 0),
+           COALESCE(artifacts_retention_days, 0)
+         )::INT * INTERVAL '1 day'"#,
   )
-  .bind(&interval)
+  .bind(days as i32)
   .fetch_all(pool)
   .await?;
   let ids: Vec<Uuid> = rows.iter().map(|row| row.get::<Uuid, _>("id")).collect();
@@ -211,64 +219,68 @@ async fn delete_terminal_runs(pool: &PgPool, ids: &[Uuid]) -> Result<u64, Cleanu
 }
 
 async fn sweep_events(pool: &PgPool, days: i64) -> Result<u64, CleanupError> {
-  let interval = format!("{days} days");
+  // Per-run override: extend retention to `max(global, override)`
+  // days by joining against the owning run row.
   let result = sqlx::query(
-    r#"DELETE FROM events
-       WHERE ts < NOW() - $1::INTERVAL
-         AND run_id IN (
-           SELECT id FROM runs
-           WHERE status IN ('succeeded', 'failed', 'cancelled')
-         )"#,
+    r#"DELETE FROM events e
+       USING runs r
+       WHERE e.run_id = r.id
+         AND r.status IN ('succeeded', 'failed', 'cancelled')
+         AND e.ts < NOW() - GREATEST(
+           $1,
+           COALESCE(r.events_retention_days, 0)
+         )::INT * INTERVAL '1 day'"#,
   )
-  .bind(&interval)
+  .bind(days as i32)
   .execute(pool)
   .await?;
   Ok(result.rows_affected())
 }
 
 async fn preview_events(pool: &PgPool, days: i64) -> Result<u64, CleanupError> {
-  let interval = format!("{days} days");
   let row = sqlx::query(
-    r#"SELECT COUNT(*)::BIGINT AS n FROM events
-       WHERE ts < NOW() - $1::INTERVAL
-         AND run_id IN (
-           SELECT id FROM runs
-           WHERE status IN ('succeeded', 'failed', 'cancelled')
-         )"#,
+    r#"SELECT COUNT(*)::BIGINT AS n FROM events e
+       JOIN runs r ON e.run_id = r.id
+       WHERE r.status IN ('succeeded', 'failed', 'cancelled')
+         AND e.ts < NOW() - GREATEST(
+           $1,
+           COALESCE(r.events_retention_days, 0)
+         )::INT * INTERVAL '1 day'"#,
   )
-  .bind(&interval)
+  .bind(days as i32)
   .fetch_one(pool)
   .await?;
   Ok(row.get::<i64, _>("n") as u64)
 }
 
 async fn sweep_artifacts(pool: &PgPool, days: i64) -> Result<u64, CleanupError> {
-  let interval = format!("{days} days");
   let result = sqlx::query(
-    r#"DELETE FROM artifacts
-       WHERE created_at < NOW() - $1::INTERVAL
-         AND run_id IN (
-           SELECT id FROM runs
-           WHERE status IN ('succeeded', 'failed', 'cancelled')
-         )"#,
+    r#"DELETE FROM artifacts a
+       USING runs r
+       WHERE a.run_id = r.id
+         AND r.status IN ('succeeded', 'failed', 'cancelled')
+         AND a.created_at < NOW() - GREATEST(
+           $1,
+           COALESCE(r.artifacts_retention_days, 0)
+         )::INT * INTERVAL '1 day'"#,
   )
-  .bind(&interval)
+  .bind(days as i32)
   .execute(pool)
   .await?;
   Ok(result.rows_affected())
 }
 
 async fn preview_artifacts(pool: &PgPool, days: i64) -> Result<u64, CleanupError> {
-  let interval = format!("{days} days");
   let row = sqlx::query(
-    r#"SELECT COUNT(*)::BIGINT AS n FROM artifacts
-       WHERE created_at < NOW() - $1::INTERVAL
-         AND run_id IN (
-           SELECT id FROM runs
-           WHERE status IN ('succeeded', 'failed', 'cancelled')
-         )"#,
+    r#"SELECT COUNT(*)::BIGINT AS n FROM artifacts a
+       JOIN runs r ON a.run_id = r.id
+       WHERE r.status IN ('succeeded', 'failed', 'cancelled')
+         AND a.created_at < NOW() - GREATEST(
+           $1,
+           COALESCE(r.artifacts_retention_days, 0)
+         )::INT * INTERVAL '1 day'"#,
   )
-  .bind(&interval)
+  .bind(days as i32)
   .fetch_one(pool)
   .await?;
   Ok(row.get::<i64, _>("n") as u64)

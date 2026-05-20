@@ -65,6 +65,8 @@ async fn seed_runs(state: &AppState, tenant: &str, status: RunStatus, count: usi
         status,
         run_dir: None,
         tenant_id: tenant.into(),
+        events_retention_days: None,
+        artifacts_retention_days: None,
       })
       .await
       .unwrap();
@@ -337,6 +339,8 @@ async fn cross_tenant_get_run_returns_404() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: format!("tenant-alpha-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -383,6 +387,8 @@ async fn cross_tenant_cancel_run_returns_404_and_leaves_row_intact() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: format!("tenant-owner-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -425,6 +431,8 @@ async fn same_tenant_get_run_succeeds_via_header_binding() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: format!("tenant-correct-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -542,6 +550,8 @@ async fn missing_tenant_header_defaults_to_default_tenant() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();

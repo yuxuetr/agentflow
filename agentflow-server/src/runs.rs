@@ -52,6 +52,62 @@ pub struct CreateRunRequest {
   /// Optional tenant override (defaults to `"default"`).
   #[serde(default)]
   pub tenant_id: Option<String>,
+  /// Per-run retention overrides (P10.14.1). Either field can pin
+  /// the corresponding resource (events / artifacts) for at least
+  /// the specified number of days, regardless of the tenant +
+  /// profile default. Pinning is *additive*: the cleanup sweep
+  /// uses `max(global, override)` so an override can only ever
+  /// extend retention, never shorten it.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub retention_overrides: Option<RetentionOverrides>,
+}
+
+/// Body shape for `retention_overrides:` on `POST /v1/runs`
+/// (P10.14.1). Both fields are optional; absent fields fall back
+/// entirely to the tenant default.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RetentionOverrides {
+  /// Keep `events` rows for this run for at least N days. Must be
+  /// `>= 0`. `0` is accepted as a no-op (equivalent to absent) for
+  /// caller convenience.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub events_days: Option<i32>,
+  /// Keep `artifacts` rows for this run for at least N days. Same
+  /// semantics as `events_days`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub artifacts_days: Option<i32>,
+}
+
+impl RetentionOverrides {
+  /// Validate that no override is negative. The cleanup-sweep SQL
+  /// uses `GREATEST(global, COALESCE(override, 0))`, so a negative
+  /// override would otherwise silently degrade to the global
+  /// default — better to surface the obvious request error at the
+  /// API layer.
+  pub fn validate(&self) -> Result<(), &'static str> {
+    if matches!(self.events_days, Some(n) if n < 0) {
+      return Err("retention_overrides.events_days must be >= 0");
+    }
+    if matches!(self.artifacts_days, Some(n) if n < 0) {
+      return Err("retention_overrides.artifacts_days must be >= 0");
+    }
+    Ok(())
+  }
+
+  /// Treat `Some(0)` the same as absent (caller convenience). The
+  /// SQL `GREATEST(global, 0)` is already a no-op vs `GREATEST(global)`,
+  /// but normalizing here keeps the DB row tidy and the audit story
+  /// honest (only meaningful overrides appear in the column).
+  fn normalize_nonzero(value: Option<i32>) -> Option<i32> {
+    value.filter(|n| *n > 0)
+  }
+
+  pub fn into_pair(self) -> (Option<i32>, Option<i32>) {
+    (
+      Self::normalize_nonzero(self.events_days),
+      Self::normalize_nonzero(self.artifacts_days),
+    )
+  }
 }
 
 #[derive(Debug, Serialize)]
@@ -357,6 +413,16 @@ pub async fn submit_run(
     ));
   };
 
+  let (events_retention_days, artifacts_retention_days) = match req.retention_overrides {
+    Some(overrides) => {
+      if let Err(msg) = overrides.validate() {
+        return Err(ApiError::BadRequest(msg.into()));
+      }
+      overrides.into_pair()
+    }
+    None => (None, None),
+  };
+
   let run_id = Uuid::new_v4();
   let tenant_id = req.tenant_id.unwrap_or_else(|| "default".into());
   let run_base_dir = run_base_dir_for_request();
@@ -371,6 +437,8 @@ pub async fn submit_run(
       status: RunStatus::Queued,
       run_dir: Some(run_dir.display().to_string()),
       tenant_id: tenant_id.clone(),
+      events_retention_days,
+      artifacts_retention_days,
     })
     .await?;
 
@@ -686,5 +754,74 @@ mod anyhow_like {
         Self::Flow(agentflow_core::error::AgentFlowError::TaskCancelled)
       )
     }
+  }
+}
+
+#[cfg(test)]
+mod retention_overrides_tests {
+  use super::RetentionOverrides;
+
+  #[test]
+  fn validate_rejects_negative_events_days() {
+    let o = RetentionOverrides {
+      events_days: Some(-1),
+      artifacts_days: None,
+    };
+    assert!(o.validate().is_err());
+  }
+
+  #[test]
+  fn validate_rejects_negative_artifacts_days() {
+    let o = RetentionOverrides {
+      events_days: None,
+      artifacts_days: Some(-7),
+    };
+    assert!(o.validate().is_err());
+  }
+
+  #[test]
+  fn validate_accepts_zero_and_positive() {
+    let o = RetentionOverrides {
+      events_days: Some(0),
+      artifacts_days: Some(180),
+    };
+    assert!(o.validate().is_ok());
+  }
+
+  #[test]
+  fn into_pair_normalizes_zero_to_none() {
+    let o = RetentionOverrides {
+      events_days: Some(0),
+      artifacts_days: Some(180),
+    };
+    // The cleanup SQL treats 0 the same as absent via GREATEST(...,
+    // COALESCE(override, 0)). Normalizing in `into_pair` keeps the
+    // DB row honest (only meaningful overrides are persisted) and
+    // makes the audit story unambiguous.
+    assert_eq!(o.into_pair(), (None, Some(180)));
+  }
+
+  #[test]
+  fn into_pair_passes_through_positive_values() {
+    let o = RetentionOverrides {
+      events_days: Some(30),
+      artifacts_days: Some(60),
+    };
+    assert_eq!(o.into_pair(), (Some(30), Some(60)));
+  }
+
+  #[test]
+  fn deserialize_accepts_partial_body() {
+    let parsed: RetentionOverrides =
+      serde_json::from_str(r#"{"events_days": 90}"#).expect("valid body");
+    assert_eq!(parsed.events_days, Some(90));
+    assert!(parsed.artifacts_days.is_none());
+  }
+
+  #[test]
+  fn deserialize_accepts_empty_object() {
+    let parsed: RetentionOverrides = serde_json::from_str("{}").expect("empty body ok");
+    assert!(parsed.events_days.is_none());
+    assert!(parsed.artifacts_days.is_none());
   }
 }

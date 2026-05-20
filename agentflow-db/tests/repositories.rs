@@ -53,6 +53,8 @@ async fn run_repo_create_get_list_update() {
     status: RunStatus::Queued,
     run_dir: Some("/tmp/x".into()),
     tenant_id: tenant.clone(),
+    events_retention_days: None,
+    artifacts_retention_days: None,
   };
   let created = repos.runs.create(new_run).await.expect("create run");
   assert_eq!(created.id, id);
@@ -93,6 +95,8 @@ async fn step_and_event_repos_round_trip() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: "tenant-step-event-rt".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .expect("create run");
@@ -156,6 +160,8 @@ async fn seed_run(repos: &Repositories, tenant: &str) -> Uuid {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: tenant.into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .expect("seed run");

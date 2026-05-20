@@ -42,6 +42,8 @@ async fn seed_run_with_events(state: &AppState, events: &[(&str, serde_json::Val
       status: RunStatus::Succeeded,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .expect("create run");

@@ -211,6 +211,116 @@ async fn submit_run_without_workflow_returns_bad_request() {
   assert_eq!(body["error"]["code"], "bad_request");
 }
 
+/// P10.14.1: `retention_overrides` on the create body persists to
+/// the runs row so the cleanup sweep can honor it later.
+#[tokio::test]
+async fn submit_run_persists_retention_overrides() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_persists_retention_overrides");
+    return;
+  };
+  let app = create_router(state.clone());
+
+  let body = json!({
+    "workflow": FIXED_DAG_WORKFLOW,
+    "retention_overrides": {"events_days": 90, "artifacts_days": 180}
+  })
+  .to_string();
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let run_id: Uuid = parsed["run_id"].as_str().unwrap().parse().unwrap();
+
+  let row = state.repos.runs.get(run_id).await.unwrap().unwrap();
+  assert_eq!(row.events_retention_days, Some(90));
+  assert_eq!(row.artifacts_retention_days, Some(180));
+}
+
+/// P10.14.1: negative overrides are rejected at the API layer
+/// instead of silently degrading to the global default.
+#[tokio::test]
+async fn submit_run_rejects_negative_retention_override() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_rejects_negative_retention_override");
+    return;
+  };
+  let app = create_router(state);
+
+  let body = json!({
+    "workflow": FIXED_DAG_WORKFLOW,
+    "retention_overrides": {"events_days": -1}
+  })
+  .to_string();
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(parsed["error"]["code"], "bad_request");
+}
+
+/// P10.14.1: `Some(0)` is accepted (caller convenience) and
+/// normalized to NULL in the DB so the audit story is honest.
+#[tokio::test]
+async fn submit_run_normalizes_zero_override_to_null() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_normalizes_zero_override_to_null");
+    return;
+  };
+  let app = create_router(state.clone());
+
+  let body = json!({
+    "workflow": FIXED_DAG_WORKFLOW,
+    "retention_overrides": {"events_days": 0, "artifacts_days": 30}
+  })
+  .to_string();
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  let run_id: Uuid = parsed["run_id"].as_str().unwrap().parse().unwrap();
+
+  let row = state.repos.runs.get(run_id).await.unwrap().unwrap();
+  assert!(row.events_retention_days.is_none());
+  assert_eq!(row.artifacts_retention_days, Some(30));
+}
+
 #[tokio::test]
 async fn get_run_returns_404_when_missing() {
   let Some(state) = fresh_state().await else {
@@ -276,6 +386,8 @@ async fn cancel_running_run_marks_cancelled_and_emits_event() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -334,6 +446,8 @@ async fn cancel_completed_run_returns_current_terminal_state() {
       status: RunStatus::Succeeded,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -375,6 +489,8 @@ async fn repeated_cancel_is_idempotent() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -425,6 +541,8 @@ async fn get_run_returns_persisted_row() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: "default".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -466,6 +584,8 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: "tenant-a".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -478,6 +598,8 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       status: RunStatus::Running,
       run_dir: None,
       tenant_id: "tenant-a".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -490,6 +612,8 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: "tenant-b".into(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();

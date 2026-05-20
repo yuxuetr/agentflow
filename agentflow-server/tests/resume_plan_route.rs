@@ -67,6 +67,8 @@ async fn resume_plan_route_returns_plan_for_existing_checkpoint() {
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -143,6 +145,8 @@ async fn resume_plan_route_honours_force_replay_query_param() {
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -219,6 +223,8 @@ async fn resume_plan_route_returns_404_when_checkpoint_missing() {
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();

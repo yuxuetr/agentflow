@@ -164,15 +164,19 @@ pub struct PgRunRepo {
 impl RunRepo for PgRunRepo {
   async fn create(&self, run: NewRun) -> Result<Run, DbError> {
     let row = sqlx::query_as::<_, Run>(
-      r#"INSERT INTO runs (id, workflow, status, run_dir, tenant_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, workflow, status, started_at, finished_at, run_dir, tenant_id, error"#,
+      r#"INSERT INTO runs (id, workflow, status, run_dir, tenant_id,
+                           events_retention_days, artifacts_retention_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, workflow, status, started_at, finished_at, run_dir,
+                   tenant_id, error, events_retention_days, artifacts_retention_days"#,
     )
     .bind(run.id)
     .bind(&run.workflow)
     .bind(run.status.as_str())
     .bind(run.run_dir.as_deref())
     .bind(&run.tenant_id)
+    .bind(run.events_retention_days)
+    .bind(run.artifacts_retention_days)
     .fetch_one(&self.pool)
     .await?;
     Ok(row)
@@ -180,7 +184,8 @@ impl RunRepo for PgRunRepo {
 
   async fn get(&self, id: Uuid) -> Result<Option<Run>, DbError> {
     let row = sqlx::query_as::<_, Run>(
-      r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
+      r#"SELECT id, workflow, status, started_at, finished_at, run_dir,
+                tenant_id, error, events_retention_days, artifacts_retention_days
          FROM runs WHERE id = $1"#,
     )
     .bind(id)

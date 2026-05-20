@@ -795,13 +795,38 @@ No active gaps. Future opportunities:
 
 No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
 
-- TODO P10.14.1 (Medium — v1.x) Per-run retention override via
+- DONE P10.14.1 (Medium — v1.x) Per-run retention override via
   POST body
-  - Today retention is per-tenant + per-profile. P2.2 left
-    per-run override as deferred. A `retention_overrides:
-    {events_days, artifacts_days}` field on `POST /v1/runs` body
-    would let users keep critical runs longer than the global
-    sweep.
+  - Landed. `POST /v1/runs` body now accepts
+    `retention_overrides: {events_days, artifacts_days}` (both
+    optional). The cleanup sweep uses `max(global, override)`
+    semantics so an override can only ever extend retention.
+    Pinning events or artifacts also pins the `runs` row itself
+    (via `GREATEST(global, events_override, artifacts_override)`
+    on the run-row delete) so the `ON DELETE CASCADE` doesn't
+    yank the pinned children out from under the override.
+    Negative overrides → `bad_request`; `Some(0)` → normalized
+    to NULL.
+  - New migration `0005_run_retention_overrides.sql` adds two
+    nullable INTEGER columns to `runs`; safe additive upgrade
+    (existing rows default to NULL ≡ no override).
+  - New types: `RetentionOverrides` in `agentflow-server::runs`
+    (re-exported from `agentflow-server::lib`), with
+    `validate()` + `into_pair()` API. 7 unit tests cover
+    validation, normalization, and partial-body deserialization.
+  - New integration tests in
+    `agentflow-server/tests/cleanup_route.rs`:
+    `cleanup_skips_terminal_run_pinned_by_events_override` (run
+    row pin) and `cleanup_skips_events_pinned_by_override`
+    (events-sweep pin). Both self-skip without
+    `AGENTFLOW_DATABASE_TEST_URL` to keep workspace `cargo test`
+    hermetic.
+  - New route-level tests in `runs_routes.rs`:
+    `submit_run_persists_retention_overrides`,
+    `submit_run_rejects_negative_retention_override`,
+    `submit_run_normalizes_zero_override_to_null`.
+  - Docs: `docs/DEPLOYMENT.md` "Per-run retention overrides"
+    snippet for the operator-facing curl example.
 
 - TODO P10.14.2 (Low — v1.x) Operational dashboards (Grafana
   templates)

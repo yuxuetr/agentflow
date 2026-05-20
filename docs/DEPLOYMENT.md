@@ -146,6 +146,32 @@ Expected event kinds for a successful fixed DAG include:
 `workflow.started`, `node.started`, `node.output.captured`, `node.completed`,
 and `workflow.completed`.
 
+#### Per-run retention overrides (P10.14.1)
+
+The `POST /v1/runs` body accepts an optional `retention_overrides`
+object that pins a run's events and/or artifacts for longer than
+the tenant + profile default:
+
+```json
+{
+  "workflow": "...yaml...",
+  "retention_overrides": {
+    "events_days": 90,
+    "artifacts_days": 365
+  }
+}
+```
+
+Semantics: the cleanup sweep uses
+`max(global_default, override)` so a per-run override can only
+ever *extend* retention. Pinning a run also pins its row
+itself — otherwise the `ON DELETE CASCADE` from `runs` would
+yank the pinned events/artifacts out from under the override.
+Negative values are rejected with `bad_request`; `Some(0)` is
+accepted and normalized to "no override". See
+`docs/SERVER_BACKUP_RESTORE.md` for the operator-side retention
+defaults.
+
 To inspect run status (the previously-documented
 `/v1/runs/{id}/graph` endpoint was removed in P10.13.1 along with
 the `agentflow-viz` crate; use the SSE event stream or the run

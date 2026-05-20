@@ -48,6 +48,8 @@ async fn insert_terminal_run(state: &AppState, status: RunStatus) -> Uuid {
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -242,6 +244,8 @@ async fn client_disconnect_mid_stream_drops_broker_receiver_count() {
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();

@@ -39,6 +39,8 @@ async fn insert_run(db: &Database, status: RunStatus, finished_offset_days: Opti
       workflow: "name: stub".into(),
       status: RunStatus::Running,
       run_dir: None,
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await
     .unwrap();
@@ -108,6 +110,146 @@ async fn cleanup_deletes_terminal_runs_past_retention() {
   assert!(repos(&db).runs.get(old_id).await.unwrap().is_none());
   assert!(repos(&db).runs.get(young_id).await.unwrap().is_some());
   assert!(repos(&db).runs.get(active_id).await.unwrap().is_some());
+}
+
+/// P10.14.1: a terminal run with `events_retention_days > global`
+/// must survive the sweep until the longer window expires; the
+/// cleanup SQL pins the run-row deletion on
+/// `GREATEST(global, events_override, artifacts_override)` to keep
+/// the cascade from yanking events out from under the override.
+#[tokio::test]
+async fn cleanup_skips_terminal_run_pinned_by_events_override() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping cleanup_skips_terminal_run_pinned_by_events_override");
+    return;
+  };
+
+  // A run finished 60 days ago. The Local profile defaults
+  // `runs_retention_days = 30`, so without an override this would
+  // be deleted. With `events_retention_days = 365` it must stay.
+  let id = Uuid::new_v4();
+  repos(&db)
+    .runs
+    .create(NewRun {
+      id,
+      tenant_id: "default".into(),
+      workflow: "name: stub".into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      events_retention_days: Some(365),
+      artifacts_retention_days: None,
+    })
+    .await
+    .unwrap();
+  repos(&db)
+    .runs
+    .update_status(id, RunStatus::Succeeded, None)
+    .await
+    .unwrap();
+  let target = Utc::now() - Duration::days(60);
+  sqlx::query("UPDATE runs SET finished_at = $1 WHERE id = $2")
+    .bind(target)
+    .bind(id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+  // Also add a baseline "no override, old" run that should still
+  // get swept to prove the global path still works.
+  let unpinned = insert_run(&db, RunStatus::Succeeded, Some(60)).await;
+
+  let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
+  let report = cleanup_expired(&db, None, &cfg).await.unwrap();
+
+  // The pinned run must NOT be in run_ids_targeted, and must
+  // survive the sweep.
+  assert!(
+    !report.run_ids_targeted.contains(&id),
+    "pinned run should be excluded from targets: {id}"
+  );
+  assert!(
+    repos(&db).runs.get(id).await.unwrap().is_some(),
+    "pinned run must survive cleanup"
+  );
+  // The unpinned old run is gone.
+  assert!(
+    repos(&db).runs.get(unpinned).await.unwrap().is_none(),
+    "unpinned old run should be deleted"
+  );
+}
+
+/// P10.14.1: the events-sweep also pins on the per-run override
+/// independently of the run-row deletion. An ancient terminal run
+/// with `events_retention_days = 365` keeps its event rows even
+/// though the global default would normally cull them.
+#[tokio::test]
+async fn cleanup_skips_events_pinned_by_override() {
+  use agentflow_db::{EventRepo, NewEvent};
+
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping cleanup_skips_events_pinned_by_override");
+    return;
+  };
+
+  // Pinned run: finished 60 days ago, override 365 days.
+  let pinned = Uuid::new_v4();
+  repos(&db)
+    .runs
+    .create(NewRun {
+      id: pinned,
+      tenant_id: "default".into(),
+      workflow: "name: stub".into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      events_retention_days: Some(365),
+      artifacts_retention_days: None,
+    })
+    .await
+    .unwrap();
+  repos(&db)
+    .runs
+    .update_status(pinned, RunStatus::Succeeded, None)
+    .await
+    .unwrap();
+  sqlx::query("UPDATE runs SET finished_at = $1 WHERE id = $2")
+    .bind(Utc::now() - Duration::days(60))
+    .bind(pinned)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+  // Back-date an event row so it would otherwise be eligible for
+  // sweep (events_retention_days = 14 in Local profile).
+  repos(&db)
+    .events
+    .append(NewEvent {
+      run_id: pinned,
+      seq: 0,
+      kind: "node.completed".into(),
+      payload: serde_json::json!({"node_id": "stub"}),
+      tenant_id: Some("default".into()),
+    })
+    .await
+    .unwrap();
+  sqlx::query("UPDATE events SET ts = $1 WHERE run_id = $2 AND seq = 0")
+    .bind(Utc::now() - Duration::days(60))
+    .bind(pinned)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+  let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
+  cleanup_expired(&db, None, &cfg).await.unwrap();
+
+  // The event row must still be there.
+  let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM events WHERE run_id = $1")
+    .bind(pinned)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+  assert_eq!(
+    remaining, 1,
+    "event row should be retained under the 365-day override"
+  );
 }
 
 #[tokio::test]

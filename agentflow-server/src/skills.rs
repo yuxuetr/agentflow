@@ -206,6 +206,8 @@ pub async fn run_skill(
       status: RunStatus::Queued,
       run_dir: None,
       tenant_id: tenant_id.clone(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
     })
     .await?;
 

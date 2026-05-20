@@ -29,6 +29,8 @@ fn run(status: &str, finished_at: Option<&str>, error: Option<&str>) -> Run {
     run_dir: Some(format!("/tmp/agentflow/runs/{RUN_ID}")),
     tenant_id: "default".to_string(),
     error: error.map(ToString::to_string),
+    events_retention_days: None,
+    artifacts_retention_days: None,
   }
 }
 

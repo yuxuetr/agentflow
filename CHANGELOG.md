@@ -18,6 +18,28 @@ across the 200+ tests touched.
 
 ### Added
 
+#### Server gateway
+
+- **Per-run retention override on `POST /v1/runs`** (P10.14.1).
+  The request body now accepts an optional `retention_overrides`
+  object with `events_days` and `artifacts_days` fields. The
+  cleanup sweep uses `max(global, override)` so a per-run
+  override can only *extend* retention — it cannot shorten the
+  tenant + profile default. Pinning a run's events or artifacts
+  also pins the parent `runs` row itself: the cleanup SQL keys
+  the run-row deletion on `GREATEST(global, events_override,
+  artifacts_override)` so the `ON DELETE CASCADE` from `runs`
+  doesn't yank the pinned children out from under the override.
+  Negative overrides are rejected at the API layer with a clean
+  `bad_request` error; `Some(0)` is accepted (caller convenience)
+  and normalized to NULL in the DB so the audit story stays
+  honest. New migration `0005_run_retention_overrides.sql` adds
+  the two nullable columns to `runs`; existing rows default to
+  NULL (no override) so the upgrade is a no-op for everyone
+  who doesn't opt in. See `docs/DEPLOYMENT.md` "Per-run
+  retention overrides" for the operator-facing snippet.
+  Closes the P2.2-deferred per-run override item.
+
 #### Workflow grammar
 
 - **`type: shell` YAML workflow node** (F-A7-2 fully closed,

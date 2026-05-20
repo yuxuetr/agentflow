@@ -53,6 +53,14 @@ impl RunStatus {
 }
 
 /// One row in the `runs` table.
+///
+/// `events_retention_days` / `artifacts_retention_days` are the
+/// per-run override knobs introduced by P10.14.1 (migration
+/// `0005_run_retention_overrides.sql`). Either field as `Some(N)`
+/// asks the cleanup sweep to keep that resource for at least
+/// `max(global_default, N)` days; `None` (the common case) falls
+/// back entirely to the tenant + profile default. The override
+/// only ever extends retention — it cannot shorten it.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Run {
   pub id: Uuid,
@@ -63,6 +71,10 @@ pub struct Run {
   pub run_dir: Option<String>,
   pub tenant_id: String,
   pub error: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub events_retention_days: Option<i32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub artifacts_retention_days: Option<i32>,
 }
 
 /// Input for creating a new run via [`crate::repo::RunRepo::create`].
@@ -73,6 +85,13 @@ pub struct NewRun {
   pub status: RunStatus,
   pub run_dir: Option<String>,
   pub tenant_id: String,
+  /// Per-run override: keep `events` rows for at least this many
+  /// days, regardless of the global tenant default. `None` ⇒ no
+  /// override. Negative values are rejected at the server layer.
+  pub events_retention_days: Option<i32>,
+  /// Per-run override: keep `artifacts` rows for at least this many
+  /// days. Same semantics as `events_retention_days`.
+  pub artifacts_retention_days: Option<i32>,
 }
 
 /// One row in the `steps` table. `payload` is provider-specific JSON
