@@ -772,35 +772,68 @@ enum SkillCommands {
     #[arg(long = "with-mcp-discovery")]
     with_mcp_discovery: bool,
   },
-  /// Run a skill with a single message and exit
+  /// Run a skill with a single message and exit.
+  ///
+  /// Local mode (default): treats the positional argument as a
+  /// filesystem path to a skill directory, loads + validates the
+  /// manifest, builds the agent in-process, and runs it.
+  ///
+  /// Server mode (`--server <url>` or `AGENTFLOW_SERVER_URL`):
+  /// treats the positional argument as a skill NAME resolved via
+  /// the remote gateway's `AGENTFLOW_SKILLS_INDEX` catalog, then
+  /// dispatches via `POST /v1/skills/{name}:run` and polls until
+  /// the run is terminal. `--memory`, `--model`, `--session`, and
+  /// `--trace` are rejected in server mode because the wire
+  /// contract doesn't accept per-request overrides today
+  /// (P10.11.2 follow-up if needed).
   Run {
-    /// Path to the skill directory
+    /// Local mode: path to the skill directory. Server mode (with
+    /// `--server`): skill name resolved via the server's catalog.
     skill_dir: String,
     /// The message to send to the agent
     #[arg(short, long)]
     message: String,
-    /// Override the model declared by the skill manifest
+    /// Override the model declared by the skill manifest.
+    /// **Local-only** — incompatible with `--server`.
     #[arg(long)]
     model: Option<String>,
-    /// Override memory backend for this run: session, sqlite, or none
+    /// Override memory backend for this run: session, sqlite, or none.
+    /// **Local-only** — incompatible with `--server`.
     #[arg(long, value_parser = ["session", "sqlite", "none"])]
     memory: Option<String>,
-    /// Reuse an existing session ID for multi-turn conversations
+    /// Reuse an existing session ID for multi-turn conversations.
+    /// **Local-only** — incompatible with `--server`.
     #[arg(long, visible_alias = "session-id")]
     session: Option<String>,
     /// Print the structured AgentRuntime trace as JSON (text mode only;
     /// in `--output json` mode the trace is inlined under the `trace`
-    /// key of the response payload instead).
+    /// key of the response payload instead). **Local-only** — server
+    /// runs emit their trace through the event log; consume it via
+    /// `agentflow workflow logs <run_id>`.
     #[arg(long)]
     trace: bool,
-    /// Output format. `text` (default) keeps the emoji-prefixed banner
-    /// and `🤖 Agent:` line for interactive use. `json` emits a single
-    /// JSON object to stdout suitable for piping into other tooling:
-    /// `{skill, model, session_id, message, answer, stop_reason,
-    /// elapsed_ms, trace?}`. Warnings still go to stderr in JSON mode
-    /// so stdout stays pure JSON (F-A2-6).
-    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    /// Output format. Local mode: `text` (default — emoji banner +
+    /// `🤖 Agent:`) or `json` (single JSON object). Server mode:
+    /// `text` (final run row pretty-printed) or `json-envelope`
+    /// (canonical `CliJsonEnvelope` wrapping the run row;
+    /// progress goes to stderr). Warnings always go to stderr.
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
     output: String,
+    /// Dispatch the run to a remote `agentflow serve` instance
+    /// instead of running in-process. Falls back to
+    /// AGENTFLOW_SERVER_URL when omitted; when neither is set the
+    /// CLI runs the skill locally. In server mode the positional
+    /// argument is the skill NAME, not a filesystem path.
+    #[arg(long)]
+    server: Option<String>,
+    /// Bearer token for the remote server (also AGENTFLOW_API_TOKEN).
+    /// Only consulted when --server is set.
+    #[arg(long)]
+    auth_token: Option<String>,
+    /// Tenant id scope for server-mode requests. Defaults to
+    /// AGENTFLOW_TENANT or "default".
+    #[arg(long)]
+    tenant: Option<String>,
   },
   /// Start an interactive multi-turn chat session with a skill
   Chat {
@@ -1614,7 +1647,57 @@ async fn main() {
         session,
         trace,
         output,
-      } => skill::run::execute(skill_dir, message, model, memory, session, trace, output).await,
+        server,
+        auth_token,
+        tenant,
+      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
+        Some(server_url) => {
+          // Reject local-only flags + the local-only `json` output
+          // value BEFORE any HTTP call. Both checks fold into the
+          // same `Result<()>` so the outer match sees one shape.
+          let validation: anyhow::Result<()> = (|| {
+            skill::server_ops::reject_local_only_flags(
+              model.as_deref(),
+              memory.as_deref(),
+              session.as_deref(),
+              trace,
+            )?;
+            if output == "json" {
+              anyhow::bail!(
+                "--output json is local-only; use --output json-envelope in server mode \
+                 for the canonical CliJsonEnvelope wire schema"
+              );
+            }
+            Ok(())
+          })();
+          match validation {
+            Ok(()) => {
+              skill::server_ops::run_via_server(
+                &server_url,
+                auth_token.as_deref(),
+                tenant.as_deref(),
+                &skill_dir,
+                &message,
+                &output,
+              )
+              .await
+            }
+            Err(err) => Err(err),
+          }
+        }
+        None => {
+          // Local mode: server-only flags being set is a soft
+          // misconfiguration — the user probably intended to set
+          // AGENTFLOW_SERVER_URL too. Warn but don't bail; local
+          // mode is the fallback.
+          if auth_token.is_some() || tenant.is_some() {
+            eprintln!(
+              "⚠  --auth-token / --tenant ignored: --server (or AGENTFLOW_SERVER_URL) is not set"
+            );
+          }
+          skill::run::execute(skill_dir, message, model, memory, session, trace, output).await
+        }
+      },
       SkillCommands::Chat {
         skill_dir,
         model,

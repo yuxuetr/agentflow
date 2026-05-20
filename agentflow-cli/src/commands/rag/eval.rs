@@ -409,10 +409,8 @@ async fn build_dense_retriever(dataset: &Dataset, embedding_model: &str) -> Resu
         unique_query_texts.len()
       )
     })?;
-  let query_map: HashMap<String, Vec<f32>> = unique_query_texts
-    .into_iter()
-    .zip(query_vectors)
-    .collect();
+  let query_map: HashMap<String, Vec<f32>> =
+    unique_query_texts.into_iter().zip(query_vectors).collect();
 
   DenseEval::new(format!("dense:{embedding_model}"), corpus_pairs, query_map)
     .map_err(anyhow::Error::from)

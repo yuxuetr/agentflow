@@ -9,5 +9,6 @@ pub mod list_tools;
 pub mod marketplace;
 pub mod run;
 mod runtime_options;
+pub mod server_ops;
 pub mod test;
 pub mod validate;

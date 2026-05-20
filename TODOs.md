@@ -463,11 +463,42 @@ No active gaps. Future opportunities:
     -- -D warnings` clean. Cargo.toml gains `reqwest` `stream`
     feature + `futures = "0.3"`.
 
-- TODO P10.11.2 (Medium — pre-GA) `agentflow skill run --server`
+- DONE P10.11.2 (Medium — pre-GA) `agentflow skill run --server`
   server-backed mode
-  - Today only `workflow run --server` exists. Extend the
-    server-backed pattern to `skill run` so platform users don't
-    have to local-spawn skills.
+  - Landed: `SkillCommands::Run` gains `--server` / `--auth-token`
+    / `--tenant` flags. When `--server` (or `AGENTFLOW_SERVER_URL`)
+    is set, the dispatch arm routes to the new
+    `agentflow-cli/src/commands/skill/server_ops.rs::run_via_server`
+    helper backed by a new
+    `ServerClient::submit_skill_run(skill_name, input)` method that
+    targets `POST /v1/skills/{name}:run`. Polls
+    `GET /v1/runs/{id}` until terminal (`succeeded` / `failed` /
+    `cancelled`) and pretty-prints the row, mirroring the
+    `workflow run --server` pattern. The positional argument
+    shifts semantics: filesystem path in local mode, skill NAME
+    (resolved by server's `AGENTFLOW_SKILLS_INDEX` catalog) in
+    server mode — documented in the clap help text + module docs.
+  - Local-only flag rejection: `--memory`, `--model`, `--session`,
+    `--trace`, and the local-only `--output json` are all rejected
+    BEFORE any HTTP call with a single-line actionable error that
+    names where the operator should look (e.g. "the server uses
+    the model declared in the skill manifest loaded by the
+    catalog at AGENTFLOW_SKILLS_INDEX"). `--trace` rejection
+    points the operator at `agentflow workflow logs <run_id>` for
+    the server-side trace equivalent. Local mode tolerates
+    `--auth-token` / `--tenant` being set (warns to stderr but
+    falls back to local execution) — that's the kindest UX for
+    operators who set `AGENTFLOW_SERVER_URL` then unset it.
+  - Tests: 5 new unit tests in
+    `commands::skill::server_ops::tests` (one per local-only flag
+    + happy path) + 5 hermetic integration tests in
+    `agentflow-cli/tests/skill_run_server_tests.rs` that spin up
+    a minimal axum mock server (no Postgres, no real skill
+    registry) and drive the CLI binary end-to-end:
+    submit-and-poll, envelope-mode wrap, `--model` rejection,
+    `--output json` rejection, and 404 ("skill not installed")
+    propagation. `cargo clippy -p agentflow-cli --tests -- -D
+    warnings` clean.
 
 - TODO P10.11.3 (Low — Stretch) Remaining `--format json-envelope`
   migrations

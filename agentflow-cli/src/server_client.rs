@@ -223,6 +223,35 @@ impl ServerClient {
     expect_success(response).await
   }
 
+  /// `POST /v1/skills/{name}:run` — submit a skill execution. The
+  /// server resolves `skill_name` against the catalog loaded from
+  /// `AGENTFLOW_SKILLS_INDEX` and 404s when the name is unknown,
+  /// so the error path is the natural "skill not installed on this
+  /// server" signal. Returns the parsed `{ run_id, status }`
+  /// envelope; the caller is expected to poll `get_run` until
+  /// terminal status, exactly like the `workflow run --server` path.
+  ///
+  /// `input` is the operator's `--message` payload forwarded to the
+  /// skill agent; pass an empty string to fire-and-forget skills
+  /// that don't need user input.
+  pub async fn submit_skill_run(&self, skill_name: &str, input: &str) -> Result<Value> {
+    let body = serde_json::json!({
+      "input": input,
+      "tenant_id": self.tenant_id,
+    });
+    let url = self.url(&format!("/v1/skills/{skill_name}:run"));
+    let response = self
+      .http
+      .post(url)
+      .headers(self.auth_headers())
+      .header(CONTENT_TYPE, "application/json")
+      .body(body.to_string())
+      .send()
+      .await
+      .context("failed to POST /v1/skills/{name}:run")?;
+    expect_success(response).await
+  }
+
   /// `GET /v1/runs/{id}/events/history?after_seq=<n>` — fetches the
   /// already-persisted event log as a bare JSON array. Used by the
   /// `workflow logs <run_id>` command without `--follow`. The server

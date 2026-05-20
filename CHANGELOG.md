@@ -63,6 +63,25 @@ across the 200+ tests touched.
   tests in `eval::retrievers::tests` plus 1 hermetic CLI test
   (`build_dense_retriever_errors_without_openai_api_key`) cover
   the new code paths.
+- **`agentflow skill run --server <url>`** dispatches the skill
+  to a remote `agentflow serve` instance via
+  `POST /v1/skills/{name}:run` (P10.11.2). Mirrors the
+  `workflow run --server` pattern: submits, polls
+  `GET /v1/runs/{id}` until terminal status (succeeded / failed /
+  cancelled), and pretty-prints the final row. The positional
+  argument shifts semantics in server mode — it's the skill NAME
+  resolved via the server's `AGENTFLOW_SKILLS_INDEX` catalog, not
+  a local filesystem path. New flags: `--server <url>`,
+  `--auth-token <token>`, `--tenant <id>`. Local-only flags
+  (`--memory`, `--model`, `--session`, `--trace`) are rejected
+  with a single-line actionable error when combined with
+  `--server` because the wire contract doesn't accept per-request
+  overrides today. `--output` accepts `json-envelope` in server
+  mode (canonical `CliJsonEnvelope`); the local-mode `json`
+  value is rejected to keep the wire-schema surface narrow.
+  Hermetic axum mock-server integration tests cover the
+  submission round-trip, envelope wrap, local-only flag
+  rejection, and 404 propagation.
 - **`agentflow workflow logs <run_id>`** subcommand consumes the
   server's persisted event log (P10.11.1). Without `--follow`,
   fetches the history snapshot as a single JSON array via
