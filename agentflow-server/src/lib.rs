@@ -297,7 +297,22 @@ fn validate_origins(origins: &[String]) -> Result<(), ServerHttpConfigError> {
 /// Returns the current Prometheus snapshot as text. Bypasses auth
 /// so Prometheus scrapers can poll without a bearer token — the
 /// same convention as `/health`.
-async fn prometheus_metrics() -> impl axum::response::IntoResponse {
+///
+/// P10.14.2-FU4: gauges that aren't kept current by per-event
+/// observers are refreshed at scrape time. The Harness session
+/// status buckets and the pending-approval count fall into this
+/// bucket — they're cheap to compute (one indexed `SELECT` +
+/// one mutex read) and there's no benefit to maintaining them
+/// out-of-band.
+async fn prometheus_metrics(
+  axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl axum::response::IntoResponse {
+  // Refresh the scrape-time gauges before rendering. Failures
+  // here are logged + swallowed — `/metrics` must never 500
+  // because a single panel can't compute, otherwise the whole
+  // scrape stops.
+  refresh_scrape_time_gauges(&state).await;
+
   let body = metrics::render_text();
   (
     [(
@@ -306,6 +321,59 @@ async fn prometheus_metrics() -> impl axum::response::IntoResponse {
     )],
     body,
   )
+}
+
+/// Run the scrape-time inspectors that compute gauges from
+/// "live" sources (DB row counts, in-memory registries) rather
+/// than per-event observation.
+///
+/// Adding a new scrape-time gauge: emit it from a helper in
+/// `crate::metrics::observe_*`, then call the helper here. The
+/// per-gauge cost is one query / mutex read; the total stays
+/// well under typical scrape budgets (15-30s).
+async fn refresh_scrape_time_gauges(state: &AppState) {
+  // P10.14.2-FU4 — Harness session status buckets.
+  match sqlx::query_as::<_, (String, i64)>(
+    "SELECT status, COUNT(*)::BIGINT FROM harness_sessions GROUP BY status",
+  )
+  .fetch_all(state.db.read_pool())
+  .await
+  {
+    Ok(rows) => {
+      // Always emit all four known statuses so a status that
+      // drops to zero renders as zero, not as a stale value.
+      // Unknown statuses (DB / app drift) are ignored — we
+      // don't invent a label the dashboard doesn't expect.
+      let mut totals = std::collections::HashMap::<&'static str, u64>::from([
+        ("running", 0),
+        ("completed", 0),
+        ("failed", 0),
+        ("cancelled", 0),
+      ]);
+      for (status, count) in rows {
+        if let Some(slot) = totals.get_mut(status.as_str()) {
+          *slot = count.max(0) as u64;
+        }
+      }
+      for (status, count) in totals {
+        metrics::observe_harness_sessions_active(status, count);
+      }
+    }
+    Err(err) => {
+      // Common case in tests where the DB pool is lazy and the
+      // server isn't actually connected to Postgres. Log at
+      // debug so production scrape errors still surface but
+      // tests stay quiet.
+      tracing::debug!(
+        error = %err,
+        "refresh_scrape_time_gauges: harness session count query failed"
+      );
+    }
+  }
+
+  // P10.14.2-FU4 — pending approval count from the in-process
+  // registry. Always succeeds.
+  metrics::observe_harness_approvals_pending(state.approval_registry.pending_count());
 }
 
 pub fn create_router(state: AppState) -> Router {

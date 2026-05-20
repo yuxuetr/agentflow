@@ -233,6 +233,75 @@ async fn metrics_endpoint_emits_worker_fleet_gauges_after_admit_and_claim() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_emits_harness_session_gauges_at_scrape_time() {
+  // P10.14.2-FU4: harness session status + pending approvals
+  // are computed at scrape time. The DB query may fail when no
+  // Postgres is wired (lazy_state); in that case the gauges
+  // stay at their previous value (we already observed something
+  // in the helper unit tests), so we just assert the metric
+  // names appear in the rendered body — sourcing the values
+  // from a real DB is covered by `tests/metrics_endpoint_live.rs`
+  // (gated on `AGENTFLOW_DATABASE_TEST_URL`).
+  let _ = metrics::init_recorder();
+  // Prime the gauges via the helpers so the test doesn't depend
+  // on the scrape-time DB read (which fails silently without a
+  // live Postgres pool).
+  metrics::observe_harness_sessions_active("running", 2);
+  metrics::observe_harness_sessions_active("completed", 5);
+  metrics::observe_harness_approvals_pending(1);
+  let app = create_router(lazy_state());
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_harness_sessions_active"),
+    "sessions gauge must appear; got:\n{body}"
+  );
+  for status in ["running", "completed"] {
+    let needle = format!("status=\"{status}\"");
+    assert!(
+      body.contains(&needle),
+      "status label `{status}` must appear; got:\n{body}"
+    );
+  }
+  assert!(
+    body.contains("agentflow_harness_approvals_pending"),
+    "approvals gauge must appear; got:\n{body}"
+  );
+}
+
+#[tokio::test]
+async fn metrics_endpoint_scrape_time_handler_survives_unreachable_db() {
+  // The /metrics handler runs a `SELECT … FROM harness_sessions`
+  // before rendering. A lazy pool with no real Postgres behind
+  // it must NOT fail the response — the dashboard would rather
+  // show stale gauges for the affected panel than miss every
+  // other metric in the scrape.
+  let _ = metrics::init_recorder();
+  let app = create_router(lazy_state());
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/metrics")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  // The other gauges should still render — confirms the handler
+  // didn't bail out on the DB error.
+  let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+    .await
+    .unwrap();
+  let body = String::from_utf8(bytes.to_vec()).unwrap();
+  // The pending-approval gauge doesn't depend on the DB and
+  // always renders.
+  assert!(
+    body.contains("agentflow_harness_approvals_pending"),
+    "approvals gauge must render even when DB query fails; got:\n{body}"
+  );
+}
+
+#[tokio::test]
 async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // We can't easily make `init_recorder` un-install (it's
   // process-global), so this test only runs in a fresh process

@@ -500,26 +500,29 @@ retention sweep deletions, and Harness Mode sessions. See
 contract, import recipe, and conventions.
 
 **Status:** the `agentflow-server` binary exposes `/metrics`.
-Eight series are live today: the three workflow series from
+Ten series are live today: the three workflow series from
 P10.14.2-FU1 (`agentflow_workflow_completed_total{status}`,
 `agentflow_workflow_duration_seconds`,
 `agentflow_nodes_failed_total{node_type}`), the three cleanup
 counters from P10.14.2-FU2
 (`agentflow_cleanup_runs_deleted_total` /
 `agentflow_cleanup_events_deleted_total` /
-`agentflow_cleanup_artifacts_deleted_total`), and the two
+`agentflow_cleanup_artifacts_deleted_total`), the two
 worker-fleet gauges from P10.14.2-FU3
 (`agentflow_workers_admitted`,
-`agentflow_worker_tasks_inflight{worker_id}`). Other series
-listed below are documented for the forward contract but emit
-zeros until follow-up TODOs land:
-`agentflow_harness_sessions_active{status}` /
-`agentflow_harness_approvals_pending` (P10.14.2-FU4),
-`agentflow_health_status{component}` /
-`agentflow_memory_usage_bytes` /
+`agentflow_worker_tasks_inflight{worker_id}`), and the two
+harness session gauges from P10.14.2-FU4
+(`agentflow_harness_sessions_active{status}`,
+`agentflow_harness_approvals_pending`). The harness gauges
+are computed at scrape time (one `GROUP BY` query against the
+read replica + one mutex read of the in-process approval
+registry); a DB-query failure falls back to the previous
+gauge value rather than failing the scrape. Remaining series
+deferred to `P10.14.2-FU5`: `agentflow_health_status{component}`
+/ `agentflow_memory_usage_bytes` /
 `agentflow_state_size_bytes` /
-`agentflow_workflow_runs_active{tenant}` (P10.14.2-FU5,
-scrape-time inspectors).
+`agentflow_workflow_runs_active{tenant}` (all scrape-time
+process inspectors).
 
 Key metrics to monitor:
 

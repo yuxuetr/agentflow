@@ -132,6 +132,25 @@ across the 200+ tests touched.
 
 #### Operator dashboards
 
+- **Prometheus `/metrics` — harness session gauges**
+  (P10.14.2-FU4). New scrape-time pattern: the `/metrics`
+  handler now runs `refresh_scrape_time_gauges(&state)`
+  before rendering. Two gauges source from this path:
+  `agentflow_harness_sessions_active{status}` (computed via
+  `SELECT status, COUNT(*) FROM harness_sessions GROUP BY
+  status` against the read pool — reuse of P10.15.2's
+  optional replica) and `agentflow_harness_approvals_pending`
+  (sourced from `PendingApprovalRegistry::pending_count()`,
+  an in-process mutex read). All four known status buckets
+  emit every scrape so a bucket dropping to 0 renders as 0
+  instead of leaving a stale value. **Fail-soft contract:**
+  a DB-query failure inside the refresh is logged and
+  swallowed; the scrape still returns 200 and the remaining
+  metrics render. Pinned by a dedicated integration test.
+  4 new tests (2 unit + 2 integration including the
+  unreachable-DB invariant). 10 of the 14 dashboard series
+  are now live.
+
 - **Prometheus `/metrics` — worker fleet gauges**
   (P10.14.2-FU3). `AuthenticatedControlPlane` now emits the
   two worker-fleet gauges from its three mutation sites:

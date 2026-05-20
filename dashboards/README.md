@@ -71,8 +71,8 @@ Live series:
 | `agentflow_cleanup_artifacts_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
 | `agentflow_workers_admitted` | ✅ live | `AuthenticatedControlPlane::admit` (FU3) |
 | `agentflow_worker_tasks_inflight` | ✅ live | `AuthenticatedControlPlane::claim_task` + `report_result` (FU3) |
-| `agentflow_harness_sessions_active{status}` | ⏳ FU4 | needs hook into harness session repo |
-| `agentflow_harness_approvals_pending` | ⏳ FU4 | needs hook into harness session repo |
+| `agentflow_harness_sessions_active{status}` | ✅ live | scrape-time `SELECT … FROM harness_sessions GROUP BY status` (FU4) |
+| `agentflow_harness_approvals_pending` | ✅ live | scrape-time `PendingApprovalRegistry::pending_count()` (FU4) |
 | `agentflow_health_status{component}` | ⏳ FU5 | scrape-time inspector |
 | `agentflow_memory_usage_bytes` | ⏳ FU5 | scrape-time inspector |
 | `agentflow_state_size_bytes` | ⏳ FU5 | scrape-time inspector |

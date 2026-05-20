@@ -1089,13 +1089,45 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     live. `docs/KUBERNETES_DEPLOYMENT.md` callout updated
     from "6 series live" to "8 series live."
 
-- TODO P10.14.2-FU4 (Low — v1.x) Wire harness session metrics
-  - `agentflow_harness_sessions_active{status}` and
-    `agentflow_harness_approvals_pending`. Source data lives
-    in the `harness_sessions` DB rows + the pending-approvals
-    queue in `LiveHarnessExecutor`. Likely scrape-time
-    `SELECT COUNT(*) ... GROUP BY status` against the DB
-    rather than per-event increments. ~60 LoC + tests.
+- DONE P10.14.2-FU4 (Low — v1.x) Wire harness session metrics
+  - Landed. The `/metrics` handler now runs scrape-time
+    inspectors via a new `refresh_scrape_time_gauges(&state)`
+    helper before rendering. Two gauges sourced from this
+    path:
+    1. `agentflow_harness_sessions_active{status}` —
+       `SELECT status, COUNT(*) FROM harness_sessions
+       GROUP BY status` against `state.db.read_pool()` (FU5
+       reuse-ready). All four known statuses (`running`,
+       `completed`, `failed`, `cancelled`) emit every
+       scrape so a bucket that drops to 0 renders as 0
+       instead of leaving a stale value; unknown statuses
+       (DB / app drift) are ignored.
+    2. `agentflow_harness_approvals_pending` —
+       `PendingApprovalRegistry::pending_count()` (in-process
+       mutex read, always succeeds).
+  - Robustness: a DB-query failure inside the harness gauge
+    refresh is logged at `tracing::debug` and swallowed; the
+    scrape still returns 200 and the remaining metrics
+    render. This is critical — a `/metrics` 500 would stop
+    Prometheus from picking up *any* of the other 8 series.
+    Pinned by the new
+    `metrics_endpoint_scrape_time_handler_survives_unreachable_db`
+    integration test.
+  - New `observe_harness_sessions_active(status, count)` and
+    `observe_harness_approvals_pending(count)` helpers +
+    matching `HARNESS_SESSIONS_ACTIVE` /
+    `HARNESS_APPROVALS_PENDING` constants. Both are
+    set-not-increment gauges — the scrape-time refresh
+    re-emits absolute counts every poll.
+  - 4 new tests (2 unit + 2 integration):
+    - `observe_harness_sessions_active_emits_per_status_label`
+    - `observe_harness_approvals_pending_emits_gauge`
+    - `metrics_endpoint_emits_harness_session_gauges_at_scrape_time`
+    - `metrics_endpoint_scrape_time_handler_survives_unreachable_db`
+  - Dashboard status: `dashboards/README.md` matrix → 10 ✅
+    live. `docs/KUBERNETES_DEPLOYMENT.md` callout updated
+    from "8 series live" to "10 series live" + documents
+    the scrape-time pattern + the fail-soft contract.
 
 - TODO P10.14.2-FU5 (Low — v1.x) Wire scrape-time process /
   state inspectors

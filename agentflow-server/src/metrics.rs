@@ -115,6 +115,12 @@ pub mod names {
   pub const WORKERS_ADMITTED: &str = "agentflow_workers_admitted";
   /// Gauge, label `worker_id` — in-flight tasks per worker.
   pub const WORKER_TASKS_INFLIGHT: &str = "agentflow_worker_tasks_inflight";
+  /// Gauge, label `status` — active Harness Mode sessions per
+  /// status (P10.14.2-FU4).
+  pub const HARNESS_SESSIONS_ACTIVE: &str = "agentflow_harness_sessions_active";
+  /// Gauge — pending approval requests parked in the
+  /// `PendingApprovalRegistry`.
+  pub const HARNESS_APPROVALS_PENDING: &str = "agentflow_harness_approvals_pending";
 }
 
 /// Record the terminal status of a workflow run. Fires the
@@ -174,6 +180,24 @@ pub fn observe_workers_admitted(count: usize) {
 pub fn observe_worker_tasks_inflight(worker_id: &str, count: u32) {
   metrics::gauge!(names::WORKER_TASKS_INFLIGHT, "worker_id" => worker_id.to_string())
     .set(count as f64);
+}
+
+/// Record one Harness Mode session-status bucket
+/// (P10.14.2-FU4). Called once per known status at scrape
+/// time from the `/metrics` handler — the gauge stores the
+/// absolute count, so emitting all four buckets every
+/// scrape is the right pattern (a status that drops to 0
+/// renders as 0, not as a stale value).
+pub fn observe_harness_sessions_active(status: &'static str, count: u64) {
+  metrics::gauge!(names::HARNESS_SESSIONS_ACTIVE, "status" => status).set(count as f64);
+}
+
+/// Record the count of pending approval requests
+/// (P10.14.2-FU4). Sourced from
+/// `PendingApprovalRegistry::pending_count()` at scrape time;
+/// anything > 0 means an operator action is queued.
+pub fn observe_harness_approvals_pending(count: usize) {
+  metrics::gauge!(names::HARNESS_APPROVALS_PENDING).set(count as f64);
 }
 
 #[cfg(test)]
@@ -267,6 +291,37 @@ mod tests {
     assert!(
       text.contains("agentflow_workers_admitted"),
       "workers gauge must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_harness_sessions_active_emits_per_status_label() {
+    let _ = init_recorder();
+    observe_harness_sessions_active("running", 3);
+    observe_harness_sessions_active("completed", 17);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_harness_sessions_active"),
+      "harness sessions gauge must appear; got: {text}"
+    );
+    assert!(
+      text.contains("status=\"running\""),
+      "status label `running` must appear; got: {text}"
+    );
+    assert!(
+      text.contains("status=\"completed\""),
+      "status label `completed` must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_harness_approvals_pending_emits_gauge() {
+    let _ = init_recorder();
+    observe_harness_approvals_pending(2);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_harness_approvals_pending"),
+      "pending approvals gauge must appear; got: {text}"
     );
   }
 
