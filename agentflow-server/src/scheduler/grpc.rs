@@ -638,6 +638,12 @@ fn worker_task_from_proto(task: pb::WorkerTask) -> BoxedStatusResult<WorkerTask>
     node_id: task.node_id,
     attempt: task.attempt,
     payload: parse_json(&task.payload_json, "payload_json")?,
+    // P10.16.2 capability label is not yet plumbed across the gRPC
+    // wire (follow-up TODO `P10.16.2-FU1`). Until then, every task
+    // arriving over gRPC is untagged; the capability filter
+    // unconditionally accepts untagged tasks so the upgrade is
+    // additive at the protocol boundary.
+    node_type: None,
   })
 }
 
@@ -750,6 +756,11 @@ fn worker_heartbeat_from_proto(
     active_task,
     free_slots: heartbeat.free_slots,
     ts,
+    // P10.16.2 capability advertisement is not yet plumbed across
+    // the gRPC wire (follow-up TODO `P10.16.2-FU1`). Heartbeats
+    // over gRPC default to "any task" so existing gRPC workers
+    // keep behaving as before.
+    capabilities: crate::scheduler::WorkerCapabilities::default(),
   })
 }
 

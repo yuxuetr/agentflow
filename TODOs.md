@@ -999,11 +999,66 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
   - gRPC-metadata propagation of admission tokens is still
     deferred to the broader auth story (separate TODO).
 
-- TODO P10.16.2 (Low — v1.x) Worker pool admission heuristics
-  - Today: `max_workers` + `max_concurrent_tasks_per_worker` are
-    static. Add: capacity-aware load balancing, locality hints
-    (`run_dir` co-location), and per-worker capability advertising
-    (which node types each worker can run).
+- DONE P10.16.2 (Low — v1.x) Worker pool admission heuristics
+  (foundation slice)
+  - Landed capability-aware dispatch + locality preference end-
+    to-end for the in-memory protocol. New types
+    (`WorkerCapabilities`, `ClaimHints`), additive optional
+    fields (`WorkerTask.node_type: Option<String>`,
+    `WorkerHeartbeat.capabilities: WorkerCapabilities`), new
+    trait method `WorkerProtocol::claim_task_with_hints` with a
+    default impl falling through to `claim_task` (so the gRPC
+    adapter keeps compiling without behavior change), and an
+    `InMemoryWorkerProtocol` override that scans the queue in
+    three passes: (1) same-run AND capability-accepting,
+    (2) capability-accepting regardless of run, (3) FIFO.
+    Locality cache is per-worker, in-memory, and tracks the
+    most-recently-claimed `run_id` so a worker without an
+    explicit `locality_run_id` still gets warm-cache
+    continuity. `WorkerControlPlane::claim_task_with_hints`
+    forwards to the protocol and updates the run snapshot the
+    same way `claim_task` does.
+  - 9 hermetic unit tests in `scheduler::tests`: capability
+    default accepts everything, restricted set filters out
+    unmatched types, restricted set still accepts untagged
+    tasks (additive upgrade), `claim_task_with_hints` skips
+    unmatched-capability tasks, locality hint beats FIFO,
+    locality with no match falls back to FIFO, cached
+    last-claimed run biases subsequent claims, combined
+    capability+locality picks the warmest matching task, and
+    the control-plane wrapper still increments
+    `running_tasks` on the run snapshot.
+  - **Wire-extension status:** the in-memory protocol gets
+    full capability + locality dispatch; the gRPC adapter is
+    one follow-up away. `pb::ClaimTaskRequest` /
+    `pb::HeartbeatRequest` don't carry the new fields yet, so
+    workers talking gRPC effectively claim with "no hints"
+    and get pre-P10.16.2 FIFO. Tracked as
+    `P10.16.2-FU1` below. The trait surface stays
+    forward-compatible so the wire-extension is purely
+    additive.
+  - Static `max_workers` + `max_concurrent_tasks_per_worker`
+    caps from P5.5 remain unchanged; capability + locality
+    are additive on top.
+  - Docs: `docs/DISTRIBUTED.md` gains a "Worker Capability +
+    Locality Hints (P10.16.2)" section between admission and
+    resource limits; `docs/STABILITY.md` row updated to list
+    `WorkerCapabilities` / `ClaimHints` and note the new
+    optional fields.
+
+- TODO P10.16.2-FU1 (Low — v1.x) Plumb capability + locality
+  hints across the gRPC wire
+  - Foundation landed in P10.16.2 — the in-memory protocol does
+    capability filtering + locality preference end-to-end, but
+    gRPC workers can't send hints because `pb::ClaimTaskRequest`
+    and `pb::HeartbeatRequest` don't carry the new fields.
+  - Scope: extend the two `prost::Message` structs with optional
+    `node_types: repeated string` + `locality_run_id: string`
+    (tag numbers 4+/5+ keep wire compat with pre-FU1 workers);
+    update `agentflow-worker` to populate them from its config;
+    update `GrpcWorkerService::claim_task` to construct
+    `ClaimHints` from the request and call
+    `claim_task_with_hints`. ~150-200 LoC including tests.
 
 ### P10.17 — agentflow-ui (B → "operator dashboard")
 

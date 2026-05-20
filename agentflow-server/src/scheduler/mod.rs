@@ -71,6 +71,12 @@ impl WorkerId {
 }
 
 /// One schedulable unit of distributed work.
+///
+/// `node_type` (added in P10.16.2) is the optional capability label
+/// used for worker-side filtering. When set, a worker only claims the
+/// task if its [`WorkerCapabilities::node_types`] contains the label
+/// (or its capability set is empty, meaning "anything"). `None`
+/// preserves the pre-P10.16.2 behavior of "any worker can claim me."
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerTask {
   pub task_id: Uuid,
@@ -78,6 +84,11 @@ pub struct WorkerTask {
   pub node_id: String,
   pub attempt: u32,
   pub payload: serde_json::Value,
+  /// Optional capability label for capability-aware dispatch.
+  /// Workers compare this against
+  /// [`WorkerCapabilities::node_types`]. `None` → bypass the filter.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub node_type: Option<String>,
 }
 
 impl WorkerTask {
@@ -88,6 +99,7 @@ impl WorkerTask {
       node_id: node_id.into(),
       attempt: 0,
       payload,
+      node_type: None,
     }
   }
 
@@ -103,7 +115,107 @@ impl WorkerTask {
       node_id: node_id.into(),
       attempt,
       payload,
+      node_type: None,
     }
+  }
+
+  /// Tag this task with a capability label for worker-side filtering.
+  /// Builder style so existing call sites don't need to enumerate the
+  /// optional field. Returns `self` for chaining.
+  pub fn with_node_type(mut self, node_type: impl Into<String>) -> Self {
+    self.node_type = Some(node_type.into());
+    self
+  }
+}
+
+/// Worker capability descriptor (P10.16.2).
+///
+/// Workers advertise which task labels they can execute. The
+/// in-memory protocol uses this to skip tasks the worker can't
+/// handle when scanning the queue; the gRPC adapter forwards the
+/// set on `claim_task` calls (wire-extension follow-up).
+///
+/// An empty `node_types` vector means "this worker accepts any
+/// task" — the pre-P10.16.2 default. A non-empty vector restricts
+/// the worker to tasks whose `node_type` is in the set OR untagged
+/// (the latter keeps the upgrade additive: legacy untagged tasks
+/// continue to schedule onto capability-restricted workers).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WorkerCapabilities {
+  /// Capability labels this worker accepts. Empty = unrestricted.
+  /// Match is case-sensitive against [`WorkerTask::node_type`].
+  pub node_types: Vec<String>,
+}
+
+impl WorkerCapabilities {
+  /// Convenience constructor for "any task" capability.
+  pub fn any() -> Self {
+    Self::default()
+  }
+
+  /// Convenience constructor for a worker that handles exactly the
+  /// given task labels.
+  pub fn for_node_types<I, S>(node_types: I) -> Self
+  where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+  {
+    Self {
+      node_types: node_types.into_iter().map(Into::into).collect(),
+    }
+  }
+
+  /// Return `true` when the worker accepts `node_type`. `None`
+  /// (untagged task) is always accepted to preserve backwards
+  /// compat. Empty capability set ("any task") also accepts
+  /// everything.
+  pub fn accepts(&self, node_type: Option<&str>) -> bool {
+    if self.node_types.is_empty() {
+      return true;
+    }
+    let Some(nt) = node_type else {
+      return true;
+    };
+    self.node_types.iter().any(|allowed| allowed == nt)
+  }
+}
+
+/// Optional hints a worker can attach to a claim call (P10.16.2).
+///
+/// All fields default to "no preference" so existing call sites
+/// keep working unchanged. The [`WorkerProtocol`] trait default
+/// implementation of [`WorkerProtocol::claim_task_with_hints`]
+/// ignores hints and falls back to [`WorkerProtocol::claim_task`],
+/// so protocols that don't care about hints don't need to
+/// implement anything.
+#[derive(Debug, Clone, Default)]
+pub struct ClaimHints {
+  /// What task labels this worker accepts. See
+  /// [`WorkerCapabilities::accepts`].
+  pub capabilities: WorkerCapabilities,
+  /// Optional locality hint — a `run_id` whose tasks this worker
+  /// has recently handled. The in-memory protocol uses it to
+  /// prefer warm-cache tasks (same run = warm filesystem, warm
+  /// model context) over cold tasks when multiple match the
+  /// capability filter.
+  pub locality_run_id: Option<Uuid>,
+}
+
+impl ClaimHints {
+  /// Convenience: "no hints," equivalent to the pre-P10.16.2
+  /// behavior.
+  pub fn none() -> Self {
+    Self::default()
+  }
+
+  pub fn with_capabilities(mut self, capabilities: WorkerCapabilities) -> Self {
+    self.capabilities = capabilities;
+    self
+  }
+
+  pub fn with_locality(mut self, run_id: Uuid) -> Self {
+    self.locality_run_id = Some(run_id);
+    self
   }
 }
 
@@ -156,12 +268,25 @@ pub struct StitchedWorkerTraceEvent {
 }
 
 /// Worker heartbeat payload. `active_task` is `None` when the worker is idle.
+///
+/// `capabilities` (added in P10.16.2) is the per-heartbeat
+/// advertisement of which task labels this worker accepts.
+/// Defaults to "any task" so heartbeats from pre-P10.16.2 workers
+/// keep their existing behavior. The control plane snapshots the
+/// latest capabilities per worker; capability-aware dispatch reads
+/// from the snapshot during `claim_task_with_hints`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerHeartbeat {
   pub worker_id: WorkerId,
   pub active_task: Option<Uuid>,
   pub free_slots: u32,
   pub ts: DateTime<Utc>,
+  #[serde(default, skip_serializing_if = "is_default_capabilities")]
+  pub capabilities: WorkerCapabilities,
+}
+
+fn is_default_capabilities(value: &WorkerCapabilities) -> bool {
+  value.node_types.is_empty()
 }
 
 impl WorkerHeartbeat {
@@ -171,7 +296,16 @@ impl WorkerHeartbeat {
       active_task,
       free_slots,
       ts: Utc::now(),
+      capabilities: WorkerCapabilities::default(),
     }
+  }
+
+  /// Builder-style capability advertisement. Lets workers attach
+  /// their accepted node_types to the heartbeat without enumerating
+  /// the (now wider) struct literal.
+  pub fn with_capabilities(mut self, capabilities: WorkerCapabilities) -> Self {
+    self.capabilities = capabilities;
+    self
   }
 }
 
@@ -183,6 +317,20 @@ pub trait WorkerProtocol: Send + Sync {
 
   /// Claim the next available task for `worker_id`.
   async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError>;
+
+  /// Claim the next task that matches the worker's capabilities and
+  /// (optionally) locality preference (P10.16.2). Defaults to
+  /// [`claim_task`] when the implementation doesn't care about
+  /// hints — additive on the trait so the gRPC adapter, which
+  /// hasn't grown wire-level capability fields yet, doesn't need
+  /// to do anything.
+  async fn claim_task_with_hints(
+    &self,
+    worker_id: WorkerId,
+    _hints: &ClaimHints,
+  ) -> Result<Option<WorkerTask>, SchedulerError> {
+    self.claim_task(worker_id).await
+  }
 
   /// Report a terminal result for a task previously claimed by a worker.
   async fn report_result(
@@ -244,7 +392,25 @@ where
     &self,
     worker_id: WorkerId,
   ) -> Result<Option<WorkerTask>, SchedulerError> {
-    let Some(task) = self.protocol.claim_task(worker_id.clone()).await? else {
+    self
+      .claim_task_with_hints(worker_id, &ClaimHints::none())
+      .await
+  }
+
+  /// Capability + locality-aware claim (P10.16.2). Forwards to the
+  /// protocol's `claim_task_with_hints` so capability-aware
+  /// implementations (in-memory, future capability-aware gRPC
+  /// adapter) can filter and re-rank the queue.
+  pub async fn claim_task_with_hints(
+    &self,
+    worker_id: WorkerId,
+    hints: &ClaimHints,
+  ) -> Result<Option<WorkerTask>, SchedulerError> {
+    let Some(task) = self
+      .protocol
+      .claim_task_with_hints(worker_id.clone(), hints)
+      .await?
+    else {
       return Ok(None);
     };
     let mut state = self.state.lock().await;
@@ -683,6 +849,13 @@ struct InMemoryState {
   claimed: HashMap<Uuid, ClaimedTask>,
   completed: HashMap<Uuid, CompletedTask>,
   heartbeats: HashMap<WorkerId, WorkerHeartbeat>,
+  /// Locality cache (P10.16.2). Tracks the most recent `run_id`
+  /// each worker successfully claimed so subsequent claims can
+  /// prefer same-run tasks (warm filesystem, warm context). A
+  /// single Option per worker is the v1.x foundation; a future
+  /// LRU set could remember the last N runs if real workloads
+  /// need broader locality.
+  last_claimed_run: HashMap<WorkerId, Uuid>,
 }
 
 #[derive(Debug)]
@@ -738,10 +911,75 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
   }
 
   async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
+    // Preserve the pre-P10.16.2 FIFO behavior when no hints are
+    // supplied. Capability-aware dispatch goes through
+    // `claim_task_with_hints` (called by `WorkerControlPlane`
+    // when a worker provides capabilities + locality).
     let mut state = self.state.lock().await;
     let Some(task) = state.queued.pop_front() else {
       return Ok(None);
     };
+    state
+      .last_claimed_run
+      .insert(worker_id.clone(), task.run_id);
+    state
+      .claimed
+      .insert(task.task_id, ClaimedTask { worker_id });
+    Ok(Some(task))
+  }
+
+  async fn claim_task_with_hints(
+    &self,
+    worker_id: WorkerId,
+    hints: &ClaimHints,
+  ) -> Result<Option<WorkerTask>, SchedulerError> {
+    let mut state = self.state.lock().await;
+    if state.queued.is_empty() {
+      return Ok(None);
+    }
+
+    // The locality hint defaults to "the run this worker last
+    // claimed from" so a worker that doesn't supply
+    // `locality_run_id` still gets warm-cache continuity.
+    let locality_run_id = hints
+      .locality_run_id
+      .or_else(|| state.last_claimed_run.get(&worker_id).copied());
+
+    // Pass 1: same run AND capability-accepting (warmest match).
+    // Pass 2: capability-accepting regardless of run.
+    // Pass 3: untagged tasks (no node_type) — accepts under any
+    //         capability set per the
+    //         `WorkerCapabilities::accepts` contract.
+    //
+    // Each pass scans queued in FIFO order so ties between equally-
+    // preferred tasks keep the original ordering.
+    let chosen_index = (|| {
+      if let Some(run) = locality_run_id
+        && let Some(idx) = state.queued.iter().position(|task| {
+          task.run_id == run && hints.capabilities.accepts(task.node_type.as_deref())
+        })
+      {
+        return Some(idx);
+      }
+      if let Some(idx) = state
+        .queued
+        .iter()
+        .position(|task| hints.capabilities.accepts(task.node_type.as_deref()))
+      {
+        return Some(idx);
+      }
+      None
+    })();
+
+    let Some(idx) = chosen_index else {
+      return Ok(None);
+    };
+    // Remove from the deque without disturbing the order of the
+    // remaining tasks.
+    let task = state.queued.remove(idx).expect("index from position");
+    state
+      .last_claimed_run
+      .insert(worker_id.clone(), task.run_id);
     state
       .claimed
       .insert(task.task_id, ClaimedTask { worker_id });
@@ -795,6 +1033,7 @@ pub enum SchedulerError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
 
   #[test]
   fn selected_transport_is_grpc() {
@@ -1094,5 +1333,221 @@ mod tests {
       .expect("heartbeat");
 
     assert_eq!(control.worker_heartbeat(&worker).await, Some(heartbeat));
+  }
+
+  // ----- P10.16.2: capability + locality hints -----
+
+  #[test]
+  fn worker_capabilities_default_accepts_everything() {
+    let caps = WorkerCapabilities::default();
+    assert!(caps.accepts(None));
+    assert!(caps.accepts(Some("template")));
+    assert!(caps.accepts(Some("llm")));
+  }
+
+  #[test]
+  fn worker_capabilities_restricted_accepts_only_listed_types() {
+    let caps = WorkerCapabilities::for_node_types(["template", "file"]);
+    assert!(caps.accepts(Some("template")));
+    assert!(caps.accepts(Some("file")));
+    assert!(!caps.accepts(Some("llm")));
+  }
+
+  #[test]
+  fn worker_capabilities_restricted_still_accepts_untagged_tasks() {
+    // Backwards compat: tasks without a `node_type` label are
+    // accepted by every worker regardless of capability set. That
+    // makes the P10.16.2 upgrade additive — pre-P10.16.2 tasks
+    // (which never set `node_type`) keep scheduling onto
+    // capability-restricted workers.
+    let caps = WorkerCapabilities::for_node_types(["template"]);
+    assert!(caps.accepts(None));
+  }
+
+  #[tokio::test]
+  async fn claim_task_with_hints_skips_unmatched_capability_tasks() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let run = Uuid::new_v4();
+    let llm_task = WorkerTask::new(run, "llm-a", json!({})).with_node_type("llm");
+    let tpl_task = WorkerTask::new(run, "tpl-a", json!({})).with_node_type("template");
+    protocol.submit_task(llm_task.clone()).await.unwrap();
+    protocol.submit_task(tpl_task.clone()).await.unwrap();
+
+    let worker = WorkerId::new("template-only").unwrap();
+    let hints =
+      ClaimHints::default().with_capabilities(WorkerCapabilities::for_node_types(["template"]));
+
+    let claimed = protocol
+      .claim_task_with_hints(worker.clone(), &hints)
+      .await
+      .unwrap()
+      .expect("template task should be returned");
+    assert_eq!(claimed.task_id, tpl_task.task_id);
+
+    // Re-claim: no more template tasks remain, so the llm-only
+    // task in front of the queue is NOT returned to this worker.
+    let next = protocol
+      .claim_task_with_hints(worker, &hints)
+      .await
+      .unwrap();
+    assert!(
+      next.is_none(),
+      "worker without llm capability must not get llm task"
+    );
+
+    // A different worker without restrictions claims it cleanly.
+    let any_worker = WorkerId::new("anything-goes").unwrap();
+    let any = protocol
+      .claim_task_with_hints(any_worker, &ClaimHints::none())
+      .await
+      .unwrap()
+      .expect("anything-goes worker should claim the llm task");
+    assert_eq!(any.task_id, llm_task.task_id);
+  }
+
+  #[tokio::test]
+  async fn claim_task_with_hints_prefers_locality_match() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let run_a = Uuid::new_v4();
+    let run_b = Uuid::new_v4();
+    // Submit in order: run_b first (would be FIFO without hints),
+    // then run_a.
+    let task_b = WorkerTask::new(run_b, "n", json!({}));
+    let task_a = WorkerTask::new(run_a, "n", json!({}));
+    protocol.submit_task(task_b.clone()).await.unwrap();
+    protocol.submit_task(task_a.clone()).await.unwrap();
+
+    let worker = WorkerId::new("local-worker").unwrap();
+    let hints = ClaimHints::default().with_locality(run_a);
+    let claimed = protocol
+      .claim_task_with_hints(worker, &hints)
+      .await
+      .unwrap()
+      .expect("a task should be claimed");
+    assert_eq!(
+      claimed.task_id, task_a.task_id,
+      "locality hint should beat FIFO ordering"
+    );
+  }
+
+  #[tokio::test]
+  async fn claim_task_with_hints_falls_back_to_fifo_when_no_locality_match() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let run_a = Uuid::new_v4();
+    let run_b = Uuid::new_v4();
+    let task_b = WorkerTask::new(run_b, "n", json!({}));
+    let task_a = WorkerTask::new(run_a, "n", json!({}));
+    protocol.submit_task(task_b.clone()).await.unwrap();
+    protocol.submit_task(task_a.clone()).await.unwrap();
+
+    let worker = WorkerId::new("no-locality").unwrap();
+    // Locality hint points at a run that has no queued tasks; the
+    // worker should fall through to FIFO order (run_b first).
+    let hints = ClaimHints::default().with_locality(Uuid::new_v4());
+    let claimed = protocol
+      .claim_task_with_hints(worker, &hints)
+      .await
+      .unwrap()
+      .expect("a task should be claimed");
+    assert_eq!(
+      claimed.task_id, task_b.task_id,
+      "no matching locality should preserve FIFO"
+    );
+  }
+
+  #[tokio::test]
+  async fn claim_task_with_hints_remembers_last_run_as_locality() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let run_a = Uuid::new_v4();
+    let run_b = Uuid::new_v4();
+    // Sequence:
+    //   1. submit run_a/task_a + run_b/task_b in that order.
+    //   2. claim with explicit run_a locality → returns task_a.
+    //   3. submit run_a/task_a2 + run_b/task_b2.
+    //   4. claim with NO explicit locality → should still return
+    //      a run_a task (the cached last-claimed run) instead of
+    //      the FIFO winner (task_b that was already queued, now
+    //      followed by task_a2/task_b2).
+    let task_a = WorkerTask::new(run_a, "n1", json!({}));
+    let task_b = WorkerTask::new(run_b, "n2", json!({}));
+    protocol.submit_task(task_a.clone()).await.unwrap();
+    protocol.submit_task(task_b.clone()).await.unwrap();
+
+    let worker = WorkerId::new("sticky-worker").unwrap();
+    let claimed = protocol
+      .claim_task_with_hints(worker.clone(), &ClaimHints::default().with_locality(run_a))
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(claimed.task_id, task_a.task_id);
+
+    let task_a2 = WorkerTask::new(run_a, "n3", json!({}));
+    let task_b2 = WorkerTask::new(run_b, "n4", json!({}));
+    protocol.submit_task(task_a2.clone()).await.unwrap();
+    protocol.submit_task(task_b2.clone()).await.unwrap();
+
+    let claimed = protocol
+      .claim_task_with_hints(worker, &ClaimHints::none())
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      claimed.task_id, task_a2.task_id,
+      "cached last-claimed run should bias the second claim"
+    );
+  }
+
+  #[tokio::test]
+  async fn claim_task_with_hints_combines_capability_and_locality() {
+    // Queue:   run_a/llm    run_b/template    run_a/template
+    // Worker:  template-only, locality = run_a
+    // Expect:  run_a/template (capability OK + locality match).
+    let protocol = InMemoryWorkerProtocol::new();
+    let run_a = Uuid::new_v4();
+    let run_b = Uuid::new_v4();
+    let t1 = WorkerTask::new(run_a, "x", json!({})).with_node_type("llm");
+    let t2 = WorkerTask::new(run_b, "y", json!({})).with_node_type("template");
+    let t3 = WorkerTask::new(run_a, "z", json!({})).with_node_type("template");
+    protocol.submit_task(t1).await.unwrap();
+    protocol.submit_task(t2.clone()).await.unwrap();
+    protocol.submit_task(t3.clone()).await.unwrap();
+
+    let worker = WorkerId::new("template-and-local").unwrap();
+    let hints = ClaimHints::default()
+      .with_capabilities(WorkerCapabilities::for_node_types(["template"]))
+      .with_locality(run_a);
+    let claimed = protocol
+      .claim_task_with_hints(worker, &hints)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      claimed.task_id, t3.task_id,
+      "should pick the run_a/template task over the run_b/template task"
+    );
+  }
+
+  #[tokio::test]
+  async fn control_plane_claim_task_with_hints_updates_run_snapshot() {
+    // End-to-end: the WorkerControlPlane wrapper around the
+    // capability-aware protocol still updates per-run state.
+    let protocol = InMemoryWorkerProtocol::new();
+    let control = WorkerControlPlane::new(protocol);
+    let run = Uuid::new_v4();
+    let task = WorkerTask::new(run, "n", json!({})).with_node_type("template");
+    control.schedule_task(task.clone()).await.unwrap();
+
+    let worker = WorkerId::new("w").unwrap();
+    let hints =
+      ClaimHints::default().with_capabilities(WorkerCapabilities::for_node_types(["template"]));
+    let claimed = control
+      .claim_task_with_hints(worker, &hints)
+      .await
+      .unwrap()
+      .expect("task claimed");
+    assert_eq!(claimed.task_id, task.task_id);
+    let snapshot = control.run_snapshot(run).await.expect("snapshot");
+    assert_eq!(snapshot.running_tasks, 1);
+    assert_eq!(snapshot.status, RunControlStatus::Running);
   }
 }

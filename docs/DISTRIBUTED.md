@@ -260,6 +260,57 @@ Test references:
   poll/heartbeat/report, and token rotation does not drop in-flight
   tasks.
 
+## Worker Capability + Locality Hints (P10.16.2)
+
+The control plane supports two optional dispatch hints alongside
+the static admission caps:
+
+- **Capability-aware dispatch.** Workers advertise which task
+  labels they accept via `WorkerCapabilities.node_types`
+  (e.g. `["template", "file"]`). The in-memory protocol filters
+  the queue per worker so a `template`-only worker never claims
+  an `llm` task. Untagged tasks (no `node_type`) and untagged
+  workers (empty capability set) preserve the pre-P10.16.2
+  behavior — the upgrade is fully additive.
+- **Locality preference.** When a worker has recently claimed
+  tasks for a `run_id`, the protocol prefers same-run tasks on
+  the next claim (warm filesystem, warm context, warm model
+  cache). The locality cache is per-worker, in-memory, and
+  tracks the most-recently-claimed `run_id` (a future LRU set
+  could remember the last N runs if real workloads ask for
+  broader locality).
+
+Wire shape:
+
+| Type | Field | Purpose |
+|------|-------|---------|
+| `WorkerTask` | `node_type: Option<String>` | Capability label. `None` = "any worker." |
+| `WorkerHeartbeat` | `capabilities: WorkerCapabilities` | Default empty = "accepts anything." |
+| `ClaimHints` | `capabilities`, `locality_run_id` | Optional per-claim hints. |
+| `WorkerProtocol::claim_task_with_hints(worker_id, hints)` | new trait method | Default impl falls back to `claim_task(worker_id)`. |
+
+`WorkerControlPlane::claim_task_with_hints` is the public entry
+point — it forwards to the protocol and updates the run snapshot
+the same way the bare `claim_task` does, so existing
+control-plane invariants hold.
+
+**Wire-extension status:** the in-memory protocol implements
+capability + locality dispatch end-to-end. The gRPC adapter has
+*not* yet extended `pb::ClaimTaskRequest` / `pb::HeartbeatRequest`
+to carry the new fields — workers talking gRPC effectively ask
+for "no hints" and get pre-P10.16.2 FIFO behavior. Tracked as
+follow-up `P10.16.2-FU1` in `TODOs.md`. The trait surface stays
+forward-compatible: when the gRPC adapter grows the wire fields,
+no caller-side change is needed beyond plumbing them through.
+
+Test references:
+
+- `agentflow-server/src/scheduler/mod.rs#tests` — capability
+  filter, locality preference, FIFO fallback when no match,
+  cached last-run locality, combined capability + locality, and
+  the `WorkerControlPlane::claim_task_with_hints` end-to-end
+  invariant that run snapshots still increment.
+
 ## Worker Resource Limits (P5.6)
 
 Each worker enforces an in-process resource envelope around every

@@ -979,6 +979,7 @@ mod tests {
         active_task: Some(claimed.task_id),
         free_slots: 0,
         ts: chrono::Utc::now() - ChronoDuration::seconds(5),
+        capabilities: Default::default(),
       })
       .await
       .unwrap();

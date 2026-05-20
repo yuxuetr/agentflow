@@ -181,11 +181,14 @@ intelligence.
   no silent downgrade. See `docs/DISTRIBUTED.md` "JWT identity
   flow" for the operator playbook. gRPC-metadata propagation of
   admission tokens is still deferred.
-- **Worker pool admission heuristics** (`P10.16.2`). Static
-  `max_workers` + `max_concurrent_tasks_per_worker` today.
-  Future: capacity-aware load balancing, locality hints
-  (`run_dir` co-location), per-worker capability advertising
-  (which node types each worker can run).
+- **Worker pool admission heuristics** (`P10.16.2`, foundation
+  closed). Capability-aware dispatch (`WorkerCapabilities`
+  advertises which `node_type`s a worker accepts) + locality
+  preference (warm-run bias on next claim) land for the
+  in-memory protocol. gRPC wire-extension stays as a tracked
+  follow-up (`P10.16.2-FU1`). The static `max_workers` +
+  `max_concurrent_tasks_per_worker` caps remain in place; the
+  hints are additive on top.
 - **Worker-executable node payload expansion** — `P2.8`
   expanded to `template/file`; future iterations should add
   `llm`, `http`, `mcp`, `agent` so worker mode is useful for

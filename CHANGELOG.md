@@ -78,6 +78,35 @@ across the 200+ tests touched.
   through 50+ test sites. Adds `tiktoken-rs = "0.6"` dep to
   `agentflow-llm`.
 
+#### Worker dispatch hints
+
+- **Capability + locality hints on worker claim** (P10.16.2
+  foundation). `WorkerCapabilities { node_types }` advertises
+  which task labels a worker accepts; `WorkerTask.node_type:
+  Option<String>` tags tasks with their capability label;
+  `ClaimHints { capabilities, locality_run_id }` is the optional
+  per-claim payload. New trait method
+  `WorkerProtocol::claim_task_with_hints(worker_id, hints)`
+  with a default impl falling back to `claim_task` so the gRPC
+  adapter compiles unchanged; `InMemoryWorkerProtocol` overrides
+  to scan the queue in three passes (same-run + capability,
+  capability anywhere, FIFO). The protocol also caches the
+  most-recently-claimed `run_id` per worker so workers without
+  an explicit locality hint still get warm-cache continuity.
+  `WorkerHeartbeat` gains a `capabilities` field with a default
+  empty value; `WorkerControlPlane::claim_task_with_hints` is
+  the public entry point and still increments the run snapshot
+  the same way bare `claim_task` does.
+  - Wire-extension to gRPC stays as a tracked follow-up
+    (`P10.16.2-FU1`); the trait surface is forward-compatible.
+    Workers talking gRPC today effectively send "no hints" and
+    get pre-P10.16.2 FIFO behavior — fully additive upgrade.
+  - 9 hermetic unit tests cover capability default, restricted
+    set with untagged-task fallback, capability filtering,
+    locality preference, FIFO fallback when no locality match,
+    cached-last-run bias, combined capability + locality, and
+    the control-plane snapshot invariant.
+
 #### Worker admission
 
 - **Signed-JWT identity flavour for worker admission** (P10.16.1).

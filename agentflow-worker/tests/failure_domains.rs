@@ -78,6 +78,7 @@ async fn stale_heartbeat_redistributes_to_another_worker() {
       active_task: Some(claimed.task_id),
       free_slots: 0,
       ts: chrono::Utc::now() - ChronoDuration::seconds(10),
+      capabilities: Default::default(),
     })
     .await
     .expect("heartbeat");
@@ -137,6 +138,7 @@ async fn worker_crash_midtask_is_reattempted_elsewhere() {
       active_task: Some(claimed.task_id),
       free_slots: 0,
       ts: chrono::Utc::now() - ChronoDuration::seconds(10),
+      capabilities: Default::default(),
     })
     .await
     .expect("heartbeat");
