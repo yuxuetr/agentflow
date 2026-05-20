@@ -1745,11 +1745,76 @@ No active gaps. Future opportunities:
     peer project (Helix/Zed/Lapce) shipping a WASM
     plugin ecosystem that creates an ergonomics gap.
 
-- TODO P10.19.2 (Medium — v1.x) Workspace-wide perf regression
+- DONE P10.19.2 (Medium — v1.x) Workspace-wide perf regression
   detection
-  - `bench-gate` exists for criterion benches. Extend to capture
-    `cargo test --workspace` total wall-clock per crate and gate
-    on 1.5× regressions to catch test-suite bloat early.
+  - Landed as a new `cargo xtask test-gate` subcommand, sibling
+    to `bench-gate`. Same architectural shape (baseline JSON +
+    threshold + compare report); different metric: per-crate
+    `cargo test -p <crate> --all-targets` wall-clock instead of
+    criterion microbench medians. Threshold defaults to **1.5×**
+    (looser than bench-gate's 1.25× because test wall-clock
+    captures both incremental compile and execution and `cargo
+    test` has no warm-up / measurement-time knobs to dampen
+    variance).
+  - **Modes**:
+    - Default: walks `workspace.members` (minus `xtask` itself),
+      runs `cargo test -p <crate> --all-targets --quiet` per
+      crate, times each with `Instant::now()`, reads the host-
+      specific baseline file, fails when any crate's
+      `current_ns / baseline_ns >= threshold`.
+    - `--update`: same sweep but writes the timings to the
+      baseline path instead of comparing. Stamps `host.captured_at`
+      (UTC via `date -u +%F`) + `host.rustc` (`rustc --version`)
+      automatically.
+    - `--input <path>`: pure-data comparison flow — read a
+      pre-captured "current" JSON, no cargo invocation. Useful
+      for CI two-stage flows where capture and gate live in
+      different jobs. Mutually exclusive with `--update`.
+  - **Flags**: `--baseline <path>` (override default), `--threshold
+    <ratio>` (default 1.5; must be > 1.0 + finite),
+    `--allow-missing` (don't error when baseline has entries with
+    no matching current measurement — mirrors bench-gate),
+    `--include <crate>` / `--exclude <crate>` (repeatable; the
+    intersection rules match the obvious union/difference
+    semantics).
+  - **Baseline files** live at
+    `benches/baselines/test-timings/<host>.json` (parallel
+    directory to the criterion baselines, same `<host>.json`
+    naming). A `README.md` in that directory documents schema,
+    capture flow, threshold rationale, and the "first-time
+    capture" bootstrap. **No initial baseline files ship in this
+    commit** — running `cargo test` across the full workspace
+    takes 5–15 minutes per host and the numbers vary per
+    machine, so the first operator to capture on a given host
+    lands the file as a separate diff. Plain `test-gate` (no
+    `--update`) fails fast with an actionable error pointing at
+    `--update` until a baseline exists.
+  - **Schema**: `{ host: {id, machine?, arch?, os?, rustc?,
+    captured_at?}, notes: [..], timings: { <crate>: {
+    wall_clock_ns: u128, test_count: Option<u64> } } }`. The
+    `test_count` field is best-effort, parsed from the
+    `test result: ok. N passed; ...` summary lines and summed
+    across binaries (libtest emits one summary per binary
+    inside a single `cargo test` invocation). `None` when no
+    summary appears (compile failure, harness disabled).
+  - **Tests (16 new in `xtask::test_gate_tests`)**: 4 pure
+    comparator boundary tests (at-threshold / faster / zero-
+    baseline / missing-keys), 3 test-count parser tests
+    (multi-binary sum / no-summary / format drift), 1 serde
+    round-trip pinning the schema, 3 crate-selection tests
+    (xtask excluded / include filter / exclude filter), 1
+    write+read round-trip, 1 threshold validation, 1
+    `--update` vs `--input` mutual-exclusion check, 2
+    end-to-end pure-data tests driving `test_gate_from_args`
+    through `--input` (happy + failing). All hermetic — no
+    cargo invocation needed at test time. `cargo test -p
+    xtask test_gate` 16/16 green; `cargo clippy -p xtask
+    --tests -- -D warnings` clean.
+  - **Not in scope** (separate follow-up): wiring `test-gate
+    --allow-missing` into `quality.yml` after a baseline file
+    lands. Per the README rationale, landing the gate first lets
+    contributors run it locally for a release before it gates
+    CI — same staged rollout the bench-gate followed.
 
 - DONE P10.19.3 (Low — Stretch) Centralized `docs/ROADMAP_v2.md`
   for post-v1.0 direction

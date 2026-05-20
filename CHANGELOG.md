@@ -18,6 +18,24 @@ across the 200+ tests touched.
 
 ### Added
 
+#### Workspace tooling
+
+- **`cargo xtask test-gate`** (P10.19.2). New sibling to the existing
+  `bench-gate` (criterion microbench gate). Runs
+  `cargo test -p <crate> --all-targets --quiet` per workspace member,
+  measures per-crate wall-clock, compares against a host-specific
+  baseline JSON, fails on a configurable threshold (default **1.5×**,
+  looser than bench-gate's 1.25× because `cargo test` is meaningfully
+  noisier than criterion). Three modes — compare (default), `--update`
+  (refresh the baseline), and `--input <path>` (pure-data comparison
+  for CI two-stage flows). Baselines live at
+  `benches/baselines/test-timings/<host>.json` with a README pinning
+  schema + capture flow. 16 hermetic unit tests cover the pure
+  comparator, the test-count parser, crate selection, and the
+  argument validation paths. Not wired into CI yet — landing the
+  xtask first lets contributors confirm the heuristic against real
+  PRs locally, same staged rollout as bench-gate.
+
 #### Observability
 
 - **`agentflow_state_size_bytes{run_id}` Prometheus gauge wired
