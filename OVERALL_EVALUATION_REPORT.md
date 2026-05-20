@@ -144,13 +144,14 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 
 优势：
 
-- 包含 protocol、client、transport_new、server、tools 适配。
+- 包含 protocol、client、transport、server、tools 适配。
 - ClientBuilder、stdio transport、list/call tools、resources、prompts、retry 等能力比较完整。
 - 有状态机、timeout、integration、latency 相关测试。
+- P10.5.1 已清理 `client_old` + 旧 `transport` 历史包袱；`transport_new`
+  重命名为 `transport`（保留 `#[deprecated]` 别名以兼容老代码）。
 
 不足：
 
-- `client_old` 与新 client 并存，历史包袱仍在。
 - server 标注 experimental，生产服务端能力需谨慎评估。
 - MCP 与 Skills/Tools/Nodes 的集成已存在，但调用链上的权限、trace、错误上下文还应统一。
 

@@ -5,7 +5,7 @@
 
 use agentflow_mcp::client::ClientBuilder;
 use agentflow_mcp::error::MCPError;
-use agentflow_mcp::transport_new::{MockTransport, StdioTransport, Transport};
+use agentflow_mcp::transport::{MockTransport, StdioTransport, Transport};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,7 +79,7 @@ async fn test_stdio_timeout_configuration() {
     StdioTransport::new(vec!["echo".to_string()]).with_timeout(Duration::from_millis(500));
 
   // Verify timeout is set
-  use agentflow_mcp::transport_new::TransportConfig;
+  use agentflow_mcp::transport::TransportConfig;
   assert_eq!(transport.timeout_ms(), Some(500));
 }
 
@@ -88,7 +88,7 @@ async fn test_stdio_timeout_can_be_modified() {
   let mut transport = StdioTransport::new(vec!["echo".to_string()]);
 
   // Set custom timeout
-  use agentflow_mcp::transport_new::TransportConfig;
+  use agentflow_mcp::transport::TransportConfig;
   transport.set_timeout_ms(1000);
   assert_eq!(transport.timeout_ms(), Some(1000));
 
@@ -157,7 +157,7 @@ impl Transport for DelayedMockTransport {
     self.inner.is_connected()
   }
 
-  fn transport_type(&self) -> agentflow_mcp::transport_new::TransportType {
+  fn transport_type(&self) -> agentflow_mcp::transport::TransportType {
     self.inner.transport_type()
   }
 }
@@ -246,7 +246,7 @@ async fn test_retry_after_timeout() {
       self.inner.is_connected()
     }
 
-    fn transport_type(&self) -> agentflow_mcp::transport_new::TransportType {
+    fn transport_type(&self) -> agentflow_mcp::transport::TransportType {
       self.inner.transport_type()
     }
   }
@@ -323,7 +323,7 @@ async fn test_timeout_exhausts_retries() {
       self.inner.is_connected()
     }
 
-    fn transport_type(&self) -> agentflow_mcp::transport_new::TransportType {
+    fn transport_type(&self) -> agentflow_mcp::transport::TransportType {
       self.inner.transport_type()
     }
   }

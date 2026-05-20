@@ -4,7 +4,7 @@
 //! for testing purposes without requiring a real server.
 
 use crate::error::{MCPError, MCPResult};
-use crate::transport_new::{Transport, TransportType};
+use crate::transport::{Transport, TransportType};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 /// # Example
 ///
 /// ```
-/// use agentflow_mcp::transport_new::MockTransport;
+/// use agentflow_mcp::transport::MockTransport;
 /// use serde_json::json;
 ///
 /// let mut transport = MockTransport::new();

@@ -36,7 +36,7 @@ Traditional example-based tests that verify specific behaviors and edge cases. T
 - `client/retry.rs`: Tests for retry logic and backoff calculations
 - `protocol/types.rs`: Tests for JSON-RPC serialization/deserialization
 - `error.rs`: Tests for error construction and context propagation
-- `transport_new/stdio.rs`: Tests for stdio transport lifecycle
+- `transport/stdio.rs`: Tests for stdio transport lifecycle
 
 ### 2. Integration Tests
 
@@ -193,7 +193,7 @@ fn prop_result_ext_context_works(is_ok, context)
 - Specialized error fields (timeout, tool name, URI) are preserved
 - Error messages are never empty
 
-#### 4. Transport Configuration (`src/transport_new/stdio.rs`)
+#### 4. Transport Configuration (`src/transport/stdio.rs`)
 
 **8 property tests** validating transport config:
 

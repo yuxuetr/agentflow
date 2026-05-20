@@ -309,9 +309,38 @@ No gaps from the evaluation. Future opportunities:
 
 ### P10.5 — agentflow-mcp (A-)
 
-- TODO P10.5.1 (Medium) Remove `client_old` historical baggage
-  - The old MCP client module sits alongside the current one. Audit
-    references; if none, delete + drop the rustdoc that mentions it.
+- DONE P10.5.1 (Medium) Remove `client_old` historical baggage
+  - Audit confirmed zero external callers in the workspace (both
+    modules were `#[doc(hidden)]` since their introduction and never
+    re-exported at crate root). Deleted `agentflow-mcp/src/client_old.rs`
+    (182 lines) + `agentflow-mcp/src/transport.rs` (150 lines; only
+    ever consumed by `client_old`).
+  - Scope widened beyond the TODO's named module to also rename
+    `transport_new` → `transport` so the post-cleanup name is
+    internally consistent (the `_new` suffix existed precisely as
+    contrast to the deleted old `transport`). All 10 affected
+    callsites (6 tests + 2 examples + 2 internal modules) flipped
+    via `sed` — `cargo build --workspace --tests` clean afterwards.
+    `#[deprecated]` `pub use transport as transport_new;` re-export
+    preserves the old import path for any 3rd-party caller through
+    the transition window; they get a deprecation warning instead
+    of a hard break. A 1-test `compat_tests` module pins the
+    alias's type identity (boxing a `transport::MockTransport` into
+    a `&dyn transport_new::Transport` only type-checks when both
+    paths point at the same trait) so the re-export can't silently
+    degrade.
+  - lib.rs architecture doc updated to drop legacy mentions;
+    `traits.rs` doctest is now consistent with the module name
+    (was always `use agentflow_mcp::transport::Transport` — was
+    forward-looking before, accurate now). Updated
+    `OVERALL_EVALUATION_REPORT.md` to note the cleanup landed;
+    `docs/MCP_TEST_EXAMPLES_GUIDE.md` paths updated.
+    `agentflow-mcp` is below the stability tier line per
+    `docs/STABILITY.md`, so this rename is in scope.
+  - Tests: 217 mcp tests pass (incl. 1 new compat test, all
+    doctests, integration tests using the new path); `cargo
+    clippy -p agentflow-mcp --tests --examples -- -D warnings`
+    clean; full workspace `cargo build --workspace --tests` green.
 - TODO P10.5.2 (Medium — v1.x) Promote MCP server from
   `experimental` to `beta`
   - Spec the contract that's actually stable today, add backward-

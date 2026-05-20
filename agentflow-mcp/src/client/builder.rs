@@ -5,7 +5,7 @@
 
 use crate::error::{MCPError, MCPResult};
 use crate::protocol::types::{ClientCapabilities, Implementation};
-use crate::transport_new::{StdioTransport, Transport};
+use crate::transport::{StdioTransport, Transport};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ impl ClientBuilder {
   ///
   /// ```
   /// use agentflow_mcp::client::ClientBuilder;
-  /// use agentflow_mcp::transport_new::StdioTransport;
+  /// use agentflow_mcp::transport::StdioTransport;
   ///
   /// let builder = ClientBuilder::new()
   ///   .with_transport(StdioTransport::new(vec!["node".into(), "server.js".into()]));

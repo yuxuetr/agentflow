@@ -13,7 +13,7 @@
 
 use agentflow_mcp::client::ClientBuilder;
 use agentflow_mcp::protocol::{JsonRpcRequest, extract_traceparent_from_request};
-use agentflow_mcp::transport_new::MockTransport;
+use agentflow_mcp::transport::MockTransport;
 use serde_json::Value;
 
 fn captured_request(messages: &[Value], method: &str) -> JsonRpcRequest {

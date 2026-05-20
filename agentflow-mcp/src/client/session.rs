@@ -9,7 +9,7 @@ use crate::protocol::types::ClientCapabilities;
 use crate::protocol::types::{
   Implementation, InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, RequestId,
 };
-use crate::transport_new::Transport;
+use crate::transport::Transport;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -411,7 +411,7 @@ impl Drop for MCPClient {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::transport_new::StdioTransport;
+  use crate::transport::StdioTransport;
 
   #[test]
   fn test_session_id_generated() {

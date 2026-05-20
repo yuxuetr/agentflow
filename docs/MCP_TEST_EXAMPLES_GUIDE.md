@@ -18,7 +18,7 @@ This guide documents the testing infrastructure and examples created for the Age
 
 ## MockTransport
 
-**File**: `src/transport_new/mock.rs` (371 lines)
+**File**: `src/transport/mock.rs` (371 lines)
 
 ### Purpose
 
@@ -52,7 +52,7 @@ MockTransport simulates MCP server responses for testing purposes, allowing you 
 ### Usage Example
 
 ```rust
-use agentflow_mcp::transport_new::MockTransport;
+use agentflow_mcp::transport::MockTransport;
 use serde_json::json;
 
 // Create mock transport

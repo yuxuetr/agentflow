@@ -289,6 +289,19 @@ across the 200+ tests touched.
 
 ### Removed
 
+- **`agentflow-mcp::client_old`** and the legacy `transport` module
+  it depended on (P10.5.1). Both were `#[doc(hidden)]` and had no
+  external callers in the workspace; deleting them removes ~330
+  lines of dead code. The current `transport_new` module is renamed
+  to `transport` so the post-cleanup name is internally consistent.
+  A `#[deprecated]` `pub use transport as transport_new;` re-export
+  preserves the old import path for any 3rd-party caller through
+  the transition window — they get a deprecation warning instead of
+  a hard break. A compat unit test pins the alias's type identity
+  so the re-export can't silently degrade. agentflow-mcp is below
+  the stability tier line per `docs/STABILITY.md`, so this rename
+  is in scope.
+
 - **6 dead `agentflow-llm/config/models/*.yml` files** (F-A7-3,
   `5578743`). The vendor_configs split was never read by the
   runtime registry. 4 misdirecting docs updated to point at the

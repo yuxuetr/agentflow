@@ -28,7 +28,7 @@ Successfully addressed all **Priority 1 (Critical)** testing gaps identified in 
 ## Part 1: Stdio Transport Unit Tests
 
 ### Objective
-The stdio transport layer (`transport_new/stdio.rs`) had **zero unit tests** despite being critical infrastructure for process communication.
+The stdio transport layer (`transport/stdio.rs`) had **zero unit tests** despite being critical infrastructure for process communication.
 
 ### Implementation
 Added **19 comprehensive unit tests** covering all aspects of stdio transport:
@@ -76,7 +76,7 @@ Added **19 comprehensive unit tests** covering all aspects of stdio transport:
 - ✅ Drop trait cleanup verification
 
 ### File Location
-`agentflow-mcp/src/transport_new/stdio.rs` (lines 378-723)
+`agentflow-mcp/src/transport/stdio.rs` (lines 378-723)
 
 ### Coverage Improvement
 - **Before:** 0% unit test coverage
@@ -339,7 +339,7 @@ test result: ok. 11 passed; 0 failed; 3 ignored
 3. `agentflow-mcp/docs/TESTING_IMPROVEMENTS.md` (this file)
 
 ### Modified Files
-1. `agentflow-mcp/src/transport_new/stdio.rs` (+345 lines of tests)
+1. `agentflow-mcp/src/transport/stdio.rs` (+345 lines of tests)
 
 ---
 

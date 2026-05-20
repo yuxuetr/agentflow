@@ -5,7 +5,7 @@
 //! and proper timeout/health check mechanisms.
 
 use crate::error::{MCPError, MCPResult};
-use crate::transport_new::traits::{Transport, TransportConfig, TransportType};
+use crate::transport::traits::{Transport, TransportConfig, TransportType};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 /// # Example
 ///
 /// ```no_run
-/// use agentflow_mcp::transport_new::{StdioTransport, Transport};
+/// use agentflow_mcp::transport::{StdioTransport, Transport};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut transport = StdioTransport::new(vec![
@@ -69,7 +69,7 @@ impl StdioTransport {
   /// # Example
   ///
   /// ```
-  /// use agentflow_mcp::transport_new::StdioTransport;
+  /// use agentflow_mcp::transport::StdioTransport;
   ///
   /// let transport = StdioTransport::new(vec![
   ///   "node".to_string(),
@@ -104,7 +104,7 @@ impl StdioTransport {
   /// # Example
   ///
   /// ```
-  /// use agentflow_mcp::transport_new::StdioTransport;
+  /// use agentflow_mcp::transport::StdioTransport;
   /// use std::time::Duration;
   ///
   /// let transport = StdioTransport::new(vec!["node".into(), "server.js".into()])
@@ -753,7 +753,7 @@ mod tests {
         let transport = StdioTransport::new(vec!["test".to_string()])
           .with_timeout(Duration::from_millis(timeout_ms));
 
-        use crate::transport_new::TransportConfig;
+        use crate::transport::TransportConfig;
         prop_assert_eq!(transport.timeout_ms(), Some(timeout_ms));
       }
 
@@ -763,7 +763,7 @@ mod tests {
         let transport = StdioTransport::new(vec!["test".to_string()])
           .with_max_message_size(size);
 
-        use crate::transport_new::TransportConfig;
+        use crate::transport::TransportConfig;
         prop_assert_eq!(transport.max_message_size(), Some(size));
       }
 
@@ -776,7 +776,7 @@ mod tests {
         let mut transport = StdioTransport::new(vec!["test".to_string()])
           .with_timeout(Duration::from_millis(initial_ms));
 
-        use crate::transport_new::TransportConfig;
+        use crate::transport::TransportConfig;
         prop_assert_eq!(transport.timeout_ms(), Some(initial_ms));
 
         transport.set_timeout_ms(new_ms);
@@ -792,7 +792,7 @@ mod tests {
         let mut transport = StdioTransport::new(vec!["test".to_string()])
           .with_max_message_size(initial_size);
 
-        use crate::transport_new::TransportConfig;
+        use crate::transport::TransportConfig;
         prop_assert_eq!(transport.max_message_size(), Some(initial_size));
 
         transport.set_max_message_size(new_size);
@@ -846,7 +846,7 @@ mod tests {
           .with_timeout(Duration::from_millis(timeout_ms))
           .with_max_message_size(max_size);
 
-        use crate::transport_new::TransportConfig;
+        use crate::transport::TransportConfig;
         prop_assert_eq!(transport.timeout_ms(), Some(timeout_ms));
         prop_assert_eq!(transport.max_message_size(), Some(max_size));
         prop_assert_eq!(transport.transport_type(), TransportType::Stdio);

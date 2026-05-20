@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use agentflow_mcp::transport_new::{StdioTransport, Transport};
+//! use agentflow_mcp::transport::{StdioTransport, Transport};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut transport = StdioTransport::new(vec![

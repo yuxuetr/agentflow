@@ -4,7 +4,7 @@
 //! ensuring proper state transitions and operation sequencing.
 
 use agentflow_mcp::client::{ClientBuilder, SessionState};
-use agentflow_mcp::transport_new::MockTransport;
+use agentflow_mcp::transport::MockTransport;
 use serde_json::json;
 
 // Helper trait for in-place JSON mutation (currently unused but available for future tests)

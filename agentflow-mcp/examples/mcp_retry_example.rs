@@ -15,7 +15,7 @@
 use agentflow_mcp::client::ClientBuilder;
 use agentflow_mcp::client::retry::{RetryConfig, retry_with_backoff};
 use agentflow_mcp::error::{MCPError, MCPResult};
-use agentflow_mcp::transport_new::MockTransport;
+use agentflow_mcp::transport::MockTransport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
