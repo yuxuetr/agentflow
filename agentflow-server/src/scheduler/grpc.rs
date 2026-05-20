@@ -47,6 +47,13 @@ pub mod pb {
     pub attempt: u32,
     #[prost(string, tag = "5")]
     pub payload_json: String,
+    /// Capability label for worker-side filtering (P10.16.2-FU1).
+    /// Empty string = "untagged" (= `WorkerTask::node_type ==
+    /// None`). Capability-restricted workers still accept
+    /// untagged tasks per `WorkerCapabilities::accepts`, so this
+    /// field's absence is a no-op for pre-FU1 workers.
+    #[prost(string, tag = "6")]
+    pub node_type: String,
   }
 
   #[derive(Clone, PartialEq, ::prost::Message)]
@@ -93,6 +100,19 @@ pub mod pb {
   pub struct ClaimTaskRequest {
     #[prost(string, tag = "1")]
     pub worker_id: String,
+    /// Capability filter (P10.16.2-FU1). Empty list = "any task,"
+    /// matching the pre-FU1 wire (capabilities default to empty).
+    /// When non-empty, the server skips tasks whose `node_type`
+    /// isn't in this set. Untagged tasks (empty `node_type`)
+    /// always pass regardless of the filter.
+    #[prost(string, repeated, tag = "2")]
+    pub accepted_node_types: Vec<String>,
+    /// Locality preference (P10.16.2-FU1). When non-empty, the
+    /// server prefers tasks whose `run_id` matches this value,
+    /// falling back to FIFO when no match exists. Empty = "no
+    /// preference," matching the pre-FU1 behavior.
+    #[prost(string, tag = "3")]
+    pub locality_run_id: String,
   }
 
   #[derive(Clone, PartialEq, ::prost::Message)]
@@ -121,6 +141,13 @@ pub mod pb {
     pub free_slots: u32,
     #[prost(string, tag = "4")]
     pub timestamp_rfc3339: String,
+    /// Per-heartbeat capability advertisement (P10.16.2-FU1).
+    /// Same semantics as `ClaimTaskRequest::accepted_node_types`.
+    /// The server snapshots this so subsequent claims by the
+    /// same worker can use the most-recent capability set even
+    /// when the claim call doesn't supply hints inline.
+    #[prost(string, repeated, tag = "5")]
+    pub accepted_node_types: Vec<String>,
   }
 }
 
@@ -186,11 +213,18 @@ where
     &self,
     request: Request<pb::ClaimTaskRequest>,
   ) -> Result<Response<pb::ClaimTaskResponse>, Status> {
-    let worker_id = WorkerId::new(request.into_inner().worker_id)
+    let request = request.into_inner();
+    let worker_id = WorkerId::new(request.worker_id.clone())
       .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    // P10.16.2-FU1: route through `claim_task_with_hints` so the
+    // worker's advertised capabilities + locality preference
+    // filter the queue. Pre-FU1 workers send empty fields, which
+    // `ClaimHints::default()` interprets as "no preference" —
+    // identical to the bare `claim_task` path.
+    let hints = claim_hints_from_proto(&request).map_err(|e| *e)?;
     let task = self
       .protocol
-      .claim_task(worker_id)
+      .claim_task_with_hints(worker_id, &hints)
       .await
       .map_err(status_from_error)?
       .map(worker_task_to_proto);
@@ -255,10 +289,12 @@ where
     &self,
     request: Request<pb::ClaimTaskRequest>,
   ) -> Result<Response<pb::ClaimTaskResponse>, Status> {
-    let worker_id = WorkerId::new(request.into_inner().worker_id)
+    let request = request.into_inner();
+    let worker_id = WorkerId::new(request.worker_id.clone())
       .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    let hints = claim_hints_from_proto(&request).map_err(|e| *e)?;
     let task = self
-      .claim_task(worker_id)
+      .claim_task_with_hints(worker_id, &hints)
       .await
       .map_err(status_from_error)?
       .map(worker_task_to_proto);
@@ -575,11 +611,28 @@ impl WorkerProtocol for GrpcWorkerProtocol {
   }
 
   async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
+    // Pre-FU1 path: no hints. Equivalent to
+    // `claim_task_with_hints(worker_id, &ClaimHints::none())`.
+    self
+      .claim_task_with_hints(worker_id, &crate::scheduler::ClaimHints::none())
+      .await
+  }
+
+  async fn claim_task_with_hints(
+    &self,
+    worker_id: WorkerId,
+    hints: &crate::scheduler::ClaimHints,
+  ) -> Result<Option<WorkerTask>, SchedulerError> {
     let response = self
       .unary::<_, pb::ClaimTaskResponse>(
         "/agentflow.scheduler.v1.WorkerControl/ClaimTask",
         pb::ClaimTaskRequest {
           worker_id: worker_id.0,
+          accepted_node_types: hints.capabilities.node_types.clone(),
+          locality_run_id: hints
+            .locality_run_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
         },
       )
       .await?
@@ -628,6 +681,10 @@ fn worker_task_to_proto(task: WorkerTask) -> pb::WorkerTask {
     node_id: task.node_id,
     attempt: task.attempt,
     payload_json: task.payload.to_string(),
+    // P10.16.2-FU1: capability label round-trips across the wire.
+    // `None` ↔ empty string so a pre-FU1 worker that ignores the
+    // field still sees a coherent task.
+    node_type: task.node_type.unwrap_or_default(),
   }
 }
 
@@ -638,12 +695,14 @@ fn worker_task_from_proto(task: pb::WorkerTask) -> BoxedStatusResult<WorkerTask>
     node_id: task.node_id,
     attempt: task.attempt,
     payload: parse_json(&task.payload_json, "payload_json")?,
-    // P10.16.2 capability label is not yet plumbed across the gRPC
-    // wire (follow-up TODO `P10.16.2-FU1`). Until then, every task
-    // arriving over gRPC is untagged; the capability filter
-    // unconditionally accepts untagged tasks so the upgrade is
-    // additive at the protocol boundary.
-    node_type: None,
+    // P10.16.2-FU1: empty string → None preserves the
+    // "untagged task" semantic that
+    // `WorkerCapabilities::accepts` always accepts.
+    node_type: if task.node_type.is_empty() {
+      None
+    } else {
+      Some(task.node_type)
+    },
   })
 }
 
@@ -727,6 +786,12 @@ fn worker_heartbeat_to_proto(heartbeat: WorkerHeartbeat) -> pb::HeartbeatRequest
       .unwrap_or_default(),
     free_slots: heartbeat.free_slots,
     timestamp_rfc3339: heartbeat.ts.to_rfc3339(),
+    // P10.16.2-FU1: heartbeats round-trip capability
+    // advertisements. Empty `node_types` ↔ empty repeated
+    // string, so pre-FU1 workers (which never set this field)
+    // produce the same wire bytes as a worker explicitly
+    // advertising "any task."
+    accepted_node_types: heartbeat.capabilities.node_types,
   }
 }
 
@@ -756,11 +821,32 @@ fn worker_heartbeat_from_proto(
     active_task,
     free_slots: heartbeat.free_slots,
     ts,
-    // P10.16.2 capability advertisement is not yet plumbed across
-    // the gRPC wire (follow-up TODO `P10.16.2-FU1`). Heartbeats
-    // over gRPC default to "any task" so existing gRPC workers
-    // keep behaving as before.
-    capabilities: crate::scheduler::WorkerCapabilities::default(),
+    // P10.16.2-FU1: capability advertisement reads from the
+    // wire. An empty list means "any task" (the pre-FU1 default)
+    // — the policy layer in `InMemoryWorkerProtocol` and
+    // `WorkerCapabilities::accepts` already handle that case.
+    capabilities: crate::scheduler::WorkerCapabilities {
+      node_types: heartbeat.accepted_node_types,
+    },
+  })
+}
+
+/// Convert a `pb::ClaimTaskRequest` into a [`ClaimHints`]
+/// (P10.16.2-FU1). Empty values map cleanly to "no preference"
+/// so pre-FU1 workers continue to get FIFO dispatch.
+fn claim_hints_from_proto(
+  request: &pb::ClaimTaskRequest,
+) -> BoxedStatusResult<crate::scheduler::ClaimHints> {
+  let locality_run_id = if request.locality_run_id.is_empty() {
+    None
+  } else {
+    Some(parse_uuid(&request.locality_run_id, "locality_run_id")?)
+  };
+  Ok(crate::scheduler::ClaimHints {
+    capabilities: crate::scheduler::WorkerCapabilities {
+      node_types: request.accepted_node_types.clone(),
+    },
+    locality_run_id,
   })
 }
 
@@ -825,6 +911,8 @@ mod traceparent_tests {
   async fn inject_inside_scope_writes_traceparent_metadata() {
     let mut req = Request::new(pb::ClaimTaskRequest {
       worker_id: "worker-1".into(),
+      accepted_node_types: Vec::new(),
+      locality_run_id: String::new(),
     });
     agentflow_tracing::context::scope("00-trace-id-span-01".to_string(), async {
       inject_traceparent_into_grpc_request(&mut req);
@@ -884,5 +972,138 @@ mod traceparent_tests {
       extract_traceparent_from_grpc_request(&req).as_deref(),
       Some("00-roundtrip-test-01")
     );
+  }
+}
+
+#[cfg(test)]
+mod hint_proto_tests {
+  //! P10.16.2-FU1: wire-shape conversions for capability +
+  //! locality hints. The transport-layer policy-routing test
+  //! (capability filter actually filtering, locality preference
+  //! actually winning) lives in `scheduler::mod.rs` against
+  //! `InMemoryWorkerProtocol`; here we only assert the bytes
+  //! round-trip cleanly so the trait method sees the same data
+  //! the worker sent.
+  use super::*;
+  use crate::scheduler::{ClaimHints, WorkerCapabilities};
+
+  #[test]
+  fn worker_task_round_trip_preserves_node_type() {
+    let task = WorkerTask::new(Uuid::new_v4(), "node-a", serde_json::json!({"k": "v"}))
+      .with_node_type("template");
+    let wire = worker_task_to_proto(task.clone());
+    assert_eq!(wire.node_type, "template");
+    let back = worker_task_from_proto(wire).expect("decode");
+    assert_eq!(back.node_type.as_deref(), Some("template"));
+    assert_eq!(back.task_id, task.task_id);
+  }
+
+  #[test]
+  fn worker_task_round_trip_preserves_untagged() {
+    // The pre-FU1 wire path: a worker that doesn't set
+    // `node_type` ends up with `None`, not `Some("")` —
+    // important because `WorkerCapabilities::accepts(None)`
+    // always returns true (the untagged-task-always-accepted
+    // invariant) while `accepts(Some(""))` would unhelpfully
+    // never match.
+    let task = WorkerTask::new(Uuid::new_v4(), "node-a", serde_json::json!({}));
+    let wire = worker_task_to_proto(task);
+    assert_eq!(wire.node_type, "", "untagged tasks encode as empty string");
+    let back = worker_task_from_proto(wire).expect("decode");
+    assert!(
+      back.node_type.is_none(),
+      "empty string decodes back to None"
+    );
+  }
+
+  #[test]
+  fn claim_hints_round_trip_carries_capabilities_and_locality() {
+    let run = Uuid::new_v4();
+    let hints = ClaimHints::default()
+      .with_capabilities(WorkerCapabilities::for_node_types(["template", "file"]))
+      .with_locality(run);
+    let wire = pb::ClaimTaskRequest {
+      worker_id: "w".into(),
+      accepted_node_types: hints.capabilities.node_types.clone(),
+      locality_run_id: hints
+        .locality_run_id
+        .map(|id| id.to_string())
+        .unwrap_or_default(),
+    };
+    let decoded = claim_hints_from_proto(&wire).expect("decode");
+    assert_eq!(
+      decoded.capabilities.node_types,
+      vec!["template".to_string(), "file".to_string()]
+    );
+    assert_eq!(decoded.locality_run_id, Some(run));
+  }
+
+  #[test]
+  fn claim_hints_from_proto_default_means_no_hints() {
+    // Pre-FU1 worker sends a bare `ClaimTaskRequest { worker_id }`
+    // with default values everywhere else. The decoder must
+    // produce a `ClaimHints` that's behaviorally identical to
+    // `ClaimHints::none()`.
+    let wire = pb::ClaimTaskRequest {
+      worker_id: "legacy-worker".into(),
+      accepted_node_types: Vec::new(),
+      locality_run_id: String::new(),
+    };
+    let decoded = claim_hints_from_proto(&wire).expect("decode");
+    assert!(decoded.capabilities.node_types.is_empty());
+    assert!(decoded.locality_run_id.is_none());
+    // The capability check on the decoded hint accepts any
+    // task — same as `ClaimHints::none()` semantics.
+    assert!(decoded.capabilities.accepts(Some("anything")));
+    assert!(decoded.capabilities.accepts(None));
+  }
+
+  #[test]
+  fn claim_hints_from_proto_rejects_malformed_locality_uuid() {
+    let wire = pb::ClaimTaskRequest {
+      worker_id: "w".into(),
+      accepted_node_types: Vec::new(),
+      locality_run_id: "not-a-uuid".into(),
+    };
+    let err = claim_hints_from_proto(&wire).expect_err("malformed uuid rejected");
+    let status = *err;
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("locality_run_id"));
+  }
+
+  #[test]
+  fn heartbeat_round_trip_preserves_capabilities() {
+    let hb = WorkerHeartbeat::now(WorkerId::new("w").unwrap(), None, 4)
+      .with_capabilities(WorkerCapabilities::for_node_types(["template"]));
+    let wire = worker_heartbeat_to_proto(hb);
+    assert_eq!(
+      wire.accepted_node_types,
+      vec!["template".to_string()],
+      "capability advertisement encodes to repeated string"
+    );
+    let back = worker_heartbeat_from_proto(wire).expect("decode");
+    assert_eq!(
+      back.capabilities.node_types,
+      vec!["template".to_string()],
+      "round-trip preserves the capability set"
+    );
+  }
+
+  #[test]
+  fn heartbeat_pre_fu1_default_decodes_as_any_capability() {
+    // A heartbeat from a pre-FU1 worker has an empty
+    // `accepted_node_types`. The decoder produces a default
+    // `WorkerCapabilities` which accepts everything — preserves
+    // the pre-FU1 admission semantics.
+    let wire = pb::HeartbeatRequest {
+      worker_id: "legacy".into(),
+      active_task_id: String::new(),
+      free_slots: 0,
+      timestamp_rfc3339: String::new(),
+      accepted_node_types: Vec::new(),
+    };
+    let back = worker_heartbeat_from_proto(wire).expect("decode");
+    assert!(back.capabilities.node_types.is_empty());
+    assert!(back.capabilities.accepts(Some("any")));
   }
 }

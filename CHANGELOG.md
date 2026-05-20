@@ -133,6 +133,32 @@ across the 200+ tests touched.
 
 #### Worker dispatch hints
 
+- **gRPC wire-extension for capability + locality hints**
+  (P10.16.2-FU1). Closes the follow-up opened during P10.16.2.
+  `pb::WorkerTask` gained `node_type: string` (tag 6),
+  `pb::ClaimTaskRequest` gained `accepted_node_types:
+  repeated string` (tag 2) + `locality_run_id: string`
+  (tag 3), and `pb::HeartbeatRequest` gained
+  `accepted_node_types: repeated string` (tag 5). All four
+  fields are wire-additive — pre-FU1 workers (which never set
+  them) encode as empty values which the server decodes as "no
+  hints / untagged task," preserving pre-P10.16.2 FIFO
+  behavior exactly. Both `GrpcWorkerService` and
+  `WorkerControlPlane`'s tonic adapter now route through
+  `protocol.claim_task_with_hints`; `GrpcWorkerProtocol`
+  (client side) gained an explicit `claim_task_with_hints`
+  impl. `agentflow-worker::WorkerConfig` gained a
+  `capabilities: WorkerCapabilities` knob +
+  `with_capabilities` builder; `run_once` sends them on every
+  heartbeat AND attaches them to claim hints, so distributed
+  workers can declare which node types they accept and the
+  queue scan skips work they can't run. 7 hermetic
+  round-trip tests in `scheduler::grpc::hint_proto_tests`
+  cover the wire-shape conversions, malformed locality UUID
+  rejection, and the pre-FU1 backwards-compat invariants.
+  `docs/DISTRIBUTED.md` "Wire-extension status" subsection
+  marks FU1 closed with a wire-shape mapping table.
+
 - **Capability + locality hints on worker claim** (P10.16.2
   foundation). `WorkerCapabilities { node_types }` advertises
   which task labels a worker accepts; `WorkerTask.node_type:

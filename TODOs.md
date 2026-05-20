@@ -1141,19 +1141,55 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     `WorkerCapabilities` / `ClaimHints` and note the new
     optional fields.
 
-- TODO P10.16.2-FU1 (Low — v1.x) Plumb capability + locality
+- DONE P10.16.2-FU1 (Low — v1.x) Plumb capability + locality
   hints across the gRPC wire
-  - Foundation landed in P10.16.2 — the in-memory protocol does
-    capability filtering + locality preference end-to-end, but
-    gRPC workers can't send hints because `pb::ClaimTaskRequest`
-    and `pb::HeartbeatRequest` don't carry the new fields.
-  - Scope: extend the two `prost::Message` structs with optional
-    `node_types: repeated string` + `locality_run_id: string`
-    (tag numbers 4+/5+ keep wire compat with pre-FU1 workers);
-    update `agentflow-worker` to populate them from its config;
-    update `GrpcWorkerService::claim_task` to construct
-    `ClaimHints` from the request and call
-    `claim_task_with_hints`. ~150-200 LoC including tests.
+  - Landed end-to-end. `pb::WorkerTask` gained `node_type:
+    string` (tag 6); `pb::ClaimTaskRequest` gained
+    `accepted_node_types: repeated string` (tag 2) +
+    `locality_run_id: string` (tag 3); `pb::HeartbeatRequest`
+    gained `accepted_node_types: repeated string` (tag 5). All
+    four fields are wire-additive — pre-FU1 workers (which
+    never set them) encode as empty values, which the server
+    decodes as "no hints / untagged task" preserving the
+    pre-FU1 FIFO behavior exactly.
+  - `worker_task_to_proto` / `worker_task_from_proto` round-trip
+    `node_type` with the empty-string ↔ None mapping critical
+    for the "untagged-task-always-accepted" invariant.
+  - New `claim_hints_from_proto` helper decodes the
+    `accepted_node_types` + `locality_run_id` pair into a
+    `ClaimHints`, with proper validation of malformed UUID
+    locality hints (surfaced as
+    `tonic::Status::invalid_argument`).
+  - `worker_heartbeat_to_proto` / `worker_heartbeat_from_proto`
+    carry the per-heartbeat capability advertisement.
+  - **Both** gRPC service impls (`GrpcWorkerService` and
+    `WorkerControlPlane`'s tonic adapter) now route through
+    `protocol.claim_task_with_hints` so the capability filter
+    actually filters when a worker advertises capabilities.
+    `GrpcWorkerProtocol` (the client) gained an explicit
+    `claim_task_with_hints` impl; `claim_task` becomes a thin
+    shim that delegates with `ClaimHints::none()`.
+  - `agentflow-worker::WorkerConfig` gained
+    `capabilities: WorkerCapabilities` + `with_capabilities`
+    builder. `run_once` now sends the configured capabilities
+    on every heartbeat AND attaches them to the claim hints,
+    so distributed workers can declare which node types they
+    accept and the queue scan skips work they can't run.
+  - 7 hermetic unit tests in `scheduler::grpc::hint_proto_tests`:
+    `worker_task_round_trip_preserves_node_type`,
+    `worker_task_round_trip_preserves_untagged`,
+    `claim_hints_round_trip_carries_capabilities_and_locality`,
+    `claim_hints_from_proto_default_means_no_hints`,
+    `claim_hints_from_proto_rejects_malformed_locality_uuid`,
+    `heartbeat_round_trip_preserves_capabilities`,
+    `heartbeat_pre_fu1_default_decodes_as_any_capability`.
+    Combined with the policy-level tests from P10.16.2
+    (`scheduler::tests`, 9 tests), the capability + locality
+    surface is now covered at both the protocol and the wire
+    level.
+  - `docs/DISTRIBUTED.md` "Wire-extension status" subsection
+    updated to mark FU1 closed, with a wire-shape table
+    showing every new field's pb type + pre-FU1 default.
 
 ### P10.17 — agentflow-ui (B → "operator dashboard")
 

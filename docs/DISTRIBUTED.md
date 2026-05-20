@@ -294,14 +294,27 @@ point — it forwards to the protocol and updates the run snapshot
 the same way the bare `claim_task` does, so existing
 control-plane invariants hold.
 
-**Wire-extension status:** the in-memory protocol implements
-capability + locality dispatch end-to-end. The gRPC adapter has
-*not* yet extended `pb::ClaimTaskRequest` / `pb::HeartbeatRequest`
-to carry the new fields — workers talking gRPC effectively ask
-for "no hints" and get pre-P10.16.2 FIFO behavior. Tracked as
-follow-up `P10.16.2-FU1` in `TODOs.md`. The trait surface stays
-forward-compatible: when the gRPC adapter grows the wire fields,
-no caller-side change is needed beyond plumbing them through.
+**Wire-extension status (P10.16.2-FU1, closed):** capability +
+locality hints round-trip across the gRPC wire end-to-end.
+`pb::WorkerTask` gained `node_type: string` (tag 6),
+`pb::ClaimTaskRequest` gained `accepted_node_types: repeated
+string` (tag 2) + `locality_run_id: string` (tag 3), and
+`pb::HeartbeatRequest` gained `accepted_node_types: repeated
+string` (tag 5). All four fields are wire-additive — pre-FU1
+workers that don't set them encode as empty values which the
+server decodes as "no hints / untagged task" (preserving the
+pre-FU1 FIFO behavior). The `agentflow-worker` runtime gained
+a `WorkerConfig::capabilities` knob that flows through every
+heartbeat + claim call.
+
+Wire shape:
+
+| pb field | Type | Maps to | Pre-FU1 default |
+|----------|------|---------|------|
+| `WorkerTask.node_type` | string | `WorkerTask::node_type: Option<String>` | empty ⇒ `None` (untagged-task-accepted invariant) |
+| `ClaimTaskRequest.accepted_node_types` | repeated string | `ClaimHints::capabilities.node_types` | empty ⇒ "any task" |
+| `ClaimTaskRequest.locality_run_id` | string | `ClaimHints::locality_run_id: Option<Uuid>` | empty ⇒ `None` |
+| `HeartbeatRequest.accepted_node_types` | repeated string | `WorkerHeartbeat::capabilities.node_types` | empty ⇒ "any task" |
 
 Test references:
 
@@ -310,6 +323,12 @@ Test references:
   cached last-run locality, combined capability + locality, and
   the `WorkerControlPlane::claim_task_with_hints` end-to-end
   invariant that run snapshots still increment.
+- `agentflow-server/src/scheduler/grpc.rs#hint_proto_tests`
+  (P10.16.2-FU1) — 7 hermetic round-trip tests covering
+  `WorkerTask.node_type` (tagged + untagged), `ClaimHints`
+  (both fields set + bare-default → no-hints), malformed
+  locality UUID rejection, heartbeat capability round-trip,
+  and pre-FU1 default decoded as "any capability."
 
 ## Worker Resource Limits (P5.6)
 

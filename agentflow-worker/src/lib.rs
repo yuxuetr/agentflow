@@ -38,8 +38,8 @@ use agentflow_nodes::nodes::{
   file::FileNode, http::HttpNode, llm::LlmNode, mcp::MCPNode, template::TemplateNode,
 };
 use agentflow_server::{
-  NodeExecutionPayload, SchedulerError, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
-  WorkerTaskResult, WorkerTraceEvent,
+  ClaimHints, NodeExecutionPayload, SchedulerError, WorkerCapabilities, WorkerHeartbeat, WorkerId,
+  WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent,
 };
 use agentflow_tools::ToolRegistry;
 use thiserror::Error;
@@ -99,6 +99,12 @@ pub struct WorkerConfig {
   pub poll_interval: Duration,
   pub heartbeat_interval: Duration,
   pub resource_limits: WorkerResourceLimits,
+  /// Capabilities advertised in every claim + heartbeat
+  /// (P10.16.2-FU1). Empty = "any task" (pre-FU1 default).
+  /// A worker that knows it only handles `template` / `file`
+  /// nodes can set this to skip the server-side filter cost on
+  /// unmatched tasks.
+  pub capabilities: WorkerCapabilities,
 }
 
 impl WorkerConfig {
@@ -114,11 +120,20 @@ impl WorkerConfig {
       // pass unchanged. Production callers should override via
       // `with_resource_limits` with the prod-leaning preset.
       resource_limits: WorkerResourceLimits::unlimited(),
+      capabilities: WorkerCapabilities::default(),
     }
   }
 
   pub fn with_resource_limits(mut self, limits: WorkerResourceLimits) -> Self {
     self.resource_limits = limits;
+    self
+  }
+
+  /// Advertise a fixed capability set on every heartbeat + claim
+  /// (P10.16.2-FU1). Equivalent to setting `self.capabilities`
+  /// directly.
+  pub fn with_capabilities(mut self, capabilities: WorkerCapabilities) -> Self {
+    self.capabilities = capabilities;
     self
   }
 }
@@ -199,16 +214,20 @@ where
   pub async fn run_once(&self) -> Result<Option<WorkerTask>, WorkerError> {
     self
       .protocol
-      .heartbeat(WorkerHeartbeat::now(
-        self.config.worker_id.clone(),
-        None,
-        self.config.free_slots,
-      ))
+      .heartbeat(
+        WorkerHeartbeat::now(self.config.worker_id.clone(), None, self.config.free_slots)
+          .with_capabilities(self.config.capabilities.clone()),
+      )
       .await?;
 
+    // P10.16.2-FU1: send the worker's capabilities (and an empty
+    // locality hint — the server defaults to "most-recently-
+    // claimed run" when this is absent) so the queue scan can
+    // skip work the worker can't run.
+    let hints = ClaimHints::default().with_capabilities(self.config.capabilities.clone());
     let Some(task) = self
       .protocol
-      .claim_task(self.config.worker_id.clone())
+      .claim_task_with_hints(self.config.worker_id.clone(), &hints)
       .await?
     else {
       return Ok(None);
