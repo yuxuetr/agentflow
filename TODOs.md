@@ -583,14 +583,30 @@ No active gaps. Future opportunities:
 
 ### P10.10 — agentflow-harness (A-)
 
-- TODO P10.10.1 (Medium — v1.x) Promote individual H6 items from
+- DONE P10.10.1 (Medium — v1.x) Promote individual H6 items from
   `Later Tracks` on concrete demand
-  - Slash-command ecosystem expansion
-  - TUI product shell (separate from CLI run)
-  - OpenHarness-style config import
-  - Plugin compatibility adapters
-  - Provider subscription bridge
-  - Each requires its own RFC. Don't pull en bloc.
+  - Resolved as a 1-pager (`docs/H6_PROMOTION_CRITERIA.md`)
+    capturing per-item promotion triggers, not as code. The
+    TODO was a *tracking* item — "don't pull en bloc, write
+    an RFC per item when demand appears" — so closing it
+    means pinning the gate, not shipping any of the five
+    items. Same shape as P10.19.1 (WASM 1-pager): decide-when-
+    to-revisit, persist the analysis, let demand drive the
+    next P11.x rather than speculation.
+  - For each of the 5 H6 items (slash-command expansion, TUI
+    product shell, OpenHarness-style config import, plugin
+    compatibility adapters, provider subscription bridge) the
+    doc pins: what concrete demand signal tips the scale, the
+    RFC scope when it does, the estimated effort, and an
+    explicit cross-reference to the non-goal stance in
+    `RoadMap.md` for the two items that are currently
+    documented as non-goals (TUI product shell, provider
+    subscription bridge).
+  - `docs/HARNESS_MODE.md` H6 row links to the criteria doc;
+    `docs/ROADMAP_v2.md` Theme F is updated to note the
+    triggers + non-goal flags. Future P11.x promotion opens
+    a per-item RFC under `docs/RFC_H6_<slug>.md` referencing
+    the criteria doc.
 
 - DONE P10.10.2 (Low — Stretch) Harness session replay
   - Landed: new `HarnessCommands::Replay` subcommand backed by

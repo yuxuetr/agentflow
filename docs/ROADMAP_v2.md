@@ -186,22 +186,27 @@ intelligence.
 
 Motivation: H0–H5 closed. H6 is the open-ended track of
 "advanced compatibility" features — promoted individually only
-when concrete demand surfaces (`P10.10.1`).
+when concrete demand surfaces. Per-item promotion triggers are
+pinned in `docs/H6_PROMOTION_CRITERIA.md` (P10.10.1, closed).
 
-Candidate items (each needs its own RFC before promotion):
+Candidate items (each needs its own RFC before promotion;
+two are explicit non-goals in `RoadMap.md` and would need that
+decision re-opened first):
 
 - **Slash-command ecosystem expansion** — beyond the current
   closed command set.
-- **TUI product shell** — separate from CLI run; an opinionated
-  long-lived agent UI.
+- **TUI product shell** *(non-goal in `RoadMap.md`)* — separate
+  from CLI run; an opinionated long-lived agent UI.
 - **OpenHarness-style config import** — interop with the
   external `harness` config conventions.
 - **Plugin compatibility adapters** — bridges for existing
   third-party agent frameworks.
-- **Provider subscription bridge** — bring-your-own-subscription
-  flows.
+- **Provider subscription bridge** *(non-goal in `RoadMap.md`)* —
+  bring-your-own-subscription flows.
 
-Don't pull en bloc. Each is its own design conversation.
+Don't pull en bloc. Each is its own design conversation. See
+`docs/H6_PROMOTION_CRITERIA.md` for the per-item demand signals
+that would tip the scale.
 
 Already-closed Harness session replay CLI is P10.10.2 (landed).
 

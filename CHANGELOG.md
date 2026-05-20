@@ -572,6 +572,25 @@ across the 200+ tests touched.
 
 ### Docs / conventions
 
+- **H6 promotion criteria 1-pager** (P10.10.1,
+  `docs/H6_PROMOTION_CRITERIA.md`). Pins per-item promotion
+  triggers for the 5 H6 (Phase Harness "advanced compatibility")
+  items so the TODO list doesn't accidentally pull them en
+  bloc when a single one gets demand. For each of
+  slash-command expansion, TUI product shell, OpenHarness
+  config import, plugin compatibility adapters, and provider
+  subscription bridge: documents the demand signal that would
+  tip the scale, the per-item RFC scope, the estimated effort,
+  and the explicit cross-reference to the non-goal stance in
+  `RoadMap.md` for the two items currently documented as
+  non-goals (TUI, subscription bridge). Closes a *tracking*
+  TODO — no code shipped; the value is preserving the per-item
+  review discipline so a future P11.x opens a focused RFC
+  instead of a five-item batch. Same posture as the WASM
+  1-pager (P10.19.1). `docs/HARNESS_MODE.md` H6 row links to
+  the criteria doc; `docs/ROADMAP_v2.md` Theme F flags
+  non-goals explicitly.
+
 - **WASM plugin runtime 1-pager** (P10.19.1,
   `docs/WASM_PLUGIN_EVALUATION.md`). The narrowed
   wasmtime-vs-wasmer-vs-extism comparison concludes that

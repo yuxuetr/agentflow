@@ -477,7 +477,7 @@ cancelled, timeout).
 | H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
 | H4 | P-H.4 | Background task tools | gated |
 | H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **closed** |
-| H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred |
+| H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred — see `docs/H6_PROMOTION_CRITERIA.md` for per-item promotion triggers |
 
 ## Architectural invariants
 
