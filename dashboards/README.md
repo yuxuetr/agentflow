@@ -73,10 +73,10 @@ Live series:
 | `agentflow_worker_tasks_inflight` | ✅ live | `AuthenticatedControlPlane::claim_task` + `report_result` (FU3) |
 | `agentflow_harness_sessions_active{status}` | ✅ live | scrape-time `SELECT … FROM harness_sessions GROUP BY status` (FU4) |
 | `agentflow_harness_approvals_pending` | ✅ live | scrape-time `PendingApprovalRegistry::pending_count()` (FU4) |
-| `agentflow_health_status{component}` | ⏳ FU5 | scrape-time inspector |
-| `agentflow_memory_usage_bytes` | ⏳ FU5 | scrape-time inspector |
-| `agentflow_state_size_bytes` | ⏳ FU5 | scrape-time inspector |
-| `agentflow_workflow_runs_active{tenant}` | ⏳ FU5 | scrape-time inspector |
+| `agentflow_health_status{component}` | ✅ live | scrape-time inspector — `system=1` always; `database=1\|0` from `SELECT 1` (FU5) |
+| `agentflow_memory_usage_bytes` | ✅ live | scrape-time `/proc/self/statm` on Linux; `0` fallback elsewhere (FU5) |
+| `agentflow_workflow_runs_active{tenant}` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')` (FU5) |
+| `agentflow_state_size_bytes{run_id}` | ⏳ FU6 | requires architectural access to live `Flow` state pool the server doesn't currently expose |
 
 Until the deferred series wire up, the corresponding Grafana
 panels show empty / zero values. The dashboard JSON is checked

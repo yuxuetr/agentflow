@@ -132,6 +132,27 @@ across the 200+ tests touched.
 
 #### Operator dashboards
 
+- **Prometheus `/metrics` — process / state inspectors**
+  (P10.14.2-FU5). Three new scrape-time gauges
+  plug into the `refresh_scrape_time_gauges` helper
+  established by FU4:
+  `agentflow_health_status{component}` (emits `system=1`
+  unconditionally and `database=1|0` from a `SELECT 1`
+  probe), `agentflow_memory_usage_bytes` (reads
+  `/proc/self/statm` on Linux, `0` fallback elsewhere),
+  and `agentflow_workflow_runs_active{tenant}` (single
+  `GROUP BY` query against the read pool). All inherit the
+  fail-soft contract from FU4. 13 of 14 dashboard series
+  are now live; the remaining `state_size_bytes{run_id}`
+  is deferred to `P10.14.2-FU6` because it requires
+  architectural access to live `Flow::context.state_pool`
+  contents the server doesn't expose, and the available
+  proxies (events table size, artifacts size) would
+  mislead operators. 5 new tests (3 unit + 2 integration,
+  including a contract-pin that
+  `agentflow_health_status{component="system"} 1` renders
+  on every scrape).
+
 - **Prometheus `/metrics` — harness session gauges**
   (P10.14.2-FU4). New scrape-time pattern: the `/metrics`
   handler now runs `refresh_scrape_time_gauges(&state)`

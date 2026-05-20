@@ -7,31 +7,33 @@
 //! module installs the recorder that aggregates them into the
 //! Prometheus text format scraped by `GET /metrics`.
 //!
-//! Wiring status:
+//! Wiring status (per-slice closure of `P10.14.2-FU*`):
 //!
-//! - **Live in this slice:** `agentflow_workflow_completed_total{status}`,
+//! - **FU1** — `agentflow_workflow_completed_total{status}`,
 //!   `agentflow_workflow_duration_seconds`,
-//!   `agentflow_nodes_failed_total{node_type}` — wired via
-//!   [`WorkflowEventListener`].
-//! - **Deferred to follow-up TODOs** (see `P10.14.2-FU2` /
-//!   `-FU3` / `-FU4` in `TODOs.md`):
-//!   - `agentflow_cleanup_*_deleted_total` — needs hook into
-//!     `agentflow_server::cleanup::cleanup_expired`.
-//!   - `agentflow_workers_admitted` /
-//!     `agentflow_worker_tasks_inflight` — needs hook into
-//!     `AuthenticatedControlPlane` state.
-//!   - `agentflow_harness_sessions_active{status}` /
-//!     `agentflow_harness_approvals_pending` — needs hook into
-//!     the Harness Mode session repo.
-//!   - `agentflow_health_status{component}` /
-//!     `agentflow_memory_usage_bytes` /
-//!     `agentflow_state_size_bytes` /
-//!     `agentflow_workflow_runs_active{tenant}` — process /
-//!     state inspectors, computed at scrape time.
+//!   `agentflow_nodes_failed_total{node_type}` wired via
+//!   `WorkflowEventListener`.
+//! - **FU2** — `agentflow_cleanup_*_deleted_total` wired via
+//!   `cleanup::cleanup_expired`.
+//! - **FU3** — `agentflow_workers_admitted` /
+//!   `agentflow_worker_tasks_inflight` wired via
+//!   `AuthenticatedControlPlane`.
+//! - **FU4** — `agentflow_harness_sessions_active{status}` /
+//!   `agentflow_harness_approvals_pending` wired via
+//!   scrape-time `refresh_scrape_time_gauges`.
+//! - **FU5** — `agentflow_health_status{component}` /
+//!   `agentflow_memory_usage_bytes` /
+//!   `agentflow_workflow_runs_active{tenant}` wired via
+//!   the same scrape-time helper.
+//! - **Deferred to `P10.14.2-FU6`:**
+//!   `agentflow_state_size_bytes{run_id}` — the gauge requires
+//!   architectural access to live `Flow` state-pool contents
+//!   that the server doesn't currently expose; a proxy
+//!   (e.g. `events` payload-bytes per run) would mislead
+//!   operators.
 //!
-//! Until those land, the corresponding Grafana panels render as
-//! empty — that's documented in `dashboards/README.md` under
-//! "Current emission status."
+//! The current state of each series is mirrored in
+//! `dashboards/README.md` under "Current emission status."
 
 use std::sync::OnceLock;
 
@@ -121,6 +123,14 @@ pub mod names {
   /// Gauge — pending approval requests parked in the
   /// `PendingApprovalRegistry`.
   pub const HARNESS_APPROVALS_PENDING: &str = "agentflow_harness_approvals_pending";
+  /// Gauge, label `component` — health probe per subsystem
+  /// (P10.14.2-FU5). `1` = up, `0` = down.
+  pub const HEALTH_STATUS: &str = "agentflow_health_status";
+  /// Gauge — server process resident memory in bytes.
+  pub const MEMORY_USAGE_BYTES: &str = "agentflow_memory_usage_bytes";
+  /// Gauge, label `tenant` — queued + running workflow runs
+  /// per tenant.
+  pub const WORKFLOW_RUNS_ACTIVE: &str = "agentflow_workflow_runs_active";
 }
 
 /// Record the terminal status of a workflow run. Fires the
@@ -198,6 +208,30 @@ pub fn observe_harness_sessions_active(status: &'static str, count: u64) {
 /// anything > 0 means an operator action is queued.
 pub fn observe_harness_approvals_pending(count: usize) {
   metrics::gauge!(names::HARNESS_APPROVALS_PENDING).set(count as f64);
+}
+
+/// Record one health probe (P10.14.2-FU5). `up = true` →
+/// gauge `1`, `up = false` → gauge `0`. Stat panel on the
+/// dashboard maps these values to UP / DOWN colour bands.
+pub fn observe_health_status(component: &'static str, up: bool) {
+  metrics::gauge!(names::HEALTH_STATUS, "component" => component).set(if up { 1.0 } else { 0.0 });
+}
+
+/// Record the server process resident memory in bytes
+/// (P10.14.2-FU5). Best read from `/proc/self/statm` on
+/// Linux; other platforms fall back to `0` since the scrape-
+/// time inspector documents non-Linux as best-effort.
+pub fn observe_memory_usage_bytes(bytes: u64) {
+  metrics::gauge!(names::MEMORY_USAGE_BYTES).set(bytes as f64);
+}
+
+/// Record per-tenant active workflow runs (P10.14.2-FU5).
+/// "Active" = queued + running, NOT terminal. Sourced at
+/// scrape time from a single `GROUP BY` against the read
+/// pool so the gauge cost is one indexed query per
+/// `/metrics` poll.
+pub fn observe_workflow_runs_active(tenant: &str, count: u64) {
+  metrics::gauge!(names::WORKFLOW_RUNS_ACTIVE, "tenant" => tenant.to_string()).set(count as f64);
 }
 
 #[cfg(test)]
@@ -311,6 +345,57 @@ mod tests {
     assert!(
       text.contains("status=\"completed\""),
       "status label `completed` must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_health_status_maps_bool_to_zero_or_one() {
+    let _ = init_recorder();
+    observe_health_status("system", true);
+    observe_health_status("database", false);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_health_status"),
+      "health gauge must appear; got: {text}"
+    );
+    assert!(
+      text.contains("component=\"system\""),
+      "system component label must appear; got: {text}"
+    );
+    assert!(
+      text.contains("component=\"database\""),
+      "database component label must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_memory_usage_bytes_emits_gauge() {
+    let _ = init_recorder();
+    observe_memory_usage_bytes(123_456_789);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_memory_usage_bytes"),
+      "memory gauge must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_workflow_runs_active_emits_per_tenant_label() {
+    let _ = init_recorder();
+    observe_workflow_runs_active("default", 4);
+    observe_workflow_runs_active("acme-corp", 17);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_workflow_runs_active"),
+      "active-runs gauge must appear; got: {text}"
+    );
+    assert!(
+      text.contains("tenant=\"default\""),
+      "default tenant label must appear; got: {text}"
+    );
+    assert!(
+      text.contains("tenant=\"acme-corp\""),
+      "explicit tenant label must appear; got: {text}"
     );
   }
 

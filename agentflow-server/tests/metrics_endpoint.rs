@@ -302,6 +302,65 @@ async fn metrics_endpoint_scrape_time_handler_survives_unreachable_db() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_emits_scrape_time_process_inspectors() {
+  // P10.14.2-FU5: health_status, memory_usage_bytes,
+  // workflow_runs_active are computed at scrape time. The DB
+  // queries fail silently against a lazy pool, but
+  // `health_status{component="system"}` is always emitted and
+  // `memory_usage_bytes` emits `0` on non-Linux — both reach
+  // the wire from the unreachable-DB code path.
+  let _ = metrics::init_recorder();
+  // Prime the gauges via the helpers so the test pins the
+  // wire shape regardless of whether the scrape-time DB
+  // queries succeed in this test harness.
+  metrics::observe_health_status("system", true);
+  metrics::observe_health_status("database", false);
+  metrics::observe_memory_usage_bytes(1024 * 1024 * 256);
+  metrics::observe_workflow_runs_active("default", 4);
+  let app = create_router(lazy_state());
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_health_status"),
+    "health gauge must appear; got:\n{body}"
+  );
+  for component in ["system", "database"] {
+    let needle = format!("component=\"{component}\"");
+    assert!(
+      body.contains(&needle),
+      "component label `{component}` must appear; got:\n{body}"
+    );
+  }
+  assert!(
+    body.contains("agentflow_memory_usage_bytes"),
+    "memory gauge must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("agentflow_workflow_runs_active"),
+    "active-runs gauge must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("tenant=\"default\""),
+    "tenant label must appear; got:\n{body}"
+  );
+}
+
+#[tokio::test]
+async fn metrics_endpoint_emits_system_health_one_on_every_scrape() {
+  // The scrape-time inspector unconditionally emits
+  // `agentflow_health_status{component="system"} 1` because if
+  // we're computing this code, the system is up by definition.
+  // Pinned so a future refactor of `refresh_scrape_time_gauges`
+  // can't silently drop it.
+  let _ = metrics::init_recorder();
+  let app = create_router(lazy_state());
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_health_status{component=\"system\"} 1"),
+    "system=1 must appear on every scrape; got:\n{body}"
+  );
+}
+
+#[tokio::test]
 async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // We can't easily make `init_recorder` un-install (it's
   // process-global), so this test only runs in a fresh process

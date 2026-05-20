@@ -1129,18 +1129,55 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     from "8 series live" to "10 series live" + documents
     the scrape-time pattern + the fail-soft contract.
 
-- TODO P10.14.2-FU5 (Low — v1.x) Wire scrape-time process /
+- DONE P10.14.2-FU5 (Low — v1.x) Wire scrape-time process /
   state inspectors
-  - The dashboard panels for
-    `agentflow_health_status{component}`,
-    `agentflow_memory_usage_bytes`,
-    `agentflow_state_size_bytes`, and
-    `agentflow_workflow_runs_active{tenant}` are
-    scrape-time inspectors — they read process state /
-    in-memory snapshots rather than incrementing on events.
-    A `Collector` trait + per-metric implementations + a
-    hook on `/metrics` that calls them before rendering.
-    ~100 LoC + tests.
+  - Landed three of the four series:
+    - `agentflow_health_status{component}` — emits
+      `system=1` unconditionally (if the handler ran, the
+      system is up by definition) and `database=1|0` from a
+      cheap `SELECT 1` probe against the read pool.
+    - `agentflow_memory_usage_bytes` — Linux reads
+      `/proc/self/statm` and multiplies the resident-pages
+      field by 4096. Non-Linux platforms emit `0` so dev
+      macOS / Windows hosts render cleanly without an error
+      surface in the panel (production targets are Linux
+      99% of the time).
+    - `agentflow_workflow_runs_active{tenant}` — single
+      `SELECT tenant_id, COUNT(*) FROM runs WHERE status IN
+      ('queued','running') GROUP BY tenant_id` against the
+      read pool. Same fail-soft contract from FU4: a query
+      failure logs at debug and skips the gauge but doesn't
+      break the scrape.
+  - 4th series `agentflow_state_size_bytes{run_id}` deferred
+    to `P10.14.2-FU6` (see below): a faithful gauge needs
+    architectural access to live `Flow::context.state_pool`
+    contents that the server doesn't currently expose;
+    surrogate proxies (events table size, artifacts size)
+    would mislead operators reading the panel.
+  - 5 new tests (3 unit + 2 integration). The
+    `metrics_endpoint_emits_system_health_one_on_every_scrape`
+    integration test pins the contract that the system
+    component renders `1` on every successful scrape so a
+    future refactor of `refresh_scrape_time_gauges` can't
+    silently drop it.
+  - Dashboard status: `dashboards/README.md` matrix → 13 ✅
+    live + 1 ⏳ FU6 (state_size_bytes).
+    `docs/KUBERNETES_DEPLOYMENT.md` callout rewritten to
+    summarise the now-complete (modulo FU6) inspector
+    surface.
+
+- TODO P10.14.2-FU6 (Low — v1.x) Live-state size gauge
+  - Wire `agentflow_state_size_bytes{run_id}` for the
+    "Memory & workflow state" dashboard panel. The gauge
+    needs architectural access to live `Flow::context.state_pool`
+    contents — neither `runs` (workflow YAML, not state)
+    nor `events` (audit log, not state) is a faithful
+    proxy. Likely surface: the server exposes a
+    `Flow::estimated_state_bytes()` accessor, the
+    `FlowRunExecutor` snapshots it periodically into the
+    runs table or a process-local registry, the scrape-time
+    helper reads from there. ~150 LoC + integration test
+    against a real workflow.
 
 ### P10.15 — agentflow-db (B+)
 

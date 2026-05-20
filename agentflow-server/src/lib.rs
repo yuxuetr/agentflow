@@ -374,6 +374,79 @@ async fn refresh_scrape_time_gauges(state: &AppState) {
   // P10.14.2-FU4 — pending approval count from the in-process
   // registry. Always succeeds.
   metrics::observe_harness_approvals_pending(state.approval_registry.pending_count());
+
+  // P10.14.2-FU5 — health status per component.
+  //
+  // `component="system"` is always 1 if we're computing it,
+  // because the only way to reach this code is via a successful
+  // `/metrics` poll — the rest of the stat panel is hyperbole.
+  // `component="database"` is a `SELECT 1` probe against the
+  // read pool so it picks up replica unavailability too. Both
+  // failures map to gauge 0 (Stat panel red); never block the
+  // scrape.
+  metrics::observe_health_status("system", true);
+  let db_up = sqlx::query("SELECT 1")
+    .execute(state.db.read_pool())
+    .await
+    .is_ok();
+  metrics::observe_health_status("database", db_up);
+
+  // P10.14.2-FU5 — process resident memory. Linux reads from
+  // `/proc/self/statm`; non-Linux falls back to 0 with a debug
+  // log. Production deployments are Linux 99% of the time.
+  if let Some(bytes) = process_memory_bytes() {
+    metrics::observe_memory_usage_bytes(bytes);
+  } else {
+    // Emit 0 so the panel renders cleanly on dev macOS / Windows
+    // hosts and operators can still see the scrape worked.
+    metrics::observe_memory_usage_bytes(0);
+  }
+
+  // P10.14.2-FU5 — active runs per tenant. `active` = queued
+  // + running, never terminal. One indexed query against the
+  // read pool. Same fail-soft pattern as the harness session
+  // refresh — a query error skips this gauge but doesn't block
+  // the rest of the scrape.
+  match sqlx::query_as::<_, (String, i64)>(
+    "SELECT tenant_id, COUNT(*)::BIGINT FROM runs \
+       WHERE status IN ('queued', 'running') GROUP BY tenant_id",
+  )
+  .fetch_all(state.db.read_pool())
+  .await
+  {
+    Ok(rows) => {
+      for (tenant, count) in rows {
+        metrics::observe_workflow_runs_active(&tenant, count.max(0) as u64);
+      }
+    }
+    Err(err) => {
+      tracing::debug!(
+        error = %err,
+        "refresh_scrape_time_gauges: workflow_runs_active query failed"
+      );
+    }
+  }
+}
+
+/// Best-effort process resident-memory probe (P10.14.2-FU5).
+/// Reads `/proc/self/statm` on Linux (the second whitespace-
+/// separated field is resident pages; multiplying by 4096
+/// gives bytes — Linux page size is 4096 on every architecture
+/// the gateway targets). Returns `None` on non-Linux + on any
+/// I/O / parse failure so the caller can degrade to a `0`
+/// gauge rather than fail the scrape.
+fn process_memory_bytes() -> Option<u64> {
+  #[cfg(target_os = "linux")]
+  {
+    let s = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let field = s.split_whitespace().nth(1)?;
+    let pages: u64 = field.parse().ok()?;
+    Some(pages.saturating_mul(4096))
+  }
+  #[cfg(not(target_os = "linux"))]
+  {
+    None
+  }
 }
 
 pub fn create_router(state: AppState) -> Router {

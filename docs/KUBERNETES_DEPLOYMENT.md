@@ -500,29 +500,26 @@ retention sweep deletions, and Harness Mode sessions. See
 contract, import recipe, and conventions.
 
 **Status:** the `agentflow-server` binary exposes `/metrics`.
-Ten series are live today: the three workflow series from
-P10.14.2-FU1 (`agentflow_workflow_completed_total{status}`,
+13 of the 14 dashboard series are live as of P10.14.2-FU5:
+the three workflow series from FU1
+(`agentflow_workflow_completed_total{status}`,
 `agentflow_workflow_duration_seconds`,
 `agentflow_nodes_failed_total{node_type}`), the three cleanup
-counters from P10.14.2-FU2
-(`agentflow_cleanup_runs_deleted_total` /
-`agentflow_cleanup_events_deleted_total` /
-`agentflow_cleanup_artifacts_deleted_total`), the two
-worker-fleet gauges from P10.14.2-FU3
-(`agentflow_workers_admitted`,
-`agentflow_worker_tasks_inflight{worker_id}`), and the two
-harness session gauges from P10.14.2-FU4
-(`agentflow_harness_sessions_active{status}`,
-`agentflow_harness_approvals_pending`). The harness gauges
-are computed at scrape time (one `GROUP BY` query against the
-read replica + one mutex read of the in-process approval
-registry); a DB-query failure falls back to the previous
-gauge value rather than failing the scrape. Remaining series
-deferred to `P10.14.2-FU5`: `agentflow_health_status{component}`
-/ `agentflow_memory_usage_bytes` /
-`agentflow_state_size_bytes` /
-`agentflow_workflow_runs_active{tenant}` (all scrape-time
-process inspectors).
+counters from FU2, the two worker-fleet gauges from FU3, the
+two harness session gauges from FU4, and three scrape-time
+process inspectors from FU5
+(`agentflow_health_status{component}`,
+`agentflow_memory_usage_bytes`,
+`agentflow_workflow_runs_active{tenant}`). The scrape-time
+gauges are computed via `refresh_scrape_time_gauges(&state)`
+which runs before every render; DB query failures are logged
+and swallowed (fail-soft) so a database hiccup doesn't break
+the entire scrape. Memory reporting is Linux-specific
+(`/proc/self/statm`); non-Linux deployments emit `0`. The
+remaining series `agentflow_state_size_bytes{run_id}` is
+deferred to `P10.14.2-FU6` — it requires architectural
+access to live `Flow` state-pool contents that the server
+doesn't currently expose.
 
 Key metrics to monitor:
 
