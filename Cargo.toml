@@ -21,3 +21,6 @@ members = [
 #   "agentflow-agents/agents/paper_assistant",
 ]
 resolver = "2"
+
+[profile.dev.package."*"]
+debug = 1
