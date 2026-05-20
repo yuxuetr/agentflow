@@ -1,10 +1,12 @@
 [package]
 name = "agentflow-server"
 version = "0.1.0"
-edition = "2024"
-authors = ["AgentFlow Contributors"]
 description = "Axum-based Gateway server for AgentFlow"
-license = "MIT"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 axum = "0.7"

@@ -21,5 +21,23 @@ members = [
 ]
 resolver = "2"
 
+# Shared package metadata (Rust 1.64+ workspace inheritance, P10.0.2-FU1).
+# Every publishable member opts in via `<field>.workspace = true` instead
+# of duplicating these values in its own [package] table. Three immediate
+# wins:
+#   1. `cargo publish --dry-run` no longer warns about missing
+#      `repository` / `homepage` (the canonical pre-GA fix for the
+#      warning P10.0.2 surfaced workspace-wide).
+#   2. A future repo rename / org move is a one-line change here
+#      instead of a 15-file `sed`.
+#   3. `edition`, `license`, `authors` stop drifting between crates.
+# `xtask` keeps `publish = false` and does not opt in — internal-only.
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["yuxuetr", "AgentFlow Contributors"]
+repository = "https://github.com/yuxuetr/agentflow"
+homepage = "https://github.com/yuxuetr/agentflow"
+
 [profile.dev.package."*"]
 debug = 1

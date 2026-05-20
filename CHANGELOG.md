@@ -753,6 +753,18 @@ across the 200+ tests touched.
 
 ### Changed
 
+- **Workspace package metadata centralised via `[workspace.package]`**
+  (P10.0.2-FU1). New shared metadata table in the root `Cargo.toml`
+  pins `edition` / `license` / `authors` / `repository` / `homepage`
+  once for every publishable member; each member's `[package]` table
+  opts in with `<field>.workspace = true`. Clears the
+  `manifest has no documentation, homepage or repository` warning
+  from `cargo publish --dry-run` across all 15 publishable crates.
+  Two pre-existing `repository = "https://github.com/agentflow/agentflow"`
+  values (an org that doesn't exist — 404) replaced with the inherited
+  canonical URL `https://github.com/yuxuetr/agentflow`. A future repo
+  rename is now a one-line change to the workspace block instead of
+  a 15-file `sed`. `xtask` stays opted out (`publish = false`).
 - **Workspace-internal `[dependencies]` now carry explicit
   `version = "X.Y"`** (P10.0.2). Every path-dep on a workspace
   crate was previously bare `{ path = "../..." }`, which

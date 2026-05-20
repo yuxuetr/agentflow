@@ -1,13 +1,14 @@
 [package]
 name = "agentflow-rag"
 version = "0.3.0-alpha"
-edition = "2024"
-authors = ["AgentFlow Contributors"]
 description = "Retrieval-Augmented Generation (RAG) system for AgentFlow"
-repository = "https://github.com/agentflow/agentflow"
-license = "MIT"
 keywords = ["rag", "vector-database", "embeddings", "semantic-search", "ai"]
 categories = ["algorithms", "database", "text-processing"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 default = ["qdrant"]

@@ -1,10 +1,12 @@
 [package]
 name = "agentflow-tracing"
 version = "0.1.0"
-edition = "2024"
-authors = ["AgentFlow Team"]
 description = "Workflow execution tracing and logging for AgentFlow"
-license = "MIT"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 # Core dependencies

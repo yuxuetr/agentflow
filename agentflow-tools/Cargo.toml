@@ -1,12 +1,14 @@
 [package]
 name = "agentflow-tools"
 version = "0.1.0"
-edition = "2024"
-authors = ["AgentFlow Contributors"]
 description = "Unified tool abstraction and built-in tools for AgentFlow agents"
-license = "MIT"
 keywords = ["ai", "agents", "tools", "llm"]
 categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 async-trait = "0.1"

@@ -1,12 +1,14 @@
 [package]
 name = "agentflow-harness"
 version = "0.1.0"
-edition = "2024"
-authors = ["AgentFlow Contributors"]
 description = "Harness Agent Mode runtime + contract crate: long-lived, workspace-aware agent sessions for AgentFlow"
-license = "MIT"
 keywords = ["ai", "agents", "harness", "agentflow"]
 categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 # Phase H0 deliverable: the contract surface (event envelope, approval
 # protocol, hook traits, session context). Phase H1 adds the runtime

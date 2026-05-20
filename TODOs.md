@@ -254,15 +254,52 @@ all map to the P7.4-FU4 production-deployment checklist in
     `P10.0.2-FU1` below. Not a blocker — crates.io accepts publish
     with the warning.
 
-- TODO P10.0.2-FU1 (Low — pre-GA) Add `documentation` / `homepage`
-  / `repository` to the 14 publishable manifests missing them
-  - Currently only `agentflow-rag` carries `repository`. The
-    cleanest fix is to move shared package metadata into the
-    workspace root via `[workspace.package]` (Rust 1.64+) and have
-    each member opt-in with `documentation.workspace = true` etc.
-    Estimated ~50 LoC across 15 Cargo.toml files. Removes the
-    warning from `cargo publish --dry-run` and improves the
-    crates.io listing.
+- DONE P10.0.2-FU1 (Low — pre-GA) Workspace package metadata via
+  `[workspace.package]`
+  - Landed via Rust 1.64+ workspace inheritance (matches the
+    "cleanest fix" path the original TODO suggested). New
+    `[workspace.package]` block in root `Cargo.toml` pins the
+    five shared fields once:
+    - `edition = "2024"` (was duplicated 15×)
+    - `license = "MIT"` (was duplicated 15×)
+    - `authors = ["yuxuetr", "AgentFlow Contributors"]` (unifies
+      the two prior styles)
+    - `repository = "https://github.com/yuxuetr/agentflow"` (NEW
+      — clears the dry-run warning workspace-wide)
+    - `homepage = "https://github.com/yuxuetr/agentflow"` (NEW)
+  - Every one of the 15 publishable members opts in via
+    `<field>.workspace = true` on the five fields above. Per-crate
+    `name` / `version` / `description` / `keywords` / `categories`
+    stay in each member's `[package]` table — those are the fields
+    that genuinely differ per crate.
+  - **Three pre-existing `repository` values cleaned up at the
+    same time**: `agentflow-rag` and `agentflow-cli` both pointed
+    at `https://github.com/agentflow/agentflow` (a 404 — the
+    `agentflow` org doesn't exist); `agentflow-mcp` correctly
+    pointed at the canonical URL. All three replaced with
+    `repository.workspace = true` so they inherit the single
+    canonical value. A future repo rename / org move is a
+    one-line change to the workspace block instead of a 15-file
+    `sed`.
+  - **`xtask` deliberately doesn't opt in** — it's `publish =
+    false` and internal-only; pulling it into the shared metadata
+    table would be misleading.
+  - **Verification**: every one of the 15 publishable crates now
+    dry-runs without the `manifest has no documentation, homepage
+    or repository` warning. The 4 leaf crates (`agentflow-core`,
+    `agentflow-tools`, `agentflow-rag`, `agentflow-db`) confirmed
+    end-to-end with `cargo publish --dry-run --allow-dirty -p
+    <crate>`; the other 11 confirmed via `--no-verify --allow-dirty`
+    + grep (the dep-resolution failure documented in P10.0.2
+    still kicks in afterward, but the manifest warning is
+    suppressed). `cargo clippy --workspace --tests -- -D warnings`
+    clean; `cargo build --workspace` clean.
+  - **Out of scope** (genuinely per-crate, not shared workspace
+    data): adding `documentation = "https://docs.rs/<crate>"` per
+    member. crates.io auto-discovers the docs.rs link from the
+    package name anyway, so the explicit field is a cosmetic-
+    only nicety; deferred until / if it surfaces an operator
+    complaint.
 - TODO P10.0.3 Tag `v1.0.0-rc.1`
   - One-way decision; human operator only.
 - TODO P10.0.4 GitHub Release artifact + docker image push
