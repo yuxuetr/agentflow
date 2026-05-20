@@ -165,8 +165,12 @@ Explicit Non-Goals for Harness Mode (preserved here):
 
 ### Web UI Productization
 
-- Keep Web UI as a debugger/run console. It should not be required for
-  headless operation.
+- **Positioning (P10.17.1, committed)**: debugger / run console only.
+  Operator-dashboard features (cost aggregation, retry-rate trends,
+  worker utilization, policy-decision summary) are intentionally
+  out of scope — Prometheus + Grafana + BI tools cover those better.
+  Full rationale + in/out scope table in
+  [`docs/WEB_UI.md` § Product positioning](docs/WEB_UI.md#product-positioning).
 - Add richer run creation flows, provider configuration diagnostics, and trace
   comparison.
 - Add durable user preferences without leaking API tokens.

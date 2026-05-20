@@ -797,14 +797,30 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
 
 ### P10.17 — agentflow-ui (B → "operator dashboard")
 
-- TODO P10.17.1 (HIGH — v1.x) Decide product positioning
-  - Today: "debugger" per the RoadMap. Real-world Web UIs for
-    workflow platforms tend to grow into "operator dashboards"
-    (cost / retry rates / policy decisions / worker utilization).
-    Decide whether to commit to that productization arc or stay
-    debugger-only.
-  - Either way: write the answer in `docs/WEB_UI.md` so future
-    contributors know the bar.
+- DONE P10.17.1 (HIGH — v1.x) Decide product positioning
+  - **Committed to debugger-focused.** Operator dashboard
+    features (cost aggregation, retry-rate trends, policy-
+    decision summary, worker fleet utilization) are explicitly
+    out of scope; Prometheus + Grafana + BI tools cover those
+    better, and the server already exposes Prometheus metrics
+    for scraping. The CLI + trace replay remain the headless
+    surface — `RoadMap.md` already pinned "Web UI should not be
+    required for headless operation"; this commit makes the bar
+    a first-class doc section instead of a one-line aside.
+  - `docs/WEB_UI.md` gains a "Product positioning" section near
+    the top with: the committed direction, an in-scope / out-of-
+    scope table, the rationale (maintenance budget + better
+    alternatives + headless line), the v1.1 additive items that
+    stay inside the boundary (Harness session replay UI, trace
+    compare polish, long-run perf inc. P10.17.3, prefs API
+    wiring P10.17.2, Playwright e2e P10.17.4), and concrete
+    alternative-tool pointers for each out-of-scope category.
+    Last paragraph names the contributor workflow: "ask if it
+    fits the in-scope column; if no, write a v2 RFC".
+  - `RoadMap.md::Web UI Productization` updated: the existing
+    one-liner now points at the canonical doc section so future
+    contributors land on the in/out table instead of inferring
+    boundaries from the prose.
 
 - TODO P10.17.2 (Medium — v1.x) Preference UI wiring to P6.4 API
   - The `/v1/preferences` API exists (P6.4). The UI still reads /
