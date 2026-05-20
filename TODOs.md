@@ -1063,14 +1063,31 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     cover it cleanly when a real sweep is exercised; left as
     a follow-up.
 
-- TODO P10.14.2-FU3 (Low — v1.x) Wire worker fleet metrics
-  - Hook `AuthenticatedControlPlane` (or its state behind it)
-    to emit gauges:
-    `agentflow_workers_admitted` (`admitted_worker_count()`)
-    and `agentflow_worker_tasks_inflight{worker_id}` (in-flight
-    map). Either tick on every admission/claim/report or
-    snapshot at scrape time via a `Collector`-style hook. ~50
-    LoC + tests.
+- DONE P10.14.2-FU3 (Low — v1.x) Wire worker fleet metrics
+  - Landed. `AuthenticatedControlPlane` now emits the two
+    gauges from its three mutation sites: `admit()` sets
+    `agentflow_workers_admitted` to `state.admitted.len()`
+    after every successful admission; `claim_task` sets
+    `agentflow_worker_tasks_inflight{worker_id}` to the
+    post-increment value after a task is claimed;
+    `report_result` does the same after the decrement (and
+    explicitly emits `0` for the "report without prior claim"
+    branch so the panel doesn't carry a stale value).
+  - New `metrics::observe_workers_admitted(count)` and
+    `metrics::observe_worker_tasks_inflight(worker_id, count)`
+    helpers + matching `WORKERS_ADMITTED` /
+    `WORKER_TASKS_INFLIGHT` constants. Gauges are absolute
+    (set-not-increment) so re-admissions and idempotent
+    claims emit the same value without double-counting.
+  - 2 new unit tests + 1 new integration test:
+    - `observe_workers_admitted_emits_gauge`
+    - `observe_worker_tasks_inflight_emits_per_worker_label`
+    - `metrics_endpoint_emits_worker_fleet_gauges_after_admit_and_claim`
+      — end-to-end through `AuthenticatedControlPlane` against
+      an in-memory protocol, no live Postgres or gRPC needed.
+  - Dashboard status: `dashboards/README.md` matrix → 8 ✅
+    live. `docs/KUBERNETES_DEPLOYMENT.md` callout updated
+    from "6 series live" to "8 series live."
 
 - TODO P10.14.2-FU4 (Low — v1.x) Wire harness session metrics
   - `agentflow_harness_sessions_active{status}` and

@@ -180,6 +180,59 @@ async fn metrics_endpoint_emits_cleanup_counters_after_observation() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_emits_worker_fleet_gauges_after_admit_and_claim() {
+  // P10.14.2-FU3: end-to-end through `AuthenticatedControlPlane`.
+  // We don't need a full distributed setup — just exercise the
+  // admission + claim path against an in-memory protocol so the
+  // metric calls fire from the real code path, not just the
+  // helper.
+  use agentflow_server::{
+    AuthenticatedControlPlane, InMemoryWorkerProtocol, WorkerAdmissionPolicy, WorkerControlPlane,
+    WorkerCredential, WorkerHeartbeat, WorkerId, WorkerTask,
+  };
+  let _ = metrics::init_recorder();
+
+  let protocol = InMemoryWorkerProtocol::new();
+  let control = WorkerControlPlane::new(protocol);
+  let admission = AuthenticatedControlPlane::new(control, WorkerAdmissionPolicy::open());
+
+  let worker = WorkerId::new("metrics-worker-a").expect("valid id");
+  let cred = WorkerCredential::anonymous(worker.clone());
+
+  // Trigger admit → workers_admitted = 1.
+  let hb = WorkerHeartbeat::now(worker.clone(), None, 1);
+  admission
+    .heartbeat(cred.clone(), hb)
+    .await
+    .expect("heartbeat");
+
+  // Submit + claim a task to bump worker_tasks_inflight.
+  let run_id = uuid::Uuid::new_v4();
+  let task = WorkerTask::new(run_id, "n", serde_json::json!({}));
+  admission
+    .inner()
+    .schedule_task(task)
+    .await
+    .expect("schedule");
+  let _ = admission.claim_task(cred.clone()).await.expect("claim");
+
+  let app = create_router(lazy_state());
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_workers_admitted"),
+    "admitted gauge must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("agentflow_worker_tasks_inflight"),
+    "in-flight gauge must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("worker_id=\"metrics-worker-a\""),
+    "worker_id label must propagate; got:\n{body}"
+  );
+}
+
+#[tokio::test]
 async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // We can't easily make `init_recorder` un-install (it's
   // process-global), so this test only runs in a fresh process

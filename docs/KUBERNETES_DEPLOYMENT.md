@@ -500,18 +500,20 @@ retention sweep deletions, and Harness Mode sessions. See
 contract, import recipe, and conventions.
 
 **Status:** the `agentflow-server` binary exposes `/metrics`.
-Six series are live today:
-`agentflow_workflow_completed_total{status}`,
-`agentflow_workflow_duration_seconds` (histogram with buckets
-0.1s … 10min), `agentflow_nodes_failed_total{node_type}` (all
-three via P10.14.2-FU1), and
-`agentflow_cleanup_runs_deleted_total` /
+Eight series are live today: the three workflow series from
+P10.14.2-FU1 (`agentflow_workflow_completed_total{status}`,
+`agentflow_workflow_duration_seconds`,
+`agentflow_nodes_failed_total{node_type}`), the three cleanup
+counters from P10.14.2-FU2
+(`agentflow_cleanup_runs_deleted_total` /
 `agentflow_cleanup_events_deleted_total` /
-`agentflow_cleanup_artifacts_deleted_total` (via P10.14.2-FU2).
-Other series listed below are documented for the forward
-contract but emit zeros until follow-up TODOs land:
-`agentflow_workers_admitted` / `agentflow_worker_tasks_inflight`
-(P10.14.2-FU3), `agentflow_harness_sessions_active{status}` /
+`agentflow_cleanup_artifacts_deleted_total`), and the two
+worker-fleet gauges from P10.14.2-FU3
+(`agentflow_workers_admitted`,
+`agentflow_worker_tasks_inflight{worker_id}`). Other series
+listed below are documented for the forward contract but emit
+zeros until follow-up TODOs land:
+`agentflow_harness_sessions_active{status}` /
 `agentflow_harness_approvals_pending` (P10.14.2-FU4),
 `agentflow_health_status{component}` /
 `agentflow_memory_usage_bytes` /

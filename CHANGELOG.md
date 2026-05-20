@@ -132,6 +132,23 @@ across the 200+ tests touched.
 
 #### Operator dashboards
 
+- **Prometheus `/metrics` — worker fleet gauges**
+  (P10.14.2-FU3). `AuthenticatedControlPlane` now emits the
+  two worker-fleet gauges from its three mutation sites:
+  `admit()` sets `agentflow_workers_admitted` to the
+  distinct-worker count after every successful admission;
+  `claim_task` sets
+  `agentflow_worker_tasks_inflight{worker_id}` to the
+  post-increment value; `report_result` sets the same gauge
+  after the decrement. Gauges are absolute (set-not-
+  increment) so idempotent re-admissions don't double-count.
+  New `metrics::observe_workers_admitted` /
+  `metrics::observe_worker_tasks_inflight` helpers + matching
+  constants. 2 new unit tests + 1 end-to-end integration test
+  exercising the real admission code path against an
+  in-memory protocol. 8 of the 14 dashboard series are now
+  live (6 from FU1+FU2 + 2 from this slice).
+
 - **Prometheus `/metrics` — cleanup sweep counters**
   (P10.14.2-FU2). `cleanup_expired` now fires
   `agentflow_cleanup_runs_deleted_total`,

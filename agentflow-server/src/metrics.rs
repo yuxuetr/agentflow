@@ -111,6 +111,10 @@ pub mod names {
   pub const CLEANUP_EVENTS_DELETED_TOTAL: &str = "agentflow_cleanup_events_deleted_total";
   /// Counter — rows reaped from `artifacts` per sweep.
   pub const CLEANUP_ARTIFACTS_DELETED_TOTAL: &str = "agentflow_cleanup_artifacts_deleted_total";
+  /// Gauge — currently admitted worker count (P10.14.2-FU3).
+  pub const WORKERS_ADMITTED: &str = "agentflow_workers_admitted";
+  /// Gauge, label `worker_id` — in-flight tasks per worker.
+  pub const WORKER_TASKS_INFLIGHT: &str = "agentflow_worker_tasks_inflight";
 }
 
 /// Record the terminal status of a workflow run. Fires the
@@ -151,6 +155,25 @@ pub fn observe_cleanup_sweep(
   metrics::counter!(names::CLEANUP_RUNS_DELETED_TOTAL).increment(runs_deleted);
   metrics::counter!(names::CLEANUP_EVENTS_DELETED_TOTAL).increment(events_deleted);
   metrics::counter!(names::CLEANUP_ARTIFACTS_DELETED_TOTAL).increment(artifacts_deleted);
+}
+
+/// Record the currently-admitted worker count (P10.14.2-FU3).
+/// Called from `AuthenticatedControlPlane::admit` after every
+/// successful admission so the gauge tracks the distinct-worker
+/// count exactly. `usize -> f64` is safe — admission caps are
+/// always small relative to `f64`'s integer-exact range.
+pub fn observe_workers_admitted(count: usize) {
+  metrics::gauge!(names::WORKERS_ADMITTED).set(count as f64);
+}
+
+/// Record one worker's in-flight task count (P10.14.2-FU3).
+/// Called from `AuthenticatedControlPlane::claim_task` and
+/// `report_result` so the gauge stays current. Pass the
+/// post-mutation value — the gauge isn't an increment helper,
+/// it stores the absolute count per `worker_id` label.
+pub fn observe_worker_tasks_inflight(worker_id: &str, count: u32) {
+  metrics::gauge!(names::WORKER_TASKS_INFLIGHT, "worker_id" => worker_id.to_string())
+    .set(count as f64);
 }
 
 #[cfg(test)]
@@ -233,6 +256,37 @@ mod tests {
     assert!(
       text.contains("agentflow_cleanup_artifacts_deleted_total"),
       "artifacts counter must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_workers_admitted_emits_gauge() {
+    let _ = init_recorder();
+    observe_workers_admitted(7);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_workers_admitted"),
+      "workers gauge must appear; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_worker_tasks_inflight_emits_per_worker_label() {
+    let _ = init_recorder();
+    observe_worker_tasks_inflight("worker-a", 3);
+    observe_worker_tasks_inflight("worker-b", 0);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_worker_tasks_inflight"),
+      "inflight gauge must appear; got: {text}"
+    );
+    assert!(
+      text.contains("worker_id=\"worker-a\""),
+      "worker_id label `worker-a` must appear; got: {text}"
+    );
+    assert!(
+      text.contains("worker_id=\"worker-b\""),
+      "worker_id label `worker-b` must appear; got: {text}"
     );
   }
 

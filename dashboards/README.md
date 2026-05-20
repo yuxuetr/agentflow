@@ -69,8 +69,8 @@ Live series:
 | `agentflow_cleanup_runs_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
 | `agentflow_cleanup_events_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
 | `agentflow_cleanup_artifacts_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
-| `agentflow_workers_admitted` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
-| `agentflow_worker_tasks_inflight` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
+| `agentflow_workers_admitted` | ✅ live | `AuthenticatedControlPlane::admit` (FU3) |
+| `agentflow_worker_tasks_inflight` | ✅ live | `AuthenticatedControlPlane::claim_task` + `report_result` (FU3) |
 | `agentflow_harness_sessions_active{status}` | ⏳ FU4 | needs hook into harness session repo |
 | `agentflow_harness_approvals_pending` | ⏳ FU4 | needs hook into harness session repo |
 | `agentflow_health_status{component}` | ⏳ FU5 | scrape-time inspector |

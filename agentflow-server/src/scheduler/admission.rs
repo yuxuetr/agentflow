@@ -322,6 +322,12 @@ where
     let currently_active = state.admitted.len() - usize::from(already_admitted);
     self.policy.check(credential, currently_active)?;
     state.admitted.insert(credential.worker_id.clone());
+    // P10.14.2-FU3: emit the admitted-worker gauge after every
+    // mutation so the Grafana "Worker fleet" panel tracks the
+    // distinct-worker count exactly. Idempotent re-admissions
+    // re-emit the same value, which is fine — gauges are set,
+    // not incremented.
+    crate::metrics::observe_workers_admitted(state.admitted.len());
     Ok(())
   }
 
@@ -361,7 +367,13 @@ where
     let task = self.inner.claim_task(credential.worker_id.clone()).await?;
     if task.is_some() {
       let mut state = self.state.lock().await;
-      *state.in_flight.entry(credential.worker_id).or_insert(0) += 1;
+      let slot = state
+        .in_flight
+        .entry(credential.worker_id.clone())
+        .or_insert(0);
+      *slot += 1;
+      // P10.14.2-FU3: per-worker in-flight gauge.
+      crate::metrics::observe_worker_tasks_inflight(&credential.worker_id.0, *slot);
     }
     Ok(task)
   }
@@ -384,9 +396,17 @@ where
       .await;
 
     let mut state = self.state.lock().await;
-    if let Some(slot) = state.in_flight.get_mut(&credential.worker_id) {
+    let new_inflight = if let Some(slot) = state.in_flight.get_mut(&credential.worker_id) {
       *slot = slot.saturating_sub(1);
-    }
+      *slot
+    } else {
+      0
+    };
+    // P10.14.2-FU3: keep the per-worker gauge current on every
+    // result report, including the "wasn't tracked" branch
+    // (gauge → 0) so a worker that reports without a prior
+    // claim doesn't poison the panel with a stale value.
+    crate::metrics::observe_worker_tasks_inflight(&credential.worker_id.0, new_inflight);
     Ok(inner_result?)
   }
 
