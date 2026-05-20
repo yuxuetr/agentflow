@@ -42,7 +42,10 @@ fn lazy_state() -> AppState {
   let pool = PgPoolOptions::new()
     .connect_lazy("postgres://postgres:postgres@localhost:5432/agentflow_test")
     .unwrap();
-  AppState::new(Database { pool })
+  AppState::new(Database {
+    pool,
+    read_pool: None,
+  })
 }
 
 #[tokio::test]

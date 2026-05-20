@@ -230,6 +230,12 @@ struct ServeArgs {
   /// Postgres URL (default env: DATABASE_URL)
   #[arg(long)]
   database_url: Option<String>,
+  /// Postgres read-replica URL — routes get_*/list_* repo calls
+  /// to a replica while writes go to `--database-url`. Defaults
+  /// to env `AGENTFLOW_DATABASE_READ_URL`. Unset = reads use the
+  /// primary (single-node default). P10.15.2.
+  #[arg(long)]
+  database_read_url: Option<String>,
   /// Workflow run-artifact root (env: AGENTFLOW_RUN_DIR)
   #[arg(long)]
   run_dir: Option<String>,
@@ -1979,6 +1985,7 @@ async fn main() {
       serve_cmd::execute(
         args.bind,
         args.database_url,
+        args.database_read_url,
         args.run_dir,
         args.trace_dir,
         args.security_profile,

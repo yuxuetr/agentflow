@@ -988,10 +988,57 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     contract a future `agentflow restore --input <path>` would
     consume.
 
-- TODO P10.15.2 (Low — v1.x) Read-replica support
-  - All repos write through the primary. For read-heavy gateways,
-    a `--database-read-url` option that routes `list_*` /
-    `get_*` reads to a replica would scale better.
+- DONE P10.15.2 (Low — v1.x) Read-replica support
+  - Landed end-to-end. `Database` gains `read_pool: Option<PgPool>`
+    + `Database::read_pool()` helper that falls back to the
+    primary when no replica is configured. New
+    `Database::connect_with_replica` /
+    `connect_and_migrate_with_replica` constructors take the
+    primary URL + replica URL + per-pool connection caps;
+    migrations always run against the primary so DDL never
+    races the replica.
+  - Every Pg*Repo struct now carries both `pool` (write) and
+    `read_pool` (read); a python pass routed 12 `SELECT`-shaped
+    `fetch_*(&self.pool)` sites to `&self.read_pool` while
+    leaving every `INSERT...RETURNING` / `UPDATE` / `DELETE` on
+    `&self.pool`. New `Repositories::from_pools(write, read)`
+    constructor + `Repositories::from_database(&db)` bridge
+    pick the right pool per side; `from_pool(pool)` stays as a
+    backwards-compat shim that uses the same pool for both
+    sides.
+  - `agentflow-server::AppState::new` now goes through
+    `Repositories::from_database` so the moment an operator
+    sets `AGENTFLOW_DATABASE_READ_URL` (or the new
+    `agentflow serve --database-read-url` CLI flag), reads
+    automatically route to the replica.
+  - CLI plumbing: `agentflow serve` gains `--database-read-url
+    <URL>` (default env `AGENTFLOW_DATABASE_READ_URL`); the
+    flag forwards through to `agentflow-server` via env-var
+    passthrough; the server binary reads the env directly in
+    `build_config_from_env`.
+  - 6 hermetic unit tests in `agentflow-db`:
+    `database::tests::read_pool_falls_back_to_primary_when_not_configured`,
+    `database::tests::read_pool_returns_replica_when_configured`,
+    `repo::tests::from_pool_uses_same_pool_for_reads_and_writes`,
+    `repo::tests::from_pools_routes_separate_pools_to_every_repo`
+    (all 9 repos populated correctly),
+    `repo::tests::from_database_threads_replica_into_repos_when_set`,
+    `repo::tests::from_database_falls_back_to_primary_when_no_replica`.
+    All use `PgPoolOptions::connect_lazy` so no live Postgres
+    is required — `cargo test -p agentflow-db --lib` runs in
+    under a second.
+  - Backwards-compat invariants: every existing
+    `Database { pool }` initializer in test files (2 sites)
+    fixed up to `Database { pool, read_pool: None }`.
+    `Repositories::from_pool(pool)` stays as the single-arg
+    convenience constructor; `AppState::new` continues to
+    accept a bare `Database`.
+  - Replication-lag caveat documented in
+    `docs/DEPLOYMENT.md` "Read-replica routing (P10.15.2)":
+    write-then-immediately-read clients may observe pre-write
+    state; cleanup sweep + run-row creation + harness session
+    creation all read+write through the primary in the same
+    call so they're unaffected.
 
 ### P10.16 — agentflow-worker (B)
 

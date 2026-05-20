@@ -51,6 +51,11 @@ pub struct ServeConfig {
   /// Postgres connection URL. The `--check` path treats absence as a
   /// warning; the binding path treats absence as a hard error.
   pub database_url: Option<String>,
+  /// Optional read-replica connection URL (P10.15.2). When set,
+  /// every `get_*` / `list_*` repo method routes to this pool;
+  /// `INSERT` / `UPDATE` / `DELETE` always hit `database_url`.
+  /// When absent (the default), reads fall back to the primary.
+  pub read_database_url: Option<String>,
   /// Optional override for `AGENTFLOW_RUN_DIR`.
   pub run_dir: Option<PathBuf>,
   /// Optional override for `AGENTFLOW_TRACE_DIR`.
@@ -75,6 +80,7 @@ impl ServeConfig {
         .parse()
         .expect("DEFAULT_SERVE_BIND is a valid SocketAddr"),
       database_url: None,
+      read_database_url: None,
       run_dir: None,
       trace_dir: None,
       security_profile: SecurityProfile::default(),
@@ -362,12 +368,26 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     .ok_or(ServeError::MissingDatabaseUrl)?;
 
   info!("Initializing database connection and applying migrations…");
-  let db = Database::connect_and_migrate(&db_url, 8)
-    .await
-    .map_err(|e| {
-      error!("Failed to connect to database: {e}");
-      ServeError::Database(e.to_string())
-    })?;
+  let db = if let Some(read_url) = config.read_database_url.clone() {
+    info!("Read-replica URL configured; reads will route to the replica.");
+    // The replica pool gets 2× the primary's connection budget on
+    // the assumption that the gateway is read-heavy. Operators with
+    // unusual ratios can rebuild from the same primitives via
+    // `Database::connect_with_replica` directly.
+    Database::connect_and_migrate_with_replica(&db_url, &read_url, 8, 16)
+      .await
+      .map_err(|e| {
+        error!("Failed to connect to database (primary or replica): {e}");
+        ServeError::Database(e.to_string())
+      })?
+  } else {
+    Database::connect_and_migrate(&db_url, 8)
+      .await
+      .map_err(|e| {
+        error!("Failed to connect to database: {e}");
+        ServeError::Database(e.to_string())
+      })?
+  };
 
   let security_defaults =
     server_security_defaults_from_env(config.security_profile).map_err(ServeError::HttpConfig)?;

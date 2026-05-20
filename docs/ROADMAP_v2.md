@@ -119,10 +119,14 @@ plane. v1.x hardening focuses on per-tenant operations.
   docs + `agentflow doctor --backup-check` probes; production
   uses `pg_dump` + filesystem snapshot. An `agentflow backup
   --output <path>` orchestrator would close the loop.
-- **Read-replica support** (`P10.15.2`). All repos write
-  through the primary. A `--database-read-url` option routing
-  `list_*` / `get_*` reads to a replica would scale read-heavy
-  gateways.
+- **Read-replica support** (`P10.15.2`, closed). `Database`
+  carries an optional `read_pool`; every `get_*` / `list_*`
+  repo method routes to it when configured, writes always hit
+  the primary. `agentflow serve --database-read-url <URL>`
+  (env `AGENTFLOW_DATABASE_READ_URL`) opts in. See
+  `docs/DEPLOYMENT.md` "Read-replica routing (P10.15.2)" for
+  the operator playbook and the documented replication-lag
+  caveat.
 
 ### D. Web UI
 

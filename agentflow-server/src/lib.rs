@@ -150,7 +150,10 @@ impl std::fmt::Debug for AppState {
 
 impl AppState {
   pub fn new(db: Database) -> Self {
-    let repos = Repositories::from_pool(db.pool.clone());
+    // P10.15.2: prefer the replica-aware constructor so reads
+    // route to `db.read_pool()` when configured. Falls through
+    // to the primary when no replica is set.
+    let repos = Repositories::from_database(&db);
     Self {
       db,
       repos,

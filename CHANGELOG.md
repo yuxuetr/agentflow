@@ -78,6 +78,33 @@ across the 200+ tests touched.
   through 50+ test sites. Adds `tiktoken-rs = "0.6"` dep to
   `agentflow-llm`.
 
+#### Database layer
+
+- **DB read-replica support** (P10.15.2). `Database` gains
+  optional `read_pool: Option<PgPool>` + helper
+  `read_pool()` that falls back to the primary when no
+  replica is configured. New constructors
+  `Database::connect_with_replica` and
+  `Database::connect_and_migrate_with_replica` take the
+  primary URL + replica URL + per-pool connection caps;
+  migrations always run against the primary so DDL never
+  races the replica. Every Pg*Repo carries both `pool`
+  (write) and `read_pool` (read); 12 `SELECT`-shaped sites
+  in the repo layer route to `read_pool`, while every
+  `INSERT...RETURNING` / `UPDATE` / `DELETE` stays on
+  `pool`. New `Repositories::from_pools(write, read)` +
+  `Repositories::from_database(&db)` constructors;
+  `from_pool(pool)` stays as a backwards-compat shim.
+  `agentflow serve` gains `--database-read-url <URL>`
+  (default env `AGENTFLOW_DATABASE_READ_URL`) forwarded
+  through to the server binary. Single-node deployments
+  are unaffected — `read_pool: None` falls through to the
+  primary and the existing test suite passes unchanged.
+  Documented in `docs/DEPLOYMENT.md` "Read-replica routing
+  (P10.15.2)" with the replication-lag caveat called out.
+  6 hermetic unit tests (lazy pools — no live Postgres
+  required).
+
 #### Operator dashboards
 
 - **Checked-in Grafana dashboard template** (P10.14.2). New

@@ -72,12 +72,21 @@ fn build_config_from_env() -> Result<ServeConfig, Box<dyn std::error::Error>> {
   let database_url = std::env::var("DATABASE_URL")
     .ok()
     .filter(|value| !value.trim().is_empty());
+  // P10.15.2 read-replica opt-in. `AGENTFLOW_DATABASE_READ_URL`
+  // (or the CLI flag `--database-read-url` via the
+  // `agentflow serve` shim) points at the replica. Empty / unset
+  // → reads fall back to the primary, preserving single-node
+  // behavior.
+  let read_database_url = std::env::var("AGENTFLOW_DATABASE_READ_URL")
+    .ok()
+    .filter(|value| !value.trim().is_empty());
   let auth_token_env = std::env::var("AGENTFLOW_SERVE_AUTH_TOKEN_ENV")
     .unwrap_or_else(|_| "AGENTFLOW_API_TOKEN".to_string());
 
   Ok(ServeConfig {
     bind,
     database_url,
+    read_database_url,
     run_dir: std::env::var("AGENTFLOW_RUN_DIR").ok().map(Into::into),
     trace_dir: std::env::var("AGENTFLOW_TRACE_DIR").ok().map(Into::into),
     security_profile,

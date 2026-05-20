@@ -111,6 +111,49 @@ curl -H "Authorization: Bearer dev-secret" http://localhost:3000/v1/whoami
 Health probes (`/health`, `/health/live`, `/health/ready`) bypass auth so
 load balancers / kubelet probes work without secrets.
 
+### Read-replica routing (P10.15.2)
+
+Read-heavy gateways can route `GET /v1/runs/{id}`,
+`GET /v1/runs/{id}/events/history`, `GET /v1/harness/sessions`,
+and similar `list_*` / `get_*` paths to a Postgres read replica
+while writes (run submission, status updates, retention sweep
+deletes) continue to hit the primary.
+
+```bash
+# Primary URL for writes + migrations:
+export DATABASE_URL="postgres://gw:secret@primary.db.internal/agentflow"
+# Replica URL for SELECTs:
+export AGENTFLOW_DATABASE_READ_URL="postgres://gw:secret@replica.db.internal/agentflow"
+
+agentflow serve
+# Or via the CLI flag:
+agentflow serve \
+  --database-url "$DATABASE_URL" \
+  --database-read-url "$AGENTFLOW_DATABASE_READ_URL"
+```
+
+When `AGENTFLOW_DATABASE_READ_URL` is unset (the default),
+reads fall back to the primary — that's the single-node
+deployment behavior and is fully backwards-compatible.
+
+**Caveats:**
+
+- **Replication lag.** A client that writes (`POST /v1/runs`)
+  and immediately reads (`GET /v1/runs/{id}`) may observe the
+  prior state because the replica hasn't caught up. The
+  cleanup sweep, run-row creation, and harness session
+  creation all read+write through the primary in the same
+  call, so this only affects HTTP clients that submit then
+  re-query in the same round trip.
+- **Migrations always run against the primary.** The replica
+  catches up via Postgres streaming replication; we never
+  apply DDL against it directly.
+- **Pool budgets are independent.** The replica pool defaults
+  to 2× the primary's connection cap (16 vs 8) on the
+  assumption that the gateway is read-heavy. Operators with
+  unusual ratios can rebuild from `Database::connect_with_replica`
+  directly.
+
 ### Submit and inspect a run
 
 `POST /v1/runs` executes config-first workflow YAML through

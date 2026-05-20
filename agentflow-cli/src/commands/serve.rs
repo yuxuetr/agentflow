@@ -27,6 +27,7 @@ pub const AGENTFLOW_SERVE_BIND_ENV: &str = "AGENTFLOW_SERVE_BIND";
 pub async fn execute(
   bind: Option<String>,
   database_url: Option<String>,
+  read_database_url: Option<String>,
   run_dir: Option<String>,
   trace_dir: Option<String>,
   security_profile: String,
@@ -49,6 +50,13 @@ pub async fn execute(
   cmd.env("AGENTFLOW_SERVE_AUTH_TOKEN_ENV", &auth_token_env);
   if let Some(url) = database_url.or_else(|| std::env::var("DATABASE_URL").ok()) {
     cmd.env("DATABASE_URL", url);
+  }
+  // P10.15.2 read-replica forwarding. The server binary reads
+  // `AGENTFLOW_DATABASE_READ_URL` directly; the CLI just
+  // forwards the value it got (flag → env passthrough fallback).
+  if let Some(url) = read_database_url.or_else(|| std::env::var("AGENTFLOW_DATABASE_READ_URL").ok())
+  {
+    cmd.env("AGENTFLOW_DATABASE_READ_URL", url);
   }
   if let Some(dir) = run_dir.or_else(|| std::env::var("AGENTFLOW_RUN_DIR").ok()) {
     cmd.env("AGENTFLOW_RUN_DIR", dir);
