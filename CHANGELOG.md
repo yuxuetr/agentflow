@@ -105,6 +105,23 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **Server-side `?filter=` pre-filter for events history**
+  (P10.17.3). `GET /v1/runs/{id}/events/history?filter=<expr>`
+  accepts the same grammar as the client-side `eventFilter.ts`
+  (kind=/kind!=/kind~ + step compares joined by AND). Long runs
+  no longer need to ship every event over the wire just to be
+  filtered client-side. New `agentflow-server::events_filter`
+  module with 21 unit tests pinning every clause shape +
+  case-insensitivity + the AND-inside-value non-split rule +
+  every parse-error path; new self-skipping integration tests
+  in `agentflow-server/tests/events_filter_route.rs` cover
+  kind-contains + after_seq+filter compose + 400-on-bad-expr +
+  empty-param no-op. UI side: run-console history fetch now
+  passes the operator's saved filter expression on initial
+  attach; 400 responses fall back to no-filter so a malformed
+  expression still loads the timeline (the inline parse error
+  from the client `compileFilter` is what the operator
+  actually sees and fixes).
 - **Web UI preferences sync to `/v1/preferences`** (P10.17.2).
   Selected localStorage values now round-trip through the
   server's tenant-scoped preferences API so an operator's

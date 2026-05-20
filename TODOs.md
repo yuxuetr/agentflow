@@ -866,11 +866,44 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     -p agentflow-server` all 82 tests green after the rebuilt
     `dist/` (the server embeds the bundle via `include_str!`).
 
-- TODO P10.17.3 (Medium — v1.x) Server-side `?filter=` pre-filter
+- DONE P10.17.3 (Medium — v1.x) Server-side `?filter=` pre-filter
   for very long runs
-  - P6.5 client-side event filter works for <10k events. For
-    longer runs the server should pre-filter via `/v1/runs/{id}/
-    events/history?filter=...`.
+  - Landed: new `agentflow-server::events_filter` module mirrors
+    the client-side `eventFilter.ts` grammar (`kind=` / `kind!=`
+    / `kind~` / `step<op>N` joined by case-insensitive `AND`).
+    Wired into `GET /v1/runs/{id}/events/history` via a new
+    `filter` query param. Empty / absent → no filter (fast
+    path); parse errors → 400 with the single-line parser
+    message so the UI's 400-fallback can pattern-match.
+  - The parser is strict on the server side (responds 400) but
+    lenient on the client (surfaces error inline) — same
+    behaviour the docs already promised. Both implementations
+    use the same surrounding-whitespace AND split rule, so
+    `kind=foo_AND_bar` stays as one clause whose value contains
+    `AND` instead of getting mis-split.
+  - UI: `RunConsole` history fetch passes the operator's saved
+    filter expression (read from localStorage on the
+    runId-changed effect) on initial run attach. 400 responses
+    silently re-fetch without the filter — the inline parse
+    error from `compileFilter` is already what the operator
+    actually sees and edits. Client-side filter stays active as
+    a defensive for live SSE events (which aren't
+    server-pre-filtered) and for filter changes after the
+    initial fetch (no re-fetch on filter edit; the saved value
+    drives the wire reduction).
+  - Tests: 21 unit in `events_filter::tests` (every clause
+    shape, case-insensitivity, AND-inside-value non-split,
+    every parse error, every operator's matches() behaviour
+    including the "events without step_index get excluded from
+    step clauses" rule) + 4 self-skipping route integration
+    tests in `tests/events_filter_route.rs` (kind-contains
+    happy path, after_seq+filter compose, 400-on-bad-expr,
+    empty-param no-op). `cargo clippy -p agentflow-server
+    --tests -- -D warnings` clean; `npx tsc --noEmit` clean
+    after the UI patch; `npm run build` rebuilt the embedded
+    `dist/`.
+  - `docs/WEB_UI.md` Architecture section gains a `?filter=`
+    line under the dependency list.
 
 - TODO P10.17.4 (Low — v1.x) Playwright suite in CI
   - The e2e specs exist (`agentflow-ui/e2e/`) but are not in

@@ -183,6 +183,15 @@ pub struct EventsQuery {
   /// pass the last seq they saw to avoid duplicates and gaps.
   #[serde(default)]
   pub after_seq: Option<i64>,
+  /// P10.17.3: optional event-filter expression. Grammar mirrors
+  /// `agentflow-ui/src/eventFilter.ts` — `kind=…` / `kind!=…` /
+  /// `kind~…` / `step<op>N` joined by case-insensitive `AND`.
+  /// Empty / absent → no filter (every persisted event returned).
+  /// Parse errors surface as 400; valid expressions filter rows
+  /// in-memory after the page read so the page-size cap still
+  /// applies *to the matching set*.
+  #[serde(default)]
+  pub filter: Option<String>,
 }
 
 /// `GET /v1/runs/{id}/events` — server-sent events stream.
@@ -275,9 +284,14 @@ fn serialise_event(event: &StreamedEvent) -> Event {
     .data(json)
 }
 
-/// Convenience handler for the future "events as JSON list" route. Not
-/// wired into the router yet but kept here so the broker can be exercised
-/// from tests without an SSE client.
+/// `GET /v1/runs/{id}/events/history` — return persisted events as a
+/// JSON array. Supports both `?after_seq=<n>` (for pagination /
+/// reconnect catch-up) and `?filter=<expr>` (P10.17.3, pre-filter
+/// before the wire so long runs don't ship every event just to be
+/// filtered client-side).
+///
+/// Filter syntax mirrors `agentflow-ui/src/eventFilter.ts`; parse
+/// failures surface as 400 with the single-line parser message.
 pub async fn list_events(
   State(state): State<AppState>,
   Path(run_id): Path<Uuid>,
@@ -290,8 +304,16 @@ pub async fn list_events(
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
 
+  // P10.17.3: parse the filter up front so a malformed expression
+  // returns 400 instead of silently degrading to "no filter applied".
+  let filter = match params.filter.as_deref() {
+    Some(raw) => crate::events_filter::parse_filter(raw)
+      .map_err(|err| ApiError::BadRequest(format!("invalid filter: {err}")))?,
+    None => Default::default(),
+  };
+
   let after_seq = params.after_seq.unwrap_or(-1);
-  let events = state
+  let raw_events: Vec<StreamedEvent> = state
     .repos
     .events
     .list_after(run_id, after_seq, 1_000)
@@ -299,6 +321,18 @@ pub async fn list_events(
     .into_iter()
     .map(StreamedEvent::from)
     .collect();
+
+  // Empty filter is a no-op fast path; the `matches` helper does
+  // the same check internally but skipping the iter avoids the
+  // allocation for the common case.
+  let events = if filter.is_empty() {
+    raw_events
+  } else {
+    raw_events
+      .into_iter()
+      .filter(|e| crate::events_filter::matches(e, &filter))
+      .collect()
+  };
   Ok(Json(events))
 }
 

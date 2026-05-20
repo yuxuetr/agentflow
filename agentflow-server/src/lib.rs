@@ -27,6 +27,7 @@ pub mod auth;
 pub mod cleanup;
 pub mod diagnostics;
 pub mod error;
+pub mod events_filter;
 pub mod events_stream;
 pub mod harness;
 pub mod harness_approval;

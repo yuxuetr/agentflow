@@ -981,7 +981,30 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         setError(null);
         window.history.replaceState(null, '', `/ui?run=${encodeURIComponent(runId)}`);
 
-        const historyResponse = await apiFetch(`/v1/runs/${runId}/events/history`, apiToken);
+        // P10.17.3: when the operator already has a filter expression
+        // (loaded from localStorage on the run-id effect above), pass
+        // it through to the server so very long runs don't ship every
+        // event just to be filtered client-side. The client-side
+        // filter still runs on the returned events as a defensive
+        // (live SSE events arrive after the initial fetch and aren't
+        // server-pre-filtered). On a 400 from a malformed expression
+        // the UI silently retries without the filter — the inline
+        // parse error from `compileFilter` is already visible.
+        let historyUrl = `/v1/runs/${runId}/events/history`;
+        const initialFilter = readStorage(`${eventFilterKeyPrefix}${runId}`, '');
+        if (initialFilter.trim()) {
+          historyUrl += `?filter=${encodeURIComponent(initialFilter)}`;
+        }
+        let historyResponse = await apiFetch(historyUrl, apiToken);
+        if (historyResponse.status === 400 && initialFilter.trim()) {
+          // Malformed filter — retry without it so the timeline
+          // still loads. The inline filter input will show the
+          // parse error from compileFilter.
+          historyResponse = await apiFetch(
+            `/v1/runs/${runId}/events/history`,
+            apiToken,
+          );
+        }
         let afterSeq = -1;
         if (historyResponse.ok) {
           const history = (await historyResponse.json()) as StreamedEvent[];

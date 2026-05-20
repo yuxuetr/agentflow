@@ -90,6 +90,12 @@ top-level tab.
 - DAG dependency: `GET /v1/runs/{id}/graph`
 - Trace history dependency: `GET /v1/runs/{id}/events/history`
 - Live stream dependency: `GET /v1/runs/{id}/events`
+- Server-side filter (P10.17.3): `?filter=<expr>` accepted on
+  `GET /v1/runs/{id}/events/history`. Grammar mirrors the
+  client-side `eventFilter.ts`. The UI now passes the operator's
+  saved filter expression on initial run attach so long runs
+  don't ship every event over the wire; client-side filtering
+  remains active as a defensive for live SSE events.
 
 The server embeds the `dist/` files with `include_str!`, so production
 deployments do not need Node.js or a separate static file server. Rebuild the
