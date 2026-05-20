@@ -572,6 +572,24 @@ across the 200+ tests touched.
 
 ### Docs / conventions
 
+- **LLM provider module promotion criteria 1-pager** (P10.3.2,
+  `docs/LLM_PROVIDER_MODULE_PROMOTION.md`). Pins per-vendor
+  promotion triggers for the four OpenAI-compat vendors
+  (GLM, DashScope, DeepSeek, MiniMax) that currently share
+  `OpenAIProvider`. Documents six concrete divergence signals
+  (tool-call shape, multimodal shape, streaming-protocol,
+  auth/endpoint topology, vendor-specific feature with no
+  upstream OpenAI mapping, operator-side request) and ties
+  each to an existing `cross_provider_*` consistency-test
+  invariant where applicable, so "should I extract X?" is
+  answerable in minutes against the empirical state of the
+  nightly live suite rather than a re-derived analysis. As
+  of 2026-05-20 no trigger has fired. Closes a *tracking*
+  TODO; no Rust code shipped. Same posture as the WASM
+  1-pager (P10.19.1) and the H6 criteria 1-pager (P10.10.1).
+  `docs/ROADMAP_v2.md` Theme A updated to mark closed with
+  a pointer to the criteria doc.
+
 - **H6 promotion criteria 1-pager** (P10.10.1,
   `docs/H6_PROMOTION_CRITERIA.md`). Pins per-item promotion
   triggers for the 5 H6 (Phase Harness "advanced compatibility")

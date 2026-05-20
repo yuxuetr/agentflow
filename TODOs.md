@@ -280,16 +280,35 @@ No active gaps from the evaluation. Future opportunities:
     clean. CHANGELOG.md "Changed" section documents the migration
     note for callers depending on strict-init semantics.
 
-- TODO P10.3.2 (Medium — v1.x) Promote DashScope / DeepSeek /
+- DONE P10.3.2 (Medium — v1.x) Promote DashScope / DeepSeek /
   MiniMax to dedicated provider modules (R16)
-  - Current: 4 OpenAI-compat vendors (GLM + these 3) share
-    `OpenAIProvider` via `create_provider`. Works for the wire
-    shape match.
-  - Trigger to do this: vendor introduces wire-format divergence
-    that `OpenAIProvider` can't cleanly handle (custom tool-call
-    format, multimodal extension, etc.).
-  - Until then: keep the shared-adapter approach. Estimate when
-    needed: ~300-500 LoC per vendor.
+  - Resolved as a 1-pager (`docs/LLM_PROVIDER_MODULE_PROMOTION.md`)
+    pinning per-vendor promotion triggers, not as code. The
+    TODO was trigger-gated ("until vendor introduces wire-
+    format divergence, keep shared adapter") so closing it
+    means making the gate empirically verifiable, not extracting
+    any of the three vendors prematurely. Same posture as
+    P10.19.1 (WASM) and P10.10.1 (H6).
+  - **Six concrete triggers** documented (any one tips the
+    scale for that specific vendor): tool-call shape divergence
+    (caught by the `cross_provider_tool_call_paths_*` invariant),
+    multimodal-shape divergence (caught by
+    `cross_provider_multimodal_paths_*`), streaming-protocol
+    divergence (caught by `cross_provider_streaming_paths_*`),
+    auth/endpoint topology divergence (HMAC-SHA1, per-request
+    OAuth, etc.), vendor-specific feature with no upstream
+    OpenAI mapping (e.g. DeepSeek `reasoning_content`), and
+    operator-side issue request.
+  - **None has fired** as of 2026-05-20. The nightly
+    cross-provider live suite passes for all 4 OpenAI-compat
+    vendors. The doc also captures the mechanical migration
+    steps for the day one trigger does fire (new
+    `agentflow-llm/src/providers/<v>.rs`, dispatch update in
+    `create_provider`, vendor-specific tests, doc updates).
+  - `docs/ROADMAP_v2.md` Theme A updated to mark this closed
+    with a pointer to the criteria doc. Future P11.x extraction
+    opens a fresh TODO referencing the criteria; no formal RFC
+    needed for the peel-off itself once a trigger fires.
 
 - TODO P10.3.3 (Medium — v1.x) Provider-specific tokenizers
   - Today the `PricingTable` cost tracking + `RuntimeLimits`

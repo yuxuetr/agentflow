@@ -53,10 +53,14 @@ modality dispatcher is unified (P-LLM). The remaining work is
 hardening + finer-grained vendor compatibility.
 
 - **Promote DashScope / DeepSeek / MiniMax to dedicated provider
-  modules** (`TODOs.md::P10.3.2`). Today they share
-  `OpenAIProvider` via `create_provider`. Move only when a
-  vendor introduces a wire-format divergence the shared adapter
-  can't cleanly handle. Estimate: ~300-500 LoC per vendor.
+  modules** (`P10.3.2`, closed). Today they share
+  `OpenAIProvider` via `create_provider`. Per-vendor promotion
+  triggers (tool-call shape divergence, multimodal-shape
+  divergence, streaming-protocol divergence, auth/endpoint
+  topology divergence, vendor-specific feature with no upstream
+  OpenAI mapping, operator-side request) pinned in
+  `docs/LLM_PROVIDER_MODULE_PROMOTION.md`. None has fired as of
+  2026-05-20. Estimate when needed: ~300-500 LoC per vendor.
 - **Provider-specific tokenizers** (`P10.3.3`). The current
   `PricingTable` cost tracking + `RuntimeLimits` token budgets
   use char-count heuristics. Wire each provider to its real
