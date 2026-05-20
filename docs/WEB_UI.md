@@ -87,7 +87,6 @@ top-level tab.
 - Cancel dependency: `POST /v1/runs/{id}:cancel`
 - REST dependency: `GET /v1/runs/{id}`
 - Run list dependency: `GET /v1/runs?tenant_id=default&limit=20`
-- DAG dependency: `GET /v1/runs/{id}/graph`
 - Trace history dependency: `GET /v1/runs/{id}/events/history`
 - Live stream dependency: `GET /v1/runs/{id}/events`
 - Server-side filter (P10.17.3): `?filter=<expr>` accepted on
@@ -206,7 +205,11 @@ follow-up inside the same TODO.
 - Run summary: status, tenant, event count, workflow body.
 - Run list: recent runs for the selected tenant.
 - Provider/config panel: auth state, run directory, and latest provider/model event.
-- DAG status: `agentflow-viz` graph JSON/Mermaid overlaid with persisted node status events.
+- DAG status (event-derived): a button grid of nodes observed in
+  the event stream, coloured by the most recent event tone. No
+  spatial layout — graphical DAG visualisation was intentionally
+  cut in P10.13.1 (the `agentflow-viz` crate was deleted; see
+  `docs/ROADMAP_v2.md` Theme D for the decision rationale).
 - DAG node detail: selected node id/status and latest matching event.
 - Agent timeline: ordered event stream, with agent/tool/failure status tones.
 - Agent/tool policy detail: latest agent/tool/policy event.

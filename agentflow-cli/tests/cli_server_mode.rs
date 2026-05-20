@@ -189,62 +189,9 @@ async fn cli_workflow_cancel_via_server_marks_run_cancelled() {
   assert_eq!(row.status, "cancelled");
 }
 
-#[tokio::test]
-async fn cli_workflow_graph_via_server_returns_visualisation() {
-  let Some((server_url, state)) = spawn_server().await else {
-    eprintln!("skipping cli_workflow_graph_via_server — set AGENTFLOW_DATABASE_TEST_URL");
-    return;
-  };
-  let tenant = format!("p25-graph-{}", Uuid::new_v4());
-  let id = Uuid::new_v4();
-  state
-    .repos
-    .runs
-    .create(NewRun {
-      id,
-      workflow: r#"
-name: Graph Demo
-nodes:
-  - id: alpha
-    type: template
-  - id: beta
-    type: template
-    dependencies: [alpha]
-"#
-      .into(),
-      status: RunStatus::Queued,
-      run_dir: None,
-      tenant_id: tenant.clone(),
-    })
-    .await
-    .unwrap();
-
-  let url = server_url.clone();
-  let tenant_for_cli = tenant.clone();
-  let assert = tokio::task::spawn_blocking(move || {
-    cli_bin()
-      .args([
-        "workflow",
-        "graph",
-        &id.to_string(),
-        "--server",
-        &url,
-        "--tenant",
-        &tenant_for_cli,
-      ])
-      .assert()
-      .success()
-  })
-  .await
-  .unwrap();
-
-  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-  let parsed: Value = serde_json::from_str(&stdout).expect("CLI emits JSON");
-  assert!(parsed["graph"].is_object());
-  let mermaid = parsed["mermaid"].as_str().expect("mermaid present");
-  assert!(mermaid.contains("alpha"));
-  assert!(mermaid.contains("beta"));
-}
+// (P10.13.1: `cli_workflow_graph_via_server_returns_visualisation`
+// removed alongside the `agentflow-viz` crate + the
+// `workflow graph` subcommand.)
 
 #[tokio::test]
 async fn cli_workflow_list_without_server_errors_clearly() {

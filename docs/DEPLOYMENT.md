@@ -146,11 +146,14 @@ Expected event kinds for a successful fixed DAG include:
 `workflow.started`, `node.started`, `node.output.captured`, `node.completed`,
 and `workflow.completed`.
 
-To inspect graph status:
+To inspect run status (the previously-documented
+`/v1/runs/{id}/graph` endpoint was removed in P10.13.1 along with
+the `agentflow-viz` crate; use the SSE event stream or the run
+detail endpoint instead):
 
 ```bash
 curl -s -H "Authorization: Bearer dev-secret" \
-  http://localhost:3000/v1/runs/$RUN_ID/graph | jq .
+  http://localhost:3000/v1/runs/$RUN_ID | jq .
 ```
 
 To cancel a queued or running run:

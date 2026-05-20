@@ -305,8 +305,7 @@ node per case. This is a deliberate choice:
   resume-plan <eval_run_id>`.
 - Trace events emit through the existing `EventListener` chain, so
   `--otel` flags Just Work.
-- The `Flow` itself can be inspected with `agentflow workflow validate`
-  and visualised with `agentflow-viz`.
+- The `Flow` itself can be inspected with `agentflow workflow validate`.
 
 Concretely, the runner constructs:
 

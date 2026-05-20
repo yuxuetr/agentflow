@@ -11,7 +11,7 @@
 //! be overridden via `--tenant` or `AGENTFLOW_TENANT`.
 //!
 //! Wire shape: the client targets the v1 routes documented in
-//! `docs/STABILITY.md` (`/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/graph`,
+//! `docs/STABILITY.md` (`/v1/runs`, `/v1/runs/{id}`,
 //! `/v1/runs/{id}:cancel`). All responses come back as `serde_json::Value`
 //! so the CLI can pass them through the P3.3 envelope without coupling
 //! to per-route response structs.
@@ -208,18 +208,6 @@ impl ServerClient {
       .send()
       .await
       .context("failed to cancel run")?;
-    expect_success(response).await
-  }
-
-  /// `GET /v1/runs/{id}/graph`.
-  pub async fn get_run_graph(&self, run_id: &str) -> Result<Value> {
-    let response = self
-      .http
-      .get(self.url(&format!("/v1/runs/{run_id}/graph")))
-      .headers(self.auth_headers())
-      .send()
-      .await
-      .context("failed to fetch run graph")?;
     expect_success(response).await
   }
 

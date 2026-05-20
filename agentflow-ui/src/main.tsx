@@ -41,20 +41,6 @@ type StreamedEvent = {
   ts: string;
 };
 
-type VisualNode = {
-  id: string;
-  label?: string;
-  status?: string;
-};
-
-type RunGraph = {
-  graph: {
-    nodes?: VisualNode[];
-  };
-  mermaid: string;
-  active_node?: string | null;
-};
-
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
 
 const tokenKey = 'agentflow.ui.apiToken';
@@ -757,7 +743,6 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   const prefSync = usePreferenceSync(apiToken, tenantId);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
-  const [runGraph, setRunGraph] = useState<RunGraph | null>(null);
   const [events, setEvents] = useState<StreamedEvent[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   // P6.5: event-filter expression (matches the syntax in
@@ -802,15 +787,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
     [events, eventFilter],
   );
 
+  // P10.13.1: viz-derived graph data is gone. The button grid now
+  // derives entirely from observed events — group per unique
+  // `node_id`/kind, surface the most recent status, cap at 12 to
+  // keep the lane compact for long runs.
   const nodeSummaries = useMemo(() => {
-    if (runGraph?.graph.nodes?.length) {
-      return runGraph.graph.nodes.map((node) => ({
-        name: node.id,
-        label: node.label ?? node.id,
-        status: node.status ?? 'pending',
-        tone: eventTone(node.status ?? 'pending'),
-      }));
-    }
     const seen = new Map<string, { name: string; label: string; status: string; tone: string }>();
     for (const event of events) {
       const name = eventNodeId(event) || event.kind;
@@ -822,7 +803,7 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
       });
     }
     return Array.from(seen.values()).slice(-12);
-  }, [events, runGraph]);
+  }, [events]);
 
   const selectedNode = useMemo(() => {
     if (!selectedEvent) {
@@ -832,14 +813,13 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
     if (!nodeId) {
       return null;
     }
-    const node = runGraph?.graph.nodes?.find((item) => item.id === nodeId);
     return {
       id: nodeId,
-      label: node?.label ?? nodeId,
-      status: node?.status ?? selectedEvent.kind,
+      label: nodeId,
+      status: selectedEvent.kind,
       event: selectedEvent,
     };
-  }, [runGraph, selectedEvent]);
+  }, [selectedEvent]);
 
   const agentToolEvents = useMemo(
     () =>
@@ -975,7 +955,6 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         }
         const nextRun = runFromEnvelope(payload);
         setActiveRun(nextRun);
-        setRunGraph(null);
         setEvents([]);
         setSelectedSeq(null);
         setError(null);
@@ -1013,10 +992,10 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
           afterSeq = history.at(-1)?.seq ?? -1;
         }
 
-        const graphResponse = await apiFetch(`/v1/runs/${runId}/graph`, apiToken);
-        if (graphResponse.ok) {
-          setRunGraph((await graphResponse.json()) as RunGraph);
-        }
+        // P10.13.1: the `/v1/runs/{id}/graph` fetch + the
+        // mermaid-preview block it fed were removed alongside the
+        // `agentflow-viz` crate deletion. The node grid below now
+        // derives entirely from observed events.
 
         await connectStream(afterSeq);
         if (!cancelled) {
@@ -1257,7 +1236,6 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
               ))
             )}
           </div>
-          {runGraph ? <pre className="mermaid-preview">{runGraph.mermaid}</pre> : null}
         </section>
 
         <aside className="timeline-pane" aria-label="Agent timeline">

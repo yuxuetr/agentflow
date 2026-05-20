@@ -9,7 +9,7 @@ Recommended four-layer mental model:
 - **L1 Execution Core**: `agentflow-core` (DAG engine, `AsyncNode`, `FlowValue`, scheduler, retry, timeout, checkpoint, resource manager, health, events)
 - **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
 - **L3 Agent / Orchestration**: `agentflow-agents`, `agentflow-skills`, `agentflow-cli`
-- **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-viz`, `agentflow-server`, `agentflow-db`
+- **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-server`, `agentflow-db`
 
 The framework supports two complementary execution styles:
 
@@ -108,10 +108,13 @@ The two compose via `AgentNode` (agent embedded in DAG) and `WorkflowTool` (DAG 
 - Redaction for API keys, env secrets, sensitive tool params
 - `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` for explicit storage roots
 
-#### L4 — agentflow-viz
-**Primary Focus**: DAG visualization
-- YAML → VisualGraph → Mermaid / DOT / JSON
-- Static visualization; not yet wired to live trace state
+#### L4 — agentflow-viz (deleted in P10.13.1)
+The static DAG-visualisation crate was removed when the workspace
+concluded the "DAG visualisation" surface (button grid + raw
+Mermaid text) didn't justify the maintenance cost. See
+`docs/ROADMAP_v2.md` Theme D for the decision rationale. A
+future RFC may revisit graphical DAG / agent topology rendering
+as an additive UI feature.
 
 #### L4 — agentflow-server (scaffold)
 **Primary Focus**: Axum gateway for platform mode
@@ -691,8 +694,11 @@ See `agentflow-cli/examples/` and `agentflow-cli/templates/` for production-read
   choice, `WorkerControlPlane`, `agentflow-worker` runtime/binary,
   `StitchedWorkerTraceEvent`, and OTel span mapping.
 - ✅ **Web UI debugger** — React + Vite + TypeScript SPA embedded at `/ui`,
-  `GET /v1/runs`, `GET /v1/runs/{id}/graph`, event history replay, SSE live
+  `GET /v1/runs`, event history replay, SSE live
   updates, and `docs/WEB_UI.md`.
+  (P10.13.1 follow-up: `GET /v1/runs/{id}/graph` was removed when
+  `agentflow-viz` was deleted; the UI now derives the DAG node
+  grid from event payloads.)
 
 ### May 3, 2026 - Multi-Agent Collaboration Patterns (P1 #7 closed) ✅
 - ✅ **`AgentStepKind` + `AgentEvent` extended** — added `Handoff`,

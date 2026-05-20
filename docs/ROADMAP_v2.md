@@ -131,14 +131,20 @@ debugger boundary):
   syncable keys; the 3-line replication pattern lives in
   `agentflow-ui/src/main.tsx::RunConsole`.
 
-Open architectural question:
+Architectural decisions already landed:
 
-- **`agentflow-viz` merge or live-interop** (`P10.13.1`).
-  `agentflow-viz` is static-only (YAML → Mermaid / DOT / JSON);
-  the UI already renders DAG with live state. Either merge the
-  static-export path into the UI or keep `agentflow-viz` as the
-  canonical static-export crate with a documented interop
-  protocol. Pick one and document the decision.
+- **`agentflow-viz` deleted** (`P10.13.1`, closed). Honest
+  audit revealed the "DAG visualisation" was a button grid of
+  node status badges + the raw Mermaid markdown text in a
+  `<pre>` block — no SVG, no spatial layout, no edges. The
+  data plumbing through `/v1/runs/{id}/graph` was disproportionate
+  to the rendering value. Crate + endpoint + UI consumer all
+  removed. Workflow DAG visualisation **could** be done well
+  (e.g. mount mermaid.js in the UI to render the text as SVG)
+  but is deferred to a future RFC. Agent-native execution
+  visualisation (ReAct loop / multi-agent topology / Harness
+  session tree) is its own design problem — today's surface is
+  `agentflow harness replay --speed 2x` per-event text timeline.
 
 Explicitly NOT v2:
 

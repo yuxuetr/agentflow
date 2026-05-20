@@ -1,11 +1,10 @@
 use agentflow_db::Run;
 use agentflow_server::{
-  ApiError, CancelRunResponse, CreateRunResponse, ListRunsResponse, RunGraphResponse, RunResponse,
-  StreamedEvent,
+  ApiError, CancelRunResponse, CreateRunResponse, ListRunsResponse, RunResponse, StreamedEvent,
 };
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
-use serde_json::{Value, json};
+use serde_json::Value;
 use uuid::Uuid;
 
 const RUN_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -91,32 +90,6 @@ fn cancel_run_response_fixture_matches_wire_shape() {
     serde_json::to_value(response).unwrap(),
     fixture_value(include_str!(
       "fixtures/rest_envelopes/cancel_run_response.json"
-    ))
-  );
-}
-
-#[test]
-fn run_graph_response_fixture_matches_wire_shape() {
-  let response = RunGraphResponse {
-    graph: json!({
-      "nodes": [
-        {
-          "id": "render",
-          "label": "render",
-          "type": "template",
-          "status": "completed"
-        }
-      ],
-      "edges": []
-    }),
-    mermaid: "graph TD\n  render[render]\n".to_string(),
-    active_node: Some("render".to_string()),
-  };
-
-  assert_eq!(
-    serde_json::to_value(response).unwrap(),
-    fixture_value(include_str!(
-      "fixtures/rest_envelopes/run_graph_response.json"
     ))
   );
 }

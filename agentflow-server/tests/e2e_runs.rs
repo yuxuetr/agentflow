@@ -16,7 +16,7 @@
 //! Skipped without `AGENTFLOW_DATABASE_TEST_URL`; the workspace `cargo
 //! test` stays hermetic.
 
-use agentflow_db::{Database, EventRepo, NewEvent, NewRun, RunRepo, RunStatus};
+use agentflow_db::{Database, NewRun, RunRepo, RunStatus};
 use agentflow_server::{AppState, AuthConfig, create_router};
 use axum::{
   body::Body,
@@ -238,155 +238,10 @@ async fn list_runs_offset_beyond_total_returns_empty_page() {
   );
 }
 
-// ── Graph snapshot before / during (covered upstream) / after ──────────────
-
-#[tokio::test]
-async fn get_run_graph_returns_snapshot_before_any_events() {
-  let Some(state) = fresh_state().await else {
-    eprintln!("skipping get_run_graph_before_events — set AGENTFLOW_DATABASE_TEST_URL");
-    return;
-  };
-  let id = Uuid::new_v4();
-  state
-    .repos
-    .runs
-    .create(NewRun {
-      id,
-      workflow: r#"
-name: Pre-Event Graph
-nodes:
-  - id: alpha
-    type: template
-  - id: beta
-    type: template
-    dependencies: [alpha]
-"#
-      .into(),
-      status: RunStatus::Queued,
-      run_dir: None,
-      tenant_id: "default".into(),
-    })
-    .await
-    .unwrap();
-
-  let app = create_router(state);
-  let response = app
-    .oneshot(
-      Request::builder()
-        .uri(format!("/v1/runs/{id}/graph"))
-        .body(Body::empty())
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-  assert_eq!(response.status(), StatusCode::OK);
-  let body: Value = serde_json::from_slice(
-    &axum::body::to_bytes(response.into_body(), 8192)
-      .await
-      .unwrap(),
-  )
-  .unwrap();
-  assert!(body["graph"].is_object(), "graph snapshot must be present");
-  // No events ⇒ no active node.
-  assert!(
-    body["active_node"].is_null(),
-    "before any events the active_node must be null"
-  );
-  // The mermaid rendering still contains both node ids so a UI can
-  // render the workflow shape even pre-run.
-  let mermaid = body["mermaid"].as_str().unwrap();
-  assert!(mermaid.contains("alpha"), "mermaid must list 'alpha' node");
-  assert!(mermaid.contains("beta"), "mermaid must list 'beta' node");
-}
-
-#[tokio::test]
-async fn get_run_graph_returns_snapshot_after_run_completes() {
-  let Some(state) = fresh_state().await else {
-    eprintln!("skipping get_run_graph_after_run_completes — set AGENTFLOW_DATABASE_TEST_URL");
-    return;
-  };
-  let id = Uuid::new_v4();
-  state
-    .repos
-    .runs
-    .create(NewRun {
-      id,
-      workflow: r#"
-name: Post-Run Graph
-nodes:
-  - id: alpha
-    type: template
-  - id: beta
-    type: template
-    dependencies: [alpha]
-"#
-      .into(),
-      status: RunStatus::Running,
-      run_dir: None,
-      tenant_id: "default".into(),
-    })
-    .await
-    .unwrap();
-
-  // Replay node.started → node.completed for both nodes, then mark
-  // the run succeeded.
-  let events = [
-    ("node.started", json!({"node_id": "alpha"})),
-    ("node.completed", json!({"node_id": "alpha"})),
-    ("node.started", json!({"node_id": "beta"})),
-    ("node.completed", json!({"node_id": "beta"})),
-  ];
-  for (seq, (kind, payload)) in events.iter().enumerate() {
-    state
-      .repos
-      .events
-      .append(NewEvent {
-        run_id: id,
-        seq: seq as i64,
-        kind: kind.to_string(),
-        payload: payload.clone(),
-        tenant_id: None,
-      })
-      .await
-      .unwrap();
-  }
-  state
-    .repos
-    .runs
-    .update_status(id, RunStatus::Succeeded, None)
-    .await
-    .unwrap();
-
-  let app = create_router(state);
-  let response = app
-    .oneshot(
-      Request::builder()
-        .uri(format!("/v1/runs/{id}/graph"))
-        .body(Body::empty())
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-  assert_eq!(response.status(), StatusCode::OK);
-  let body: Value = serde_json::from_slice(
-    &axum::body::to_bytes(response.into_body(), 8192)
-      .await
-      .unwrap(),
-  )
-  .unwrap();
-  assert!(body["graph"].is_object());
-  // The route's `active_node` is "last-touched" not "currently-running",
-  // so after the run finishes the last node that had a node.* event is
-  // still surfaced. This is the contract downstream consumers depend on
-  // for highlighting the last-known cursor in the UI.
-  assert_eq!(
-    body["active_node"], "beta",
-    "the last touched node id must be surfaced as active_node"
-  );
-  let mermaid = body["mermaid"].as_str().unwrap();
-  assert!(mermaid.contains("alpha"));
-  assert!(mermaid.contains("beta"));
-}
+// (P10.13.1: the `/v1/runs/{id}/graph` endpoint + its two e2e tests
+// were removed when `agentflow-viz` was deleted. Workflow DAG
+// visualisation is intentionally out of scope; see
+// `docs/ROADMAP_v2.md` Theme D for the decision rationale.)
 
 // ── Authenticated path under production-style profile ─────────────────────
 

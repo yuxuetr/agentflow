@@ -91,7 +91,7 @@ Current feature inventory:
   `conditional`, `factories`, `mcp`, `rag`.
 - `agentflow-rag`: `qdrant`, `local-embeddings`, `pdf`, `html`.
 - `agentflow-tracing`: `postgres`.
-- `agentflow-agents` and `agentflow-viz`: empty default feature sets.
+- `agentflow-agents`: empty default feature set.
 
 CI-covered combinations:
 

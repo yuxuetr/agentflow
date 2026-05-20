@@ -201,7 +201,7 @@ all map to the P7.4-FU4 production-deployment checklist in
   - Order: `agentflow-core` → `agentflow-tools` → `agentflow-tracing`
     → `agentflow-llm` → `agentflow-nodes` → `agentflow-mcp` →
     `agentflow-memory` → `agentflow-rag` → `agentflow-agents` →
-    `agentflow-skills` → `agentflow-harness` → `agentflow-viz` →
+    `agentflow-skills` → `agentflow-harness` →
     `agentflow-db` → `agentflow-server` → `agentflow-worker` →
     `agentflow-cli`. xtask, ui not published.
 - TODO P10.0.3 Tag `v1.0.0-rc.1`
@@ -765,19 +765,31 @@ No active gaps. Future opportunities:
     timeline on the right would be valuable for debugging fan-out
     workflows. (Web UI already has trace-compare for this.)
 
-### P10.13 — agentflow-viz (B — needs a strategic decision)
+### P10.13 — agentflow-viz (closed: crate deleted 2026-05-20)
 
-- TODO P10.13.1 (Medium — v1.x) Decide: merge with `agentflow-ui`
-  OR establish live-trace interop protocol
-  - `agentflow-viz` is static-only (YAML → Mermaid / DOT / JSON).
-    `agentflow-ui` already renders DAG with live state. Two
-    options:
-    - **Merge**: deprecate `agentflow-viz`, fold its rendering
-      logic into the UI's static-export path. Smaller workspace.
-    - **Live interop**: keep `agentflow-viz` as the "static export"
-      crate and have the UI call into it for printable snapshots.
-      Cleaner separation.
-  - Either way, document the decision in `docs/WEB_UI.md`.
+- DONE P10.13.1 (Medium — v1.x) Decide: merge with `agentflow-ui`
+  OR establish live-trace interop protocol → **Decision: delete
+  the crate entirely.** An honest audit revealed the UI's
+  "DAG visualisation" surface was a button grid of node status
+  badges plus the raw Mermaid markdown text in a `<pre>` block —
+  no SVG, no spatial layout, no edges. The data-plumbing cost
+  (an entire workspace crate + a beta REST route + a CLI
+  subcommand + the UI fetch path) was disproportionate to the
+  rendering value. Removed: `agentflow-viz/` crate,
+  `/v1/runs/{id}/graph` REST endpoint, `agentflow workflow
+  graph` CLI subcommand, `RunGraphResponse` shape, the Web UI
+  Mermaid `<pre>` block + `runGraph` state. The node-status
+  grid in the UI is now derived entirely from event payloads
+  (already the source of truth for execution state). Updated
+  references: `docs/STABILITY.md` (Beta row removed),
+  `docs/WEB_UI.md` (DAG dependency + viz reference),
+  `docs/ROADMAP_v2.md` Theme D (decision rationale),
+  `docs/ARCHITECTURE.md`, `AGENTS.md`, `OVERALL_EVALUATION_REPORT.md`,
+  `docs/CI_WORKFLOWS.md`, `docs/RELEASE_CHECKLIST.md`,
+  `docs/CURRENT_STATUS.md`, `docs/AGENT_EVAL_FORMAT.md`,
+  `docs/DEPLOYMENT.md`, `CLAUDE.md`. Future RFC may revisit
+  graphical DAG / agent topology rendering as an additive
+  UI-only feature.
 
 ### P10.14 — agentflow-server (A-)
 

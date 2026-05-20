@@ -45,7 +45,6 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 | `agentflow-memory` | Session/SQLite/Semantic memory。 |
 | `agentflow-rag` | 文档切分、embedding、Qdrant、检索、rerank、数据源。 |
 | `agentflow-tracing` | workflow trace、存储 schema、redaction、replay、TUI、OTel 转换。 |
-| `agentflow-viz` | DAG 可视化，输出 Mermaid/DOT/JSON。 |
 | `agentflow-db` | Gateway PostgreSQL 连接层。 |
 | `agentflow-server` | Axum gateway，目前主要是 health/readiness/liveness。 |
 
@@ -233,18 +232,21 @@ AgentFlow V2 已经从单纯 DAG 工作流引擎演进为“DAG 工作流 + agen
 
 结论：Tracing 设计完整，是生产化重要基础；下一阶段应加强跨 DAG/agent/tool 的统一 trace id 传播。
 
-### 3.12 agentflow-viz
+### 3.12 agentflow-viz（P10.13.1 已删除）
 
-优势：
+该 crate 在 2026-05-20 的 P10.13.1 中整体下线：从 workspace
+members、`/v1/runs/{id}/graph` REST 路由、`agentflow workflow
+graph` CLI 子命令、以及 Web UI 的 Mermaid 文本块全部移除。
+触发原因：UI 端的"DAG 可视化"实际只是事件驱动的状态按钮 +
+原始 Mermaid markdown 文本，没有 SVG、没有节点布局、没有
+依赖边——后端只为"提供一段 Markdown 文本字符串"维护一个
+crate + 一条 REST 路由，性价比为负。
 
-- 支持 Mermaid、DOT、JSON 输出。
-- 可从 YAML 转换 VisualGraph，适合文档和调试。
-
-不足：
-
-- 与 CLI debug、实时 trace 状态、checkpoint 状态的联动还可以更深。
-
-结论：作为静态 DAG 可视化已可用；若要成为调试 UI，需要接入执行态和 trace。
+未来若要做真正的图形化 DAG / agent topology 渲染，应作为
+增量 UI 特性（例如直接在 SPA 中接 mermaid.js 把
+`agentflow workflow validate --output mermaid` 输出渲染为
+SVG），不再需要后端常驻 crate。决策记录见
+`docs/ROADMAP_v2.md` Theme D。
 
 ### 3.13 agentflow-db 与 agentflow-server
 

@@ -319,7 +319,6 @@ dependencies = [
  "agentflow-skills",
  "agentflow-tools",
  "agentflow-tracing",
- "agentflow-viz",
  "anyhow",
  "async-trait",
  "axum",
@@ -409,17 +408,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
-]
-
-[[package]]
-name = "agentflow-viz"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]

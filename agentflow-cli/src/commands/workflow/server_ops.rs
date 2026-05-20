@@ -61,18 +61,6 @@ pub async fn cancel(
   print_server_response("workflow cancel", format, &body)
 }
 
-pub async fn graph(
-  server_url: &str,
-  auth_token: Option<&str>,
-  tenant: Option<&str>,
-  run_id: &str,
-  format: &str,
-) -> Result<()> {
-  let client = build_client(server_url, auth_token, tenant)?;
-  let body = client.get_run_graph(run_id).await?;
-  print_server_response("workflow graph", format, &body)
-}
-
 /// P10.11.4: reject `workflow run` flags that are local-only when
 /// the operator is dispatching via `--server`. Today the
 /// `POST /v1/runs` wire body only accepts `{ workflow, tenant_id }`

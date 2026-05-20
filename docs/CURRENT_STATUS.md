@@ -20,7 +20,7 @@ The current architecture is organized into four layers:
   `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
 - L3 agent and orchestration: `agentflow-agents`, `agentflow-skills`,
   `agentflow-cli`.
-- L4 operations and productization: `agentflow-tracing`, `agentflow-viz`,
+- L4 operations and productization: `agentflow-tracing`,
   `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`.
 
 ## Implemented Surfaces

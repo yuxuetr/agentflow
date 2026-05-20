@@ -437,6 +437,27 @@ across the 200+ tests touched.
 
 ### Removed
 
+- **`agentflow-viz` crate** (P10.13.1). Removed alongside the
+  `/v1/runs/{id}/graph` REST endpoint, the `agentflow workflow
+  graph` CLI subcommand, the `RunGraphResponse` shape, and the
+  Mermaid `<pre>` block in the Web UI. An honest audit revealed
+  the "DAG visualisation" surface was a button grid of node
+  status badges plus the raw Mermaid markdown text in a code
+  block — no SVG, no spatial layout, no edges. The data-plumbing
+  cost (an entire workspace crate + a beta REST route + a CLI
+  subcommand + the UI fetch path) was disproportionate to the
+  rendering value. The UI's node-status grid is now derived
+  entirely from event payloads, which was already the source of
+  truth for execution state. A future RFC may revisit graphical
+  DAG / agent topology rendering as an additive feature
+  (e.g. mounting mermaid.js to render `agentflow workflow
+  validate --output mermaid` as SVG client-side); see
+  `docs/ROADMAP_v2.md` Theme D for the decision rationale.
+  Stability impact: `/v1/runs/{id}/graph` was listed as Beta in
+  `docs/STABILITY.md`; the row was deleted with a P10.13.1
+  cross-reference so anyone hitting the old endpoint gets a
+  pointer to the rationale.
+
 - **`agentflow-mcp::client_old`** and the legacy `transport` module
   it depended on (P10.5.1). Both were `#[doc(hidden)]` and had no
   external callers in the workspace; deleting them removes ~330

@@ -20,7 +20,7 @@ Last audited: 2026-05-14.
 |-----|---------------|
 | `fmt` | `cargo fmt --all --check`. |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings`. |
-| `test` | `cargo test -p <pkg> --all-targets` per matrixed crate (`agentflow-core`, `agentflow-tools`, `agentflow-mcp`, `agentflow-memory`, `agentflow-skills`, `agentflow-agents`, `agentflow-cli`). Crates not in the matrix (e.g. `agentflow-db`, `agentflow-server`, `agentflow-worker`, `agentflow-ui`, `agentflow-rag`, `agentflow-tracing`, `agentflow-viz`, `agentflow-llm`) currently rely on `cargo build --workspace` plus their dependents' tests. Expanding this matrix is part of M.3. |
+| `test` | `cargo test -p <pkg> --all-targets` per matrixed crate (`agentflow-core`, `agentflow-tools`, `agentflow-mcp`, `agentflow-memory`, `agentflow-skills`, `agentflow-agents`, `agentflow-cli`). Crates not in the matrix (e.g. `agentflow-db`, `agentflow-server`, `agentflow-worker`, `agentflow-ui`, `agentflow-rag`, `agentflow-tracing`, `agentflow-llm`) currently rely on `cargo build --workspace` plus their dependents' tests. Expanding this matrix is part of M.3. |
 | `doctest` | `cargo test --workspace --doc`. |
 | `features` | Hand-picked feature combinations (`agentflow-core --features observability`, `agentflow-mcp --features client,server,stdio`, `agentflow-cli --no-default-features --features mcp\|rag\|plugin`, `agentflow-core --features plugin --all-targets`). The exhaustive matrix is tracked under P3.9 (`feature-matrix.yml`, not yet created). |
 | `examples` | Compiles all workspace examples and runs the no-API smoke set (fixed DAG, ReAct, Plan-Execute, skill index / validate / list-tools, hybrid agent, plugin host, plugin marketplace install). |

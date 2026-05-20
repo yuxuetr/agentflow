@@ -1146,15 +1146,9 @@ fn workflow_cancel_help_lists_json_envelope_format() {
     .stdout(predicate::str::contains("json-envelope"));
 }
 
-#[test]
-fn workflow_graph_help_lists_json_envelope_format() {
-  Command::cargo_bin("agentflow")
-    .unwrap()
-    .args(["workflow", "graph", "--help"])
-    .assert()
-    .success()
-    .stdout(predicate::str::contains("json-envelope"));
-}
+// (P10.13.1: `workflow graph` subcommand removed alongside the
+// `agentflow-viz` crate deletion. The previous help-text +
+// format-rejection tests for it lived here.)
 
 #[test]
 fn workflow_list_rejects_unknown_format() {
@@ -1176,16 +1170,6 @@ fn workflow_cancel_rejects_unknown_format() {
     .assert()
     .failure()
     .stderr(predicate::str::contains("text"));
-}
-
-#[test]
-fn workflow_graph_rejects_unknown_format() {
-  Command::cargo_bin("agentflow")
-    .unwrap()
-    .args(["workflow", "graph", "run-abc", "--format", "xml"])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("xml"));
 }
 
 // ────────────────────────────────────────────────────────────────────────────

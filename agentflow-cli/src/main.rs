@@ -459,20 +459,6 @@ enum WorkflowCommands {
     #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
     format: String,
   },
-  /// Fetch the run graph snapshot from a remote server.
-  Graph {
-    run_id: String,
-    #[arg(long)]
-    server: Option<String>,
-    #[arg(long)]
-    auth_token: Option<String>,
-    #[arg(long)]
-    tenant: Option<String>,
-    /// Output format: json (default — legacy bare body) or
-    /// json-envelope (canonical `CliJsonEnvelope`)
-    #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
-    format: String,
-  },
   /// Stream a workflow run's event log from a remote server.
   ///
   /// Without `--follow` (default), fetches the already-persisted
@@ -1506,27 +1492,6 @@ async fn main() {
         }
         None => Err(anyhow::anyhow!(
           "workflow cancel requires --server <url> or AGENTFLOW_SERVER_URL to be set"
-        )),
-      },
-      WorkflowCommands::Graph {
-        run_id,
-        server,
-        auth_token,
-        tenant,
-        format,
-      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
-        Some(server_url) => {
-          workflow::server_ops::graph(
-            &server_url,
-            auth_token.as_deref(),
-            tenant.as_deref(),
-            &run_id,
-            &format,
-          )
-          .await
-        }
-        None => Err(anyhow::anyhow!(
-          "workflow graph requires --server <url> or AGENTFLOW_SERVER_URL to be set"
         )),
       },
       WorkflowCommands::Logs {

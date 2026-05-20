@@ -81,7 +81,6 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-rag` | RAG abstractions including vector store and reranking modules. |
 | `agentflow-memory` | Session, SQLite, semantic memory types, and memory store abstractions. |
 | `agentflow-tracing` | Structured trace events, file storage, redaction, replay, OpenTelemetry integration, and terminal timeline inspection. |
-| `agentflow-viz` | Workflow graph conversion and DOT, JSON, and Mermaid renderers. |
 | `agentflow-db` | SQLx database layer with migrations, models, and repository traits for runs, steps, events, artifacts, Skill installs, and MCP sessions. |
 | `agentflow-server` | Axum gateway with health endpoints, run submission/query routes, SSE event streams, Skill routes, bearer auth, Web UI embedding, and distributed scheduler control-plane primitives. |
 | `agentflow-worker` | Distributed worker runtime and binary built around the `WorkerProtocol` abstraction. |
