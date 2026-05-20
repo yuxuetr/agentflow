@@ -111,6 +111,14 @@ AgentFlow should expose three primary access modes:
 
 ## Later Tracks
 
+> **Looking for the consolidated post-v1.0 picture?** See
+> [`docs/ROADMAP_v2.md`](docs/ROADMAP_v2.md) — it unifies the
+> sections below, the `v1.x` entries in `TODOs.md`, and the
+> §7 themes from the latest project evaluation into a single
+> staging ground. The prose here is preserved as historical
+> rationale; the v2 doc is the source of truth for "what comes
+> after v1.0 GA".
+
 ### Harness Agent Mode
 
 AgentFlow's evolution toward a long-lived, workspace-aware, governable agent

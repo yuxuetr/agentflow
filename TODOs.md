@@ -1023,11 +1023,27 @@ No active gaps. Future opportunities:
     `cargo test --workspace` total wall-clock per crate and gate
     on 1.5× regressions to catch test-suite bloat early.
 
-- TODO P10.19.3 (Low — Stretch) Centralized `docs/ROADMAP_v2.md`
+- DONE P10.19.3 (Low — Stretch) Centralized `docs/ROADMAP_v2.md`
   for post-v1.0 direction
-  - Today the v1.x ideas are scattered across this file, the eval
-    report §7.3, and `RoadMap.md` "Later Tracks". A consolidated
-    v2 roadmap (once v1.0 GA cuts) would help align contributors.
+  - Created `docs/ROADMAP_v2.md` as the single source of truth
+    for "what's after v1.0 GA". Organised into 10 themes
+    (A–J): LLM/provider expansion, Memory/RAG, Server platform,
+    Web UI (debugger-scoped per P10.17.1), Distributed,
+    Harness H6, Plugin runtime (WASM), Perf, Ops tooling,
+    Docs/contributor experience. Each remaining v1.x bullet
+    here gets a back-reference (`P10.X`) so the audit trail
+    is one-step.
+  - Doc opens with `Status` (not binding; staging ground) +
+    `v1 → v2 inflection` (the maintenance bar tightens
+    post-GA). Closes with `Non-goals for v2` (carries forward
+    the v1 non-goals + adds operator-dashboard Web UI per
+    P10.17.1 + UI-as-headless-requirement) and a `How to
+    promote` workflow (open a `P11.x` TODO entry →
+    backreference the theme letter → leave a stub here).
+  - `RoadMap.md::Later Tracks` gains an inline pointer at the
+    top of the section directing future contributors to the
+    v2 doc; the existing prose is preserved as historical
+    rationale.
 
 ---
 

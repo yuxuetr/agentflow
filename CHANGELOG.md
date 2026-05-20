@@ -105,6 +105,19 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **`docs/ROADMAP_v2.md`** consolidated post-v1.0 roadmap
+  (P10.19.3). Single source of truth for "what comes after v1.0
+  GA", consolidating signals previously scattered across
+  `RoadMap.md` Later Tracks, `TODOs.md` v1.x entries, and
+  `docs/archive/PROJECT_EVALUATION_2026-05-19.md` §7. Ten themes
+  (LLM/provider expansion, memory/RAG, server platform, Web UI
+  debugger-scope, distributed/worker, Harness H6, plugin
+  runtime WASM, perf, ops tooling, docs/contributor experience)
+  with backreferences to the canonical `TODOs.md` IDs. Explicit
+  v2 non-goals carry the v1 non-goals forward + add
+  operator-dashboard Web UI per P10.17.1. `RoadMap.md::Later
+  Tracks` gains an inline pointer at the top of the section so
+  future contributors land on the consolidated view first.
 - **`agentflow mcp config list --format json-envelope`** support
   (P10.11.3). The audit of all `format: String` clap fields in
   `agentflow-cli/src/main.rs` found exactly one holdout that
