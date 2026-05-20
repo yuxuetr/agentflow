@@ -85,6 +85,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "flate2",
+ "futures",
  "glob",
  "indicatif",
  "mime",

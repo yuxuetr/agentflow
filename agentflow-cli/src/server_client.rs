@@ -222,6 +222,124 @@ impl ServerClient {
       .context("failed to fetch run graph")?;
     expect_success(response).await
   }
+
+  /// `GET /v1/runs/{id}/events/history?after_seq=<n>` — fetches the
+  /// already-persisted event log as a bare JSON array. Used by the
+  /// `workflow logs <run_id>` command without `--follow`. The server
+  /// caps the page at 1000 events so callers needing more should
+  /// pass an increased `after_seq` and re-call.
+  pub async fn list_events_history(&self, run_id: &str, after_seq: Option<i64>) -> Result<Value> {
+    let mut url = self.url(&format!("/v1/runs/{run_id}/events/history"));
+    if let Some(seq) = after_seq {
+      url.push_str(&format!("?after_seq={seq}"));
+    }
+    let response = self
+      .http
+      .get(url)
+      .headers(self.auth_headers())
+      .send()
+      .await
+      .context("failed to GET /v1/runs/{id}/events/history")?;
+    expect_success(response).await
+  }
+
+  /// `GET /v1/runs/{id}/events?after_seq=<n>` — opens an SSE stream.
+  /// Each parsed event payload is delivered to `on_event` as a
+  /// [`serde_json::Value`] (the wire shape matches
+  /// `agentflow_server::events_stream::StreamedEvent`). When the
+  /// server closes the connection, the call returns `Ok(())`. When
+  /// the stream reports a transport error, it returns `Err`.
+  ///
+  /// The follow path uses a much longer reqwest timeout than the
+  /// short-poll routes — SSE connections are expected to stay open
+  /// for the lifetime of the run.
+  ///
+  /// `on_event` is `FnMut` so callers can keep counters / I/O
+  /// handles without wrapping in a `Mutex`.
+  pub async fn stream_events_sse<F>(
+    &self,
+    run_id: &str,
+    after_seq: Option<i64>,
+    mut on_event: F,
+  ) -> Result<()>
+  where
+    F: FnMut(Value),
+  {
+    let mut url = self.url(&format!("/v1/runs/{run_id}/events"));
+    if let Some(seq) = after_seq {
+      url.push_str(&format!("?after_seq={seq}"));
+    }
+    // The default 30s `ServerClient` timeout would tear down a live
+    // SSE follow inside a minute; build a dedicated long-lived
+    // client for this single request.
+    let follow_client = reqwest::Client::builder()
+      .no_proxy()
+      // No request-level timeout: SSE streams stay open indefinitely
+      // (the server uses a 15s keep-alive). A read-timeout could
+      // belong here in the future but isn't required for v1.
+      .build()
+      .context("failed to build SSE follow HTTP client")?;
+    let response = follow_client
+      .get(url)
+      .headers(self.auth_headers())
+      .send()
+      .await
+      .context("failed to open SSE stream")?;
+    if !response.status().is_success() {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      bail!(
+        "server returned {} {} on SSE open: {body}",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or("")
+      );
+    }
+    let mut byte_stream = response.bytes_stream();
+    let mut buffer = String::new();
+    use futures::stream::StreamExt;
+    while let Some(chunk_result) = byte_stream.next().await {
+      let chunk = chunk_result.context("SSE chunk read failed")?;
+      buffer.push_str(&String::from_utf8_lossy(&chunk));
+      // SSE events are separated by "\n\n"; within an event, fields
+      // ("data:", "event:", "id:", ":") are separated by single
+      // newlines. We only care about the `data:` field — that's
+      // where the JSON-serialised `StreamedEvent` lives.
+      while let Some(boundary) = buffer.find("\n\n") {
+        let raw_event: String = buffer.drain(..boundary + 2).collect();
+        if let Some(payload) = parse_sse_event_payload(&raw_event)
+          && let Ok(value) = serde_json::from_str::<Value>(&payload)
+        {
+          on_event(value);
+        }
+      }
+    }
+    Ok(())
+  }
+}
+
+/// Extract the `data:` payload from a single raw SSE event block.
+/// Returns `None` for keep-alives (comment lines starting with `:`)
+/// or events with no `data:` field. Multi-line `data:` payloads are
+/// re-joined with newlines per the SSE spec.
+pub(crate) fn parse_sse_event_payload(raw_event: &str) -> Option<String> {
+  let mut data_lines: Vec<&str> = Vec::new();
+  for line in raw_event.lines() {
+    if let Some(rest) = line.strip_prefix("data:") {
+      // SSE spec: a single leading space after the colon is
+      // stripped; everything else is preserved verbatim.
+      let trimmed = rest.strip_prefix(' ').unwrap_or(rest);
+      data_lines.push(trimmed);
+    }
+    // Lines starting with `:` are keep-alive comments — ignore.
+    // Lines starting with `id:` / `event:` / `retry:` are
+    // structural — also ignored (we identify events by their JSON
+    // body, not the `event:` kind, because the kind is already
+    // inside the payload).
+  }
+  if data_lines.is_empty() {
+    return None;
+  }
+  Some(data_lines.join("\n"))
 }
 
 async fn expect_success(response: reqwest::Response) -> Result<Value> {
@@ -323,5 +441,42 @@ mod tests {
       resolve_auth_token_from(Some("flag-token"), Some("env-token")),
       Some("flag-token".to_string())
     );
+  }
+
+  /// P10.11.1: the SSE `data:` extraction must produce the exact
+  /// JSON the server sent, including stripping the single leading
+  /// space per the SSE spec (`Sse::data(json_text)` in axum prefixes
+  /// payloads with `data: `, not `data:`).
+  #[test]
+  fn parse_sse_event_payload_strips_single_leading_space() {
+    let raw = "id: 7\nevent: step_started\ndata: {\"seq\":7}\n\n";
+    let payload = parse_sse_event_payload(raw).expect("data line present");
+    assert_eq!(payload, r#"{"seq":7}"#);
+  }
+
+  #[test]
+  fn parse_sse_event_payload_joins_multi_line_data() {
+    // SSE spec: multi-line `data:` fields are re-joined with `\n`.
+    // axum's SSE serialiser emits single-line JSON so this is
+    // defensive, but the spec compliance matters if the server
+    // ever splits a large payload.
+    let raw = "data: line one\ndata: line two\n\n";
+    let payload = parse_sse_event_payload(raw).expect("data lines present");
+    assert_eq!(payload, "line one\nline two");
+  }
+
+  #[test]
+  fn parse_sse_event_payload_returns_none_for_keepalive_only() {
+    // Keep-alive: `:keep-alive\n\n`. Comment-only event with no
+    // `data:` line — must surface as None so the consumer doesn't
+    // try to parse it as JSON and log a spurious error.
+    let raw = ":keep-alive\n\n";
+    assert!(parse_sse_event_payload(raw).is_none());
+  }
+
+  #[test]
+  fn parse_sse_event_payload_ignores_structural_fields_without_data() {
+    let raw = "id: 42\nevent: heartbeat\n\n";
+    assert!(parse_sse_event_payload(raw).is_none());
   }
 }

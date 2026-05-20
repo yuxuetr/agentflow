@@ -46,6 +46,19 @@ across the 200+ tests touched.
 
 #### CLI
 
+- **`agentflow workflow logs <run_id>`** subcommand consumes the
+  server's persisted event log (P10.11.1). Without `--follow`,
+  fetches the history snapshot as a single JSON array via
+  `GET /v1/runs/{id}/events/history`. With `--follow` (`-f`),
+  opens an SSE stream against `GET /v1/runs/{id}/events` and
+  prints each event as it arrives until the server closes the
+  connection. Supports `--after-seq <n>` for resuming reconnects,
+  `--format text|json|json-envelope` (envelope incompatible with
+  `--follow` — rejected with a clear error since envelopes are
+  bounded and follow streams are not), `--server` / `--auth-token`
+  / `--tenant` matching the other server-backed `workflow`
+  subcommands. Hermetic round-trip tests via a tiny axum mock
+  server (no Postgres required).
 - **`agentflow harness run --approve {none,cli,auto-allow,auto-deny}`**
   wires `HookedTool` into the CLI Harness path (F-A2-11, `9d386b3`).
   Combined with `--profile production`, every NonIdempotent tool

@@ -420,6 +420,41 @@ enum WorkflowCommands {
     #[arg(long, default_value = "json", value_parser = ["json", "json-envelope"])]
     format: String,
   },
+  /// Stream a workflow run's event log from a remote server.
+  ///
+  /// Without `--follow` (default), fetches the already-persisted
+  /// events as a single JSON array via
+  /// `GET /v1/runs/{id}/events/history`. With `--follow`, opens an
+  /// SSE connection at `GET /v1/runs/{id}/events` and keeps
+  /// streaming until the server closes or the user cancels.
+  ///
+  /// Reconnecting consumers can pass `--after-seq <n>` to resume
+  /// past the last `seq` they printed, avoiding duplicates.
+  Logs {
+    /// Run id whose event log should be streamed.
+    run_id: String,
+    #[arg(long)]
+    server: Option<String>,
+    #[arg(long)]
+    auth_token: Option<String>,
+    #[arg(long)]
+    tenant: Option<String>,
+    /// Keep the connection open and stream events as they're
+    /// emitted (SSE). Default: false (history-only snapshot).
+    #[arg(short = 'f', long, default_value_t = false)]
+    follow: bool,
+    /// Resume after this `seq`. Useful for reconnecting consumers
+    /// to avoid duplicate output.
+    #[arg(long)]
+    after_seq: Option<i64>,
+    /// Output format: text (default — human-readable one line per
+    /// event), json (JSONL — one event JSON per line), or
+    /// json-envelope (single canonical `CliJsonEnvelope` wrapping
+    /// the events array; incompatible with `--follow` because an
+    /// envelope is bounded and a follow stream is not).
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
+    format: String,
+  },
   /// Validate workflow schema and dependencies without execution
   Validate {
     workflow_file: String,
@@ -1319,6 +1354,31 @@ async fn main() {
         }
         None => Err(anyhow::anyhow!(
           "workflow graph requires --server <url> or AGENTFLOW_SERVER_URL to be set"
+        )),
+      },
+      WorkflowCommands::Logs {
+        run_id,
+        server,
+        auth_token,
+        tenant,
+        follow,
+        after_seq,
+        format,
+      } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
+        Some(server_url) => {
+          workflow::server_ops::logs(
+            &server_url,
+            auth_token.as_deref(),
+            tenant.as_deref(),
+            &run_id,
+            follow,
+            after_seq,
+            &format,
+          )
+          .await
+        }
+        None => Err(anyhow::anyhow!(
+          "workflow logs requires --server <url> or AGENTFLOW_SERVER_URL to be set"
         )),
       },
       WorkflowCommands::Validate {

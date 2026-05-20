@@ -394,12 +394,32 @@ No active gaps. Future opportunities:
 
 ### P10.11 — agentflow-cli (A-)
 
-- TODO P10.11.1 (Medium — pre-GA) `agentflow workflow logs <run_id>`
+- DONE P10.11.1 (Medium — pre-GA) `agentflow workflow logs <run_id>`
   SSE follow command
-  - The server-side SSE endpoint exists (`/v1/runs/{id}/events`).
-    The CLI surface to consume it (`workflow logs --follow`) was
-    deferred. Build it on top of `server_client.rs`.
-  - Effort: small (~100-200 LoC).
+  - Landed: new `WorkflowCommands::Logs { ... }` subcommand wired
+    through `agentflow-cli/src/commands/workflow/server_ops.rs::logs`,
+    backed by two new `ServerClient` methods:
+    `list_events_history(run_id, after_seq)` (calls
+    `GET /v1/runs/{id}/events/history`) and
+    `stream_events_sse(run_id, after_seq, on_event)` (opens the
+    `GET /v1/runs/{id}/events` SSE stream with a dedicated
+    no-timeout reqwest client, parses `data:` lines per the SSE
+    spec, and dispatches each event through a `FnMut` callback).
+    Supports `--follow`, `--after-seq`, and `--format
+    text|json|json-envelope` (envelope rejected with a clear
+    error when combined with `--follow` because an envelope is
+    bounded and a follow stream is not).
+  - Tests: 4 unit tests (`format_event_text_*`,
+    `logs_rejects_follow_with_json_envelope_format`) + 4 SSE
+    parser tests (`parse_sse_event_payload_*`) + 5 hermetic
+    integration tests in
+    `agentflow-cli/tests/workflow_logs_tests.rs` that spin up a
+    minimal axum mock server (no Postgres required) and exercise
+    history-text, history-jsonl, history-envelope, follow-stream,
+    follow-rejects-envelope round-trips end-to-end via the CLI
+    binary. All green; `cargo clippy -p agentflow-cli --tests
+    -- -D warnings` clean. Cargo.toml gains `reqwest` `stream`
+    feature + `futures = "0.3"`.
 
 - TODO P10.11.2 (Medium — pre-GA) `agentflow skill run --server`
   server-backed mode
