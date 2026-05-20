@@ -35,11 +35,12 @@ Eight authoritative tables, all owned by the schema bundled with
 | `harness_sessions` | Harness Agent Mode session rows |
 | `harness_session_events` | Harness event log (mirrors the SSE stream) |
 
-Backup with `pg_dump`. Restore with `pg_restore`. Migrations are
-embedded via `sqlx::migrate!()` and run on first server start, so a
-restored DB at the target schema version Just Works; a restored DB at
-an *older* schema version is upgraded by `agentflow serve` before it
-accepts traffic.
+Backup with `pg_dump` (or `agentflow backup` — see below). Restore
+with `pg_restore`. Migrations are embedded via `sqlx::migrate!()`
+and run on first server start, so a restored DB at the target
+schema version Just Works; a restored DB at an *older* schema
+version is upgraded by `agentflow serve` before it accepts
+traffic.
 
 ### 2. Run artifacts (`AGENTFLOW_RUN_DIR`)
 
@@ -63,6 +64,67 @@ backends back up the same way as the main Postgres above.
 | Marketplace cache | `<home>/.agentflow/marketplace/cache` | Read-only artifact cache; safe to rebuild on demand, but restoring it avoids re-downloading and re-verifying signatures. |
 | Skills install dir | `<home>/.agentflow/skills` (override: `AGENTFLOW_SKILLS_DIR`) | Authoritative for installed skill manifests. Lose this and every skill needs to be reinstalled. |
 | Plugins install dir | `<home>/.agentflow/plugins` (override: `AGENTFLOW_PLUGINS_DIR`) | Same shape as skills, but holds subprocess plugin binaries + manifests. |
+
+## `agentflow backup` (P10.15.1)
+
+`agentflow backup --output <path>` orchestrates the four state
+surfaces above into a single bundle directory in one command:
+
+```bash
+agentflow backup --output /var/backups/agentflow/2026-05-20 \
+  --database-url "$DATABASE_URL"
+```
+
+Output layout:
+
+```text
+<output>/
+  manifest.json          # schema version, timestamps, per-artifact bytes
+  db.dump                # pg_dump --format=custom of $DATABASE_URL
+  run_dir.tar.gz         # tar -czf of $AGENTFLOW_RUN_DIR
+  trace_dir.tar.gz       # tar -czf of $AGENTFLOW_TRACE_DIR
+  marketplace_cache.tar.gz
+  skills_dir.tar.gz
+  plugins_dir.tar.gz
+```
+
+Key flags:
+
+- `--output <PATH>` *(required)* — destination directory. The
+  command creates it if missing; refuses to overwrite a
+  non-empty directory unless `--force` is supplied.
+- `--database-url <URL>` — Postgres connection string. Falls
+  back to `$DATABASE_URL`. Only consulted when the `db` include
+  is in the active set.
+- `--include <NAME>` *(repeatable)* — restrict to one or more
+  includes. Empty = all 6. Aliases accepted: `database` → `db`,
+  `runs` → `run_dir`, `traces` → `trace_dir`, etc.
+- `--dry-run` — print the plan + the `manifest.json` shape the
+  command would emit, mutate nothing. Useful for production
+  rehearsal before running with real credentials.
+- `--force` — overwrite a non-empty `--output` directory.
+- `--format text|json|json-envelope` — output format for the
+  per-step report. `json-envelope` is the canonical
+  `agentflow.cli/1` envelope; see `docs/CLI_JSON_OUTPUT.md`.
+
+Failure handling: a missing source directory is `skipped` (not
+a failure); a tool not on PATH (`pg_dump` / `tar`) is `failed`
+and the exit code is `2`. Each step's row in the manifest /
+report carries `status`, `bytes`, `duration_ms`, and a
+`reason` field for skipped or failed steps. The bundle
+manifest is written even on partial failure so a future
+`agentflow restore` can diff "what we got" against "what we
+wanted" instead of guessing.
+
+The `manifest_version` field on the bundle (currently
+`"agentflow.backup/1"`) is the wire-shape promise. Bumping it
+is a breaking change for any future restore tooling that pins
+to the prior shape.
+
+Restore is **not** wrapped yet (tracked separately in v1.x — a
+future `agentflow restore --input <path>` would consume the
+same manifest); for now use the [Restore sequencing](#restore-sequencing)
+steps below with `pg_restore` and `tar -xzf` directly.
 
 ## Restore sequencing
 
@@ -147,3 +209,5 @@ If any line fails, **do not swing traffic**. Fix the gap, re-run
   orphaned run_dir subdirectories.
 - `agentflow doctor --backup-check` (P2.7) — the deployment-time
   smoke this document refers to.
+- `agentflow backup --output <path>` (P10.15.1) — the
+  orchestrator that wraps `pg_dump` + `tar` into one command.

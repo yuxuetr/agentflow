@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod backup;
 pub mod cleanup;
 pub mod config;
 pub mod doctor;

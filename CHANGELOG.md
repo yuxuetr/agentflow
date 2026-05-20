@@ -18,6 +18,39 @@ across the 200+ tests touched.
 
 ### Added
 
+#### CLI ops
+
+- **`agentflow backup --output <path>`** (P10.15.1). Orchestrates
+  `pg_dump --format=custom` + `tar -czf` of the five filesystem
+  state surfaces (`run_dir`, `trace_dir`, marketplace cache,
+  skills, plugins) into a single bundle directory with a
+  versioned `manifest.json`. Closes the operator loop that
+  `docs/SERVER_BACKUP_RESTORE.md` documents — that doc described
+  *which* state surfaces must be backed up; this command actually
+  does it in one invocation instead of leaving the operator to
+  run six commands by hand and reason about the order.
+  - Flags: `--output` (required), `--database-url`, `--include`
+    (repeatable; aliases like `runs` → `run_dir`, `database` →
+    `db` accepted), `--dry-run`, `--force`,
+    `--format text|json|json-envelope` (canonical `agentflow.cli/1`).
+  - Manifest schema discriminator `agentflow.backup/1` is the
+    wire-shape promise a future `agentflow restore --input <path>`
+    will consume. Restore itself stays out of this TODO's scope.
+  - Tool requirements (`pg_dump`, `tar`) are PATH-probed up front;
+    "tool not found" surfaces as a `failed` step with a
+    package-manager hint, not an unhelpful panic.
+  - A missing source directory is `skipped` (not `failed`) — the
+    common case where the operator only opted into a subset of
+    state surfaces stays out of the failure path.
+  - 12 hermetic unit tests in `commands::backup::tests`:
+    include-name parsing + aliases, artifact-name layout
+    discipline, URL password redaction (3 variants), dir-prep
+    refuse/force/create/dry-run paths, end-to-end dry-run
+    behavior (all 6 includes), explicit-include subset, and
+    DB-step skip-without-`DATABASE_URL`. Postgres / tar are
+    never invoked in the test suite, so this runs hermetically
+    in CI.
+
 #### Server gateway
 
 - **Per-run retention override on `POST /v1/runs`** (P10.14.1).

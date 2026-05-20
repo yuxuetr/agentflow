@@ -836,11 +836,33 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
 
 ### P10.15 — agentflow-db (B+)
 
-- TODO P10.15.1 (Medium — v1.x) Real backup/restore implementation
-  - Today: docs (`SERVER_BACKUP_RESTORE.md`) + `agentflow doctor
-    --backup-check` probes. Production backup is `pg_dump` +
-    filesystem snapshot. An `agentflow backup --output <path>`
-    CLI that orchestrates both would close the loop for operators.
+- DONE P10.15.1 (Medium — v1.x) Real backup/restore implementation
+  - Landed: `agentflow backup --output <path>` orchestrates
+    `pg_dump --format=custom` + `tar -czf` of the 5 filesystem
+    state surfaces (run_dir, trace_dir, marketplace cache,
+    skills, plugins) into one bundle directory with a versioned
+    `manifest.json` (`agentflow.backup/1`).
+  - Flags: `--output` (required), `--database-url`, `--include`
+    (repeatable, aliases like `runs`/`database`/`traces`
+    accepted), `--dry-run`, `--force`,
+    `--format text|json|json-envelope` (canonical
+    `agentflow.cli/1`).
+  - Failure model: missing source dir is `skipped` (not failed);
+    missing `pg_dump`/`tar` on PATH is `failed` with a
+    package-manager install hint. Exit code `2` when any step
+    failed.
+  - Hermetic test surface: 12 unit tests in
+    `commands::backup::tests` cover include parsing + aliases,
+    URL password redaction, output-dir prep refuse/force/create/
+    dry-run paths, and end-to-end dry-run behavior (full +
+    subset + DB-only-without-URL skip path). Postgres / tar
+    never invoked, so CI is fast and portable.
+  - Docs: `docs/SERVER_BACKUP_RESTORE.md` gains a P10.15.1
+    section with the flag reference, output layout, failure
+    handling, and a pointer to the manifest version.
+  - Restore wrap is **not** in scope; the manifest shape is the
+    contract a future `agentflow restore --input <path>` would
+    consume.
 
 - TODO P10.15.2 (Low — v1.x) Read-replica support
   - All repos write through the primary. For read-heavy gateways,
