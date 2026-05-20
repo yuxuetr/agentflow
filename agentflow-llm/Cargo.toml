@@ -61,7 +61,7 @@ log = "0.4"
 tiktoken-rs = "0.6"
 
 # AgentFlow integration
-agentflow-core = { path = "../agentflow-core" }
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

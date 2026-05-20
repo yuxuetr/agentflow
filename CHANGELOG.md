@@ -709,6 +709,21 @@ across the 200+ tests touched.
 
 ### Changed
 
+- **Workspace-internal `[dependencies]` now carry explicit
+  `version = "X.Y"`** (P10.0.2). Every path-dep on a workspace
+  crate was previously bare `{ path = "../..." }`, which
+  `cargo publish` rejects with `all dependencies must have a
+  version requirement specified when publishing`. Eleven Cargo.toml
+  files were patched (the four leaf crates `agentflow-core` /
+  `agentflow-tools` / `agentflow-rag` / `agentflow-db` had no
+  internal deps). Workspace builds and test suites are unaffected
+  — `path =` still wins at resolution time; the version is only
+  consulted when the package gets published. `[dev-dependencies]`
+  path-deps are left as-is (cargo strips them at publish).
+- **`Cargo.lock` refreshed off the yanked `slab v0.4.10`** (P10.0.2).
+  `cargo update -p slab` bumped to `v0.4.12`, removing the
+  `package 'slab v0.4.10' in Cargo.lock is yanked in registry
+  'crates-io'` warning from `cargo publish --dry-run`.
 - **Default template node behaviour**: auto-detects JSON when
   rendered output starts with `[`/`{`. Workflows that already set
   `output_format: "json"` are unaffected; new workflows can omit

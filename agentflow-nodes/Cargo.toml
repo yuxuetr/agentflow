@@ -21,16 +21,16 @@ rag = ["agentflow-rag"]
 
 [dependencies]
 # Core dependency - all nodes build on top of agentflow-core
-agentflow-core = { path = "../agentflow-core" }
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
 
 # LLM integration - required for real model execution
-agentflow-llm = { path = "../agentflow-llm" }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 
 # MCP integration - optional for MCP tool calling
-agentflow-mcp = { path = "../agentflow-mcp", optional = true }
+agentflow-mcp = { path = "../agentflow-mcp", version = "0.2", optional = true }
 
 # RAG integration - optional for RAG operations
-agentflow-rag = { path = "../agentflow-rag", optional = true }
+agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
 
 # Removed: agentflow-config dependency to break circular dependency
 

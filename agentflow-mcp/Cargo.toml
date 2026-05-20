@@ -32,7 +32,7 @@ futures = "0.3"
 # P3.8: cross-hop W3C traceparent propagation. Used to read the
 # active context from `agentflow_tracing::context::current_traceparent`
 # at request emission time and inject it into `params._meta.traceparent`.
-agentflow-tracing = { path = "../agentflow-tracing", default-features = false }
+agentflow-tracing = { path = "../agentflow-tracing", version = "0.1", default-features = false }
 
 [dev-dependencies]
 tokio-test = "0.4"

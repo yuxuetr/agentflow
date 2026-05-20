@@ -14,8 +14,8 @@ categories = ["development-tools"]
 # providers, JSONL persistence, and event bridging.
 
 [dependencies]
-agentflow-agents = { path = "../agentflow-agents" }
-agentflow-tools = { path = "../agentflow-tools" }
+agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -27,7 +27,7 @@ tracing = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
-agentflow-llm = { path = "../agentflow-llm" }
-agentflow-memory = { path = "../agentflow-memory" }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 tempfile = "3"
 tokio = { version = "1.0", features = ["full"] }

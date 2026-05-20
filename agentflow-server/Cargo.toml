@@ -41,16 +41,16 @@ metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false }
 
 # Workspace dependencies
-agentflow-db = { path = "../agentflow-db" }
-agentflow-core = { path = "../agentflow-core" }
-agentflow-cli = { path = "../agentflow-cli" }
-agentflow-skills = { path = "../agentflow-skills" }
-agentflow-tracing = { path = "../agentflow-tracing" }
-agentflow-tools = { path = "../agentflow-tools" }
-agentflow-harness = { path = "../agentflow-harness" }
-agentflow-agents = { path = "../agentflow-agents" }
-agentflow-llm = { path = "../agentflow-llm" }
-agentflow-memory = { path = "../agentflow-memory" }
+agentflow-db = { path = "../agentflow-db", version = "0.1" }
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
+agentflow-cli = { path = "../agentflow-cli", version = "0.2" }
+agentflow-skills = { path = "../agentflow-skills", version = "0.1" }
+agentflow-tracing = { path = "../agentflow-tracing", version = "0.1" }
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+agentflow-harness = { path = "../agentflow-harness", version = "0.1" }
+agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

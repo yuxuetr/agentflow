@@ -7,16 +7,16 @@ description = "Distributed worker process for AgentFlow"
 license = "MIT"
 
 [dependencies]
-agentflow-core = { path = "../agentflow-core" }
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
 # P2.8 — enable the `mcp` feature so the worker can dispatch `mcp` payloads
 # via the same `MCPNode` the local scheduler uses; default features cover
 # `llm` / `http` / `file` / `template`.
-agentflow-nodes = { path = "../agentflow-nodes", features = ["mcp"] }
-agentflow-llm = { path = "../agentflow-llm" }
-agentflow-agents = { path = "../agentflow-agents" }
-agentflow-memory = { path = "../agentflow-memory" }
-agentflow-tools = { path = "../agentflow-tools" }
-agentflow-server = { path = "../agentflow-server" }
+agentflow-nodes = { path = "../agentflow-nodes", version = "0.2", features = ["mcp"] }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+agentflow-server = { path = "../agentflow-server", version = "0.1" }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

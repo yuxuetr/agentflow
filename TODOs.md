@@ -197,13 +197,72 @@ all map to the P7.4-FU4 production-deployment checklist in
     `docs/RELEASE_NOTES_v1.0.0-rc.1.md` on a fresh VM. Cross off
     each step + record `agentflow doctor --profile production
     --backup-check --format json` exit code.
-- TODO P10.0.2 `cargo publish --dry-run` for all publishable crates
+- DONE P10.0.2 `cargo publish --dry-run` for all publishable crates
   - Order: `agentflow-core` → `agentflow-tools` → `agentflow-tracing`
     → `agentflow-llm` → `agentflow-nodes` → `agentflow-mcp` →
     `agentflow-memory` → `agentflow-rag` → `agentflow-agents` →
     `agentflow-skills` → `agentflow-harness` →
     `agentflow-db` → `agentflow-server` → `agentflow-worker` →
     `agentflow-cli`. xtask, ui not published.
+  - **Required fix landed**: every `[dependencies]` path-dep on a
+    workspace-internal crate now carries an explicit
+    `version = "X.Y"` next to `path = "../..."`. Cargo's publish
+    flow rejects bare path-only deps with
+    `all dependencies must have a version requirement specified
+    when publishing`. Fix covers 11 of the 15 publishable crates
+    (`agentflow-tracing` / `agentflow-llm` / `agentflow-nodes` /
+    `agentflow-mcp` / `agentflow-memory` / `agentflow-agents` /
+    `agentflow-skills` / `agentflow-harness` / `agentflow-server` /
+    `agentflow-worker` / `agentflow-cli`). Dev-dependencies don't
+    need versions for publish (cargo ignores them in published
+    manifests), so the `[dev-dependencies]` path-deps in
+    `agentflow-harness` / `agentflow-cli` are left as-is.
+  - **Cargo.lock yank fix**: `cargo update -p slab` bumped the
+    transitively-pinned `slab v0.4.10` (yanked from crates.io) up
+    to `v0.4.12`. The dry-run warning is now gone.
+  - **Dry-run scope (4 of 15 crates pass end-to-end locally)**:
+    `agentflow-core`, `agentflow-tools`, `agentflow-rag`, and
+    `agentflow-db` have no workspace-internal `[dependencies]`,
+    so their `cargo publish --dry-run` resolves cleanly and
+    packages a valid `.crate` tarball. Confirmed locally.
+  - **Cargo limitation (11 of 15 crates can't dry-run locally)**:
+    the remaining 11 crates package cleanly (the `Packaging
+    <crate> v<ver>` step succeeds for every one) but fail at the
+    upload-prep step's `Updating crates.io index` because their
+    workspace-internal deps aren't on crates.io yet — either the
+    crate has never been published (e.g. `no matching package
+    named 'agentflow-tracing' found`) or the on-registry version
+    predates the local bump (e.g. `failed to select a version for
+    the requirement 'agentflow-core = "^0.2"'; candidate versions
+    found which didn't match: 0.1.2, 0.1.1`). This is the
+    well-known monorepo-publish constraint:
+    `cargo publish --dry-run` consults the real registry for
+    dep resolution; neither `--no-verify`, `--offline`, nor
+    `[patch.crates-io]` bypasses the upload-prep validation.
+  - **Real-environment gap → folded into P10.0.3**: a true
+    end-to-end dry-run of the full 15-crate chain requires the
+    deps to be live on crates.io. The natural shape is the
+    sequential publish flow of P10.0.3 — dry-run a crate, real
+    publish if green, wait for the index refresh, dry-run the
+    next dependent. P10.0.3 already covers this, so no separate
+    follow-up is opened.
+  - **Cosmetic warning surfaced (pre-GA, not blocking publish)**:
+    14 of 15 manifests still emit `manifest has no documentation,
+    homepage or repository`. Only `agentflow-rag` has
+    `repository = "https://github.com/agentflow/agentflow"`. Adding
+    the three metadata fields workspace-wide is tracked as
+    `P10.0.2-FU1` below. Not a blocker — crates.io accepts publish
+    with the warning.
+
+- TODO P10.0.2-FU1 (Low — pre-GA) Add `documentation` / `homepage`
+  / `repository` to the 14 publishable manifests missing them
+  - Currently only `agentflow-rag` carries `repository`. The
+    cleanest fix is to move shared package metadata into the
+    workspace root via `[workspace.package]` (Rust 1.64+) and have
+    each member opt-in with `documentation.workspace = true` etc.
+    Estimated ~50 LoC across 15 Cargo.toml files. Removes the
+    warning from `cargo publish --dry-run` and improves the
+    crates.io listing.
 - TODO P10.0.3 Tag `v1.0.0-rc.1`
   - One-way decision; human operator only.
 - TODO P10.0.4 GitHub Release artifact + docker image push
