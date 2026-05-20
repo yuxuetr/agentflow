@@ -239,25 +239,34 @@ No active gaps from the evaluation. Future opportunities:
 
 ### P10.3 — agentflow-llm (A — but `init()` UX is the single biggest pre-GA fix)
 
-- TODO P10.3.1 (HIGH — pre-GA) Lenient `LLMConfig::validate()` for
+- DONE P10.3.1 (HIGH — pre-GA) Lenient `LLMConfig::validate()` for
   missing provider keys (R15)
-  - Current behavior: any provider in `default_models.yml` whose
-    `api_key_env` is unset causes `AgentFlow::init()` to fail-close.
-    Result: a fresh user with only `OPENAI_API_KEY` set cannot
-    even call `init()` because DASHSCOPE/DEEPSEEK/MINIMAX/etc.
-    keys are missing.
-  - Proposed change: `validate()` emits `eprintln!` warnings for
-    missing keys (naming the affected models so users know what
-    they're losing) but does NOT return `Err`. Fail-fast moves to
-    the lookup path: `get_provider(name)` returns
-    `LLMError::MissingApiKey` only when the user actually asks for
-    a model whose provider has no key.
-  - Tests: extend `agentflow-llm/src/config/validation.rs` unit
-    tests + verify `agentflow doctor --profile production` still
-    fails-closed on missing `AGENTFLOW_API_TOKEN` (auth, not LLM
-    key).
-  - Risk: behavior change. Anyone depending on strict-init for
-    correctness needs a migration note in `CHANGELOG.md`.
+  - Landed: `LLMConfig::validate()` is now lenient — emits an
+    `eprintln!` warning per missing-key provider naming the
+    affected models, returns `Ok(())`. New
+    `LLMConfig::validate_strict()` preserves the fail-close path
+    for callers like `agentflow doctor --profile production`.
+    `ModelRegistry::initialize_providers()` skips missing-key
+    providers and tracks them in
+    `missing_key_providers: HashSet<String>`;
+    `ModelRegistry::get_provider()` consults that set and returns
+    `LLMError::MissingApiKey` (actionable, names the env var) for
+    skipped vendors instead of the misleading
+    `LLMError::UnsupportedProvider`.
+  - Tests: 5 new — 4 in
+    `agentflow-llm/src/config/model_config.rs::tests`
+    (`validate_emits_warning_but_no_err_for_missing_api_key`,
+    `validate_strict_returns_missing_api_key_err_when_env_unset`,
+    `validate_still_errors_on_unsupported_vendor`,
+    `validate_still_errors_on_invalid_temperature`) + 1 in
+    `agentflow-llm/src/registry/model_registry.rs::tests`
+    (`load_config_skips_provider_with_missing_key_and_keeps_others`
+    — proves the registry-level round-trip end-to-end). Full
+    `cargo test -p agentflow-llm` green (216 tests / 0 failed);
+    `cargo clippy -p agentflow-llm -p agentflow-cli -p
+    agentflow-agents -p agentflow-harness --tests -- -D warnings`
+    clean. CHANGELOG.md "Changed" section documents the migration
+    note for callers depending on strict-init semantics.
 
 - TODO P10.3.2 (Medium — v1.x) Promote DashScope / DeepSeek /
   MiniMax to dedicated provider modules (R16)

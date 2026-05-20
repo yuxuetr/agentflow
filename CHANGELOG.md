@@ -118,6 +118,25 @@ across the 200+ tests touched.
   Template's whole point is to consume arbitrary Tera context.
   Typo-detection for other node types (closed ParamSpec) is
   unaffected.
+- **`LLMConfig::validate()` is lenient on missing API keys**
+  (P10.3.1). Previously, `AgentFlow::init()` against the bundled
+  `default_models.yml` would fail-close for a fresh user with
+  only `OPENAI_API_KEY` set, because the YAML references ~9
+  providers and the strict validator required every key to be
+  present. Now `validate()` emits an `eprintln!` warning naming
+  each missing provider + the affected models, and returns
+  `Ok(())` so init proceeds. The fail-fast moves to the lookup
+  path: `ModelRegistry::get_provider("anthropic")` now returns
+  `LLMError::MissingApiKey { provider: "anthropic" }` (actionable
+  — names the env var to set) when that provider was skipped at
+  init time, rather than the misleading `UnsupportedProvider`.
+  **Migration**: callers that need the old fail-close semantics
+  (e.g., `agentflow doctor --profile production` health checks)
+  should use the new `LLMConfig::validate_strict()` method, which
+  returns `Err(LLMError::MissingApiKey)` on the first missing
+  configured key. Structural validation (unsupported vendor,
+  out-of-range numeric fields) remains a hard error in both
+  paths.
 
 ### Fixed
 

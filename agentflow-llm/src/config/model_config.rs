@@ -519,10 +519,52 @@ impl LLMConfig {
     })
   }
 
-  /// Validate the configuration against available environment variables
+  /// Validate the configuration's structural correctness.
+  ///
+  /// **Lenient on missing API keys** (P10.3.1): models whose vendor's
+  /// API key env var is unset emit an `eprintln!` warning naming the
+  /// affected models so the user knows what's being skipped, but do
+  /// NOT cause this method to return `Err`. The fail-fast moves to
+  /// the lookup path — `ModelRegistry::get_provider(name)` returns
+  /// [`LLMError::MissingApiKey`] only when the user actually requests
+  /// a model whose provider key is missing.
+  ///
+  /// This lets a fresh user with only `OPENAI_API_KEY` set call
+  /// `AgentFlow::init()` against the bundled `default_models.yml`
+  /// (which references ~9 providers) without fail-closing on the 8
+  /// unset keys.
+  ///
+  /// Callers that need the old strict behaviour (e.g.,
+  /// `agentflow doctor --profile production`) should use
+  /// [`LLMConfig::validate_strict`] instead.
   pub fn validate(&self) -> Result<()> {
+    self.validate_inner(false)
+  }
+
+  /// Strict validation: same as [`LLMConfig::validate`] but ALSO
+  /// returns `Err(LLMError::MissingApiKey)` for any provider whose
+  /// API key env var is unset. Used by production health checks
+  /// (e.g., `agentflow doctor --profile production`) where a missing
+  /// key represents a hard misconfiguration rather than a partial
+  /// install.
+  pub fn validate_strict(&self) -> Result<()> {
+    self.validate_inner(true)
+  }
+
+  fn validate_inner(&self, strict_api_keys: bool) -> Result<()> {
+    // Group models by vendor first so the warning can list affected
+    // model names (helps the user understand what they're losing if
+    // a key is missing).
+    let mut models_by_vendor: HashMap<&str, Vec<&str>> = HashMap::new();
     for (model_name, model_config) in &self.models {
-      // Check if provider exists
+      models_by_vendor
+        .entry(model_config.vendor.as_str())
+        .or_default()
+        .push(model_name.as_str());
+    }
+
+    for (model_name, model_config) in &self.models {
+      // Check if vendor is supported — always a hard error.
       if ![
         "openai",
         "anthropic",
@@ -546,14 +588,7 @@ impl LLMConfig {
         });
       }
 
-      // Check if API key is available
-      if self.get_api_key(&model_config.vendor).is_err() {
-        return Err(LLMError::MissingApiKey {
-          provider: model_config.vendor.clone(),
-        });
-      }
-
-      // Validate model-specific configuration
+      // Validate model-specific numeric ranges — always hard errors.
       if let Some(temp) = model_config.temperature
         && !(0.0..=2.0).contains(&temp)
       {
@@ -593,6 +628,38 @@ impl LLMConfig {
         return Err(LLMError::InvalidModelConfig {
           message: format!("n for model '{}' must be between 1 and 10", model_name),
         });
+      }
+    }
+
+    // API-key check is deferred until after structural validation
+    // so the warning message can group every affected model per
+    // provider in one line.
+    let mut missing_providers: Vec<&str> = Vec::new();
+    for vendor in models_by_vendor.keys() {
+      if self.get_api_key(vendor).is_err() {
+        missing_providers.push(vendor);
+      }
+    }
+    // Sort for deterministic output ordering across runs.
+    missing_providers.sort_unstable();
+
+    if strict_api_keys {
+      if let Some(first) = missing_providers.first() {
+        return Err(LLMError::MissingApiKey {
+          provider: (*first).to_string(),
+        });
+      }
+    } else {
+      for vendor in &missing_providers {
+        let mut affected = models_by_vendor.get(vendor).cloned().unwrap_or_default();
+        affected.sort_unstable();
+        eprintln!(
+          "Warning: provider '{}' has no API key configured; \
+           {} model(s) unavailable until the key is set: {}",
+          vendor,
+          affected.len(),
+          affected.join(", ")
+        );
       }
     }
 
@@ -694,6 +761,121 @@ models:
     let config = LLMConfig::from_yaml(yaml).unwrap();
     assert_eq!(config.get_api_key("mock").unwrap(), "mock");
     assert!(config.validate().is_ok());
+  }
+
+  /// P10.3.1: `validate()` is lenient on missing API keys — it
+  /// must NOT return Err for a config that references providers
+  /// whose keys aren't set in the environment. The warning
+  /// (printed to stderr) names the affected models so the user
+  /// knows what's being skipped, but the call itself succeeds so
+  /// fresh users with only one provider key can still init
+  /// against the bundled default registry.
+  #[test]
+  fn validate_emits_warning_but_no_err_for_missing_api_key() {
+    // SAFETY: this unit test mutates a dedicated test env var.
+    unsafe {
+      env::remove_var("P10_3_1_MISSING_KEY_ENV");
+    }
+    let yaml = r#"
+models:
+  some-model:
+    vendor: openai
+providers:
+  openai:
+    api_key_env: "P10_3_1_MISSING_KEY_ENV"
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    // The hard contract for P10.3.1: lenient path returns Ok even
+    // though the configured api_key_env is unset.
+    config
+      .validate()
+      .expect("validate() must be lenient on missing keys (P10.3.1)");
+  }
+
+  /// P10.3.1: `validate_strict()` preserves the old fail-close
+  /// behaviour for callers that need it (e.g.,
+  /// `agentflow doctor --profile production`). A configured
+  /// `api_key_env` that's unset must produce
+  /// [`LLMError::MissingApiKey`].
+  ///
+  /// **Test isolation**: `get_api_key` falls back to provider-
+  /// specific common env vars (`ANTHROPIC_API_KEY` /
+  /// `DEEPSEEK_API_KEY` / …) when the configured `api_key_env` is
+  /// unset, so the test must temporarily clear those fallbacks to
+  /// be deterministic regardless of the developer's environment.
+  /// `deepseek` is chosen because it has a single fallback
+  /// (`DEEPSEEK_API_KEY`), minimising snapshot+restore noise.
+  #[test]
+  fn validate_strict_returns_missing_api_key_err_when_env_unset() {
+    let snapshot_configured = env::var("P10_3_1_STRICT_MISSING_KEY_ENV").ok();
+    let snapshot_fallback = env::var("DEEPSEEK_API_KEY").ok();
+
+    // SAFETY: test isolates by clearing the configured slot and
+    // the single fallback for `deepseek`, then restores at exit.
+    unsafe {
+      env::remove_var("P10_3_1_STRICT_MISSING_KEY_ENV");
+      env::remove_var("DEEPSEEK_API_KEY");
+    }
+
+    let yaml = r#"
+models:
+  some-model:
+    vendor: deepseek
+providers:
+  deepseek:
+    api_key_env: "P10_3_1_STRICT_MISSING_KEY_ENV"
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let result = config.validate_strict();
+
+    // SAFETY: restore env state regardless of assertion outcome.
+    unsafe {
+      if let Some(value) = snapshot_configured {
+        env::set_var("P10_3_1_STRICT_MISSING_KEY_ENV", value);
+      }
+      if let Some(value) = snapshot_fallback {
+        env::set_var("DEEPSEEK_API_KEY", value);
+      }
+    }
+
+    match result {
+      Err(LLMError::MissingApiKey { provider }) => assert_eq!(provider, "deepseek"),
+      Err(other) => panic!("expected MissingApiKey, got: {other:?}"),
+      Ok(()) => panic!("validate_strict() must err on missing keys (P10.3.1)"),
+    }
+  }
+
+  /// P10.3.1 regression guard: structural checks (unsupported
+  /// vendor, out-of-range numeric fields) must STILL be hard
+  /// errors in the lenient path. The leniency only relaxes the
+  /// API-key check.
+  #[test]
+  fn validate_still_errors_on_unsupported_vendor() {
+    let yaml = r#"
+models:
+  bad-model:
+    vendor: definitely-not-a-real-provider
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let err = config
+      .validate()
+      .expect_err("unsupported vendor must remain a hard error");
+    assert!(matches!(err, LLMError::UnsupportedProvider { .. }));
+  }
+
+  #[test]
+  fn validate_still_errors_on_invalid_temperature() {
+    let yaml = r#"
+models:
+  hot-model:
+    vendor: mock
+    temperature: 3.0
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let err = config
+      .validate()
+      .expect_err("out-of-range temperature must remain a hard error");
+    assert!(matches!(err, LLMError::InvalidModelConfig { .. }));
   }
 
   #[test]
