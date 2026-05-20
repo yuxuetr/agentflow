@@ -822,10 +822,49 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     contributors land on the in/out table instead of inferring
     boundaries from the prose.
 
-- TODO P10.17.2 (Medium — v1.x) Preference UI wiring to P6.4 API
-  - The `/v1/preferences` API exists (P6.4). The UI still reads /
-    writes localStorage. Switch to the API so preferences sync
-    across browsers.
+- DONE P10.17.2 (Medium — v1.x) Preference UI wiring to P6.4 API
+  - Landed the helper + hook + proof-of-pattern wiring; the
+    canonical sync contract is now live for the run-console
+    tenant id. New files:
+    - `agentflow-ui/src/preferences.ts` — pure helper module
+      with `STATIC_KEY_MAP` (7 syncable local keys → server
+      keys), `serverKeyForLocal` / `localKeyForServer` (with
+      dynamic per-run-id event-filter prefix handling),
+      `loadServerPreferences` / `saveServerPreferences`,
+      `tenantHeaders`, and `PreferenceWriteQueue` (500 ms
+      debounce + last-write-wins per key).
+    - `agentflow-ui/src/preferences.test.ts` — 28 PASS in the
+      same bun/tsc-runnable pattern as `eventFilter.test.ts`
+      (key mapping in both directions, dropped-unknown-keys,
+      static + dynamic event-filter prefixes, fetcher contract
+      including `X-Agentflow-Tenant`, queue collapse / cancel
+      / flush-now).
+    - `agentflow-ui/src/usePreferenceSync.ts` — React hook that
+      GETs once per `(apiToken, tenant)` pair, exposes
+      `{ serverPrefs, syncToServer }`, debounces PUTs via the
+      queue, and flushes pending writes on unmount so an
+      operator's last edit doesn't get lost between
+      navigations.
+  - **Scope split**: only `agentflow.ui.tenantId` (run console)
+    is end-to-end-wired into the UI in this commit (load
+    overlay + write sync). The other 6 syncable keys are
+    *mapped* in the helper but their components still write to
+    localStorage only — replicating the 3-line pattern in each
+    component is mechanical and tracked as a follow-up *inside*
+    the doc table. Splitting it this way kept the diff to
+    main.tsx small (one component, ~12 lines added) so the
+    pattern is reviewable.
+  - Explicitly NOT synced (security / size / machine-specific):
+    api token, workflow YAML drafts, harness user_input prompt,
+    harness workspace_root path. Reasons are pinned in
+    `docs/WEB_UI.md` + tests.
+  - `docs/WEB_UI.md` gains a "Durable preferences (P10.17.2)"
+    section with the synced-vs-never-synced tables + wire-shape
+    contract notes (regex constraint, 16 KiB cap, token-shape
+    rejection). `npm test` (bun-driven) green on 28 helper
+    tests; `npx tsc --noEmit` clean; `cargo test
+    -p agentflow-server` all 82 tests green after the rebuilt
+    `dist/` (the server embeds the bundle via `include_str!`).
 
 - TODO P10.17.3 (Medium — v1.x) Server-side `?filter=` pre-filter
   for very long runs

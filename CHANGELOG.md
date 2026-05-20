@@ -105,6 +105,25 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **Web UI preferences sync to `/v1/preferences`** (P10.17.2).
+  Selected localStorage values now round-trip through the
+  server's tenant-scoped preferences API so an operator's
+  settings roam across browsers. Pure-helper module
+  (`agentflow-ui/src/preferences.ts`) lists the syncable keys —
+  tenant ids, profile selections, harness runtime kind, per-run
+  event-filter expressions — and explicitly excludes the API
+  token, workflow YAML drafts, harness user_input prompts, and
+  workspace_root paths (security / size / machine-specific).
+  React hook (`usePreferenceSync.ts`) GETs once per
+  `(apiToken, tenant)` pair, debounces PUTs at 500 ms via a
+  last-write-wins queue, flushes on unmount. localStorage stays
+  as a fast first-paint cache. End-to-end wired today for the
+  run-console tenant; the other 6 keys are mapped in the helper
+  with the same 3-line pattern available for replication —
+  tracked as follow-up work inside the new
+  `docs/WEB_UI.md § Durable preferences (P10.17.2)` table.
+  28 PASS in `preferences.test.ts` (bun-driven; same node-tsx
+  pattern as `eventFilter.test.ts`); `npx tsc --noEmit` clean.
 - **`agentflow harness replay <session_id>`** subcommand
   (P10.10.2). Re-streams a persisted JSONL session log with
   time-paced output (sleeps between events based on their

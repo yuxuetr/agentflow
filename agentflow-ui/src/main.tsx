@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { compileFilter, applyFilter, type FilterEvent } from './eventFilter';
+import { usePreferenceSync } from './usePreferenceSync';
 
 type RunRecord = {
   id: string;
@@ -748,6 +749,12 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   const [runId, setRunId] = useState('');
   const [tenantId, setTenantId] = useState(() => readStorage(tenantKey, 'default'));
   const [workflowDraft, setWorkflowDraft] = useState(() => readStorage(workflowKey, starterWorkflow));
+  // P10.17.2: durable preferences via /v1/preferences. localStorage
+  // stays the fast first-paint cache (set above); when the server
+  // returns prefs for this tenant, the overlay effect below
+  // updates `tenantId` if the server value differs. The PUT side
+  // is wired in the existing writeStorage effect.
+  const prefSync = usePreferenceSync(apiToken, tenantId);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
   const [runGraph, setRunGraph] = useState<RunGraph | null>(null);
@@ -863,7 +870,27 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
 
   useEffect(() => {
     writeStorage(tenantKey, tenantId);
-  }, [tenantId]);
+    // P10.17.2: best-effort PUT to /v1/preferences. Queue
+    // debounces so rapid typing in the tenant input collapses to
+    // one PUT. Workflow YAML drafts stay local-only — they're
+    // large and can contain example tokens that would trip the
+    // server's token-shape rejection.
+    prefSync.syncToServer(tenantKey, tenantId);
+  }, [tenantId, prefSync]);
+
+  // P10.17.2: when the server snapshot arrives for this tenant,
+  // overlay it onto the local state. Skip when the value matches
+  // current state (avoids a render cycle) or when the server has
+  // no entry for this key (first-time tenant, no sync yet).
+  useEffect(() => {
+    const fromServer = prefSync.serverPrefs?.[
+      'ui.run-console.tenant'
+    ];
+    if (typeof fromServer === 'string' && fromServer !== tenantId) {
+      setTenantId(fromServer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefSync.serverPrefs]);
 
   useEffect(() => {
     writeStorage(workflowKey, workflowDraft);

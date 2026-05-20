@@ -139,6 +139,62 @@ The Vite dev server should proxy or target an `agentflow-server` instance for
 - Live reconnect: the UI streams SSE with `fetch`, tracks the last observed
   sequence, and reconnects with `?after_seq=<seq>` after transient failures.
 
+## Durable preferences (P10.17.2)
+
+Selected preference values sync to the server via the
+`/v1/preferences` API (P6.4) so they roam with the operator
+across browsers. Each value still writes to `localStorage` as a
+fast first-paint cache; the server is the cross-browser source
+of truth.
+
+| Local key | Server key | Synced today |
+| --- | --- | --- |
+| `agentflow.ui.tenantId` (run console) | `ui.run-console.tenant` | **Yes** |
+| `agentflow.ui.newForm.tenant` | `ui.new-form.tenant` | mapped; wiring follow-up |
+| `agentflow.ui.newForm.profile` | `ui.new-form.profile` | mapped; wiring follow-up |
+| `agentflow.ui.harness.newForm.tenant_id` | `ui.harness-new-form.tenant` | mapped; wiring follow-up |
+| `agentflow.ui.harness.newForm.profile` | `ui.harness-new-form.profile` | mapped; wiring follow-up |
+| `agentflow.ui.harness.newForm.runtime_kind` | `ui.harness-new-form.runtime` | mapped; wiring follow-up |
+| `agentflow.ui.run.eventFilter.<run_id>` | `ui.event-filter.<run_id>` | mapped; wiring follow-up |
+
+"Mapped" = `serverKeyForLocal()` in `src/preferences.ts` returns
+the server key; "Synced" = a React component currently calls
+`prefSync.syncToServer(...)` + overlays `prefSync.serverPrefs`
+into local state. The run-console tenant is the proof-of-pattern
+slice that landed under P10.17.2; replicating the same 3-line
+pattern at the other call sites is mechanical and tracked as a
+follow-up inside the same TODO.
+
+### Never synced (intentional)
+
+| Local key | Why local-only |
+| --- | --- |
+| `agentflow.ui.apiToken` | **Security.** The token is the only sensitive value in the UI; uploading it to a route that lists every preference would leak it. |
+| `agentflow.ui.workflowDraft` / `agentflow.ui.newForm.workflow` | Workflow YAML drafts can be large (>16 KiB server cap) and may contain example tokens that would trip the server's [token-shape rejection](../agentflow-server/src/preferences.rs). |
+| `agentflow.ui.newForm.inputs` | Same as workflow drafts — user-supplied JSON, can include user-pasted content. |
+| `agentflow.ui.harness.newForm.user_input` | Prompt text often contains personal info. |
+| `agentflow.ui.harness.newForm.workspace_root` | Filesystem path — machine-specific (`/Users/alice/...` ≠ `C:\Users\bob\...`). |
+
+### Wire shape contract
+
+- `GET /v1/preferences` — returns the full tenant-scoped map.
+  The UI reads it once per `(apiToken, tenant)` pair. Subsequent
+  tenant switches refetch.
+- `PUT /v1/preferences` — body `{ "preferences": { ... } }`. The
+  UI debounces writes (500 ms window) so fast typing in the
+  tenant input collapses to one PUT.
+- Server-side key constraint: `^[a-zA-Z0-9_.\-:]{1,128}$`. UI
+  keys are picked to satisfy this (dot-segmented with hyphens).
+- Server-side value cap: 16 KiB per JSON value. UI's synced
+  values are all short strings; large drafts go to the
+  intentionally-local list above.
+- Token-shape rejection: the server refuses values that look
+  like Bearer tokens / `sk-…` keys / long hex digests / opaque
+  alphanumeric strings ≥ 40 chars. The UI's synced keys don't
+  carry such values, so the rejection is a backstop; combined
+  with the never-synced list it makes accidental token upload
+  essentially impossible.
+
 ## Current Views
 
 - Run summary: status, tenant, event count, workflow body.
