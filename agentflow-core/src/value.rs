@@ -30,6 +30,32 @@ pub enum FlowValue {
   },
 }
 
+impl FlowValue {
+  /// Best-effort estimate of the serialized size of this value, in bytes.
+  ///
+  /// Used by the live-state size gauge (P10.14.2-FU6) to summarise an
+  /// active workflow's state pool without persisting the actual contents.
+  /// `Json` variants are sized via `serde_json::to_vec` (compact form);
+  /// `File` and `Url` variants only count the path/url string plus the
+  /// optional mime tag — the underlying blob lives elsewhere and is not
+  /// part of the in-memory pool.
+  ///
+  /// Returns `0` if the JSON encoder errors (shouldn't happen for any
+  /// `serde_json::Value` round-tripped through this enum, but fall back
+  /// to zero rather than panic).
+  pub fn estimated_size_bytes(&self) -> usize {
+    match self {
+      FlowValue::Json(value) => serde_json::to_vec(value).map(|b| b.len()).unwrap_or(0),
+      FlowValue::File { path, mime_type } => {
+        path.as_os_str().len() + mime_type.as_deref().map(str::len).unwrap_or(0)
+      }
+      FlowValue::Url { url, mime_type } => {
+        url.len() + mime_type.as_deref().map(str::len).unwrap_or(0)
+      }
+    }
+  }
+}
+
 impl Serialize for FlowValue {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where
@@ -274,6 +300,44 @@ mod tests {
     assert_eq!(
       serde_json::to_value(value).unwrap(),
       json!({"type": "json", "value": {"ok": true}})
+    );
+  }
+
+  #[test]
+  fn estimated_size_bytes_json_matches_compact_encoding() {
+    let value = FlowValue::Json(json!({"k": "v"}));
+    let expected = serde_json::to_vec(&json!({"k": "v"})).unwrap().len();
+    assert_eq!(value.estimated_size_bytes(), expected);
+    assert!(value.estimated_size_bytes() >= "{\"k\":\"v\"}".len());
+  }
+
+  #[test]
+  fn estimated_size_bytes_file_counts_path_and_mime_only() {
+    let value = FlowValue::File {
+      path: PathBuf::from("/tmp/blob.bin"),
+      mime_type: Some("application/octet-stream".to_string()),
+    };
+    assert_eq!(
+      value.estimated_size_bytes(),
+      "/tmp/blob.bin".len() + "application/octet-stream".len()
+    );
+
+    let value_no_mime = FlowValue::File {
+      path: PathBuf::from("/tmp/blob.bin"),
+      mime_type: None,
+    };
+    assert_eq!(value_no_mime.estimated_size_bytes(), "/tmp/blob.bin".len());
+  }
+
+  #[test]
+  fn estimated_size_bytes_url_counts_url_and_mime_only() {
+    let value = FlowValue::Url {
+      url: "https://example.test/r".to_string(),
+      mime_type: Some("text/plain".to_string()),
+    };
+    assert_eq!(
+      value.estimated_size_bytes(),
+      "https://example.test/r".len() + "text/plain".len()
     );
   }
 

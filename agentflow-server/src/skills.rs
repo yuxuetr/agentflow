@@ -215,6 +215,7 @@ pub async fn run_skill(
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
+  let live_state_registry = state.live_state_registry.clone();
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
@@ -227,6 +228,7 @@ pub async fn run_skill(
         cancellation_token: task_token,
         broker,
         tenant_id,
+        live_state_registry: Some(live_state_registry),
       })
       .await;
     cancellation_registry.complete(run_id);

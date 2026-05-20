@@ -76,15 +76,12 @@ Live series:
 | `agentflow_health_status{component}` | ✅ live | scrape-time inspector — `system=1` always; `database=1\|0` from `SELECT 1` (FU5) |
 | `agentflow_memory_usage_bytes` | ✅ live | scrape-time `/proc/self/statm` on Linux; `0` fallback elsewhere (FU5) |
 | `agentflow_workflow_runs_active{tenant}` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')` (FU5) |
-| `agentflow_state_size_bytes{run_id}` | ⏳ FU6 | requires architectural access to live `Flow` state pool the server doesn't currently expose |
+| `agentflow_state_size_bytes{run_id}` | ✅ live | `LiveStateRegistry` snapshot at scrape time; `Flow::StateSizeObserver` writes per-run entries after every node completes; executor deregisters on terminal transitions to keep cardinality bounded (FU6) |
 
-Until the deferred series wire up, the corresponding Grafana
-panels show empty / zero values. The dashboard JSON is checked
-in *now* against the forward contract so operators have
-something to import as each slice lands.
-
-The follow-up TODOs are tracked in `TODOs.md` under
-`P10.14.2-FU2` / `-FU3` / `-FU4` / `-FU5`.
+All 14 contracted series are live. The dashboard JSON is the
+operator-side source of truth; the metric names module
+(`agentflow-server::metrics::names`) pins the same strings so
+the unit-test compat layer can assert exact parity.
 
 ## Conventions
 

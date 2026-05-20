@@ -1207,12 +1207,9 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
       read pool. Same fail-soft contract from FU4: a query
       failure logs at debug and skips the gauge but doesn't
       break the scrape.
-  - 4th series `agentflow_state_size_bytes{run_id}` deferred
-    to `P10.14.2-FU6` (see below): a faithful gauge needs
-    architectural access to live `Flow::context.state_pool`
-    contents that the server doesn't currently expose;
-    surrogate proxies (events table size, artifacts size)
-    would mislead operators reading the panel.
+  - 4th series `agentflow_state_size_bytes{run_id}` was
+    deferred to `P10.14.2-FU6` at the time of this entry —
+    that gauge is now live; see the FU6 closure below.
   - 5 new tests (3 unit + 2 integration). The
     `metrics_endpoint_emits_system_health_one_on_every_scrape`
     integration test pins the contract that the system
@@ -1225,18 +1222,83 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     summarise the now-complete (modulo FU6) inspector
     surface.
 
-- TODO P10.14.2-FU6 (Low — v1.x) Live-state size gauge
-  - Wire `agentflow_state_size_bytes{run_id}` for the
-    "Memory & workflow state" dashboard panel. The gauge
-    needs architectural access to live `Flow::context.state_pool`
-    contents — neither `runs` (workflow YAML, not state)
-    nor `events` (audit log, not state) is a faithful
-    proxy. Likely surface: the server exposes a
-    `Flow::estimated_state_bytes()` accessor, the
-    `FlowRunExecutor` snapshots it periodically into the
-    runs table or a process-local registry, the scrape-time
-    helper reads from there. ~150 LoC + integration test
-    against a real workflow.
+- DONE P10.14.2-FU6 (Low — v1.x) Live-state size gauge
+  - Landed end-to-end. `agentflow_state_size_bytes{run_id}` now
+    renders in the "Memory & workflow state" panel; the
+    dashboards/README.md status matrix shows 14 / 14 ✅ live.
+  - **Core side** — new `agentflow-core::state_size` module ships
+    the `StateSizeObserver` trait + `estimated_state_pool_bytes`
+    helper. `FlowValue::estimated_size_bytes` measures Json
+    variants via `serde_json::to_vec` (compact form); File/Url
+    variants count only the path/url + mime-tag strings (the
+    underlying blob lives elsewhere and is not part of the
+    in-memory pool). `Flow` gains a private
+    `state_size_observer: Option<Arc<dyn StateSizeObserver>>`
+    field + `Flow::with_state_size_observer(...)` builder + a
+    `notify_state_size(&state_pool)` helper called after every
+    `state_pool.insert(...)` in both execution paths (serial +
+    concurrent). Five insert sites instrumented; the observer
+    sees one sample per node completion in either mode.
+  - **Server side** — new `agentflow-server::live_state_registry`
+    module ships `LiveStateRegistry` (`Arc<Mutex<HashMap<Uuid,
+    u64>>>`). `LiveStateRegistry::observer_for(run_id)` returns
+    an `Arc<dyn StateSizeObserver>` bound to a specific run id;
+    every `observe(bytes)` call overwrites that run's entry.
+    `snapshot()` copies out `(Uuid, u64)` pairs for the scrape
+    path; `deregister(&run_id)` clears one entry. `AppState`
+    gains a `live_state_registry: LiveStateRegistry` field
+    (cheap to `Clone` — inner Arc-shared). `RunContext` gains
+    an optional `live_state_registry` field threaded through
+    from the route handler so the test-side `StubExecutor` can
+    bypass it.
+  - **Wiring** — `flow_execute` (in `runs.rs`) attaches the
+    observer to the Flow before run, and explicitly deregisters
+    after the terminal status update. `FlowRunExecutor::execute`
+    also deregisters on the error path so cancelled / failed /
+    build-failure runs don't leak label cardinality. The
+    `refresh_scrape_time_gauges` helper iterates
+    `state.live_state_registry.snapshot()` and emits
+    `observe_state_size_bytes(run_id, bytes)` per entry — pure
+    in-process read, no DB, no syscall.
+  - **Metric contract** — new `names::STATE_SIZE_BYTES =
+    "agentflow_state_size_bytes"`. New `observe_state_size_bytes
+    (run_id: &str, bytes: u64)` helper, mirroring the
+    `{run_id}`-labelled gauge convention from the FU3
+    `{worker_id}` pattern.
+  - **Tests (15 new across 3 layers)**:
+    - 3 in `agentflow-core::value::tests`
+      (`estimated_size_bytes_json_matches_compact_encoding`,
+      `estimated_size_bytes_file_counts_path_and_mime_only`,
+      `estimated_size_bytes_url_counts_url_and_mime_only`).
+    - 4 in `agentflow-core::state_size::tests`
+      (`estimated_state_pool_bytes_empty_pool_is_zero`,
+      `estimated_state_pool_bytes_sums_keys_and_values`,
+      `estimated_state_pool_bytes_skips_error_results_payloads`,
+      `observer_trait_is_object_safe_and_receives_samples`).
+    - 3 in `agentflow-core/tests/state_size_observer_tests.rs`
+      (`state_size_observer_fires_per_node_in_serial_mode`,
+      `state_size_observer_fires_per_node_in_concurrent_mode`,
+      `flow_without_observer_runs_unchanged`).
+    - 6 in `agentflow-server::live_state_registry::tests`
+      (`snapshot_starts_empty`, `observer_records_under_its_run_id`,
+      `multiple_observers_isolate_per_run_id`,
+      `observe_overwrites_prior_sample_same_run_id`,
+      `deregister_removes_entry_and_is_idempotent`,
+      `cloned_registries_share_state`).
+    - 1 in `agentflow-server::metrics::tests`
+      (`observe_state_size_bytes_emits_per_run_id_label`).
+    - 2 in `agentflow-server/tests/metrics_endpoint.rs`
+      (`metrics_endpoint_emits_state_size_gauge_per_active_run_id`,
+      `metrics_endpoint_state_size_gauge_drops_after_deregister`).
+  - **Verification**: `cargo clippy -p agentflow-core
+    -p agentflow-server --tests -- -D warnings` clean;
+    `cargo test -p agentflow-core --lib` 139/139;
+    `cargo test -p agentflow-core --test state_size_observer_tests`
+    3/3; `cargo test -p agentflow-server --lib` 167/167;
+    `cargo test -p agentflow-server --test metrics_endpoint`
+    14/14. `docs/KUBERNETES_DEPLOYMENT.md` and
+    `dashboards/README.md` updated from "13 series live + 1 ⏳"
+    to "14 series live."
 
 ### P10.15 — agentflow-db (B+)
 

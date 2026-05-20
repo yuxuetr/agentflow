@@ -131,6 +131,13 @@ pub mod names {
   /// Gauge, label `tenant` — queued + running workflow runs
   /// per tenant.
   pub const WORKFLOW_RUNS_ACTIVE: &str = "agentflow_workflow_runs_active";
+  /// Gauge, label `run_id` — estimated bytes held in the
+  /// live `Flow::state_pool` for an in-flight workflow run
+  /// (P10.14.2-FU6). Re-emitted from a process-local snapshot
+  /// at scrape time; absent for runs that have already
+  /// terminated (the executor deregisters the entry on
+  /// completion so the gauge cardinality stays bounded).
+  pub const STATE_SIZE_BYTES: &str = "agentflow_state_size_bytes";
 }
 
 /// Record the terminal status of a workflow run. Fires the
@@ -232,6 +239,16 @@ pub fn observe_memory_usage_bytes(bytes: u64) {
 /// `/metrics` poll.
 pub fn observe_workflow_runs_active(tenant: &str, count: u64) {
   metrics::gauge!(names::WORKFLOW_RUNS_ACTIVE, "tenant" => tenant.to_string()).set(count as f64);
+}
+
+/// Record one in-flight workflow's live state-pool size
+/// (P10.14.2-FU6). `bytes` is the estimated serialized size
+/// of the `Flow::context.state_pool`, snapshotted by the
+/// executor after every node completes and held in the
+/// `LiveStateRegistry` for scrape-time reads. Called once
+/// per active run per scrape from the `/metrics` handler.
+pub fn observe_state_size_bytes(run_id: &str, bytes: u64) {
+  metrics::gauge!(names::STATE_SIZE_BYTES, "run_id" => run_id.to_string()).set(bytes as f64);
 }
 
 #[cfg(test)]
@@ -456,6 +473,28 @@ mod tests {
     assert!(
       text.contains("node_type=\"unknown\""),
       "fallback label `unknown` must appear for untagged failures; got: {text}"
+    );
+  }
+
+  #[test]
+  fn observe_state_size_bytes_emits_per_run_id_label() {
+    let _ = init_recorder();
+    let run_a = "00000000-0000-0000-0000-000000000001";
+    let run_b = "00000000-0000-0000-0000-000000000002";
+    observe_state_size_bytes(run_a, 1024);
+    observe_state_size_bytes(run_b, 8192);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_state_size_bytes"),
+      "state size gauge must appear; got: {text}"
+    );
+    assert!(
+      text.contains(&format!("run_id=\"{run_a}\"")),
+      "first run_id label must appear; got: {text}"
+    );
+    assert!(
+      text.contains(&format!("run_id=\"{run_b}\"")),
+      "second run_id label must appear; got: {text}"
     );
   }
 }

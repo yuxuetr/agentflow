@@ -6,6 +6,7 @@ use crate::{
   expr,
   resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
+  state_size::{StateSizeObserver, estimated_state_pool_bytes},
   value::FlowValue,
 };
 use dirs;
@@ -58,6 +59,7 @@ pub struct Flow {
   checkpoint_enabled: bool,
   checkpoint_manager: Option<Arc<CheckpointManager>>,
   event_listener: Option<Arc<dyn EventListener>>,
+  state_size_observer: Option<Arc<dyn StateSizeObserver>>,
 }
 
 impl Flow {
@@ -68,6 +70,7 @@ impl Flow {
       checkpoint_enabled: false,
       checkpoint_manager: None,
       event_listener: None,
+      state_size_observer: None,
     }
   }
 
@@ -100,6 +103,21 @@ impl Flow {
   pub fn with_event_listener(mut self, listener: Arc<dyn EventListener>) -> Self {
     self.event_listener = Some(listener);
     self
+  }
+
+  /// Attach a [`StateSizeObserver`] (P10.14.2-FU6) that receives the
+  /// estimated state-pool byte count after every node completes. Used by
+  /// `agentflow-server`'s `/metrics` handler to render the per-run live
+  /// state-size gauge.
+  pub fn with_state_size_observer(mut self, observer: Arc<dyn StateSizeObserver>) -> Self {
+    self.state_size_observer = Some(observer);
+    self
+  }
+
+  fn notify_state_size(&self, state_pool: &HashMap<String, AsyncNodeResult>) {
+    if let Some(observer) = &self.state_size_observer {
+      observer.observe(estimated_state_pool_bytes(state_pool));
+    }
   }
 
   pub async fn run(&self) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
@@ -386,6 +404,7 @@ impl Flow {
         let result = Err(AgentFlowError::NodeSkipped);
         self.persist_step_result(&run_dir, node_id, &result)?;
         state_pool.insert(node_id.to_string(), result);
+        self.notify_state_size(&state_pool);
         continue;
       }
 
@@ -475,6 +494,7 @@ impl Flow {
       }
 
       state_pool.insert(node_id.to_string(), result);
+      self.notify_state_size(&state_pool);
 
       // Save checkpoint if enabled
       if self.checkpoint_enabled
@@ -779,6 +799,7 @@ impl Flow {
             timestamp: Instant::now(),
           });
           state_pool.insert(node_id, result);
+          self.notify_state_size(&state_pool);
           if !config.continue_on_skip {
             fail_fast_triggered = true;
             break;
@@ -795,6 +816,7 @@ impl Flow {
                 self.persist_step_result(&run_dir, &node_id, &result)?;
                 self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
                 state_pool.insert(node_id, result);
+                self.notify_state_size(&state_pool);
                 if config.fail_fast {
                   fail_fast_triggered = true;
                   break;
@@ -853,6 +875,7 @@ impl Flow {
         }
 
         state_pool.insert(node_id.clone(), result);
+        self.notify_state_size(&state_pool);
 
         if self.checkpoint_enabled
           && state_pool

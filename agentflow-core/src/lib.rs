@@ -25,6 +25,7 @@ pub mod resource_manager;
 pub mod resume;
 pub mod scheduler;
 pub mod state_monitor;
+pub mod state_size;
 
 // Observability (lightweight events only)
 pub mod events;
@@ -53,4 +54,5 @@ pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
 pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
 pub use scheduler::{FlowCancellationToken, FlowExecutionConfig, FlowExecutionMode};
 pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
+pub use state_size::{StateSizeObserver, estimated_state_pool_bytes};
 pub use value::FlowValue;

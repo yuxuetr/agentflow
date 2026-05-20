@@ -147,6 +147,12 @@ pub struct RunContext {
   /// every event the executor emits gets stamped with the correct
   /// scope without re-querying the run row.
   pub tenant_id: String,
+  /// Process-local registry the executor writes live state-pool sizes
+  /// into (P10.14.2-FU6). `None` skips the gauge wiring — the `StubExecutor`
+  /// path and tests that bypass `AppState::new` use this. Real submissions
+  /// always carry the `AppState`'s shared registry so the `/metrics`
+  /// scrape can read what's running.
+  pub live_state_registry: Option<crate::live_state_registry::LiveStateRegistry>,
 }
 
 #[derive(Clone, Default)]
@@ -252,6 +258,14 @@ impl RunExecutor for FlowRunExecutor {
         .runs
         .update_status(ctx.run_id, status, Some(&e.to_string()))
         .await;
+      // P10.14.2-FU6: drop the live-state gauge entry even on failure
+      // so the cardinality stays bounded. (The happy path in
+      // `flow_execute` deregisters after the success status update;
+      // this branch covers cancellation, panic-via-Err, build_flow
+      // failure, etc.)
+      if let Some(registry) = &ctx.live_state_registry {
+        registry.deregister(&ctx.run_id);
+      }
       ctx
         .broker
         .finalise_with_grace(ctx.run_id, broker_finalize_grace());
@@ -277,6 +291,14 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   ));
   flow = flow.with_event_listener(listener);
 
+  // P10.14.2-FU6: attach a state-size observer when one is wired in.
+  // The observer keeps the live `agentflow_state_size_bytes{run_id}`
+  // gauge fresh; on terminal transitions below we explicitly
+  // deregister so the gauge stops emitting for this run.
+  if let Some(registry) = &ctx.live_state_registry {
+    flow = flow.with_state_size_observer(registry.observer_for(ctx.run_id));
+  }
+
   let execution_config =
     server_execution_config(ctx.run_base_dir.clone(), ctx.cancellation_token.clone());
   let state = flow
@@ -300,6 +322,10 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
       .runs
       .update_status(ctx.run_id, RunStatus::Succeeded, None)
       .await?;
+  }
+
+  if let Some(registry) = &ctx.live_state_registry {
+    registry.deregister(&ctx.run_id);
   }
 
   ctx
@@ -448,6 +474,7 @@ pub async fn submit_run(
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
+  let live_state_registry = state.live_state_registry.clone();
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
@@ -460,6 +487,7 @@ pub async fn submit_run(
         cancellation_token: task_token,
         broker,
         tenant_id,
+        live_state_registry: Some(live_state_registry),
       })
       .await;
     cancellation_registry.complete(run_id);

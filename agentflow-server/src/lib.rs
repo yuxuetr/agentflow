@@ -32,6 +32,7 @@ pub mod events_stream;
 pub mod harness;
 pub mod harness_approval;
 pub mod harness_live;
+pub mod live_state_registry;
 pub mod metrics;
 pub mod preferences;
 pub mod runs;
@@ -67,6 +68,7 @@ pub use harness_approval::{
   PendingApprovalsResponse, ServerApprovalProvider, decide_approval, list_pending_approvals,
 };
 pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
+pub use live_state_registry::LiveStateRegistry;
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
   ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunCancellationRegistry, RunContext,
@@ -128,6 +130,11 @@ pub struct AppState {
   /// `POST /v1/harness/sessions/{id}/approvals/{request_id}` route
   /// resolves the oneshot from the HTTP side.
   pub approval_registry: PendingApprovalRegistry,
+  /// Process-local snapshot of live `Flow::state_pool` sizes per active
+  /// run (P10.14.2-FU6). Written by the DAG executor through the
+  /// `StateSizeObserver` interface; read at scrape time by the
+  /// `/metrics` handler to emit `agentflow_state_size_bytes{run_id}`.
+  pub live_state_registry: live_state_registry::LiveStateRegistry,
   /// Active security profile and documented defaults. Enforcement is rolled
   /// out by the follow-up P1 tasks without changing local behavior here.
   pub security: SecurityProfileDefaults,
@@ -166,6 +173,7 @@ impl AppState {
       harness_executor: default_harness_executor(),
       harness_broker: HarnessEventBroker::new(),
       approval_registry: PendingApprovalRegistry::new(),
+      live_state_registry: live_state_registry::LiveStateRegistry::new(),
       security: SecurityProfile::default().defaults(),
     }
   }
@@ -425,6 +433,15 @@ async fn refresh_scrape_time_gauges(state: &AppState) {
         "refresh_scrape_time_gauges: workflow_runs_active query failed"
       );
     }
+  }
+
+  // P10.14.2-FU6 — live state-pool size per active run. Pure
+  // in-process registry read: no DB, no syscall. The DAG executor
+  // is responsible for deregistering on terminal transitions, so
+  // the snapshot here only contains currently-running runs and
+  // gauge cardinality stays bounded.
+  for (run_id, bytes) in state.live_state_registry.snapshot() {
+    metrics::observe_state_size_bytes(&run_id.to_string(), bytes);
   }
 }
 

@@ -18,6 +18,32 @@ across the 200+ tests touched.
 
 ### Added
 
+#### Observability
+
+- **`agentflow_state_size_bytes{run_id}` Prometheus gauge wired
+  end-to-end** (P10.14.2-FU6). The last deferred series from the
+  "Memory & workflow state" Grafana panel now renders live: the
+  dashboard matrix is 14/14 ✅. Surface lands in two pieces:
+  - `agentflow-core`: new public `state_size` module with the
+    `StateSizeObserver` trait, `estimated_state_pool_bytes`
+    helper, and `FlowValue::estimated_size_bytes` method. `Flow`
+    gains a `with_state_size_observer(Arc<dyn StateSizeObserver>)`
+    builder + a private hook that fires after every node insert
+    in both serial and concurrent execution paths.
+  - `agentflow-server`: new public `live_state_registry` module
+    with the process-local `LiveStateRegistry`. `AppState` carries
+    one (cloned cheaply into every `RunContext`); the DAG
+    executor attaches a per-run observer at submit time and
+    deregisters on terminal transitions so gauge cardinality is
+    bounded to currently-running runs. The `/metrics`
+    `refresh_scrape_time_gauges` helper iterates the snapshot
+    and emits one labelled gauge sample per active run.
+  - 15 hermetic tests across 3 layers (`agentflow-core` lib +
+    integration, `agentflow-server` lib + integration). No
+    Postgres or real workflow needed at test time — the
+    integration test seeds the registry directly through the
+    same observer path the executor uses.
+
 #### CLI ops
 
 - **`agentflow backup --output <path>`** (P10.15.1). Orchestrates

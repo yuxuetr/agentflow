@@ -500,26 +500,27 @@ retention sweep deletions, and Harness Mode sessions. See
 contract, import recipe, and conventions.
 
 **Status:** the `agentflow-server` binary exposes `/metrics`.
-13 of the 14 dashboard series are live as of P10.14.2-FU5:
-the three workflow series from FU1
+All 14 dashboard series are live as of P10.14.2-FU6: the three
+workflow series from FU1
 (`agentflow_workflow_completed_total{status}`,
 `agentflow_workflow_duration_seconds`,
 `agentflow_nodes_failed_total{node_type}`), the three cleanup
 counters from FU2, the two worker-fleet gauges from FU3, the
-two harness session gauges from FU4, and three scrape-time
-process inspectors from FU5
-(`agentflow_health_status{component}`,
+two harness session gauges from FU4, three scrape-time process
+inspectors from FU5 (`agentflow_health_status{component}`,
 `agentflow_memory_usage_bytes`,
-`agentflow_workflow_runs_active{tenant}`). The scrape-time
-gauges are computed via `refresh_scrape_time_gauges(&state)`
-which runs before every render; DB query failures are logged
-and swallowed (fail-soft) so a database hiccup doesn't break
-the entire scrape. Memory reporting is Linux-specific
-(`/proc/self/statm`); non-Linux deployments emit `0`. The
-remaining series `agentflow_state_size_bytes{run_id}` is
-deferred to `P10.14.2-FU6` — it requires architectural
-access to live `Flow` state-pool contents that the server
-doesn't currently expose.
+`agentflow_workflow_runs_active{tenant}`), and the per-run
+live-state gauge from FU6 (`agentflow_state_size_bytes{run_id}`).
+The scrape-time gauges are computed via
+`refresh_scrape_time_gauges(&state)` which runs before every
+render; DB query failures are logged and swallowed (fail-soft)
+so a database hiccup doesn't break the entire scrape. Memory
+reporting is Linux-specific (`/proc/self/statm`); non-Linux
+deployments emit `0`. The live-state gauge is sourced from an
+in-process `LiveStateRegistry` that the DAG executor writes
+to via `Flow::StateSizeObserver` after every node completes
+and deregisters from on terminal transitions, so the label
+cardinality only tracks runs that are actually in flight.
 
 Key metrics to monitor:
 

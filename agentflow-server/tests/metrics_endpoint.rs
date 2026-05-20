@@ -361,6 +361,64 @@ async fn metrics_endpoint_emits_system_health_one_on_every_scrape() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_emits_state_size_gauge_per_active_run_id() {
+  // P10.14.2-FU6 — when the executor registers a state-size
+  // sample in the live-state registry, the scrape-time helper
+  // should render it as `agentflow_state_size_bytes{run_id="..."}`.
+  // We bypass the real executor here by writing directly through
+  // an observer (the same path the executor uses internally) so
+  // the test is hermetic — no real workflow / Postgres needed.
+  use uuid::Uuid;
+  let _ = metrics::init_recorder();
+  let state = lazy_state();
+  let run_a = Uuid::new_v4();
+  let run_b = Uuid::new_v4();
+  state.live_state_registry.observer_for(run_a).observe(4096);
+  state.live_state_registry.observer_for(run_b).observe(16_384);
+
+  let app = create_router(state);
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_state_size_bytes"),
+    "state-size gauge must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains(&format!("run_id=\"{run_a}\"")),
+    "first run_id label must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains(&format!("run_id=\"{run_b}\"")),
+    "second run_id label must appear; got:\n{body}"
+  );
+}
+
+#[tokio::test]
+async fn metrics_endpoint_state_size_gauge_drops_after_deregister() {
+  // After a run terminates, the executor deregisters its entry
+  // so the gauge cardinality stays bounded. The next scrape's
+  // snapshot must not include the deregistered run, regardless
+  // of whether the metrics exporter keeps the last-seen value
+  // in its own state.
+  use uuid::Uuid;
+  let _ = metrics::init_recorder();
+  let state = lazy_state();
+  let registry = state.live_state_registry.clone();
+  let run = Uuid::new_v4();
+  registry.observer_for(run).observe(512);
+  registry.deregister(&run);
+
+  let app = create_router(state);
+  let body = fetch_metrics_body(app).await;
+  assert_eq!(
+    registry.snapshot().len(),
+    0,
+    "registry must be empty after deregister"
+  );
+  // Sanity: the body is still well-formed.
+  assert!(body.contains("agentflow_health_status"));
+}
+
+#[tokio::test]
 async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // We can't easily make `init_recorder` un-install (it's
   // process-global), so this test only runs in a fresh process
