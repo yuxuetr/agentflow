@@ -738,11 +738,76 @@ No gaps from the evaluation. Future opportunities:
 
 No active gaps. Future opportunities:
 
-- TODO P10.8.1 (Stretch) ReAct trace replay diff tool
-  - `agentflow trace replay` exists; an
-    `agentflow agent replay --diff <baseline>` would compare a
-    fresh ReAct run against a golden trace and surface step-level
-    divergence (tool-call order, message tokens, stop-reason).
+- DONE P10.8.1 (Stretch) ReAct trace replay diff tool
+  - Landed as a new `agentflow agent` namespace + `replay` subcommand:
+    `agentflow agent replay <current.jsonl> --diff <baseline.jsonl>
+    [--strict-tokens] [--format text|stream-json|json-envelope]`.
+    Pure file-to-file comparator — no LLM call required at runtime.
+    The user produces both JSONL files however they like (running
+    ReAct twice + capturing AgentEvent streams, extracting from the
+    server's persisted events, etc.).
+  - **Scope decision**: this is NOT a "run-then-diff" wrapper. The
+    TODO's framing ("compare a fresh ReAct run against a golden
+    trace") was relaxed to file-to-file because actually running
+    ReAct fresh requires real LLM API access (real-environment
+    territory). The comparator + the JSONL contract is the
+    valuable piece; a future `agentflow agent run + --diff`
+    wrapper can land as a separate subcommand once `agent run`
+    exists (it doesn't today).
+  - **Three diff dimensions** (matching the TODO's "tool-call
+    order, message tokens, stop-reason"):
+    1. Step order: walks the common prefix of the two
+       `step_completed` event streams, flags `StepKindMismatch`
+       (different `AgentStepKind` discriminants) and
+       `ToolNameMismatch` (same kind=tool_call but different
+       tool). Tool *params* differences alone are NOT flagged —
+       LLM-driven params jitter is expected noise.
+    2. Stop reason: terminal `RunStopped.reason` variants
+       compared via their snake_case label
+       (`final_answer` / `max_steps` / etc.). Missing terminal
+       event on one side counts as a divergence too.
+    3. Token usage: per-step `LlmCallCompleted.prompt_tokens` /
+       `completion_tokens` deltas reported as soft `Variance`
+       lines by default (since LLM token accounting jitters by a
+       few tokens between identical requests).
+       `--strict-tokens` promotes any non-zero delta to a hard
+       `Divergence` that fails the gate.
+  - **CLI surface**: `text` mode prints a human-readable summary;
+    `stream-json` emits one `{type, data}` line per
+    divergence / variance to stdout for piping into automation;
+    `json-envelope` wraps the full structured `DiffReport` in
+    the canonical `agentflow.cli/1` envelope so CI consumers can
+    parse the result.
+  - **Exit code**: zero on perfect match (variances allowed
+    unless `--strict-tokens`); non-zero on any `Divergence`.
+  - **`AgentEvent` namespace boundary**: this is operationally
+    different from `agentflow harness replay`. Harness Mode emits
+    `HarnessEvent` (workspace-aware, approval-gated, seq-keyed);
+    ReAct emits `AgentEvent` (fine-grained: per-step, per-LLM-
+    call, per-tool-call). The two enums have different wire
+    shapes, and the diff tool only operates on the latter. The
+    namespace separation (`agent` vs `harness` top-level
+    subcommands) makes the boundary discoverable.
+  - **Tests (20 new across 2 layers, all hermetic)**: 14 pure
+    comparator + parser tests in
+    `commands::agent::replay::tests` (identical-traces /
+    step-count rollup / step-kind mismatch / tool-name mismatch
+    / params-alone-is-not-divergence / stop-reason mismatch
+    (both-sides + one-side-missing) / token-delta-as-variance /
+    token-delta-as-divergence-under-strict / missing-llm-call
+    delta-against-zero / JSONL parse: blank-line tolerance +
+    real event shape round-trip + line-number-on-malformed +
+    last-run_stopped-wins + format parser). 6 hermetic CLI
+    integration tests in `agentflow-cli/tests/agent_replay_tests.rs`
+    drive the CLI binary end-to-end: identical-traces-success,
+    tool-name-divergence-fails-non-zero, stop-reason-divergence-
+    fails-non-zero, json-envelope-shape, --strict-tokens-promotes-
+    delta-to-divergence, malformed-JSONL-reports-line-number.
+  - **Verification**: `cargo build -p agentflow-cli` clean;
+    `cargo test -p agentflow-cli --lib commands::agent`
+    14/14; `cargo test -p agentflow-cli --test agent_replay_tests`
+    6/6; `cargo clippy -p agentflow-cli --tests -- -D warnings`
+    clean.
 
 ### P10.9 — agentflow-skills (A-)
 

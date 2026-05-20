@@ -18,6 +18,25 @@ across the 200+ tests touched.
 
 ### Added
 
+#### CLI ops (cont.)
+
+- **`agentflow agent replay <current> --diff <baseline>`** (P10.8.1).
+  New `agent` top-level subcommand namespace + `replay` file-to-file
+  diff. Compares two ReAct `AgentEvent` JSONL streams along three
+  operator-facing dimensions: tool-call order, terminal stop-reason,
+  per-step LLM token usage. Step-kind / tool-name / stop-reason
+  divergence fails the gate; token deltas are soft variances by
+  default (`--strict-tokens` promotes them). Output formats
+  `text` / `stream-json` / `json-envelope` (canonical
+  `agentflow.cli/1` shape). Pure file-to-file — the user produces
+  both JSONL files however they like (no `agent run` wrapper yet;
+  follow-up territory once one exists). 14 pure unit tests cover
+  the comparator + JSONL parser; 6 hermetic CLI tests cover the
+  binary end-to-end. Separate namespace from `agentflow harness
+  replay` because the wire shapes differ (`AgentEvent` is
+  fine-grained per-step / per-LLM-call; `HarnessEvent` is the
+  approval-gated session envelope).
+
 #### Workspace tooling
 
 - **`cargo xtask test-gate`** (P10.19.2). New sibling to the existing

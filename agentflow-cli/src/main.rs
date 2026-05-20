@@ -7,7 +7,7 @@ use commands::plugin;
 #[cfg(feature = "rag")]
 use commands::rag;
 use commands::{
-  audio, backup as backup_cmd, cleanup as cleanup_cmd, config as config_cmd, doctor,
+  agent, audio, backup as backup_cmd, cleanup as cleanup_cmd, config as config_cmd, doctor,
   eval as eval_cmd, harness, image, llm, marketplace, mcp, memory, serve as serve_cmd, skill,
   trace, workflow,
 };
@@ -45,6 +45,8 @@ enum Commands {
   Doctor(DoctorArgs),
   /// Harness Agent Mode: workspace-aware, long-lived agent sessions
   Harness(HarnessArgs),
+  /// ReAct-native agent inspection commands (trace diff, etc.)
+  Agent(AgentArgs),
   /// Boot the AgentFlow Gateway (Axum HTTP API) by spawning `agentflow-server`
   Serve(ServeArgs),
   /// Run the retention sweep once and exit (delegates to `agentflow-server --cleanup`)
@@ -146,6 +148,39 @@ struct DoctorArgs {
 struct HarnessArgs {
   #[command(subcommand)]
   command: HarnessCommands,
+}
+
+#[derive(Args)]
+struct AgentArgs {
+  #[command(subcommand)]
+  command: AgentCommands,
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+  /// Compare a fresh ReAct agent trace against a golden baseline.
+  ///
+  /// Both arguments are JSONL files containing one `AgentEvent` per
+  /// line. The diff reduces them to step-order + stop-reason +
+  /// per-step token usage; exits non-zero on tool-call or stop-reason
+  /// divergence. Token deltas are reported but don't fail the gate
+  /// unless `--strict-tokens` is set (LLM token counts jitter
+  /// between identical requests).
+  Replay {
+    /// The fresh trace to compare against the baseline.
+    current: std::path::PathBuf,
+    /// Path to the golden baseline trace.
+    #[arg(long)]
+    diff: std::path::PathBuf,
+    /// Treat any non-zero token-count delta as a divergence rather
+    /// than a soft variance. Off by default because LLM token
+    /// accounting varies a handful of tokens between identical runs.
+    #[arg(long)]
+    strict_tokens: bool,
+    /// Output format.
+    #[arg(long, default_value = "text", value_parser = ["text", "stream-json", "json-envelope"])]
+    format: String,
+  },
 }
 
 #[derive(Args)]
@@ -2062,6 +2097,14 @@ async fn main() {
         )
         .await
       }
+    },
+    Commands::Agent(args) => match args.command {
+      AgentCommands::Replay {
+        current,
+        diff,
+        strict_tokens,
+        format,
+      } => agent::replay::execute(current, diff, format, strict_tokens).await,
     },
     #[cfg(feature = "plugin")]
     Commands::Plugin(args) => match args.command {
