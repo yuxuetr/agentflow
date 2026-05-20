@@ -905,11 +905,45 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
   - `docs/WEB_UI.md` Architecture section gains a `?filter=`
     line under the dependency list.
 
-- TODO P10.17.4 (Low — v1.x) Playwright suite in CI
-  - The e2e specs exist (`agentflow-ui/e2e/`) but are not in
-    `quality.yml` because they need Chromium + a live server +
-    Postgres. Either: (a) ship a `docker-compose` test harness +
-    new CI job, or (b) keep them as local-only smoke.
+- DONE P10.17.4 (Low — v1.x) Playwright suite in CI
+  - Picked option (a) — new `.github/workflows/ui-e2e.yml` job
+    with `workflow_dispatch` + nightly schedule at 10:30 UTC.
+    GitHub Actions `services: postgres:16-alpine` provides the
+    DB (no docker-compose needed); the server boots in the
+    background of the job with a 30s `/ui` readiness probe.
+    Playwright + Chromium installed via `npm run e2e:install`;
+    `npx playwright test` runs the 6 specs across the 2
+    existing files (`runs-new.spec.ts` + `harness-sessions.spec.ts`).
+    Failure path uploads `playwright-report/` + traces as a
+    14-day artifact; the JUnit XML feeds GitHub's test
+    parser.
+  - **NOT** in `quality.yml::release-gate.needs` — explicit
+    decision pinned in `agentflow-ui/e2e/README.md::Why not
+    PR-gated`. The two-spec coverage doesn't justify the
+    build + browser-install + flakiness tax on every PR;
+    nightly catches regressions between releases. Promotion
+    is a single-edit change if a real regression slips
+    through later.
+  - `@playwright/test` promoted from "intentionally optional
+    dev dep" (per the existing comment in `runs-new.spec.ts`)
+    to a real `devDependencies` entry, locked at `^1.49.0`.
+    New `playwright.config.ts` uses the same `globalThis`
+    cast pattern as `eventFilter.test.ts` /
+    `preferences.test.ts` so it doesn't need `@types/node`.
+    Config picks `retries: 1` + `workers: 1` under CI for
+    cold-start absorb + DB transaction safety; `0/auto` for
+    local devs.
+  - Full operator + CI runbook in
+    `agentflow-ui/e2e/README.md`: one-time setup, per-run
+    flow, env knob table, CI artifact retrieval, the
+    "adding a spec" checklist, and the "why not PR-gated"
+    rationale so future contributors don't keep relitigating
+    the gating question. `docs/WEB_UI.md::Verification`
+    gains an "E2E (P10.17.4)" sub-section pointing at the
+    runbook.
+  - `npx tsc --noEmit` clean after the install;
+    `npx playwright test --list` enumerates all 6 specs
+    across both files.
 
 ### P10.18 — xtask (A-)
 

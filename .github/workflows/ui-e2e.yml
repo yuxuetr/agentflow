@@ -1,0 +1,159 @@
+name: UI E2E (Playwright)
+
+# Browser-based smoke against a real agentflow-server + Postgres.
+# Exercises the agentflow-ui SPA flows that don't have unit-test
+# coverage (form submission, redirect routing, localStorage
+# persistence). The two existing specs in `agentflow-ui/e2e/` are
+# the canonical surface.
+#
+# Pattern mirrors `llm-live.yml`: `workflow_dispatch` + nightly
+# `schedule`, and **not** wired into `quality.yml::release-gate`.
+# Reasoning:
+#
+#   1. Playwright + browser install + server boot adds significant
+#      wall-clock to every PR. The two specs as-is have limited
+#      coverage so the cost/benefit doesn't justify gating PRs.
+#   2. E2E flakiness (timing, animation, network) would block
+#      legitimate PRs on infra issues. Manual + nightly gives us
+#      regression detection without the false-positive tax.
+#   3. Local devs run `npm run e2e` against their dev server —
+#      that's the fast feedback loop. CI catches regressions
+#      between releases via the nightly schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec_filter:
+        description: "Optional Playwright -g pattern; empty = all specs"
+        required: false
+        default: ""
+  schedule:
+    # 10:30 UTC daily ≈ 03:30 PT / 18:30 CST. Offset from llm-live's
+    # 09:30 cron so a Postgres image pull / pages-spike-induced flap
+    # doesn't take both jobs down together.
+    - cron: "30 10 * * *"
+
+jobs:
+  e2e:
+    name: ui e2e (chromium against live server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: agentflow
+          POSTGRES_DB: agentflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentflow -d agentflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgres://agentflow:agentflow@localhost:5432/agentflow
+      AGENTFLOW_DATABASE_TEST_URL: postgres://agentflow:agentflow@localhost:5432/agentflow
+      # `local` profile lets requests through without
+      # AGENTFLOW_API_TOKEN — the e2e specs only fill the token
+      # field when BASE_URL's deployment requires it.
+      AGENTFLOW_SECURITY_PROFILE: local
+      BASE_URL: http://127.0.0.1:8080
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          # The release build dominates wall clock; cache it
+          # aggressively so nightly runs stay under 5 min when
+          # nothing changed.
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-ui-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ui-e2e-
+
+      - name: Setup node (for Playwright)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: agentflow-ui/package-lock.json
+
+      - name: Build agentflow-server (release)
+        run: cargo build --release -p agentflow-server --bin agentflow-server
+
+      - name: Install UI deps
+        working-directory: agentflow-ui
+        run: npm install
+
+      - name: Install Playwright + Chromium
+        working-directory: agentflow-ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Boot agentflow-server in background
+        run: |
+          # Run migrations (the server does this on first start
+          # via sqlx::migrate!() so this step is just for the
+          # benefit of explicit-fail-on-bad-migration diagnostics
+          # in CI logs — skip if it's noisy).
+          ./target/release/agentflow-server &
+          echo "AGENTFLOW_SERVER_PID=$!" >> $GITHUB_ENV
+          # Wait for the gateway to come up. /healthz isn't a
+          # stable surface yet so we probe /ui (which the server
+          # serves the embedded SPA from) up to 30s.
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/ui > /dev/null; then
+              echo "server up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to come up within 30s"
+          # Surface the tail of stderr if it crashed.
+          [ -n "${AGENTFLOW_SERVER_PID:-}" ] && {
+            kill -0 "${AGENTFLOW_SERVER_PID}" 2>/dev/null && \
+              echo "(server process still alive but /ui not responding)" || \
+              echo "(server process exited)"
+          }
+          exit 1
+
+      - name: Run Playwright e2e
+        working-directory: agentflow-ui
+        env:
+          CI: "1"
+        run: |
+          if [ -n "${{ github.event.inputs.spec_filter }}" ]; then
+            npx playwright test -g "${{ github.event.inputs.spec_filter }}"
+          else
+            npx playwright test
+          fi
+
+      - name: Stop agentflow-server
+        if: always()
+        run: |
+          if [ -n "${AGENTFLOW_SERVER_PID:-}" ]; then
+            kill "${AGENTFLOW_SERVER_PID}" 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: |
+            agentflow-ui/playwright-report
+            agentflow-ui/playwright-results.xml
+            agentflow-ui/test-results
+          retention-days: 14
+          if-no-files-found: ignore

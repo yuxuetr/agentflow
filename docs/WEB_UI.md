@@ -228,3 +228,23 @@ follow-up inside the same TODO.
 cargo test -p agentflow-server ui::tests --target-dir /tmp/agentflow-target
 cd agentflow-ui && npm test
 ```
+
+### Playwright E2E (P10.17.4)
+
+E2E specs in `agentflow-ui/e2e/` exercise the SPA against a real
+running `agentflow-server`. Local quickstart:
+
+```bash
+cd agentflow-ui
+npm install                      # one-time
+npm run e2e:install              # one-time — installs Chromium
+# Start agentflow-server in another terminal first…
+npm run e2e
+```
+
+Full operator + CI guide in
+[`agentflow-ui/e2e/README.md`](../agentflow-ui/e2e/README.md).
+CI runs nightly (10:30 UTC) and on `workflow_dispatch`; it's
+**not** in `quality.yml::release-gate.needs` because the build +
+browser-install cost doesn't justify gating every PR on the
+current two-spec coverage. See `.github/workflows/ui-e2e.yml`.

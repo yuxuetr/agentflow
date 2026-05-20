@@ -105,6 +105,26 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **Playwright UI e2e wired into CI** (P10.17.4). The 6 specs in
+  `agentflow-ui/e2e/` (across two files: `runs-new.spec.ts` +
+  `harness-sessions.spec.ts`) now run on a new
+  `.github/workflows/ui-e2e.yml` workflow — `workflow_dispatch`
+  + nightly schedule at 10:30 UTC, **not** in
+  `quality.yml::release-gate.needs`. The pattern mirrors
+  `llm-live.yml`: manual + nightly catches regressions between
+  releases without the build + browser-install + flakiness tax
+  on every PR. `@playwright/test` promoted from optional dev
+  dep to a real `devDependencies` entry; new `npm run e2e`
+  script plus a `playwright.config.ts` (Chromium-only, JUnit
+  XML + HTML report on CI, trace-on-first-retry). Full
+  operator + CI runbook in `agentflow-ui/e2e/README.md`. The
+  CI job spins up a Postgres 16 service container, builds the
+  server (release), boots it in the background with a 30s
+  readiness probe against `/ui`, runs the suite, and uploads
+  the `playwright-report/` HTML report as an artifact on
+  failure. `workflow_dispatch` accepts an optional
+  `spec_filter` input that maps to `playwright test -g
+  <pattern>`.
 - **Server-side `?filter=` pre-filter for events history**
   (P10.17.3). `GET /v1/runs/{id}/events/history?filter=<expr>`
   accepts the same grammar as the client-side `eventFilter.ts`
