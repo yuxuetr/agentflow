@@ -987,29 +987,94 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     P10.14.2-FU1 where it can also assert that
     `/metrics` actually emits the named series.
 
-- TODO P10.14.2-FU1 (Medium — v1.x) `/metrics` endpoint
-  emission in `agentflow-server`
-  - Foundation landed in P10.14.2 — the Grafana dashboard JSON
-    and the metric-name contract are checked in, but
-    `agentflow-server` doesn't expose `/metrics` and so the
-    dashboard is currently empty against any real deployment.
-  - Scope:
-    1. Add `metrics-exporter-prometheus` (or `prometheus`
-       crate) dep to `agentflow-server`.
-    2. New `/metrics` Axum route returning Prometheus text
-       format. Bypass auth (Prometheus scraper has no bearer
-       token).
-    3. Wire into the existing `EventListener` chain so workflow
-       / harness / worker events bump the corresponding
-       counters listed in `dashboards/README.md` "Metric
-       contract" table.
-    4. CI smoke `tests/metrics_endpoint.rs` that hits the route
-       and asserts every contracted metric name appears.
-    5. Update `docs/KUBERNETES_DEPLOYMENT.md` to drop the
-       "Note (P10.14.2-FU1)" callout once emission lands.
-  - ~300-500 LoC for emission + ~100 for tests. The
-    `EventListener` integration is the bulk of the work; the
-    Axum route is trivial.
+- DONE P10.14.2-FU1 (Medium — v1.x) `/metrics` endpoint
+  emission in `agentflow-server` (slice 1: workflow series)
+  - Landed end-to-end for the three workflow-event-derived
+    series the Grafana overview dashboard renders first:
+    `agentflow_workflow_completed_total{status}` (counter,
+    `status ∈ {succeeded, failed, cancelled}`),
+    `agentflow_workflow_duration_seconds` (histogram, buckets
+    0.1s … 10min), and `agentflow_nodes_failed_total{node_type}`
+    (counter, labelled by `node_id` until a future event-payload
+    extension splits node_type from node_id — documented inline).
+  - New module `agentflow-server/src/metrics.rs`:
+    `init_recorder()` (idempotent, OnceLock-guarded so multi-
+    `run()` callers don't panic), `render_text()` (Prometheus
+    text snapshot), `observe_workflow_completion(status,
+    duration_seconds)`, `observe_node_failure(Option<&str>)`,
+    plus `names::` constants pinning the exact wire strings
+    the dashboard JSON queries against.
+  - New `GET /metrics` route mounted on the `health`
+    sub-router (no auth, same convention as `/health`).
+    Returns `text/plain; version=0.0.4; charset=utf-8`.
+  - `WorkflowEventListener::on_event` extended with a match
+    arm that fires the counter/histogram on each terminal
+    workflow event + the per-node-failure counter. No-op when
+    no recorder is installed (the `metrics` facade silently
+    drops calls).
+  - `serve::run` installs the recorder once at boot; logs a
+    warning instead of failing if install errors out so the
+    rest of the gateway boots and `/metrics` returns an empty
+    body (the documented behaviour).
+  - **Deferred to follow-up TODOs** (opened below) for the
+    other series in the dashboard's metric-name contract:
+    cleanup sweep counters, worker fleet gauges, harness
+    session gauges, scrape-time process inspectors.
+  - 11 hermetic tests:
+    - 5 in `metrics::tests` (name-constant pinning,
+      empty-body-when-uninstalled, idempotency, counter +
+      histogram emission, node_type label + `unknown`
+      fallback).
+    - 6 in `tests/metrics_endpoint.rs` (route returns OK +
+      text/plain content-type, bypasses auth, emits the
+      three contracted metric names, histogram bucket lines
+      present, body content-type matches scrape-config
+      expectation).
+  - Deps: `metrics = "0.23"` + `metrics-exporter-prometheus
+    = "0.15"` added to `agentflow-server`.
+  - Docs: `docs/KUBERNETES_DEPLOYMENT.md` callout rewritten
+    to mark slice 1 live + list the still-deferred series.
+    `dashboards/README.md` "Current emission status"
+    rewritten with a per-metric live/deferred matrix.
+
+- TODO P10.14.2-FU2 (Low — v1.x) Wire retention sweep metrics
+  - Hook `agentflow-server::cleanup::cleanup_expired` to fire
+    `agentflow_cleanup_runs_deleted_total`,
+    `agentflow_cleanup_events_deleted_total`, and
+    `agentflow_cleanup_artifacts_deleted_total` with the
+    deletion counts from the `CleanupReport`. ~20 LoC + a
+    test that asserts the counter increments after one
+    sweep.
+
+- TODO P10.14.2-FU3 (Low — v1.x) Wire worker fleet metrics
+  - Hook `AuthenticatedControlPlane` (or its state behind it)
+    to emit gauges:
+    `agentflow_workers_admitted` (`admitted_worker_count()`)
+    and `agentflow_worker_tasks_inflight{worker_id}` (in-flight
+    map). Either tick on every admission/claim/report or
+    snapshot at scrape time via a `Collector`-style hook. ~50
+    LoC + tests.
+
+- TODO P10.14.2-FU4 (Low — v1.x) Wire harness session metrics
+  - `agentflow_harness_sessions_active{status}` and
+    `agentflow_harness_approvals_pending`. Source data lives
+    in the `harness_sessions` DB rows + the pending-approvals
+    queue in `LiveHarnessExecutor`. Likely scrape-time
+    `SELECT COUNT(*) ... GROUP BY status` against the DB
+    rather than per-event increments. ~60 LoC + tests.
+
+- TODO P10.14.2-FU5 (Low — v1.x) Wire scrape-time process /
+  state inspectors
+  - The dashboard panels for
+    `agentflow_health_status{component}`,
+    `agentflow_memory_usage_bytes`,
+    `agentflow_state_size_bytes`, and
+    `agentflow_workflow_runs_active{tenant}` are
+    scrape-time inspectors — they read process state /
+    in-memory snapshots rather than incrementing on events.
+    A `Collector` trait + per-metric implementations + a
+    hook on `/metrics` that calls them before rendering.
+    ~100 LoC + tests.
 
 ### P10.15 — agentflow-db (B+)
 

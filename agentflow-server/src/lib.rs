@@ -32,6 +32,7 @@ pub mod events_stream;
 pub mod harness;
 pub mod harness_approval;
 pub mod harness_live;
+pub mod metrics;
 pub mod preferences;
 pub mod runs;
 pub mod scheduler;
@@ -292,11 +293,32 @@ fn validate_origins(origins: &[String]) -> Result<(), ServerHttpConfigError> {
 /// need to know the API token. `/v1/*` routes inherit the bearer-token
 /// middleware when [`AppState::auth`] is `Some`; otherwise they pass
 /// through (only safe in tests / local dev).
+/// Axum handler for the `GET /metrics` endpoint (P10.14.2-FU1).
+/// Returns the current Prometheus snapshot as text. Bypasses auth
+/// so Prometheus scrapers can poll without a bearer token — the
+/// same convention as `/health`.
+async fn prometheus_metrics() -> impl axum::response::IntoResponse {
+  let body = metrics::render_text();
+  (
+    [(
+      axum::http::header::CONTENT_TYPE,
+      "text/plain; version=0.0.4; charset=utf-8",
+    )],
+    body,
+  )
+}
+
 pub fn create_router(state: AppState) -> Router {
   let health = Router::new()
     .route("/health", get(health_check))
     .route("/health/live", get(liveness_check))
-    .route("/health/ready", get(readiness_check));
+    .route("/health/ready", get(readiness_check))
+    // P10.14.2-FU1: Prometheus metrics endpoint. No auth — same
+    // convention as `/health` so scrapers don't need a bearer
+    // token. The Grafana dashboard
+    // (`dashboards/grafana/agentflow-overview.json`) consumes
+    // this surface.
+    .route("/metrics", get(prometheus_metrics));
 
   let workflow_limit = state.security.request_limits.max_workflow_submit_bytes as usize;
   let skill_limit = state.security.request_limits.max_skill_run_bytes as usize;

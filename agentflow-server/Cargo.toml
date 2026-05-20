@@ -31,6 +31,14 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uu
 # P10.16.1: signed-JWT worker admission. HS256 (single shared secret) + RS256
 # (asymmetric — operator-signed, worker-verifying — for the production IdP path).
 jsonwebtoken = "9.3"
+# P10.14.2-FU1: Prometheus `/metrics` endpoint emission. `metrics` is the
+# facade (fire-and-forget `counter!()` / `histogram!()` macros from any
+# production code path); `metrics-exporter-prometheus` provides the
+# recorder that aggregates them into the Prometheus text format the
+# Grafana dashboards (`dashboards/grafana/agentflow-overview.json`)
+# expect to scrape.
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false }
 
 # Workspace dependencies
 agentflow-db = { path = "../agentflow-db" }

@@ -499,11 +499,22 @@ retention sweep deletions, and Harness Mode sessions. See
 [`dashboards/README.md`](../dashboards/README.md) for the metric
 contract, import recipe, and conventions.
 
-**Note (P10.14.2-FU1):** the `agentflow-server` binary does not
-yet expose `/metrics`. The dashboard is forward-compatible — it
-will render as soon as the emission work tracked under
-`P10.14.2-FU1` lands. The metric names below are the contract the
-dashboard expects.
+**Status:** the `agentflow-server` binary exposes `/metrics` as
+of P10.14.2-FU1 (slice 1). Three series are live today:
+`agentflow_workflow_completed_total{status}`,
+`agentflow_workflow_duration_seconds` (histogram with buckets
+0.1s … 10min), and `agentflow_nodes_failed_total{node_type}`.
+Other series listed below are documented for the forward
+contract but emit zeros until follow-up TODOs land:
+`agentflow_cleanup_*_deleted_total` (P10.14.2-FU2),
+`agentflow_workers_admitted` / `agentflow_worker_tasks_inflight`
+(P10.14.2-FU3), `agentflow_harness_sessions_active{status}` /
+`agentflow_harness_approvals_pending` (P10.14.2-FU4),
+`agentflow_health_status{component}` /
+`agentflow_memory_usage_bytes` /
+`agentflow_state_size_bytes` /
+`agentflow_workflow_runs_active{tenant}` (P10.14.2-FU5,
+scrape-time inspectors).
 
 Key metrics to monitor:
 

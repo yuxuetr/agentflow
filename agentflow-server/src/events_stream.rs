@@ -434,6 +434,35 @@ impl agentflow_core::events::EventListener for WorkflowEventListener {
     let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let payload = workflow_event_payload(event);
     let kind = event.event_type().to_string();
+    // P10.14.2-FU1: fire Prometheus counters / histograms for the
+    // terminal-status + per-node-failure surface the Grafana
+    // overview dashboard renders. Updates fall through whether
+    // the recorder is installed or not — `metrics::counter!()`
+    // is a no-op when no global recorder exists.
+    use agentflow_core::events::WorkflowEvent as W;
+    match event {
+      W::WorkflowCompleted { duration, .. } => {
+        crate::metrics::observe_workflow_completion("succeeded", duration.as_secs_f64());
+      }
+      W::WorkflowFailed { duration, .. } => {
+        crate::metrics::observe_workflow_completion("failed", duration.as_secs_f64());
+      }
+      W::WorkflowCancelled { duration, .. } => {
+        crate::metrics::observe_workflow_completion("cancelled", duration.as_secs_f64());
+      }
+      W::NodeFailed { node_id, .. } => {
+        // The `WorkflowEvent::NodeFailed` payload doesn't carry
+        // a `node_type` directly — we have `node_id` (a workflow-
+        // local identifier like `"render"`). The capability label
+        // P10.16.2 introduces is a worker-side concept that
+        // doesn't surface through the workflow event stream, so
+        // for now the failed-by-node-type panel buckets by
+        // node_id. A future event-payload extension can split
+        // the two.
+        crate::metrics::observe_node_failure(Some(node_id));
+      }
+      _ => {}
+    }
     if let Err(e) = self.tx.send(NewEvent {
       run_id: self.run_id,
       seq,

@@ -132,6 +132,33 @@ across the 200+ tests touched.
 
 #### Operator dashboards
 
+- **Prometheus `/metrics` endpoint emission — slice 1**
+  (P10.14.2-FU1). `agentflow-server` now exposes
+  `GET /metrics` returning Prometheus text format. The
+  endpoint bypasses auth (same convention as `/health`) so
+  scrapers don't need a bearer token. Three workflow-event-
+  derived series are live: `agentflow_workflow_completed_total
+  {status}` (counter), `agentflow_workflow_duration_seconds`
+  (histogram, buckets 0.1s … 10min), and
+  `agentflow_nodes_failed_total{node_type}` (counter, labelled
+  by `node_id` until a future event-payload extension splits
+  node_type from node_id). The recorder is installed once
+  during `serve::run` boot via a `OnceLock`-guarded
+  `init_recorder()` so multi-`run()` callers don't panic.
+  `WorkflowEventListener::on_event` fires the counter +
+  histogram on each terminal event. Deps:
+  `metrics = "0.23"` + `metrics-exporter-prometheus = "0.15"`
+  added to `agentflow-server`. The four remaining series
+  classes in the dashboard contract (retention sweep counters,
+  worker fleet gauges, harness session gauges, scrape-time
+  process inspectors) are deferred to follow-up TODOs
+  `P10.14.2-FU2/FU3/FU4/FU5`; `dashboards/README.md`
+  "Current emission status" carries the per-metric
+  live/deferred matrix. 11 hermetic tests (5 unit + 6
+  integration via `tests/metrics_endpoint.rs` exercising
+  the actual Axum route, content-type, auth bypass, and
+  every contracted metric name).
+
 - **Checked-in Grafana dashboard template** (P10.14.2). New
   `dashboards/grafana/agentflow-overview.json` (9 panels:
   system health, active runs per tenant, workflow completions

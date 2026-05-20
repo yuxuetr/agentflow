@@ -53,29 +53,36 @@ in [`docs/KUBERNETES_DEPLOYMENT.md`](../docs/KUBERNETES_DEPLOYMENT.md)
 
 ## Current emission status
 
-**As of P10.14.2 closure, the `agentflow-server` binary does not
-yet expose `/metrics`.** The in-core Prometheus module from
-0.1 was removed during the
-observability split; emission has not been re-introduced. The
-dashboards here are the forward-compatible target — they will
-render as soon as the metrics start emitting.
+**As of P10.14.2-FU1 (slice 1), `agentflow-server` exposes
+`/metrics` as Prometheus text format.** The recorder is
+installed during `agentflow_server::serve::run` boot;
+`GET /metrics` is unauthenticated (same convention as
+`/health`) so Prometheus scrapers don't need a bearer token.
 
-Tracked as **`P10.14.2-FU1`** in `TODOs.md`. The follow-up adds:
+Live series:
 
-1. A `prometheus` (or `metrics-exporter-prometheus`) dependency in
-   `agentflow-server`.
-2. A `/metrics` Axum route returning Prometheus text format.
-3. Wiring into the existing `EventListener` chain so workflow /
-   harness / worker events bump the corresponding counters.
-4. CI smoke (`tests/metrics_endpoint.rs`) that hits `/metrics` and
-   asserts the contracted metric names appear.
+| Metric | Status | Source |
+|--------|--------|--------|
+| `agentflow_workflow_completed_total{status}` | ✅ live | `WorkflowEventListener` (terminal events) |
+| `agentflow_workflow_duration_seconds` | ✅ live | `WorkflowEventListener` (terminal events) |
+| `agentflow_nodes_failed_total{node_type}` | ✅ live | `WorkflowEventListener` (NodeFailed events) |
+| `agentflow_cleanup_*_deleted_total` | ⏳ FU2 | needs hook into `cleanup_expired` |
+| `agentflow_workers_admitted` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
+| `agentflow_worker_tasks_inflight` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
+| `agentflow_harness_sessions_active{status}` | ⏳ FU4 | needs hook into harness session repo |
+| `agentflow_harness_approvals_pending` | ⏳ FU4 | needs hook into harness session repo |
+| `agentflow_health_status{component}` | ⏳ FU5 | scrape-time inspector |
+| `agentflow_memory_usage_bytes` | ⏳ FU5 | scrape-time inspector |
+| `agentflow_state_size_bytes` | ⏳ FU5 | scrape-time inspector |
+| `agentflow_workflow_runs_active{tenant}` | ⏳ FU5 | scrape-time inspector |
 
-The dashboard JSON is checked in *now* rather than waiting on the
-emission work because (a) it gives operators something to import on
-day one of `P10.14.2-FU1` landing, (b) it pins the metric-name
-contract so the emission code can be unit-tested against an
-external source of truth, and (c) it documents the operator
-intent (what's worth a panel) independently of the implementation.
+Until the deferred series wire up, the corresponding Grafana
+panels show empty / zero values. The dashboard JSON is checked
+in *now* against the forward contract so operators have
+something to import as each slice lands.
+
+The follow-up TODOs are tracked in `TODOs.md` under
+`P10.14.2-FU2` / `-FU3` / `-FU4` / `-FU5`.
 
 ## Conventions
 
