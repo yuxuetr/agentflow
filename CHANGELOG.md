@@ -38,6 +38,18 @@ across the 200+ tests touched.
 
 #### CLI ops (cont.)
 
+- **`agentflow marketplace search --format text|json|json-envelope`**
+  (P10.9.2). The `search` subcommand was text-only; now also speaks
+  the canonical JSON shapes so operators can script against it. Bare
+  `--format json` emits the structured payload (`registry`, `query`,
+  `package_type_filter`, `manifest` block, `entries[]`,
+  `matched_count`); `--format json-envelope` wraps the same body in
+  the `agentflow.cli/1` envelope. Empty matches produce `entries: []`
+  + `matched_count: 0` (never null) so consumers don't special-case
+  the no-result path. Web UI marketplace tab from the original TODO
+  is deferred (out of scope per the P10.17.1 debugger-focused UI
+  commitment); a `P10.9.2-FU1` carry-forward tracks it until concrete
+  demand surfaces.
 - **`agentflow agent replay <current> --diff <baseline>`** (P10.8.1).
   New `agent` top-level subcommand namespace + `replay` file-to-file
   diff. Compares two ReAct `AgentEvent` JSONL streams along three

@@ -1111,6 +1111,12 @@ enum RemoteMarketplaceCommands {
     /// Restrict results to one package type
     #[arg(long = "type", value_parser = ["skill", "plugin"])]
     package_type: Option<String>,
+    /// Output format (P10.9.2). `text` (default) prints the existing
+    /// human-readable banner; `json` emits the bare structured result;
+    /// `json-envelope` wraps it in the canonical `agentflow.cli/1`
+    /// envelope so script consumers can parse without scraping stdout.
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
+    format: String,
   },
   /// Download and cache a verified package artifact
   Install {
@@ -1909,7 +1915,8 @@ async fn main() {
         registry,
         query,
         package_type,
-      } => marketplace::search(registry, query, package_type).await,
+        format,
+      } => marketplace::search(registry, query, package_type, format).await,
       RemoteMarketplaceCommands::Install {
         registry,
         package,

@@ -32,12 +32,26 @@ pub async fn search(
   registry: String,
   query: Option<String>,
   package_type: Option<String>,
+  format: String,
 ) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
   let package_type = parse_package_type_opt(package_type.as_deref())?;
-  let query = query.map(|q| q.to_ascii_lowercase());
-  let entries = matching_entries(&manifest, query.as_deref(), package_type);
+  let lowercased_query = query.as_ref().map(|q| q.to_ascii_lowercase());
+  let entries = matching_entries(&manifest, lowercased_query.as_deref(), package_type);
 
+  match format.as_str() {
+    "json" => render_search_json(&registry, query.as_deref(), package_type, &manifest, &entries),
+    "json-envelope" => {
+      render_search_envelope(&registry, query.as_deref(), package_type, &manifest, &entries)
+    }
+    _ => render_search_text(&manifest, &entries),
+  }
+}
+
+fn render_search_text(
+  manifest: &RemoteMarketplaceManifest,
+  entries: &[&RemoteMarketplaceEntry],
+) -> Result<()> {
   println!(
     "🛒 Marketplace: {} [{} entries]",
     manifest.name,
@@ -50,10 +64,61 @@ pub async fn search(
     println!("   No matching packages");
     return Ok(());
   }
-
   for entry in entries {
     print_entry(entry);
   }
+  Ok(())
+}
+
+/// Build the structured search payload that both `--format json` and
+/// `--format json-envelope` render. Shared so the envelope body stays
+/// byte-identical to the bare-json output — the additive-field
+/// contract pinned by the json_envelope_migration_tests harness.
+fn build_search_payload(
+  registry: &str,
+  query: Option<&str>,
+  package_type: Option<MarketplacePackageType>,
+  manifest: &RemoteMarketplaceManifest,
+  entries: &[&RemoteMarketplaceEntry],
+) -> serde_json::Value {
+  serde_json::json!({
+    "registry": registry,
+    "query": query,
+    "package_type_filter": package_type.map(|t| t.as_str().to_string()),
+    "manifest": {
+      "schema_version": manifest.schema_version,
+      "name": manifest.name,
+      "description": manifest.description,
+      "homepage": manifest.homepage,
+      "total_entries": manifest.entries().len(),
+    },
+    "entries": entries,
+    "matched_count": entries.len(),
+  })
+}
+
+fn render_search_json(
+  registry: &str,
+  query: Option<&str>,
+  package_type: Option<MarketplacePackageType>,
+  manifest: &RemoteMarketplaceManifest,
+  entries: &[&RemoteMarketplaceEntry],
+) -> Result<()> {
+  let payload = build_search_payload(registry, query, package_type, manifest, entries);
+  println!("{}", serde_json::to_string_pretty(&payload)?);
+  Ok(())
+}
+
+fn render_search_envelope(
+  registry: &str,
+  query: Option<&str>,
+  package_type: Option<MarketplacePackageType>,
+  manifest: &RemoteMarketplaceManifest,
+  entries: &[&RemoteMarketplaceEntry],
+) -> Result<()> {
+  let payload = build_search_payload(registry, query, package_type, manifest, entries);
+  let envelope = crate::json_envelope::CliJsonEnvelope::ok("marketplace search", &payload);
+  println!("{}", serde_json::to_string_pretty(&envelope)?);
   Ok(())
 }
 

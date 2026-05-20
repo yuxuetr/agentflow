@@ -904,9 +904,68 @@ No active gaps. Future opportunities:
     --tests -- -D warnings` clean. `sha2` promoted from
     `[dev-dependencies]` to `[dependencies]` for the cache hash.
 
-- TODO P10.9.2 (Low — Stretch) Skill marketplace search UX
-  - Today `agentflow marketplace search` is text-only. Optional:
-    JSON-envelope output + Web UI marketplace browser tab.
+- DONE P10.9.2 (Low — Stretch) Skill marketplace search UX
+  - Landed the CLI JSON-envelope half of the TODO. `agentflow
+    marketplace search` now accepts `--format text|json|json-envelope`
+    (default `text`, preserving the existing human-readable
+    output). `--format json` emits the structured payload; `--format
+    json-envelope` wraps it in the canonical `agentflow.cli/1`
+    envelope shape so script consumers can parse without scraping
+    stdout.
+  - **Scope decision**: the TODO also mentioned a Web UI
+    marketplace browser tab. Deferred — `P10.17.1` committed the
+    UI surface to debugger-only positioning (run console, harness
+    session view, trace replay), and the marketplace browser is
+    explicitly out of that scope. If concrete operator demand
+    surfaces, it'd open as a new `P11.x` item per the
+    `docs/ROADMAP_v2.md` promotion workflow.
+  - **Payload shape**:
+    ```json
+    {
+      "registry": "<URL or path>",
+      "query": "<query string or null>",
+      "package_type_filter": "skill" | "plugin" | null,
+      "manifest": { "schema_version", "name", "description",
+                    "homepage", "total_entries" },
+      "entries": [ RemoteMarketplaceEntry, ... ],
+      "matched_count": <usize>
+    }
+    ```
+    Empty matches produce `entries: []` + `matched_count: 0`
+    (never null or missing) so scripts can iterate without
+    special-casing the no-result path.
+  - **Envelope shape**: `{version, command, result, errors}` only,
+    with the `result` body byte-identical to the bare `--format
+    json` output (the additive-field contract the other
+    `--format json-envelope` migrations pin).
+  - **Reuse**: shared `build_search_payload(...)` between the two
+    JSON paths so they can't drift; the only difference is the
+    envelope wrapper.
+  - **Tests (4 new in `agentflow-cli/tests/marketplace_cli_tests.rs`,
+    all hermetic — local TOML files, no HTTP)**:
+    - `marketplace_search_json_format_emits_structured_payload`
+      (pins every top-level key + the entry list shape +
+      filter-survival into `package_type_filter`).
+    - `marketplace_search_json_envelope_wraps_body_in_canonical_shape`
+      (captures `--format json` body first, then envelope, and
+      asserts `result == legacy_body` + version + command +
+      top-level keys exactly `[command, errors, result, version]`).
+    - `marketplace_search_json_format_empty_match_set_renders_empty_entries`
+      (pins the never-null contract).
+    - `marketplace_search_unknown_format_is_rejected_by_clap`
+      (`value_parser` enforcement so a fat-fingered CI flag
+      doesn't fall through to text mode).
+  - **Verification**: `cargo build -p agentflow-cli` clean.
+    `cargo test -p agentflow-cli --test marketplace_cli_tests
+    marketplace_search` 5/5 green (1 pre-existing + 4 new).
+    `cargo clippy -p agentflow-cli --tests -- -D warnings` clean.
+
+- TODO P10.9.2-FU1 (Low — Stretch) Web UI marketplace browser tab
+  - Carry-forward of the second half of the original P10.9.2 TODO.
+    P10.17.1 committed the Web UI to debugger-only positioning,
+    so this stays Stretch until a concrete operator complaint
+    surfaces; promote to a real P11.x line once that happens, per
+    `docs/ROADMAP_v2.md`.
 
 ### P10.10 — agentflow-harness (A-)
 

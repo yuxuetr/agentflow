@@ -291,6 +291,157 @@ fn marketplace_search_lists_matching_packages() {
 }
 
 #[test]
+fn marketplace_search_json_format_emits_structured_payload() {
+  // P10.9.2 — `--format json` emits the bare structured body. The
+  // existing `--format text` path (above) stays unchanged; this test
+  // pins the JSON wire shape so scripts can rely on it.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  let assert = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json",
+    ])
+    .assert()
+    .success();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  let body: serde_json::Value = serde_json::from_str(&stdout).expect("body must be JSON");
+
+  // Pin the structural keys that operator scripts will read.
+  assert_eq!(body["registry"], marketplace.to_str().unwrap());
+  assert_eq!(body["query"], "rust");
+  assert_eq!(body["package_type_filter"], "skill");
+  assert_eq!(body["manifest"]["name"], "remote-test");
+  assert_eq!(body["manifest"]["total_entries"], 2);
+  assert_eq!(body["matched_count"], 1);
+  assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+  assert_eq!(body["entries"][0]["name"], "rust-expert");
+  assert_eq!(body["entries"][0]["version"], "1.0.0");
+  assert_eq!(body["entries"][0]["type"], "skill");
+  // Aliases survive the round-trip.
+  assert_eq!(body["entries"][0]["aliases"][0], "rust");
+}
+
+#[test]
+fn marketplace_search_json_envelope_wraps_body_in_canonical_shape() {
+  // P10.9.2 — `--format json-envelope` wraps the body in the
+  // `agentflow.cli/1` shape. The envelope contract:
+  //   version + command + result + errors are the only top-level keys;
+  //   result is byte-identical to `--format json` output.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  // Capture legacy `--format json` body as baseline.
+  let json_output = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json",
+    ])
+    .output()
+    .unwrap();
+  let legacy_body: serde_json::Value =
+    serde_json::from_slice(&json_output.stdout).expect("json body");
+
+  // Now request the envelope.
+  let env_output = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_output.status.success());
+  let env: serde_json::Value =
+    serde_json::from_slice(&env_output.stdout).expect("envelope must be JSON");
+
+  assert_eq!(env["version"], "agentflow.cli/1");
+  assert_eq!(env["command"], "marketplace search");
+  assert_eq!(env["result"], legacy_body);
+  assert_eq!(env["errors"].as_array().unwrap().len(), 0);
+  // No other top-level keys — pin the envelope shape so future
+  // additions are deliberate, not accidental.
+  let env_obj = env.as_object().expect("envelope is an object");
+  let mut keys: Vec<&str> = env_obj.keys().map(|s| s.as_str()).collect();
+  keys.sort();
+  assert_eq!(keys, vec!["command", "errors", "result", "version"]);
+}
+
+#[test]
+fn marketplace_search_json_format_empty_match_set_renders_empty_entries() {
+  // No matches → `entries` is an empty array, not null/missing.
+  // Scripts that iterate over the array shouldn't need to special-case
+  // the no-result path.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  let assert = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "no-such-package-xyzzy",
+      "--format",
+      "json",
+    ])
+    .assert()
+    .success();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  let body: serde_json::Value = serde_json::from_str(&stdout).expect("json body");
+  assert_eq!(body["matched_count"], 0);
+  assert!(body["entries"].is_array());
+  assert_eq!(body["entries"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn marketplace_search_unknown_format_is_rejected_by_clap() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  // Unknown format strings must be rejected up front by the value_parser
+  // so misconfigured CI doesn't silently fall through to text mode.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--format",
+      "yaml-with-comments",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("invalid value"));
+}
+
+#[test]
 fn marketplace_update_writes_registry_cache() {
   let work = TempDir::new().unwrap();
   let marketplace = work.path().join("marketplace.toml");
