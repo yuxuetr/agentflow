@@ -63,6 +63,28 @@ across the 200+ tests touched.
   tests in `eval::retrievers::tests` plus 1 hermetic CLI test
   (`build_dense_retriever_errors_without_openai_api_key`) cover
   the new code paths.
+- **`agentflow memory prune --layer {preference,entity_facts}
+  --db <path> --older-than <duration>`** subcommand (P10.7.1)
+  wires the existing trait surface
+  (`PreferenceStore::prune_older_than`,
+  `EntityFactStore::prune_invalidated`) to a CLI front-end so
+  operators can drop stale memory rows from the command line.
+  `--older-than` accepts `<integer><unit>` where unit ∈
+  `{s, m, h, d, w, y}` — bare integers are rejected so a typo
+  (`--older-than 30` instead of `--older-than 30d`) can't
+  silently mean "30 seconds". `--format text` (coloured ✓ line
+  with row count) or `--format json-envelope` (canonical
+  `agentflow.cli/1` wrapper carrying `{layer, db, older_than,
+  older_than_seconds, removed_rows}`). The `entity_facts` path
+  is invalidation-bounded — active facts are never touched, even
+  with `--older-than 0s`. Session + semantic layers are out of
+  scope for this slice because they expose per-session clear
+  rather than retention-based prune. Defaults `--db` to
+  `~/.agentflow/memory.db` matching the agent-runtime
+  convention. 6 unit tests + 5 hermetic integration tests cover
+  the parser, layer routing, missing-db error, unsupported-layer
+  rejection, and the end-to-end round-trip against a real
+  on-disk SQLite file seeded via the public memory-crate API.
 - **`agentflow workflow run --server` flag validation** (P10.11.4):
   closes the silent-drop class of bug for the local-only flag set
   by rejecting up front with a single-line actionable error when

@@ -380,10 +380,42 @@ No gaps from the evaluation. Future opportunities:
 
 ### P10.7 — agentflow-memory (B+)
 
-- TODO P10.7.1 (Medium) `agentflow memory prune` CLI command
-  - The trait surface (`MemoryStore::prune_*`) exists from P4.7;
-    the CLI front-end was deferred. Wire it up so operators can
-    prune memory layers from the command line.
+- DONE P10.7.1 (Medium) `agentflow memory prune` CLI command
+  - Landed: new top-level `Commands::Memory` subcommand with
+    `prune --layer {preference,entity_facts} --db <path>
+    --older-than <duration> [--format text|json-envelope]`.
+    Backed by `agentflow-cli/src/commands/memory/prune.rs::execute`
+    which dispatches to `SqlitePreferenceStore::open(&path) ->
+    prune_older_than(cutoff)` or `SqliteEntityFactStore::open(&path)
+    -> prune_invalidated(cutoff)` (preserves the trait's
+    "active facts never touched" safety invariant). Defaults
+    `--db` to `~/.agentflow/memory.db` matching the agent-runtime
+    convention.
+  - Duration parser: `<integer><unit>` where unit ∈
+    `{s, m, h, d, w, y}`. Retention windows are
+    days / weeks / years so the parser deliberately supports
+    longer units than the workflow-level `parse_duration`
+    (which tops out at minutes). Bare integers (`--older-than
+    30`) are rejected because silently choosing a unit would
+    turn a typo into data loss. Year uses 365.25 × 86 400 =
+    31 557 600 s to track the Julian year without drift over
+    multi-year spans.
+  - Out of scope: session + semantic layers expose per-session
+    clear instead of retention-based prune. They can join the
+    surface once the trait gains a matching method (separate
+    follow-up — touching `MemoryStore` stable API).
+  - Tests: 6 unit tests in `commands::memory::prune::tests`
+    (parser: every unit / bare-integer rejection / unknown-unit
+    rejection / empty rejection / zero accepted; +1 in-crate
+    round-trip via `SqlitePreferenceStore::in_memory` proving
+    old-row pruned + fresh-row survives) + 5 hermetic CLI tests
+    in `agentflow-cli/tests/memory_prune_tests.rs` that drive
+    the CLI binary against real on-disk SQLite files seeded via
+    the public memory-crate API: preference round-trip,
+    entity_facts "active rows never touched" invariant,
+    unsupported-layer rejection, missing-db rejection,
+    bare-integer rejection. `cargo clippy -p agentflow-cli
+    --tests -- -D warnings` clean.
 
 - TODO P10.7.2 (Low — v1.x) Encryption-at-rest implementation
   - `EncryptedPreferenceStore` trait stub is in place per the P4.5
