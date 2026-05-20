@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use agentflow_skills::policy::{
   McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission, resolve_tool_policy,
@@ -10,14 +12,48 @@ use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{Capability, EffectiveCapabilities, ToolPermission};
 
 use super::error_context::mcp_context;
+use super::mcp_discovery_cache::{
+  DEFAULT_TTL, DiscoveryCache, from_cache_value, hash_mcp_servers, to_cache_value,
+};
+
+/// How the MCP discovery cache was consulted on this run — used by
+/// the human-readable summary line so operators see whether a fast
+/// path was taken without having to grep their cache directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheOutcome {
+  /// Discovery was skipped entirely (`--no-mcp-discovery` or no MCP
+  /// servers declared).
+  Skipped,
+  /// Fresh entry found — no MCP servers were spawned.
+  Hit,
+  /// Stale or missing entry — discovery ran and the cache was
+  /// updated.
+  Miss,
+  /// `--refresh-mcp-cache` was passed — discovery ran regardless of
+  /// cache state.
+  Refresh,
+}
 
 pub async fn execute(
   skill_dir: String,
   explain_permissions: bool,
   allow_tools: Vec<String>,
   deny_tools: Vec<String>,
+  no_mcp_discovery: bool,
+  refresh_mcp_cache: bool,
   with_mcp_discovery: bool,
 ) -> Result<()> {
+  if with_mcp_discovery {
+    // P10.9.1 flipped the default: MCP discovery is on whenever
+    // `--explain-permissions` is set + servers are declared. The
+    // old `--with-mcp-discovery` flag becomes a no-op; warn so
+    // operators eventually drop it from their scripts but don't
+    // break anyone today.
+    eprintln!(
+      "⚠  --with-mcp-discovery is now the default and the flag is a no-op; \
+       safe to remove. Use --no-mcp-discovery to opt out."
+    );
+  }
   let dir = Path::new(&skill_dir);
   let manifest =
     SkillLoader::load(dir).with_context(|| format!("Failed to load skill from '{}'", skill_dir))?;
@@ -137,29 +173,36 @@ pub async fn execute(
       &manifest.security.tool_permission_allowlist,
     );
     print_sandbox_profile(manifest.security.os_sandbox, &manifest.tools);
-    // P3.5 slice 4: optionally discover MCP-advertised tools and feed
-    // them into the policy resolver so admission rows surface for them
-    // too. Off by default — spawning MCP servers is slow / heavy.
-    let mcp_caps = if with_mcp_discovery && !manifest.mcp_servers.is_empty() {
-      Some(
-        discover_mcp_capabilities(&manifest, dir)
-          .await
-          .with_context(|| mcp_context("MCP capability discovery failed", &manifest))?,
-      )
+    // P10.9.1: MCP discovery is now default-on whenever the
+    // manifest declares servers. The cache means repeat-inspects
+    // are free; the spinner keeps fresh discoveries visible.
+    // Skip both when the operator opts out OR when there are no
+    // servers to query (clippy collapses the two skip-paths into
+    // one `||` arm).
+    let (mcp_caps, outcome) = if no_mcp_discovery || manifest.mcp_servers.is_empty() {
+      (None, CacheOutcome::Skipped)
     } else {
-      None
+      let (caps, outcome) = run_discovery_with_cache(&manifest, dir, refresh_mcp_cache)
+        .await
+        .with_context(|| mcp_context("MCP capability discovery failed", &manifest))?;
+      (Some(caps), outcome)
     };
     if let Some(caps) = mcp_caps.as_ref() {
-      print_mcp_discovery_summary(caps);
-    } else if with_mcp_discovery && manifest.mcp_servers.is_empty() {
-      println!("\nMCP discovery: requested via --with-mcp-discovery but no MCP servers declared.");
+      print_mcp_discovery_summary(caps, outcome);
+    } else if no_mcp_discovery && !manifest.mcp_servers.is_empty() {
+      println!(
+        "\nMCP discovery: skipped (--no-mcp-discovery). \
+         Tool admission rows below will not include MCP-advertised tools."
+      );
     }
     let resolved = resolve_skill_policy(&manifest, &allow_tools, &deny_tools, mcp_caps.as_ref());
     print_policy_admissions(&resolved, &allow_tools, &deny_tools);
   } else if !allow_tools.is_empty() || !deny_tools.is_empty() {
     println!("\n(note: --allow-tool / --deny-tool are only honored with --explain-permissions)");
-  } else if with_mcp_discovery {
-    println!("\n(note: --with-mcp-discovery is only honored with --explain-permissions)");
+  } else if no_mcp_discovery || refresh_mcp_cache {
+    println!(
+      "\n(note: --no-mcp-discovery / --refresh-mcp-cache are only honored with --explain-permissions)"
+    );
   }
 
   if warnings.is_empty() {
@@ -334,10 +377,72 @@ fn resolve_skill_policy(
   })
 }
 
+/// Run MCP discovery, consulting the on-disk cache first. Returns
+/// the discovered capabilities + the outcome label for the summary.
+///
+/// Cache miss / `--refresh-mcp-cache` paths show a spinner while
+/// the servers are being spawned — the work happens inside one
+/// `SkillBuilder::build_registry` call which contacts every
+/// declared MCP server in parallel, so a single spinner accurately
+/// represents the wall-clock cost.
+async fn run_discovery_with_cache(
+  manifest: &agentflow_skills::SkillManifest,
+  dir: &Path,
+  refresh_mcp_cache: bool,
+) -> Result<(McpCapabilityMap, CacheOutcome)> {
+  let cache_path = DiscoveryCache::default_path();
+  let manifest_hash = hash_mcp_servers(&manifest.mcp_servers);
+
+  if !refresh_mcp_cache && let Some(path) = cache_path.as_ref() {
+    let cache = DiscoveryCache::load(path);
+    if let Some(entry) = cache.lookup_fresh(&manifest_hash, DEFAULT_TTL) {
+      return Ok((from_cache_value(&entry.tools_by_server), CacheOutcome::Hit));
+    }
+  }
+
+  // Fresh discovery — spinner runs for the duration of
+  // `SkillBuilder::build_registry`. The spinner is sent to stderr
+  // (indicatif default) so it doesn't corrupt stdout consumers.
+  let spinner = ProgressBar::new_spinner();
+  spinner.set_style(
+    ProgressStyle::with_template("{spinner:.cyan} {msg}")
+      .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+  );
+  spinner.enable_steady_tick(Duration::from_millis(120));
+  let server_count = manifest.mcp_servers.len();
+  spinner.set_message(format!(
+    "Discovering MCP tools for {server_count} server{}...",
+    if server_count == 1 { "" } else { "s" }
+  ));
+
+  let result = discover_mcp_capabilities(manifest, dir).await;
+  spinner.finish_and_clear();
+  let caps = result?;
+
+  // Persist on success. Cache write errors are non-fatal — log to
+  // stderr but don't fail the inspect call; the operator gets the
+  // discovery output and the next inspect will just re-discover.
+  if let Some(path) = cache_path.as_ref() {
+    let mut cache = DiscoveryCache::load(path);
+    cache.upsert(manifest_hash, to_cache_value(&caps));
+    if let Err(err) = cache.save(path) {
+      eprintln!("⚠  failed to write MCP discovery cache: {err}");
+    }
+  }
+
+  let outcome = if refresh_mcp_cache {
+    CacheOutcome::Refresh
+  } else {
+    CacheOutcome::Miss
+  };
+  Ok((caps, outcome))
+}
+
 /// Spawn every MCP server declared in the manifest and group the
 /// resulting tool registry by server name → tool names. This is
 /// expensive (one subprocess per server, JSON-RPC handshake each)
-/// which is why the caller only opts in via `--with-mcp-discovery`.
+/// — `run_discovery_with_cache` is the entry point most callers
+/// should use because it short-circuits on a fresh cache hit.
 async fn discover_mcp_capabilities(
   manifest: &agentflow_skills::SkillManifest,
   dir: &Path,
@@ -361,8 +466,15 @@ async fn discover_mcp_capabilities(
   Ok(caps)
 }
 
-fn print_mcp_discovery_summary(caps: &McpCapabilityMap) {
+fn print_mcp_discovery_summary(caps: &McpCapabilityMap, outcome: CacheOutcome) {
+  let badge = match outcome {
+    CacheOutcome::Hit => "  source: cache hit",
+    CacheOutcome::Miss => "  source: fresh discovery (cached for next run)",
+    CacheOutcome::Refresh => "  source: forced re-discovery (--refresh-mcp-cache)",
+    CacheOutcome::Skipped => "  source: skipped",
+  };
   println!("\nMCP discovery:");
+  println!("{badge}");
   if caps.is_empty() {
     println!("  (no MCP-advertised tools found)");
     return;

@@ -439,11 +439,45 @@ No active gaps. Future opportunities:
 
 ### P10.9 — agentflow-skills (A-)
 
-- TODO P10.9.1 (Medium) Promote `skill inspect --with-mcp-discovery`
+- DONE P10.9.1 (Medium) Promote `skill inspect --with-mcp-discovery`
   to default-on
-  - Today opt-in because spawning MCP servers is heavy. Add a
-    progress indicator + cache the discovery result so subsequent
-    invocations are fast; then flip the default.
+  - Landed: MCP discovery is now default-on whenever
+    `--explain-permissions` is set and the manifest declares MCP
+    servers. New `agentflow-cli/src/commands/skill/mcp_discovery_cache.rs`
+    persists a manifest-level cache to
+    `~/.agentflow/cache/skill_mcp_discovery.json` (24h TTL, single
+    JSON document keyed by `hash_mcp_servers(...)`, schema-versioned
+    so future bumps drop old entries silently). The hash inputs are
+    `name`/`command`/`args`/`env` (the fields that affect what
+    tools the server advertises); `timeout_secs` /
+    `max_concurrent_calls` are deliberately excluded so adjusting
+    them doesn't invalidate the cache. An `indicatif` spinner runs
+    during fresh discovery so operators see something is happening
+    during the spawn.
+  - Flag surface: `--no-mcp-discovery` (opt-out),
+    `--refresh-mcp-cache` (force re-spawn ignoring cache),
+    `--with-mcp-discovery` (deprecated no-op + stderr warning that
+    names the new flag). The summary line now identifies which
+    path was taken: `cache hit` / `fresh discovery (cached for
+    next run)` / `forced re-discovery (--refresh-mcp-cache)` /
+    `skipped`, so operators see whether they paid the cost or
+    not. Cache write errors are non-fatal — logged to stderr but
+    don't fail the inspect call (next run just re-discovers).
+  - Tests: 13 unit in
+    `commands::skill::mcp_discovery_cache::tests` (hash stability
+    across env iteration / server ordering; hash distinguishes
+    argv / command / env-value changes; hash ignores timeout;
+    load/save round-trip; load returns empty on missing file /
+    schema mismatch / malformed JSON; TTL fresh/stale/unknown)
+    + 4 hermetic CLI tests in
+    `agentflow-cli/tests/skill_inspect_mcp_discovery_tests.rs`
+    (deprecation warning fires; baseline emits no warning;
+    `--no-mcp-discovery` short-circuits the spawn — proven by
+    writing a SKILL.md whose server script doesn't exist so any
+    real spawn would fail loudly; stray-flag-without-
+    `--explain-permissions` note). `cargo clippy -p agentflow-cli
+    --tests -- -D warnings` clean. `sha2` promoted from
+    `[dev-dependencies]` to `[dependencies]` for the cache hash.
 
 - TODO P10.9.2 (Low — Stretch) Skill marketplace search UX
   - Today `agentflow marketplace search` is text-only. Optional:

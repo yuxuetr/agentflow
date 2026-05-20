@@ -63,6 +63,34 @@ across the 200+ tests touched.
   tests in `eval::retrievers::tests` plus 1 hermetic CLI test
   (`build_dense_retriever_errors_without_openai_api_key`) cover
   the new code paths.
+- **`agentflow skill inspect --explain-permissions` now runs MCP
+  discovery by default** (P10.9.1). Pre-P10.9.1 it was opt-in via
+  `--with-mcp-discovery` because spawning every declared MCP
+  server is heavy. This release flips the default and adds a
+  manifest-level JSON cache at
+  `~/.agentflow/cache/skill_mcp_discovery.json` (24-hour TTL,
+  keyed by a stable SHA-256 of the manifest's `mcp_servers`
+  section — including `name`/`command`/`args`/`env`, excluding
+  `timeout_secs`/`max_concurrent_calls` which don't affect tool
+  advertisements). Cache hits return in microseconds; cache
+  misses show an `indicatif` spinner while the servers are
+  spawned. The summary line now identifies which path was
+  taken (`cache hit` / `fresh discovery (cached for next run)` /
+  `forced re-discovery` / `skipped`). New `--no-mcp-discovery`
+  flag opts out entirely; `--refresh-mcp-cache` busts the cache
+  on demand. The old `--with-mcp-discovery` flag is kept as a
+  no-op + deprecation warning so existing scripts don't break.
+  13 unit tests in `commands::skill::mcp_discovery_cache::tests`
+  (hash stability across env iteration order / server ordering;
+  hash distinguishes argv / command / env-value changes; hash
+  ignores timeout; load/save round-trip; load returns empty on
+  missing file / schema mismatch / malformed JSON; TTL fresh/
+  stale/unknown) + 4 hermetic CLI tests covering the
+  deprecation warning, baseline (no warning when not set),
+  `--no-mcp-discovery` short-circuit (with an MCP-declaring
+  skill whose server script doesn't exist, so a spurious spawn
+  would fail loudly), and stray-flag-without-`--explain-permissions`
+  note.
 - **`agentflow memory prune --layer {preference,entity_facts}
   --db <path> --older-than <duration>`** subcommand (P10.7.1)
   wires the existing trait surface

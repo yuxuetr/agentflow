@@ -7,6 +7,7 @@ pub mod install;
 pub mod list;
 pub mod list_tools;
 pub mod marketplace;
+pub mod mcp_discovery_cache;
 pub mod run;
 mod runtime_options;
 pub mod server_ops;

@@ -809,12 +809,23 @@ enum SkillCommands {
     /// Operator override: deny tool by name (repeatable). Highest precedence.
     #[arg(long = "deny-tool", value_name = "TOOL")]
     deny_tools: Vec<String>,
-    /// Spawn each declared MCP server and discover its advertised
-    /// tools, then feed the per-server tool list into the capability
-    /// policy so MCP-advertised tools get admission rows alongside
-    /// built-ins. Off by default because spawning MCP servers is
-    /// heavy; only set when you want a complete admission table.
-    #[arg(long = "with-mcp-discovery")]
+    /// Skip MCP capability discovery even when the manifest declares
+    /// servers. P10.9.1 flipped the default: discovery is now on by
+    /// default (cached in `~/.agentflow/cache/skill_mcp_discovery.json`
+    /// for 24h, so repeat-inspects on the same skill are free).
+    /// Pass this opt-out when you want to skip the cost entirely.
+    #[arg(long = "no-mcp-discovery")]
+    no_mcp_discovery: bool,
+    /// Force a fresh MCP discovery and rewrite the cache entry.
+    /// Use after upstream MCP servers ship a new tool advertisement
+    /// and the 24h TTL hasn't expired yet.
+    #[arg(long = "refresh-mcp-cache")]
+    refresh_mcp_cache: bool,
+    /// **Deprecated** (P10.9.1): MCP discovery is now the default
+    /// when the manifest declares servers. The flag is kept as a
+    /// no-op so existing scripts don't break; safe to remove.
+    /// Use `--no-mcp-discovery` to opt out.
+    #[arg(long = "with-mcp-discovery", hide = true)]
     with_mcp_discovery: bool,
   },
   /// Run a skill with a single message and exit.
@@ -1715,6 +1726,8 @@ async fn main() {
         explain_permissions,
         allow_tools,
         deny_tools,
+        no_mcp_discovery,
+        refresh_mcp_cache,
         with_mcp_discovery,
       } => {
         skill::inspect::execute(
@@ -1722,6 +1735,8 @@ async fn main() {
           explain_permissions,
           allow_tools,
           deny_tools,
+          no_mcp_discovery,
+          refresh_mcp_cache,
           with_mcp_discovery,
         )
         .await

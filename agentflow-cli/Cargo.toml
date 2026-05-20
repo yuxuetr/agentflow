@@ -99,10 +99,14 @@ uuid = { version = "1.6", features = ["v4"] }
 # (P3.4) to verify declared MCP server commands resolve.
 which = "6.0"
 
+# Stable hashing for the skill-inspect MCP discovery cache
+# (~/.agentflow/cache/skill_mcp_discovery.json keyed by the hash of
+# the manifest's mcp_servers section). P10.9.1.
+sha2 = "0.10"
+
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"
-sha2 = "0.10"
 # Used by the P2.5 server-mode integration tests to spin up the
 # `agentflow-server` HTTP gateway against the test Postgres so the
 # CLI client can drive it end-to-end. Self-skips without
