@@ -108,6 +108,10 @@ pub struct PlanExecuteAgent {
   tools: Arc<ToolRegistry>,
   memory_hook: Option<Arc<dyn AgentMemoryHook>>,
   pub session_id: String,
+  /// Token counter for `Message::*_with_counter` calls
+  /// (P10.3.3-FU1). Mirrors the `ReActAgent` field — see that
+  /// crate's docstring for the precision rationale.
+  message_counter: Box<dyn agentflow_memory::TokenCounter>,
 }
 
 impl PlanExecuteAgent {
@@ -116,12 +120,14 @@ impl PlanExecuteAgent {
     memory: Box<dyn MemoryStore>,
     tools: Arc<ToolRegistry>,
   ) -> Self {
+    let message_counter = crate::token_counter_adapter::build_message_counter(&config.model);
     Self {
       config,
       memory,
       tools,
       memory_hook: None,
       session_id: uuid::Uuid::new_v4().to_string(),
+      message_counter,
     }
   }
 
@@ -165,7 +171,11 @@ impl PlanExecuteAgent {
     let run_started_at = Instant::now();
 
     self
-      .add_memory_message(Message::user(&self.session_id, &context.input))
+      .add_memory_message(Message::user_with_counter(
+        &self.session_id,
+        &context.input,
+        &*self.message_counter,
+      ))
       .await?;
 
     if is_cancelled(&cancellation_token) {
@@ -196,7 +206,11 @@ impl PlanExecuteAgent {
     let planner_text = planner_response.content.clone();
     debug!(response = %planner_text, "PlanExecute planner responded");
     self
-      .add_memory_message(Message::assistant(&self.session_id, &planner_text))
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &planner_text,
+        &*self.message_counter,
+      ))
       .await?;
 
     let plan = if !planner_response.tool_calls.is_empty() {
@@ -369,10 +383,11 @@ impl PlanExecuteAgent {
       tool_calls += 1;
 
       self
-        .add_memory_message(Message::tool_result(
+        .add_memory_message(Message::tool_result_with_counter(
           &self.session_id,
           &tool,
           &output.content,
+          &*self.message_counter,
         ))
         .await?;
       observations.push(output.content);
@@ -386,7 +401,11 @@ impl PlanExecuteAgent {
       }
     });
     self
-      .add_memory_message(Message::assistant(&self.session_id, &answer))
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &answer,
+        &*self.message_counter,
+      ))
       .await?;
     steps.push(AgentStep::new(
       step_index,
@@ -521,7 +540,13 @@ impl PlanExecuteAgent {
 
   fn apply_context(&mut self, context: &AgentContext) {
     self.session_id = context.session_id.clone();
-    self.config.model = context.model.clone();
+    if !context.model.trim().is_empty() {
+      self.config.model = context.model.clone();
+      // P10.3.3-FU1: rebuild the per-message counter to match
+      // the run's actual model. The budget enforcement uses the
+      // resulting `token_count` directly.
+      self.message_counter = crate::token_counter_adapter::build_message_counter(&context.model);
+    }
     if let Some(persona) = &context.persona {
       self.config.persona = Some(persona.clone());
     }

@@ -61,19 +61,20 @@ hardening + finer-grained vendor compatibility.
   OpenAI mapping, operator-side request) pinned in
   `docs/LLM_PROVIDER_MODULE_PROMOTION.md`. None has fired as of
   2026-05-20. Estimate when needed: ~300-500 LoC per vendor.
-- **Provider-specific tokenizers** (`P10.3.3`, foundation
-  closed). `agentflow_llm::tokenizer` ships `TokenCounter`
+- **Provider-specific tokenizers** (`P10.3.3` + `P10.3.3-FU1`,
+  both closed). `agentflow_llm::tokenizer` ships `TokenCounter`
   trait + `TiktokenCounter` (cl100k_base, o200k_base,
   p50k_base, r50k_base via `tiktoken-rs`) + `HeuristicCounter`
-  fallback + `counter_for_model(model_id)` factory. Covers
-  the OpenAI family (`gpt-3.5-*`, `gpt-4*`, `gpt-4o*`, `o1*`,
-  `o3*`) and the OpenAI-compat vendors (Moonshot, DeepSeek,
-  GLM, DashScope Qwen, MiniMax, StepFun). Anthropic / Google
-  fall back to the documented heuristic; provider responses
-  still ship exact counts for post-call accounting. Follow-up
-  (separate TODO): rip out `Message::new`'s
-  `content.len() / 4` heuristic and route every memory
-  allocation through `count_tokens_for_model`.
+  fallback + `counter_for_model(model_id)` factory. FU1 added
+  the bridge from agentflow-llm to agentflow-memory:
+  `Message::*_with_counter` constructors + a
+  `token_counter_adapter` in agentflow-agents that routes
+  `ReActAgent` / `PlanExecuteAgent` message construction
+  through the BPE counter. `apply_memory_prompt_budget`
+  compacts against precise counts for the OpenAI family +
+  cl100k_base-compatible vendors. Anthropic / Google fall
+  back to the documented heuristic; provider responses still
+  ship exact counts for post-call accounting.
 - **Auto-rotate live nightly default models on 404** (`P10.3.4`).
   Vendor deprecations cause periodic CI churn (claude-3-5-haiku
   → claude-haiku-4-5; gemini-1.5-flash → 2.5-flash, etc.). A

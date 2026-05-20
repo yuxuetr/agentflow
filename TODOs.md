@@ -347,15 +347,68 @@ No active gaps from the evaluation. Future opportunities:
     improvement, so the trait surface lands first.
   - Adds `tiktoken-rs = "0.6"` dep to `agentflow-llm`.
 
-- TODO P10.3.3-FU1 (Low — v1.x) Wire `count_tokens_for_model`
+- DONE P10.3.3-FU1 (Low — v1.x) Wire `count_tokens_for_model`
   into `agentflow-memory::Message::new`
-  - Foundation landed in P10.3.3. This is the rip-out: every
-    `Message::new` site (and `SessionMemory` / `SemanticMemory`
-    budget checks) currently uses `content.len() / 4`. Add a
-    `Message::new_for_model(session, role, content, model_id)`
-    constructor (or pass a `&dyn TokenCounter` through) and
-    update test sites. ~50 test-site touches; the trait
-    surface from P10.3.3 makes each one mechanical.
+  - Resolved without the 50-site rip-out. New
+    `agentflow_memory::TokenCounter` trait + matching
+    `HeuristicCounter` default + four `*_with_counter`
+    constructors (`new_with_counter`, `user_with_counter`,
+    `assistant_with_counter`, `system_with_counter`,
+    `tool_result_with_counter`) preserve every existing
+    `Message::new` callsite as the heuristic path — tests
+    that don't care about precision keep working — and add a
+    parallel precise path for callers that do.
+  - `agentflow-agents::token_counter_adapter::LlmTokenCounter`
+    bridges the gap between `agentflow_llm::TokenCounter`
+    (BPE-backed, lives in agentflow-llm) and
+    `agentflow_memory::TokenCounter` (the local trait the
+    `Message::*_with_counter` signature requires).
+    `build_message_counter(model_id) -> Box<dyn
+    agentflow_memory::TokenCounter>` is the convenience
+    constructor used by the agent runtimes.
+  - `ReActAgent` and `PlanExecuteAgent` gained
+    `message_counter: Box<dyn TokenCounter>` fields,
+    initialised from `config.model` in `new()` and rebuilt in
+    `apply_context()` when the run-time context overrides the
+    model. Every production `Message::user / assistant /
+    system / tool_result` call inside the two agents (15 sites
+    total) now routes through `*_with_counter(&self.session_id,
+    content, &*self.message_counter)` so the per-message
+    `token_count` matches what the LLM provider actually bills.
+  - Direct consequence: `apply_memory_prompt_budget` in
+    `ReActAgent` now compacts the history against precise BPE
+    counts for the OpenAI family (gpt-3.5/4/4o/o1/o3) and the
+    OpenAI-compat vendors that share cl100k_base (Moonshot,
+    DeepSeek, GLM, DashScope, MiniMax, StepFun). CJK text and
+    code that the heuristic over-estimates by 3-5× no longer
+    triggers premature compaction; English text that the
+    heuristic under-counted no longer ships over-budget
+    prompts that providers reject.
+  - 9 new hermetic tests:
+    - 6 in `agentflow-memory::types::tests` (heuristic preserved
+      for `Message::new`, counter respected for
+      `new_with_counter`, role + tool_name preserved through
+      the `*_with_counter` variants, `.max(1)` token floor
+      invariant for empty content, heuristic-vs-counter
+      divergence proven on CJK input).
+    - 3 in `agentflow-agents::token_counter_adapter::tests`
+      (tiktoken routing for OpenAI family, heuristic fallback
+      for non-BPE families, trait routing through the
+      `Box<dyn TokenCounter>` boundary).
+  - Test-site decision: the ~50 callsites in `agentflow-memory
+    /tests/*` and `agentflow-agents/tests/prompt_assembly*`
+    stay on the heuristic path. They're testing message-
+    handling logic (search, compaction, eviction order), not
+    tokenization accuracy. Forcing them onto the BPE counter
+    would change the expected eviction boundaries and require
+    rewriting every fixture's expected token counts. The
+    precision improvement that matters lands at the agent
+    production layer; that's where the LLM provider actually
+    sees the prompt.
+  - Verification: cargo build --workspace --tests + cargo
+    clippy --workspace --tests -D warnings + cargo test -p
+    agentflow-agents -p agentflow-memory (memory lib 42, +6
+    new; agents total 194, +3 new from adapter tests).
 
 - TODO P10.3.4 (Low — v1.x) Auto-rotate live nightly default models
   on 404

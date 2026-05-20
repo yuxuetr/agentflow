@@ -14,6 +14,7 @@ pub mod react;
 pub mod reflection;
 pub mod runtime;
 pub mod supervisor;
+pub mod token_counter_adapter;
 pub mod tools;
 pub mod traits;
 

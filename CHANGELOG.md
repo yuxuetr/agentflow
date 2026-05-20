@@ -53,6 +53,31 @@ across the 200+ tests touched.
 
 #### LLM provider layer
 
+- **Memory layer routed through real tokenizer in agent
+  production paths** (P10.3.3-FU1). New
+  `agentflow_memory::TokenCounter` trait + `HeuristicCounter`
+  default + five `Message::*_with_counter` constructors
+  preserve every existing `Message::new` callsite as the
+  heuristic path while adding a parallel precise path for
+  callers that know their target model id.
+  `agentflow-agents::token_counter_adapter` bridges
+  `agentflow_llm::TokenCounter` (BPE from P10.3.3) to the
+  memory crate's local trait without creating a new
+  cross-crate dependency. `ReActAgent` and
+  `PlanExecuteAgent` gained a `message_counter` field
+  rebuilt from `context.model` in `apply_context`; all 15
+  production `Message::user/assistant/system/tool_result`
+  callsites inside the two agents now route through
+  `*_with_counter(&self.session_id, content,
+  &*self.message_counter)`. Direct consequence:
+  `apply_memory_prompt_budget` compacts against precise BPE
+  counts for OpenAI family + cl100k_base-compatible vendors,
+  ending the CJK over-estimation (3-5×) and code
+  under-estimation the heuristic produced. 9 new hermetic
+  tests; ~50 test-site callers stay on the heuristic
+  intentionally (they're testing message-handling logic, not
+  tokenization accuracy).
+
 - **Provider-specific tokenizer trait (`TokenCounter`)** (P10.3.3
   foundation slice). New `agentflow_llm::tokenizer` module ships
   `TokenCounter` trait, `TiktokenCounter` (BPE via `tiktoken-rs`

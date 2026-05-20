@@ -264,11 +264,24 @@ pub struct ReActAgent {
   memory_summary_backend: Option<Arc<dyn MemorySummaryBackend>>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
+  /// Token counter used for every `Message::*_with_counter` call
+  /// in the run loop (P10.3.3-FU1). Initialised lazily in
+  /// `apply_context` from `context.model` so the per-message
+  /// `token_count` reflects the real tokenizer for the target
+  /// provider — `apply_memory_prompt_budget` then enforces the
+  /// budget against the same numbers the LLM will actually bill.
+  /// Defaults to the heuristic until the first context arrives.
+  message_counter: Box<dyn agentflow_memory::TokenCounter>,
 }
 
 impl ReActAgent {
   pub fn new(config: ReActConfig, memory: Box<dyn MemoryStore>, tools: Arc<ToolRegistry>) -> Self {
     let session_id = uuid::Uuid::new_v4().to_string();
+    // Build the initial counter from the configured model so
+    // agents created without a context (e.g. construction-time
+    // dogfooding tools) still produce sane counts. `apply_context`
+    // updates this if the run's context overrides the model.
+    let message_counter = crate::token_counter_adapter::build_message_counter(&config.model);
     Self {
       config,
       memory,
@@ -277,6 +290,7 @@ impl ReActAgent {
       memory_hook: None,
       memory_summary_backend: None,
       session_id,
+      message_counter,
     }
   }
 
@@ -526,7 +540,11 @@ impl ReActAgent {
 
     // 1. Store user message
     self
-      .add_memory_message(Message::user(&self.session_id, &context.input))
+      .add_memory_message(Message::user_with_counter(
+        &self.session_id,
+        &context.input,
+        &*self.message_counter,
+      ))
       .await?;
 
     // 2. Inject system prompt if this is the first user message
@@ -764,7 +782,11 @@ impl ReActAgent {
       {
         info!("Stop condition matched: '{}'", condition);
         self
-          .add_memory_message(Message::assistant(&self.session_id, &raw_response))
+          .add_memory_message(Message::assistant_with_counter(
+            &self.session_id,
+            &raw_response,
+            &*self.message_counter,
+          ))
           .await?;
         self
           .record_reflection(
@@ -823,7 +845,11 @@ impl ReActAgent {
 
       // Store the assistant turn
       self
-        .add_memory_message(Message::assistant(&self.session_id, &raw_response))
+        .add_memory_message(Message::assistant_with_counter(
+          &self.session_id,
+          &raw_response,
+          &*self.message_counter,
+        ))
         .await?;
 
       match parsed {
@@ -1167,10 +1193,11 @@ impl ReActAgent {
           };
 
           self
-            .add_memory_message(Message::tool_result(
+            .add_memory_message(Message::tool_result_with_counter(
               &self.session_id,
               &tool,
               &observation_for_memory,
+              &*self.message_counter,
             ))
             .await?;
 
@@ -1258,6 +1285,10 @@ impl ReActAgent {
     self.session_id = context.session_id.clone();
     if !context.model.trim().is_empty() {
       self.config.model = context.model.clone();
+      // Rebuild the per-message tokenizer when the model changes
+      // so the precision claims in `apply_memory_prompt_budget`
+      // match the model the run actually targets (P10.3.3-FU1).
+      self.message_counter = crate::token_counter_adapter::build_message_counter(&context.model);
     }
     if let Some(persona) = &context.persona {
       self.config.persona = Some(persona.clone());
@@ -1366,12 +1397,20 @@ impl ReActAgent {
       match &step.kind {
         AgentStepKind::Observe { input } => {
           self
-            .add_memory_message(Message::user(&self.session_id, input))
+            .add_memory_message(Message::user_with_counter(
+              &self.session_id,
+              input,
+              &*self.message_counter,
+            ))
             .await?;
         }
         AgentStepKind::Plan { thought } => {
           self
-            .add_memory_message(Message::assistant(&self.session_id, thought))
+            .add_memory_message(Message::assistant_with_counter(
+              &self.session_id,
+              thought,
+              &*self.message_counter,
+            ))
             .await?;
         }
         AgentStepKind::ToolCall { .. } => {}
@@ -1387,17 +1426,30 @@ impl ReActAgent {
             content.clone()
           };
           self
-            .add_memory_message(Message::tool_result(&self.session_id, tool, observation))
+            .add_memory_message(Message::tool_result_with_counter(
+              &self.session_id,
+              tool,
+              observation,
+              &*self.message_counter,
+            ))
             .await?;
         }
         AgentStepKind::Reflect { content } => {
           self
-            .add_memory_message(Message::assistant(&self.session_id, content))
+            .add_memory_message(Message::assistant_with_counter(
+              &self.session_id,
+              content,
+              &*self.message_counter,
+            ))
             .await?;
         }
         AgentStepKind::FinalAnswer { answer } => {
           self
-            .add_memory_message(Message::assistant(&self.session_id, answer))
+            .add_memory_message(Message::assistant_with_counter(
+              &self.session_id,
+              answer,
+              &*self.message_counter,
+            ))
             .await?;
         }
         AgentStepKind::Handoff { .. }
@@ -1705,7 +1757,11 @@ impl ReActAgent {
 
     // 3. Persist the assistant turn that triggered this batch.
     self
-      .add_memory_message(Message::assistant(&self.session_id, raw_response))
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        raw_response,
+        &*self.message_counter,
+      ))
       .await?;
 
     // 4. Pre-assign step indexes and emit `ToolPolicyDecision`,
@@ -2055,10 +2111,11 @@ impl ReActAgent {
       }
       *tool_calls_counter += 1;
       self
-        .add_memory_message(Message::tool_result(
+        .add_memory_message(Message::tool_result_with_counter(
           &self.session_id,
           &prep.tool,
           &observation,
+          &*self.message_counter,
         ))
         .await?;
     }

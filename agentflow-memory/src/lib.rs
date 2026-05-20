@@ -38,4 +38,4 @@ pub use semantic::SemanticMemory;
 pub use session::SessionMemory;
 pub use sqlite::SqliteMemory;
 pub use store::MemoryStore;
-pub use types::{Message, Role};
+pub use types::{HeuristicCounter, Message, Role, TokenCounter};
