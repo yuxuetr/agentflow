@@ -155,6 +155,31 @@ async fn metrics_endpoint_emits_nodes_failed_total_with_node_type_label() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_emits_cleanup_counters_after_observation() {
+  // P10.14.2-FU2: the three cleanup_*_deleted_total counters
+  // appear once `observe_cleanup_sweep` fires. A real
+  // `cleanup_expired` invocation requires Postgres and is
+  // covered by `tests/cleanup_route.rs` end-to-end; this test
+  // just pins the metric-name wire shape.
+  let _ = metrics::init_recorder();
+  metrics::observe_cleanup_sweep(false, 3, 42, 7);
+  let app = create_router(lazy_state());
+  let body = fetch_metrics_body(app).await;
+  assert!(
+    body.contains("agentflow_cleanup_runs_deleted_total"),
+    "runs counter must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("agentflow_cleanup_events_deleted_total"),
+    "events counter must appear; got:\n{body}"
+  );
+  assert!(
+    body.contains("agentflow_cleanup_artifacts_deleted_total"),
+    "artifacts counter must appear; got:\n{body}"
+  );
+}
+
+#[tokio::test]
 async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // We can't easily make `init_recorder` un-install (it's
   // process-global), so this test only runs in a fresh process

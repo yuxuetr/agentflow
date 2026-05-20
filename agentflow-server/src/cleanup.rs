@@ -179,6 +179,18 @@ pub async fn cleanup_expired(
   }
 
   report.finished_at = Utc::now();
+  // P10.14.2-FU2: fire the three cleanup_*_deleted_total
+  // counters so the Grafana "Retention sweep" panel shows
+  // real deletion rates. Dry-run sweeps are intentionally
+  // skipped — the panel is about *actual* reaping, not
+  // previews. See `metrics::observe_cleanup_sweep` for the
+  // contract.
+  crate::metrics::observe_cleanup_sweep(
+    report.dry_run,
+    report.runs_deleted,
+    report.events_deleted,
+    report.artifacts_deleted,
+  );
   Ok(report)
 }
 

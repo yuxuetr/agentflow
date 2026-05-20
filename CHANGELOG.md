@@ -132,6 +132,21 @@ across the 200+ tests touched.
 
 #### Operator dashboards
 
+- **Prometheus `/metrics` — cleanup sweep counters**
+  (P10.14.2-FU2). `cleanup_expired` now fires
+  `agentflow_cleanup_runs_deleted_total`,
+  `agentflow_cleanup_events_deleted_total`, and
+  `agentflow_cleanup_artifacts_deleted_total` at the end of
+  every sweep via a new
+  `metrics::observe_cleanup_sweep(dry_run, runs, events,
+  artifacts)` helper. Dry-run sweeps skip the increment (the
+  Grafana panel is about actual reaping, not previews). The
+  six-series matrix in `dashboards/README.md` updates from 3
+  ✅ to 6 ✅; the three retention bars in the Grafana
+  overview now render real data. 1 new unit test + 1 new
+  integration test exercising the `/metrics` route after a
+  synthetic sweep observation.
+
 - **Prometheus `/metrics` endpoint emission — slice 1**
   (P10.14.2-FU1). `agentflow-server` now exposes
   `GET /metrics` returning Prometheus text format. The

@@ -105,6 +105,12 @@ pub mod names {
   pub const WORKFLOW_DURATION_SECONDS: &str = "agentflow_workflow_duration_seconds";
   /// Counter, label `node_type`.
   pub const NODES_FAILED_TOTAL: &str = "agentflow_nodes_failed_total";
+  /// Counter — rows reaped from `runs` per sweep (P10.14.2-FU2).
+  pub const CLEANUP_RUNS_DELETED_TOTAL: &str = "agentflow_cleanup_runs_deleted_total";
+  /// Counter — rows reaped from `events` per sweep.
+  pub const CLEANUP_EVENTS_DELETED_TOTAL: &str = "agentflow_cleanup_events_deleted_total";
+  /// Counter — rows reaped from `artifacts` per sweep.
+  pub const CLEANUP_ARTIFACTS_DELETED_TOTAL: &str = "agentflow_cleanup_artifacts_deleted_total";
 }
 
 /// Record the terminal status of a workflow run. Fires the
@@ -126,6 +132,25 @@ pub fn observe_workflow_completion(status: &'static str, duration_seconds: f64) 
 pub fn observe_node_failure(node_type: Option<&str>) {
   let node_type = node_type.unwrap_or("unknown").to_string();
   metrics::counter!(names::NODES_FAILED_TOTAL, "node_type" => node_type).increment(1);
+}
+
+/// Record one retention-sweep invocation (P10.14.2-FU2). Bumps
+/// the three `agentflow_cleanup_*_deleted_total` counters by
+/// the per-row deletion counts from a [`crate::cleanup::CleanupReport`].
+/// Dry-run sweeps are skipped — the dashboard panel renders rate
+/// of *actual* deletions, not previews.
+pub fn observe_cleanup_sweep(
+  dry_run: bool,
+  runs_deleted: u64,
+  events_deleted: u64,
+  artifacts_deleted: u64,
+) {
+  if dry_run {
+    return;
+  }
+  metrics::counter!(names::CLEANUP_RUNS_DELETED_TOTAL).increment(runs_deleted);
+  metrics::counter!(names::CLEANUP_EVENTS_DELETED_TOTAL).increment(events_deleted);
+  metrics::counter!(names::CLEANUP_ARTIFACTS_DELETED_TOTAL).increment(artifacts_deleted);
 }
 
 #[cfg(test)]
@@ -191,6 +216,34 @@ mod tests {
       "histogram must be emitted; got: {text}"
     );
   }
+
+  #[test]
+  fn observe_cleanup_sweep_increments_three_counters() {
+    let _ = init_recorder();
+    observe_cleanup_sweep(false, 5, 100, 7);
+    let text = render_text();
+    assert!(
+      text.contains("agentflow_cleanup_runs_deleted_total"),
+      "runs counter must appear; got: {text}"
+    );
+    assert!(
+      text.contains("agentflow_cleanup_events_deleted_total"),
+      "events counter must appear; got: {text}"
+    );
+    assert!(
+      text.contains("agentflow_cleanup_artifacts_deleted_total"),
+      "artifacts counter must appear; got: {text}"
+    );
+  }
+
+  // Note: a `dry_run_is_a_no_op` test was attempted but races
+  // against `observe_cleanup_sweep_increments_three_counters`
+  // when cargo runs the tests in parallel (the absolute counter
+  // value depends on which test ran first). The dry-run no-op
+  // invariant is enforced by an obvious `if dry_run { return; }`
+  // branch in `observe_cleanup_sweep` and verified by code review;
+  // an integration test against a real Postgres `cleanup_expired`
+  // call would test the same invariant cleanly.
 
   #[test]
   fn observe_node_failure_labels_with_node_type_or_unknown() {

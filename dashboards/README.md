@@ -66,7 +66,9 @@ Live series:
 | `agentflow_workflow_completed_total{status}` | ✅ live | `WorkflowEventListener` (terminal events) |
 | `agentflow_workflow_duration_seconds` | ✅ live | `WorkflowEventListener` (terminal events) |
 | `agentflow_nodes_failed_total{node_type}` | ✅ live | `WorkflowEventListener` (NodeFailed events) |
-| `agentflow_cleanup_*_deleted_total` | ⏳ FU2 | needs hook into `cleanup_expired` |
+| `agentflow_cleanup_runs_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
+| `agentflow_cleanup_events_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
+| `agentflow_cleanup_artifacts_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
 | `agentflow_workers_admitted` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
 | `agentflow_worker_tasks_inflight` | ⏳ FU3 | needs hook into `AuthenticatedControlPlane` |
 | `agentflow_harness_sessions_active{status}` | ⏳ FU4 | needs hook into harness session repo |

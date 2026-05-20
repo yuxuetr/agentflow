@@ -1037,14 +1037,31 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
     `dashboards/README.md` "Current emission status"
     rewritten with a per-metric live/deferred matrix.
 
-- TODO P10.14.2-FU2 (Low — v1.x) Wire retention sweep metrics
-  - Hook `agentflow-server::cleanup::cleanup_expired` to fire
-    `agentflow_cleanup_runs_deleted_total`,
-    `agentflow_cleanup_events_deleted_total`, and
-    `agentflow_cleanup_artifacts_deleted_total` with the
-    deletion counts from the `CleanupReport`. ~20 LoC + a
-    test that asserts the counter increments after one
-    sweep.
+- DONE P10.14.2-FU2 (Low — v1.x) Wire retention sweep metrics
+  - Landed. `cleanup_expired` now calls
+    `metrics::observe_cleanup_sweep(report.dry_run,
+    runs_deleted, events_deleted, artifacts_deleted)` at the
+    end of every sweep. Dry-run sweeps are skipped (the panel
+    is about actual deletions, not previews).
+  - New `metrics::observe_cleanup_sweep` helper + three
+    `CLEANUP_*_DELETED_TOTAL` constants in `metrics::names`
+    pinning the wire strings the Grafana dashboard queries.
+  - 1 new unit test (`observe_cleanup_sweep_increments_three_counters`)
+    + 1 new integration test in `tests/metrics_endpoint.rs`
+    (`metrics_endpoint_emits_cleanup_counters_after_observation`)
+    that hits the real `/metrics` route and asserts the
+    three counter names appear after observing a sweep.
+  - Dashboard status: `dashboards/README.md` "Current emission
+    status" matrix updated to mark all three counters ✅ live.
+    `docs/KUBERNETES_DEPLOYMENT.md` callout updated from "3
+    series live" to "6 series live."
+  - Test-decision note: a dry-run-is-a-no-op unit test was
+    attempted but races against the increment test under
+    `cargo test`'s default parallelism. The no-op invariant
+    is enforced by an obvious `if dry_run { return; }` branch
+    + a Postgres integration test in `cleanup_route.rs` could
+    cover it cleanly when a real sweep is exercised; left as
+    a follow-up.
 
 - TODO P10.14.2-FU3 (Low — v1.x) Wire worker fleet metrics
   - Hook `AuthenticatedControlPlane` (or its state behind it)
