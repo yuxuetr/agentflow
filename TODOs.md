@@ -904,11 +904,59 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
   - Docs: `docs/DEPLOYMENT.md` "Per-run retention overrides"
     snippet for the operator-facing curl example.
 
-- TODO P10.14.2 (Low — v1.x) Operational dashboards (Grafana
+- DONE P10.14.2 (Low — v1.x) Operational dashboards (Grafana
   templates)
-  - Server emits Prometheus metrics; a checked-in Grafana
-    dashboard JSON would let operators import in 1 click. Today
-    they have to build it themselves.
+  - Landed `dashboards/grafana/agentflow-overview.json` + the
+    `dashboards/README.md` operator playbook. The dashboard
+    carries 9 panels (system health, active runs per tenant,
+    workflow completions by status, p50/p95/p99 duration, node
+    failures by node_type, worker fleet, memory + state size,
+    retention sweep deletions, Harness Mode sessions +
+    approvals) against the metric-name contract documented in
+    `docs/KUBERNETES_DEPLOYMENT.md` §Grafana Dashboard.
+  - **Honest gap:** the TODO note assumed "server emits
+    Prometheus metrics," but the in-core metrics module was
+    removed during the observability split and
+    `agentflow-server` doesn't expose `/metrics` today. The
+    dashboard is forward-compatible — it will render the
+    moment emission lands. The dashboard JSON shipping *now*
+    pins the operator-side metric-name contract so the
+    emission code in P10.14.2-FU1 can be unit-tested against
+    an external source of truth, and so operators have
+    something to import on day one.
+  - Conventions captured in `dashboards/README.md` so future
+    dashboards stay consistent (every panel references
+    `${DS_PROMETHEUS}`, no embedded alert rules, no per-tenant
+    JSON splits, no SLO panels until error-budget metrics are
+    in the contract).
+  - JSON validates via `jq . dashboards/grafana/*.json`.
+    Tested by parsing in pre-commit; CI smoke is deferred to
+    P10.14.2-FU1 where it can also assert that
+    `/metrics` actually emits the named series.
+
+- TODO P10.14.2-FU1 (Medium — v1.x) `/metrics` endpoint
+  emission in `agentflow-server`
+  - Foundation landed in P10.14.2 — the Grafana dashboard JSON
+    and the metric-name contract are checked in, but
+    `agentflow-server` doesn't expose `/metrics` and so the
+    dashboard is currently empty against any real deployment.
+  - Scope:
+    1. Add `metrics-exporter-prometheus` (or `prometheus`
+       crate) dep to `agentflow-server`.
+    2. New `/metrics` Axum route returning Prometheus text
+       format. Bypass auth (Prometheus scraper has no bearer
+       token).
+    3. Wire into the existing `EventListener` chain so workflow
+       / harness / worker events bump the corresponding
+       counters listed in `dashboards/README.md` "Metric
+       contract" table.
+    4. CI smoke `tests/metrics_endpoint.rs` that hits the route
+       and asserts every contracted metric name appears.
+    5. Update `docs/KUBERNETES_DEPLOYMENT.md` to drop the
+       "Note (P10.14.2-FU1)" callout once emission lands.
+  - ~300-500 LoC for emission + ~100 for tests. The
+    `EventListener` integration is the bulk of the work; the
+    Axum route is trivial.
 
 ### P10.15 — agentflow-db (B+)
 

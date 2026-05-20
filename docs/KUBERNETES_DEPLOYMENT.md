@@ -484,6 +484,27 @@ spec:
 
 ### Grafana Dashboard
 
+**Import the checked-in template (P10.14.2):**
+
+```bash
+# Grafana UI: Dashboards → Import → Upload JSON → pick a
+# Prometheus datasource at the import prompt.
+curl -O https://raw.githubusercontent.com/yuxuetr/agentflow/main/dashboards/grafana/agentflow-overview.json
+```
+
+The dashboard is at `dashboards/grafana/agentflow-overview.json`
+in the repo. It carries 9 panels covering health, workflow
+throughput / duration / failures, worker fleet, memory + state,
+retention sweep deletions, and Harness Mode sessions. See
+[`dashboards/README.md`](../dashboards/README.md) for the metric
+contract, import recipe, and conventions.
+
+**Note (P10.14.2-FU1):** the `agentflow-server` binary does not
+yet expose `/metrics`. The dashboard is forward-compatible — it
+will render as soon as the emission work tracked under
+`P10.14.2-FU1` lands. The metric names below are the contract the
+dashboard expects.
+
 Key metrics to monitor:
 
 1. **Health Status**

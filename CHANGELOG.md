@@ -78,6 +78,32 @@ across the 200+ tests touched.
   through 50+ test sites. Adds `tiktoken-rs = "0.6"` dep to
   `agentflow-llm`.
 
+#### Operator dashboards
+
+- **Checked-in Grafana dashboard template** (P10.14.2). New
+  `dashboards/grafana/agentflow-overview.json` (9 panels:
+  system health, active runs per tenant, workflow completions
+  by status, p50/p95/p99 duration, node failures by node_type,
+  worker fleet admitted + in-flight, memory + state size,
+  retention sweep deletions, Harness Mode sessions +
+  approvals) + `dashboards/README.md` operator playbook
+  (import recipe, metric contract, conventions). The dashboard
+  uses a `${DS_PROMETHEUS}` variable so it survives datasource
+  renames during import, and tags with `agentflow / overview /
+  operator` for discoverability. Imports cleanly into Grafana
+  8+ (`schemaVersion: 38`). `docs/KUBERNETES_DEPLOYMENT.md`
+  §Grafana Dashboard updated to link the JSON.
+  - **Documented gap:** the in-core Prometheus metrics module
+    was removed during the observability split, and
+    `agentflow-server` doesn't expose `/metrics` today. The
+    dashboard is forward-compatible — it will render the
+    moment emission lands. Shipping the JSON now pins the
+    operator-side metric-name contract so the emission code
+    (tracked under follow-up `P10.14.2-FU1`) can be
+    unit-tested against an external source of truth, and so
+    operators have something to import on day one of
+    `P10.14.2-FU1` closure.
+
 #### Worker dispatch hints
 
 - **Capability + locality hints on worker claim** (P10.16.2
