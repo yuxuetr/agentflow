@@ -1020,14 +1020,33 @@ No active gaps. Future opportunities:
 
 ### P10.19 — Cross-crate / workspace level
 
-- TODO P10.19.1 (HIGH — pre-GA) WASM plugin runtime evaluation
-  - From eval §7.2 item #9. Subprocess JSON-RPC plugin runtime is
-    stable. WASM is the natural "v2 plugin runtime" — sandbox is
-    free, distribution is single-file, startup is faster.
-  - Action: write a 1-pager comparing wasmtime / wasmer / extism
-    plugin frameworks against the current subprocess `Plugin`
-    trait surface. Decide whether to invest before v1.0 GA or
-    push to v2.0.
+- DONE P10.19.1 (HIGH — pre-GA) WASM plugin runtime evaluation
+  - 1-pager landed at `docs/WASM_PLUGIN_EVALUATION.md`. The
+    narrowed wasmtime-vs-wasmer-vs-extism comparison concludes
+    that **if** we ever adopt WASM, wasmtime + WIT + WASI 0.2 is
+    the right runtime (industry default in 2026; component-model
+    + WASI 0.2 stable async is the only path that matches our
+    `AsyncNode::execute` shape without abstraction loss). wasmer
+    is rejected on ecosystem-bifurcation grounds; extism is
+    rejected as the wrong abstraction tier (bytes-only, not
+    typed nodes participating in a `FlowValue` dataflow).
+  - **Decision: push to v2.0.** The subprocess runtime is stable
+    and the WASM win (sub-ms cold start, single-binary plugin
+    distribution, finer-grained capability sandbox) doesn't
+    solve any current user complaint — the 50-200 ms subprocess
+    cold start is dominated by the first LLM call's TCP
+    handshake in any realistic workflow. Pre-GA opportunity
+    cost (~6-8 person-weeks for WIT design + 3 polyglot
+    examples + CI surface) is better spent on the remaining
+    operator-facing HIGH items (P10.0.x). The
+    `PluginRuntime::Wasm` enum variant stays in
+    `agentflow-core/src/plugin/manifest.rs` as a
+    forward-compatible reservation; v2.0 wires the real host.
+  - Re-evaluation triggers (any one is sufficient): concrete
+    latency complaint, polyglot-plugin demand from a non-Rust
+    contributor, single-binary distribution complaint, or a
+    peer project (Helix/Zed/Lapce) shipping a WASM
+    plugin ecosystem that creates an ergonomics gap.
 
 - TODO P10.19.2 (Medium — v1.x) Workspace-wide perf regression
   detection

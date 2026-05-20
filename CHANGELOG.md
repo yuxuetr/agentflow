@@ -478,6 +478,22 @@ across the 200+ tests touched.
 
 ### Docs / conventions
 
+- **WASM plugin runtime 1-pager** (P10.19.1,
+  `docs/WASM_PLUGIN_EVALUATION.md`). The narrowed
+  wasmtime-vs-wasmer-vs-extism comparison concludes that
+  wasmtime + WIT + WASI 0.2 is the right runtime *if* we adopt
+  WASM, and decides to **push the adoption itself to v2.0**.
+  Subprocess JSON-RPC is mature and the 50-200 ms subprocess
+  cold start is dominated by the first LLM call's TCP
+  handshake in any realistic workflow — the ~6-8 person-week
+  pre-GA investment doesn't fix any current friction. The
+  `PluginRuntime::Wasm` enum variant stays in `manifest.rs` as
+  a forward-compatible reservation; v2 wires the real host
+  when at least one of the documented re-evaluation triggers
+  fires (latency complaint, polyglot demand, distribution
+  complaint, or peer-project precedent). Closes the
+  P10.19.1 HIGH pre-GA item from the v1.0 RC backlog.
+
 - **R1 → R4 reflection sequence** (`docs/L1_L3_REFLECTION_*.md`,
   `b3ee990` / `2d3d06d` / `edd9572`). R2 froze the L1↔L3
   selection rule + per-application matrix; R3 documented the

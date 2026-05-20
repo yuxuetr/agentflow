@@ -204,12 +204,14 @@ Already-closed Harness session replay CLI is P10.10.2 (landed).
 Motivation: subprocess JSON-RPC is the stable v1 runtime. v2's
 question is what supplements it.
 
-- **WASM plugin runtime evaluation** (`P10.19.1`). Subprocess
-  is mature. WASM is the natural v2 plugin runtime — sandbox
-  is free, distribution is single-file, startup is faster.
-  Action: write a 1-pager comparing wasmtime / wasmer / extism
-  against the current subprocess `Plugin` trait surface.
-  Decide whether to invest pre-v1.0 GA or push to v2.0.
+- **WASM plugin runtime** (closed: `P10.19.1`). Evaluation
+  landed at `docs/WASM_PLUGIN_EVALUATION.md`. **Decision: push
+  to v2.0.** Runtime choice if/when we cross the threshold:
+  wasmtime + WIT + WASI 0.2. Re-evaluation triggers documented
+  in the 1-pager — until at least one fires, WASM is "better
+  story for hypothetical users," not a fix for current
+  friction. The `PluginRuntime::Wasm` manifest enum variant
+  stays as a forward-compatible reservation.
 - **Avoid native `dlopen`** — unless a concrete ABI strategy
   emerges. The Non-Goals stance from `RoadMap.md` carries
   forward.
