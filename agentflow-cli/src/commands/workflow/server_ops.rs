@@ -73,6 +73,123 @@ pub async fn graph(
   print_server_response("workflow graph", format, &body)
 }
 
+/// P10.11.4: reject `workflow run` flags that are local-only when
+/// the operator is dispatching via `--server`. Today the
+/// `POST /v1/runs` wire body only accepts `{ workflow, tenant_id }`
+/// — every per-run knob the local executor consumes
+/// (`--model` / `--execution-mode` / `--max-concurrency` /
+/// `--run-dir` / `--watch` / `--output` / `--input` / `--dry-run` /
+/// `--timeout` / `--max-retries`) would be silently dropped without
+/// this guard, which is exactly the class of bug operators only
+/// catch in prod.
+///
+/// Two categories:
+/// - **Always-local**: filesystem-side concerns
+///   (`--run-dir`, `--output <path>`) and the in-process flow
+///   (`--watch`, `--dry-run`). The server has its own filesystem
+///   and event stream, so these never make sense remotely.
+/// - **Future API addition**: server-side execution knobs that the
+///   wire format could accept but doesn't today (`--model`,
+///   `--execution-mode`, `--max-concurrency`, `--input`,
+///   `--timeout`, `--max-retries`). Each error names the gap and
+///   points at the local-mode workaround.
+///
+/// `execution_mode_default` and `max_concurrency_default` are the
+/// flag defaults — the validation only fires when the operator
+/// explicitly chose something else (so passing `--execution-mode
+/// serial` with the default is a no-op).
+#[allow(clippy::too_many_arguments)]
+pub fn reject_local_only_flags(
+  model: Option<&str>,
+  execution_mode: &str,
+  execution_mode_default: &str,
+  max_concurrency: usize,
+  max_concurrency_default: usize,
+  run_dir: Option<&str>,
+  watch: bool,
+  output: Option<&str>,
+  input: &[String],
+  dry_run: bool,
+  timeout: &str,
+  timeout_default: &str,
+  max_retries: u32,
+) -> Result<()> {
+  // Always-local first — these are the clearest cases and their
+  // remedies are the most concrete.
+  if run_dir.is_some() {
+    anyhow::bail!(
+      "--run-dir is local-only (the server controls its own filesystem layout under its \
+       configured AGENTFLOW_RUN_DIR). Drop --run-dir when using --server."
+    );
+  }
+  if let Some(path) = output {
+    anyhow::bail!(
+      "--output '{path}' is local-only (writes the final workflow output to a local file). \
+       In server mode, capture the terminal run row via --format json-envelope or stream \
+       events via `agentflow workflow logs <run_id> --follow`."
+    );
+  }
+  if watch {
+    anyhow::bail!(
+      "--watch is local-only (polls the in-process run state). In server mode, stream the \
+       event log via `agentflow workflow logs <run_id> --follow` after submitting the run."
+    );
+  }
+  if dry_run {
+    anyhow::bail!(
+      "--dry-run is local-only (validates without execution). In server mode, validate the \
+       workflow up-front via `agentflow workflow validate <file>` and then submit only \
+       once validation passes."
+    );
+  }
+
+  // Future API additions — the wire body could accept these once
+  // POST /v1/runs is extended; each message says so explicitly.
+  if model.is_some() {
+    anyhow::bail!(
+      "--model is not yet wired to the server (POST /v1/runs body does not accept a per-run \
+       model override today; tracked under P10.11.4). The server uses the model declared in \
+       each LLM node of the workflow YAML. Drop --model or run locally to override."
+    );
+  }
+  if execution_mode != execution_mode_default {
+    anyhow::bail!(
+      "--execution-mode '{execution_mode}' is not yet wired to the server (POST /v1/runs body \
+       does not accept an execution-mode override today; tracked under P10.11.4). The server \
+       runner uses its own configured mode. Drop --execution-mode or run locally."
+    );
+  }
+  if max_concurrency != max_concurrency_default {
+    anyhow::bail!(
+      "--max-concurrency {max_concurrency} is not yet wired to the server (POST /v1/runs body \
+       does not accept this override today; tracked under P10.11.4). Drop --max-concurrency \
+       or run locally."
+    );
+  }
+  if !input.is_empty() {
+    anyhow::bail!(
+      "--input is not yet wired to the server (POST /v1/runs body does not accept initial \
+       inputs today; tracked under P10.11.4). Either bake the values into the workflow YAML \
+       before submission, or run locally with --input."
+    );
+  }
+  if timeout != timeout_default {
+    anyhow::bail!(
+      "--timeout '{timeout}' is not yet wired to the server (POST /v1/runs body does not \
+       accept a per-run timeout today; tracked under P10.11.4). The server applies its own \
+       configured timeout. Drop --timeout or run locally."
+    );
+  }
+  if max_retries != 0 {
+    anyhow::bail!(
+      "--max-retries {max_retries} is not yet wired to the server (POST /v1/runs body does \
+       not accept a per-run retry budget today; tracked under P10.11.4). Drop --max-retries \
+       or run locally."
+    );
+  }
+  Ok(())
+}
+
 /// `agentflow workflow logs <run_id>` — stream the server's
 /// persisted event log for a run. Without `--follow`, fetches the
 /// historical events as a single JSON array via
@@ -330,6 +447,241 @@ mod tests {
     assert!(
       !line.contains(&"x".repeat(1000)),
       "full blob must not appear in the truncated line"
+    );
+  }
+
+  // ── P10.11.4 reject_local_only_flags tests ─────────────────────────
+  //
+  // Each test isolates one flag so a regression that loosens the
+  // guard for one knob doesn't silently land. The defaults passed
+  // to the validator must mirror the clap definitions in main.rs.
+
+  /// Test seam over [`reject_local_only_flags`]: every test fills
+  /// in the defaults from the clap definitions in `main.rs`, then
+  /// overrides exactly one flag, then asserts the per-flag message.
+  /// The `#[allow]` keeps clippy from flagging the long arg list —
+  /// the wrapped function is the one that needs it; the helper
+  /// inherits the shape.
+  #[allow(clippy::too_many_arguments)]
+  fn run_validator(
+    model: Option<&str>,
+    execution_mode: &str,
+    max_concurrency: usize,
+    run_dir: Option<&str>,
+    watch: bool,
+    output: Option<&str>,
+    input: &[String],
+    dry_run: bool,
+    timeout: &str,
+    max_retries: u32,
+  ) -> Result<()> {
+    reject_local_only_flags(
+      model,
+      execution_mode,
+      "serial",
+      max_concurrency,
+      4,
+      run_dir,
+      watch,
+      output,
+      input,
+      dry_run,
+      timeout,
+      "60s",
+      max_retries,
+    )
+  }
+
+  #[test]
+  fn workflow_run_server_baseline_passes() {
+    // Defaults across the board must yield Ok — otherwise every
+    // operator's first `workflow run --server <url> <file>` would
+    // get rejected.
+    run_validator(None, "serial", 4, None, false, None, &[], false, "60s", 0)
+      .expect("defaults must pass");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_run_dir_as_local_only() {
+    let err = run_validator(
+      None,
+      "serial",
+      4,
+      Some("/tmp/x"),
+      false,
+      None,
+      &[],
+      false,
+      "60s",
+      0,
+    )
+    .expect_err("--run-dir must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--run-dir is local-only"), "{msg}");
+    assert!(
+      msg.contains("AGENTFLOW_RUN_DIR"),
+      "should name the server-side env var: {msg}"
+    );
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_output_path_with_alternative_hint() {
+    let err = run_validator(
+      None,
+      "serial",
+      4,
+      None,
+      false,
+      Some("out.json"),
+      &[],
+      false,
+      "60s",
+      0,
+    )
+    .expect_err("--output must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--output 'out.json' is local-only"), "{msg}");
+    // The error must point the operator at the in-band alternatives.
+    assert!(
+      msg.contains("json-envelope") || msg.contains("workflow logs"),
+      "{msg}"
+    );
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_watch_with_logs_alternative() {
+    let err = run_validator(None, "serial", 4, None, true, None, &[], false, "60s", 0)
+      .expect_err("--watch must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--watch is local-only"), "{msg}");
+    // Operators get the workflow logs --follow alternative explicitly.
+    assert!(msg.contains("workflow logs"), "{msg}");
+    assert!(msg.contains("--follow"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_dry_run_with_validate_alternative() {
+    let err = run_validator(None, "serial", 4, None, false, None, &[], true, "60s", 0)
+      .expect_err("--dry-run must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--dry-run is local-only"), "{msg}");
+    // The clean alternative for a dry-run-then-submit pattern is
+    // `workflow validate`; the error names it.
+    assert!(msg.contains("workflow validate"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_model_with_future_api_note() {
+    let err = run_validator(
+      Some("gpt-4o"),
+      "serial",
+      4,
+      None,
+      false,
+      None,
+      &[],
+      false,
+      "60s",
+      0,
+    )
+    .expect_err("--model must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--model is not yet wired"), "{msg}");
+    // The "future API addition" caveat names P10.11.4 so curious
+    // operators can trace it back.
+    assert!(msg.contains("P10.11.4"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_execution_mode_when_explicitly_set() {
+    // Defaults pass; only the explicit override trips the guard.
+    let err = run_validator(
+      None,
+      "concurrent",
+      4,
+      None,
+      false,
+      None,
+      &[],
+      false,
+      "60s",
+      0,
+    )
+    .expect_err("--execution-mode concurrent must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--execution-mode 'concurrent'"), "{msg}");
+    assert!(msg.contains("P10.11.4"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_accepts_execution_mode_at_default_value() {
+    // Passing `--execution-mode serial` explicitly is the same as
+    // the default; the validator must not trip.
+    run_validator(None, "serial", 4, None, false, None, &[], false, "60s", 0)
+      .expect("explicit default value must pass");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_max_concurrency_when_changed() {
+    let err = run_validator(None, "serial", 16, None, false, None, &[], false, "60s", 0)
+      .expect_err("--max-concurrency 16 must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--max-concurrency 16"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_input_pairs_with_yaml_inline_hint() {
+    let inputs = vec!["k".to_string(), "v".to_string()];
+    let err = run_validator(
+      None, "serial", 4, None, false, None, &inputs, false, "60s", 0,
+    )
+    .expect_err("--input must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--input is not yet wired"), "{msg}");
+    // Operators get the "bake into YAML" workaround explicitly.
+    assert!(msg.contains("workflow YAML"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_timeout_when_changed() {
+    let err = run_validator(None, "serial", 4, None, false, None, &[], false, "120s", 0)
+      .expect_err("--timeout 120s must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--timeout '120s'"), "{msg}");
+  }
+
+  #[test]
+  fn workflow_run_server_rejects_max_retries_when_nonzero() {
+    let err = run_validator(None, "serial", 4, None, false, None, &[], false, "60s", 3)
+      .expect_err("--max-retries 3 must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("--max-retries 3"), "{msg}");
+  }
+
+  /// Guard ordering invariant: when multiple local-only flags are
+  /// set at once, the always-local category fires first (run_dir
+  /// before model). Pin this so a future refactor doesn't silently
+  /// flip the order and start surfacing a less-actionable error
+  /// when both are set.
+  #[test]
+  fn workflow_run_server_rejects_always_local_before_future_api() {
+    let err = run_validator(
+      Some("gpt-4o"),
+      "serial",
+      4,
+      Some("/tmp/x"),
+      false,
+      None,
+      &[],
+      false,
+      "60s",
+      0,
+    )
+    .expect_err("both flags set must still err");
+    let msg = err.to_string();
+    assert!(
+      msg.contains("--run-dir"),
+      "always-local --run-dir must surface first when both set: {msg}",
     );
   }
 

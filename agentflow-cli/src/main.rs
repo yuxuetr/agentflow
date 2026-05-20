@@ -1285,28 +1285,52 @@ async fn main() {
           std::process::exit(1);
         }
         // Server-mode short-circuits the in-process executor when
-        // --server (or AGENTFLOW_SERVER_URL) is set. The body becomes
-        // the workflow file contents; per-run knobs (model, dry-run,
-        // execution-mode, run_dir, retries, watch, output sink, input
-        // pairs) stay local-only for now and are documented as
-        // server-mode follow-ups in TODOs.md.
+        // --server (or AGENTFLOW_SERVER_URL) is set. P10.11.4
+        // closed the silent-drop class of bug: every per-run knob
+        // the local executor consumes is now rejected up front
+        // with an actionable message naming the local mode
+        // alternative or future-API status.
         if let Some(server_url) =
           agentflow_cli::server_client::resolve_server_url(server.as_deref())
         {
-          match std::fs::read_to_string(&workflow_file) {
-            Ok(body) => {
-              workflow::server_ops::run_via_server(
-                &server_url,
-                auth_token.as_deref(),
-                tenant.as_deref(),
-                &body,
-                &format,
-              )
-              .await
-            }
-            Err(e) => Err(anyhow::anyhow!(
-              "failed to read workflow file '{workflow_file}': {e}"
-            )),
+          // Defaults must match the clap flag definitions above —
+          // the validator only fires when the operator explicitly
+          // overrode them.
+          const EXECUTION_MODE_DEFAULT: &str = "serial";
+          const MAX_CONCURRENCY_DEFAULT: usize = 4;
+          const TIMEOUT_DEFAULT: &str = "60s";
+          let validation = workflow::server_ops::reject_local_only_flags(
+            model.as_deref(),
+            &execution_mode,
+            EXECUTION_MODE_DEFAULT,
+            max_concurrency,
+            MAX_CONCURRENCY_DEFAULT,
+            run_dir.as_deref(),
+            watch,
+            output.as_deref(),
+            &input,
+            dry_run,
+            &timeout,
+            TIMEOUT_DEFAULT,
+            max_retries,
+          );
+          match validation {
+            Err(err) => Err(err),
+            Ok(()) => match std::fs::read_to_string(&workflow_file) {
+              Ok(body) => {
+                workflow::server_ops::run_via_server(
+                  &server_url,
+                  auth_token.as_deref(),
+                  tenant.as_deref(),
+                  &body,
+                  &format,
+                )
+                .await
+              }
+              Err(e) => Err(anyhow::anyhow!(
+                "failed to read workflow file '{workflow_file}': {e}"
+              )),
+            },
           }
         } else {
           let input_pairs = input

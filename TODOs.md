@@ -507,12 +507,41 @@ No active gaps. Future opportunities:
     search`, `config show`). Migrate them so the envelope contract
     is universal.
 
-- TODO P10.11.4 (Medium — pre-GA) Server-side mapping for
-  `--model` / `--execution-mode` / `--run-dir` flags
-  - When `--server` is set, these per-run knobs are silently
-    local-only. Either: (a) wire them through to the server's POST
-    body, OR (b) error out with a clear message naming the
-    incompatibility.
+- DONE P10.11.4 (Medium — pre-GA) Server-side mapping for
+  local-only `workflow run` flags
+  - Picked option (b): reject up front. Wiring `--model` /
+    `--execution-mode` / `--max-concurrency` / `--input` /
+    `--timeout` / `--max-retries` through to the server needs a
+    schema change to `POST /v1/runs` body + executor honouring it
+    end-to-end; tracked as a v1.x follow-up. For pre-GA the
+    important thing is no silent drops.
+  - Scope widened beyond the TODO's named 3 flags to cover the
+    full silent-drop class: `--model`, `--execution-mode`
+    (non-default), `--max-concurrency` (non-default), `--run-dir`,
+    `--watch`, `--output`, `--input`, `--dry-run`, `--timeout`
+    (non-default), `--max-retries` (non-zero). Two categories
+    surface in the error messages: **always-local** (filesystem +
+    in-process flow — each points at the concrete server-side
+    alternative, e.g. `--watch` → `agentflow workflow logs <run_id>
+    --follow`, `--dry-run` → `agentflow workflow validate <file>`)
+    and **future API addition** (each names P10.11.4 so curious
+    operators can find the follow-up).
+  - Landed: new public
+    `workflow::server_ops::reject_local_only_flags(...)` validator
+    wired into the `WorkflowCommands::Run` dispatch arm in
+    `main.rs` before the workflow file is read. Defaults must
+    match the clap definitions; the validator only fires on
+    explicit overrides.
+  - Tests: 13 new unit tests in
+    `commands::workflow::server_ops::tests` (one per flag + the
+    baseline-passes path + guard ordering invariant proving
+    always-local fires before future-API when both are set) + 11
+    hermetic CLI tests in
+    `agentflow-cli/tests/workflow_run_server_validation_tests.rs`
+    (one per flag against an obviously-unreachable URL —
+    validation runs before any network call, so the per-flag
+    message proves the guard fired). `cargo clippy -p
+    agentflow-cli --tests -- -D warnings` clean.
 
 ### P10.12 — agentflow-tracing (A)
 

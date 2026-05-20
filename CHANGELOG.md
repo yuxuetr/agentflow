@@ -63,6 +63,24 @@ across the 200+ tests touched.
   tests in `eval::retrievers::tests` plus 1 hermetic CLI test
   (`build_dense_retriever_errors_without_openai_api_key`) cover
   the new code paths.
+- **`agentflow workflow run --server` flag validation** (P10.11.4):
+  closes the silent-drop class of bug for the local-only flag set
+  by rejecting up front with a single-line actionable error when
+  any of `--model`, `--execution-mode` (non-default),
+  `--max-concurrency` (non-default), `--run-dir`, `--watch`,
+  `--output`, `--input`, `--dry-run`, `--timeout` (non-default),
+  or `--max-retries` (non-zero) is combined with `--server`. Two
+  categories: **always-local** (filesystem + in-process flow:
+  `--run-dir` / `--output` / `--watch` / `--dry-run`) each name a
+  concrete server-side alternative (e.g. `--watch` points at
+  `agentflow workflow logs <run_id> --follow`); **future API
+  addition** (server-side execution knobs the wire format could
+  accept but doesn't today: `--model` / `--execution-mode` /
+  `--max-concurrency` / `--input` / `--timeout` / `--max-retries`)
+  each name P10.11.4 so curious operators can find the follow-up
+  work. Defaults pass through silently — the validator only fires
+  when the operator explicitly overrode a flag. 13 unit tests + 11
+  hermetic CLI tests cover every guard + the baseline-passes path.
 - **`agentflow skill run --server <url>`** dispatches the skill
   to a remote `agentflow serve` instance via
   `POST /v1/skills/{name}:run` (P10.11.2). Mirrors the
