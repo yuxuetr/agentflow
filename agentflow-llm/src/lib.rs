@@ -92,6 +92,7 @@ pub mod model_types;
 pub mod multimodal;
 pub mod providers;
 pub mod registry;
+pub mod tokenizer;
 pub mod tool_calling;
 pub mod trace_context;
 
@@ -111,6 +112,10 @@ pub use providers::modality::{
   Text2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
 };
 pub use registry::ModelRegistry;
+pub use tokenizer::{
+  HeuristicCounter, TiktokenCounter, TokenCounter, TokenCounterError, count_tokens_for_model,
+  counter_for_model,
+};
 pub use tool_calling::{LLMResponse, StopReason, ToolCallRequest, ToolChoice, ToolSpec};
 pub use trace_context::LlmTraceContext;
 

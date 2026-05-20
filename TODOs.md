@@ -310,11 +310,52 @@ No active gaps from the evaluation. Future opportunities:
     opens a fresh TODO referencing the criteria; no formal RFC
     needed for the peel-off itself once a trigger fires.
 
-- TODO P10.3.3 (Medium — v1.x) Provider-specific tokenizers
-  - Today the `PricingTable` cost tracking + `RuntimeLimits`
-    token budgets use char-count or rough heuristics. Wire each
-    provider to its real tokenizer (tiktoken for OpenAI, etc.) for
-    accurate budget enforcement.
+- DONE P10.3.3 (Medium — v1.x) Provider-specific tokenizers
+  (foundation slice)
+  - Landed the trait surface + accuracy improvement for the
+    OpenAI family, not the workspace-wide rip-out of the
+    heuristic. New module `agentflow-llm/src/tokenizer.rs`
+    ships `TokenCounter` trait, `TiktokenCounter` (BPE via
+    `tiktoken-rs` 0.6 — cl100k_base, o200k_base, p50k_base,
+    r50k_base), `HeuristicCounter` (preserves the existing
+    `len / 4` fallback), and `counter_for_model(model_id)` +
+    `count_tokens_for_model(model_id, text)` factories.
+  - Coverage matrix documented in the module-doc table:
+    - **Exact (tiktoken)**: `gpt-3.5-*`, `gpt-4*`, `gpt-4o*`,
+      `o1*`, `o3*`, `gpt-5*` → BPE-accurate.
+    - **Close (cl100k_base used as approximation)**: Moonshot
+      Kimi (`kimi-*`, `moonshot-v*`), DeepSeek (`deepseek-*`),
+      GLM (`glm-*`, `chatglm*`), DashScope Qwen (`qwen*`),
+      MiniMax (`abab*`, `minimax-*`), StepFun (`step-*`). The
+      per-vendor accuracy gap is documented inline (5-15%
+      depending on family).
+    - **Heuristic fallback**: Anthropic (`claude-*`), Google
+      (`gemini-*`, `models/gemini*`), and unknown model ids.
+      Provider responses still report exact counts for
+      post-call accounting, so the precision gap only affects
+      pre-call budget enforcement.
+  - 13 hermetic unit tests cover BPE counts against known
+    inputs (cl100k_base + o200k_base), heuristic backward
+    compat, model-name routing for every documented family,
+    case-insensitivity, free-function round-trip, and the
+    error path when an unknown encoding name is requested.
+  - **Not in scope** (follow-up TODO `P10.3.3-FU1`): rip out
+    the `content.len() / 4` heuristic at every
+    `agentflow-memory::Message::new` site and route through
+    `count_tokens_for_model`. Doing that in one shot would
+    ripple through 50+ test sites and obscure the accuracy
+    improvement, so the trait surface lands first.
+  - Adds `tiktoken-rs = "0.6"` dep to `agentflow-llm`.
+
+- TODO P10.3.3-FU1 (Low — v1.x) Wire `count_tokens_for_model`
+  into `agentflow-memory::Message::new`
+  - Foundation landed in P10.3.3. This is the rip-out: every
+    `Message::new` site (and `SessionMemory` / `SemanticMemory`
+    budget checks) currently uses `content.len() / 4`. Add a
+    `Message::new_for_model(session, role, content, model_id)`
+    constructor (or pass a `&dyn TokenCounter` through) and
+    update test sites. ~50 test-site touches; the trait
+    surface from P10.3.3 makes each one mechanical.
 
 - TODO P10.3.4 (Low — v1.x) Auto-rotate live nightly default models
   on 404

@@ -51,6 +51,33 @@ across the 200+ tests touched.
     never invoked in the test suite, so this runs hermetically
     in CI.
 
+#### LLM provider layer
+
+- **Provider-specific tokenizer trait (`TokenCounter`)** (P10.3.3
+  foundation slice). New `agentflow_llm::tokenizer` module ships
+  `TokenCounter` trait, `TiktokenCounter` (BPE via `tiktoken-rs`
+  — cl100k_base / o200k_base / p50k_base / r50k_base),
+  `HeuristicCounter` (preserves the workspace's existing
+  `len / 4` fallback), and `counter_for_model(model_id)` +
+  `count_tokens_for_model(model_id, text)` factories. Closes the
+  precision gap for OpenAI-family pre-call token budgeting: the
+  heuristic over-estimates CJK text by 3-5× and code by
+  4× — the BPE counter is exact for `gpt-3.5-*`, `gpt-4*`,
+  `gpt-4o*`, `o1*`, `o3*`, `gpt-5*`, and within ~5-15% for the
+  OpenAI-compat vendors (Moonshot, DeepSeek, GLM, DashScope
+  Qwen, MiniMax, StepFun) that ship documented BPE-compatible
+  tokenizers. Anthropic / Google fall back to the heuristic;
+  their post-call responses still report exact counts so cost
+  tracking stays accurate. 13 hermetic unit tests cover BPE
+  counts against known inputs, model-name routing for every
+  documented family, case-insensitivity, and the error path.
+  **Follow-up `P10.3.3-FU1`** is open to wire
+  `count_tokens_for_model` into `agentflow-memory::Message::new`
+  (the existing heuristic site) — the foundation landed first
+  so the accuracy improvement is visible without rippling
+  through 50+ test sites. Adds `tiktoken-rs = "0.6"` dep to
+  `agentflow-llm`.
+
 #### Worker admission
 
 - **Signed-JWT identity flavour for worker admission** (P10.16.1).

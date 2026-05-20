@@ -49,6 +49,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 log = "0.4"
 
+# Provider-specific tokenizers (P10.3.3). `tiktoken-rs` ships the
+# OpenAI BPE encodings (cl100k_base, o200k_base, p50k_base, r50k_base)
+# used by every OpenAI-family model — GPT-3.5 / 4 / 4o, plus the
+# OpenAI-compat vendors that adopted the same tokenizer (Moonshot Kimi,
+# DeepSeek-V*, GLM-4, DashScope Qwen, MiniMax). Anthropic / Google use
+# SentencePiece variants and fall back to the heuristic counter (their
+# APIs report precise counts in the response so post-call accounting
+# stays exact; pre-call budgeting is the gap this dep closes for the
+# BPE family).
+tiktoken-rs = "0.6"
+
 # AgentFlow integration
 agentflow-core = { path = "../agentflow-core" }
 
