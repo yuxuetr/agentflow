@@ -234,12 +234,18 @@ fn build_tool_registry(
   // Each built-in tool only checks its relevant policy field, so merging is safe.
   let policy = Arc::new(build_sandbox_policy(tool_configs, skill_dir));
 
-  let os_sandbox = security.os_sandbox;
+  // P10.4.1: per-tool override of the manifest-level `os_sandbox`.
+  // `tool_cfg.os_sandbox = Some(true|false)` wins; `None` falls back
+  // to `security.os_sandbox`. Resolved per-iteration so a mixed-policy
+  // skill (sandbox shell but not script, or vice versa) gets exactly
+  // what the manifest declares.
+  let manifest_os_sandbox = security.os_sandbox;
   for tool_cfg in tool_configs {
+    let effective_os_sandbox = tool_cfg.os_sandbox.unwrap_or(manifest_os_sandbox);
     match tool_cfg.name.to_lowercase().as_str() {
       "shell" => {
         let mut tool = ShellTool::new(policy.clone());
-        if os_sandbox {
+        if effective_os_sandbox {
           tool = tool.with_os_sandbox();
         }
         registry.register(Arc::new(tool));
@@ -256,7 +262,7 @@ fn build_tool_registry(
         if let Some(schema) = &tool_cfg.parameters {
           tool = tool.with_parameters_schema(schema.clone());
         }
-        if os_sandbox {
+        if effective_os_sandbox {
           tool = tool.with_os_sandbox();
         }
         registry.register(Arc::new(tool));
@@ -867,6 +873,188 @@ description = "Coding rules"
     // build() should not fail even though knowledge list is empty;
     // references/ is picked up automatically by build_persona()
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+  }
+
+  // ── P10.4.1: per-tool os_sandbox override ──────────────────────────────────
+  //
+  // Three resolution cases:
+  //   1. tool override None + manifest false → effective false → noop backend.
+  //   2. tool override None + manifest true  → effective true  → default
+  //      platform backend.
+  //   3. tool override Some(true)  + manifest false → effective true (opt in).
+  //   4. tool override Some(false) + manifest true  → effective false (opt out).
+  //
+  // We assert against `Tool::sandbox_status().backend` so the test stays
+  // portable: on platforms without an enforcing backend (macOS x86_64,
+  // Windows), `default_backend()` returns the noop backend by design and
+  // both `with_os_sandbox()` and the default constructor produce the same
+  // "noop" name. The contract we're pinning is "the override controls
+  // *which* `with_os_sandbox` call fires", not "this is sandbox-exec on
+  // every host."
+
+  fn expected_backend_name_when_enforcing() -> String {
+    agentflow_tools::sandbox::default_backend().name().to_string()
+  }
+
+  fn sandbox_backend_for(
+    registry: &agentflow_tools::ToolRegistry,
+    tool_name: &str,
+  ) -> String {
+    registry
+      .get(tool_name)
+      .expect("tool present in registry")
+      .sandbox_status()
+      .expect("shell/script tools always report a sandbox status")
+      .backend
+  }
+
+  #[tokio::test]
+  async fn per_tool_os_sandbox_override_opts_in_when_manifest_default_off() {
+    // Manifest default OFF, shell tool individually OPTS IN. Resolved
+    // value for shell must be ON (default_backend) regardless of the
+    // manifest-level flag.
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("per-tool-opt-in");
+    manifest.security.os_sandbox = false;
+    manifest.tools = vec![ToolConfig {
+      name: "shell".to_string(),
+      os_sandbox: Some(true),
+      ..ToolConfig::default()
+    }];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert_eq!(
+      sandbox_backend_for(&registry, "shell"),
+      expected_backend_name_when_enforcing(),
+      "tool-level os_sandbox=true must override manifest default off"
+    );
+  }
+
+  #[tokio::test]
+  async fn per_tool_os_sandbox_override_opts_out_when_manifest_default_on() {
+    // Manifest default ON, script tool individually OPTS OUT. Resolved
+    // value for script must be OFF (noop) — proves the override beats
+    // the manifest in the other direction.
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("per-tool-opt-out");
+    manifest.security.os_sandbox = true;
+    manifest.tools = vec![ToolConfig {
+      name: "script".to_string(),
+      os_sandbox: Some(false),
+      ..ToolConfig::default()
+    }];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert_eq!(
+      sandbox_backend_for(&registry, "script"),
+      "noop",
+      "tool-level os_sandbox=false must override manifest default on"
+    );
+  }
+
+  #[tokio::test]
+  async fn missing_per_tool_os_sandbox_falls_back_to_manifest_default_on() {
+    // Manifest ON, no per-tool override → inherits manifest level.
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("manifest-default-on");
+    manifest.security.os_sandbox = true;
+    manifest.tools = vec![ToolConfig {
+      name: "shell".to_string(),
+      ..ToolConfig::default()
+    }];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert_eq!(
+      sandbox_backend_for(&registry, "shell"),
+      expected_backend_name_when_enforcing(),
+      "no tool override + manifest on must inherit manifest on"
+    );
+  }
+
+  #[tokio::test]
+  async fn missing_per_tool_os_sandbox_falls_back_to_manifest_default_off() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("manifest-default-off");
+    manifest.security.os_sandbox = false;
+    manifest.tools = vec![ToolConfig {
+      name: "shell".to_string(),
+      ..ToolConfig::default()
+    }];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert_eq!(
+      sandbox_backend_for(&registry, "shell"),
+      "noop",
+      "no tool override + manifest off must inherit manifest off"
+    );
+  }
+
+  #[tokio::test]
+  async fn per_tool_os_sandbox_isolates_overrides_across_tools_in_same_skill() {
+    // The same manifest sandboxes shell but NOT script. Covers the
+    // exact "heterogeneous enforcement" use case the TODO calls out.
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("scripts")).unwrap();
+    write_file(
+      &dir.path().join("scripts").join("hello.sh"),
+      "#!/bin/bash\necho hi",
+    );
+    let mut manifest = minimal_manifest("heterogeneous");
+    manifest.security.os_sandbox = false;
+    manifest.tools = vec![
+      ToolConfig {
+        name: "shell".to_string(),
+        os_sandbox: Some(true),
+        ..ToolConfig::default()
+      },
+      ToolConfig {
+        name: "script".to_string(),
+        os_sandbox: Some(false),
+        ..ToolConfig::default()
+      },
+    ];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert_eq!(
+      sandbox_backend_for(&registry, "shell"),
+      expected_backend_name_when_enforcing()
+    );
+    assert_eq!(sandbox_backend_for(&registry, "script"), "noop");
+  }
+
+  #[test]
+  fn tool_config_serde_round_trips_os_sandbox_override_field() {
+    // Schema-stability pin: the field is named exactly `os_sandbox`
+    // on `[[tools]]` blocks in TOML and accepts a plain boolean.
+    // Renaming or moving it is a breaking change for any operator
+    // who's adopted the override.
+    let toml = r#"
+name = "shell"
+os_sandbox = true
+"#;
+    let parsed: ToolConfig = toml::from_str(toml).expect("parse tool config");
+    assert_eq!(parsed.name, "shell");
+    assert_eq!(parsed.os_sandbox, Some(true));
+
+    let toml_off = r#"
+name = "script"
+os_sandbox = false
+"#;
+    let parsed_off: ToolConfig = toml::from_str(toml_off).unwrap();
+    assert_eq!(parsed_off.os_sandbox, Some(false));
+
+    // Field is fully optional — pre-P10.4.1 manifests without it
+    // continue to parse to `None`.
+    let toml_no_override = r#"
+name = "shell"
+"#;
+    let parsed_no_override: ToolConfig = toml::from_str(toml_no_override).unwrap();
+    assert_eq!(parsed_no_override.os_sandbox, None);
   }
 
   /// build() with sqlite memory creates the db directory.

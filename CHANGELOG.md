@@ -18,6 +18,24 @@ across the 200+ tests touched.
 
 ### Added
 
+#### Security
+
+- **Per-tool `os_sandbox` override on `[[tools]]` blocks** (P10.4.1).
+  Skill manifests can now opt individual `shell` / `script` tools in
+  or out of the OS-level sandbox independently of the manifest-level
+  `[security] os_sandbox` default. The new `os_sandbox: Option<bool>`
+  field on `ToolConfig` is fully optional; `None` falls back to the
+  manifest-level value (so every pre-P10.4.1 manifest parses
+  identically with unchanged behaviour). `Some(true)` opts the tool
+  in even when the manifest default is off; `Some(false)` opts it
+  out even when the manifest default is on. Only the two subprocess-
+  spawning built-in tools honour the override; `file` / `http`
+  ignore it. `agentflow skill inspect --explain-permissions` now
+  prints a per-tool resolution table under `Sandbox profile`
+  showing each sandboxable tool's resolved value + its source
+  (`per-tool override` vs `inherited`). 6 new builder unit tests
+  + 1 serde round-trip pin the resolution rules and schema.
+
 #### CLI ops (cont.)
 
 - **`agentflow agent replay <current> --diff <baseline>`** (P10.8.1).

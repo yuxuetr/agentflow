@@ -274,6 +274,38 @@ tool_permission_allowlist = ["filesystem_read", "process_exec"]
 or in YAML front-matter on a `SKILL.md` file. `SecurityConfig.os_sandbox`
 defaults to `false`.
 
+### Per-tool override (P10.4.1)
+
+`[security] os_sandbox` is a manifest-level *default*. Individual tools
+can override it via `os_sandbox` on their `[[tools]]` block when a
+skill needs heterogeneous enforcement — e.g. sandbox a permissive
+`shell` but leave a vetted `script` tool unrestricted, or the reverse:
+
+```toml
+[security]
+os_sandbox = true     # manifest-level default: sandbox everything
+
+[[tools]]
+name = "shell"
+# no `os_sandbox` here -> inherits the manifest default (true)
+
+[[tools]]
+name = "script"
+os_sandbox = false    # opt OUT for this tool only
+```
+
+Resolution rules:
+
+* `tool_cfg.os_sandbox = Some(true|false)` wins over `security.os_sandbox`
+  unconditionally.
+* `tool_cfg.os_sandbox = None` (or the field absent — the pre-P10.4.1
+  default) falls back to `security.os_sandbox`.
+* The field is honoured only for tools that actually spawn subprocesses
+  (`shell` and `script`). Non-process tools (`file`, `http`) ignore it.
+* `agentflow skill inspect --explain-permissions` prints a per-tool
+  resolution table under `Sandbox profile` so operators can confirm at
+  a glance which tool ended up inheriting vs. opting in vs. opting out.
+
 In Rust code (programmatic use):
 
 ```rust

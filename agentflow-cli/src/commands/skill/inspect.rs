@@ -305,6 +305,29 @@ fn print_sandbox_profile(os_sandbox_optin: bool, tools: &[agentflow_skills::mani
   let has_sandboxable_tool = tools
     .iter()
     .any(|t| matches!(t.name.to_lowercase().as_str(), "shell" | "script"));
+
+  // P10.4.1: surface any per-tool overrides. Operators with mixed
+  // heterogeneous-enforcement skills want to confirm at a glance which
+  // sandboxable tool actually inherits / opts in / opts out — without
+  // this, the manifest-level line alone hides the resolved value.
+  let mut override_lines: Vec<(String, bool, &'static str)> = Vec::new();
+  for tool in tools {
+    let lc = tool.name.to_lowercase();
+    if !matches!(lc.as_str(), "shell" | "script") {
+      continue;
+    }
+    match tool.os_sandbox {
+      Some(value) => override_lines.push((tool.name.clone(), value, "per-tool override")),
+      None => override_lines.push((tool.name.clone(), os_sandbox_optin, "inherited")),
+    }
+  }
+  if !override_lines.is_empty() {
+    println!("  tool resolution:");
+    for (name, effective, source) in &override_lines {
+      println!("    {name}: {effective} ({source})");
+    }
+  }
+
   let mut notes: Vec<String> = Vec::new();
   if has_sandboxable_tool {
     if !os_sandbox_optin && enforcement == SandboxEnforcement::Enforcing {

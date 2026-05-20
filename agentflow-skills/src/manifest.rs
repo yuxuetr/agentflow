@@ -325,6 +325,16 @@ pub struct ToolConfig {
 
   /// Override the sandbox exec-time limit (seconds).
   pub max_exec_time_secs: Option<u64>,
+
+  /// Per-tool override of the manifest-level `[security] os_sandbox`
+  /// flag (P10.4.1). `None` (the default) means inherit from
+  /// `SecurityConfig::os_sandbox`. `Some(true)` opts this tool in
+  /// even when the manifest-level default is off; `Some(false)`
+  /// opts it out even when the manifest-level default is on.
+  /// Only honored for tools that actually spawn subprocesses
+  /// (`shell`, `script`) — non-process tools (`file`, `http`)
+  /// ignore the field.
+  pub os_sandbox: Option<bool>,
 }
 
 /// A knowledge file (markdown, txt, …) loaded into the agent's context.

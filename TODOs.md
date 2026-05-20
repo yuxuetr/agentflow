@@ -522,11 +522,64 @@ No active gaps from the evaluation. Future opportunities:
 
 No gaps from the evaluation. Future opportunities:
 
-- TODO P10.4.1 (Stretch) Sandbox profile per-tool override
-  - Today `security.os_sandbox` is a manifest-level flag. Future:
-    `[security.tools.<name>] os_sandbox = "enforcing"` to override
-    per individual tool when the skill needs heterogeneous
-    enforcement.
+- DONE P10.4.1 (Stretch) Sandbox profile per-tool override
+  - Landed via `[[tools]] os_sandbox = true|false` on individual
+    tool blocks (rather than the TODO's suggested
+    `[security.tools.<name>] os_sandbox = "enforcing"` shape).
+    Rationale: a boolean per `[[tools]]` block stays consistent
+    with the existing manifest-level `[security] os_sandbox`
+    flag, and the runtime `SandboxEnforcement::{Enforcing,
+    Permissive, Disabled}` tri-state is platform-determined
+    output (depends on whether `sandbox-exec` / `seccomp` is
+    available), not user-configurable from the manifest. The
+    operator-facing question is purely "request enforcement on
+    this tool or not" — `true` / `false` captures it without
+    introducing a stringly-typed config the schema layer would
+    have to validate.
+  - Schema: new `os_sandbox: Option<bool>` field on
+    `agentflow_skills::manifest::ToolConfig`. `None` (the
+    default, and what every pre-P10.4.1 manifest deserialises to)
+    falls back to `security.os_sandbox`; `Some(true)` opts that
+    tool in even when the manifest-level default is off;
+    `Some(false)` opts it out even when the manifest-level
+    default is on. Resolved per-iteration in
+    `agentflow_skills::builder::build_tool_registry` so a mixed-
+    policy skill (sandbox shell but not script, or vice versa)
+    gets exactly what the manifest declares.
+  - Scope: only `shell` and `script` honour the override —
+    they're the tools that actually spawn subprocesses. `file`
+    and `http` ignore the field (documented in the rustdoc; the
+    builder simply doesn't read it for those tool kinds).
+  - Operator UX: `agentflow skill inspect --explain-permissions`
+    now prints a per-tool resolution table under
+    `Sandbox profile`. Each sandboxable tool gets a line like
+    `  shell: true (per-tool override)` or `  script: false
+    (inherited)` so the resolved value is visible at a glance —
+    the manifest-level line alone hid the effective state once
+    overrides existed.
+  - Backwards compatibility: zero — the field is optional with
+    `None` default, so manifests authored before this change
+    parse identically and the builder's behaviour for them is
+    unchanged. The new field is additive on the wire.
+  - Tests (6 new in `builder::tests`, plus 1 serde
+    round-trip): per-tool=true overrides manifest=false (opt
+    in), per-tool=false overrides manifest=true (opt out),
+    fallback inherits manifest=on, fallback inherits
+    manifest=off, the canonical "heterogeneous skill"
+    (`shell` sandboxed + `script` unsandboxed in the same
+    manifest), and a serde stability pin (`ToolConfig` accepts
+    `os_sandbox = true|false` on a `[[tools]]` block; the field
+    is fully optional so pre-FU manifests still parse).
+    Backend-name assertions use `Tool::sandbox_status().backend`
+    + `agentflow_tools::sandbox::default_backend()` so the
+    suite stays portable across hosts that fall back to noop.
+  - Verification: `cargo test -p agentflow-skills --lib
+    builder::tests` 23/23 green (6 new). `cargo clippy -p
+    agentflow-skills -p agentflow-cli --tests -- -D warnings`
+    clean.
+  - Docs: `docs/TOOL_PERMISSIONS.md` gains a "Per-tool override
+    (P10.4.1)" subsection with the TOML example + resolution
+    rules + the `skill inspect` UX note.
 
 ### P10.5 — agentflow-mcp (A-)
 
