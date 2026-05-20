@@ -220,15 +220,48 @@ struct RegressionDecision {
   threshold_p_value: f64,
 }
 
-/// Load a stored `EvalReport` (baseline snapshot) from disk. The file
-/// is expected to be the same JSON shape `--output` writes inside its
-/// `"baseline"` block — produced once by an earlier run and checked in
-/// under `agentflow-rag/eval_baselines/<dataset>/<retriever>.json`.
+/// Load a stored `EvalReport` (baseline snapshot) from disk.
+///
+/// Accepts two on-disk shapes:
+///
+/// 1. **Bare `EvalReport`** — the historical convention used by
+///    `agentflow-rag/eval_baselines/ci_offline/bm25.json` (one
+///    object with `label`, `per_k`, `mrr`, etc. at the top level).
+/// 2. **Envelope form** — the shape `--output <file>` writes
+///    today: `{ dataset, baseline, candidate, comparison,
+///    regression }`. The reader extracts the `baseline` field.
+///
+/// Accepting both shapes (P10.6.2) means `agentflow rag eval
+/// --retriever dense --output <path>` produces a file that can be
+/// fed back via `--compare-baseline <path>` on a later run without
+/// the operator having to hand-extract the `.baseline` field. The
+/// pre-P10.6.2 path required that manual extraction.
 fn load_baseline_from_path(path: &PathBuf) -> Result<EvalReport> {
   let raw = std::fs::read_to_string(path)
     .with_context(|| format!("reading baseline snapshot at {}", path.display()))?;
-  let report: EvalReport = serde_json::from_str(&raw)
+  // Try the bare shape first: it's what bm25.json uses and what
+  // `serde::from_str::<EvalReport>` decodes cleanly. If that
+  // fails, fall through to the envelope path so operators with a
+  // `--output`-generated file get a clear error only when BOTH
+  // shapes fail.
+  if let Ok(report) = serde_json::from_str::<EvalReport>(&raw) {
+    return Ok(report);
+  }
+  let envelope: Value = serde_json::from_str(&raw)
     .with_context(|| format!("parsing baseline snapshot at {}", path.display()))?;
+  let baseline = envelope.get("baseline").ok_or_else(|| {
+    anyhow::anyhow!(
+      "baseline snapshot at {} is neither a bare EvalReport nor an envelope with a \
+       `baseline` field; regenerate with `agentflow rag eval --output <path>` to fix",
+      path.display()
+    )
+  })?;
+  let report: EvalReport = serde_json::from_value(baseline.clone()).with_context(|| {
+    format!(
+      "extracting `baseline` field from envelope at {}",
+      path.display()
+    )
+  })?;
   Ok(report)
 }
 
@@ -636,5 +669,86 @@ mod tests {
     let cmp = comparison_with_recall_drop(0.04, Some(0.04));
     assert!(evaluate_regression(&cmp, 0.03, 0.05).regression_detected);
     assert!(!evaluate_regression(&cmp, 0.05, 0.01).regression_detected);
+  }
+
+  // ── load_baseline_from_path dual-shape parser (P10.6.2) ─────────────
+
+  /// Helper: minimal `EvalReport` for the round-trip tests.
+  fn fixture_report() -> EvalReport {
+    use agentflow_rag::eval::PerKMetrics;
+    use agentflow_rag::eval::metrics::LatencyAggregate;
+    EvalReport {
+      retriever: "fixture".into(),
+      label: "baseline".into(),
+      per_k: vec![PerKMetrics {
+        k: 5,
+        recall: 1.0,
+        ndcg: 1.0,
+      }],
+      mrr: 1.0,
+      latency: LatencyAggregate {
+        mean_ms: 0.1,
+        p50_ms: 0.1,
+        p95_ms: 0.1,
+      },
+      num_queries: 10,
+      queries_with_relevant: 10,
+      per_query: vec![],
+    }
+  }
+
+  #[test]
+  fn load_baseline_reads_bare_eval_report() {
+    // The bm25.json convention: a bare EvalReport at the top level.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bare.json");
+    std::fs::write(
+      &path,
+      serde_json::to_string_pretty(&fixture_report()).unwrap(),
+    )
+    .unwrap();
+    let loaded = load_baseline_from_path(&path).expect("bare shape must load");
+    assert_eq!(loaded.retriever, "fixture");
+    assert_eq!(loaded.per_k.len(), 1);
+  }
+
+  /// P10.6.2: the reader must also accept the envelope shape that
+  /// `--output <path>` writes (`{ dataset, baseline, candidate, ... }`).
+  /// Without this, an operator can't feed back their own `--output`
+  /// file via `--compare-baseline` without hand-extracting the
+  /// `.baseline` field — the exact frustration this commit closes.
+  #[test]
+  fn load_baseline_reads_envelope_with_baseline_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("envelope.json");
+    let envelope = json!({
+      "dataset": { "path": "/tmp/x", "corpus_size": 20 },
+      "baseline": fixture_report(),
+      "candidate": Value::Null,
+      "comparison": Value::Null,
+      "regression": Value::Null,
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&envelope).unwrap()).unwrap();
+    let loaded = load_baseline_from_path(&path).expect("envelope shape must load");
+    assert_eq!(loaded.retriever, "fixture");
+  }
+
+  /// Neither shape → clear error naming the recovery path. Catches a
+  /// future refactor that loosens the parser to silently accept an
+  /// EvalReport-without-required-fields and then trip down-stream.
+  #[test]
+  fn load_baseline_errors_when_neither_shape_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("garbage.json");
+    std::fs::write(&path, r#"{"random_key": 42}"#).unwrap();
+    let err = load_baseline_from_path(&path).expect_err("must err");
+    let msg = format!("{err:#}");
+    // The two-shape diagnostic + the regeneration hint are both
+    // actionable; pin both so the message doesn't degrade.
+    assert!(
+      msg.contains("neither a bare EvalReport nor an envelope"),
+      "{msg}"
+    );
+    assert!(msg.contains("agentflow rag eval --output"), "{msg}");
   }
 }

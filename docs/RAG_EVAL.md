@@ -207,6 +207,45 @@ The sign test is a coarse signal — if you need real statistical claims, run a
 larger dataset and compute paired t-tests externally on the per-query rows in
 the JSON report.
 
+#### Checked-in regression baselines (P10.6.2)
+
+The repo ships three regression-gate baselines for the bundled
+`ci_offline` dataset under `agentflow-rag/eval_baselines/ci_offline/`:
+
+| Baseline file | Retriever | API key needed at run time? | CI gating |
+| --- | --- | --- | --- |
+| `bm25.json` | `bm25` (lexical, offline) | No | Always (every PR) |
+| `dense.json` | `dense` (OpenAI `text-embedding-3-small`, in-memory cosine) | Yes — `OPENAI_API_KEY` | When `OPENAI_API_KEY` secret is set on the runner |
+| `hybrid.json` | `hybrid` (RRF over BM25 + dense) | Yes — `OPENAI_API_KEY` | When `OPENAI_API_KEY` secret is set on the runner |
+
+The CI workflow (`.github/workflows/quality.yml::rag-eval-smoke`)
+runs `--compare-baseline` against all three; forks without the
+`OPENAI_API_KEY` secret stay green because the dense + hybrid steps
+self-skip via `if: ${{ secrets.OPENAI_API_KEY != '' }}`.
+
+Both the bare `EvalReport` shape (the `bm25.json` convention) and
+the `{ dataset, baseline, candidate, ... }` envelope shape (what
+`--output <path>` writes) are accepted by `--compare-baseline`, so
+operators can feed their own `--output` files back without any
+manual extraction.
+
+Regenerating after upstream changes (new corpus docs, new queries,
+embedding-model upgrade):
+
+```bash
+agentflow rag eval \
+  --dataset agentflow-rag/eval_datasets/ci_offline \
+  --retriever dense \
+  --embedding-model text-embedding-3-small \
+  --output agentflow-rag/eval_baselines/ci_offline/dense.json
+
+agentflow rag eval \
+  --dataset agentflow-rag/eval_datasets/ci_offline \
+  --retriever hybrid \
+  --embedding-model text-embedding-3-small \
+  --output agentflow-rag/eval_baselines/ci_offline/hybrid.json
+```
+
 ## JSON report shape
 
 When `--output report.json` is set, the harness writes a single JSON document

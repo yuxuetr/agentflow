@@ -46,6 +46,20 @@ across the 200+ tests touched.
 
 #### CLI
 
+- **Dense + hybrid RAG eval baselines checked in** (P10.6.2). The
+  bundled `ci_offline` dataset now has three regression-gate
+  baselines under `agentflow-rag/eval_baselines/ci_offline/`:
+  `bm25.json` (offline, always gated on every PR), plus the new
+  `dense.json` (`text-embedding-3-small`) and `hybrid.json` (RRF
+  over BM25 + dense). CI gates against all three; the dense + hybrid
+  steps self-skip via `if: ${{ secrets.OPENAI_API_KEY != '' }}` so
+  forks without the secret stay green. A bug-fix in the
+  `--compare-baseline` reader lets it accept BOTH the bare
+  `EvalReport` shape (the bm25.json convention) AND the
+  `{ dataset, baseline, candidate, ... }` envelope shape that
+  `--output <path>` writes — pre-P10.6.2 operators had to
+  hand-extract the `.baseline` field to round-trip their own
+  `--output` files back through the regression gate.
 - **Pluggable RAG eval retrievers** (P10.6.1):
   `agentflow-rag::eval::DenseEval` (in-memory cosine similarity over
   pre-embedded corpus + queries) and

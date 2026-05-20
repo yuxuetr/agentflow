@@ -168,12 +168,41 @@ jobs:
         run: cargo test -p agentflow-cli --features rag --test rag_eval_cli_tests
       - name: Run RAG eval gate-logic unit tests
         run: cargo test -p agentflow-cli --features rag --bin agentflow commands::rag::eval
-      - name: Run RAG eval against checked-in baseline snapshot
+      - name: Run RAG eval against checked-in BM25 baseline
         run: |
           cargo run -p agentflow-cli --features rag --bin agentflow -- \
             rag eval \
               --dataset agentflow-rag/eval_datasets/ci_offline \
               --compare-baseline agentflow-rag/eval_baselines/ci_offline/bm25.json
+      # P10.6.2: dense + hybrid baselines require live OpenAI
+      # embeddings, so they self-skip when OPENAI_API_KEY isn't
+      # set as a repo secret. Forks without the secret stay green;
+      # the main repo's PRs get full retriever-regression coverage
+      # when the secret is available on the runner. The condition
+      # checks `secrets.OPENAI_API_KEY != ''` rather than the step
+      # env — `if:` is evaluated before the step's `env:` block.
+      - name: Run RAG eval against checked-in dense baseline
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+            rag eval \
+              --dataset agentflow-rag/eval_datasets/ci_offline \
+              --retriever dense \
+              --embedding-model text-embedding-3-small \
+              --compare-baseline agentflow-rag/eval_baselines/ci_offline/dense.json
+      - name: Run RAG eval against checked-in hybrid baseline
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+            rag eval \
+              --dataset agentflow-rag/eval_datasets/ci_offline \
+              --retriever hybrid \
+              --embedding-model text-embedding-3-small \
+              --compare-baseline agentflow-rag/eval_baselines/ci_offline/hybrid.json
 
   examples:
     name: examples compile and smoke

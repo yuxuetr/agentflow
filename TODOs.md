@@ -426,13 +426,38 @@ No gaps from the evaluation. Future opportunities:
     missing. Hermetic / CI runs continue to use `--retriever
     bm25`, which has no external dependencies.
 
-- TODO P10.6.2 (Medium) Additional eval baselines
-  - Now unblocked by P10.6.1. Ship `dense.json` + `hybrid.json`
-    baselines alongside the existing `bm25.json` so regressions
-    across all three retrievers gate releases. Requires
-    `OPENAI_API_KEY` to generate the baselines, but the on-disk
-    snapshots themselves are deterministic-enough to check in
-    once.
+- DONE P10.6.2 (Medium) Additional eval baselines
+  - Generated against `OPENAI_API_KEY` from `~/.agentflow/.env`:
+    `dense.json` (retriever=`dense`, model=`text-embedding-3-small`,
+    Recall@1=0.65, Recall@5=1.0, MRR=1.0) and `hybrid.json`
+    (`hybrid:bm25+dense:text-embedding-3-small`, RRF k=60, same
+    metrics on the `ci_offline` dataset). Both checked in under
+    `agentflow-rag/eval_baselines/ci_offline/`.
+  - Round-trip verified by re-running `--compare-baseline` against
+    each file: regression gate `PASS — no regression: neither
+    recall nor p-value crossed the threshold` on both. Determinism
+    holds at the threshold level (Recall@5 / nDCG@5 deltas =
+    0.0000 on rerun) even though OpenAI embedding numerics aren't
+    bit-stable.
+  - Discovered + fixed a pre-existing reader / writer mismatch:
+    `--output <path>` writes the `{ dataset, baseline, candidate,
+    comparison, regression }` envelope but `--compare-baseline`
+    previously only parsed a bare `EvalReport`. The dual-shape
+    reader in `load_baseline_from_path` now accepts both shapes
+    (bare EvalReport first; falls through to `envelope["baseline"]`
+    extraction on parse failure) so operators can feed their own
+    `--output` files back without manual extraction. 3 new unit
+    tests in `commands::rag::eval::tests` pin the dual-shape
+    contract + the actionable error on neither-shape-matches.
+  - CI: `.github/workflows/quality.yml::rag-eval-smoke` extended
+    with two new steps that gate against `dense.json` + `hybrid.json`
+    when `OPENAI_API_KEY` secret is set on the runner. `if: ${{
+    secrets.OPENAI_API_KEY != '' }}` (NOT `env.OPENAI_API_KEY` —
+    the `if:` evaluates before the step `env:` block) lets forks
+    without the secret stay green.
+  - Docs: `docs/RAG_EVAL.md` gains a "Checked-in regression
+    baselines" subsection with the three-baseline table + the
+    regeneration commands.
 
 - TODO P10.6.3 (Low — Stretch) Latency profile per chunk size
   - Today the eval reports p50/p95 latency but not per-chunk-size.
