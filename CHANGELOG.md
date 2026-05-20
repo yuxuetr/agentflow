@@ -105,6 +105,37 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **`agentflow mcp config list --format json-envelope`** support
+  (P10.11.3). The audit of all `format: String` clap fields in
+  `agentflow-cli/src/main.rs` found exactly one holdout that
+  didn't accept `json-envelope`: this one. The legacy `--format
+  json` bare-body shape is preserved for back-compat; the new
+  envelope mode wraps the same `{source, servers}` payload in
+  the canonical `agentflow.cli/1` wire schema. Hermetic CLI test
+  added alongside the existing json test.
+- **`cargo xtask check-changelog`** subcommand (P10.18.2). Fails
+  when a non-trivial source change versus a base ref (default
+  `origin/main`) didn't touch `CHANGELOG.md` AND no commit body
+  in the branch range carries `chore(skip-changelog)`. Trivial
+  paths (`docs/`, `*.md`, `Cargo.lock` / `package-lock.json`,
+  `.github/workflows/`, `tests/`, `**/fixtures/`, `*.test.ts` /
+  `*.test.rs`) are excluded — that classifier is the
+  single-source-of-truth pass/fail boundary, pinned by a
+  dedicated unit test. Not wired into `quality.yml` today;
+  available for manual + local pre-commit use. New
+  `check_changelog_tests` module covers the 4 outcomes
+  (only-docs / changelog-touched / skip-marker / source-but-no-
+  signal) with a git fixture per test.
+- **Checkpoint schema documentation** (P10.1.2) —
+  `docs/CHECKPOINT_SCHEMA.md` formally documents the
+  `decode_checkpoint_flow_value` warn-vs-silent fallback
+  asymmetry: tagged-but-corrupt values warn loudly so a writer
+  regression is debuggable; genuinely untagged legacy values
+  fall back silently because spamming the operator on every
+  pre-0.2 resume would be noise. The doc names the tests that
+  pin each branch + the operator-facing diagnostic surface
+  (`tagged ... but failed to deserialize` substring) so the
+  contract stays auditable. STABILITY.md cross-references it.
 - **Playwright UI e2e wired into CI** (P10.17.4). The 6 specs in
   `agentflow-ui/e2e/` (across two files: `runs-new.spec.ts` +
   `harness-sessions.spec.ts`) now run on a new

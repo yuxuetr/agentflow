@@ -222,10 +222,22 @@ all map to the P7.4-FU4 production-deployment checklist in
   - Criterion suites already exist (`benches/scheduler.rs`); compare
     against the perf-regression gate baseline and look for any 1.10×
     regressions accumulated during P3.3 envelope work.
-- TODO P10.1.2 (Stretch) Document `decode_checkpoint_flow_value`'s
+- DONE P10.1.2 (Stretch) Document `decode_checkpoint_flow_value`'s
   warn-vs-silent fallback in `docs/CHECKPOINT_SCHEMA.md`
-  - One paragraph; helps future readers understand pre-0.2 legacy
-    handling and why the two paths diverge.
+  - The doc file didn't exist; created it as the canonical
+    checkpoint-schema reference. Documents the on-disk tagged
+    `FlowValue` shape (json/file/url variants), the reader
+    contract (three input categories — tagged-clean,
+    tagged-corrupt, untagged), and the operator-facing
+    asymmetry between the two fallback paths. Names the tests
+    that pin each branch
+    (`malformed_tagged_checkpoint_value_falls_back_to_json`,
+    `legacy_untagged_checkpoint_values_decode_as_json`,
+    `legacy_raw_json_checkpoint_values_read_as_json_flow_values`)
+    and the operator-facing `tagged ... but failed to
+    deserialize` substring so a debugger can grep stderr.
+    `docs/STABILITY.md` cross-references the new file from
+    its existing Checkpoint state row.
 
 ### P10.2 — agentflow-nodes (A-)
 
@@ -682,12 +694,29 @@ No active gaps. Future opportunities:
     propagation. `cargo clippy -p agentflow-cli --tests -- -D
     warnings` clean.
 
-- TODO P10.11.3 (Low — Stretch) Remaining `--format json-envelope`
+- DONE P10.11.3 (Low — Stretch) Remaining `--format json-envelope`
   migrations
-  - Audit which commands still lack `--format json-envelope`
-    (likely a few small ones like `mcp config`, `marketplace
-    search`, `config show`). Migrate them so the envelope contract
-    is universal.
+  - Audit via `awk` over `agentflow-cli/src/main.rs::value_parser`
+    fields: the audit found EXACTLY ONE holdout — `mcp config
+    list`'s `--format` accepted only `text | json`. Every other
+    `format: String` clap field already accepted `json-envelope`
+    (or `stream-json` where streaming is the contract).
+    `mcp config show` was an intentional exception (bare JSON
+    always, no `--format` at all) — its output is a single
+    bounded server config, and adding `--format` would be a
+    breaking change for callers that pipe to `jq` directly.
+  - Migrated `mcp config list`:
+    `value_parser` widened to `["text", "json", "json-envelope"]`;
+    `run_list(format: &str)` instead of `run_list(json: bool)`;
+    json-envelope mode wraps the same `{source, servers}` body
+    in `CliJsonEnvelope::ok("mcp config list", ...)`. Legacy
+    `--format json` bare-body output preserved unchanged so
+    existing scripts don't break. New hermetic CLI test
+    (`config_list_json_envelope_format_wraps_body_in_canonical_envelope`)
+    sits alongside the existing `_json_format_emits_structured_payload`
+    test and pins the four canonical envelope fields
+    (`version`, `command`, `result`, `errors`) + asserts the
+    body parity with the legacy mode.
 
 - DONE P10.11.4 (Medium — pre-GA) Server-side mapping for
   local-only `workflow run` flags
@@ -951,9 +980,31 @@ No active gaps. Future opportunities:
 
 - TODO P10.18.1 (Stretch) `cargo xtask refresh-live-models` (also
   listed under P10.3.4)
-- TODO P10.18.2 (Stretch) `cargo xtask check-changelog` to ensure
-  every PR touches `CHANGELOG.md` or has a `chore(skip-changelog)`
-  marker
+- DONE P10.18.2 (Stretch) `cargo xtask check-changelog`
+  - New subcommand at `xtask/src/main.rs::check_changelog_from_args`.
+    Args: `cargo xtask check-changelog [BASE_REF]` (default
+    `origin/main`). Behaviour:
+    1. `git diff --name-only BASE...HEAD` to enumerate the
+       branch's touched files.
+    2. Classify every path through `is_trivial_changelog_path`
+       (docs/ + *.md + Cargo.lock / package-lock.json +
+       .gitignore + .github/workflows/ + tests/ + **/fixtures/
+       + *.test.ts / *.test.rs). Trivial-only changes → PASS.
+    3. Else: PASS when CHANGELOG.md is touched OR any commit
+       body in BASE..HEAD contains `chore(skip-changelog)`.
+    4. Else: FAIL listing the non-trivial paths + the
+       skip-marker escape hatch.
+  - Tests: 5 new in `check_changelog_tests` (trivial-path
+    classifier covering each prefix/suffix family; the 4
+    outcome paths each with a real `tempfile + git init`
+    fixture). The classifier test alone catches a regression
+    that narrows the trivial set, which is the most
+    operator-impactful break-mode (suddenly more PRs need a
+    CHANGELOG bump).
+  - **Not** wired into `quality.yml` today — landing the
+    xtask first lets contributors run it locally and confirms
+    the heuristic against real PRs before it gates anything.
+    `print_usage` text + module rustdoc document the contract.
 
 ### P10.19 — Cross-crate / workspace level
 

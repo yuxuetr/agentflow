@@ -192,15 +192,32 @@ pub fn run_validate() -> Result<()> {
 /// `agentflow mcp config list` — print the configured server names +
 /// commands so operators can see what doctor / future tools will
 /// probe.
-pub fn run_list(json: bool) -> Result<()> {
+///
+/// `format` accepts:
+/// - `"text"` (default) — human-readable bullet list.
+/// - `"json"` — legacy bare body `{source, servers}`. Preserved
+///   for back-compat with existing automation; new tooling
+///   should prefer `json-envelope`.
+/// - `"json-envelope"` — canonical `CliJsonEnvelope` wrapping
+///   the same body the legacy `json` mode emits, so scripts get
+///   the closed `agentflow.cli/1` wire shape (P10.11.3).
+pub fn run_list(format: &str) -> Result<()> {
   let (config, source) = McpConfigFile::load_default()?;
-  if json {
-    let payload = serde_json::json!({
-      "source": source.display_path(),
-      "servers": config.mcp_servers,
-    });
-    println!("{}", serde_json::to_string_pretty(&payload)?);
-    return Ok(());
+  let payload = serde_json::json!({
+    "source": source.display_path(),
+    "servers": config.mcp_servers,
+  });
+  match format {
+    "json" => {
+      println!("{}", serde_json::to_string_pretty(&payload)?);
+      return Ok(());
+    }
+    "json-envelope" => {
+      let envelope = crate::json_envelope::CliJsonEnvelope::ok("mcp config list", &payload);
+      println!("{}", serde_json::to_string_pretty(&envelope)?);
+      return Ok(());
+    }
+    _ => {}
   }
 
   println!("MCP config: {}", source.display_path());

@@ -753,10 +753,17 @@ enum McpConfigCommands {
   Path,
   /// Parse + validate the config and report the server count
   Validate,
-  /// List configured MCP servers (text by default, `--format json` for tooling)
+  /// List configured MCP servers (text by default; `--format json`
+  /// for legacy bare body, `--format json-envelope` for the
+  /// canonical `agentflow.cli/1` wrapper).
   List {
-    /// Emit a JSON object with `source` + `servers` keys instead of text
-    #[arg(long, value_parser = ["text", "json"], default_value = "text")]
+    /// Output format: `text` (default), `json` (legacy bare body
+    /// — `{source, servers}`), or `json-envelope` (canonical
+    /// `CliJsonEnvelope` wrapping the same body). The bare-body
+    /// `json` mode is preserved for back-compat with existing
+    /// scripts; new tooling should use `json-envelope` for the
+    /// closed wire shape promise.
+    #[arg(long, value_parser = ["text", "json", "json-envelope"], default_value = "text")]
     format: String,
   },
   /// Print one server's full config (env, args, timeouts) as JSON
@@ -1706,7 +1713,7 @@ async fn main() {
       McpCommands::Config { command } => match command {
         McpConfigCommands::Path => mcp::config::run_path(),
         McpConfigCommands::Validate => mcp::config::run_validate(),
-        McpConfigCommands::List { format } => mcp::config::run_list(format == "json"),
+        McpConfigCommands::List { format } => mcp::config::run_list(&format),
         McpConfigCommands::Show { name } => mcp::config::run_show(&name),
       },
     },

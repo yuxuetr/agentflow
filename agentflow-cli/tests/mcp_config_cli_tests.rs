@@ -85,6 +85,51 @@ command = "npx"
   );
 }
 
+/// P10.11.3: `--format json-envelope` migration. The legacy
+/// `--format json` keeps its bare-body output for back-compat;
+/// the new envelope mode wraps the same body in the canonical
+/// `CliJsonEnvelope` so scripts get the closed wire shape.
+#[test]
+fn config_list_json_envelope_format_wraps_body_in_canonical_envelope() {
+  let (_tmp, path) = write_fixture(
+    r#"
+[[mcp_servers]]
+name = "filesystem"
+command = "npx"
+"#,
+  );
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.env("AGENTFLOW_MCP_CONFIG", &path).args([
+    "mcp",
+    "config",
+    "list",
+    "--format",
+    "json-envelope",
+  ]);
+  let out = cmd.assert().success();
+  let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+  let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+  // Canonical envelope shape: version + command + result + errors.
+  assert_eq!(parsed["version"], "agentflow.cli/1");
+  assert_eq!(parsed["command"], "mcp config list");
+  assert!(
+    parsed["errors"]
+      .as_array()
+      .expect("errors must be an array")
+      .is_empty(),
+    "success path must have no envelope errors",
+  );
+  // The same body the legacy `json` mode emits lands under `result`.
+  let result = &parsed["result"];
+  assert!(result.get("source").is_some());
+  let servers = result.get("servers").and_then(|v| v.as_array()).unwrap();
+  assert_eq!(servers.len(), 1);
+  assert_eq!(
+    servers[0].get("name").and_then(|v| v.as_str()),
+    Some("filesystem"),
+  );
+}
+
 #[test]
 fn config_show_prints_one_server_as_json() {
   let (_tmp, path) = write_fixture(
