@@ -105,6 +105,22 @@ across the 200+ tests touched.
   skill whose server script doesn't exist, so a spurious spawn
   would fail loudly), and stray-flag-without-`--explain-permissions`
   note.
+- **`agentflow harness replay <session_id>`** subcommand
+  (P10.10.2). Re-streams a persisted JSONL session log with
+  time-paced output (sleeps between events based on their
+  original `ts` deltas). Useful for debugging long-finished
+  sessions where the *pacing* of events carries diagnostic value
+  — e.g. spotting a tool call that fired right before a stall.
+  `--speed 1x` (default) honours the original timing; `2x` /
+  `0.5x` scale it; `inf` / `instant` skip all sleeps (== `resume`
+  but routed through the per-event formatter). `--from-seq` /
+  `--to-seq` clip the visible window; `--filter-kind` (repeatable)
+  acts as an OR include-list over the `kind` discriminator.
+  `--output {text, stream-json}` — `json` / `json-envelope` are
+  rejected because replay is open-ended (mirrors the
+  `workflow logs --follow` rejection). The 1-hour sleep cap
+  prevents an overnight idle gap from hanging the replay (run
+  with `--speed inf` if you really want the original timing).
 - **`agentflow memory prune --layer {preference,entity_facts}
   --db <path> --older-than <duration>`** subcommand (P10.7.1)
   wires the existing trait surface

@@ -580,11 +580,41 @@ No active gaps. Future opportunities:
   - Provider subscription bridge
   - Each requires its own RFC. Don't pull en bloc.
 
-- TODO P10.10.2 (Low — Stretch) Harness session replay
-  - `harness list` shows session ids; a
-    `harness replay <id> --speed 2x` would re-stream the JSONL
-    log through a JSONL→TUI renderer for debugging long sessions
-    after the fact.
+- DONE P10.10.2 (Low — Stretch) Harness session replay
+  - Landed: new `HarnessCommands::Replay` subcommand backed by
+    `agentflow-cli/src/commands/harness/replay.rs::execute`. The
+    "JSONL→TUI renderer" in the TODO scope reduced to "per-event
+    formatted lines on stdout" — a real TUI is overkill for the
+    stretch tier, and stream-json mode covers the
+    automation-friendly path. The pacing logic (`SpeedMode::
+    Realtime(multiplier)` / `Instant`) is what makes this
+    materially different from the existing `resume` (dump-all-at-
+    once) command.
+  - Flags: `--speed` (`1x` / `2x` / `0.5x` / `inf` / `instant`,
+    case-insensitive on the aliases; bare integers rejected with
+    a clear "must end in 'x'" message), `--from-seq` / `--to-seq`
+    (inclusive bounds, u64-typed to match `HarnessEvent.seq`),
+    `--filter-kind` (repeatable, OR semantics over the snake_case
+    kind discriminator), `--output {text, stream-json}` (json /
+    json-envelope rejected up front as bounded formats).
+  - Robustness: 1-hour sleep cap so a session that idled overnight
+    doesn't hang the replay; `Duration::ZERO` for backwards-ts
+    (clock skew) so out-of-order events flow through instead of
+    panicking; `infx` rejected as non-finite (the parse-as-f64
+    edge case) so it doesn't silently degrade to Instant.
+  - Tests: 15 unit in `commands::harness::replay::tests`
+    (parse_speed: every accepted form + each rejection path;
+    apply_filters: no-filter / from / to / kind / additive
+    include-list; sleep_between: Instant / multiplier scaling /
+    backwards-ts / 1-hour cap) + 7 hermetic CLI tests in
+    `agentflow-cli/tests/harness_replay_tests.rs` that seed a
+    temp JSONL session log with `chrono::TimeZone::timestamp_opt`
+    + run the CLI binary against it (instant-speed full stream,
+    stream-json one-event-per-line + header-on-stderr,
+    filter-kind restriction, from-seq skip, bare-integer-speed
+    rejection, json-envelope-format rejection, unknown-session
+    error). `cargo clippy -p agentflow-cli --tests -- -D
+    warnings` clean.
 
 ### P10.11 — agentflow-cli (A-)
 

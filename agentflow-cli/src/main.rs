@@ -307,6 +307,52 @@ enum HarnessCommands {
     #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
   },
+  /// Time-paced re-stream of a persisted Harness session log
+  /// (P10.10.2).
+  ///
+  /// Unlike `resume` (dump-all-at-once), `replay` sleeps between
+  /// events based on their original `ts` deltas so an operator
+  /// can watch a long-finished session "happen" in real time or
+  /// accelerated time. Useful for spotting tool calls that fired
+  /// right before a stall, or for debugging the *pacing* of a
+  /// long-running multi-hour session after the fact.
+  Replay {
+    /// Session id to replay
+    session_id: String,
+    /// Override the run-dir
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Replay speed: `1x` real-time, `2x` / `0.5x` / etc. for
+    /// scaled timing, or `inf` / `instant` for no sleeps.
+    /// Bare integers (e.g. `2`) are rejected because the
+    /// `x` suffix is the only disambiguation between speed
+    /// multiplier and seconds.
+    #[arg(long, default_value = "1x")]
+    speed: String,
+    /// Start from this seq (inclusive). Earlier events are
+    /// silently skipped + their inter-event sleeps collapse.
+    #[arg(long)]
+    from_seq: Option<u64>,
+    /// Stop at this seq (inclusive).
+    #[arg(long)]
+    to_seq: Option<u64>,
+    /// Only show events of this `kind` (repeatable for OR
+    /// semantics). Names match the `kind` discriminator in the
+    /// JSONL wire shape (`session_started`, `step_started`,
+    /// `tool_call_requested`, `approval_requested`,
+    /// `approval_decided`, `tool_call_completed`,
+    /// `background_task_updated`, `memory_summary_added`,
+    /// `stopped`).
+    #[arg(long = "filter-kind", value_name = "KIND")]
+    filter_kinds: Vec<String>,
+    /// Output format: `text` (one human-readable line per event)
+    /// or `stream-json` (one JSON event per line, JSONL —
+    /// pipeable to `jq -c`). `json` / `json-envelope` are
+    /// rejected because replay is open-ended; use `harness
+    /// resume` for the bounded shape.
+    #[arg(long, default_value = "text", value_parser = ["text", "stream-json"])]
+    output: String,
+  },
 }
 #[cfg(feature = "plugin")]
 #[derive(Args)]
@@ -1962,6 +2008,26 @@ async fn main() {
         run_dir,
         output,
       } => harness::inspect::execute(session_id, run_dir, output).await,
+      HarnessCommands::Replay {
+        session_id,
+        run_dir,
+        speed,
+        from_seq,
+        to_seq,
+        filter_kinds,
+        output,
+      } => {
+        harness::replay::execute(
+          session_id,
+          run_dir,
+          speed,
+          from_seq,
+          to_seq,
+          filter_kinds,
+          output,
+        )
+        .await
+      }
     },
     #[cfg(feature = "plugin")]
     Commands::Plugin(args) => match args.command {

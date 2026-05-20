@@ -8,6 +8,7 @@
 
 pub mod inspect;
 pub mod list;
+pub mod replay;
 pub mod resume;
 pub mod run;
 
