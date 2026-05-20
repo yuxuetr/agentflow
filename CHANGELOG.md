@@ -51,6 +51,45 @@ across the 200+ tests touched.
     never invoked in the test suite, so this runs hermetically
     in CI.
 
+#### Worker admission
+
+- **Signed-JWT identity flavour for worker admission** (P10.16.1).
+  New `agentflow-server::scheduler::jwt` module ships `JwtPolicy`
+  (issuer / audience / key pool / leeway), HS256 + RS256
+  `JwtVerificationKey`, and a strict claim validator
+  (`iss`/`aud`/`sub`/`exp`/`nbf`). `WorkerAdmissionPolicy` gains
+  `jwt: Option<JwtPolicy>` + `jwt_workers: HashSet<WorkerId>` so
+  workers can opt into JWT auth alongside (or instead of) the
+  existing PSK path. PSK takes precedence over JWT when a worker
+  is misconfigured into both sets so there's no silent
+  downgrade. The `aud` claim deserializer is tolerant of both
+  the string and string-array forms per RFC §4.1.3. Key
+  rotation works the same way as PSK: append a new
+  `JwtVerificationKey` to the policy pool, flip the IdP, drop
+  the old key. HS256 fits self-administered deployments; RS256
+  fits the production path where an external IdP (Okta / Auth0
+  / Vault / GCP Workload Identity) signs and the control plane
+  only holds the public key.
+  - **Wire-shape additive change:** `AdmissionError::InvalidCredential`
+    gained a `reason: String` field so the verifier-specific
+    failure mode (PSK rotation mismatch / JWT issuer mismatch /
+    expired / etc.) reaches the operator-facing log line. The
+    contract is `Experimental` per `docs/STABILITY.md` so this
+    is in scope; no external matches exist in the workspace.
+  - 14 hermetic unit tests in `scheduler::jwt::tests` cover
+    happy path, every documented failure mode, leeway boundary,
+    key rotation pool, and the multi-`aud` shape; 7 more tests
+    in `scheduler::admission::tests::jwt_flavor` exercise the
+    policy-layer routing (valid token admitted, missing
+    credential, wrong subject, expired token,
+    `jwt_workers`-without-`jwt`-policy as server config error,
+    PSK-takes-precedence, anonymous workers still anonymous
+    when JWT is configured). `now()` injection keeps the suite
+    deterministic.
+  - gRPC-metadata propagation of admission tokens is still
+    deferred (separate TODO).
+  - Adds `jsonwebtoken = "9.3"` dep to `agentflow-server`.
+
 #### Server gateway
 
 - **Per-run retention override on `POST /v1/runs`** (P10.14.1).

@@ -871,11 +871,57 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
 
 ### P10.16 — agentflow-worker (B)
 
-- TODO P10.16.1 (Medium — v1.x) Signed-JWT identity flavour for
+- DONE P10.16.1 (Medium — v1.x) Signed-JWT identity flavour for
   worker admission (P5.5 deferred)
-  - Today: PSK-only auth via `WorkerCredential`. JWT is documented
-    as the next iteration when the broader auth track ships
-    issuer/audience/key rotation primitives.
+  - Landed. New `agentflow-server/src/scheduler/jwt.rs` ships
+    `JwtPolicy` (issuer / audience / key pool / leeway),
+    `JwtVerificationKey::{Hs256, Rs256}`, `WorkerJwtClaims` (with
+    a tolerant `aud` deserializer that accepts string OR array
+    per RFC §4.1.3), and `verify_worker_jwt[_at]` with strict
+    `iss` / `aud` / `sub` / `exp` / `nbf` validation and
+    operator-actionable error variants (`IssuerMismatch`,
+    `AudienceMismatch`, `SubjectMismatch`, `Expired`,
+    `NotYetValid`, `SignatureMismatch`, `Malformed`, `NoKeys`).
+  - `WorkerAdmissionPolicy` gains `jwt: Option<JwtPolicy>` +
+    `jwt_workers: HashSet<WorkerId>`. PSK takes precedence over
+    JWT when a worker is misconfigured into both sets so a
+    fat-fingered config can't silently downgrade auth. Workers
+    in neither set stay anonymous (existing behavior).
+  - `AdmissionError::InvalidCredential` extended with
+    `reason: String` so the verifier-specific message
+    (`"psk did not match any rotation entry"` / JWT verify
+    error `Display`) reaches `tonic::Status::permission_denied`.
+    No external consumers in the workspace; experimental tier
+    per `docs/STABILITY.md`.
+  - Key rotation: append a new `JwtVerificationKey` to the
+    `JwtPolicy.keys` pool, flip the IdP, drop the old one. The
+    verifier tries each key in order; first that succeeds wins.
+    Mirrors the existing PSK overlap-add-then-remove pattern.
+  - Tests: 14 unit tests in `commands::backup::tests` →
+    `scheduler::jwt::tests` (HS256 happy path, empty key pool,
+    signature mismatch, issuer/aud/sub mismatch with
+    expected-vs-actual error fields, expired-after-leeway vs
+    just-expired-within-leeway, nbf-in-future, key rotation
+    pool, multi-aud string-vs-array deserialization,
+    malformed-token surfaced cleanly) plus 7 new tests in
+    `scheduler::admission::tests::jwt_flavor` covering the
+    policy-layer routing (valid token admitted, missing
+    credential, wrong subject, expired token, jwt_workers
+    without `jwt` is config error, PSK-takes-precedence,
+    anonymous workers still anonymous when JWT policy is
+    set). All hermetic — no IdP / clock dependency, `now`
+    injection lets test timestamps be deterministic.
+  - Docs: `docs/DISTRIBUTED.md` "Worker Admission" section
+    extended with the JWT knobs in the policy table + a
+    dedicated "JWT identity flow (P10.16.1)" subsection +
+    HS256-vs-RS256 guidance. `docs/STABILITY.md` row updated
+    to list `JwtPolicy` and note the `InvalidCredential.reason`
+    additive field. `docs/ROADMAP_v2.md` Theme E marks the
+    decision closed.
+  - Dep: `jsonwebtoken = "9.3"` added to
+    `agentflow-server/Cargo.toml`.
+  - gRPC-metadata propagation of admission tokens is still
+    deferred to the broader auth story (separate TODO).
 
 - TODO P10.16.2 (Low — v1.x) Worker pool admission heuristics
   - Today: `max_workers` + `max_concurrent_tasks_per_worker` are

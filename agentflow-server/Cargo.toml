@@ -28,6 +28,9 @@ dirs = "5.0"
 prost = "0.13"
 tonic = "0.12"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+# P10.16.1: signed-JWT worker admission. HS256 (single shared secret) + RS256
+# (asymmetric — operator-signed, worker-verifying — for the production IdP path).
+jsonwebtoken = "9.3"
 
 # Workspace dependencies
 agentflow-db = { path = "../agentflow-db" }

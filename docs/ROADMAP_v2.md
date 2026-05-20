@@ -159,10 +159,16 @@ Motivation: `agentflow-worker` exists with gRPC `WorkerProtocol`
 + admission policy + PSK auth. v1.x adds identity + scheduling
 intelligence.
 
-- **Signed-JWT identity** (`P10.16.1`). Today PSK-only via
-  `WorkerCredential`. JWT is documented as the next iteration
-  when the broader auth track ships issuer / audience / key
-  rotation primitives.
+- **Signed-JWT identity** (`P10.16.1`, closed). HS256 + RS256
+  JWT verification landed alongside the existing PSK path: per-
+  worker opt-in via `WorkerAdmissionPolicy.jwt_workers`,
+  configurable `JwtPolicy` (issuer / audience / key pool /
+  leeway), strict claim validation (`iss` / `aud` / `sub` /
+  `exp` / `nbf`), key-pool rotation. PSK takes precedence over
+  JWT when a worker is misconfigured into both sets so there's
+  no silent downgrade. See `docs/DISTRIBUTED.md` "JWT identity
+  flow" for the operator playbook. gRPC-metadata propagation of
+  admission tokens is still deferred.
 - **Worker pool admission heuristics** (`P10.16.2`). Static
   `max_workers` + `max_concurrent_tasks_per_worker` today.
   Future: capacity-aware load balancing, locality hints

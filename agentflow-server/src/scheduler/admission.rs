@@ -30,10 +30,24 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use super::jwt::verify_worker_jwt_at;
 use super::{
-  SchedulerError, WorkerControlPlane, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask,
-  WorkerTaskResult,
+  JwtPolicy, SchedulerError, WorkerControlPlane, WorkerHeartbeat, WorkerId, WorkerProtocol,
+  WorkerTask, WorkerTaskResult,
 };
+
+/// Pluggable thin shim around the JWT verifier so the policy layer
+/// doesn't depend on the `verify_worker_jwt_at` symbol directly. Lets
+/// future test doubles intercept the call site without a feature
+/// gate.
+fn verify_worker_jwt_for_check(
+  token: &str,
+  policy: &JwtPolicy,
+  worker_id: &str,
+  now_secs: i64,
+) -> Result<(), super::jwt::JwtVerifyError> {
+  verify_worker_jwt_at(token, policy, worker_id, now_secs).map(|_| ())
+}
 
 /// Reasons the control plane may reject a worker call.
 ///
@@ -46,8 +60,16 @@ pub enum AdmissionError {
   UnknownWorker { worker_id: String },
   #[error("worker '{worker_id}' did not present a credential, but one is required")]
   MissingCredential { worker_id: String },
-  #[error("worker '{worker_id}' presented an invalid credential")]
-  InvalidCredential { worker_id: String },
+  /// `reason` is the specific verifier message ("psk did not match
+  /// any rotation entry", "token expired at …", "token issuer
+  /// mismatch …", etc.). The transport adapter forwards it to
+  /// operators as a `tonic::Status::permission_denied` detail so the
+  /// gateway logs identify *why* a token was rejected, not just that
+  /// it was. The message is intentionally generic at the credential
+  /// level (no token fragments) — JWT internals appear in the JWT
+  /// verifier's own error chain, not here.
+  #[error("worker '{worker_id}' presented an invalid credential: {reason}")]
+  InvalidCredential { worker_id: String, reason: String },
   #[error("max worker fleet size reached ({max})")]
   WorkerFleetExhausted { max: usize },
   #[error("worker '{worker_id}' exceeded its concurrent-task quota ({max})")]
@@ -85,6 +107,12 @@ impl WorkerCredential {
 /// All fields default to "no constraint" so a brand-new policy admits
 /// every worker — that's the dev / single-process path the existing
 /// tests rely on.
+///
+/// The credential flavour is per-worker: a worker may use **PSK** (in
+/// [`Self::pre_shared_keys`]) or **JWT** (in [`Self::jwt_workers`])
+/// but not both. A worker in neither set is anonymous — the existing
+/// dev / single-process default. See `jwt.rs` for the JWT semantics
+/// (issuer / audience / key rotation / leeway).
 #[derive(Debug, Clone, Default)]
 pub struct WorkerAdmissionPolicy {
   /// If `Some`, only these worker IDs may join. `None` = any valid
@@ -93,8 +121,20 @@ pub struct WorkerAdmissionPolicy {
   /// Per-worker PSK rotation table. Each entry is a set so that
   /// `add new token → flip worker → remove old token` works without
   /// dropping in-flight tasks. Workers absent from this map are not
-  /// required to present a token.
+  /// required to present a token *unless* they are in
+  /// [`Self::jwt_workers`].
   pub pre_shared_keys: HashMap<WorkerId, HashSet<String>>,
+  /// Global JWT verification config (issuer / audience / key pool /
+  /// leeway). When `Some`, workers listed in [`Self::jwt_workers`]
+  /// present their token as a JWT and the control plane verifies it
+  /// against this policy.
+  pub jwt: Option<JwtPolicy>,
+  /// Worker IDs that must authenticate with a JWT against
+  /// [`Self::jwt`]. PSK and JWT are mutually exclusive per worker;
+  /// a worker listed in both `pre_shared_keys` and `jwt_workers` is
+  /// a config error and the PSK path is treated as authoritative to
+  /// avoid silent downgrades.
+  pub jwt_workers: HashSet<WorkerId>,
   /// Cap on distinct admitted workers (workers with a recent
   /// successful heartbeat). `None` = unbounded.
   pub max_workers: Option<usize>,
@@ -119,6 +159,19 @@ impl WorkerAdmissionPolicy {
     credential: &WorkerCredential,
     currently_active: usize,
   ) -> Result<(), AdmissionError> {
+    self.check_at(credential, currently_active, chrono::Utc::now().timestamp())
+  }
+
+  /// Variant of [`check`] that takes the "now" timestamp explicitly.
+  /// Exists so JWT-flavour tests can exercise expiry / nbf paths
+  /// deterministically without sleeping or mocking the clock at the
+  /// jsonwebtoken layer.
+  pub fn check_at(
+    &self,
+    credential: &WorkerCredential,
+    currently_active: usize,
+    now_secs: i64,
+  ) -> Result<(), AdmissionError> {
     if let Some(allowed) = &self.allowed_workers
       && !allowed.contains(&credential.worker_id)
     {
@@ -127,6 +180,10 @@ impl WorkerAdmissionPolicy {
       });
     }
 
+    // PSK takes precedence over JWT when a worker is misconfigured to
+    // be in both sets. The intent is "no silent downgrade" — an
+    // operator who fat-fingers a worker into both lists gets the
+    // stricter PSK check, not a weaker JWT-only path.
     if let Some(valid_tokens) = self.pre_shared_keys.get(&credential.worker_id) {
       let Some(presented) = credential.token.as_deref() else {
         return Err(AdmissionError::MissingCredential {
@@ -136,6 +193,32 @@ impl WorkerAdmissionPolicy {
       if !valid_tokens.contains(presented) {
         return Err(AdmissionError::InvalidCredential {
           worker_id: credential.worker_id.0.clone(),
+          reason: "psk did not match any rotation entry".to_string(),
+        });
+      }
+    } else if self.jwt_workers.contains(&credential.worker_id) {
+      let Some(policy) = self.jwt.as_ref() else {
+        // The worker is listed as needing JWT but the policy never
+        // configured the verification keys / issuer / audience. This
+        // is purely a server-side config error; reject loudly so the
+        // operator sees the gap instead of accidentally admitting an
+        // unauthenticated worker.
+        return Err(AdmissionError::InvalidCredential {
+          worker_id: credential.worker_id.0.clone(),
+          reason: "worker is in jwt_workers but no JwtPolicy is configured".to_string(),
+        });
+      };
+      let Some(presented) = credential.token.as_deref() else {
+        return Err(AdmissionError::MissingCredential {
+          worker_id: credential.worker_id.0.clone(),
+        });
+      };
+      if let Err(err) =
+        verify_worker_jwt_for_check(presented, policy, credential.worker_id.0.as_str(), now_secs)
+      {
+        return Err(AdmissionError::InvalidCredential {
+          worker_id: credential.worker_id.0.clone(),
+          reason: err.to_string(),
         });
       }
     }
@@ -366,6 +449,17 @@ mod tests {
       ),
       Err(AdmissionError::InvalidCredential { .. })
     ));
+    // The reason field carries the verifier-specific message — useful
+    // for transports that surface it to operators.
+    if let Err(AdmissionError::InvalidCredential { reason, .. }) = policy.check(
+      &WorkerCredential::new(worker("a"), Some("bad".to_string())),
+      0,
+    ) {
+      assert!(
+        reason.contains("psk"),
+        "PSK rejection reason should name the credential flavour: {reason}"
+      );
+    }
     assert!(
       policy
         .check(
@@ -435,5 +529,176 @@ mod tests {
       policy.check_claim_quota(&worker("a"), 4),
       Err(AdmissionError::WorkerQuotaExhausted { max: 4, .. })
     ));
+  }
+
+  mod jwt_flavor {
+    use super::*;
+    use crate::scheduler::jwt::{JwtPolicy, WorkerJwtClaims};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+
+    fn sign_hs256(secret: &[u8], claims: &WorkerJwtClaims) -> String {
+      encode(
+        &Header::new(Algorithm::HS256),
+        claims,
+        &EncodingKey::from_secret(secret),
+      )
+      .expect("sign HS256 test token")
+    }
+
+    fn jwt_policy() -> JwtPolicy {
+      JwtPolicy::new("test-issuer", "agentflow-workers-prod")
+        .with_hs256_secret(b"super-secret".to_vec())
+        .with_leeway_seconds(5)
+    }
+
+    fn jwt_claims(sub: &str, now: i64) -> WorkerJwtClaims {
+      WorkerJwtClaims {
+        iss: "test-issuer".into(),
+        aud: vec!["agentflow-workers-prod".into()],
+        sub: sub.into(),
+        exp: now + 300,
+        iat: Some(now),
+        nbf: None,
+      }
+    }
+
+    #[test]
+    fn jwt_worker_with_valid_token_admitted() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let token = sign_hs256(b"super-secret", &jwt_claims("jwt-a", now));
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      assert!(policy.check_at(&cred, 0, now).is_ok());
+    }
+
+    #[test]
+    fn jwt_worker_without_token_is_missing_credential() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::anonymous(worker("jwt-a"));
+      assert!(matches!(
+        policy.check_at(&cred, 0, now),
+        Err(AdmissionError::MissingCredential { .. })
+      ));
+    }
+
+    #[test]
+    fn jwt_worker_with_wrong_subject_rejected_with_reason() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      // Token issued for jwt-b but presented by jwt-a.
+      let token = sign_hs256(b"super-secret", &jwt_claims("jwt-b", now));
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("subject mismatch"),
+            "reason should name the subject mismatch: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn jwt_worker_with_expired_token_rejected() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let mut claims = jwt_claims("jwt-a", now);
+      claims.exp = now - 600;
+      let token = sign_hs256(b"super-secret", &claims);
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("expired"),
+            "reason should say expired: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn jwt_worker_without_jwt_policy_is_server_config_error() {
+      // Worker is listed in jwt_workers but the operator forgot to
+      // attach a JwtPolicy. We refuse to admit (better fail-closed
+      // than accidentally admit unauthenticated).
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: None,
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::new(worker("jwt-a"), Some("anything".into()));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("no JwtPolicy"),
+            "reason should call out the misconfiguration: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn psk_takes_precedence_over_jwt_when_misconfigured() {
+      // Worker is listed in BOTH pre_shared_keys and jwt_workers. We
+      // run the PSK check (stricter / explicit shared-secret); a JWT
+      // is silently rejected here even if it would otherwise verify.
+      let now = 1_700_000_000;
+      let mut psks = HashMap::new();
+      psks.insert(worker("dual"), HashSet::from(["psk-only".to_string()]));
+      let policy = WorkerAdmissionPolicy {
+        pre_shared_keys: psks,
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("dual")].into_iter().collect(),
+        ..Default::default()
+      };
+      let jwt_token = sign_hs256(b"super-secret", &jwt_claims("dual", now));
+      let cred = WorkerCredential::new(worker("dual"), Some(jwt_token));
+      // PSK gate runs first, sees the JWT string isn't in the PSK
+      // pool, rejects.
+      assert!(matches!(
+        policy.check_at(&cred, 0, now),
+        Err(AdmissionError::InvalidCredential { .. })
+      ));
+      // The PSK still admits its rightful token, confirming the gate
+      // didn't degrade to JWT logic.
+      let psk_cred = WorkerCredential::new(worker("dual"), Some("psk-only".to_string()));
+      assert!(policy.check_at(&psk_cred, 0, now).is_ok());
+    }
+
+    #[test]
+    fn unrelated_worker_still_anonymous_when_jwt_policy_present() {
+      // Adding a JwtPolicy must not retroactively require auth from
+      // workers who were anonymous before — only `jwt_workers`
+      // workers are affected.
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-only")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::anonymous(worker("anon-worker"));
+      assert!(policy.check_at(&cred, 0, now).is_ok());
+    }
   }
 }

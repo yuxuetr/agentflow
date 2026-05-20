@@ -193,32 +193,68 @@ heartbeat, claim a task, or report a result.
 |------|------|---------|-------|
 | `allowed_workers` | `Option<HashSet<WorkerId>>` | `None` (any worker) | When `Some`, only listed worker IDs are admitted. |
 | `pre_shared_keys` | `HashMap<WorkerId, HashSet<String>>` | empty (no PSK required) | Each worker may have **multiple valid PSKs** to support overlap-add-then-remove rotation. |
+| `jwt` | `Option<JwtPolicy>` | `None` | Global JWT verification policy (issuer / audience / key pool / leeway). Only consulted for workers in `jwt_workers`. P10.16.1. |
+| `jwt_workers` | `HashSet<WorkerId>` | empty | Workers that authenticate with a JWT against `jwt` instead of a PSK. A worker in both `pre_shared_keys` and `jwt_workers` is a config error; PSK is treated as authoritative to avoid silent downgrade. P10.16.1. |
 | `max_workers` | `Option<usize>` | unbounded | Cap on distinct admitted workers. Re-admitting an existing worker is a no-op (idempotent). |
 | `max_concurrent_tasks_per_worker` | `Option<u32>` | unbounded | Cap on simultaneously-claimed tasks per worker. Enforced inside `claim_task`. |
 
 Rejection paths map onto closed `AdmissionError` variants
-(`UnknownWorker`, `MissingCredential`, `InvalidCredential`,
-`WorkerFleetExhausted`, `WorkerQuotaExhausted`). The gRPC adapter is
-responsible for translating these into `tonic::Status::permission_denied`
-once admission-token metadata propagation lands (deferred follow-up).
+(`UnknownWorker`, `MissingCredential`, `InvalidCredential { reason }`,
+`WorkerFleetExhausted`, `WorkerQuotaExhausted`). `InvalidCredential.reason`
+carries the verifier-specific message — for PSK it's typically
+`"psk did not match any rotation entry"`; for JWT it's the
+`JwtVerifyError` `Display` output (issuer mismatch, audience mismatch,
+expired, etc.). The gRPC adapter forwards the `Display` of the whole
+error to `tonic::Status::permission_denied` once admission-token
+metadata propagation lands (deferred follow-up).
 
-**Token rotation flow:**
+**PSK rotation flow:**
 
 1. Operator stages the new key by adding it to the worker's PSK set.
 2. Worker rolls over and authenticates with the new key.
 3. Operator removes the old key — in-flight tasks are unaffected
    because admission is checked per-call, not per-task.
 
+**JWT identity flow (P10.16.1):**
+
+1. Operator configures `WorkerAdmissionPolicy.jwt = Some(JwtPolicy)`
+   with the IdP issuer, audience, and at least one
+   `JwtVerificationKey` (HS256 secret or RS256 public-key PEM).
+2. Workers that should authenticate via JWT are added to
+   `jwt_workers`. They present a token signed for that issuer +
+   audience with `sub = worker_id` and a future `exp`.
+3. The control plane verifies the token on every admission-gated
+   call. Required claims: `iss`, `aud`, `sub`, `exp`. Optional but
+   honored: `nbf`. Audience may be a string or string-array (RFC
+   §4.1.3). A configurable clock-skew `leeway_seconds` (default 30s)
+   applies to `exp` / `nbf`.
+4. Key rotation: append a new `JwtVerificationKey` to the pool, flip
+   the IdP to sign with it, drop the old key. Verification tries each
+   key in order; the first that verifies wins.
+
+**HS256 vs RS256.** HS256 (shared secret) is appropriate when the
+operator administers both the signing IdP and the control plane.
+RS256 (asymmetric, PEM public key in the policy) is the production
+path: an external IdP holds the signing key, the control plane only
+needs the public key. Both algorithms can coexist in the same key
+pool during a migration.
+
 The contract is **experimental** until N10 closes (see
-`docs/STABILITY.md` for the wire-shape promise). Signed-JWT identity,
-JWT key rotation, and gRPC-metadata propagation of admission tokens
-are deferred to the broader auth story.
+`docs/STABILITY.md` for the wire-shape promise). gRPC-metadata
+propagation of admission tokens is still deferred to the broader
+auth story.
 
 Test references:
 
 - `agentflow-server/src/scheduler/admission.rs#tests` — policy units
   (allowlist, PSK match, rotation overlap, fleet cap, per-worker
-  concurrency cap).
+  concurrency cap, JWT happy-path + every documented failure mode,
+  PSK-takes-precedence-over-JWT misconfiguration).
+- `agentflow-server/src/scheduler/jwt.rs#tests` — JWT verifier
+  units (HS256 round-trip, signature mismatch, issuer / audience /
+  subject mismatch with operator-actionable error fields, expired
+  after leeway, just-expired within leeway, nbf in future, key
+  rotation pool, multi-aud string-vs-array parsing).
 - `agentflow-server/tests/worker_admission.rs` — the three TODO-mandated
   end-to-end scenarios: unknown worker rejected, admitted worker can
   poll/heartbeat/report, and token rotation does not drop in-flight

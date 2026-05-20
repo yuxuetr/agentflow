@@ -20,6 +20,7 @@ use agentflow_tracing::{OtelAttribute, OtelSpan, OtelSpanEvent, OtelSpanKind, Ot
 pub mod admission;
 pub mod distributed;
 pub mod grpc;
+pub mod jwt;
 
 pub use admission::{
   AdmissionError, AuthenticatedControlPlane, ControlError, WorkerAdmissionPolicy, WorkerCredential,
@@ -28,6 +29,7 @@ pub use distributed::{
   DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, NodeExecutionPayload,
 };
 pub use grpc::{GrpcWorkerProtocol, GrpcWorkerService, WorkerControlServer};
+pub use jwt::{JwtPolicy, JwtVerificationKey, JwtVerifyError, WorkerJwtClaims, verify_worker_jwt};
 
 /// Transport selected for the v1.0-rc distributed control plane.
 pub const SELECTED_TRANSPORT: WorkerTransport = WorkerTransport::Grpc;
