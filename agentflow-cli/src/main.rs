@@ -1162,9 +1162,16 @@ enum RagCommands {
     /// Dataset directory (must contain corpus.jsonl, queries.jsonl, qrels.jsonl)
     #[arg(short, long)]
     dataset: std::path::PathBuf,
-    /// Retriever backend (currently: bm25)
-    #[arg(short = 'r', long, default_value = "bm25")]
+    /// Retriever backend: bm25 (default, offline), dense (in-memory
+    /// cosine over OpenAI embeddings — requires OPENAI_API_KEY), or
+    /// hybrid (RRF fusion of BM25 + dense).
+    #[arg(short = 'r', long, default_value = "bm25",
+          value_parser = ["bm25", "dense", "hybrid"])]
     retriever: String,
+    /// Embedding model used by the dense / hybrid retrievers.
+    /// Ignored when --retriever bm25. Default text-embedding-3-small.
+    #[arg(long, default_value = "text-embedding-3-small")]
+    embedding_model: String,
     /// K cutoffs for Recall@K and nDCG@K (default: 1, 3, 5, 10)
     #[arg(short = 'k', long, value_delimiter = ',')]
     k_values: Vec<usize>,
@@ -1858,6 +1865,7 @@ async fn main() {
       RagCommands::Eval {
         dataset,
         retriever,
+        embedding_model,
         k_values,
         compare_to,
         compare_baseline,
@@ -1869,6 +1877,7 @@ async fn main() {
         rag::eval::execute(
           dataset,
           retriever,
+          embedding_model,
           k_values,
           compare_to,
           compare_baseline,

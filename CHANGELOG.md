@@ -46,6 +46,23 @@ across the 200+ tests touched.
 
 #### CLI
 
+- **Pluggable RAG eval retrievers** (P10.6.1):
+  `agentflow-rag::eval::DenseEval` (in-memory cosine similarity over
+  pre-embedded corpus + queries) and
+  `agentflow-rag::eval::HybridEval` (Reciprocal Rank Fusion with
+  configurable `k` and inner-k multiplier) join the existing
+  `Bm25Eval` behind the `Retriever` trait. The CLI gains
+  `--retriever {bm25,dense,hybrid}` plus `--embedding-model
+  <name>` (defaults to `text-embedding-3-small`); dense and
+  hybrid require `OPENAI_API_KEY` at run time and surface a
+  single-line actionable error when it's missing. Eval-scale
+  corpora (<100k docs) keep the full vector matrix in RAM — no
+  Qdrant required for the eval harness. RRF tie-break is
+  deterministic (score desc, then id asc) so paired sign-test
+  comparisons across runs remain reproducible. 10 new unit
+  tests in `eval::retrievers::tests` plus 1 hermetic CLI test
+  (`build_dense_retriever_errors_without_openai_api_key`) cover
+  the new code paths.
 - **`agentflow workflow logs <run_id>`** subcommand consumes the
   server's persisted event log (P10.11.1). Without `--follow`,
   fetches the history snapshot as a single JSON array via

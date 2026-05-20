@@ -1,16 +1,25 @@
 //! `agentflow rag eval` — run the RAG eval harness over a dataset directory.
 //!
-//! The CLI is deliberately scoped to the offline BM25 retriever for the v0.4.0
-//! milestone: it requires no external services, runs on every CI host, and
-//! produces a deterministic report. Vector / hybrid retrievers can plug in
-//! later via additional `--retriever` values.
+//! Supported retriever backends (P10.6.1):
+//! - `bm25` — offline lexical BM25; no external dependencies.
+//! - `dense` — in-memory cosine similarity over OpenAI embeddings;
+//!   requires `OPENAI_API_KEY` at run time.
+//! - `hybrid` — Reciprocal Rank Fusion combining BM25 + dense; also
+//!   requires `OPENAI_API_KEY`.
+//!
+//! Eval-scale corpora (<100k docs) fit in memory, so the dense path
+//! does NOT require a vector store (Qdrant) — that's a deployment-
+//! scale concern, not an eval-harness concern.
 
+use agentflow_rag::embeddings::{EmbeddingProvider, OpenAIEmbedding};
 use agentflow_rag::eval::{
-  Bm25Eval, ComparisonReport, Dataset, EvalConfig, EvalReport, compare, evaluate,
+  Bm25Eval, ComparisonReport, Dataset, DenseEval, EvalConfig, EvalReport, HybridEval, compare,
+  evaluate,
 };
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Default thresholds used by the regression gate when `--compare-baseline`
@@ -22,14 +31,18 @@ const REGRESSION_RECALL_K: usize = 5;
 
 /// Execute the `rag eval` command.
 ///
-/// `k_values` defaults to `[1, 3, 5, 10]` when empty. `retriever` controls the
-/// backend (currently only `"bm25"`). When `compare_to` is `Some`, the CLI runs
-/// a second BM25 eval with custom params parsed from the form `k1=1.5,b=0.6`
-/// and emits a paired comparison report.
+/// `k_values` defaults to `[1, 3, 5, 10]` when empty. `retriever`
+/// chooses the backend (`bm25` / `dense` / `hybrid`).
+/// `embedding_model` is only consulted when the dense or hybrid
+/// path is selected (ignored otherwise). When `compare_to` is
+/// `Some`, the CLI runs a second BM25 eval with custom params
+/// parsed from the form `k1=1.5,b=0.6` and emits a paired
+/// comparison report.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
   dataset_dir: PathBuf,
   retriever: String,
+  embedding_model: String,
   k_values: Vec<usize>,
   compare_to: Option<String>,
   compare_baseline: Option<PathBuf>,
@@ -71,7 +84,14 @@ pub async fn execute(
     k_values
   };
 
-  let baseline_report = run_eval(&dataset, &retriever, &k_values, "baseline")?;
+  let baseline_report = run_eval(
+    &dataset,
+    &retriever,
+    &embedding_model,
+    &k_values,
+    "baseline",
+  )
+  .await?;
   if !is_envelope {
     println!();
     println!("{}", baseline_report.render_table());
@@ -282,9 +302,10 @@ fn print_regression_decision(decision: &RegressionDecision) {
   }
 }
 
-fn run_eval(
+async fn run_eval(
   dataset: &Dataset,
   retriever_kind: &str,
+  embedding_model: &str,
   k_values: &[usize],
   label: &str,
 ) -> Result<EvalReport> {
@@ -297,11 +318,104 @@ fn run_eval(
       let retriever = Bm25Eval::from_dataset(dataset);
       evaluate(&retriever, dataset, &config).map_err(anyhow::Error::from)
     }
+    "dense" => {
+      let retriever = build_dense_retriever(dataset, embedding_model).await?;
+      evaluate(&retriever, dataset, &config).map_err(anyhow::Error::from)
+    }
+    "hybrid" => {
+      // Hybrid wraps trait objects, so both BM25 and Dense must
+      // outlive the HybridEval. `Box`ing here keeps lifetimes
+      // simple — the HybridEval owns both backends for the
+      // duration of the eval.
+      let bm25 = Bm25Eval::from_dataset(dataset);
+      let dense = build_dense_retriever(dataset, embedding_model).await?;
+      let hybrid = HybridEval::new(
+        format!("hybrid:bm25+dense:{embedding_model}"),
+        Box::new(bm25),
+        Box::new(dense),
+      );
+      evaluate(&hybrid, dataset, &config).map_err(anyhow::Error::from)
+    }
     other => bail!(
-      "unsupported retriever `{}`. Supported: bm25 (vector/hybrid pending)",
+      "unsupported retriever `{}`. Supported: bm25, dense, hybrid",
       other
     ),
   }
+}
+
+/// Build a [`DenseEval`] by embedding the dataset's corpus and queries
+/// via the OpenAI embeddings API. The same embedding call happens at
+/// CLI time so the sync `Retriever::search` path inside the eval
+/// runner doesn't need an async runtime context.
+///
+/// **Requires `OPENAI_API_KEY` at run time.** The error path names
+/// the missing env var explicitly so fresh-host operators can act on
+/// the message in one read.
+async fn build_dense_retriever(dataset: &Dataset, embedding_model: &str) -> Result<DenseEval> {
+  if std::env::var("OPENAI_API_KEY").is_err() {
+    bail!(
+      "--retriever dense (or hybrid) requires OPENAI_API_KEY to be set in the environment. \
+       Either export it directly or add it to ~/.agentflow/.env. The CLI embeds the corpus + \
+       queries once via the `{embedding_model}` model before scoring; no network call happens \
+       again during the eval itself."
+    );
+  }
+  let provider = OpenAIEmbedding::new(embedding_model.to_string())
+    .with_context(|| format!("creating OpenAI embedding provider for model `{embedding_model}`"))?;
+
+  // Build the corpus body the same way `Bm25Eval` does — title +
+  // body — so dense and bm25 see equivalent text. Keeps the eval
+  // comparison apples-to-apples.
+  let corpus_texts: Vec<String> = dataset
+    .corpus
+    .iter()
+    .map(|doc| match &doc.title {
+      Some(t) if !t.is_empty() => format!("{}\n{}", t, doc.text),
+      _ => doc.text.clone(),
+    })
+    .collect();
+  let corpus_text_refs: Vec<&str> = corpus_texts.iter().map(|s| s.as_str()).collect();
+  let corpus_vectors = provider
+    .embed_batch(corpus_text_refs)
+    .await
+    .with_context(|| {
+      format!(
+        "embedding {} corpus documents via OpenAI model `{embedding_model}`",
+        dataset.corpus.len()
+      )
+    })?;
+  let corpus_pairs: Vec<(String, Vec<f32>)> = dataset
+    .corpus
+    .iter()
+    .zip(corpus_vectors)
+    .map(|(doc, vec)| (doc.id.clone(), vec))
+    .collect();
+
+  // Queries are deduped on text to avoid paying for re-embedding
+  // the same string. The DenseEval lookup is keyed by query text,
+  // so a single embedding can serve every query with that text.
+  let mut unique_queries: HashMap<String, ()> = HashMap::new();
+  for query in &dataset.queries {
+    unique_queries.entry(query.text.clone()).or_insert(());
+  }
+  let unique_query_texts: Vec<String> = unique_queries.into_keys().collect();
+  let query_text_refs: Vec<&str> = unique_query_texts.iter().map(|s| s.as_str()).collect();
+  let query_vectors = provider
+    .embed_batch(query_text_refs)
+    .await
+    .with_context(|| {
+      format!(
+        "embedding {} unique queries via OpenAI model `{embedding_model}`",
+        unique_query_texts.len()
+      )
+    })?;
+  let query_map: HashMap<String, Vec<f32>> = unique_query_texts
+    .into_iter()
+    .zip(query_vectors)
+    .collect();
+
+  DenseEval::new(format!("dense:{embedding_model}"), corpus_pairs, query_map)
+    .map_err(anyhow::Error::from)
 }
 
 fn run_compare_candidate(dataset: &Dataset, spec: &str, k_values: &[usize]) -> Result<EvalReport> {
@@ -369,6 +483,64 @@ mod tests {
   #[test]
   fn parse_bm25_params_rejects_non_numeric() {
     assert!(parse_bm25_params("k1=oops,b=0.5").is_err());
+  }
+
+  /// P10.6.1: `--retriever dense` without `OPENAI_API_KEY` must
+  /// produce a single-line actionable error message naming the
+  /// missing env var. The build step never proceeds to embedding,
+  /// so no network call happens — the test is hermetic.
+  ///
+  /// **Test isolation**: this temporarily clears `OPENAI_API_KEY`
+  /// (and the `OPENAI_KEY` fallback that `OpenAIEmbedding` checks
+  /// via the AgentFlow LLM key precedence). Snapshot + restore
+  /// keeps a dev environment with the key set from breaking other
+  /// parallel unit tests.
+  #[tokio::test]
+  async fn build_dense_retriever_errors_without_openai_api_key() {
+    use agentflow_rag::eval::dataset::{CorpusDoc, Query};
+
+    let snapshot = std::env::var("OPENAI_API_KEY").ok();
+    // SAFETY: dedicated test process; restore at end.
+    unsafe {
+      std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    let dataset = Dataset::new(
+      vec![CorpusDoc {
+        id: "d1".into(),
+        text: "anything".into(),
+        title: None,
+      }],
+      vec![Query {
+        id: "q1".into(),
+        text: "anything".into(),
+        notes: None,
+      }],
+      vec![],
+    );
+    let result = build_dense_retriever(&dataset, "text-embedding-3-small").await;
+
+    // SAFETY: restore before asserting so a panic doesn't pollute env.
+    unsafe {
+      if let Some(value) = snapshot {
+        std::env::set_var("OPENAI_API_KEY", value);
+      }
+    }
+
+    match result {
+      Err(err) => {
+        let msg = err.to_string();
+        assert!(
+          msg.contains("OPENAI_API_KEY"),
+          "error must name the missing env var: {msg}"
+        );
+        assert!(
+          msg.contains("--retriever dense") || msg.contains("hybrid"),
+          "error must reference the retriever flag: {msg}"
+        );
+      }
+      Ok(_) => panic!("must error when OPENAI_API_KEY is unset"),
+    }
   }
 
   // ── evaluate_regression unit tests (P4.2 gate logic) ────────────────

@@ -28,5 +28,5 @@ pub use compare::{
 };
 pub use dataset::{CorpusDoc, Dataset, DatasetManifest, Judgment, Query, RelevanceScore};
 pub use metrics::{LatencyAggregate, MetricKind, ndcg_at_k, recall_at_k, reciprocal_rank};
-pub use retrievers::Bm25Eval;
+pub use retrievers::{Bm25Eval, DenseEval, HybridEval};
 pub use runner::{EvalConfig, EvalReport, PerKMetrics, PerQueryRow, Retriever, evaluate};

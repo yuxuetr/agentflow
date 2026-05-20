@@ -319,17 +319,59 @@ No gaps from the evaluation. Future opportunities:
 
 ### P10.6 — agentflow-rag (A-)
 
-- TODO P10.6.1 (HIGH — pre-GA) Pluggable retriever trait
-  - Today BM25 is hardcoded in `agentflow-rag/src/eval/runner.rs`.
-    Define a `Retriever` trait with `Bm25`, `Dense`, and `Hybrid`
-    implementations; let the eval CLI accept `--retriever <name>`.
-  - Unblocks dense / hybrid baselines (currently only `bm25.json`).
-  - Effort: medium (~400-600 LoC + Qdrant integration for dense).
+- DONE P10.6.1 (HIGH — pre-GA) Pluggable retriever trait
+  - Landed: the `Retriever` trait was already in
+    `agentflow-rag/src/eval/runner.rs`; this slice added two new
+    in-tree impls in `agentflow-rag/src/eval/retrievers.rs`:
+    `DenseEval` (in-memory cosine similarity over pre-embedded
+    corpus + queries, with dim validation, zero-vector handling,
+    and stable tie-break) and `HybridEval` (Reciprocal Rank
+    Fusion over any two `Box<dyn Retriever>`, default `k=60`,
+    configurable inner-k multiplier, deterministic tie-break by
+    id ascending). Re-exported via `eval::mod`.
+  - CLI wiring: `--retriever {bm25,dense,hybrid}` +
+    `--embedding-model <name>` (default
+    `text-embedding-3-small`). Dense/hybrid embed corpus +
+    queries once via `OpenAIEmbedding::embed_batch` before the
+    sync eval runner consumes them — no async runtime inside
+    `Retriever::search`. Title + body concatenation matches the
+    BM25 path so backend comparisons stay apples-to-apples.
+    Queries are deduped on text before embedding to cut cost.
+    Hybrid composes `Bm25Eval` + `DenseEval` via `HybridEval`.
+  - **No Qdrant required** — the TODO's 400-600 LoC estimate
+    included a vector-store integration that turned out
+    unnecessary at eval scale. Production-scale retrieval still
+    uses `VectorStore` (Qdrant) directly; eval-scale (<100k
+    docs) fits in RAM and benefits from determinism.
+  - Tests: 10 new in `eval::retrievers::tests` (DenseEval:
+    cosine ranking / unknown-query / dim mismatch / empty
+    corpus / zero query vector; HybridEval: both-backends
+    promotion / disjoint RRF / k cap / zero k / canonical
+    "two moderate ranks beat one strong" / custom multiplier) +
+    1 new in `commands::rag::eval::tests`
+    (`build_dense_retriever_errors_without_openai_api_key`
+    proves the missing-key error is single-line + actionable).
+    All tests use mock vectors / mocked env — no real API call
+    needed at test time. `cargo test -p agentflow-rag --lib`
+    131/131 green; `cargo test -p agentflow-cli --features rag
+    --lib commands::rag` 12/12 green; `cargo clippy -p
+    agentflow-rag -p agentflow-cli --features rag --tests
+    -- -D warnings` clean. `docs/RAG_EVAL.md` updated with the
+    new backend section and dense/hybrid CLI examples.
+  - Real-environment dependency: an end-to-end
+    `agentflow rag eval --retriever dense` run against a real
+    dataset needs `OPENAI_API_KEY` set; the CLI errors out
+    early with a clear message naming the env var when it's
+    missing. Hermetic / CI runs continue to use `--retriever
+    bm25`, which has no external dependencies.
 
 - TODO P10.6.2 (Medium) Additional eval baselines
-  - Once P10.6.1 lands, ship `dense.json` + `hybrid.json` baselines
-    alongside the existing `bm25.json` so regressions across all
-    three retrievers gate releases.
+  - Now unblocked by P10.6.1. Ship `dense.json` + `hybrid.json`
+    baselines alongside the existing `bm25.json` so regressions
+    across all three retrievers gate releases. Requires
+    `OPENAI_API_KEY` to generate the baselines, but the on-disk
+    snapshots themselves are deterministic-enough to check in
+    once.
 
 - TODO P10.6.3 (Low — Stretch) Latency profile per chunk size
   - Today the eval reports p50/p95 latency but not per-chunk-size.

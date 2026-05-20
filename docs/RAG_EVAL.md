@@ -105,10 +105,43 @@ Notes:
 ## CLI usage
 
 ```bash
-# Quick smoke test on the bundled demo dataset
+# Quick smoke test on the bundled demo dataset (BM25 — no API key)
 agentflow rag eval \
   --dataset agentflow-rag/examples/datasets/agentflow_mini \
   --retriever bm25 \
+  -k 1,3,5,10
+```
+
+### Retriever backends (P10.6.1)
+
+The CLI supports three backends via `--retriever`:
+
+- `bm25` (default): offline lexical retrieval. No external services or
+  API keys; deterministic across runs.
+- `dense`: in-memory cosine similarity over OpenAI embeddings. Requires
+  `OPENAI_API_KEY` at run time. Pick the model with
+  `--embedding-model <name>` (default `text-embedding-3-small`). The
+  CLI embeds the corpus + queries once, then scores in RAM — no vector
+  store needed for eval-scale corpora (<100k docs).
+- `hybrid`: Reciprocal Rank Fusion (RRF) combining BM25 + dense. Also
+  requires `OPENAI_API_KEY`. The default RRF smoothing constant
+  `k = 60` matches Cormack-Clarke-Buettcher 2009; the inner-k
+  multiplier defaults to `3× --k_values.max()` so mid-ranked docs
+  from either backend still have a chance to win on the fusion score.
+
+```bash
+# Dense embedding-based retrieval (needs OPENAI_API_KEY)
+agentflow rag eval \
+  --dataset path/to/dataset \
+  --retriever dense \
+  --embedding-model text-embedding-3-small \
+  -k 1,3,5,10
+
+# Hybrid BM25 + dense via RRF
+agentflow rag eval \
+  --dataset path/to/dataset \
+  --retriever hybrid \
+  --embedding-model text-embedding-3-small \
   -k 1,3,5,10
 ```
 
