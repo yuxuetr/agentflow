@@ -1,10 +1,48 @@
-//! MCP server implementation for exposing AgentFlow capabilities
+//! MCP server implementation for exposing AgentFlow capabilities.
+//!
+//! ## Stability: Beta (P10.5.2)
+//!
+//! The server surface graduated to **Beta** with the P10.5.2 slice.
+//! The closed method set and wire shapes are pinned by fixture-based
+//! compat tests in `agentflow-mcp/tests/server_contracts.rs`; see
+//! `docs/STABILITY.md` for the full Beta promise.
+//!
+//! ### Stable surfaces (Beta)
+//!
+//! - [`MCPServer::new`] constructor.
+//! - [`MCPServer::handle_request`] — the single request → response
+//!   entry point. JSON in, optional JSON out (`None` for
+//!   notifications). The stdio loop is a thin wrapper around it,
+//!   so external integrations using a non-stdio transport (HTTP,
+//!   websocket, in-memory test harness) can drive the same logic.
+//! - [`MCPServerHandler`] trait — implementor surface for the four
+//!   methods below. Default `get_capabilities` / `get_server_info`
+//!   implementations may be overridden.
+//! - Closed method set: `initialize`, `notifications/initialized`,
+//!   `tools/list`, `tools/call`. New methods may be added in
+//!   future minor releases; the existing four stay wire-stable.
+//! - [`STABLE_PROTOCOL_VERSION`] — the protocol version string
+//!   returned by `initialize`. Bumping this is a breaking change.
+//! - JSON-RPC error code mapping per `error::JsonRpcErrorCode`.
+//!
+//! ### NOT stable
+//!
+//! - [`AgentFlowServerHandler`] is an example implementation, not a
+//!   contract. Its tool set may change.
+//! - The stdio I/O loop's exact framing (line-delimited UTF-8 with
+//!   `\n` separator) is intentionally narrow — operators wanting
+//!   richer transports should drive `handle_request` directly.
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// MCP protocol version this server speaks. Returned by the
+/// `initialize` method's `protocolVersion` field. Bumping this
+/// constant is a breaking change to the Beta wire contract.
+pub const STABLE_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Handler trait for MCP server implementations (simplified for now)
 pub trait MCPServerHandler: Send + Sync {
@@ -84,8 +122,21 @@ impl MCPServer {
     Ok(())
   }
 
-  /// Handle an MCP request
-  async fn handle_request(&self, request: Value) -> MCPResult<Option<Value>> {
+  /// Handle a single JSON-RPC request and return the response.
+  ///
+  /// Returns `Ok(Some(response))` for request methods (the four
+  /// in the closed set: `initialize` / `tools/list` / `tools/call`
+  /// / unknown), `Ok(None)` for notifications (`notifications/
+  /// initialized`) where the JSON-RPC spec forbids a reply, and
+  /// `Err` only on protocol-level failures (missing `method`
+  /// field — which today is a hard 32600-style precondition, not
+  /// a per-method tool error).
+  ///
+  /// **Beta wire contract** — pinned by
+  /// `agentflow-mcp/tests/server_contracts.rs`. Existing methods'
+  /// required response fields must not change; new optional
+  /// fields may be added with serde defaults.
+  pub async fn handle_request(&self, request: Value) -> MCPResult<Option<Value>> {
     let method = request["method"].as_str().ok_or_else(|| {
       MCPError::protocol(
         "Missing method in request".to_string(),
@@ -101,7 +152,7 @@ impl MCPServer {
             "jsonrpc": "2.0",
             "id": id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": STABLE_PROTOCOL_VERSION,
                 "capabilities": self.handler.get_capabilities(),
                 "serverInfo": self.handler.get_server_info()
             }

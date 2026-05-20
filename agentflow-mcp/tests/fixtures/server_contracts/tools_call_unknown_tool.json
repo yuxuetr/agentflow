@@ -1,0 +1,23 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "totally_unknown_tool",
+      "parameters": {}
+    }
+  },
+  "expected_response_required_fields": [
+    "jsonrpc",
+    "id",
+    "error.code",
+    "error.message"
+  ],
+  "expected_values": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error.code": -32603
+  },
+  "expected_error_message_substring": "Tool execution failed"
+}

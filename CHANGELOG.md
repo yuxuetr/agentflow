@@ -287,6 +287,24 @@ across the 200+ tests touched.
   value rather than the target parameter (integrity issue
   caught in R1 dogfooding).
 
+### Changed (stability)
+
+- **`agentflow-mcp::server` promoted from Experimental to Beta**
+  (P10.5.2). The closed method set is now pinned:
+  `initialize` / `notifications/initialized` / `tools/list` /
+  `tools/call`. New methods may be added in minor releases; the
+  existing four stay wire-stable. New public surface includes
+  `MCPServer::handle_request` (the single request → response
+  entry point, now `pub` so non-stdio transports can drive it)
+  and `STABLE_PROTOCOL_VERSION = "2024-11-05"` (bumping this is
+  the explicit signal that the wire contract changed). Backed by
+  6 fixture-driven compat tests + 2 invariant tests in
+  `agentflow-mcp/tests/server_contracts.rs`. The fixture format
+  pins required fields + exact values + error envelope shapes but
+  tolerates additive fields, matching the Beta promise. See
+  `docs/STABILITY.md` for the full contract and fixture-ownership
+  row.
+
 ### Removed
 
 - **`agentflow-mcp::client_old`** and the legacy `transport` module

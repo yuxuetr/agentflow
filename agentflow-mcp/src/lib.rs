@@ -52,7 +52,10 @@
 //! - `error` - Error types with context tracking
 //! - `protocol` - JSON-RPC and MCP protocol types
 //! - `transport` - Transport layer (stdio; HTTP transport types are reserved)
-//! - `server` - MCP server implementation (experimental)
+//! - `server` - MCP server implementation. **Beta** (P10.5.2): the
+//!   closed method set + wire shapes are pinned by fixture tests in
+//!   `agentflow-mcp/tests/server_contracts.rs`. See
+//!   `docs/STABILITY.md` for the full Beta promise.
 
 pub mod client;
 pub mod error;

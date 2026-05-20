@@ -1,0 +1,23 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "run_workflow",
+      "parameters": {
+        "workflow_path": "/tmp/example.yml"
+      }
+    }
+  },
+  "expected_response_required_fields": [
+    "jsonrpc",
+    "id",
+    "result.content"
+  ],
+  "expected_values": {
+    "jsonrpc": "2.0",
+    "id": 3
+  },
+  "expected_no_error_field": true
+}

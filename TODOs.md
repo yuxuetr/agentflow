@@ -341,10 +341,42 @@ No gaps from the evaluation. Future opportunities:
     doctests, integration tests using the new path); `cargo
     clippy -p agentflow-mcp --tests --examples -- -D warnings`
     clean; full workspace `cargo build --workspace --tests` green.
-- TODO P10.5.2 (Medium — v1.x) Promote MCP server from
+- DONE P10.5.2 (Medium — v1.x) Promote MCP server from
   `experimental` to `beta`
-  - Spec the contract that's actually stable today, add backward-
-    compat tests, update `docs/STABILITY.md`.
+  - Closed method set: `initialize` / `notifications/initialized`
+    / `tools/list` / `tools/call`. New methods may be added in
+    minor releases; the existing four stay wire-stable. Required
+    response fields: `initialize` → `result.protocolVersion` +
+    `result.capabilities` + `result.serverInfo.{name,version}`;
+    `tools/list` → `result.tools[]` with `{name, description,
+    input_schema}` per item; `tools/call` success → `result.
+    content`; `tools/call` failure → `error.{code,message}`
+    envelope. Notifications return no response (`Option::None`).
+    Error codes: `-32601` method-not-found, `-32603` tool-
+    execution-failed.
+  - New public surface: `MCPServer::handle_request` is now `pub`
+    (single request → response entry point; the stdio loop is a
+    thin wrapper around it, so non-stdio transports drive the
+    same logic). `STABLE_PROTOCOL_VERSION: &str = "2024-11-05"`
+    is the wire-reported protocol version — bumping it is the
+    explicit signal that the Beta contract changed.
+  - Tests: 6 fixture-driven compat tests
+    (`tests/fixtures/server_contracts/*.json` × 6) + 2 invariant
+    tests in `tests/server_contracts.rs`. The fixture format
+    pins required fields (dotted paths) + exact values + error
+    envelope shapes but tolerates additive fields, matching the
+    Beta promise from `docs/STABILITY.md`. One `#[test]` per
+    fixture for clean per-method failure diagnostics. The
+    `initialize_protocol_version_matches_public_constant` test
+    pins the constant ↔ wire-value equality so the two can't
+    drift. The `fixtures_tolerate_additive_response_fields` test
+    proves the harness honours the "additive fields OK" promise.
+  - `docs/STABILITY.md` updated: new "MCP server" row in the
+    Trace and Server APIs table + new fixture-ownership row.
+    `lib.rs` doc-comment + `server.rs` module doc updated to
+    declare Beta with the closed-method-set + non-stable
+    (example handler, stdio framing) lists. 226 mcp tests
+    green; clippy clean.
 
 ### P10.6 — agentflow-rag (A-)
 

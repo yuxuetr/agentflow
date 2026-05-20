@@ -1,0 +1,20 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "this/method/does/not/exist",
+    "params": {}
+  },
+  "expected_response_required_fields": [
+    "jsonrpc",
+    "id",
+    "error.code",
+    "error.message"
+  ],
+  "expected_values": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error.code": -32601
+  },
+  "expected_error_message_substring": "Method not found"
+}
