@@ -1111,8 +1111,8 @@ async fn glm_live_text_path() {
     OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
   let model = glm_live_model(
     "TEXT",
-    "glm-4.5-flash",
-    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    "glm-5.1",
+    &["glm-5.1", "glm-4.5-flash", "glm-4-flash-250414"],
     |model| model.model_type() == "text",
   )
   .await;
@@ -1144,8 +1144,8 @@ async fn glm_live_openai_compatible_chat_path() {
     OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
   let model = glm_live_model(
     "TEXT",
-    "glm-4.5-flash",
-    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    "glm-5.1",
+    &["glm-5.1", "glm-4.5-flash", "glm-4-flash-250414"],
     |model| model.model_type() == "text",
   )
   .await;
@@ -1178,8 +1178,8 @@ async fn glm_live_streaming_path() {
     OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
   let model = glm_live_model(
     "TEXT",
-    "glm-4.5-flash",
-    &["glm-4.5-flash", "glm-4-flash-250414", "glm-5.1"],
+    "glm-5.1",
+    &["glm-5.1", "glm-4.5-flash", "glm-4-flash-250414"],
     |model| model.model_type() == "text" && model.supports_streaming_capability(),
   )
   .await;
@@ -1205,8 +1205,8 @@ async fn glm_live_tool_calling_or_fallback_path() {
     OpenAIProvider::with_client(no_proxy_client(), &api_key, base_url).expect("glm provider");
   let model = glm_live_model(
     "TOOLS",
-    "glm-4.5-flash",
-    &["glm-4.5-flash", "glm-5.1", "glm-4.7-flash"],
+    "glm-5.1",
+    &["glm-5.1", "glm-4.5-flash", "glm-4.7-flash"],
     |model| model.model_type() == "text" && model.supports_tools_capability(),
   )
   .await;

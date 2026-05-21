@@ -2624,7 +2624,10 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
   LiveModelProbe {
     name: "glm",
     key_envs: &["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"],
-    default_text_model: "glm-4.5-flash",
+    // `glm-4.5-flash` was de-listed; `glm-5.1` is the current Zhipu
+    // BigModel default. Mirror the live test source-of-truth in
+    // `agentflow-llm/tests/provider_consistency_live.rs`.
+    default_text_model: "glm-5.1",
     endpoint: LiveModelsEndpoint::OpenAICompat(
       "https://open.bigmodel.cn/api/paas/v4/models",
     ),
@@ -2844,6 +2847,24 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
       status: ProbeStatus::Ok,
     };
   }
+  // Rolling-alias-with-dated-revisions fallback. Anthropic's
+  // `/v1/models` lists dated revisions like `claude-haiku-4-5-20251001`
+  // but not the rolling-alias-style `claude-haiku-4-5`. The alias still
+  // resolves to the latest dated revision in real API calls, so a
+  // strict-equality check produces a false positive. Mitigate: if any
+  // returned id starts with `<default>-` followed by a digit (the
+  // start of a YYYY[MM[DD]] date), treat the alias as still valid.
+  // The "followed by a digit" guard prevents matching genuinely
+  // different families that happen to share the alias as a prefix
+  // (e.g. an unrelated `gpt-4o-mini-realtime` shouldn't satisfy
+  // `gpt-4o-mini`'s check).
+  if let Some(dated) = find_dated_revision(probe.default_text_model, &model_ids) {
+    return LiveProbeOutcome {
+      provider: probe.name,
+      default_text_model: format!("{} (via dated revision {dated})", probe.default_text_model),
+      status: ProbeStatus::Ok,
+    };
+  }
   // Missing: pick up to 3 plausible alternatives. The heuristic is
   // "ids that share the most prefix characters with the current
   // default" — for cases like `claude-3-5-haiku-20241022 →
@@ -2985,6 +3006,25 @@ fn parse_models_response(probe: &LiveModelProbe, body: &[u8]) -> Result<Vec<Stri
   Ok(ids)
 }
 
+/// Return the first model id from `list` that looks like a dated
+/// revision of `alias` — i.e. matches `<alias>-<digit>…`. Used to
+/// suppress the rolling-alias false positive when a provider's
+/// `/v1/models` only enumerates dated revisions (Anthropic does
+/// this for some model families).
+///
+/// The "followed by a digit" guard prevents same-prefix unrelated
+/// families from satisfying the check: `gpt-4o-mini-realtime`
+/// shouldn't match `gpt-4o-mini`, but `gpt-4o-mini-2024-07-18`
+/// should.
+fn find_dated_revision<'a>(alias: &str, list: &'a [String]) -> Option<&'a str> {
+  let prefix = format!("{alias}-");
+  list.iter().find_map(|id| {
+    id.strip_prefix(&prefix)
+      .filter(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
+      .map(|_| id.as_str())
+  })
+}
+
 /// Number of leading characters two strings share, case-insensitive.
 /// Used by the "suggest a replacement" heuristic.
 fn shared_prefix_len(a: &str, b: &str) -> usize {
@@ -2999,11 +3039,16 @@ fn shared_prefix_len(a: &str, b: &str) -> usize {
 /// `#` are skipped; values may be wrapped in single or double quotes,
 /// which are stripped. Returns the count of keys set.
 ///
-/// Mirrors the heuristic that `agentflow-llm`'s own `~/.agentflow/.env`
-/// loader uses (intentionally not via `dotenv` crate — keeps xtask's
-/// dep graph minimal). Existing process env wins: keys already set
-/// from the shell aren't clobbered, which matches the CI-secrets-win
-/// convention.
+/// **Policy: `.env` wins over the ambient shell.** A real-world run
+/// (P10.3.4) surfaced an operator-stale `OPENAI_API_KEY` in the shell
+/// silently blocking a valid value in `~/.agentflow/.env`. The fix is
+/// to make `.env` authoritative when it exists. CI is unaffected
+/// because no `.env` file ships in the runner's HOME; secrets reach
+/// the process via the workflow's `env:` block exactly as before.
+///
+/// (Intentionally not via the `dotenv` crate — keeps xtask's dep
+/// graph minimal. The parser is a faithful subset of the standard
+/// `.env` grammar.)
 fn load_dotenv_file(path: &Path) -> Result<usize> {
   let text = std::fs::read_to_string(path)
     .with_context(|| format!("reading {}", path.display()))?;
@@ -3018,17 +3063,6 @@ fn load_dotenv_file(path: &Path) -> Result<usize> {
     let raw_value = line[eq + 1..].trim();
     let value = strip_dotenv_quotes(raw_value);
     if key.is_empty() {
-      continue;
-    }
-    // Don't override values that already came from the shell — *unless*
-    // the shell value is empty / whitespace, in which case fall through
-    // and let the .env file fill it in. An exported-but-empty
-    // `OPENAI_API_KEY=` would otherwise silently block a valid key from
-    // ~/.agentflow/.env, which is the exact scenario this loader exists
-    // to solve.
-    if let Some(existing) = std::env::var_os(key)
-      && !existing.is_empty()
-    {
       continue;
     }
     // SAFETY: xtask is a single-threaded CLI; no concurrent env
@@ -3144,6 +3178,53 @@ mod refresh_live_models_tests {
     assert!(
       err.to_string().contains("missing `data` array"),
       "expected clear shape error; got: {err}"
+    );
+  }
+
+  #[test]
+  fn find_dated_revision_matches_anthropic_haiku_alias() {
+    // Anthropic's `/v1/models` only lists dated revisions for some
+    // model families; the alias still resolves in real API calls. The
+    // tool should not flag the alias as missing when at least one
+    // matching dated revision is present.
+    let list = vec![
+      "claude-haiku-4-5-20251001".to_string(),
+      "claude-opus-4-1-20250805".to_string(),
+    ];
+    assert_eq!(
+      find_dated_revision("claude-haiku-4-5", &list),
+      Some("claude-haiku-4-5-20251001")
+    );
+  }
+
+  #[test]
+  fn find_dated_revision_skips_same_prefix_but_different_family() {
+    // `gpt-4o-mini-realtime-preview` shouldn't satisfy `gpt-4o-mini`
+    // — the suffix-must-start-with-digit guard guards this.
+    let list = vec![
+      "gpt-4o".to_string(),
+      "gpt-4o-mini-realtime-preview".to_string(),
+    ];
+    assert_eq!(find_dated_revision("gpt-4o-mini", &list), None);
+  }
+
+  #[test]
+  fn find_dated_revision_returns_none_when_no_match() {
+    let list = vec!["unrelated".to_string(), "other".to_string()];
+    assert!(find_dated_revision("claude-haiku-4-5", &list).is_none());
+  }
+
+  #[test]
+  fn find_dated_revision_matches_openai_style_yyyy_mm_dd_suffix() {
+    // The rule generalises beyond Anthropic — OpenAI dated revisions
+    // are `<alias>-<YYYY>-<MM>-<DD>`, which also start with a digit
+    // after the alias prefix. (In practice the strict-equality path
+    // in `probe_provider` catches `gpt-4o-mini` before this function
+    // runs, but we confirm the helper itself behaves correctly.)
+    let list = vec!["gpt-4o-mini-2024-07-18".to_string()];
+    assert_eq!(
+      find_dated_revision("gpt-4o-mini", &list),
+      Some("gpt-4o-mini-2024-07-18")
     );
   }
 
