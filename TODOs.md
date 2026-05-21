@@ -733,10 +733,91 @@ No gaps from the evaluation. Future opportunities:
     baselines" subsection with the three-baseline table + the
     regeneration commands.
 
-- TODO P10.6.3 (Low — Stretch) Latency profile per chunk size
-  - Today the eval reports p50/p95 latency but not per-chunk-size.
-    Add a benchmark dimension so chunking strategy regressions
-    surface.
+- DONE P10.6.3 (Low — Stretch) Latency profile per chunk size
+  - Landed as a new `--chunk-size <N>` flag on `agentflow rag eval`
+    plus the supporting library plumbing in `agentflow-rag::eval`.
+    When set, the eval re-chunks every corpus doc with a
+    `FixedSizeChunker(N, overlap=0)` before building the retriever
+    index. Retrieved chunk ids are remapped back to source doc ids
+    (with dedupe within the top-K window) before qrels scoring, so
+    `Recall@K` / `MRR` / `nDCG@K` stay comparable across chunked
+    and un-chunked runs — qrels still reference source doc ids,
+    not synthetic chunk ids. The latency block, however, naturally
+    reflects the chunked index shape (N× more documents indexed at
+    smaller sizes), which is the operator-facing signal the TODO
+    asks for.
+  - **Scope decision**: single-value `--chunk-size N` (not a sweep)
+    per CLI invocation. The operator captures one baseline per
+    chunking strategy and diffs the JSON files manually, the same
+    workflow the existing `--retriever {bm25,dense,hybrid}` axis
+    uses today. Sweeping multiple sizes in one invocation would
+    multiply the comparison-block / regression-gate semantics
+    confusingly; deferred unless concrete operator demand surfaces.
+  - **New library surface in `agentflow-rag::eval`**:
+    - `chunking_eval` module: `ChunkedDataset` (chunked corpus +
+      synthetic-id-to-source-id map + chunker config),
+      `chunk_dataset(&Dataset, chunk_size, overlap) -> Result<…>`,
+      `remap_chunks_to_doc_ids(&[String], &HashMap<String, String>)
+      -> Vec<String>` (dedupes within the top-K window).
+    - `evaluate_with_remapping(retriever, dataset, &Option<map>,
+      config)`: the existing `evaluate()` is now a thin wrapper
+      passing `None`. The runner over-fetches `K × 8` candidates
+      from the retriever in chunked mode so the dedupe step
+      still yields K distinct source docs.
+    - `EvalReport.chunk_size: Option<usize>` (additive,
+      `#[serde(default, skip_serializing_if = "Option::is_none")]`).
+      Pre-P10.6.3 baselines without the key deserialise as `None`
+      so the three checked-in baselines under
+      `agentflow-rag/eval_baselines/ci_offline/*.json` continue to
+      parse cleanly.
+  - **CLI surface**: `--chunk-size <N>` honored by every retriever
+    backend (bm25 / dense / hybrid). The dense path re-embeds the
+    chunked corpus, which means dense + a small chunk_size N
+    multiplies the OpenAI embedding-API cost by `corpus_size_after_
+    chunking / corpus_size`. Documented in `docs/RAG_EVAL.md` so
+    operators don't run a 1024-doc corpus through dense at
+    chunk_size=64 by accident.
+  - **Compat warning**: when `--compare-baseline` is supplied and
+    the stored baseline's `chunk_size` differs from the current
+    run's, the CLI prints a stderr warning ("baseline chunk_size=
+    Some(N) differs from current chunk_size=Some(M); metric
+    deltas may reflect chunking-strategy change, not pure
+    retriever drift") but does NOT fail — cross-chunk comparison
+    is still useful for "did the chunking change hurt recall?"
+    investigations.
+  - **Renderer**: when `chunk_size` is `Some`, the text-mode report
+    table adds a `Chunk size: N (fixed-size, overlap=0)` line
+    directly under the latency block. When `None`, the table is
+    byte-identical to pre-P10.6.3.
+  - **Tests (12 new across library + CLI, all hermetic — BM25
+    only, no OpenAI)**:
+    - 9 in `eval::chunking_eval::tests`: chunk_size=0 rejection,
+      overlap>=chunk_size rejection, synthetic-id + mapping
+      invariants, query/judgment pass-through, title+body
+      concatenation matches `Bm25Eval::from_dataset` convention,
+      empty-doc → single empty chunk fallback, remap-dedupe
+      preserves rank order, unknown chunk-id passes through
+      unchanged, full chunked-BM25-eval round trip (proves
+      remap+dedupe restores recall vs the un-remapped chunk-id-
+      only result).
+    - 2 in `eval::runner::tests`: `render_table` omits the chunk-
+      size line when `None` (byte-identical to legacy), surfaces
+      it when `Some`. Plus a serde round-trip test proving the
+      field is optional + back-compat on read.
+    - 2 in `agentflow-cli/tests/rag_eval_cli_tests.rs`:
+      `--chunk-size 64` produces a report with
+      `baseline.chunk_size = 64` and the "Chunk size:" line on
+      stdout; the un-chunked run has neither (key absent, not
+      null).
+  - **Verification**: `cargo test -p agentflow-rag --lib eval::`
+    82/82 green; `cargo test -p agentflow-cli --features rag
+    --test rag_eval_cli_tests` 7/7 (2 new); `cargo clippy
+    -p agentflow-rag -p agentflow-cli --features rag --tests
+    -- -D warnings` clean.
+  - **Docs**: `docs/RAG_EVAL.md` gains a "Per-chunk-size latency
+    profile (P10.6.3)" subsection with the three-baselines
+    capture recipe + the text-output sample + the
+    `--compare-baseline` warning behavior.
 
 ### P10.7 — agentflow-memory (B+)
 

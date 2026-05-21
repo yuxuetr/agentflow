@@ -239,6 +239,92 @@ fn cli_rag_eval_compare_baseline_json_carries_regression_block() {
 // is exercised without the retriever stamp.
 
 #[test]
+fn cli_rag_eval_chunk_size_stamps_report_and_succeeds() {
+  // P10.6.3: passing `--chunk-size N` should produce a report whose
+  // baseline block carries `chunk_size = N` and whose text output
+  // surfaces the "Chunk size:" line. The retriever path here is
+  // BM25 (default) so the test stays hermetic — no API key needed.
+  let work = TempDir::new().unwrap();
+  let report_path = work.path().join("rag-chunked.json");
+
+  let assert = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &fixture_path(),
+      "--chunk-size",
+      "64",
+      "--output",
+      report_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+  // Stdout summary should mention the chunked corpus + the Chunk size line.
+  let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+  assert!(
+    stdout.contains("chunked:"),
+    "stdout should mention chunked corpus; got:\n{stdout}"
+  );
+  assert!(
+    stdout.contains("Chunk size: 64 (fixed-size, overlap=0)"),
+    "report table should surface chunk-size line; got:\n{stdout}"
+  );
+
+  // JSON report (the `--output` payload) should pin `chunk_size: 64`
+  // inside the baseline block so a future `--compare-baseline` run
+  // can detect chunking-strategy drift.
+  let raw = fs::read_to_string(&report_path).unwrap();
+  let report: Value = serde_json::from_str(&raw).unwrap();
+  assert_eq!(
+    report["baseline"]["chunk_size"].as_u64(),
+    Some(64),
+    "baseline.chunk_size must persist; got: {}",
+    raw
+  );
+}
+
+#[test]
+fn cli_rag_eval_without_chunk_size_omits_chunk_size_field() {
+  // Negative complement of the above: the un-chunked path must NOT
+  // emit `chunk_size` into the baseline JSON (would break the
+  // "additive only" promise of the schema migration). The text
+  // output also has no "Chunk size:" line.
+  let work = TempDir::new().unwrap();
+  let report_path = work.path().join("rag-unchunked.json");
+  let assert = Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "rag",
+      "eval",
+      "--dataset",
+      &fixture_path(),
+      "--output",
+      report_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+  let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+  assert!(
+    !stdout.contains("Chunk size:"),
+    "un-chunked run must not surface a Chunk-size line; got:\n{stdout}"
+  );
+
+  let raw = fs::read_to_string(&report_path).unwrap();
+  let report: Value = serde_json::from_str(&raw).unwrap();
+  // serde's `skip_serializing_if = Option::is_none` keeps the key
+  // entirely absent (not `null`); pin that to catch a future
+  // schema migration that accidentally flips this.
+  assert!(
+    report["baseline"].get("chunk_size").is_none(),
+    "baseline.chunk_size must be absent for un-chunked runs; got: {}",
+    raw
+  );
+}
+
+#[test]
 fn cli_rag_eval_rejects_mutually_exclusive_flags() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd

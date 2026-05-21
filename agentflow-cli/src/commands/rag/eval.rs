@@ -13,8 +13,8 @@
 
 use agentflow_rag::embeddings::{EmbeddingProvider, OpenAIEmbedding};
 use agentflow_rag::eval::{
-  Bm25Eval, ComparisonReport, Dataset, DenseEval, EvalConfig, EvalReport, HybridEval, compare,
-  evaluate,
+  Bm25Eval, ChunkedDataset, ComparisonReport, Dataset, DenseEval, EvalConfig, EvalReport,
+  HybridEval, chunk_dataset, compare, evaluate_with_remapping,
 };
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
@@ -50,6 +50,7 @@ pub async fn execute(
   regression_p_value: Option<f64>,
   output: Option<PathBuf>,
   format: String,
+  chunk_size: Option<usize>,
 ) -> Result<()> {
   let is_envelope = format == "json-envelope";
 
@@ -59,6 +60,28 @@ pub async fn execute(
 
   let dataset = Dataset::load_from_dir(&dataset_dir)
     .with_context(|| format!("loading dataset from {}", dataset_dir.display()))?;
+
+  // P10.6.3: when `--chunk-size N` is set, re-chunk the corpus once
+  // up front. Both the baseline and (optional) `--compare-to`
+  // candidate share the same chunked corpus so the comparison stays
+  // apples-to-apples.
+  let chunked = match chunk_size {
+    Some(n) => Some(
+      chunk_dataset(&dataset, n, 0)
+        .with_context(|| format!("chunking corpus at chunk_size={n}"))?,
+    ),
+    None => None,
+  };
+  if let Some(ref c) = chunked
+    && !is_envelope
+  {
+    println!(
+      "  chunked: corpus_size={} (chunk_size={} overlap={})",
+      c.corpus.len(),
+      c.chunk_size,
+      c.overlap
+    );
+  }
 
   if !is_envelope {
     println!(
@@ -86,6 +109,7 @@ pub async fn execute(
 
   let baseline_report = run_eval(
     &dataset,
+    chunked.as_ref(),
     &retriever,
     &embedding_model,
     &k_values,
@@ -101,7 +125,7 @@ pub async fn execute(
   let mut candidate_report: Option<EvalReport> = None;
   let mut regression_decision: Option<RegressionDecision> = None;
   if let Some(spec) = &compare_to {
-    let candidate = run_compare_candidate(&dataset, spec, &k_values)?;
+    let candidate = run_compare_candidate(&dataset, chunked.as_ref(), spec, &k_values)?;
     let cmp = compare(&baseline_report, &candidate);
     if !is_envelope {
       println!();
@@ -116,6 +140,18 @@ pub async fn execute(
     // snapshot is the baseline; the freshly-computed report is the
     // candidate. We then check the regression criteria.
     let stored_baseline = load_baseline_from_path(path)?;
+    // P10.6.3: warn (don't fail) when the stored baseline's
+    // chunk_size differs from the current run's. Cross-chunk-size
+    // comparisons can still be useful for "did the chunking change
+    // hurt recall?" investigations — but the operator should know
+    // they're not apples-to-apples.
+    if stored_baseline.chunk_size != baseline_report.chunk_size && !is_envelope {
+      eprintln!(
+        "warning: baseline chunk_size={:?} differs from current chunk_size={:?}; \
+         metric deltas may reflect chunking-strategy change, not pure retriever drift",
+        stored_baseline.chunk_size, baseline_report.chunk_size
+      );
+    }
     let candidate = baseline_report.clone();
     let cmp = compare(&stored_baseline, &candidate);
     let decision = evaluate_regression(
@@ -337,6 +373,7 @@ fn print_regression_decision(decision: &RegressionDecision) {
 
 async fn run_eval(
   dataset: &Dataset,
+  chunked: Option<&ChunkedDataset>,
   retriever_kind: &str,
   embedding_model: &str,
   k_values: &[usize],
@@ -346,34 +383,69 @@ async fn run_eval(
     k_values: k_values.to_vec(),
     label: label.to_string(),
   };
-  match retriever_kind {
+  // When chunked, the retriever is built against the chunked corpus
+  // and the runner remaps chunk-ids → source-doc-ids before qrels
+  // scoring. When un-chunked, the retriever sees the original
+  // dataset and no remap fires — pre-P10.6.3 behaviour.
+  let (index_dataset, remap) = match chunked {
+    Some(c) => (c.as_dataset(), Some(c.chunk_to_doc.clone())),
+    None => (dataset.clone(), None),
+  };
+  // The runner evaluates Recall/MRR/nDCG against the *judgments*
+  // from the source dataset (qrels reference source doc ids).
+  // The chunked variant of the dataset only carries the corpus +
+  // chunked ids; we still pass the source dataset's judgments by
+  // reusing `dataset` for the scoring half. Conceptually:
+  //   retriever's index   ← chunked corpus
+  //   judgments + queries ← original dataset (passed in as `dataset`)
+  // The runner pairs queries↔judgments off `dataset`, then calls
+  // retriever.search() against the chunked index, then remaps
+  // results back to source ids. Pass `index_dataset` as the
+  // retriever's source; pass the source `dataset` to the runner's
+  // scoring pass — but the runner currently uses one Dataset for
+  // both. Resolution: build retriever from `index_dataset`, but
+  // evaluate against `dataset`. Since judgments + queries are
+  // identical across the two (we only mutated `corpus`), we can
+  // pass either as the second arg; passing `dataset` keeps the
+  // scoring intent explicit.
+  let mut report = match retriever_kind {
     "bm25" => {
-      let retriever = Bm25Eval::from_dataset(dataset);
-      evaluate(&retriever, dataset, &config).map_err(anyhow::Error::from)
+      let retriever = Bm25Eval::from_dataset(&index_dataset);
+      evaluate_with_remapping(&retriever, dataset, &remap, &config)
+        .map_err(anyhow::Error::from)?
     }
     "dense" => {
-      let retriever = build_dense_retriever(dataset, embedding_model).await?;
-      evaluate(&retriever, dataset, &config).map_err(anyhow::Error::from)
+      let retriever = build_dense_retriever(&index_dataset, embedding_model).await?;
+      evaluate_with_remapping(&retriever, dataset, &remap, &config)
+        .map_err(anyhow::Error::from)?
     }
     "hybrid" => {
       // Hybrid wraps trait objects, so both BM25 and Dense must
       // outlive the HybridEval. `Box`ing here keeps lifetimes
       // simple — the HybridEval owns both backends for the
       // duration of the eval.
-      let bm25 = Bm25Eval::from_dataset(dataset);
-      let dense = build_dense_retriever(dataset, embedding_model).await?;
+      let bm25 = Bm25Eval::from_dataset(&index_dataset);
+      let dense = build_dense_retriever(&index_dataset, embedding_model).await?;
       let hybrid = HybridEval::new(
         format!("hybrid:bm25+dense:{embedding_model}"),
         Box::new(bm25),
         Box::new(dense),
       );
-      evaluate(&hybrid, dataset, &config).map_err(anyhow::Error::from)
+      evaluate_with_remapping(&hybrid, dataset, &remap, &config)
+        .map_err(anyhow::Error::from)?
     }
     other => bail!(
       "unsupported retriever `{}`. Supported: bm25, dense, hybrid",
       other
     ),
+  };
+  // P10.6.3: stamp the chunking dimension on the report. The
+  // runner is config-agnostic (see `evaluate_with_remapping` doc);
+  // the CLI is the source of truth for the chunker's settings.
+  if let Some(c) = chunked {
+    report.chunk_size = Some(c.chunk_size);
   }
+  Ok(report)
 }
 
 /// Build a [`DenseEval`] by embedding the dataset's corpus and queries
@@ -449,14 +521,31 @@ async fn build_dense_retriever(dataset: &Dataset, embedding_model: &str) -> Resu
     .map_err(anyhow::Error::from)
 }
 
-fn run_compare_candidate(dataset: &Dataset, spec: &str, k_values: &[usize]) -> Result<EvalReport> {
+fn run_compare_candidate(
+  dataset: &Dataset,
+  chunked: Option<&ChunkedDataset>,
+  spec: &str,
+  k_values: &[usize],
+) -> Result<EvalReport> {
   let (k1, b) = parse_bm25_params(spec)?;
   let config = EvalConfig {
     k_values: k_values.to_vec(),
     label: format!("bm25(k1={},b={})", k1, b),
   };
-  let retriever = Bm25Eval::with_params(dataset, k1, b);
-  evaluate(&retriever, dataset, &config).map_err(anyhow::Error::from)
+  // P10.6.3: the candidate shares the chunked index with the
+  // baseline so the comparison stays apples-to-apples. When no
+  // chunk-size flag is set, both run on the un-chunked corpus.
+  let (index_dataset, remap) = match chunked {
+    Some(c) => (c.as_dataset(), Some(c.chunk_to_doc.clone())),
+    None => (dataset.clone(), None),
+  };
+  let retriever = Bm25Eval::with_params(&index_dataset, k1, b);
+  let mut report = evaluate_with_remapping(&retriever, dataset, &remap, &config)
+    .map_err(anyhow::Error::from)?;
+  if let Some(c) = chunked {
+    report.chunk_size = Some(c.chunk_size);
+  }
+  Ok(report)
 }
 
 /// Parse `--compare-to "k1=1.5,b=0.6"` into `(k1, b)`. Both keys are required;
@@ -694,6 +783,7 @@ mod tests {
       num_queries: 10,
       queries_with_relevant: 10,
       per_query: vec![],
+      chunk_size: None,
     }
   }
 

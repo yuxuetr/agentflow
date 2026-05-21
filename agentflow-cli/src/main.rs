@@ -1408,6 +1408,17 @@ enum RagCommands {
     /// the legacy bare body to disk regardless.
     #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
     format: String,
+    /// Re-chunk the corpus with a fixed-size chunker (overlap=0)
+    /// before building the retriever index, then remap retrieved
+    /// chunk ids back to source doc ids before scoring (P10.6.3).
+    /// Surfaces the chunking-strategy dimension of the eval — capture
+    /// one baseline per chunk size to compare across them. The
+    /// emitted report's `chunk_size` field persists the size used,
+    /// so `--compare-baseline` can warn when the baseline + current
+    /// run used different chunkings. When unset, behaviour is
+    /// identical to pre-P10.6.3 (single un-chunked index).
+    #[arg(long)]
+    chunk_size: Option<usize>,
   },
 }
 
@@ -2208,6 +2219,7 @@ async fn main() {
         regression_p_value,
         output,
         format,
+        chunk_size,
       } => {
         rag::eval::execute(
           dataset,
@@ -2220,6 +2232,7 @@ async fn main() {
           regression_p_value,
           output,
           format,
+          chunk_size,
         )
         .await
       }

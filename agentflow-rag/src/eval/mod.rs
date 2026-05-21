@@ -17,16 +17,20 @@
 //! See [`docs/RAG_EVAL.md`](https://github.com/agentflow/agentflow/blob/main/docs/RAG_EVAL.md)
 //! for the user-facing reference.
 
+pub mod chunking_eval;
 pub mod compare;
 pub mod dataset;
 pub mod metrics;
 pub mod retrievers;
 pub mod runner;
 
+pub use chunking_eval::{ChunkedDataset, chunk_dataset, remap_chunks_to_doc_ids};
 pub use compare::{
   ComparisonReport, MetricDelta, Verdict, compare, paired_sign_lower_tail_p_value,
 };
 pub use dataset::{CorpusDoc, Dataset, DatasetManifest, Judgment, Query, RelevanceScore};
 pub use metrics::{LatencyAggregate, MetricKind, ndcg_at_k, recall_at_k, reciprocal_rank};
 pub use retrievers::{Bm25Eval, DenseEval, HybridEval};
-pub use runner::{EvalConfig, EvalReport, PerKMetrics, PerQueryRow, Retriever, evaluate};
+pub use runner::{
+  EvalConfig, EvalReport, PerKMetrics, PerQueryRow, Retriever, evaluate, evaluate_with_remapping,
+};

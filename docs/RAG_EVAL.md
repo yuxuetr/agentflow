@@ -167,6 +167,42 @@ MRR:       0.9583
 Latency:   mean=0.07ms p50=0.08ms p95=0.09ms
 ```
 
+### Per-chunk-size latency profile (P10.6.3)
+
+By default the eval indexes the corpus one-doc-one-id. Pass
+`--chunk-size <N>` to re-chunk every corpus doc with a fixed-size
+chunker (overlap=0) before building the retriever index. The runner
+remaps retrieved chunk ids back to source doc ids before scoring,
+so `Recall@K` / `MRR` / `nDCG@K` stay comparable across chunk
+sizes (qrels still reference source doc ids). The latency block,
+however, reflects the chunked index — operators capture one baseline
+per chunk strategy to spot chunking-side regressions:
+
+```bash
+# Capture three baselines, one per chunk size:
+agentflow rag eval --dataset path/to/dataset --chunk-size 256 \
+  --output baselines/chunk-256.json
+agentflow rag eval --dataset path/to/dataset --chunk-size 512 \
+  --output baselines/chunk-512.json
+agentflow rag eval --dataset path/to/dataset --chunk-size 1024 \
+  --output baselines/chunk-1024.json
+```
+
+The CLI's text output includes a `Chunk size:` line directly under
+the latency block when `--chunk-size` is set:
+
+```
+Latency:   mean=0.18ms p50=0.20ms p95=0.32ms
+Chunk size: 256 (fixed-size, overlap=0)
+```
+
+The JSON `--output` file persists `baseline.chunk_size` (omitted
+when un-chunked, matching the pre-P10.6.3 schema for back-compat).
+When `--compare-baseline` is supplied and the stored baseline's
+`chunk_size` differs from the current run's, the CLI prints a
+stderr warning so cross-chunk comparisons aren't silently
+misinterpreted.
+
 ### Baseline comparison
 
 ```bash

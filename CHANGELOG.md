@@ -38,6 +38,25 @@ across the 200+ tests touched.
 
 #### CLI ops (cont.)
 
+- **RAG eval `--chunk-size <N>` per-chunk latency dimension**
+  (P10.6.3). `agentflow rag eval` was chunking-agnostic — corpus
+  documents went straight into the retriever index. Now passing
+  `--chunk-size N` re-chunks every corpus doc with a `FixedSizeChunker
+  (N, overlap=0)` before indexing; retrieved chunk ids are remapped
+  back to source doc ids (with dedupe within the top-K window) so
+  `Recall@K`/`MRR`/`nDCG@K` stay comparable across chunked and
+  un-chunked runs. The latency block reflects the chunked index, so
+  capturing one baseline per chunk strategy spots chunking-side
+  regressions. `EvalReport.chunk_size: Option<usize>` is additive
+  (omitted from JSON when un-chunked, preserving pre-P10.6.3 baseline
+  shape). When `--compare-baseline` is supplied and chunk sizes
+  differ, the CLI prints a stderr warning but doesn't fail — cross-
+  chunk comparison is still useful for "did the chunking change hurt
+  recall?" investigations. 12 hermetic tests cover the new library
+  surface (`chunk_dataset`, `evaluate_with_remapping`) plus the CLI
+  flag. `docs/RAG_EVAL.md` gains a "Per-chunk-size latency profile"
+  section with the three-baselines capture recipe.
+
 - **`agentflow marketplace search --format text|json|json-envelope`**
   (P10.9.2). The `search` subcommand was text-only; now also speaks
   the canonical JSON shapes so operators can script against it. Bare

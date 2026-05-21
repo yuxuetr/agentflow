@@ -354,6 +354,7 @@ mod tests {
       num_queries: per_query.len(),
       queries_with_relevant: per_query.len(),
       per_query,
+      chunk_size: None,
     }
   }
 
