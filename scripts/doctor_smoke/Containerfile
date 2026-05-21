@@ -1,0 +1,61 @@
+# Fresh-VM doctor smoke (P10.0.5).
+#
+# Multi-stage build:
+#   1. `builder` — `rust:1-slim-bookworm` mounts the workspace, builds
+#      a release `agentflow` binary.
+#   2. `smoke`   — fresh `ubuntu:24.04` with **zero** `~/.agentflow/`
+#      state; the binary is copied in, doctor runs as the entrypoint.
+#
+# The smoke image's CMD is `doctor --profile production --backup-check
+# --format json`, the exact invocation the
+# `docs/RELEASE_NOTES_v1.0.0-rc.1.md` checklist asks for. The image's
+# default behaviour on `container run` is to print the JSON report and
+# exit with the doctor's own status code.
+#
+# Build:
+#   container build --tag agentflow-doctor-smoke \
+#       --file scripts/doctor_smoke/Containerfile .
+# Run:
+#   container run --rm agentflow-doctor-smoke
+#
+# The driver script `scripts/doctor_smoke/run.sh` automates both and
+# captures the output to `scripts/doctor_smoke/last-run.json`.
+
+# ── Stage 1: build the binary ────────────────────────────────────────────────
+FROM rust:1-slim-bookworm AS builder
+
+# `git` is needed for any `[patch] git = ...` entries in the workspace's
+# Cargo.lock; `pkg-config` + `libssl-dev` cover the native-tls + reqwest
+# transitive build deps that fail with "openssl-sys could not find
+# openssl" on a bare slim image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       git pkg-config libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Build only the CLI binary to keep build time short. Default features
+# include llm + http + file + template — everything `agentflow doctor`
+# inspects. Skip plugin / rag — they're feature-gated and would pull
+# heavier deps without changing the doctor surface.
+RUN cargo build --release -p agentflow-cli --bin agentflow
+
+# ── Stage 2: smoke against fresh Ubuntu 24.04 ────────────────────────────────
+FROM ubuntu:24.04 AS smoke
+
+# `ca-certificates` is the bare minimum for any TLS-using binary on a
+# slim Ubuntu base. `tzdata` keeps chrono's local-tz lookup from
+# warning. Nothing else — the point of this image is "what does a
+# fresh-user install look like, before they configure anything?".
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates tzdata \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/agentflow /usr/local/bin/agentflow
+
+# Document what `container run agentflow-doctor-smoke` does without
+# arguments: the canonical P10.0.5 invocation. Operators can override
+# via `container run agentflow-doctor-smoke agentflow doctor ...`.
+CMD ["agentflow", "doctor", "--profile", "production", "--backup-check", "--format", "json"]

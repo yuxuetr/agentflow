@@ -1,0 +1,161 @@
+{
+  "version": "0.2.0",
+  "profile": "production",
+  "features": {
+    "rag": false,
+    "plugin": false,
+    "mcp_workflow_nodes": false
+  },
+  "paths": {
+    "home": "/root",
+    "config_dir": "/root/.agentflow",
+    "models_config": null,
+    "legacy_models_config": "/root/.agentflow/models.yaml",
+    "env_file": "/root/.agentflow/.env",
+    "skills_dir": "/root/.agentflow/skills",
+    "plugins_dir": "/root/.agentflow/plugins"
+  },
+  "config": {
+    "models_config_source_kind": "built_in_default",
+    "models_config_source_label": "built-in default_models.yml",
+    "models_config_source": "BuiltInDefault",
+    "models_config_path": "built-in default_models.yml",
+    "models_config_exists": true,
+    "models_config_loadable": true,
+    "models": 207,
+    "providers": 9,
+    "missing_env_vars": [],
+    "warnings": [],
+    "error": null
+  },
+  "security": {
+    "env_var": "AGENTFLOW_SECURITY_PROFILE",
+    "profile": "local",
+    "defaults": {
+      "profile": "local",
+      "auth": {
+        "require_api_token": false,
+        "allow_unauthenticated_loopback": true
+      },
+      "cors": {
+        "mode": "permissive",
+        "allowed_origins": []
+      },
+      "request_limits": {
+        "max_request_body_bytes": 26214400,
+        "max_workflow_submit_bytes": 5242880,
+        "max_skill_run_bytes": 2097152
+      },
+      "tool_permissions": {
+        "default_permissions": [
+          "filesystem_read",
+          "filesystem_write",
+          "process_exec",
+          "network",
+          "mcp",
+          "workflow"
+        ],
+        "default_capabilities": [
+          "fs_read",
+          "fs_write",
+          "exec",
+          "net",
+          "env"
+        ]
+      },
+      "sandboxing": {
+        "require_os_sandbox": false,
+        "allow_noop_backend": true
+      },
+      "plugins": {
+        "allow_subprocess_plugins": true,
+        "require_os_sandbox": false,
+        "allow_sandbox_disabled_opt_in": true
+      },
+      "marketplace": {
+        "allow_remote_installs": true,
+        "require_signature_verification": true,
+        "allow_unsigned_local_fixtures": true
+      }
+    },
+    "warning": null
+  },
+  "sandbox": {
+    "backend": "seccomp",
+    "enforcement": "enforcing",
+    "enforcing": true,
+    "capabilities": [
+      "process",
+      "filesystem",
+      "network"
+    ],
+    "warnings": []
+  },
+  "environment": {
+    "agentflow_run_dir": null,
+    "agentflow_trace_dir": null,
+    "agentflow_api_token_set": false,
+    "agentflow_skills_index": null
+  },
+  "disk": {
+    "run_dir": {
+      "path": "/root/.agentflow/runs",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "trace_dir": {
+      "path": "/root/.agentflow/traces",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "marketplace_cache": {
+      "path": "/root/.agentflow/marketplace/cache",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    }
+  },
+  "backup_check": {
+    "run_dir": {
+      "path": "/root/.agentflow/runs",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "trace_dir": {
+      "path": "/root/.agentflow/traces",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "marketplace_cache": {
+      "path": "/root/.agentflow/marketplace/cache",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "skills_dir": {
+      "path": "/root/.agentflow/skills",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    },
+    "plugins_dir": {
+      "path": "/root/.agentflow/plugins",
+      "source": "default",
+      "exists": false,
+      "writable": false,
+      "error": "directory does not exist; will be created on first write"
+    }
+  },
+  "status": "fail"
+}

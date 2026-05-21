@@ -86,6 +86,22 @@ across the 200+ tests touched.
   fine-grained per-step / per-LLM-call; `HarnessEvent` is the
   approval-gated session envelope).
 
+#### Release engineering
+
+- **Fresh-VM `agentflow doctor` smoke reproducible via Apple container**
+  (P10.0.5). New `scripts/doctor_smoke/` directory ships a multi-stage
+  `Containerfile` (rust:1-slim-bookworm builder → ubuntu:24.04 smoke
+  image with the binary copied in), a driver `run.sh`, a checked-in
+  `last-run.json` fixture, and a README. Drives Apple's `container`
+  CLI by default; `DOCTOR_SMOKE_RUNTIME=docker` switches to Docker.
+  Reproduces step 5 of `docs/RELEASE_NOTES_v1.0.0-rc.1.md`'s pre-cut
+  checklist. The canonical fresh-VM outcome is `status: fail` /
+  exit code 2 — production-profile treats missing `~/.agentflow/*`
+  dirs as fail (vs. warning on dev/local), so a zero-state Ubuntu
+  produces fail by design. The fixture + README document this
+  expected outcome so future operators don't mis-interpret it as a
+  binary crash.
+
 #### Workspace tooling
 
 - **`cargo xtask refresh-live-models`** (P10.3.4 / P10.18.1). New

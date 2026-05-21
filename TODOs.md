@@ -305,11 +305,43 @@ all map to the P7.4-FU4 production-deployment checklist in
 - TODO P10.0.4 GitHub Release artifact + docker image push
   - Build per-arch CLI binaries, docker buildx image for
     `agentflow-server`, attach to GitHub Release.
-- TODO P10.0.5 Fresh-VM doctor smoke
-  - Provision a clean Ubuntu 24.04 VM with zero `~/.agentflow/`
-    state, install released `agentflow` binary, run
-    `agentflow doctor --profile production --backup-check`,
-    expect exit code 0 (or document why not).
+- DONE P10.0.5 Fresh-VM doctor smoke
+  - Landed as a reproducible smoke under `scripts/doctor_smoke/`
+    (Containerfile + driver script + checked-in `last-run.json`
+    fixture + README). Drives Apple `container` (or Docker via
+    `DOCTOR_SMOKE_RUNTIME=docker`) end-to-end: multi-stage build
+    against `rust:1-slim-bookworm` → fresh `ubuntu:24.04` smoke
+    image with zero `~/.agentflow/` state → canonical
+    `agentflow doctor --profile production --backup-check --format
+    json` invocation as CMD.
+  - **The "expect exit code 0 (or document why not)" half of the
+    TODO is honestly closed as "document why not"**: production-
+    profile doctor on a fresh VM produces `status: fail`
+    (exit code 2) because every default `~/.agentflow/*` dir
+    (`runs`, `traces`, `marketplace/cache`, `skills`, `plugins`)
+    reports `exists: false`, and production-profile treats
+    missing dirs as fail (vs. warning on `dev`/`local`). This is
+    by design — `agentflow-cli/src/commands/doctor.rs` Lines
+    518-525 explicitly promote `--profile production` missing-dir
+    checks to `DoctorStatus::Fail`. The doctor binary itself runs
+    cleanly end-to-end; the exit code is the *expected first-run
+    signal* on a fresh box.
+  - **Why a checked-in fixture (last-run.json) rather than an
+    assertion?** It's documentation + a diff target, not a strict
+    oracle. The fixture's `disk.run_dir.error` string carries a
+    fixed message today; future localisation or timestamp
+    additions would false-positive against a brittle assertion.
+    The README + the driver's `jq`-summary keep the workflow
+    honest without locking in incidental formatting details.
+  - **Re-running**: `scripts/doctor_smoke/run.sh`. ~10-15 min on
+    first run (Rust toolchain + workspace compile); cache hits
+    bring re-runs down to ~30 s. The driver only surfaces exit
+    codes `>2` as its own non-zero (those represent the binary
+    *crashing*, not the doctor's profile semantics).
+  - **Wiring deliberation**: not added to `quality.yml` — the
+    10-15 min build cost is wrong fit for per-PR gating. Manual
+    pre-release operator step, called out in the README +
+    `docs/RELEASE_NOTES_v1.0.0-rc.1.md` checklist step 5.
 
 ### P10.1 — agentflow-core (A — already strong, micro-polish only)
 
