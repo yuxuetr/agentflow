@@ -1235,10 +1235,82 @@ No gaps from the evaluation. Future opportunities:
     bare-integer rejection. `cargo clippy -p agentflow-cli
     --tests -- -D warnings` clean.
 
-- TODO P10.7.2 (Low — v1.x) Encryption-at-rest implementation
-  - `EncryptedPreferenceStore` trait stub is in place per the P4.5
-    design doc. Pick a KMS strategy (envelope encryption via
-    `age` / `sops` / cloud KMS?) and ship a real impl.
+- DONE P10.7.2 (Low — v1.x) Encryption-at-rest implementation (age)
+  - Landed `AgeEncryptedPreferenceStore<S: PreferenceStore =
+    SqlitePreferenceStore>` in
+    `agentflow-memory/src/preference_encrypted.rs`. Wraps any
+    `PreferenceStore` impl, transparently age-encrypts every
+    `value` payload on write + decrypts on read. Keys (tenant /
+    user / key string) stay plaintext on disk — the inner store
+    needs them for queries — only the *value* is opaque to anyone
+    without the identity file.
+  - **KMS decision**: `age` X25519 single-user identity. No cloud
+    dependency, no envelope re-keying, no per-record key wrapping.
+    Sufficient for the local profile per `docs/MEMORY_LAYERING.md`
+    §3 "Encrypted at rest is optional; the trait should support
+    it but a plaintext default is acceptable for the local
+    profile." Cloud KMS / multi-user / envelope re-keying are
+    deferred to a v2 design conversation per
+    `docs/ROADMAP_v2.md` Theme B.
+  - **On-disk shape**: encrypted values live in the inner store's
+    existing `value` column as a JSON string with the form
+    `"age:v1:<base64(age-ciphertext)>"`. The `age:v1:` marker
+    prefix lets a reader verify they're looking at ciphertext
+    rather than plaintext — get-on-a-plaintext-row now hard
+    fails with a clear "missing marker" error so a stale
+    `SqlitePreferenceStore` write can't silently bleed back
+    through the encrypted wrapper. Future migrations bump the
+    `v1` suffix without breaking back-compat.
+  - **Identity-file helpers**:
+    - `generate_identity_file(path)` — generates a fresh X25519
+      identity, writes the canonical `AGE-SECRET-KEY-1...`
+      representation to `path` with mode 0600 on Unix. Refuses
+      to overwrite an existing file (`refusing to overwrite
+      existing identity file at …`) so a misconfigured operator
+      can't accidentally clobber a key + lose every encrypted
+      preference.
+    - `load_identity_file(path)` — reads + parses the same
+      format. Trims trailing whitespace.
+    - Convention: `~/.agentflow/identity.age` (operator-chosen;
+      not hard-coded so multi-tenant deploys can host per-tenant
+      identity files).
+  - **`open_sqlite(db_path, identity_path)`** convenience
+    constructor for the common case. Production callers pair an
+    identity file path with the existing
+    `SqlitePreferenceStore::open(...)` data path.
+  - **Threat model documented inline**: protects against an
+    attacker with read access to the SQLite file but not the
+    identity. Does NOT protect against process-memory inspection
+    or timing/size side-channels. Operator pairs with host-level
+    disk encryption (FileVault, LUKS, etc.) for defense in depth.
+  - **Tests (12 new in `preference_encrypted::tests`, all
+    hermetic — in-memory SQLite, freshly-generated identities,
+    no fs except tempfile for identity-file tests)**:
+    - 4 trait-pass-through tests: round-trip simple value,
+      round-trip complex JSON, version-increment on second
+      `put`, delete idempotency, `list_decrypts_every_row`,
+      `prune_passthrough_uses_inner_store`.
+    - 3 security tests: `ciphertext_is_not_recognizable_as_the_
+      plaintext` (peeks at the inner store's stored value to
+      confirm the plaintext substring is absent + the marker
+      prefix present), `decrypt_with_wrong_identity_fails`
+      (two distinct identities → ciphertext encrypted to A is
+      unreadable by B), `get_rejects_plaintext_row_missing_
+      marker` (plaintext bleed-through is hard-failed).
+    - 3 identity-file tests: round-trip generate→load,
+      refuses-to-overwrite-existing-file, mode-0600 on Unix.
+  - **Wiring**: `lib.rs` re-exports `AgeEncryptedPreferenceStore`
+    + `generate_identity_file` + `load_identity_file` at crate
+    root. CLI integration (a new `--encrypted --identity <path>`
+    flag pair on `agentflow memory prune` etc.) is a separate
+    follow-up — the trait surface is identical, so any future
+    CLI command can `Box<dyn PreferenceStore>` over either
+    backend at runtime.
+  - **Verification**: `cargo build -p agentflow-memory` clean
+    after `age = "0.11"` + `base64 = "0.22"` deps added.
+    `cargo test -p agentflow-memory preference_encrypted` 12/12
+    green. `cargo clippy -p agentflow-memory --tests -- -D
+    warnings` clean.
 
 - TODO P10.7.3 (Low — v1.x) Cross-session memory linking strategy
   - The 4-layer design separates Session / Semantic / Preference /

@@ -21,6 +21,7 @@ pub mod entity_facts;
 pub mod error;
 pub mod layer;
 pub mod preference;
+pub mod preference_encrypted;
 pub mod semantic;
 pub mod session;
 pub mod sqlite;
@@ -34,6 +35,9 @@ pub use layer::{
   RetentionPolicy, SemanticMemoryStore,
 };
 pub use preference::SqlitePreferenceStore;
+pub use preference_encrypted::{
+  AgeEncryptedPreferenceStore, generate_identity_file, load_identity_file,
+};
 pub use semantic::SemanticMemory;
 pub use session::SessionMemory;
 pub use sqlite::SqliteMemory;

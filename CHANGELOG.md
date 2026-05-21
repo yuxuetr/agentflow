@@ -20,6 +20,25 @@ across the 200+ tests touched.
 
 #### Security
 
+- **`AgeEncryptedPreferenceStore` — encryption-at-rest for the
+  preference memory layer** (P10.7.2). New
+  `agentflow-memory::AgeEncryptedPreferenceStore<S: PreferenceStore>`
+  wraps any preference store impl (defaults to `SqlitePreferenceStore`)
+  and transparently age-encrypts every `value` payload on write +
+  decrypts on read using a single-user X25519 identity. Keys (tenant
+  / user / key string) stay plaintext on disk — only the value is
+  opaque to anyone without the identity file. KMS decision: `age` only,
+  no cloud KMS dependency (cloud / envelope re-keying / multi-user
+  deferred to v2 per `docs/ROADMAP_v2.md` Theme B). On-disk shape is
+  `"age:v1:<base64-age-ciphertext>"`; the marker prefix lets readers
+  reject plaintext-bleed-through from a stale
+  `SqlitePreferenceStore` writer. Identity-file helpers
+  (`generate_identity_file` + `load_identity_file`) refuse to
+  overwrite existing keys and chmod 0600 on Unix. 12 hermetic tests
+  cover round-trips, version semantics through the wrapper,
+  decrypt-with-wrong-identity rejection, plaintext-bleed-through
+  rejection, and identity-file lifecycle.
+
 - **Per-tool `os_sandbox` override on `[[tools]]` blocks** (P10.4.1).
   Skill manifests can now opt individual `shell` / `script` tools in
   or out of the OS-level sandbox independently of the manifest-level
