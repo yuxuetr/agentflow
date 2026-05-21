@@ -1,0 +1,292 @@
+name: Release
+
+# P10.0.4 — release-artifact production. Fires on a `v*` tag push (the
+# tag itself is the one-way human decision tracked as P10.0.3). Builds
+# per-arch `agentflow` CLI tarballs + a multi-arch `agentflow-server`
+# Docker image pushed to GHCR + a GitHub Release with all artifacts
+# attached.
+#
+# Manual `workflow_dispatch` is supported with a `dry_run` flag that
+# skips both the GHCR push and the release publish — useful for
+# verifying the build matrix on a non-tag branch before cutting the
+# real tag.
+#
+# Required permissions (the workflow declares both at job scope):
+#   - `contents: write`  — for `softprops/action-gh-release` to create
+#     the GitHub Release on the same tag.
+#   - `packages: write`  — for `docker/login-action` to push to GHCR
+#     via the ambient `GITHUB_TOKEN`.
+#
+# Required runners:
+#   - `ubuntu-latest`         — linux/amd64 CLI + docker buildx host.
+#   - `ubuntu-24.04-arm`      — linux/arm64 CLI (GitHub-hosted ARM
+#     runner; GA since 2025).
+#   - `macos-13`              — macOS Intel CLI.
+#   - `macos-latest`          — macOS Apple Silicon CLI.
+#
+# First push notes:
+#   - GHCR creates packages as `private` by default. After the first
+#     successful push, an admin must flip the package's visibility to
+#     `public` via the package settings page on GitHub.
+#   - The `latest` tag is only updated on stable releases (no `-rc`,
+#     `-beta`, etc. suffix). Pre-release tags only update their own
+#     version tag — keeps `latest` from drifting to an RC.
+
+on:
+  push:
+    tags:
+      # Match `v1.0.0`, `v1.0.0-rc.1`, `v0.3.0-alpha`, etc.
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or branch to build (default: current ref)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Skip GHCR push + GitHub release publish"
+        type: boolean
+        default: true
+
+permissions:
+  # Workflow-level defaults; jobs that need more (packages:write,
+  # contents:write) declare them explicitly so the surface is auditable.
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # CLI binary matrix. Each row produces `agentflow-<target>.tar.gz`
+  # containing the `agentflow` binary at the archive root.
+  # ─────────────────────────────────────────────────────────────────────
+  build-binaries:
+    name: build agentflow (${{ matrix.target }})
+    strategy:
+      # `fail-fast: false` so a one-platform problem doesn't kill the
+      # other 3 — every release ships all 4 even if one is degraded
+      # (the operator decides whether to drop a platform from the
+      # release page or block the cut).
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cache cargo registry + target dir per-target. `target-dir` is
+      # fine to share across builds of the same target on the same
+      # runner; we pin a per-target cache key so x86_64 and aarch64
+      # don't poison each other's incremental state.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build agentflow (release)
+        # Default features (`llm`, `http`, `file`, `template`) — same as
+        # `cargo install agentflow-cli` would land for a fresh user.
+        # Skip `plugin` + `rag` features — they're opt-in and pull
+        # heavier deps. Tag-published binary stays minimal; users who
+        # need rag/plugin can `cargo install --features rag,plugin`.
+        run: cargo build --release -p agentflow-cli --bin agentflow
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="agentflow-${{ matrix.target }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C target/release agentflow
+          # Compute sha256 alongside the archive so the release page
+          # carries an integrity reference for every binary.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          else
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          fi
+          ls -la "${ARCHIVE}"*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentflow-${{ matrix.target }}
+          path: |
+            agentflow-${{ matrix.target }}.tar.gz
+            agentflow-${{ matrix.target }}.tar.gz.sha256
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Multi-arch `agentflow-server` Docker image → GHCR.
+  # ─────────────────────────────────────────────────────────────────────
+  build-docker:
+    name: build + push agentflow-server image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # QEMU registers ARM64 emulation for the buildx step running on
+      # an x86_64 runner. Adds ~20-30% build time vs. native, but
+      # keeps the docker job on a single runner without the cross-
+      # compile complexity.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF_NAME="${{ inputs.ref || github.ref_name }}"
+          # `github.ref_name` for a tag push is the tag (no refs/tags/
+          # prefix); for a branch dispatch the operator passes the tag
+          # explicitly via `inputs.ref`. Strip a leading refs/tags/ if
+          # somehow present.
+          REF_NAME="${REF_NAME#refs/tags/}"
+          echo "tag=${REF_NAME}" >> "${GITHUB_OUTPUT}"
+          # `latest` only on stable releases — pre-release tags
+          # (`v1.0.0-rc.1`, `v0.3.0-alpha`, etc.) keep `latest`
+          # pointing at the previous stable.
+          if [[ "${REF_NAME}" == *-* ]]; then
+            echo "is_prerelease=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_prerelease=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Log in to GHCR
+        # Skip the login on dry runs so the dispatch path doesn't
+        # require credentials. The actual `push: false` happens
+        # inside `build-push-action`.
+        if: ${{ inputs.dry_run != true }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image refs
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER_LOWER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          BASE="ghcr.io/${OWNER_LOWER}/agentflow-server"
+          REFS="${BASE}:${{ steps.tag.outputs.tag }}"
+          if [[ "${{ steps.tag.outputs.is_prerelease }}" != "true" ]]; then
+            REFS+=$'\n'"${BASE}:latest"
+          fi
+          # Multi-line outputs need the heredoc form.
+          {
+            echo 'tags<<EOF'
+            echo "${REFS}"
+            echo 'EOF'
+          } >> "${GITHUB_OUTPUT}"
+          echo "base=${BASE}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ inputs.dry_run != true }}
+          tags: ${{ steps.refs.outputs.tags }}
+          # OCI labels surface the source commit + tag on the
+          # GHCR package page, so an operator looking at the image
+          # in the registry can trace it back to a specific code
+          # state without needing to download + introspect.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Aggregate all artefacts + create the GitHub Release.
+  # ─────────────────────────────────────────────────────────────────────
+  publish-release:
+    name: publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-docker]
+    # Only fire on a real tag push, never on workflow_dispatch dry-run
+    # (the operator can `dry_run: false` from the dispatch UI when they
+    # explicitly want to publish).
+    if: ${{ github.event_name == 'push' || inputs.dry_run != true }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # `fetch-depth: 0` so `generate_release_notes` can walk the
+          # git log between the previous tag and this one.
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `download-artifact` lays files out per upload-artifact name:
+          #   artifacts/agentflow-<target>/agentflow-<target>.tar.gz
+          # The release page wants flat paths, so move everything up
+          # one level into ./release/.
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) \
+            -exec mv {} release/ \;
+          (cd release && ls -la)
+
+      - name: Aggregate SHA256SUMS
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          # Concatenate the per-archive .sha256 files into one
+          # SHA256SUMS.txt that operators can verify with
+          # `sha256sum -c SHA256SUMS.txt`.
+          cat ./*.tar.gz.sha256 > SHA256SUMS.txt
+          # Drop the per-archive files; SHA256SUMS.txt is the
+          # canonical artifact.
+          rm -f ./*.tar.gz.sha256
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # Tag is `github.ref_name` on a tag push; `inputs.ref` on a
+          # dispatch (must be a real tag that's already been pushed).
+          tag_name: ${{ inputs.ref || github.ref_name }}
+          files: release/*
+          # `prerelease` semantics: every tag carrying a `-` (rc /
+          # alpha / beta) is a pre-release; only `v1.0.0` etc. are
+          # treated as stable.
+          prerelease: ${{ contains(inputs.ref || github.ref_name, '-') }}
+          # Auto-fill the body with the commit list since the previous
+          # tag. The release-notes section header in
+          # `docs/RELEASE_NOTES_v*.md` is then linked from the body by
+          # the operator at tag-cut time.
+          generate_release_notes: true
+          # `fail_on_unmatched_files` defaults to false; pin it true so
+          # a missing artifact upstream surfaces here instead of
+          # silently shipping a partial release.
+          fail_on_unmatched_files: true

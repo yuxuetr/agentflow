@@ -187,3 +187,54 @@ git status --short --ignored
 - [ ] `release gate` passed on the release branch or tag.
 - [ ] Release commit is tagged only after all required checks pass.
 - [ ] Any skipped check is recorded in the release notes with owner and reason.
+
+## 10. Release Artifacts (Automated — P10.0.4)
+
+Triggered automatically when a `v*.*.*` tag is pushed to GitHub. The
+[`.github/workflows/release.yml`](../.github/workflows/release.yml)
+workflow runs three jobs in parallel-then-aggregate:
+
+1. **`build-binaries`** — matrix of 4 targets (linux x86_64, linux
+   aarch64, macOS Intel, macOS Apple Silicon). Produces
+   `agentflow-<target>.tar.gz` containing the `agentflow` CLI binary
+   at archive root, plus a `.sha256` per archive.
+2. **`build-docker`** — multi-arch (linux/amd64 + linux/arm64)
+   `agentflow-server` image built via `docker buildx` with QEMU,
+   pushed to `ghcr.io/<owner>/agentflow-server:<tag>` (+ `:latest`
+   when the tag has no pre-release suffix).
+3. **`publish-release`** — aggregates the tarballs + a combined
+   `SHA256SUMS.txt`, creates the GitHub Release on the same tag,
+   marks pre-releases automatically when the tag carries a `-`
+   suffix.
+
+### Manual dispatch (rehearsal mode)
+
+The workflow also accepts `workflow_dispatch` with two inputs:
+
+- `ref` — tag or branch to build (default: current ref).
+- `dry_run` — when `true` (default), skips the GHCR push *and* the
+  release publish; binaries still build + upload as Actions
+  artifacts, the docker image still buildx-runs through the
+  multi-arch pipeline but never pushes. Useful for verifying the
+  matrix on a branch before the actual tag cut.
+
+### First-push prerequisites
+
+- [ ] GHCR package `agentflow-server` is set to **public** visibility
+      after the first successful push (default for newly-created
+      GHCR packages is `private`). Repository admin only; visible
+      from GitHub package settings.
+- [ ] The `GITHUB_TOKEN` scope on the workflow is sufficient — the
+      workflow declares `packages: write` at the docker job and
+      `contents: write` at the publish job; these are honored by
+      `secrets.GITHUB_TOKEN` automatically.
+- [ ] The `ubuntu-24.04-arm` runner is available to the repo (GA
+      since 2025 — should be automatic for public repos and most
+      paid plans).
+
+### Local rehearsal
+
+`scripts/release_dry_run/run.sh` walks the same build steps locally
+(release-mode CLI binary build + `docker buildx` of the Dockerfile
+without pushing). Catches Dockerfile or feature-flag breakage before
+the tag cut.

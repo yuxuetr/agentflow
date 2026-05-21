@@ -374,9 +374,85 @@ all map to the P7.4-FU4 production-deployment checklist in
     complaint.
 - TODO P10.0.3 Tag `v1.0.0-rc.1`
   - One-way decision; human operator only.
-- TODO P10.0.4 GitHub Release artifact + docker image push
-  - Build per-arch CLI binaries, docker buildx image for
-    `agentflow-server`, attach to GitHub Release.
+- DONE P10.0.4 GitHub Release artifact + docker image push
+  - Landed `.github/workflows/release.yml` (3-job pipeline) +
+    `scripts/release_dry_run/` (local rehearsal of the build legs
+    without push) + RELEASE_CHECKLIST.md §10 documenting the
+    flow.
+  - **Trigger surface**:
+    - `push` of any `v[0-9]+.[0-9]+.[0-9]+*` tag (so
+      `v1.0.0-rc.1`, `v1.0.0`, `v0.3.0-alpha` all match) fires
+      the full pipeline including push + release publish.
+    - `workflow_dispatch` accepts `ref` (tag or branch) +
+      `dry_run` (default `true`). Dispatch path builds the
+      binaries + multi-arch image but skips the GHCR push and
+      the release publish.
+  - **3 jobs**:
+    1. `build-binaries` — 4-row matrix (linux x86_64 +
+       aarch64, macOS Intel + Apple Silicon). Each row builds
+       `cargo build --release -p agentflow-cli --bin agentflow`,
+       tars to `agentflow-<target>.tar.gz`, sidecar `.sha256`,
+       uploads via `actions/upload-artifact@v4`.
+       `fail-fast: false` so a single platform's regression
+       doesn't kill the other 3.
+    2. `build-docker` — `docker/setup-qemu-action@v3` +
+       `docker/setup-buildx-action@v3`, then
+       `docker/build-push-action@v5` against the root
+       `Dockerfile` for `linux/amd64,linux/arm64`. Pushes to
+       `ghcr.io/<owner-lower>/agentflow-server:<tag>`; also
+       pushes `:latest` when the tag has no `-` (so pre-release
+       tags can't accidentally promote latest). OCI labels
+       carry the source commit + tag + license for
+       traceability. `permissions: packages: write` declared
+       at job scope.
+    3. `publish-release` — needs both upstream jobs. Downloads
+       all artifacts, flattens to a single `release/` dir,
+       aggregates per-archive `.sha256` files into one
+       `SHA256SUMS.txt`, uploads via
+       `softprops/action-gh-release@v2` with
+       `generate_release_notes: true`,
+       `fail_on_unmatched_files: true`. `prerelease` flag
+       auto-derives from the `-` in the tag.
+       `permissions: contents: write` declared at job scope.
+  - **First-push prerequisites** documented in
+    RELEASE_CHECKLIST.md §10:
+    - GHCR package must be flipped to `public` visibility after
+      the first successful push (default is `private`).
+    - `ubuntu-24.04-arm` runner is GA since 2025 on public
+      repos and most paid plans.
+    - `secrets.GITHUB_TOKEN` covers both `packages: write`
+      (GHCR push) and `contents: write` (release publish) when
+      declared at job scope.
+  - **`scripts/release_dry_run/run.sh`** walks the same build
+    legs locally without pushing. Catches Dockerfile / feature-
+    flag / dep-graph regressions before the tag cut. Uses
+    `cargo metadata` to resolve the real `target_directory`
+    (works with the AgentFlow dev convention of
+    `~/.cargo/config.toml::build.target-dir =
+    /Users/hal/.target`). Apple `container` doesn't expose
+    `buildx`, so the docker leg falls back to single-arch local
+    build on the default runtime; pass
+    `DOCTOR_SMOKE_RUNTIME=docker` to invoke the full multi-arch
+    buildx leg.
+  - **Verification (local dry-run on apple-aarch64)**:
+    - `cargo build --release -p agentflow-cli --bin agentflow`:
+      40 s (warm cache). Binary produced at the cargo metadata
+      target_directory; `--version` smoke runs clean.
+    - Apple `container build -f Dockerfile`: 6 min cold (workspace
+      compile in the rust:1-bookworm builder stage), tags
+      `agentflow-server:dry-run`. Confirms the root Dockerfile
+      still builds the server binary end-to-end.
+  - **Wiring deliberation**: workflow only runs on real tag
+    pushes (or explicit dispatch). NOT wired into `quality.yml`
+    — same rationale as the doctor/dress-rehearsal scripts,
+    build cost too high for per-PR gating.
+  - **Real-cut sequence** (after P10.0.3's tag decision):
+    1. `git tag v1.0.0-rc.1`
+    2. `git push origin v1.0.0-rc.1`
+    3. workflow auto-fires, ~25-35 min end-to-end.
+    4. Admin flips GHCR package visibility to public.
+    5. Release page shows 4 tarballs + SHA256SUMS.txt + auto-
+       generated commit list.
 - DONE P10.0.5 Fresh-VM doctor smoke
   - Landed as a reproducible smoke under `scripts/doctor_smoke/`
     (Containerfile + driver script + checked-in `last-run.json`

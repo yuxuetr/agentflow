@@ -88,6 +88,25 @@ across the 200+ tests touched.
 
 #### Release engineering
 
+- **GitHub Release workflow + multi-arch GHCR image push** (P10.0.4).
+  New `.github/workflows/release.yml` fires on any `v*.*.*` tag push
+  (or manual `workflow_dispatch` with `dry_run: false`) and runs three
+  jobs: a 4-target matrix building `agentflow-<target>.tar.gz` for
+  linux x86_64 + linux aarch64 + macOS Intel + macOS Apple Silicon;
+  a `docker buildx` multi-arch (linux/amd64 + linux/arm64) build of
+  the root `Dockerfile` pushed to `ghcr.io/<owner>/agentflow-server`
+  with `:<tag>` always and `:latest` only on stable tags; and a
+  publish step that aggregates tarballs + a combined `SHA256SUMS.txt`
+  and creates the GitHub Release with auto-generated commit-list body.
+  `prerelease` flag auto-derives from a `-` in the tag (RC / alpha /
+  beta tags don't promote `latest`). Companion
+  `scripts/release_dry_run/run.sh` rehearses the build legs locally
+  without pushing; uses `cargo metadata` to resolve the target dir
+  through the AgentFlow `~/.cargo/config.toml::build.target-dir`
+  redirect. `docs/RELEASE_CHECKLIST.md` §10 documents the trigger,
+  first-push prerequisites (GHCR public-visibility flip), and
+  manual-dispatch rehearsal mode.
+
 - **Production deployment dress-rehearsal reproducible via Apple
   container** (P10.0.1). New `scripts/production_dress_rehearsal/`
   ships a two-stage Containerfile (rust builder + both `agentflow`
