@@ -21,8 +21,13 @@ name: Release
 #   - `ubuntu-latest`         — linux/amd64 CLI + docker buildx host.
 #   - `ubuntu-24.04-arm`      — linux/arm64 CLI (GitHub-hosted ARM
 #     runner; GA since 2025).
-#   - `macos-13`              — macOS Intel CLI.
 #   - `macos-latest`          — macOS Apple Silicon CLI.
+#
+# macOS Intel (`macos-13`) is intentionally dropped from the matrix:
+# the runner has multi-hour queue times that block the release, Apple
+# itself has EOL'd the platform, and the Apple-Silicon build can be
+# run under Rosetta 2 if a user genuinely still needs Intel. Users
+# on Intel macOS can `cargo install agentflow-cli` from source.
 #
 # First push notes:
 #   - GHCR creates packages as `private` by default. After the first
@@ -62,7 +67,7 @@ jobs:
     name: build agentflow (${{ matrix.target }})
     strategy:
       # `fail-fast: false` so a one-platform problem doesn't kill the
-      # other 3 — every release ships all 4 even if one is degraded
+      # other rows — every release ships all 3 even if one is degraded
       # (the operator decides whether to drop a platform from the
       # release page or block the cut).
       fail-fast: false
@@ -72,8 +77,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - os: macos-13
-            target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
