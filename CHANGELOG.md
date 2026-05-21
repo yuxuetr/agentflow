@@ -6,7 +6,12 @@ the project tracks [Semantic Versioning](https://semver.org/) at the
 workspace level (most crates pin to 0.2.x or 0.3.0-alpha as of this
 file's first entry).
 
-## [Unreleased] — v0.3.0 candidate
+## [Unreleased]
+
+_New entries go here. Will roll into the next tag (likely
+`v1.0.0-rc.2` or `v1.0.0`)._
+
+## [v1.0.0-rc.1] — 2026-05-21
 
 The R1 → R4 reflection arc (see `docs/L1_L3_REFLECTION_R*.md`) drove
 this set of changes. Most landed via a multi-session dogfooding loop:

@@ -372,8 +372,35 @@ all map to the P7.4-FU4 production-deployment checklist in
     package name anyway, so the explicit field is a cosmetic-
     only nicety; deferred until / if it surfaces an operator
     complaint.
-- TODO P10.0.3 Tag `v1.0.0-rc.1`
-  - One-way decision; human operator only.
+- DONE P10.0.3 Tag `v1.0.0-rc.1`
+  - Annotated local tag created at the commit that closes the
+    last active P10 item (`9dc4c99` —
+    `feat(memory): age-based encryption-at-rest for preferences
+    (P10.7.2)`). Tag message summarises the four-layer maturity
+    arc + cross-references `docs/RELEASE_NOTES_v1.0.0-rc.1.md`'s
+    What's New / Breaking Changes / Known Issues sections, which
+    were filled in at tag prep time.
+  - **Crate-version posture (documented in the release notes)**:
+    the workspace's 15 publishable crates stay on their
+    independent pre-1.0 SemVer trajectories (`agentflow-core
+    0.2.0`, `agentflow-rag 0.3.0-alpha`, etc.). The
+    `v1.0.0-rc.1` git tag is a **project-milestone marker** —
+    "the operator-facing stability surfaces are RC-ready" — not
+    a coordinated crate version bump. Coordinated 1.0 crate
+    publishing is a separate follow-up after RC-period feedback;
+    keeps the tag cut from coupling to a 15-manifest version
+    bump that would warrant its own PR.
+  - **Push semantics**: pushing the tag (`git push origin
+    v1.0.0-rc.1`) fires the `.github/workflows/release.yml`
+    pipeline landed in P10.0.4 — 4-target CLI binaries +
+    multi-arch GHCR image + GitHub Release with
+    `SHA256SUMS.txt`. End-to-end ~25-35 min. Admin then flips
+    GHCR package visibility from private (default) to public
+    per the `docs/RELEASE_CHECKLIST.md` §10 first-push
+    prerequisites.
+  - **Reversibility**: the local tag is reversible
+    (`git tag -d v1.0.0-rc.1`) until pushed. The push is the
+    one-way step.
 - DONE P10.0.4 GitHub Release artifact + docker image push
   - Landed `.github/workflows/release.yml` (3-job pipeline) +
     `scripts/release_dry_run/` (local rehearsal of the build legs
