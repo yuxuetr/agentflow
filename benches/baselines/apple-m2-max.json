@@ -63,6 +63,17 @@
       "file/read/1k":                       { "median_ns": 20491 },
       "file/write/64k":                     { "median_ns": 65044 },
       "file/read/64k":                      { "median_ns": 28924 }
+    },
+    "agentflow-core/hot_paths": {
+      "flowvalue_decode/json/tiny":              { "median_ns": 650 },
+      "flowvalue_decode/json/medium":            { "median_ns": 21564 },
+      "flowvalue_decode/json/large":             { "median_ns": 415870 },
+      "flowvalue_decode/file/metadata_only":     { "median_ns": 300 },
+      "flowvalue_decode/url/metadata_only":      { "median_ns": 302 },
+      "checkpoint_roundtrip/save_and_load/10":   { "median_ns": 7860000 },
+      "checkpoint_roundtrip/save_and_load/100":  { "median_ns": 9324300 },
+      "checkpoint_roundtrip/decode/10":          { "median_ns": 162420 },
+      "checkpoint_roundtrip/decode/100":         { "median_ns": 1660200 }
     }
   }
 }

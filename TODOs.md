@@ -313,11 +313,83 @@ all map to the P7.4-FU4 production-deployment checklist in
 
 ### P10.1 — agentflow-core (A — already strong, micro-polish only)
 
-- TODO P10.1.1 (Stretch) Benchmark hot-path scheduler / FlowValue
+- DONE P10.1.1 (Stretch) Benchmark hot-path scheduler / FlowValue
   decode / checkpoint roundtrip
-  - Criterion suites already exist (`benches/scheduler.rs`); compare
-    against the perf-regression gate baseline and look for any 1.10×
-    regressions accumulated during P3.3 envelope work.
+  - The scheduler half was already covered by
+    `agentflow-core/benches/scheduler.rs` (DAG mechanics: linear +
+    fan-out across 10/100/1000 nodes, serial vs concurrent). The
+    two remaining hot paths called out in the TODO landed as a new
+    `agentflow-core/benches/hot_paths.rs` criterion suite with two
+    groups + 9 bench points total:
+    - `flowvalue_decode/json/{tiny,medium,large}` — `serde_json::
+      from_value::<FlowValue>` over the P0.2 tagged-enum wire shape
+      across realistic payload sizes (5-field object / 50-item
+      array / 500-item nested doc).
+    - `flowvalue_decode/{file,url}/metadata_only` — the
+      `File` / `Url` variants. Tiny because they only carry the
+      path/url + mime tag, but worth a separate row so the
+      bench-gate flags any regression that disproportionately
+      affects the non-Json variants.
+    - `checkpoint_roundtrip/save_and_load/{10,100}` — full
+      `CheckpointManager::save_checkpoint_with_status` +
+      `load_latest_checkpoint` cycle through a `tempfile::TempDir`.
+      `iter_batched` keeps the temp-dir setup out of the measured
+      body. `Throughput::Elements(node_count)` reports the
+      per-node-state-entry rate.
+    - `checkpoint_roundtrip/decode/{10,100}` — bench-isolated
+      `serde_json::from_str::<Checkpoint>` against a pre-serialised
+      payload, no fs cost. Isolates the deserialiser from the
+      save_and_load wall-clock so a deserializer-only regression
+      can be triangulated.
+  - **Naming convention pin**: `BenchmarkId::new(<variant>,
+    <param>)` produces a criterion path
+    `<group>/<variant>/<param>` on disk. Slashes inside either
+    component get sanitised to `_`, so the bench deliberately
+    uses pair-form ids (`BenchmarkId::new("json", "tiny")`) rather
+    than `BenchmarkId::from_parameter("json/tiny")` which would
+    write to `flowvalue_decode/json_tiny/` and miss the
+    bench-gate's exact-match lookup. Documented inline in the
+    bench file so the next time someone adds a row they don't
+    repeat the discovery.
+  - **Baseline numbers** captured on apple-aarch64 with
+    `--warm-up-time 1 --measurement-time 3 --sample-size 20`:
+    `flowvalue_decode/json/tiny` ≈ 650 ns, `medium` ≈ 21.6 µs,
+    `large` ≈ 416 µs; `flowvalue_decode/{file,url}` ≈ 300 ns;
+    `checkpoint_roundtrip/save_and_load/10` ≈ 7.86 ms, `/100` ≈
+    9.32 ms (fs-dominated, so the per-node delta is small);
+    `checkpoint_roundtrip/decode/10` ≈ 162 µs, `/100` ≈ 1.66 ms.
+    All 9 rows land in
+    `benches/baselines/apple-m2-max.json::"agentflow-core/hot_paths"`.
+  - **TODO investigation half**: the original P10.1.1 also asked
+    to "look for any 1.10× regressions accumulated during P3.3
+    envelope work". Investigated: P3.3 was the CLI `--format
+    json-envelope` wave (`a28816c` + 10+ follow-ups) — it touches
+    `agentflow-cli` only, with zero changes to `agentflow-core::
+    {value,checkpoint,flow}`. No regression-investigation target
+    surfaced. The newly-captured baseline locks in the post-N8
+    numbers so any *future* regression in either hot path now
+    trips `bench-gate`'s 1.25× default threshold. The TODO's
+    looser 1.10× note is operator-side intuition for "review the
+    PR carefully" — `cargo test` wall-clock variance on the
+    save_and_load rows alone runs ±5% on a hot laptop, so a 1.10×
+    hard gate would false-positive on day-to-day noise; the
+    default 1.25× is the right setting.
+  - **CI wiring**: `.github/workflows/bench.yml` gains a new
+    `cargo bench (hot_paths)` step right after the existing
+    `cargo bench (scheduler)` step. Per-bench step isolation
+    keeps a panic in one from masking the rest. Job timeout
+    budget (30 min) is comfortably unchanged — the 6th bench
+    fits in ~1 minute.
+  - `benches/baselines/README.md` table extended with the new
+    row; `agentflow-core/Cargo.toml` gains a second `[[bench]]
+    name = "hot_paths" harness = false` block alongside the
+    existing scheduler block.
+  - **Verification**: `cargo bench -p agentflow-core --bench
+    hot_paths --no-run` compiles clean. `cargo clippy -p
+    agentflow-core --benches -- -D warnings` clean. End-to-end
+    `cargo xtask bench-gate --allow-missing` shows
+    `19 compared, 0 regression(s)` (10 from `node_latency` +
+    9 from this commit's `hot_paths`).
 - DONE P10.1.2 (Stretch) Document `decode_checkpoint_flow_value`'s
   warn-vs-silent fallback in `docs/CHECKPOINT_SCHEMA.md`
   - The doc file didn't exist; created it as the canonical

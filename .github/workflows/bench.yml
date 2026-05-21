@@ -22,6 +22,7 @@ name: Performance Regression Gate
 #   - retrieval: ~1 min
 #   - event_write: ~30 s
 #   - node_latency: ~1 min (P10.2.1)
+#   - hot_paths: ~1 min (P10.1.1)
 # Job-level timeout-minutes caps the whole thing.
 
 on:
@@ -55,6 +56,12 @@ jobs:
       # the gate then walks.
       - name: cargo bench (scheduler)
         run: cargo bench -p agentflow-core --bench scheduler -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+      # P10.1.1 — FlowValue decode + checkpoint-roundtrip hot paths.
+      # Same agentflow-core crate as `scheduler`, but the two benches
+      # exercise completely different code (serde + fs vs. DAG), so
+      # they're run as separate steps for clean failure isolation.
+      - name: cargo bench (hot_paths)
+        run: cargo bench -p agentflow-core --bench hot_paths -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       - name: cargo bench (provider_hop)
         run: cargo bench -p agentflow-llm --bench provider_hop -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       - name: cargo bench (retrieval)

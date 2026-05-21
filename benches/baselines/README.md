@@ -6,6 +6,7 @@ the regression gate watches:
 | Crate              | Bench               | Run                                              |
 | ------------------ | ------------------- | ------------------------------------------------ |
 | `agentflow-core`   | `scheduler`         | `cargo bench -p agentflow-core --bench scheduler`        |
+| `agentflow-core`   | `hot_paths`         | `cargo bench -p agentflow-core --bench hot_paths` (P10.1.1) |
 | `agentflow-llm`    | `provider_hop`      | `cargo bench -p agentflow-llm --bench provider_hop`      |
 | `agentflow-rag`    | `retrieval`         | `cargo bench -p agentflow-rag --bench retrieval`         |
 | `agentflow-tracing`| `event_write`       | `cargo bench -p agentflow-tracing --bench event_write`   |

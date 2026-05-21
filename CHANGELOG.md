@@ -88,6 +88,20 @@ across the 200+ tests touched.
 
 #### Workspace tooling
 
+- **FlowValue + checkpoint hot-path benches in `agentflow-core`**
+  (P10.1.1). New `agentflow-core/benches/hot_paths.rs` covers the two
+  hot paths the existing scheduler bench misses: `serde_json::from_value
+  ::<FlowValue>` over the P0.2 tagged-enum wire shape (5 variants ×
+  sizes) and the full `CheckpointManager` save+load round-trip plus
+  decode-only isolation (10 / 100 node state pools, 9 bench points
+  total). Wired into the bench CI workflow + `apple-m2-max.json`
+  baseline; `cargo xtask bench-gate --allow-missing` now compares 19
+  rows (10 from P10.2.1 + 9 here) at the default 1.25× threshold. The
+  TODO's "look for P3.3 envelope regressions" half found no target —
+  P3.3 was the CLI envelope wave with zero touches to `agentflow-core::
+  {value,checkpoint,flow}`. The new baseline locks in post-N8 numbers
+  so any future regression in these paths trips the gate.
+
 - **Per-node criterion benches in `agentflow-nodes`** (P10.2.1). New
   `agentflow-nodes/benches/node_latency.rs` covers the pure-compute
   built-ins — Tera template rendering (3 sizes), conditional

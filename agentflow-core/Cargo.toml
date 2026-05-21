@@ -88,3 +88,12 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [[bench]]
 name = "scheduler"
 harness = false
+
+# P10.1.1: FlowValue decode + checkpoint-roundtrip hot paths. The
+# scheduler bench covers DAG mechanics; this bench covers the
+# serde + fs round-trip that runs *between* nodes (every node
+# completion appends to the state pool, which the checkpoint
+# manager serialises on every save).
+[[bench]]
+name = "hot_paths"
+harness = false
