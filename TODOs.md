@@ -1339,10 +1339,48 @@ No gaps from the evaluation. Future opportunities:
     green. `cargo clippy -p agentflow-memory --tests -- -D
     warnings` clean.
 
-- TODO P10.7.3 (Low — v1.x) Cross-session memory linking strategy
-  - The 4-layer design separates Session / Semantic / Preference /
-    Entity facts cleanly. A "memory graph" linking entities across
-    sessions is a v2 design conversation.
+- DONE P10.7.3 (Low — v1.x) Cross-session memory linking strategy
+  - Resolved as a v2 design RFC at
+    `docs/RFC_CROSS_SESSION_MEMORY_LINKING.md`, not as code. The
+    TODO was explicit ("v2 design conversation"); closing it means
+    framing the conversation, not pre-deciding the implementation.
+    Same shape as the P10.10.1 (H6) and P10.19.1 (WASM) 1-pagers
+    — decide-when-to-revisit, persist the analysis, let demand
+    drive the next P11.x rather than speculation.
+  - **Honest framing**: three of the four memory layers already
+    cross sessions automatically (preferences are user-scoped not
+    session-scoped; entity facts are entity-scoped; semantic
+    memory does cross-session vector search). What's missing is
+    a *navigable index* — given an entity, find its session
+    footprint; given a session, find its entity neighbours.
+  - **5 use cases documented** (session inventory per entity,
+    session resumption with entity context, implicit knowledge-
+    graph queries, cross-session fact conflict surfacing, time-
+    bounded session linkage). Each checked against "can the
+    current four-layer model do this?" so the implementation
+    discussion stays grounded.
+  - **3 design options** in order of ambition: (A) index-only
+    additive SQLite tables (covers 3/5 UCs at lowest cost),
+    (B) embedded graph store (oxigraph / indradb / cozo —
+    covers all 5 natively), (C) vector-graph hybrid (builds on
+    existing semantic layer, statistical not symbolic).
+  - **No recommendation** pre-committed — the RFC names
+    Option A as the pragmatic default *when* promotion fires,
+    but explicitly parks B + C as exploratory tracks until
+    concrete UC3-shaped demand surfaces.
+  - **4 promotion criteria** pinned (concrete operator request,
+    3+ skill manifests hand-rolling session-inventory queries,
+    4+ week Harness session conflict-resolution incident,
+    external/forked-deployment demand). Until one fires, the
+    four-layer baseline covers durable memory + the maintenance
+    + complexity cost of linkage doesn't pencil out.
+  - **5 open questions** documented (write-path overhead,
+    conflict detection cadence, entity ID stability,
+    long-running-session semantics, retention-cascade
+    interaction) so a future P11.x promotion has the
+    homework already done.
+  - `docs/ROADMAP_v2.md` Theme B updated to point at the RFC
+    + mark P10.7.3 closed.
 
 ### P10.8 — agentflow-agents (A-)
 

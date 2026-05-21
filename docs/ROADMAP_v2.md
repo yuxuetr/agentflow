@@ -88,13 +88,22 @@ Motivation: P4 landed the 4-layer memory design + RAG eval
 harness. Production-grade encryption + cross-session linking +
 richer eval baselines are next.
 
-- **Encryption-at-rest** (`P10.7.2`). `EncryptedPreferenceStore`
-  trait stub is in place. Pick a KMS strategy (age / sops /
-  cloud KMS via envelope encryption?) and ship a real impl.
-- **Cross-session memory linking** (`P10.7.3`). The 4-layer
-  design separates Session / Semantic / Preference / Entity
-  facts cleanly. A "memory graph" linking entities across
-  sessions is a v2 design conversation.
+- **Encryption-at-rest** (`P10.7.2` closed). Landed
+  `AgeEncryptedPreferenceStore` — single-user X25519 envelope
+  encryption over any `PreferenceStore`. Cloud KMS / multi-user
+  / envelope re-keying remain v2 follow-ups; promote a new
+  P11.x line item when concrete demand (SaaS multi-tenant
+  hosting, regulated-environment deployment) surfaces.
+- **Cross-session memory linking** (`P10.7.3` closed as RFC).
+  Design 1-pager at
+  [`docs/RFC_CROSS_SESSION_MEMORY_LINKING.md`](./RFC_CROSS_SESSION_MEMORY_LINKING.md)
+  frames the design space (Option A index-only / Option B embedded
+  graph store / Option C vector-graph hybrid) and pins explicit
+  [promotion criteria](./RFC_CROSS_SESSION_MEMORY_LINKING.md#promotion-criteria).
+  Doesn't pre-decide the implementation — three of the four memory
+  layers already cross sessions automatically, so the headline
+  feature (knowledge-graph traversal) is parked until concrete
+  UC3-shaped demand surfaces.
 - **Pluggable retriever expansion** (`P10.6.1` landed BM25 +
   dense + hybrid). Future: external retrievers (Qdrant
   production, Elasticsearch, custom domain-specific). Easy via
