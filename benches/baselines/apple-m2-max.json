@@ -51,6 +51,18 @@
       "jsonl_append/nodes/10":              { "median_ns": 4934600, "throughput_elem_per_s": 2026 },
       "jsonl_append/nodes/100":             { "median_ns": 5201500, "throughput_elem_per_s": 19225 },
       "jsonl_append/nodes/1000":            { "median_ns": 8373700, "throughput_elem_per_s": 119420 }
+    },
+    "agentflow-nodes/node_latency": {
+      "template/render/small":              { "median_ns": 39655 },
+      "template/render/medium":             { "median_ns": 81704 },
+      "template/render/large":              { "median_ns": 415010 },
+      "conditional/evaluate/exists":        { "median_ns": 8130 },
+      "conditional/evaluate/equals":        { "median_ns": 7944 },
+      "conditional/evaluate/greater_than":  { "median_ns": 7870 },
+      "file/write/1k":                      { "median_ns": 63567 },
+      "file/read/1k":                       { "median_ns": 20491 },
+      "file/write/64k":                     { "median_ns": 65044 },
+      "file/read/64k":                      { "median_ns": 28924 }
     }
   }
 }

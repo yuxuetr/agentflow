@@ -339,11 +339,73 @@ all map to the P7.4-FU4 production-deployment checklist in
 
 No active gaps from the evaluation. Future opportunities:
 
-- TODO P10.2.1 (Stretch) Add a node-level latency bench for the
-  16+ built-in nodes
-  - Currently only `agentflow-core/benches/scheduler.rs` benches
-    DAG mechanics; per-node hot-path benches would catch
-    e.g. template-render regressions.
+- DONE P10.2.1 (Stretch) Add a node-level latency bench for the
+  built-in nodes
+  - Landed as a new criterion bench file
+    `agentflow-nodes/benches/node_latency.rs` plus a 10-row
+    baseline section added to `benches/baselines/apple-m2-max.json`
+    under the `agentflow-nodes/node_latency` key. The bench is
+    wired into the existing `bench-gate` CI workflow with the same
+    fast flags the four prior benches use (`--warm-up-time 1
+    --measurement-time 1 --sample-size 10`).
+  - **Scope decision** — only the *pure-compute* built-in nodes
+    are benched. The other 12+ nodes (`llm`, `http`, `mcp`, `rag`,
+    `arxiv`, `markmap`, `asr`, `tts`, image variants) depend on
+    real external services (LLM providers, HTTP endpoints, MCP
+    server spawns), which makes them poor regression-detection
+    targets — latency is dominated by external round-trip, not
+    by the AgentFlow code path. Benching them properly belongs
+    in a separate nightly suite with mocks / fixtures, tracked
+    as a future follow-up if real demand surfaces.
+  - **Coverage**: 10 bench points across 3 node families.
+    - `template/render/{small,medium,large}` — Tera rendering of
+      a synthetic template with for-loop + filter + condition,
+      across 4 / 32 / 256 loop iterations. The TODO explicitly
+      called out template-render regressions as the headline
+      target.
+    - `conditional/evaluate/{exists,equals,greater_than}` —
+      pattern-match dispatch + HashMap lookup. Catches an O(N)
+      sneak into the eval path.
+    - `file/{read,write}/{1k,64k}` — `tokio::fs` round-trip
+      through a `tempfile::TempDir`. Local-FS-dependent, but the
+      relative ratio across runs is what bench-gate watches.
+  - **Wiring**:
+    - `agentflow-nodes/Cargo.toml` gains
+      `criterion = { version = "0.5", features = ["async_tokio"] }`
+      under `[dev-dependencies]` plus a
+      `[[bench]] name = "node_latency" harness = false
+      required-features = ["conditional"]` block. The
+      required-features pin auto-enables the gated module so the
+      bench compiles deterministically.
+    - `.github/workflows/bench.yml` gains a new `cargo bench
+      (node_latency)` step + a path-trigger entry for
+      `agentflow-nodes/**` (so a node-impl PR re-runs the gate).
+      The job's runtime budget is unchanged — the 5th bench fits
+      comfortably under the 30-minute timeout.
+    - `benches/baselines/README.md` table extended with the new
+      row + the `--features conditional` capture flag.
+  - **Baseline numbers** captured locally on apple-aarch64 with
+    `--warm-up-time 1 --measurement-time 3 --sample-size 20`:
+    template render varies from 39 µs (small) → 415 µs (large);
+    conditional dispatch is ~8 µs across all 3 variants; file
+    read/write is 20–65 µs across the size matrix. The default
+    `bench-gate` 1.25× threshold absorbs day-to-day variance
+    cleanly — `cargo xtask bench-gate --allow-missing` confirmed
+    `10 compared, 0 regression(s)` on the first run after the
+    baseline was committed.
+  - **Verification**: `cargo bench -p agentflow-nodes --bench
+    node_latency --features conditional --no-run` compiles
+    clean. `cargo clippy -p agentflow-nodes --benches --features
+    conditional -- -D warnings` clean. End-to-end
+    bench-gate-against-fresh-criterion-run passes for the new
+    rows.
+  - **Known noise**: `TemplateNode::execute` and
+    `ConditionalNode::execute` both print debug lines (e.g.
+    `📝 Rendering template for node 'bench'`) on every call.
+    That's pre-existing production behaviour; the baseline
+    numbers include the print cost. A separate follow-up to
+    gate those prints behind a verbose flag would tighten the
+    `small`-end variance, but is out of scope here.
 
 ### P10.3 — agentflow-llm (A — but `init()` UX is the single biggest pre-GA fix)
 

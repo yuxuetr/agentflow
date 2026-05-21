@@ -88,6 +88,18 @@ across the 200+ tests touched.
 
 #### Workspace tooling
 
+- **Per-node criterion benches in `agentflow-nodes`** (P10.2.1). New
+  `agentflow-nodes/benches/node_latency.rs` covers the pure-compute
+  built-ins — Tera template rendering (3 sizes), conditional
+  dispatch (3 variants), and tokio fs read/write (2 payload sizes,
+  10 bench points total). Wired into the existing `bench-gate` CI
+  workflow + the `apple-m2-max.json` baseline so a template-render
+  regression now trips the same gate `scheduler` / `provider_hop` /
+  `retrieval` / `event_write` already feed. Nodes that depend on
+  external services (LLM, HTTP, MCP, RAG, image, audio, etc.) are
+  intentionally out of scope — their latency is dominated by
+  round-trip, not AgentFlow code.
+
 - **`cargo xtask test-gate`** (P10.19.2). New sibling to the existing
   `bench-gate` (criterion microbench gate). Runs
   `cargo test -p <crate> --all-targets --quiet` per workspace member,

@@ -1,7 +1,7 @@
 # Bench baselines (P7.1)
 
-Per-host snapshots of Criterion median wall-clock for the four bench
-suites called out in `TODOs.md` P7.1:
+Per-host snapshots of Criterion median wall-clock for the bench suites
+the regression gate watches:
 
 | Crate              | Bench               | Run                                              |
 | ------------------ | ------------------- | ------------------------------------------------ |
@@ -9,6 +9,7 @@ suites called out in `TODOs.md` P7.1:
 | `agentflow-llm`    | `provider_hop`      | `cargo bench -p agentflow-llm --bench provider_hop`      |
 | `agentflow-rag`    | `retrieval`         | `cargo bench -p agentflow-rag --bench retrieval`         |
 | `agentflow-tracing`| `event_write`       | `cargo bench -p agentflow-tracing --bench event_write`   |
+| `agentflow-nodes`  | `node_latency`      | `cargo bench -p agentflow-nodes --bench node_latency --features conditional` (P10.2.1) |
 
 ## Naming
 

@@ -70,5 +70,18 @@ urlencoding = "2.1"
 tokio-test = "0.4"
 wiremock = "0.5"
 tempfile = "3.3"
+# P10.2.1: per-node latency benches sit alongside the existing
+# scheduler benches under benches/. `async_tokio` lets each
+# benchmark take a tokio runtime via `.to_async(&rt)`.
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 # Examples demonstrating real LLM model calling
+
+[[bench]]
+name = "node_latency"
+harness = false
+# `conditional` isn't in the default feature set, but the bench
+# covers it; tag the requirement so `cargo bench -p agentflow-nodes
+# --bench node_latency` auto-enables it and any orchestrator (CI,
+# bench-gate) gets a deterministic build target.
+required-features = ["conditional"]
