@@ -1,0 +1,16 @@
+{
+  "profile": "production",
+  "steps": [
+    { "name": "step1_security_profile", "outcome": "pass", "detail": "AGENTFLOW_SECURITY_PROFILE=production" },
+    { "name": "step2_api_token", "outcome": "pass", "detail": "AGENTFLOW_API_TOKEN exported (64 hex chars)" },
+    { "name": "step3_storage_dirs", "outcome": "pass", "detail": "5 dirs created, all writable" },
+    { "name": "step4_database_url", "outcome": "pass-noted", "detail": "DATABASE_URL exported (connectivity not validated; see README)" },
+    { "name": "step5_doctor", "outcome": "pass", "detail": "exit=0 status=ok" },
+    { "name": "ag1_doctor_exit_zero", "outcome": "pass", "detail": "exit=0" },
+    { "name": "ag2_serve_check_readiness", "outcome": "skip-needs-postgres", "detail": "serve --check ran the config-resolution stage but tried to connect to Postgres (db.invalid); host-side rerun with a real DATABASE_URL" },
+    { "name": "step6_docker_compose_smoke", "outcome": "skip", "detail": "host-side step; not validated in single-container rehearsal" },
+    { "name": "ag3_health_ready_200", "outcome": "skip", "detail": "requires running server + Postgres; host-side" },
+    { "name": "ag4_authenticated_post_v1_runs", "outcome": "skip", "detail": "requires running server + Postgres; host-side" }
+  ],
+  "doctor_exit_code": 0
+}

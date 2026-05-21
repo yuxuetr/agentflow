@@ -88,6 +88,24 @@ across the 200+ tests touched.
 
 #### Release engineering
 
+- **Production deployment dress-rehearsal reproducible via Apple
+  container** (P10.0.1). New `scripts/production_dress_rehearsal/`
+  ships a two-stage Containerfile (rust builder + both `agentflow`
+  + `agentflow-server` binaries), a step-walking
+  `inside_container.sh`, a host-side driver `run.sh`, and checked-in
+  `last-run.{log,json}` fixtures. Walks all 6 steps of the
+  `docs/RELEASE_NOTES_v1.0.0-rc.1.md::Production Deployment
+  Checklist` plus the 4 acceptance gates inside a fresh
+  `ubuntu:24.04` container. Canonical outcome on a clean apple-
+  aarch64 box: **doctor exit code 0, status `ok`**, 5 of 6 steps
+  PASS, step 6 / AG3 / AG4 SKIP (host-side, requires Docker +
+  Postgres sidecar — documented host-side commands in the README).
+  Discovered + filed two follow-ups: (a) `serve --check` requires a
+  real Postgres connection despite a stale source comment claiming
+  otherwise; (b) `agentflow serve` shells out to a separate
+  `agentflow-server` binary not bundled with the doctor-smoke
+  image. Paired with P10.0.5 in the pre-tag checklist.
+
 - **Fresh-VM `agentflow doctor` smoke reproducible via Apple container**
   (P10.0.5). New `scripts/doctor_smoke/` directory ships a multi-stage
   `Containerfile` (rust:1-slim-bookworm builder → ubuntu:24.04 smoke

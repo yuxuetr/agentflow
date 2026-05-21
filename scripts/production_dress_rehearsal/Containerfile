@@ -1,0 +1,41 @@
+# Production deployment dress-rehearsal image (P10.0.1).
+#
+# Variant of `scripts/doctor_smoke/Containerfile` that bundles BOTH
+# `agentflow` and `agentflow-server` binaries. The dress rehearsal
+# walks `agentflow serve --check --security-profile production`
+# (acceptance gate 2), which shells out to the server binary; the
+# doctor smoke doesn't need it, so the two images are deliberately
+# kept separate.
+#
+# Stage 1: rust:1-slim-bookworm builds both bin targets in one
+# `cargo build` pass so dep compilation is amortised across them.
+# Stage 2: fresh ubuntu:24.04 with zero `~/.agentflow/` state,
+# both binaries copied in, no CMD (the rehearsal script supplies
+# the entrypoint).
+
+FROM rust:1-slim-bookworm AS builder
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       git pkg-config libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# `--bin agentflow` and `--bin agentflow-server` live in different
+# packages, so we run two `cargo build` invocations. Workspace dep
+# graph is shared, so the second build mostly hits cache — total
+# build is ~1.3× a single-binary build, not 2×.
+RUN cargo build --release -p agentflow-cli --bin agentflow \
+  && cargo build --release -p agentflow-server --bin agentflow-server
+
+FROM ubuntu:24.04 AS rehearsal
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       ca-certificates tzdata openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/agentflow /usr/local/bin/agentflow
+COPY --from=builder /src/target/release/agentflow-server /usr/local/bin/agentflow-server
