@@ -88,6 +88,25 @@ across the 200+ tests touched.
 
 #### Workspace tooling
 
+- **`cargo xtask refresh-live-models`** (P10.3.4 / P10.18.1). New
+  subcommand that pings each of the 9 live-test providers' `/models`
+  endpoints (OpenAI / Anthropic / Google / Moonshot / StepFun / GLM /
+  DashScope / DeepSeek / MiniMax), verifies the hard-coded text-model
+  default in `agentflow-llm/tests/provider_consistency_live.rs` is
+  still listed, and prints suggestions ranked by shared-prefix when a
+  default goes missing. Loads `~/.agentflow/.env` locally (silently
+  no-op on CI where keys come from the workflow's env block); treats
+  existing-but-empty env vars as unset so an exported-but-empty key
+  doesn't block a valid `.env` value. Validate-only by design — the
+  operator copies suggested replacements into the test source rather
+  than auto-editing (the defaults carry inline rationale comments
+  that an automated rewrite would clobber). First real-world run
+  surfaced two findings: `glm-4.5-flash` actually deprecated (rotate
+  to `glm-4.5` / `glm-4.6`); `claude-haiku-4-5` is a rolling alias
+  that doesn't appear in `/v1/models` but resolves in real API calls
+  (Anthropic-specific false positive of the "is the id in the list"
+  check — documented).
+
 - **FlowValue + checkpoint hot-path benches in `agentflow-core`**
   (P10.1.1). New `agentflow-core/benches/hot_paths.rs` covers the two
   hot paths the existing scheduler bench misses: `serde_json::from_value

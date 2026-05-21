@@ -640,17 +640,80 @@ No active gaps from the evaluation. Future opportunities:
     agentflow-agents -p agentflow-memory (memory lib 42, +6
     new; agents total 194, +3 new from adapter tests).
 
-- TODO P10.3.4 (Low — v1.x) Auto-rotate live nightly default models
-  on 404
-  - The live nightly went through 4 rounds of vendor-side model
-    deprecation in May 2026 (claude-3-5-haiku-20241022 →
-    claude-haiku-4-5; gemini-1.5-flash → gemini-2.0-flash →
-    gemini-2.5-flash; deepseek-chat → deepseek-v4-flash).
-  - Build a `cargo xtask refresh-live-models` that pings each
-    provider's models-list endpoint and rotates the workflow `env:`
-    block's `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL` overrides.
-  - Reduces manual `chore` toil after vendor deprecation
-    announcements.
+- DONE P10.3.4 / P10.18.1 (Low — v1.x) `cargo xtask refresh-live-models`
+  - Landed as a new `refresh-live-models` xtask subcommand that
+    pings each of the 9 live-test providers' `/models` endpoints,
+    verifies the hard-coded text-model default in
+    `agentflow-llm/tests/provider_consistency_live.rs::run_text_path`
+    is still listed, and prints a per-provider verdict +
+    suggestions when a default is missing. Closes both the P10.3.4
+    auto-rotate entry and the P10.18.1 stretch (they were
+    cross-referenced TODOs for the same task).
+  - **Scope decision**: validate-only, no auto-edit. The xtask
+    reports `ok` / `missing` / `skipped` / `error` and suggests up
+    to 3 replacement ids per missing default, ranked by shared
+    prefix with the current default. The operator copies the
+    suggestion into the test source manually. Rationale: the test
+    file's defaults carry inline rationale comments (e.g.
+    `claude-3-5-haiku-latest` alias and the dated `-20241022`
+    revision both 404 against current Anthropic tiers — see
+    CLAUDE.md) that an automated rewrite would clobber. A future
+    `--apply` mode is straightforward to add when demand for full
+    automation surfaces.
+  - **Providers covered (all 9)**: openai / anthropic / google /
+    moonshot / stepfun / glm (Zhipu/BigModel) / dashscope /
+    deepseek / minimax. Each probe uses the same auth shape
+    `agentflow-llm`'s providers use:
+    - OpenAI-compat (`Authorization: Bearer`) — openai + 6 vendors
+    - Anthropic (`x-api-key` + `anthropic-version: 2023-06-01`)
+    - Google (`?key=<KEY>` URL param, plus `models/` prefix
+      stripping on the response — without that, every Google
+      default would always report missing)
+  - **Key resolution**: loads `~/.agentflow/.env` into the process
+    environment (silently no-op when missing, the expected CI
+    case where keys come from the workflow's `env:` block). The
+    loader explicitly treats an existing empty env var as
+    unset — an exported-but-empty `OPENAI_API_KEY=` would
+    otherwise silently block a valid `.env` value. Per-provider
+    multi-key fallback matches `agentflow-llm`'s resolution order
+    (e.g. GLM tries `GLM_API_KEY` then `BIGMODEL_API_KEY` then
+    `ZHIPU_API_KEY`).
+  - **Implementation note**: shells out to `curl` rather than
+    pulling `reqwest` into xtask's dep graph. Trade-off: one
+    process spawn per probe + uses serde_json for response parse.
+    Keeps xtask compile-time short and dep graph minimal — this
+    is an operator tool, not a hot path.
+  - **Flags**: `--keep-going` (don't exit non-zero on per-provider
+    HTTP errors — useful when one provider's auth is broken but
+    you want the other 8 reports), `--include <name>` (repeatable,
+    restrict to a subset; unknown names fail fast with the full
+    provider list).
+  - **First real-world run surfaced two findings** against
+    `~/.agentflow/.env`:
+    - `glm/glm-4.5-flash` is no longer in `/v1/models`; suggested
+      replacements `glm-4.5-air`, `glm-4.5`, `glm-4.6`. (Real
+      deprecation; operator action needed.)
+    - `anthropic/claude-haiku-4-5` shows as missing because
+      `/v1/models` lists only dated revisions
+      (`claude-haiku-4-5-20251001`, etc.), not rolling aliases.
+      The rolling alias still resolves in actual API calls — this
+      is an Anthropic-specific false positive of the
+      "is the id in the list" check. Documented in the tool's
+      help / the operator can choose to pin a dated revision or
+      stay on the alias.
+  - **Tests (9 new in `xtask::refresh_live_models_tests`, all
+    hermetic — no network)**: 5 response-parser tests (OpenAI-
+    compat / Anthropic / Google + models/ prefix stripping /
+    missing-id-field skip / shape-error message), 1 shared-prefix
+    length sanity, 2 dotenv quote-stripping cases, 1 unknown-
+    include filter rejection, 1 probe_skips_providers_without_
+    api_key. The shape-error test pins the "missing `data` array"
+    diagnostic so a stale-response regression surfaces cleanly.
+  - **Verification**: `cargo build -p xtask` clean. `cargo test
+    -p xtask refresh_live_models` 9/9 green. `cargo clippy -p
+    xtask --tests -- -D warnings` clean. End-to-end smoke
+    against `~/.agentflow/.env` printed the expected 6 ok / 2
+    missing / 1 error breakdown.
 
 ### P10.4 — agentflow-tools (A-)
 
@@ -2116,8 +2179,9 @@ No active gaps beyond the v1.0.0-rc.1 ops (P10.0). Future:
 
 No active gaps. Future opportunities:
 
-- TODO P10.18.1 (Stretch) `cargo xtask refresh-live-models` (also
-  listed under P10.3.4)
+- DONE P10.18.1 (Stretch) `cargo xtask refresh-live-models`
+  - Closed jointly with P10.3.4 — see that entry for the full
+    write-up. Cross-referenced TODOs were the same task.
 - DONE P10.18.2 (Stretch) `cargo xtask check-changelog`
   - New subcommand at `xtask/src/main.rs::check_changelog_from_args`.
     Args: `cargo xtask check-changelog [BASE_REF]` (default
