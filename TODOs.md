@@ -1755,12 +1755,37 @@ No active gaps. Future opportunities:
 
 No active gaps. Future opportunities:
 
-- TODO P10.12.1 (Stretch) Hybrid TUI view (timeline + DAG side-by-
-  side)
-  - Today `trace replay` and `trace tui` are separate paths. A
-    split-pane view that shows DAG topology on the left + step
-    timeline on the right would be valuable for debugging fan-out
-    workflows. (Web UI already has trace-compare for this.)
+- DEFERRED P10.12.1 (Stretch) Hybrid TUI view (timeline + DAG
+  side-by-side)
+  - **Promoted to Deferred / Non-Goal** after honest re-evaluation
+    during the v1.0.0-rc.1 close-out:
+    1. **DAG-only scope.** The "DAG topology pane" only renders
+       for workflow traces (which have a node graph). Agent
+       traces (ReAct) are linear step sequences — no graph to
+       render — so the hybrid view doesn't apply to half the
+       trace surface.
+    2. **Web UI already covers the use case.** The TODO's own
+       parenthetical acknowledged this. `/ui/runs/<run_id>` shows
+       the DAG node-status grid + event timeline side-by-side;
+       that *is* the hybrid view the TUI would duplicate.
+    3. **Conflicts with P10.17.1's committed direction.** P10.17.1
+       made the Web UI the canonical debugger surface — adding a
+       parallel TUI debugger for the same shape would split the
+       maintenance budget without adding capability.
+    4. **No operator demand signal** in the v0.2.0 → v1.0.0-rc.1
+       arc. The Stretch tier was the right initial classification;
+       no follow-on dogfooding finding pushed it higher.
+  - **Re-promotion trigger** (any one is sufficient to flip back
+    to TODO):
+    - A real operator reports "I need to debug DAG workflows
+      without a browser" as a workflow blocker.
+    - The Web UI gets deprecated or restricted in a way that
+      breaks the headless-debugger story.
+    - A non-Rust contributor wants a polyglot terminal-only
+      debugger (would also drive the WASM plugin RFC).
+  - Pattern matches the closed Stretch items in `P10.10.1` (H6
+    promotion criteria) and `P10.19.1` (WASM evaluation) — decide-
+    when-to-revisit, persist the decision, free up active backlog.
 
 ### P10.13 — agentflow-viz (closed: crate deleted 2026-05-20)
 
