@@ -233,6 +233,11 @@ impl Transport for StdioTransport {
       .stdin(std::process::Stdio::piped())
       .stdout(std::process::Stdio::piped())
       .stderr(std::process::Stdio::piped())
+      // Ensures the child is SIGKILLed if the `Child` is dropped without
+      // an explicit `disconnect()` first. Without this, the synchronous
+      // `Drop` below cannot await `process.kill()` (which needs the tokio
+      // reactor) without deadlocking — see the `Drop` impl note.
+      .kill_on_drop(true)
       .spawn()
       .map_err(|e| MCPError::connection(format!("Failed to spawn MCP server process: {}", e)))?;
 
@@ -376,13 +381,21 @@ impl TransportConfig for StdioTransport {
 
 impl Drop for StdioTransport {
   fn drop(&mut self) {
-    // Best effort cleanup
-    if let Some(mut process) = self.process.take() {
-      futures::executor::block_on(async {
-        let _ = process.kill().await;
-        let _ = process.wait().await;
-      });
-    }
+    // Best effort cleanup. We deliberately do NOT spin up our own executor
+    // here — running `futures::executor::block_on(process.kill().await)`
+    // inside a tokio runtime context deadlocks, because the inner
+    // `tokio::process::Child::kill()` future needs the tokio reactor that
+    // is currently parked under the outer `block_on`. The CI hang in
+    // `test_drop_cleans_up_process` was exactly this.
+    //
+    // Cleanup happens via two paths instead:
+    //   1. Callers `await disconnect()` for the graceful path (preferred).
+    //   2. `Command::kill_on_drop(true)` (set at spawn time) makes tokio
+    //      SIGKILL the child when the `Child` is dropped, as long as the
+    //      runtime is still alive.
+    drop(self.process.take());
+    drop(self.stdin.take());
+    drop(self.stdout.take());
   }
 }
 
