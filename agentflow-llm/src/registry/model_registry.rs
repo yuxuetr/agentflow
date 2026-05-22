@@ -186,10 +186,26 @@ impl ModelRegistry {
       })
   }
 
-  /// Get model information for debugging/inspection
+  /// Get model information for debugging/inspection.
+  ///
+  /// Read-only by design: must not require a live provider, because
+  /// inventory paths like `agentflow llm models` need to enumerate every
+  /// declared model even when its provider's API key is unset. Falls back
+  /// to the static config's `providers[vendor].base_url` when the model
+  /// doesn't override it, and finally to an empty string when neither
+  /// is available (rare; the registry is the source of truth for what
+  /// base URL a request would use).
   pub fn get_model_info(&self, model_name: &str) -> Result<ModelInfo> {
     let model_config = self.get_model(model_name)?;
-    let provider = self.get_provider(&model_config.vendor)?;
+    let provider_base_url = {
+      let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+        message: format!("Configuration lock poisoned: {}", e),
+      })?;
+      config_guard
+        .as_ref()
+        .and_then(|c| c.providers.get(&model_config.vendor))
+        .and_then(|p| p.base_url.clone())
+    };
 
     Ok(ModelInfo {
       name: model_name.to_string(),
@@ -199,7 +215,8 @@ impl ModelRegistry {
         .unwrap_or_else(|| model_name.to_string()),
       base_url: model_config
         .base_url
-        .unwrap_or_else(|| provider.base_url().to_string()),
+        .or(provider_base_url)
+        .unwrap_or_default(),
       temperature: model_config.temperature,
       max_tokens: model_config.max_tokens,
       supports_streaming: model_config.supports_streaming.unwrap_or(true),
