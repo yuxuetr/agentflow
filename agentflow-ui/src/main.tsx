@@ -60,22 +60,18 @@ const newFormProfileKey = 'agentflow.ui.newForm.profile';
 const newFormInputsKey = 'agentflow.ui.newForm.inputs';
 
 const starterWorkflow = `name: web-ui-console-smoke
-version: "1.0"
 nodes:
-  hello:
+  - id: hello
     type: template
-    template: "hello from the run console"
-outputs:
-  message: "{{ hello.output }}"`;
+    parameters:
+      template: "hello from the run console"`;
 
 const createFormStarterWorkflow = `name: my-new-run
-version: "1.0"
 nodes:
-  greet:
+  - id: greet
     type: template
-    template: "hello {{ name }}"
-outputs:
-  message: "{{ greet.output }}"`;
+    parameters:
+      template: "hello {{ name }}"`;
 
 const createFormStarterInputs = `{
   "name": "world"
