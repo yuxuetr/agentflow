@@ -693,11 +693,15 @@ mod tests {
 
   #[tokio::test]
   async fn test_invalid_json_response() {
-    // Use echo to return invalid JSON
+    // Use echo to return invalid JSON. `sleep 5` keeps the child alive past
+    // `send_message`'s `check_process_health` probe — without it, Linux's
+    // tighter sh-exit timing races the read loop and the test surfaces
+    // "Process exited with status: 0" before the parse-error path runs,
+    // which is what we actually want to cover.
     let mut transport = StdioTransport::new(vec![
       "sh".to_string(),
       "-c".to_string(),
-      "echo 'invalid json'".to_string(),
+      "echo 'invalid json'; sleep 5".to_string(),
     ])
     .with_timeout(Duration::from_secs(1));
 
