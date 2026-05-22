@@ -176,10 +176,22 @@ impl CommandValidator {
       }
     };
     if let Some(mut stdin) = child.stdin.take() {
-      if let Err(e) = stdin.write_all(final_answer.as_bytes()).await {
-        return ValidatorVerdict::Unrunnable {
-          reason: format!("failed to write final answer to validator stdin: {e}"),
-        };
+      // A validator that doesn't read stdin (e.g. `sh -c "exit 0"`) closes
+      // its end of the pipe as it exits. On Linux that race typically wins
+      // before our write completes, surfacing `BrokenPipe`. That is NOT a
+      // validator-execution failure — the validator's own exit code is the
+      // authoritative signal, so we swallow EPIPE here and let the wait
+      // logic below decide Pass/Fail/Unrunnable from the exit status.
+      // Other I/O errors (PermissionDenied, etc.) still mean we couldn't
+      // run the validator and remain Unrunnable.
+      match stdin.write_all(final_answer.as_bytes()).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => {
+          return ValidatorVerdict::Unrunnable {
+            reason: format!("failed to write final answer to validator stdin: {e}"),
+          };
+        }
       }
       // Close stdin to signal EOF to the validator.
       drop(stdin);
