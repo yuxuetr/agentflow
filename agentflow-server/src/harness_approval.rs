@@ -43,7 +43,7 @@ use agentflow_harness::{
 };
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, JsonReq};
 
 /// Process-local pending-approval registry shared between
 /// [`ServerApprovalProvider`] and the HTTP decide route.
@@ -277,7 +277,7 @@ pub struct ApprovalDecisionResponse {
 pub async fn decide_approval(
   State(state): State<AppState>,
   Path((session_id, request_id)): Path<(Uuid, String)>,
-  Json(body): Json<ApprovalDecisionRequest>,
+  JsonReq(body): JsonReq<ApprovalDecisionRequest>,
 ) -> Result<Json<ApprovalDecisionResponse>, ApiError> {
   let _session = state
     .repos

@@ -49,7 +49,7 @@ pub use auth::{
 pub use cleanup::{
   CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
 };
-pub use error::ApiError;
+pub use error::{ApiError, JsonReq};
 pub use events_stream::{
   EventBroker, EventSink, PersistingEventSink, StreamedEvent, WorkflowEventListener, list_events,
   publish_through, stream_events,

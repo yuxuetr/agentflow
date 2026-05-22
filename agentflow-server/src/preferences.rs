@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, JsonReq};
 use crate::tenant::TenantId;
 use agentflow_db::UserPreferenceRepo;
 
@@ -69,7 +69,7 @@ pub async fn list_preferences(
 pub async fn put_preferences(
   State(state): State<AppState>,
   Extension(tenant): Extension<TenantId>,
-  Json(body): Json<PreferencesEnvelope>,
+  JsonReq(body): JsonReq<PreferencesEnvelope>,
 ) -> Result<Json<PreferencesEnvelope>, ApiError> {
   let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
   for (key, value) in body.preferences {

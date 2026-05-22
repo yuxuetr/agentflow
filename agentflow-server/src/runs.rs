@@ -33,7 +33,7 @@ use crate::events_stream::broker_finalize_grace;
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, JsonReq};
 use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
 use crate::tenant::TenantId;
 
@@ -424,7 +424,7 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
 /// dispatch the executor in the background, return the new id immediately.
 pub async fn submit_run(
   State(state): State<AppState>,
-  Json(req): Json<CreateRunRequest>,
+  JsonReq(req): JsonReq<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, ApiError> {
   let workflow = req.workflow.or_else(|| {
     req.workflow_id.as_ref().map(|id| {

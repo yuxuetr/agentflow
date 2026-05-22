@@ -18,10 +18,12 @@
 
 use axum::{
   Json,
+  extract::{FromRequest, Request, rejection::JsonRejection},
   http::StatusCode,
   response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -108,6 +110,38 @@ impl IntoResponse for ApiError {
   }
 }
 
+/// JSON body extractor that maps deserialization failures into the
+/// unified [`ApiError`] envelope instead of axum's default plain-text
+/// rejection. Drop-in replacement for `Json<T>` in route handler
+/// signatures. Without this wrapper, malformed bodies / missing fields
+/// / unknown enum variants return raw `Failed to deserialize the JSON
+/// body…` text bodies, violating the `code` / `message` envelope
+/// callers branch on (see `docs/DEPLOYMENT.md` "Unified error envelope").
+pub struct JsonReq<T>(pub T);
+
+#[axum::async_trait]
+impl<S, T> FromRequest<S> for JsonReq<T>
+where
+  S: Send + Sync,
+  T: DeserializeOwned,
+{
+  type Rejection = ApiError;
+
+  async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+    match Json::<T>::from_request(req, state).await {
+      Ok(Json(value)) => Ok(JsonReq(value)),
+      Err(rejection) => Err(json_rejection_to_api_error(rejection)),
+    }
+  }
+}
+
+fn json_rejection_to_api_error(rejection: JsonRejection) -> ApiError {
+  // `body_text()` carries the actionable detail (which field is missing,
+  // which enum variant is unknown, byte offset of a syntax error). Keep
+  // it as `message` so clients can still surface the underlying cause.
+  ApiError::BadRequest(rejection.body_text())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -150,5 +184,41 @@ mod tests {
         .unwrap()
         .contains("missing field")
     );
+  }
+
+  #[tokio::test]
+  async fn json_req_malformed_body_yields_unified_envelope() {
+    use axum::{Router, extract::State, routing::post};
+    use serde::Deserialize;
+    use tower::ServiceExt;
+
+    #[derive(Deserialize)]
+    struct Body {
+      #[allow(dead_code)]
+      field: String,
+    }
+
+    async fn handler(_state: State<()>, JsonReq(_body): JsonReq<Body>) -> StatusCode {
+      StatusCode::OK
+    }
+
+    let app = Router::new().route("/", post(handler)).with_state(());
+
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(r#"{"field": 123}"#))
+      .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "bad_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    // Underlying serde detail (type-mismatch on `field`) must survive
+    // into the envelope so clients can still see the cause.
+    assert!(msg.contains("field"), "message lacked field detail: {msg}");
   }
 }

@@ -22,7 +22,7 @@ use agentflow_core::FlowCancellationToken;
 use agentflow_db::{NewRun, RunRepo, RunStatus};
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, JsonReq};
 use crate::runs::{CreateRunResponse, RunContext};
 
 /// Read-only view of a skill registry, suitable for serving over HTTP.
@@ -173,7 +173,7 @@ pub struct RunSkillRequest {
 pub async fn run_skill(
   State(state): State<AppState>,
   Path(name): Path<String>,
-  Json(req): Json<RunSkillRequest>,
+  JsonReq(req): JsonReq<RunSkillRequest>,
 ) -> Result<Json<CreateRunResponse>, ApiError> {
   // Path is registered as `/v1/skills/:name_run`; strip the trailing
   // `:run` suffix to recover the bare skill name. Failing the suffix

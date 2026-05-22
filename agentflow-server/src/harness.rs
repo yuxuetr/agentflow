@@ -46,7 +46,7 @@ use agentflow_db::{
 };
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, JsonReq};
 use crate::events_stream::broker_finalize_grace;
 
 /// Channel capacity per session. Slow subscribers drop oldest events when
@@ -407,7 +407,7 @@ pub fn default_harness_executor() -> Arc<dyn HarnessSessionExecutor> {
 /// the new id immediately.
 pub async fn submit_harness_session(
   State(state): State<AppState>,
-  Json(req): Json<CreateHarnessSessionRequest>,
+  JsonReq(req): JsonReq<CreateHarnessSessionRequest>,
 ) -> Result<Json<CreateHarnessSessionResponse>, ApiError> {
   let user_input = req.user_input.trim();
   if user_input.is_empty() {
