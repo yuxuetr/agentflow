@@ -27,8 +27,9 @@ pub trait StateSizeObserver: Send + Sync {
   fn observe(&self, bytes: u64);
 }
 
-/// Sum the [`FlowValue::estimated_size_bytes`] of every entry in a state
-/// pool, plus each key string's length, plus each result's outer entry key.
+/// Sum the [`crate::value::FlowValue::estimated_size_bytes`] of every entry
+/// in a state pool, plus each key string's length, plus each result's outer
+/// entry key.
 ///
 /// Failed `AsyncNodeResult` entries (the `Err` arm) contribute only their
 /// outer key length — the executor never persists the error message into
