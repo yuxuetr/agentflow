@@ -247,3 +247,95 @@ async fn deny_decision_resolves_provider_with_denied_outcome() {
   assert_eq!(decided.decided_by, "operator-x");
   assert_eq!(decided.reason.as_deref(), Some("policy violation"));
 }
+
+// ── P2.6 tenant boundary regression suite ────────────────────────────────
+//
+// ddc497c added the tenant check to both `list_pending_approvals` and
+// `decide_approval`. Pin the contract so a regression flips these
+// from 404 back to 200 / 422.
+
+const TENANT_HEADER: &str = "x-agentflow-tenant";
+
+async fn park_synthetic_approval(state: &AppState, session_id: Uuid, request_id: &str) {
+  // Mirrors the pattern used by `list_pending_returns_parked_request`:
+  // park via the provider's `request()` so we don't have to widen the
+  // visibility of the private `park()` helper just for tests.
+  let provider = Arc::new(ServerApprovalProvider::new(
+    state.approval_registry.clone(),
+    Duration::from_secs(60),
+  ));
+  let request = sample_request(session_id, request_id);
+  tokio::spawn(async move {
+    let _ = provider.request(request).await;
+  });
+  while state.approval_registry.pending_count() == 0 {
+    tokio::task::yield_now().await;
+  }
+}
+
+#[tokio::test]
+async fn cross_tenant_list_pending_approvals_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_list_pending_approvals_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let session_id = insert_running_session(&state, &owner).await;
+  park_synthetic_approval(&state, session_id, "p-list").await;
+
+  let response = create_router(state)
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/v1/harness/sessions/{session_id}/approvals"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let body = body_json(response).await;
+  assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn cross_tenant_decide_approval_returns_404_and_keeps_request_parked() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_decide_approval_returns_404_and_keeps_request_parked");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let session_id = insert_running_session(&state, &owner).await;
+  let request_id = "p-decide";
+  park_synthetic_approval(&state, session_id, request_id).await;
+  let registry = state.approval_registry.clone();
+
+  let response = create_router(state)
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!(
+          "/v1/harness/sessions/{session_id}/approvals/{request_id}"
+        ))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(
+          serde_json::to_vec(&json!({ "decision": "allow", "scope": "once" })).unwrap(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  // The parked request stays parked: a cross-tenant decide attempt
+  // must not unblock the owner's pending approval. List under the
+  // owner tenant still surfaces the one request.
+  assert_eq!(registry.list(&session_id.to_string()).len(), 1);
+}

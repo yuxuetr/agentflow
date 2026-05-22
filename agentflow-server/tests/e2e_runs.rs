@@ -597,3 +597,95 @@ async fn health_route_stays_open_under_auth() {
     "health route must always be reachable without auth"
   );
 }
+
+// P2.6 follow-up after ddc497c: cover every workflow-side endpoint
+// that takes a path-bound `:id` so future handlers added without a
+// tenant boundary trip a CI failure here.
+
+#[tokio::test]
+async fn cross_tenant_list_events_history_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_list_events_history_returns_404");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(NewRun {
+      id,
+      workflow: "x-tenant-events-history".into(),
+      status: RunStatus::Queued,
+      run_dir: None,
+      tenant_id: format!("tenant-owner-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
+    })
+    .await
+    .unwrap();
+
+  let app = create_router(state);
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/runs/{id}/events/history"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let body: Value = serde_json::from_slice(
+    &axum::body::to_bytes(response.into_body(), 4096)
+      .await
+      .unwrap(),
+  )
+  .unwrap();
+  assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn cross_tenant_stream_events_sse_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_stream_events_sse_returns_404");
+    return;
+  };
+  let id = Uuid::new_v4();
+  state
+    .repos
+    .runs
+    .create(NewRun {
+      id,
+      workflow: "x-tenant-events-sse".into(),
+      status: RunStatus::Running,
+      run_dir: None,
+      tenant_id: format!("tenant-owner-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
+    })
+    .await
+    .unwrap();
+
+  let app = create_router(state);
+  // Cross-tenant SSE subscribe must 404 before any event is replayed
+  // — otherwise the intruder gets a live channel onto another
+  // tenant's stream.
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/runs/{id}/events"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

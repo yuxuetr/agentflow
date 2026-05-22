@@ -648,3 +648,172 @@ async fn post_action_unknown_suffix_returns_400() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+// ── P2.6 tenant boundary regression suite ────────────────────────────────
+//
+// After ddc497c plugged the cross-tenant leaks on every `:id`-bound
+// harness endpoint, lock the contract down: seed a session as one
+// tenant, hit the endpoint as a different tenant, expect 404. The
+// shape mirrors `cross_tenant_get_run_returns_404` in `e2e_runs.rs`.
+
+const TENANT_HEADER: &str = "x-agentflow-tenant";
+
+#[tokio::test]
+async fn cross_tenant_get_harness_session_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_get_harness_session_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let session_id = submit_for_tenant(app.clone(), "owner session", &owner).await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/harness/sessions/{session_id}"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let body = body_json(response).await;
+  assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn cross_tenant_list_harness_events_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_list_harness_events_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let session_id = submit_for_tenant(app.clone(), "owner events", &owner).await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/harness/sessions/{session_id}/events/history"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cross_tenant_stream_harness_events_sse_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_stream_harness_events_sse_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let session_id = submit_for_tenant(app.clone(), "owner sse", &owner).await;
+
+  // Cross-tenant SSE subscribe must 404 before any envelope is
+  // replayed — otherwise the intruder gets a live channel into
+  // another tenant's session.
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/harness/sessions/{session_id}/events"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cross_tenant_cancel_harness_session_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_cancel_harness_session_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let session_id = submit_for_tenant(app.clone(), "owner cancel", &owner).await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{session_id}:cancel"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cross_tenant_resume_harness_session_returns_404() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping cross_tenant_resume_harness_session_returns_404");
+    return;
+  };
+  let owner = format!("tenant-owner-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let session_id = submit_for_tenant(app.clone(), "owner resume", &owner).await;
+  // Wait briefly for the stub executor to reach a terminal state so
+  // the resume route's precondition check ("session must be terminal")
+  // isn't what produces the error — we want the tenant 404 path.
+  for _ in 0..50 {
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let row = body_json(
+      axum::Router::clone(&app)
+        .oneshot(
+          Request::builder()
+            .uri(format!("/v1/harness/sessions/{session_id}"))
+            .header(TENANT_HEADER, owner.as_str())
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    if row["status"] != "running" {
+      break;
+    }
+  }
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/v1/harness/sessions/{session_id}:resume"))
+        .header(
+          TENANT_HEADER,
+          format!("tenant-intruder-{}", Uuid::new_v4()).as_str(),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
