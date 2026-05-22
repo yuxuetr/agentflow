@@ -77,6 +77,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
   let workspace = tempfile::tempdir().expect("workspace tempdir");
 
   // Submit the session against the live executor.
+  let tenant = format!("live-{}", Uuid::new_v4());
   let response = app
     .clone()
     .oneshot(
@@ -91,7 +92,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
             "profile": "local",
             "runtime_kind": "react",
             "model": "moonshot-v1-auto",
-            "tenant_id": format!("live-{}", Uuid::new_v4()),
+            "tenant_id": tenant,
           }))
           .unwrap(),
         ))
@@ -116,6 +117,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
         Request::builder()
           .method("GET")
           .uri(format!("/v1/harness/sessions/{}", session_id))
+          .header("X-Agentflow-Tenant", &tenant)
           .body(Body::empty())
           .unwrap(),
       )
@@ -155,6 +157,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
           "/v1/harness/sessions/{}/events/history",
           session_id
         ))
+        .header("X-Agentflow-Tenant", &tenant)
         .body(Body::empty())
         .unwrap(),
     )

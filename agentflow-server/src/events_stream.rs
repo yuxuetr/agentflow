@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use axum::{
-  Json,
+  Extension, Json,
   extract::{Path, Query, State},
   response::sse::{Event, KeepAlive, Sse},
 };
@@ -30,6 +30,7 @@ use agentflow_db::{DbError, EventRepo, NewEvent, Repositories, RunRepo};
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::tenant::TenantId;
 
 /// Channel capacity per run. Slow subscribers drop oldest events when
 /// they fall this far behind; the SSE handler logs a warning and lets the
@@ -204,15 +205,22 @@ pub struct EventsQuery {
 /// 4. Forwards live broker events for as long as the channel stays open.
 pub async fn stream_events(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(run_id): Path<Uuid>,
   Query(params): Query<EventsQuery>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-  let _run = state
+  let run = state
     .repos
     .runs
     .get(run_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
+  // P2.6 tenant boundary: same "pretend the row doesn't exist" 404
+  // shape as `cancel_run`, so a cross-tenant SSE subscriber can't probe
+  // by status code or — worse — silently tail another tenant's events.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", run_id)));
+  }
 
   let mut after_seq = params.after_seq.unwrap_or(-1);
 
@@ -294,15 +302,21 @@ fn serialise_event(event: &StreamedEvent) -> Event {
 /// failures surface as 400 with the single-line parser message.
 pub async fn list_events(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(run_id): Path<Uuid>,
   Query(params): Query<EventsQuery>,
 ) -> Result<Json<Vec<StreamedEvent>>, ApiError> {
-  let _run = state
+  let run = state
     .repos
     .runs
     .get(run_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
+  // P2.6 tenant boundary: collapse cross-tenant access to 404 so the
+  // history endpoint doesn't leak another tenant's event log.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", run_id)));
+  }
 
   // P10.17.3: parse the filter up front so a malformed expression
   // returns 400 instead of silently degrading to "no filter applied".

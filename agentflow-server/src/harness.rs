@@ -25,7 +25,7 @@
 
 use async_trait::async_trait;
 use axum::{
-  Json,
+  Extension, Json,
   extract::{Path, Query, State},
   response::sse::{Event, KeepAlive, Sse},
 };
@@ -48,6 +48,7 @@ use agentflow_db::{
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
 use crate::events_stream::broker_finalize_grace;
+use crate::tenant::TenantId;
 
 /// Channel capacity per session. Slow subscribers drop oldest events when
 /// they fall this far behind; the SSE handler logs a warning and lets the
@@ -490,6 +491,7 @@ pub async fn list_harness_sessions(
 /// `GET /v1/harness/sessions/{id}` — return the current session state.
 pub async fn get_harness_session(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id): Path<Uuid>,
 ) -> Result<Json<HarnessSessionResponse>, ApiError> {
   let session = state
@@ -498,6 +500,14 @@ pub async fn get_harness_session(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", id)))?;
+  // P2.6 tenant boundary: 404 (not 403) cross-tenant access so the
+  // caller can't infer existence by status code.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      id
+    )));
+  }
   Ok(Json(HarnessSessionResponse { session }))
 }
 
@@ -510,18 +520,19 @@ pub async fn get_harness_session(
 /// it before parsing the UUID.
 pub async fn post_harness_session_action(
   state: State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(id_action): Path<String>,
   body: Option<Json<ResumeHarnessSessionRequest>>,
 ) -> Result<axum::response::Response, ApiError> {
   use axum::response::IntoResponse;
   if id_action.ends_with(":cancel") {
-    return cancel_harness_session(state, Path(id_action))
+    return cancel_harness_session(state, tenant, Path(id_action))
       .await
       .map(IntoResponse::into_response);
   }
   if id_action.ends_with(":resume") {
     let body = body.map(|Json(value)| value).unwrap_or_default();
-    return resume_harness_session(state, Path(id_action), Json(body))
+    return resume_harness_session(state, tenant, Path(id_action), Json(body))
       .await
       .map(IntoResponse::into_response);
   }
@@ -535,6 +546,7 @@ pub async fn post_harness_session_action(
 /// `cancelled: false`.
 pub async fn cancel_harness_session(
   State(state): State<AppState>,
+  tenant: TenantId,
   Path(id_cancel): Path<String>,
 ) -> Result<Json<CancelHarnessSessionResponse>, ApiError> {
   let id_raw = id_cancel.strip_suffix(":cancel").ok_or_else(|| {
@@ -549,6 +561,14 @@ pub async fn cancel_harness_session(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant cancel so a probe can't
+  // even toggle another tenant's session state.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      id
+    )));
+  }
 
   if HarnessSessionStatus::parse(&session.status)
     .map(HarnessSessionStatus::is_terminal)
@@ -659,6 +679,7 @@ pub struct ResumeHarnessSessionResponse {
 /// reruns can't race the same row. Cancel first if needed.
 pub async fn resume_harness_session(
   State(state): State<AppState>,
+  tenant: TenantId,
   Path(id_resume): Path<String>,
   Json(body): Json<ResumeHarnessSessionRequest>,
 ) -> Result<Json<ResumeHarnessSessionResponse>, ApiError> {
@@ -674,6 +695,14 @@ pub async fn resume_harness_session(
     .get(id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant resume so an attacker can't
+  // restart another tenant's session.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      id
+    )));
+  }
 
   if !HarnessSessionStatus::parse(&session.status)
     .map(HarnessSessionStatus::is_terminal)
@@ -816,15 +845,24 @@ async fn next_event_seq(repos: &Repositories, session_id: Uuid) -> Result<i64, A
 /// 4. Forwards live broker events for as long as the channel stays open.
 pub async fn stream_harness_events(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(session_id): Path<Uuid>,
   Query(params): Query<HarnessEventsQuery>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-  let _session = state
+  let session = state
     .repos
     .harness_sessions
     .get(session_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant SSE subscription so a
+  // caller can't tail another tenant's session.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
 
   let mut after_seq = params.after_seq.unwrap_or(-1);
   let receiver = state.harness_broker.subscribe(session_id);
@@ -870,15 +908,24 @@ pub async fn stream_harness_events(
 /// `list_events` route.
 pub async fn list_harness_events(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(session_id): Path<Uuid>,
   Query(params): Query<HarnessEventsQuery>,
 ) -> Result<Json<Vec<StreamedHarnessEvent>>, ApiError> {
-  let _session = state
+  let session = state
     .repos
     .harness_sessions
     .get(session_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant history reads so the
+  // endpoint doesn't leak another tenant's harness event log.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
 
   let after_seq = params.after_seq.unwrap_or(-1);
   let events = state

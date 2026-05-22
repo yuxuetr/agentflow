@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::{
-  Json,
+  Extension, Json,
   extract::{Path, State},
 };
 use chrono::Utc;
@@ -44,6 +44,7 @@ use agentflow_harness::{
 
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
+use crate::tenant::TenantId;
 
 /// Process-local pending-approval registry shared between
 /// [`ServerApprovalProvider`] and the HTTP decide route.
@@ -230,16 +231,25 @@ impl ApprovalProvider for ServerApprovalProvider {
 /// for the session, oldest first.
 pub async fn list_pending_approvals(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(session_id): Path<Uuid>,
 ) -> Result<Json<PendingApprovalsResponse>, ApiError> {
   // 404 if the session doesn't exist so the route doesn't silently
   // return an empty list for typos.
-  let _session = state
+  let session = state
     .repos
     .harness_sessions
     .get(session_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant access so the pending list
+  // doesn't leak which approvals exist on another tenant's session.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
 
   let pending = state.approval_registry.list(&session_id.to_string());
   Ok(Json(PendingApprovalsResponse { approvals: pending }))
@@ -276,15 +286,25 @@ pub struct ApprovalDecisionResponse {
 /// itself.
 pub async fn decide_approval(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path((session_id, request_id)): Path<(Uuid, String)>,
   JsonReq(body): JsonReq<ApprovalDecisionRequest>,
 ) -> Result<Json<ApprovalDecisionResponse>, ApiError> {
-  let _session = state
+  let session = state
     .repos
     .harness_sessions
     .get(session_id)
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant decision attempts so an
+  // attacker can't unblock or deny approvals on another tenant's
+  // session by guessing the request id.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
 
   let decision = ApprovalDecision {
     request_id: request_id.clone(),

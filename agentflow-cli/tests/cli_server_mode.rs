@@ -241,13 +241,17 @@ async fn cli_workflow_run_via_server_404s_against_unknown_tenant() {
     .await
     .unwrap();
 
-  // graph is the simplest read path; cancel would also work.
+  // `logs` is the canonical read path now that `graph` was removed in
+  // P10.13.1 alongside the `agentflow-viz` crate. It hits
+  // `GET /v1/runs/{id}/events/history`, which goes through the same
+  // tenant-scoped lookup as `graph` did, so the cross-tenant 404
+  // contract carries over unchanged.
   let url = server_url.clone();
   let assert = tokio::task::spawn_blocking(move || {
     cli_bin()
       .args([
         "workflow",
-        "graph",
+        "logs",
         &id.to_string(),
         "--server",
         &url,

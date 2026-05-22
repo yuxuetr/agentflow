@@ -125,6 +125,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("GET")
         .uri(format!("/v1/harness/sessions/{session_id}/events"))
+        .header("X-Agentflow-Tenant", &tenant)
         .body(Body::empty())
         .unwrap(),
     )
@@ -178,6 +179,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("GET")
         .uri(format!("/v1/harness/sessions/{session_id}/events/history"))
+        .header("X-Agentflow-Tenant", &tenant)
         .body(Body::empty())
         .unwrap(),
     )
@@ -208,6 +210,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("GET")
         .uri(format!("/v1/harness/sessions/{session_id}"))
+        .header("X-Agentflow-Tenant", &tenant)
         .body(Body::empty())
         .unwrap(),
     )
@@ -232,6 +235,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("POST")
         .uri(format!("/v1/harness/sessions/{session_id}:resume"))
+        .header("X-Agentflow-Tenant", &tenant)
         .header("content-type", "application/json")
         .body(Body::from(
           serde_json::to_vec(&json!({
@@ -262,6 +266,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
         Request::builder()
           .method("GET")
           .uri(format!("/v1/harness/sessions/{session_id}"))
+          .header("X-Agentflow-Tenant", &tenant)
           .body(Body::empty())
           .unwrap(),
       )
@@ -283,6 +288,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("GET")
         .uri(format!("/v1/harness/sessions/{session_id}/events/history"))
+        .header("X-Agentflow-Tenant", &tenant)
         .body(Body::empty())
         .unwrap(),
     )
