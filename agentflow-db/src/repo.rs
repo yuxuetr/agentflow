@@ -247,7 +247,8 @@ impl RunRepo for PgRunRepo {
     // NULL parameter at runtime.
     let rows = if let Some(status) = status {
       sqlx::query_as::<_, Run>(
-        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
+        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error,
+                  events_retention_days, artifacts_retention_days
            FROM runs
            WHERE tenant_id = $1 AND status = $2
            ORDER BY started_at DESC
@@ -261,7 +262,8 @@ impl RunRepo for PgRunRepo {
       .await?
     } else {
       sqlx::query_as::<_, Run>(
-        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error
+        r#"SELECT id, workflow, status, started_at, finished_at, run_dir, tenant_id, error,
+                  events_retention_days, artifacts_retention_days
            FROM runs
            WHERE tenant_id = $1
            ORDER BY started_at DESC
