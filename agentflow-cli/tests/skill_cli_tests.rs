@@ -714,10 +714,10 @@ fn skill_inspect_allow_deny_tool_without_explain_permissions_emits_hint() {
 }
 
 #[test]
-fn skill_inspect_with_mcp_discovery_hint_without_explain_permissions() {
-  // --with-mcp-discovery only applies to --explain-permissions mode.
-  // Without the explain flag, the CLI emits a friendly hint instead
-  // of silently doing nothing.
+fn skill_inspect_with_mcp_discovery_flag_is_a_no_op_after_default_on() {
+  // P10.9.1 made MCP discovery the default under --explain-permissions;
+  // the old --with-mcp-discovery flag is now a no-op but still parses,
+  // and we warn on stderr so operators eventually drop it from scripts.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
     .args([
@@ -728,8 +728,8 @@ fn skill_inspect_with_mcp_discovery_hint_without_explain_permissions() {
     ])
     .assert()
     .success()
-    .stdout(predicate::str::contains(
-      "--with-mcp-discovery is only honored with --explain-permissions",
+    .stderr(predicate::str::contains(
+      "--with-mcp-discovery is now the default and the flag is a no-op",
     ));
 }
 
@@ -755,10 +755,13 @@ fn skill_inspect_explain_permissions_with_mcp_discovery_surfaces_advertised_tool
 }
 
 #[test]
-fn skill_inspect_explain_permissions_without_mcp_discovery_skips_discovery_section() {
-  // Negative: same skill, no --with-mcp-discovery. The `MCP discovery:`
-  // header must NOT be printed — the operator hasn't opted into the
-  // (potentially slow) spawn path.
+fn skill_inspect_no_mcp_discovery_opt_out_reports_skipped_status() {
+  // Post-P10.9.1, --explain-permissions always emits an `MCP discovery:`
+  // line because the discovery cache outcome is part of the operator
+  // contract. The --no-mcp-discovery opt-out flips that line to a
+  // "skipped" status (no MCP servers spawned, no tools enumerated),
+  // which is the load-bearing invariant for anyone scripting around
+  // the discovery cost.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
     .args([
@@ -766,10 +769,13 @@ fn skill_inspect_explain_permissions_without_mcp_discovery_skips_discovery_secti
       "inspect",
       &mcp_basic_skill_path(),
       "--explain-permissions",
+      "--no-mcp-discovery",
     ])
     .assert()
     .success()
-    .stdout(predicate::str::contains("MCP discovery:").not());
+    .stdout(predicate::str::contains(
+      "MCP discovery: skipped (--no-mcp-discovery)",
+    ));
 }
 
 #[test]
