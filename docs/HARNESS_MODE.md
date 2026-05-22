@@ -398,6 +398,16 @@ Axum can't bind two POST handlers to the same path pattern, so the
 dispatcher is the cleanest way to keep two semantically distinct
 actions on a single REST resource.
 
+> **zsh caveat for `curl` callers.** Writing the URL as
+> `curl -X POST "http://host:3000/v1/harness/sessions/$SID:cancel"`
+> silently breaks under zsh because the shell parses `:c` as a csh-style
+> parameter modifier and rewrites the variable. The URL that actually
+> reaches the gateway has `:c` missing, and the route returns
+> `bad_request: ...must end with :cancel or :resume`. Always brace the
+> variable: `…/sessions/${SID}:cancel` and `…/sessions/${SID}:resume`.
+> Bash is not affected, but the braced form is harmless there too —
+> safer to standardise on it in any shared scripts or docs.
+
 Slice 4 also flips the Web UI detail page from polling to
 `EventSource` SSE, with a 5 s history-poll fallback for clients that
 lose the broker channel (the workflow `EventBroker` contract drops

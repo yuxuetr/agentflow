@@ -100,9 +100,9 @@ Unified user interface:
 
 #### L4 — agentflow-tracing
 Observability:
-- Event collection via `EventListener` (non-invasive)
-- Persistence: JSONL (default) or SQLite/Postgres (feature-gated)
-- `agentflow trace replay` + TUI timeline
+- Event collection via `EventListener` (non-invasive); the in-process drain task processes events in arrival order so terminal node state cannot race the `WorkflowCompleted` save
+- Persistence: JSONL (default) or SQLite/Postgres (feature-gated). Producer-side wiring is live in CLI (`agentflow workflow run` always writes file traces under `AGENTFLOW_TRACE_DIR` / `~/.agentflow/traces` by default) and in the gateway (`POST /v1/runs` writes file traces only when `AGENTFLOW_TRACE_DIR` is explicitly set, since the cleanup sweep does not cover that dir). Harness sessions (`HarnessEvent`) persist to Postgres + SSE only; file-backed trace integration would need a separate `HarnessEventListener → ExecutionTrace` adapter and is not wired today.
+- `agentflow trace replay` + TUI timeline (read from the directories above)
 - OpenTelemetry exporter (OTLP) with W3C trace context propagation
 - Redaction for API keys, env secrets, sensitive tool params
 - `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` for explicit storage roots

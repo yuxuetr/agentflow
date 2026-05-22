@@ -84,6 +84,21 @@ The Helm chart wires liveness and readiness probes to those endpoints. The curre
 - CLI containers that need `~/.agentflow` can mount it as a volume at `/home/agentflow/.agentflow`.
 - Trace files should be backed by a persistent volume only when using file-backed trace storage.
 
+### File-backed trace dir is opt-in and not garbage-collected
+
+Setting `AGENTFLOW_TRACE_DIR=<path>` opts the gateway in to writing one
+`<run_id>.json` file per `POST /v1/runs` execution (so operators can
+inspect via `agentflow trace tui <run_id> --dir <path>`). The Postgres
+event log remains the source of truth either way.
+
+The cleanup sweep documented under "Per-run retention overrides" deletes
+expired `runs` / `events` / `artifacts` rows but **does not touch the
+trace JSON directory**. If you enable this on a long-running deployment,
+rotate the directory externally (e.g. a `logrotate`-style cron or a
+volume with its own retention policy) — otherwise it will grow without
+bound. Default-deployment behaviour with the env var unset is unchanged:
+no trace files are produced, no cleanup needed.
+
 ## v0.3.0 N8: Control-plane HTTP surface
 
 The gateway applies its `agentflow-db` migrations on startup
