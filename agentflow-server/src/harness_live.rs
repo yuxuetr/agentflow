@@ -22,8 +22,8 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentStopReason;
 use agentflow_harness::{
   ApprovalProvider, HarnessEvent, HarnessEventBody, HarnessEventSink, HarnessProfile,
-  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SinkChain, default_providers,
-  wrap_registry,
+  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SinkChain, StopReason,
+  StoppedPayload, default_providers, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SessionMemory;
@@ -163,7 +163,8 @@ impl std::fmt::Debug for LiveHarnessExecutor {
 impl HarnessSessionExecutor for LiveHarnessExecutor {
   async fn execute(&self, ctx: HarnessSessionContext) {
     if let Err(err) = live_execute(self, &ctx).await {
-      error!(session_id = %ctx.session_id, error = %err, "live harness executor failed");
+      let err_msg = err.to_string();
+      error!(session_id = %ctx.session_id, error = %err_msg, "live harness executor failed");
       let _ = ctx
         .repos
         .harness_sessions
@@ -171,13 +172,66 @@ impl HarnessSessionExecutor for LiveHarnessExecutor {
           ctx.session_id,
           HarnessSessionStatus::Failed,
           None,
-          Some(&err.to_string()),
+          Some(&err_msg),
         )
         .await;
+      // Emit a terminal `stopped` event so SSE subscribers and event-log
+      // consumers see the H0 contract's required close signal. Two
+      // failure shapes need this:
+      //   1. `live_execute` errored before `HarnessRuntime::run` could
+      //      start (e.g. LLM init / model resolution failed), so the
+      //      runtime never wrote anything but `session_started` —
+      //      sometimes not even that.
+      //   2. `HarnessRuntime::run` errored mid-way (inner agent failed)
+      //      and the runtime itself does not currently emit `stopped`
+      //      on its error path.
+      // Both leave the broker open and the event history missing a
+      // terminal kind, which the closed kind set documented in
+      // `docs/HARNESS_MODE.md` promises is always present.
+      emit_failure_stopped_event(&ctx, &err_msg).await;
       ctx
         .broker
         .finalise_with_grace(ctx.session_id, broker_finalize_grace());
     }
+  }
+}
+
+/// Persist + publish a synthetic `stopped` event with
+/// `StopReason::Failed` for a session whose execution failed before the
+/// runtime could emit its own terminal event. seq is computed from the
+/// current `MAX(seq)` in the event log so the synthetic event always
+/// lands after whatever the runtime did manage to write (typically a
+/// solitary `session_started`).
+async fn emit_failure_stopped_event(ctx: &HarnessSessionContext, err_msg: &str) {
+  let next_seq = match ctx.repos.harness_events.max_seq(ctx.session_id).await {
+    Ok(Some(max)) => (max as u64).saturating_add(1),
+    Ok(None) => 0,
+    Err(err) => {
+      warn!(
+        session_id = %ctx.session_id,
+        error = %err,
+        "harness failure-stopped emit: max_seq lookup failed, skipping",
+      );
+      return;
+    }
+  };
+  let event = HarnessEvent {
+    seq: next_seq,
+    session_id: ctx.session_id.to_string(),
+    ts: chrono::Utc::now(),
+    body: HarnessEventBody::Stopped(StoppedPayload {
+      reason: StopReason::Failed,
+      final_answer: None,
+      error: Some(err_msg.to_string()),
+    }),
+  };
+  let sink = ServerHarnessEventSink::new(ctx.repos.clone(), ctx.broker.clone());
+  if let Err(err) = sink.write(&event).await {
+    warn!(
+      session_id = %ctx.session_id,
+      error = %err,
+      "harness failure-stopped emit: sink write failed",
+    );
   }
 }
 
