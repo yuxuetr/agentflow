@@ -99,6 +99,16 @@ pub struct TraceCollector {
 
   /// Exporters invoked once a workflow trace reaches a terminal state.
   exporters: Vec<Arc<dyn TraceExporter>>,
+
+  /// Lazily-initialised drain channel. Sender side is populated on the
+  /// first event (so we don't require a tokio runtime at construction
+  /// time); a single dedicated task drains the receiver in arrival
+  /// order. Without this, every `on_event` call previously spun its own
+  /// `tokio::spawn`, and the resulting tasks raced for `current_traces`
+  /// — `WorkflowCompleted` would sometimes save the trace before an
+  /// earlier `NodeCompleted` finished updating the node row, yielding
+  /// `status=running` on the final node in TUI/replay output.
+  drain_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<WorkflowEvent>>,
 }
 
 impl TraceCollector {
@@ -110,6 +120,7 @@ impl TraceCollector {
       current_traces: Arc::new(RwLock::new(HashMap::new())),
       pending_llm: Arc::new(RwLock::new(HashMap::new())),
       exporters: Vec::new(),
+      drain_tx: std::sync::OnceLock::new(),
     }
   }
 
@@ -444,20 +455,38 @@ impl EventListener for TraceCollector {
 
     // Spawn async task to process event (non-blocking)
     if self.config.async_storage {
-      tokio::spawn(async move {
-        if let Err(e) = Self::process_event(
-          storage,
-          traces,
-          pending_llm,
-          config.clone(),
-          exporters,
-          event,
-        )
-        .await
-        {
-          Self::handle_storage_error(&config, e);
-        }
+      // Lazily set up a single drain task on first use so events are
+      // applied to `current_traces` in arrival order. The previous
+      // `tokio::spawn` per event raced across tasks for the same
+      // workflow's RwLock — see field-level comment on `drain_tx`.
+      let tx = self.drain_tx.get_or_init(|| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
+        let storage_drain = storage.clone();
+        let traces_drain = traces.clone();
+        let pending_drain = pending_llm.clone();
+        let config_drain = config.clone();
+        let exporters_drain = exporters.clone();
+        tokio::spawn(async move {
+          while let Some(ev) = rx.recv().await {
+            if let Err(e) = Self::process_event(
+              storage_drain.clone(),
+              traces_drain.clone(),
+              pending_drain.clone(),
+              config_drain.clone(),
+              exporters_drain.clone(),
+              ev,
+            )
+            .await
+            {
+              Self::handle_storage_error(&config_drain, e);
+            }
+          }
+        });
+        tx
       });
+      // Drop on send failure: receiver only goes away on collector drop,
+      // and at that point storage IO is best-effort by design.
+      let _ = tx.send(event);
     } else {
       // Blocking mode (for testing or special cases)
       let rt = tokio::runtime::Handle::current();
