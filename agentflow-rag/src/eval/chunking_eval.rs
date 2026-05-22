@@ -91,8 +91,7 @@ pub fn chunk_dataset(
   }
   let chunker = FixedSizeChunker::new(chunk_size, overlap);
   let mut corpus: Vec<CorpusDoc> = Vec::with_capacity(dataset.corpus.len());
-  let mut chunk_to_doc: HashMap<String, String> =
-    HashMap::with_capacity(dataset.corpus.len());
+  let mut chunk_to_doc: HashMap<String, String> = HashMap::with_capacity(dataset.corpus.len());
 
   for doc in &dataset.corpus {
     // BEIR convention: title + body when title is non-empty, same as
@@ -167,7 +166,10 @@ pub fn remap_chunks_to_doc_ids(
   let mut seen: std::collections::HashSet<String> =
     std::collections::HashSet::with_capacity(retrieved.len());
   for raw in retrieved {
-    let mapped = chunk_to_doc.get(raw).cloned().unwrap_or_else(|| raw.clone());
+    let mapped = chunk_to_doc
+      .get(raw)
+      .cloned()
+      .unwrap_or_else(|| raw.clone());
     if seen.insert(mapped.clone()) {
       out.push(mapped);
     }
@@ -178,10 +180,7 @@ pub fn remap_chunks_to_doc_ids(
 /// Thin wrapper so the call sites stay readable. The chunker's own
 /// `chunk()` API returns `crate::error::Result<Vec<TextChunk>>`; we
 /// just propagate it.
-fn chunker_chunk(
-  chunker: &FixedSizeChunker,
-  text: &str,
-) -> Result<Vec<TextChunk>> {
+fn chunker_chunk(chunker: &FixedSizeChunker, text: &str) -> Result<Vec<TextChunk>> {
   use crate::chunking::ChunkingStrategy;
   chunker.chunk(text)
 }
@@ -235,7 +234,10 @@ mod tests {
         "synthetic id wrong: {}",
         doc.id
       );
-      assert_eq!(chunked.chunk_to_doc.get(&doc.id).map(String::as_str), Some("d1"));
+      assert_eq!(
+        chunked.chunk_to_doc.get(&doc.id).map(String::as_str),
+        Some("d1")
+      );
     }
   }
 
@@ -303,7 +305,10 @@ mod tests {
     assert_eq!(chunked.corpus[0].id, "d-empty::chunk0");
     assert_eq!(chunked.corpus[0].text, "");
     assert_eq!(
-      chunked.chunk_to_doc.get("d-empty::chunk0").map(String::as_str),
+      chunked
+        .chunk_to_doc
+        .get("d-empty::chunk0")
+        .map(String::as_str),
       Some("d-empty")
     );
   }
@@ -325,7 +330,10 @@ mod tests {
       "d3::chunk0".to_string(),
     ];
     let out = remap_chunks_to_doc_ids(&raw, &map);
-    assert_eq!(out, vec!["d1".to_string(), "d2".to_string(), "d3".to_string()]);
+    assert_eq!(
+      out,
+      vec!["d1".to_string(), "d2".to_string(), "d3".to_string()]
+    );
   }
 
   #[test]

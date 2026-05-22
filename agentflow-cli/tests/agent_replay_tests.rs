@@ -111,12 +111,7 @@ fn cli_agent_replay_tool_name_divergence_exits_non_zero() {
   let dir = tempfile::tempdir().expect("tempdir");
   let baseline_events = vec![
     step_completed_observe(0, "2026-05-21T10:00:00Z", "go"),
-    step_completed_tool_call(
-      1,
-      "2026-05-21T10:00:01Z",
-      "search",
-      serde_json::json!({}),
-    ),
+    step_completed_tool_call(1, "2026-05-21T10:00:01Z", "search", serde_json::json!({})),
     run_stopped(
       "2026-05-21T10:00:02Z",
       serde_json::json!({"reason": "final_answer"}),
@@ -124,12 +119,7 @@ fn cli_agent_replay_tool_name_divergence_exits_non_zero() {
   ];
   let current_events = vec![
     step_completed_observe(0, "2026-05-21T10:00:00Z", "go"),
-    step_completed_tool_call(
-      1,
-      "2026-05-21T10:00:01Z",
-      "browse",
-      serde_json::json!({}),
-    ),
+    step_completed_tool_call(1, "2026-05-21T10:00:01Z", "browse", serde_json::json!({})),
     run_stopped(
       "2026-05-21T10:00:02Z",
       serde_json::json!({"reason": "final_answer"}),
@@ -212,8 +202,7 @@ fn cli_agent_replay_json_envelope_format_wraps_canonical_shape() {
     .assert()
     .success();
   let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
-  let envelope: serde_json::Value =
-    serde_json::from_str(&stdout).expect("envelope must be JSON");
+  let envelope: serde_json::Value = serde_json::from_str(&stdout).expect("envelope must be JSON");
   assert_eq!(envelope["version"], "agentflow.cli/1");
   assert_eq!(envelope["command"], "agent replay --diff");
   assert!(envelope["result"]["divergences"].is_array());

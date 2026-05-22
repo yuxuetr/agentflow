@@ -893,13 +893,12 @@ description = "Coding rules"
   // every host."
 
   fn expected_backend_name_when_enforcing() -> String {
-    agentflow_tools::sandbox::default_backend().name().to_string()
+    agentflow_tools::sandbox::default_backend()
+      .name()
+      .to_string()
   }
 
-  fn sandbox_backend_for(
-    registry: &agentflow_tools::ToolRegistry,
-    tool_name: &str,
-  ) -> String {
+  fn sandbox_backend_for(registry: &agentflow_tools::ToolRegistry, tool_name: &str) -> String {
     registry
       .get(tool_name)
       .expect("tool present in registry")

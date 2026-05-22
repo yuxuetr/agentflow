@@ -202,12 +202,7 @@ fn bench_checkpoint_roundtrip(c: &mut Criterion) {
           |(manager, _dir, state)| async move {
             let wid = format!("bench-{}", uuid::Uuid::new_v4());
             manager
-              .save_checkpoint_with_status(
-                &wid,
-                "last_node",
-                &state,
-                WorkflowStatus::Running,
-              )
+              .save_checkpoint_with_status(&wid, "last_node", &state, WorkflowStatus::Running)
               .await
               .expect("save ok");
             manager
@@ -235,16 +230,14 @@ fn bench_checkpoint_roundtrip(c: &mut Criterion) {
       status: WorkflowStatus::Running,
       metadata: HashMap::new(),
     };
-    let serialized =
-      serde_json::to_string_pretty(&checkpoint).expect("serialize checkpoint");
+    let serialized = serde_json::to_string_pretty(&checkpoint).expect("serialize checkpoint");
     group.throughput(Throughput::Elements(node_count as u64));
     group.bench_with_input(
       BenchmarkId::new("decode", node_count),
       &node_count,
       |b, _| {
         b.iter(|| {
-          let _decoded: Checkpoint =
-            serde_json::from_str(&serialized).expect("decode ok");
+          let _decoded: Checkpoint = serde_json::from_str(&serialized).expect("decode ok");
         });
       },
     );

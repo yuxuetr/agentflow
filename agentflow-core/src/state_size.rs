@@ -81,10 +81,7 @@ mod tests {
   #[test]
   fn estimated_state_pool_bytes_skips_error_results_payloads() {
     let mut pool: HashMap<String, AsyncNodeResult> = HashMap::new();
-    pool.insert(
-      "errored_node".to_string(),
-      Err(AgentFlowError::NodeSkipped),
-    );
+    pool.insert("errored_node".to_string(), Err(AgentFlowError::NodeSkipped));
     // Only the outer key length contributes.
     assert_eq!(
       estimated_state_pool_bytes(&pool),

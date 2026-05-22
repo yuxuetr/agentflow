@@ -1,0 +1,9 @@
+# Workspace formatting policy. Mirrors the personal rustfmt config maintainers
+# use locally; checked in so CI agrees on what `cargo fmt --check` accepts.
+# Nightly-only options (e.g. format_strings) intentionally omitted so stable
+# toolchains can run this without warnings.
+max_width = 100
+hard_tabs = false
+tab_spaces = 2
+edition = "2024"
+newline_style = "Unix"

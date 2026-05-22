@@ -175,6 +175,9 @@ async fn flow_without_observer_runs_unchanged() {
     initial_inputs: HashMap::new(),
   }];
   let flow = Flow::new(nodes);
-  let state = flow.run().await.expect("default flow runs without observer");
+  let state = flow
+    .run()
+    .await
+    .expect("default flow runs without observer");
   assert!(state.contains_key("a"));
 }

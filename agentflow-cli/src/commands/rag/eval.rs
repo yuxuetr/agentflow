@@ -411,13 +411,11 @@ async fn run_eval(
   let mut report = match retriever_kind {
     "bm25" => {
       let retriever = Bm25Eval::from_dataset(&index_dataset);
-      evaluate_with_remapping(&retriever, dataset, &remap, &config)
-        .map_err(anyhow::Error::from)?
+      evaluate_with_remapping(&retriever, dataset, &remap, &config).map_err(anyhow::Error::from)?
     }
     "dense" => {
       let retriever = build_dense_retriever(&index_dataset, embedding_model).await?;
-      evaluate_with_remapping(&retriever, dataset, &remap, &config)
-        .map_err(anyhow::Error::from)?
+      evaluate_with_remapping(&retriever, dataset, &remap, &config).map_err(anyhow::Error::from)?
     }
     "hybrid" => {
       // Hybrid wraps trait objects, so both BM25 and Dense must
@@ -431,8 +429,7 @@ async fn run_eval(
         Box::new(bm25),
         Box::new(dense),
       );
-      evaluate_with_remapping(&hybrid, dataset, &remap, &config)
-        .map_err(anyhow::Error::from)?
+      evaluate_with_remapping(&hybrid, dataset, &remap, &config).map_err(anyhow::Error::from)?
     }
     other => bail!(
       "unsupported retriever `{}`. Supported: bm25, dense, hybrid",
@@ -540,8 +537,8 @@ fn run_compare_candidate(
     None => (dataset.clone(), None),
   };
   let retriever = Bm25Eval::with_params(&index_dataset, k1, b);
-  let mut report = evaluate_with_remapping(&retriever, dataset, &remap, &config)
-    .map_err(anyhow::Error::from)?;
+  let mut report =
+    evaluate_with_remapping(&retriever, dataset, &remap, &config).map_err(anyhow::Error::from)?;
   if let Some(c) = chunked {
     report.chunk_size = Some(c.chunk_size);
   }

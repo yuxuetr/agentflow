@@ -91,10 +91,7 @@ fn template_context(n: usize) -> HashMap<String, FlowValue> {
       })
     })
     .collect();
-  inputs(&[
-    ("name", json!("benchmark")),
-    ("items", Value::Array(items)),
-  ])
+  inputs(&[("name", json!("benchmark")), ("items", Value::Array(items))])
 }
 
 // ── benches ─────────────────────────────────────────────────────────────────
@@ -117,9 +114,8 @@ fn bench_template_render(c: &mut Criterion) {
     let ctx = template_context(loop_iters);
     group.throughput(Throughput::Elements(loop_iters as u64));
     group.bench_with_input(BenchmarkId::new("render", label), &loop_iters, |b, _| {
-      b.to_async(&rt).iter(|| async {
-        node.execute(&ctx).await.expect("template render ok")
-      });
+      b.to_async(&rt)
+        .iter(|| async { node.execute(&ctx).await.expect("template render ok") });
     });
   }
   group.finish();
@@ -143,31 +139,22 @@ fn bench_conditional_evaluate(c: &mut Criterion) {
 
   let exists_node = ConditionalNode::new("ex", "user_present");
   group.bench_function(BenchmarkId::new("evaluate", "exists"), |b| {
-    b.to_async(&rt).iter(|| async {
-      exists_node
-        .execute(&ctx)
-        .await
-        .expect("conditional ok")
-    });
+    b.to_async(&rt)
+      .iter(|| async { exists_node.execute(&ctx).await.expect("conditional ok") });
   });
 
   let equals_node = ConditionalNode::new("eq", "name")
     .with_condition_type(ConditionType::Equals("alice".to_string()));
   group.bench_function(BenchmarkId::new("evaluate", "equals"), |b| {
-    b.to_async(&rt).iter(|| async {
-      equals_node
-        .execute(&ctx)
-        .await
-        .expect("conditional ok")
-    });
+    b.to_async(&rt)
+      .iter(|| async { equals_node.execute(&ctx).await.expect("conditional ok") });
   });
 
-  let gt_node = ConditionalNode::new("gt", "score")
-    .with_condition_type(ConditionType::GreaterThan(10.0));
+  let gt_node =
+    ConditionalNode::new("gt", "score").with_condition_type(ConditionType::GreaterThan(10.0));
   group.bench_function(BenchmarkId::new("evaluate", "greater_than"), |b| {
-    b.to_async(&rt).iter(|| async {
-      gt_node.execute(&ctx).await.expect("conditional ok")
-    });
+    b.to_async(&rt)
+      .iter(|| async { gt_node.execute(&ctx).await.expect("conditional ok") });
   });
 
   group.finish();
@@ -200,9 +187,8 @@ fn bench_file_read_write(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(byte_count as u64));
     group.bench_with_input(BenchmarkId::new("write", label), &byte_count, |b, _| {
-      b.to_async(&rt).iter(|| async {
-        node.execute(&write_inputs).await.expect("file write ok")
-      });
+      b.to_async(&rt)
+        .iter(|| async { node.execute(&write_inputs).await.expect("file write ok") });
     });
 
     // Seed the read target once outside the loop. The bench then
@@ -214,14 +200,10 @@ fn bench_file_read_write(c: &mut Criterion) {
       .to_string_lossy()
       .into_owned();
     std::fs::write(&read_path, &payload).expect("seed read fixture");
-    let read_inputs = inputs(&[
-      ("operation", json!("read")),
-      ("path", json!(read_path)),
-    ]);
+    let read_inputs = inputs(&[("operation", json!("read")), ("path", json!(read_path))]);
     group.bench_with_input(BenchmarkId::new("read", label), &byte_count, |b, _| {
-      b.to_async(&rt).iter(|| async {
-        node.execute(&read_inputs).await.expect("file read ok")
-      });
+      b.to_async(&rt)
+        .iter(|| async { node.execute(&read_inputs).await.expect("file read ok") });
     });
   }
   group.finish();

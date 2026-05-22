@@ -51,8 +51,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use age::secrecy::ExposeSecret;
+use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
@@ -144,10 +144,7 @@ pub fn generate_identity_file<P: AsRef<Path>>(
   let identity = age::x25519::Identity::generate();
   let secret = identity.to_string();
   std::fs::write(path, secret.expose_secret().as_bytes()).map_err(|e| {
-    MemoryError::StorageError(format!(
-      "writing identity file {}: {e}",
-      path.display()
-    ))
+    MemoryError::StorageError(format!("writing identity file {}: {e}", path.display()))
   })?;
   // 0600 on Unix so a casual `ls` doesn't leak the secret. No-op on
   // Windows; the host disk-encryption story is the operator's
@@ -155,43 +152,32 @@ pub fn generate_identity_file<P: AsRef<Path>>(
   #[cfg(unix)]
   {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-      MemoryError::StorageError(format!("chmod 0600 on {}: {e}", path.display()))
-    })?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+      .map_err(|e| MemoryError::StorageError(format!("chmod 0600 on {}: {e}", path.display())))?;
   }
   Ok(identity)
 }
 
 /// Load an X25519 identity from `path`. Expects the canonical
 /// single-line `AGE-SECRET-KEY-1...` representation.
-pub fn load_identity_file<P: AsRef<Path>>(
-  path: P,
-) -> Result<age::x25519::Identity, MemoryError> {
+pub fn load_identity_file<P: AsRef<Path>>(path: P) -> Result<age::x25519::Identity, MemoryError> {
   let path = path.as_ref();
   let content = std::fs::read_to_string(path).map_err(|e| {
-    MemoryError::StorageError(format!(
-      "reading identity file {}: {e}",
-      path.display()
-    ))
+    MemoryError::StorageError(format!("reading identity file {}: {e}", path.display()))
   })?;
   age::x25519::Identity::from_str(content.trim()).map_err(|e| {
-    MemoryError::StorageError(format!(
-      "parsing identity file {}: {e}",
-      path.display()
-    ))
+    MemoryError::StorageError(format!("parsing identity file {}: {e}", path.display()))
   })
 }
 
 /// Encrypt one JSON value to the marker-prefixed string the inner
 /// store persists.
-fn encrypt_value(
-  value: &Value,
-  recipient: &age::x25519::Recipient,
-) -> Result<String, MemoryError> {
+fn encrypt_value(value: &Value, recipient: &age::x25519::Recipient) -> Result<String, MemoryError> {
   let plaintext = serde_json::to_vec(value)
     .map_err(|e| MemoryError::StorageError(format!("serialise plaintext: {e}")))?;
-  let encryptor = age::Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))
-    .map_err(|e| MemoryError::StorageError(format!("age encryptor init: {e}")))?;
+  let encryptor =
+    age::Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))
+      .map_err(|e| MemoryError::StorageError(format!("age encryptor init: {e}")))?;
   let mut ciphertext = Vec::with_capacity(plaintext.len() + 256);
   let mut writer = encryptor
     .wrap_output(&mut ciphertext)
@@ -209,14 +195,10 @@ fn encrypt_value(
 /// Reverse of [`encrypt_value`]. Verifies the marker prefix so a
 /// plaintext-from-`SqlitePreferenceStore` row can't be mis-read as a
 /// failed decryption.
-fn decrypt_value(
-  stored: &Value,
-  identity: &age::x25519::Identity,
-) -> Result<Value, MemoryError> {
+fn decrypt_value(stored: &Value, identity: &age::x25519::Identity) -> Result<Value, MemoryError> {
   let stored_str = stored.as_str().ok_or_else(|| {
     MemoryError::StorageError(
-      "encrypted preference store expected a JSON string value; got a non-string"
-        .to_string(),
+      "encrypted preference store expected a JSON string value; got a non-string".to_string(),
     )
   })?;
   let payload = stored_str.strip_prefix(VALUE_MARKER).ok_or_else(|| {
@@ -414,11 +396,7 @@ mod tests {
       .put_preference(&scope, "tone", json!("formal"))
       .await
       .unwrap();
-    let pv = store
-      .get_preference(&scope, "tone")
-      .await
-      .unwrap()
-      .unwrap();
+    let pv = store.get_preference(&scope, "tone").await.unwrap().unwrap();
     assert_eq!(pv.version, 2);
     assert_eq!(pv.value, json!("formal"));
   }
@@ -427,31 +405,30 @@ mod tests {
   async fn delete_then_get_returns_none() {
     let mut store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
-    store
-      .put_preference(&scope, "k", json!(1))
-      .await
-      .unwrap();
+    store.put_preference(&scope, "k", json!(1)).await.unwrap();
     store.delete_preference(&scope, "k").await.unwrap();
-    assert!(
-      store
-        .get_preference(&scope, "k")
-        .await
-        .unwrap()
-        .is_none()
-    );
+    assert!(store.get_preference(&scope, "k").await.unwrap().is_none());
   }
 
   #[tokio::test]
   async fn list_decrypts_every_row() {
     let mut store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
-    store.put_preference(&scope, "a", json!("a-val")).await.unwrap();
-    store.put_preference(&scope, "b", json!("b-val")).await.unwrap();
-    store.put_preference(&scope, "c", json!("c-val")).await.unwrap();
+    store
+      .put_preference(&scope, "a", json!("a-val"))
+      .await
+      .unwrap();
+    store
+      .put_preference(&scope, "b", json!("b-val"))
+      .await
+      .unwrap();
+    store
+      .put_preference(&scope, "c", json!("c-val"))
+      .await
+      .unwrap();
     let mut rows = store.list_preferences(&scope).await.unwrap();
     rows.sort_by(|x, y| x.0.cmp(&y.0));
-    let pairs: Vec<(String, Value)> =
-      rows.into_iter().map(|(k, pv)| (k, pv.value)).collect();
+    let pairs: Vec<(String, Value)> = rows.into_iter().map(|(k, pv)| (k, pv.value)).collect();
     assert_eq!(
       pairs,
       vec![
@@ -495,8 +472,7 @@ mod tests {
     );
     let err = result.unwrap_err().to_string();
     assert!(
-      err.to_ascii_lowercase().contains("decrypt")
-        || err.to_ascii_lowercase().contains("age"),
+      err.to_ascii_lowercase().contains("decrypt") || err.to_ascii_lowercase().contains("age"),
       "diagnostic should mention age/decrypt; got: {err}"
     );
   }
@@ -530,18 +506,16 @@ mod tests {
   async fn prune_passthrough_uses_inner_store() {
     let mut store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
-    store
-      .put_preference(&scope, "k", json!("v"))
-      .await
-      .unwrap();
+    store.put_preference(&scope, "k", json!("v")).await.unwrap();
     // A 0-duration cutoff prunes nothing on a row that's <1s old,
     // confirming the call reaches the inner store and the
     // wrapper isn't intercepting the prune path.
-    let removed = store.prune_older_than(Duration::from_secs(60)).await.unwrap();
+    let removed = store
+      .prune_older_than(Duration::from_secs(60))
+      .await
+      .unwrap();
     assert_eq!(removed, 0);
-    assert!(
-      store.get_preference(&scope, "k").await.unwrap().is_some()
-    );
+    assert!(store.get_preference(&scope, "k").await.unwrap().is_some());
   }
 
   #[test]

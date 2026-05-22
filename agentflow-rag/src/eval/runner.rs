@@ -118,9 +118,7 @@ impl EvalReport {
       // P10.6.3: surface the chunking dimension next to the latency
       // block so an operator scanning the report knows whether the
       // numbers came from chunked or un-chunked indexing.
-      out.push_str(&format!(
-        "Chunk size: {n} (fixed-size, overlap=0)\n"
-      ));
+      out.push_str(&format!("Chunk size: {n} (fixed-size, overlap=0)\n"));
     }
     out
   }

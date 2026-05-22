@@ -374,7 +374,10 @@ async fn metrics_endpoint_emits_state_size_gauge_per_active_run_id() {
   let run_a = Uuid::new_v4();
   let run_b = Uuid::new_v4();
   state.live_state_registry.observer_for(run_a).observe(4096);
-  state.live_state_registry.observer_for(run_b).observe(16_384);
+  state
+    .live_state_registry
+    .observer_for(run_b)
+    .observe(16_384);
 
   let app = create_router(state);
   let body = fetch_metrics_body(app).await;

@@ -40,10 +40,20 @@ pub async fn search(
   let entries = matching_entries(&manifest, lowercased_query.as_deref(), package_type);
 
   match format.as_str() {
-    "json" => render_search_json(&registry, query.as_deref(), package_type, &manifest, &entries),
-    "json-envelope" => {
-      render_search_envelope(&registry, query.as_deref(), package_type, &manifest, &entries)
-    }
+    "json" => render_search_json(
+      &registry,
+      query.as_deref(),
+      package_type,
+      &manifest,
+      &entries,
+    ),
+    "json-envelope" => render_search_envelope(
+      &registry,
+      query.as_deref(),
+      package_type,
+      &manifest,
+      &entries,
+    ),
     _ => render_search_text(&manifest, &entries),
   }
 }

@@ -281,10 +281,8 @@ pub fn compute_diff(
     // are richer signals but deliberately out of scope — LLM-driven
     // params vary noisily, and step-order divergence usually
     // dominates anyway).
-    if let (
-      AgentStepKind::ToolCall { tool: bt, .. },
-      AgentStepKind::ToolCall { tool: ct, .. },
-    ) = (base, curr)
+    if let (AgentStepKind::ToolCall { tool: bt, .. }, AgentStepKind::ToolCall { tool: ct, .. }) =
+      (base, curr)
       && bt != ct
     {
       report.divergences.push(Divergence::ToolNameMismatch {
@@ -309,8 +307,7 @@ pub fn compute_diff(
   //    A step that appears in only one side gets full-credit "delta"
   //    against zero — operationally this is "current emitted a new
   //    LLM call at step N" or vice versa.
-  let mut indices: std::collections::BTreeSet<usize> =
-    baseline.llm_calls.keys().copied().collect();
+  let mut indices: std::collections::BTreeSet<usize> = baseline.llm_calls.keys().copied().collect();
   indices.extend(current.llm_calls.keys().copied());
   for index in indices {
     let base = baseline.llm_calls.get(&index).copied().unwrap_or_default();
@@ -449,11 +446,7 @@ fn render_stream_json(report: &DiffReport) -> Result<()> {
   Ok(())
 }
 
-fn render_envelope(
-  report: &DiffReport,
-  baseline_path: &Path,
-  current_path: &Path,
-) -> Result<()> {
+fn render_envelope(report: &DiffReport, baseline_path: &Path, current_path: &Path) -> Result<()> {
   let envelope = serde_json::json!({
     "version": "agentflow.cli/1",
     "command": "agent replay --diff",
@@ -476,9 +469,7 @@ fn format_divergence_line(d: &Divergence) -> String {
     Divergence::StepCount {
       baseline_count,
       current_count,
-    } => format!(
-      "step count differs: baseline has {baseline_count}, current has {current_count}"
-    ),
+    } => format!("step count differs: baseline has {baseline_count}, current has {current_count}"),
     Divergence::StepKindMismatch {
       index,
       baseline_kind,
@@ -488,9 +479,7 @@ fn format_divergence_line(d: &Divergence) -> String {
       index,
       baseline_tool,
       current_tool,
-    } => format!(
-      "step {index} tool name: baseline={baseline_tool}, current={current_tool}"
-    ),
+    } => format!("step {index} tool name: baseline={baseline_tool}, current={current_tool}"),
     Divergence::StopReasonMismatch { baseline, current } => format!(
       "stop reason: baseline={}, current={}",
       baseline.as_deref().unwrap_or("<none>"),
@@ -512,9 +501,9 @@ fn format_variance_line(v: &Variance) -> String {
       index,
       prompt_delta,
       completion_delta,
-    } => format!(
-      "step {index} tokens: prompt Δ={prompt_delta:+}, completion Δ={completion_delta:+}"
-    ),
+    } => {
+      format!("step {index} tokens: prompt Δ={prompt_delta:+}, completion Δ={completion_delta:+}")
+    }
   }
 }
 
@@ -575,12 +564,7 @@ mod tests {
     let curr = trace_with(
       vec![
         step(0, AgentStepKind::Observe { input: "a".into() }),
-        step(
-          1,
-          AgentStepKind::FinalAnswer {
-            answer: "b".into(),
-          },
-        ),
+        step(1, AgentStepKind::FinalAnswer { answer: "b".into() }),
       ],
       None,
     );
@@ -617,7 +601,12 @@ mod tests {
       None,
     );
     let curr = trace_with(
-      vec![step(0, AgentStepKind::Plan { thought: "..".into() })],
+      vec![step(
+        0,
+        AgentStepKind::Plan {
+          thought: "..".into(),
+        },
+      )],
       None,
     );
     let report = compute_diff(&base, &curr, false);
@@ -705,10 +694,7 @@ mod tests {
   #[test]
   fn stop_reason_mismatch_is_flagged() {
     let base = trace_with(vec![], Some(AgentStopReason::FinalAnswer));
-    let curr = trace_with(
-      vec![],
-      Some(AgentStopReason::MaxSteps { max_steps: 10 }),
-    );
+    let curr = trace_with(vec![], Some(AgentStopReason::MaxSteps { max_steps: 10 }));
     let report = compute_diff(&base, &curr, false);
     let found = report.divergences.iter().any(|d| {
       matches!(
