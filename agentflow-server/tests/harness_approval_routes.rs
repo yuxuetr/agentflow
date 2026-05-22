@@ -33,10 +33,9 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE harness_sessions RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // Intentionally no TRUNCATE — tests below seed sessions with fresh
+  // uuids per case. See `agentflow-db/tests/repositories.rs::fresh_db`
+  // for the parallel-cargo-test rationale.
   Some(AppState::new(db))
 }
 

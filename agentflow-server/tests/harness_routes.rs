@@ -29,12 +29,13 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  // Two TRUNCATEs because `harness_session_events` references
-  // `harness_sessions` and we want a clean slate for every test run.
-  sqlx::query("TRUNCATE harness_sessions RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // Intentionally no TRUNCATE — every test below either operates on a
+  // freshly-uuid'd session it just submitted, or scopes its listing to
+  // a unique `format!("...-{}", Uuid::new_v4())` tenant (see
+  // `list_sessions_returns_newest_first`). A global TRUNCATE here used
+  // to wipe other concurrent test binaries' seeded rows mid-run and
+  // caused flakes in PG-parallel CI. Matches the `agentflow-db/tests/
+  // repositories.rs::fresh_db` rationale.
   Some(AppState::new(db))
 }
 

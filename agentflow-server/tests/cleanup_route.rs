@@ -1,6 +1,15 @@
 //! Integration tests for `cleanup_expired`. Requires a live Postgres
 //! pointed to by `AGENTFLOW_DATABASE_TEST_URL`; without it the tests
 //! exit early so workspace `cargo test` stays hermetic.
+//!
+//! `cleanup_expired` mutates global table state (deletes every
+//! terminal+expired row regardless of tenant), so the tests in this
+//! file must run serially relative to each other — otherwise a
+//! `delete` test's destroy phase races a `dry_run` test's read phase.
+//! Other test binaries in this crate are UUID-isolated (see their
+//! `fresh_state` comments) and don't touch `cleanup_expired`, so they
+//! can keep running in parallel with this binary; the [`CLEANUP_MUTEX`]
+//! below only serialises the cleanup tests against each other.
 
 use std::fs;
 
@@ -9,7 +18,15 @@ use agentflow_server::{CleanupConfig, cleanup_expired};
 use agentflow_tools::SecurityProfile;
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use uuid::Uuid;
+
+/// Module-local mutex held for the lifetime of each cleanup test. The
+/// guard crosses `.await` points (the test does seeding + cleanup +
+/// re-reads all under the lock), so this uses `tokio::sync::Mutex`
+/// rather than `std::sync::Mutex` to keep the futures `Send` under
+/// the multi-thread tokio test runtime.
+static CLEANUP_MUTEX: Mutex<()> = Mutex::const_new(());
 
 fn live_url() -> Option<String> {
   std::env::var("AGENTFLOW_DATABASE_TEST_URL").ok()
@@ -22,10 +39,12 @@ fn repos(db: &Database) -> Repositories {
 async fn fresh_db() -> Option<Database> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // Intentionally no TRUNCATE: integration tests run in parallel
+  // across cargo test binaries, and a global TRUNCATE wipes another
+  // test's seeded rows mid-run. The cleanup tests below only assert
+  // on the specific run ids they seed, so they tolerate co-resident
+  // rows from other tests. Mirrors the pattern documented in
+  // `agentflow-db/tests/repositories.rs::fresh_db`.
   Some(db)
 }
 
@@ -66,6 +85,7 @@ async fn insert_run(db: &Database, status: RunStatus, finished_offset_days: Opti
 
 #[tokio::test]
 async fn cleanup_dry_run_targets_old_terminal_runs_without_deleting() {
+  let _guard = CLEANUP_MUTEX.lock().await;
   let Some(db) = fresh_db().await else {
     eprintln!("skipping cleanup_dry_run_targets_old_terminal_runs_without_deleting");
     return;
@@ -93,6 +113,7 @@ async fn cleanup_dry_run_targets_old_terminal_runs_without_deleting() {
 
 #[tokio::test]
 async fn cleanup_deletes_terminal_runs_past_retention() {
+  let _guard = CLEANUP_MUTEX.lock().await;
   let Some(db) = fresh_db().await else {
     eprintln!("skipping cleanup_deletes_terminal_runs_past_retention");
     return;
@@ -119,6 +140,7 @@ async fn cleanup_deletes_terminal_runs_past_retention() {
 /// the cascade from yanking events out from under the override.
 #[tokio::test]
 async fn cleanup_skips_terminal_run_pinned_by_events_override() {
+  let _guard = CLEANUP_MUTEX.lock().await;
   let Some(db) = fresh_db().await else {
     eprintln!("skipping cleanup_skips_terminal_run_pinned_by_events_override");
     return;
@@ -186,6 +208,7 @@ async fn cleanup_skips_terminal_run_pinned_by_events_override() {
 async fn cleanup_skips_events_pinned_by_override() {
   use agentflow_db::{EventRepo, NewEvent};
 
+  let _guard = CLEANUP_MUTEX.lock().await;
   let Some(db) = fresh_db().await else {
     eprintln!("skipping cleanup_skips_events_pinned_by_override");
     return;
@@ -254,6 +277,7 @@ async fn cleanup_skips_events_pinned_by_override() {
 
 #[tokio::test]
 async fn cleanup_filesystem_sweep_removes_orphaned_dirs() {
+  let _guard = CLEANUP_MUTEX.lock().await;
   let Some(db) = fresh_db().await else {
     eprintln!("skipping cleanup_filesystem_sweep_removes_orphaned_dirs");
     return;

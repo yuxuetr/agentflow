@@ -24,10 +24,10 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // Intentionally no TRUNCATE — every test below seeds its own
+  // freshly-uuid'd run id, and the assertions key off that specific
+  // id. See the docstring on `agentflow-db/tests/repositories.rs::fresh_db`
+  // for the parallel-cargo-test rationale.
   Some(AppState::new(db))
 }
 

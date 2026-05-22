@@ -72,12 +72,10 @@ async fn full_stack_e2e_submit_stream_history_resume() {
 
   let db = Database::connect_and_migrate(&url, 4).await.unwrap();
   let tenant = format!("e2e-fullstack-{}", Uuid::new_v4());
-  // Scoped truncate would be cleaner; the wider TRUNCATE matches the
-  // pattern used by the other harness tests and isn't observed by
-  // parallel runs because we pin a unique tenant.
-  let _ = sqlx::query("TRUNCATE harness_sessions RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await;
+  // No TRUNCATE: this test scopes to a unique tenant and only reads
+  // its own freshly-uuid'd session. Wiping the table here would race
+  // against any other harness test binary running in parallel and
+  // delete its in-flight rows.
 
   let state = AppState::new(db);
   let live = LiveHarnessExecutor::new(state.approval_registry.clone(), Duration::from_secs(60));

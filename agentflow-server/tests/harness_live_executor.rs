@@ -64,10 +64,9 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
   }
 
   let db = Database::connect_and_migrate(&url, 4).await.unwrap();
-  sqlx::query("TRUNCATE harness_sessions RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .unwrap();
+  // No TRUNCATE: this live-executor test scopes to a unique tenant
+  // (set below) and only reads back its own session id. Wiping the
+  // table here used to race other parallel test binaries.
 
   let state = AppState::new(db);
   let live = LiveHarnessExecutor::new(state.approval_registry.clone(), Duration::from_secs(60));

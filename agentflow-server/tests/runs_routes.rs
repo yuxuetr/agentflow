@@ -33,10 +33,12 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // No TRUNCATE: every test below submits a fresh run and keys
+  // assertions off the returned run_id, so co-resident rows from
+  // other test binaries don't interfere. A global TRUNCATE here
+  // used to wipe other binaries' in-flight rows. See
+  // `agentflow-db/tests/repositories.rs::fresh_db` for the same
+  // rationale at the DB-crate layer.
   Some(AppState::new(db))
 }
 
