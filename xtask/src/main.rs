@@ -62,6 +62,11 @@ const AGENT_SDK_ALLOWLIST: &[&str] = &[
   "Critique",
   "Final",
   "FailureReason",
+  // FlowValue variants: `FlowValue::File` and `FlowValue::Url` show up in the
+  // typed-value section. The parent `FlowValue` enum is declared in
+  // agentflow-core/src/value.rs.
+  "File",
+  "Url",
   // Example types defined inline in the doc (no real impl file).
   "EchoTool",
 ];
@@ -285,6 +290,29 @@ pub fn bench_gate_at(
   out: &mut impl Write,
   err: &mut impl Write,
 ) -> Result<()> {
+  let criterion_root = pick_criterion_root(workspace_root);
+  bench_gate_at_with_criterion_root(
+    &criterion_root,
+    baseline_path,
+    threshold,
+    allow_missing,
+    out,
+    err,
+  )
+}
+
+/// Same as [`bench_gate_at`] but with the Criterion output directory
+/// passed explicitly. Used by unit tests to bypass [`pick_criterion_root`],
+/// which would otherwise consult `~/.cargo/config.toml` and find the
+/// developer's real target-dir instead of the test's synthetic root.
+pub fn bench_gate_at_with_criterion_root(
+  criterion_root: &Path,
+  baseline_path: &Path,
+  threshold: f64,
+  allow_missing: bool,
+  out: &mut impl Write,
+  err: &mut impl Write,
+) -> Result<()> {
   let baseline_text = std::fs::read_to_string(baseline_path)
     .with_context(|| format!("failed to read baseline file '{}'", baseline_path.display()))?;
   let baseline: BaselineFile = serde_json::from_str(&baseline_text).with_context(|| {
@@ -294,7 +322,7 @@ pub fn bench_gate_at(
     )
   })?;
 
-  let criterion_root = pick_criterion_root(workspace_root);
+  let criterion_root = criterion_root.to_path_buf();
   let _ = writeln!(
     out,
     "bench-gate: baseline={} threshold={:.2}× criterion-root={}",
@@ -646,11 +674,12 @@ fn verify_edition_at(
   stderr: &mut impl Write,
 ) -> Result<()> {
   let members = read_workspace_members(workspace_root)?;
+  let workspace_edition = read_workspace_package_edition(workspace_root)?;
   let mut failures: Vec<String> = Vec::new();
   let mut checked: Vec<String> = Vec::new();
   for member in &members {
     let manifest = workspace_root.join(member).join("Cargo.toml");
-    let edition = read_edition(&manifest)
+    let edition = read_edition(&manifest, workspace_edition.as_deref())
       .with_context(|| format!("Failed to read edition for member '{}'", manifest.display()))?;
     if edition != EXPECTED_EDITION {
       failures.push(format!(
@@ -904,22 +933,60 @@ fn read_workspace_members(workspace_root: &Path) -> Result<Vec<String>> {
   Ok(out)
 }
 
-fn read_edition(manifest: &Path) -> Result<String> {
+fn read_edition(manifest: &Path, workspace_edition: Option<&str>) -> Result<String> {
   let content = std::fs::read_to_string(manifest)
     .with_context(|| format!("Failed to read {}", manifest.display()))?;
   let parsed: toml::Value =
     toml::from_str(&content).with_context(|| format!("Failed to parse {}", manifest.display()))?;
-  let edition = parsed
+  let edition_value = parsed
     .get("package")
     .and_then(|p| p.get("edition"))
-    .and_then(|e| e.as_str())
     .ok_or_else(|| {
       anyhow::anyhow!(
         "package.edition missing from {} — every workspace member must declare an edition",
         manifest.display()
       )
     })?;
-  Ok(edition.to_string())
+  if let Some(s) = edition_value.as_str() {
+    return Ok(s.to_string());
+  }
+  // `edition.workspace = true` form: defer to `[workspace.package].edition`.
+  let inherits = edition_value
+    .as_table()
+    .and_then(|t| t.get("workspace"))
+    .and_then(|w| w.as_bool())
+    .unwrap_or(false);
+  if inherits {
+    return workspace_edition.map(str::to_string).ok_or_else(|| {
+      anyhow::anyhow!(
+        "{} inherits edition from workspace but [workspace.package].edition is not set",
+        manifest.display()
+      )
+    });
+  }
+  Err(anyhow::anyhow!(
+    "package.edition in {} must be either a string or `{{ workspace = true }}`",
+    manifest.display()
+  ))
+}
+
+/// Returns the workspace-level edition declared under `[workspace.package]` in
+/// the root manifest, if present. Members that opt into `edition.workspace =
+/// true` resolve to this value.
+fn read_workspace_package_edition(workspace_root: &Path) -> Result<Option<String>> {
+  let manifest_path = workspace_root.join("Cargo.toml");
+  let content = std::fs::read_to_string(&manifest_path)
+    .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+  let parsed: toml::Value = toml::from_str(&content)
+    .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+  Ok(
+    parsed
+      .get("workspace")
+      .and_then(|w| w.get("package"))
+      .and_then(|p| p.get("edition"))
+      .and_then(|e| e.as_str())
+      .map(str::to_string),
+  )
 }
 
 #[cfg(test)]
@@ -984,6 +1051,32 @@ mod tests {
       "stderr: {stderr_s}"
     );
     assert!(stderr_s.contains("verify-edition: FAIL"));
+  }
+
+  #[test]
+  fn resolves_workspace_inherited_edition() {
+    // Members that declare `edition.workspace = true` should pick up the
+    // edition from `[workspace.package].edition` rather than being treated as
+    // missing. This is the form every agentflow-* crate uses in production.
+    let root = tempdir();
+    let root_manifest = "[workspace]\nmembers = [\"inheritor\"]\nresolver = \"2\"\n\n\
+       [workspace.package]\nedition = \"2024\"\n";
+    std::fs::write(root.path().join("Cargo.toml"), root_manifest).unwrap();
+    std::fs::create_dir_all(root.path().join("inheritor")).unwrap();
+    std::fs::write(
+      root.path().join("inheritor/Cargo.toml"),
+      "[package]\nname = \"inheritor\"\nversion = \"0.0.0\"\nedition.workspace = true\n",
+    )
+    .unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let result = verify_edition_at(root.path(), &mut stdout, &mut stderr);
+    assert!(result.is_ok(), "{}", String::from_utf8_lossy(&stderr));
+    assert!(
+      String::from_utf8(stdout)
+        .unwrap()
+        .contains("verify-edition: OK")
+    );
   }
 
   #[test]
@@ -1199,7 +1292,8 @@ mod tests {
     );
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
-    let result = bench_gate_at(root.path(), &baseline, 1.25, false, &mut out, &mut err);
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, false, &mut out, &mut err);
     assert!(result.is_ok(), "unexpected error: {:?}", result.err());
     let stdout = String::from_utf8(out).unwrap();
     assert!(stdout.contains("ratio=1.00×"));
@@ -1224,7 +1318,8 @@ mod tests {
     );
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
-    let result = bench_gate_at(root.path(), &baseline, 1.25, false, &mut out, &mut err);
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, false, &mut out, &mut err);
     assert!(result.is_err(), "expected regression failure");
     let stderr = String::from_utf8(err).unwrap();
     assert!(
@@ -1236,7 +1331,7 @@ mod tests {
   #[test]
   fn bench_gate_fails_when_baseline_bench_has_no_criterion_output() {
     let root = tempdir();
-    let _criterion = synth_workspace_for_gate(root.path());
+    let criterion = synth_workspace_for_gate(root.path());
     // No estimates.json written for this bench.
     let baseline = write_baseline(
       root.path(),
@@ -1250,7 +1345,8 @@ mod tests {
     );
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
-    let result = bench_gate_at(root.path(), &baseline, 1.25, false, &mut out, &mut err);
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, false, &mut out, &mut err);
     assert!(result.is_err(), "expected missing-bench failure");
     let stderr = String::from_utf8(err).unwrap();
     let err_msg = format!("{:?}", result.unwrap_err());
@@ -1263,7 +1359,7 @@ mod tests {
   #[test]
   fn bench_gate_allow_missing_skips_missing_benches() {
     let root = tempdir();
-    let _criterion = synth_workspace_for_gate(root.path());
+    let criterion = synth_workspace_for_gate(root.path());
     let baseline = write_baseline(
       root.path(),
       r#"{
@@ -1276,7 +1372,8 @@ mod tests {
     );
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
-    let result = bench_gate_at(root.path(), &baseline, 1.25, true, &mut out, &mut err);
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, true, &mut out, &mut err);
     assert!(
       result.is_ok(),
       "--allow-missing should not fail: {:?}",
@@ -1833,14 +1930,16 @@ fn test_gate_from_args(
   while let Some(arg) = iter.next() {
     match arg.as_str() {
       "--baseline" => {
-        baseline_path = Some(PathBuf::from(iter.next().ok_or_else(|| {
-          anyhow::anyhow!("--baseline requires a path argument")
-        })?));
+        baseline_path =
+          Some(PathBuf::from(iter.next().ok_or_else(|| {
+            anyhow::anyhow!("--baseline requires a path argument")
+          })?));
       }
       "--input" => {
-        input_path = Some(PathBuf::from(iter.next().ok_or_else(|| {
-          anyhow::anyhow!("--input requires a path argument")
-        })?));
+        input_path =
+          Some(PathBuf::from(iter.next().ok_or_else(|| {
+            anyhow::anyhow!("--input requires a path argument")
+          })?));
       }
       "--threshold" => {
         threshold = iter
@@ -1870,9 +1969,12 @@ fn test_gate_from_args(
     }
   }
   if update && input_path.is_some() {
-    bail!("--update and --input are mutually exclusive (--update WRITES the baseline; --input only READS pre-captured timings)");
+    bail!(
+      "--update and --input are mutually exclusive (--update WRITES the baseline; --input only READS pre-captured timings)"
+    );
   }
-  let baseline_path = baseline_path.unwrap_or_else(|| default_test_timing_baseline_path(workspace_root));
+  let baseline_path =
+    baseline_path.unwrap_or_else(|| default_test_timing_baseline_path(workspace_root));
 
   let crates = select_test_gate_crates(workspace_root, &include, &exclude)?;
   let _ = writeln!(
@@ -1935,7 +2037,11 @@ fn test_gate_from_args(
         } else {
           f64::INFINITY
         };
-        let verdict = if ratio >= threshold { "REGRESSION" } else { "ok" };
+        let verdict = if ratio >= threshold {
+          "REGRESSION"
+        } else {
+          "ok"
+        };
         let _ = writeln!(
           stdout,
           "  {krate}: baseline={baseline_ms} ms, current={current_ms} ms, ratio={ratio:.2}× [{verdict}]"
@@ -2073,7 +2179,9 @@ fn capture_test_timings(
       stdout,
       "    -> {} ms, tests={}{}",
       elapsed.as_millis(),
-      test_count.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string()),
+      test_count
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "?".to_string()),
       if !output.status.success() {
         " (test invocation reported non-zero — wall-clock still captured)"
       } else {
@@ -2101,8 +2209,8 @@ fn write_test_timing_file(path: &Path, baseline: &TestTimingBaseline) -> Result<
       )
     })?;
   }
-  let mut text = serde_json::to_string_pretty(baseline)
-    .context("serializing TestTimingBaseline to JSON")?;
+  let mut text =
+    serde_json::to_string_pretty(baseline).context("serializing TestTimingBaseline to JSON")?;
   text.push('\n');
   std::fs::write(path, text)
     .with_context(|| format!("failed to write baseline '{}'", path.display()))?;
@@ -2115,11 +2223,7 @@ fn capture_host_metadata() -> TestTimingHost {
   } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
     "linux-x86_64".to_string()
   } else {
-    format!(
-      "{}-{}",
-      std::env::consts::OS,
-      std::env::consts::ARCH
-    )
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
   };
   let rustc = Command::new("rustc")
     .arg("--version")
@@ -2358,12 +2462,8 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   #[test]
   fn select_crates_respects_exclude_filter() {
     let workspace_root = workspace_root();
-    let crates = select_test_gate_crates(
-      &workspace_root,
-      &[],
-      &["agentflow-core".to_string()],
-    )
-    .unwrap();
+    let crates =
+      select_test_gate_crates(&workspace_root, &[], &["agentflow-core".to_string()]).unwrap();
     assert!(!crates.contains(&"agentflow-core".to_string()));
     assert!(crates.contains(&"agentflow-tools".to_string()));
   }
@@ -2605,9 +2705,7 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
     name: "google",
     key_envs: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     default_text_model: "gemini-2.5-flash",
-    endpoint: LiveModelsEndpoint::Google(
-      "https://generativelanguage.googleapis.com/v1beta/models",
-    ),
+    endpoint: LiveModelsEndpoint::Google("https://generativelanguage.googleapis.com/v1beta/models"),
   },
   LiveModelProbe {
     name: "moonshot",
@@ -2628,9 +2726,7 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
     // BigModel default. Mirror the live test source-of-truth in
     // `agentflow-llm/tests/provider_consistency_live.rs`.
     default_text_model: "glm-5.1",
-    endpoint: LiveModelsEndpoint::OpenAICompat(
-      "https://open.bigmodel.cn/api/paas/v4/models",
-    ),
+    endpoint: LiveModelsEndpoint::OpenAICompat("https://open.bigmodel.cn/api/paas/v4/models"),
   },
   LiveModelProbe {
     name: "dashscope",
@@ -2801,7 +2897,10 @@ pub fn refresh_live_models_from_args(
     );
   }
   if error_count > 0 && !keep_going {
-    let _ = writeln!(err, "[refresh] {error_count} provider(s) failed; rerun with --keep-going to ignore HTTP errors");
+    let _ = writeln!(
+      err,
+      "[refresh] {error_count} provider(s) failed; rerun with --keep-going to ignore HTTP errors"
+    );
     bail!("refresh-live-models: {error_count} probe error(s)");
   }
   Ok(())
@@ -2837,10 +2936,7 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
     }
   };
 
-  if model_ids
-    .iter()
-    .any(|id| id == probe.default_text_model)
-  {
+  if model_ids.iter().any(|id| id == probe.default_text_model) {
     return LiveProbeOutcome {
       provider: probe.name,
       default_text_model: probe.default_text_model.to_string(),
@@ -2900,24 +2996,23 @@ fn print_probe_line(out: &mut impl Write, outcome: &LiveProbeOutcome) {
         outcome.provider, outcome.default_text_model
       );
       if suggestions.is_empty() {
-        let _ = writeln!(out, "      (no alternatives surfaced; manual review needed)");
+        let _ = writeln!(
+          out,
+          "      (no alternatives surfaced; manual review needed)"
+        );
       } else {
-        let _ = writeln!(out, "      suggested replacements: {}", suggestions.join(", "));
+        let _ = writeln!(
+          out,
+          "      suggested replacements: {}",
+          suggestions.join(", ")
+        );
       }
     }
     ProbeStatus::Skipped { reason } => {
-      let _ = writeln!(
-        out,
-        "  · {:<10} skipped  ({reason})",
-        outcome.provider
-      );
+      let _ = writeln!(out, "  · {:<10} skipped  ({reason})", outcome.provider);
     }
     ProbeStatus::Error { reason } => {
-      let _ = writeln!(
-        out,
-        "  ! {:<10} error    {reason}",
-        outcome.provider
-      );
+      let _ = writeln!(out, "  ! {:<10} error    {reason}", outcome.provider);
     }
   }
 }
@@ -2942,7 +3037,9 @@ fn fetch_provider_models(probe: &LiveModelProbe, api_key: &str) -> Result<Vec<St
   cmd.arg("--silent").arg("--show-error").arg("--fail");
   let url = match probe.endpoint {
     LiveModelsEndpoint::OpenAICompat(url) => {
-      cmd.arg("-H").arg(format!("Authorization: Bearer {api_key}"));
+      cmd
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {api_key}"));
       url.to_string()
     }
     LiveModelsEndpoint::Anthropic(url) => {
@@ -2959,11 +3056,7 @@ fn fetch_provider_models(probe: &LiveModelProbe, api_key: &str) -> Result<Vec<St
     .with_context(|| format!("spawning curl for {}", probe.name))?;
   if !output.status.success() {
     let stderr = String::from_utf8_lossy(&output.stderr);
-    bail!(
-      "curl exited {} (stderr: {})",
-      output.status,
-      stderr.trim()
-    );
+    bail!("curl exited {} (stderr: {})", output.status, stderr.trim());
   }
   parse_models_response(probe, &output.stdout)
 }
@@ -2996,7 +3089,10 @@ fn parse_models_response(probe: &LiveModelProbe, body: &[u8]) -> Result<Vec<Stri
         // Google's response prefixes with `models/`; strip it so the
         // ids align with the test file's hard-coded `gemini-2.5-flash`
         // style.
-        name.strip_prefix("models/").map(String::from).unwrap_or(name)
+        name
+          .strip_prefix("models/")
+          .map(String::from)
+          .unwrap_or(name)
       })
       .collect(),
   };
@@ -3050,8 +3146,8 @@ fn shared_prefix_len(a: &str, b: &str) -> usize {
 /// graph minimal. The parser is a faithful subset of the standard
 /// `.env` grammar.)
 fn load_dotenv_file(path: &Path) -> Result<usize> {
-  let text = std::fs::read_to_string(path)
-    .with_context(|| format!("reading {}", path.display()))?;
+  let text =
+    std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
   let mut count = 0usize;
   for line in text.lines() {
     let line = line.trim();
@@ -3150,10 +3246,7 @@ mod refresh_live_models_tests {
     let ids = parse_models_response(&google_probe(), body).expect("parse ok");
     assert_eq!(
       ids,
-      vec![
-        "gemini-2.5-flash".to_string(),
-        "gemini-2.5-pro".to_string()
-      ]
+      vec!["gemini-2.5-flash".to_string(), "gemini-2.5-pro".to_string()]
     );
   }
 
@@ -3231,7 +3324,10 @@ mod refresh_live_models_tests {
   #[test]
   fn shared_prefix_len_is_case_insensitive() {
     assert_eq!(shared_prefix_len("gpt-4o-mini", "gpt-4O-mini"), 11);
-    assert_eq!(shared_prefix_len("claude-haiku-4-5", "claude-sonnet-4-5"), 7);
+    assert_eq!(
+      shared_prefix_len("claude-haiku-4-5", "claude-sonnet-4-5"),
+      7
+    );
     assert_eq!(shared_prefix_len("", "anything"), 0);
   }
 
@@ -3254,10 +3350,7 @@ mod refresh_live_models_tests {
     let mut err = Vec::new();
     let res = refresh_live_models_from_args(
       &workspace_root,
-      vec![
-        "--include".to_string(),
-        "no-such-provider".to_string(),
-      ],
+      vec!["--include".to_string(), "no-such-provider".to_string()],
       &mut out,
       &mut err,
     );
@@ -3283,7 +3376,10 @@ mod refresh_live_models_tests {
     let outcome = probe_provider(&probe);
     match outcome.status {
       ProbeStatus::Skipped { reason } => {
-        assert!(reason.contains(KEY), "diagnostic must name the env var: {reason}");
+        assert!(
+          reason.contains(KEY),
+          "diagnostic must name the env var: {reason}"
+        );
       }
       other => panic!("expected Skipped, got {other:?}"),
     }
