@@ -23,11 +23,13 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use agentflow_core::{
-  FlowCancellationToken, FlowExecutionConfig, ResumePlan, ResumePlanOptions,
+  FlowCancellationToken, FlowExecutionConfig, MultiListener, ResumePlan, ResumePlanOptions,
   async_node::AsyncNodeResult,
   build_resume_plan,
   checkpoint::{CheckpointConfig, CheckpointManager},
+  events::EventListener,
 };
+use agentflow_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
 
 use crate::events_stream::broker_finalize_grace;
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
@@ -282,14 +284,43 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
 
   let run_id = ctx.run_id.to_string();
   let mut flow = agentflow_cli::executor::build_flow_from_yaml(&ctx.workflow, None)?;
-  let listener = Arc::new(WorkflowEventListener::from_state(
-    ctx.run_id,
-    ctx.tenant_id.clone(),
-    ctx.repos.clone(),
-    ctx.broker.clone(),
-    0,
-  ));
-  flow = flow.with_event_listener(listener);
+  // The gateway always streams workflow events into Postgres + the SSE
+  // broker. `AGENTFLOW_TRACE_DIR` opts in to *additionally* writing a
+  // file-backed `ExecutionTrace` JSON so operators can run `agentflow
+  // trace tui <run_id>` against the same run. Kept opt-in because the
+  // gateway is long-running and unmanaged trace files would accumulate
+  // — the existing run/event retention sweep does not cover this dir.
+  let mut listeners: Vec<Box<dyn EventListener>> =
+    vec![Box::new(WorkflowEventListener::from_state(
+      ctx.run_id,
+      ctx.tenant_id.clone(),
+      ctx.repos.clone(),
+      ctx.broker.clone(),
+      0,
+    ))];
+  if let Some(trace_dir) = resolve_server_trace_dir() {
+    match attach_file_trace_storage(&trace_dir) {
+      Ok(collector) => {
+        info!(
+          run_id = %ctx.run_id,
+          trace_dir = %trace_dir.display(),
+          "tracing: writing file trace for this run",
+        );
+        listeners.push(Box::new(collector));
+      }
+      Err(err) => {
+        // Trace IO is best-effort; degrade to DB-only rather than fail
+        // the workflow because the operator's disk is unhappy.
+        error!(
+          run_id = %ctx.run_id,
+          trace_dir = %trace_dir.display(),
+          error = %err,
+          "tracing: file trace storage unavailable; continuing without it",
+        );
+      }
+    }
+  }
+  flow = flow.with_event_listener(Arc::new(MultiListener::new(listeners)));
 
   // P10.14.2-FU6: attach a state-size observer when one is wired in.
   // The observer keeps the live `agentflow_state_size_bytes{run_id}`
@@ -333,6 +364,28 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     .finalise_with_grace(ctx.run_id, broker_finalize_grace());
   info!(run_id = %ctx.run_id, "flow executor finished");
   Ok(())
+}
+
+/// Resolve the gateway's opt-in file-backed trace dir. Returns `None`
+/// when `AGENTFLOW_TRACE_DIR` is unset / empty so the default deployment
+/// does not silently accumulate JSON files outside the cleanup sweep.
+fn resolve_server_trace_dir() -> Option<PathBuf> {
+  std::env::var("AGENTFLOW_TRACE_DIR")
+    .ok()
+    .filter(|v| !v.is_empty())
+    .map(PathBuf::from)
+}
+
+/// Build a `TraceCollector` rooted at `trace_dir`. Wrapped in its own
+/// helper so the call site stays small and the error path is uniform.
+fn attach_file_trace_storage(trace_dir: &FsPath) -> Result<TraceCollector, anyhow::Error> {
+  std::fs::create_dir_all(trace_dir)?;
+  let storage = Arc::new(FileTraceStorage::new(trace_dir.to_path_buf())?);
+  // Production config: skips capturing prompts / IO bodies so trace
+  // files don't fan out to the size of every per-node payload. The
+  // server already persists the full event stream to Postgres; the
+  // file-trace is a portable summary for `agentflow trace tui`.
+  Ok(TraceCollector::new(storage, TraceConfig::production()))
 }
 
 fn server_execution_config(
