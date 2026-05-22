@@ -112,8 +112,7 @@ impl SandboxBackend for LinuxSeccompBackend {
     // `apply_filter` only calls `prctl` + `seccomp(2)` — both async-signal-safe.
     unsafe {
       command.pre_exec(move || {
-        seccompiler::apply_filter(&bpf)
-          .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))
+        seccompiler::apply_filter(&bpf).map_err(|err| std::io::Error::other(err.to_string()))
       });
     }
     Ok(())
