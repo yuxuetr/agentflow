@@ -6,11 +6,14 @@ use crate::{
 use agentflow_core::{
   FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow, value::FlowValue,
 };
+use agentflow_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -54,7 +57,7 @@ pub async fn execute(
     );
   }
 
-  let flow = build_flow_from_definition(&flow_def, model.as_deref())?;
+  let mut flow = build_flow_from_definition(&flow_def, model.as_deref())?;
   if let Some(model) = &model {
     println!("🤖 Model override: {}", model);
   }
@@ -69,6 +72,32 @@ pub async fn execute(
       println!("  {}. {}", idx + 1, node_id);
     }
     return Ok(());
+  }
+
+  // Stable workflow_id for both the flow's emitted events and the trace
+  // file. Printing it up front so the operator can run `agentflow trace
+  // tui <workflow_id>` against the JSON written below.
+  let workflow_id = Uuid::new_v4().to_string();
+  let trace_dir = resolve_trace_dir()?;
+  if let Some(dir) = trace_dir.as_ref() {
+    fs::create_dir_all(dir)
+      .with_context(|| format!("Failed to create trace dir {}", dir.display()))?;
+    let storage = Arc::new(
+      FileTraceStorage::new(dir.clone())
+        .with_context(|| format!("Failed to initialise trace storage at {}", dir.display()))?,
+    );
+    let collector = Arc::new(TraceCollector::new(storage, TraceConfig::development()));
+    flow = flow.with_event_listener(collector);
+    println!(
+      "📓 Tracing enabled — workflow_id={} dir={}",
+      workflow_id,
+      dir.display()
+    );
+    println!(
+      "   View timeline: agentflow trace tui {} --dir {}",
+      workflow_id,
+      dir.display()
+    );
   }
 
   let initial_inputs = parse_inputs(input)?;
@@ -94,6 +123,7 @@ pub async fn execute(
   let start_time = std::time::Instant::now();
   let final_state = run_with_retries(
     flow,
+    workflow_id,
     initial_inputs,
     timeout_duration,
     max_retries,
@@ -126,6 +156,21 @@ pub async fn execute(
   }
 
   Ok(())
+}
+
+/// Resolve where to write trace JSON: explicit `AGENTFLOW_TRACE_DIR` env
+/// wins; otherwise default to `~/.agentflow/traces` so `agentflow trace
+/// tui <workflow_id>` works out of the box. Returns `Ok(None)` only when
+/// the home directory cannot be located AND the env var is unset (rare;
+/// container runs without HOME). Tracing then degrades to a no-op.
+fn resolve_trace_dir() -> Result<Option<PathBuf>> {
+  if let Some(raw) = std::env::var("AGENTFLOW_TRACE_DIR")
+    .ok()
+    .filter(|v| !v.is_empty())
+  {
+    return Ok(Some(PathBuf::from(raw)));
+  }
+  Ok(dirs::home_dir().map(|h| h.join(".agentflow").join("traces")))
 }
 
 fn parse_inputs(input: Vec<(String, String)>) -> Result<AsyncNodeInputs> {
@@ -195,6 +240,7 @@ fn parse_execution_config(
 
 async fn run_with_retries(
   flow: Flow,
+  workflow_id: String,
   initial_inputs: AsyncNodeInputs,
   timeout_duration: Duration,
   max_retries: u32,
@@ -208,8 +254,11 @@ async fn run_with_retries(
       println!("🔁 Workflow attempt {}/{}", attempt, attempts);
     }
 
-    let run =
-      flow.execute_from_inputs_with_config(initial_inputs.clone(), execution_config.clone());
+    let run = flow.execute_from_inputs_with_id_and_config(
+      workflow_id.clone(),
+      initial_inputs.clone(),
+      execution_config.clone(),
+    );
     match tokio::time::timeout(timeout_duration, run).await {
       Ok(Ok(state)) => return Ok(state),
       Ok(Err(err)) => {
