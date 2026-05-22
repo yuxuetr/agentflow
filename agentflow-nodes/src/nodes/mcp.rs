@@ -31,7 +31,7 @@ use std::time::Duration;
 /// MCP Node for calling tools from MCP servers
 #[derive(Debug, Clone)]
 pub struct MCPNode {
-  /// Server command to execute (e.g., ["npx", "-y", "@modelcontextprotocol/server-filesystem"])
+  /// Server command to execute (e.g., `["npx", "-y", "@modelcontextprotocol/server-filesystem"]`)
   pub server_command: Vec<String>,
 
   /// Tool name to call

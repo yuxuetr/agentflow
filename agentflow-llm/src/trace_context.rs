@@ -11,7 +11,7 @@
 //! 1. A typed [`LlmTraceContext`] that round-trips through the W3C
 //!    [`traceparent`](https://www.w3.org/TR/trace-context/#traceparent-header)
 //!    format.
-//! 2. A tokio [task-local](task_local) so the active context flows through
+//! 2. A tokio task-local (`tokio::task_local!`) so the active context flows through
 //!    `await` points without explicit plumbing — set it once around an
 //!    [`crate::LLMClient::execute`] call and every provider's
 //!    `build_headers` will pick it up automatically.

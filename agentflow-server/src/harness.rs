@@ -126,8 +126,8 @@ impl HarnessEventBroker {
       .subscribe()
   }
 
-  /// Publish without persisting. Use [`Self::publish_through`] (free
-  /// function below) when you also want a DB row.
+  /// Publish without persisting. Use [`publish_through`] (free function
+  /// below) when you also want a DB row.
   pub fn publish(&self, event: StreamedHarnessEvent) {
     let mut map = self
       .inner

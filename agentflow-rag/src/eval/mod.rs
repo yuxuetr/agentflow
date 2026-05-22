@@ -11,7 +11,7 @@
 //!   external retrievers plug in by implementing [`Retriever`].
 //! - **Dataset-first**: standard JSONL layout (`corpus.jsonl`,
 //!   `queries.jsonl`, `qrels.jsonl`) plus optional `dataset.toml` manifest.
-//! - **Baseline comparison**: [`compare`] takes two `EvalReport`s and emits
+//! - **Baseline comparison**: [`compare()`] takes two `EvalReport`s and emits
 //!   per-metric deltas with a sign-test verdict.
 //!
 //! See [`docs/RAG_EVAL.md`](https://github.com/agentflow/agentflow/blob/main/docs/RAG_EVAL.md)

@@ -320,7 +320,7 @@ pub trait WorkerProtocol: Send + Sync {
 
   /// Claim the next task that matches the worker's capabilities and
   /// (optionally) locality preference (P10.16.2). Defaults to
-  /// [`claim_task`] when the implementation doesn't care about
+  /// [`Self::claim_task`] when the implementation doesn't care about
   /// hints — additive on the trait so the gRPC adapter, which
   /// hasn't grown wire-level capability fields yet, doesn't need
   /// to do anything.

@@ -1,6 +1,6 @@
 //! OpenAI Whisper / GPT-4o-transcribe ASR provider.
 //!
-//! Implements [`AsrProvider`](super::modality::AsrProvider) by calling
+//! Implements [`AsrProvider`] by calling
 //! `POST {base_url}/audio/transcriptions` with a multipart form. The
 //! base URL is the same `https://api.openai.com/v1` the chat provider
 //! uses, so the same `OPENAI_API_KEY` flows through.

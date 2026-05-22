@@ -1,7 +1,7 @@
 //! Replay formatting for workflow and agent execution traces.
 //!
 //! Replay is intentionally read-only: it reconstructs the timeline from a
-//! persisted [`ExecutionTrace`](crate::ExecutionTrace) without calling tools,
+//! persisted [`ExecutionTrace`] without calling tools,
 //! MCP servers, workflows, or LLM providers again.
 
 use crate::{

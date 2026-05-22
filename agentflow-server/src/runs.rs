@@ -142,8 +142,7 @@ pub struct RunContext {
   pub run_base_dir: Option<PathBuf>,
   pub cancellation_token: FlowCancellationToken,
   /// Forwards events to live SSE subscribers. Persisting to the DB still
-  /// has to happen — use [`publish_through`](crate::events_stream::publish_through)
-  /// for the standard path.
+  /// has to happen — use [`publish_through`] for the standard path.
   pub broker: EventBroker,
   /// Tenant the run was created under. Mirrors `runs.tenant_id` so
   /// every event the executor emits gets stamped with the correct

@@ -314,7 +314,7 @@ impl ReActAgent {
   /// Used by callers that need to wrap or transform the registry after
   /// the agent has been constructed — for example, the
   /// `agentflow harness run` CLI uses this to install
-  /// [`agentflow_harness::wrap_registry`]'s approval-gate pipeline
+  /// `agentflow_harness::wrap_registry`'s approval-gate pipeline
   /// around tools that came from `SkillBuilder::build`, without having
   /// to duplicate the manifest/persona/memory wiring.
   ///

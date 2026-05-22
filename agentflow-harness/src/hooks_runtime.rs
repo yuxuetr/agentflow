@@ -1,4 +1,4 @@
-//! Hook + approval execution layer for [`HarnessRuntime`].
+//! Hook + approval execution layer for [`crate::runtime::HarnessRuntime`].
 //!
 //! Phase H2 wires the [`PreToolHook`] / [`PostToolHook`] /
 //! [`ApprovalProvider`] traits (frozen in Phase H0) into the live
@@ -16,8 +16,8 @@
 //!    even an unanimous `Allow` to `RequireApproval` so production
 //!    runs are fail-closed by default (HARNESS_MODE_EVOLUTION Risk 2).
 //! 4. If an approval is required, builds an [`ApprovalRequest`], emits
-//!    [`HarnessEvent::ApprovalRequested`], delegates to the configured
-//!    [`ApprovalProvider`], and emits [`HarnessEvent::ApprovalDecided`]
+//!    [`HarnessEventBody::ApprovalRequested`], delegates to the configured
+//!    [`ApprovalProvider`], and emits [`HarnessEventBody::ApprovalDecided`]
 //!    with the result. The decision is cached per
 //!    `(tool_name, scope)` so `Session` / `Run` scoped allows reuse
 //!    without re-prompting.
@@ -88,7 +88,7 @@ impl HookConfig {
   /// Build a config with the minimum required pieces. `seq_counter`
   /// is created fresh; pass a shared counter via
   /// [`HookConfig::with_seq_counter`] when integrating with a parent
-  /// [`HarnessRuntime`] so the emitted approval events share the
+  /// [`crate::runtime::HarnessRuntime`] so the emitted approval events share the
   /// session's `seq` namespace.
   ///
   /// ## Approval-gate default is silent-allow (F-A2-12)
@@ -181,8 +181,8 @@ impl HookConfig {
 /// Wrap every tool already registered in `registry` with a
 /// [`HookedTool`] that runs the configured hooks + approval flow on
 /// every call. Returns the same registry (mutated in-place) so the
-/// caller can keep using the existing [`ToolPolicy`] + capability
-/// state.
+/// caller can keep using the existing [`agentflow_tools::ToolPolicy`] +
+/// capability state.
 pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegistry {
   let shared_config = Arc::new(SharedHookConfig {
     session_id: config.session_id,

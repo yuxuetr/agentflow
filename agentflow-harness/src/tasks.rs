@@ -23,7 +23,7 @@
 //!   `max_output_bytes` of incremental output through the [`TaskWriter`]
 //!   handed to the factory. Overflow is recorded but not fatal.
 //! - **Trace emission.** Every lifecycle transition emits one
-//!   [`HarnessEvent::BackgroundTaskUpdated`] through the same
+//!   [`HarnessEventBody::BackgroundTaskUpdated`] through the same
 //!   [`SinkChain`] the parent session uses, with the parent
 //!   session's `seq_counter` so the order interleaves cleanly with
 //!   approval and tool events.

@@ -218,11 +218,11 @@ const DEFAULT_REGRESSION_RATIO: f64 = 1.25;
 
 /// Parse `bench-gate` args + dispatch into [`bench_gate_at`].
 /// Supported args:
-///   --baseline <path>   override the default baseline file
-///   --threshold <ratio> override the regression ratio (default 1.25)
-///   --allow-missing     don't fail when a baseline entry has no
-///                       matching Criterion result (useful for CI runs
-///                       that intentionally only ran a subset of benches)
+///   `--baseline <path>`   override the default baseline file
+///   `--threshold <ratio>` override the regression ratio (default 1.25)
+///   `--allow-missing`     don't fail when a baseline entry has no
+///                         matching Criterion result (useful for CI runs
+///                         that intentionally only ran a subset of benches)
 pub fn bench_gate_from_args(
   workspace_root: &Path,
   args: Vec<String>,

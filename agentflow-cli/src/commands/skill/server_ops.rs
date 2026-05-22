@@ -18,7 +18,7 @@
 //!
 //! `--memory`, `--model`, `--session`, and `--trace` are local-only
 //! because today's `POST /v1/skills/{name}:run` body
-//! ([`agentflow_server::skills::RunSkillRequest`]) only accepts
+//! (`agentflow_server::skills::RunSkillRequest`) only accepts
 //! `input` + `tenant_id`. Combining them with `--server` is
 //! rejected with a clear error rather than silently dropping the
 //! flag — silent drops are the kind of bug operators only catch in

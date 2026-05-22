@@ -147,7 +147,7 @@ pub struct BackupStepReport {
   /// Stable tag — matches the manifest. Operators can grep on
   /// this when wiring up monitoring.
   pub include: String,
-  /// Resolved source path on the host (or "<postgres>" for the
+  /// Resolved source path on the host (or `"<postgres>"` for the
   /// DB step — no single FS path).
   pub source: String,
   /// Artifact filename inside the bundle directory.

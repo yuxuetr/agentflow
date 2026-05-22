@@ -17,8 +17,7 @@ use std::time::Instant;
 ///
 /// Eval runs are batched and offline, so we deliberately keep this sync to
 /// avoid forcing every backend into an async wrapper. The Qdrant /
-/// embedding-API path can still be wrapped via [`adapters::AsyncRetriever`]
-/// if needed.
+/// embedding-API path can still be wrapped in a sync adapter if needed.
 pub trait Retriever: Send + Sync {
   /// Backend label for the report (e.g. `"bm25"`, `"vector:openai"`).
   fn name(&self) -> &str;

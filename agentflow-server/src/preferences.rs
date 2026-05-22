@@ -65,7 +65,7 @@ pub async fn list_preferences(
 ///     are small by nature; anything larger is almost certainly the
 ///     wrong endpoint.
 ///   - Values are screened for token-shaped strings (see
-///     [`looks_like_token`]). Matches → 400.
+///     `looks_like_token`). Matches → 400.
 pub async fn put_preferences(
   State(state): State<AppState>,
   Extension(tenant): Extension<TenantId>,

@@ -162,7 +162,7 @@ impl WorkerAdmissionPolicy {
     self.check_at(credential, currently_active, chrono::Utc::now().timestamp())
   }
 
-  /// Variant of [`check`] that takes the "now" timestamp explicitly.
+  /// Variant of [`Self::check`] that takes the "now" timestamp explicitly.
   /// Exists so JWT-flavour tests can exercise expiry / nbf paths
   /// deterministically without sleeping or mocking the clock at the
   /// jsonwebtoken layer.

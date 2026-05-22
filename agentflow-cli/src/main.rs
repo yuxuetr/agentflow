@@ -807,7 +807,7 @@ enum McpCommands {
 
 #[derive(Subcommand)]
 enum McpConfigCommands {
-  /// Print the resolved `mcp.toml` path (or "<no mcp.toml configured>")
+  /// Print the resolved `mcp.toml` path (or `"<no mcp.toml configured>"`)
   Path,
   /// Parse + validate the config and report the server count
   Validate,

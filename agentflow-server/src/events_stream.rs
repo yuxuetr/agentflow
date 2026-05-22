@@ -93,7 +93,7 @@ impl EventBroker {
       .subscribe()
   }
 
-  /// Publish without persisting. Use [`Self::publish_through`] instead when
+  /// Publish without persisting. Use [`publish_through`] instead when
   /// you also want a DB row — keeps the persisted log and live stream in
   /// sync.
   pub fn publish(&self, event: StreamedEvent) {

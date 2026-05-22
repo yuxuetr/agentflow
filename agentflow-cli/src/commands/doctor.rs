@@ -125,7 +125,8 @@ pub struct DryRunReport {
   pub outcome: DryRunOutcomeReport,
 }
 
-/// JSON-shaped projection of [`agentflow_core::plugin::DryRunOutcome`].
+/// JSON-shaped projection of `agentflow_core::plugin::DryRunOutcome`
+/// (feature-gated behind `plugin`).
 ///
 /// Discriminator: `"status"` — `"passed"` for success, `"failed"`
 /// for any negative outcome (with `kind` distinguishing the failure
@@ -297,7 +298,7 @@ pub struct ServerReport {
 }
 
 /// Tri-state doctor verdict. `agentflow doctor` exits with the
-/// corresponding [`Self::exit_code`] so CI gates can branch on it
+/// corresponding `Self::exit_code` so CI gates can branch on it
 /// (`P3.4`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

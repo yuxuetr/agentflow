@@ -1,7 +1,7 @@
 //! Worker runtime for distributed AgentFlow execution.
 //!
 //! The runtime is transport-agnostic: it drives any
-//! [`WorkerProtocol`](agentflow_server::WorkerProtocol) implementation through
+//! [`WorkerProtocol`] implementation through
 //! heartbeat, claim, execute, and report-result steps. The first binary uses
 //! the in-memory protocol for local smoke tests; the gRPC adapter can plug in
 //! behind the same API.

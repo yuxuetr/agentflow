@@ -136,7 +136,7 @@ pub struct HarnessRunResult {
 }
 
 impl HarnessRunResult {
-  /// Convenience for callers that need to render "<answer>\n\nSession: <id>".
+  /// Convenience for callers that need to render `"<answer>\n\nSession: <id>"`.
   pub fn answer_with_session(&self) -> String {
     let answer = self.answer.as_deref().unwrap_or("(no answer)");
     format!("{answer}\n\nSession: {}", self.session_id)
@@ -159,7 +159,7 @@ pub struct HarnessRuntime {
 impl HarnessRuntime {
   /// Build a runtime from a pre-constructed inner [`AgentRuntime`].
   /// Most callers pass `Box::new(ReActAgent::new(...))` or use
-  /// [`agentflow_skills::SkillBuilder`] to assemble one.
+  /// `agentflow_skills::SkillBuilder` to assemble one.
   pub fn new(inner: Box<dyn AgentRuntime>) -> Self {
     Self {
       inner,

@@ -27,7 +27,7 @@ impl MoonshotProvider {
   }
 
   /// Construct with a caller-supplied [`reqwest::Client`]. See
-  /// [`OpenAIProvider::with_client`] for the rationale.
+  /// [`crate::providers::OpenAIProvider::with_client`] for the rationale.
   pub fn with_client(client: Client, api_key: &str, base_url: Option<String>) -> Result<Self> {
     if api_key.is_empty() {
       return Err(LLMError::MissingApiKey {

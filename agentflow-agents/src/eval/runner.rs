@@ -7,8 +7,8 @@
 //! `agentflow_core::Flow` is tracked separately under P4.4 slice 3.
 //!
 //! The runner is also intentionally agnostic of how runtimes are built —
-//! tests pass a stub factory that returns pre-canned [`AgentRunResult`]s;
-//! the CLI builds real [`crate::ReActAgent`]s. The harness's job is
+//! tests pass a stub factory that returns pre-canned [`crate::runtime::AgentRunResult`]s;
+//! the CLI builds real [`crate::react::ReActAgent`]s. The harness's job is
 //! only to glue the dataset, runtime, and assertions together.
 
 use std::time::{Duration, Instant};
