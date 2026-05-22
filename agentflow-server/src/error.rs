@@ -41,7 +41,7 @@ struct ErrorBody {
 }
 
 /// API errors returned to the client. New variants must map to a stable
-/// `code` string in [`ApiError::error_code`].
+/// `code` string in `ApiError::error_code`.
 #[derive(Debug, Error)]
 pub enum ApiError {
   #[error("Database error: {0}")]
@@ -68,6 +68,12 @@ pub enum ApiError {
   /// route. Distinct from `Unauthorized` so operators can see a config gap.
   #[error("Server misconfiguration: {0}")]
   Misconfigured(String),
+
+  /// Request body exceeded the configured size limit. Surfaced through
+  /// the unified envelope (HTTP 413) instead of being collapsed into
+  /// `BadRequest` so clients can branch on the size-limit cause.
+  #[error("Payload too large: {0}")]
+  PayloadTooLarge(String),
 }
 
 impl ApiError {
@@ -80,6 +86,7 @@ impl ApiError {
       ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
       ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
       ApiError::Forbidden => StatusCode::FORBIDDEN,
+      ApiError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
     }
   }
 
@@ -92,6 +99,7 @@ impl ApiError {
       ApiError::Unauthorized => "unauthorized",
       ApiError::Forbidden => "forbidden",
       ApiError::Misconfigured(_) => "server_misconfigured",
+      ApiError::PayloadTooLarge(_) => "payload_too_large",
     }
   }
 }
@@ -139,7 +147,16 @@ fn json_rejection_to_api_error(rejection: JsonRejection) -> ApiError {
   // `body_text()` carries the actionable detail (which field is missing,
   // which enum variant is unknown, byte offset of a syntax error). Keep
   // it as `message` so clients can still surface the underlying cause.
-  ApiError::BadRequest(rejection.body_text())
+  let message = rejection.body_text();
+  // Preserve the 413 status that `DefaultBodyLimit` produces. Without
+  // this branch, an oversized body would be collapsed into `BadRequest`
+  // (HTTP 400) and clients couldn't branch on the size-limit cause —
+  // and the existing `body_limit_rejects_oversized_json_before_handler`
+  // contract tests would fail.
+  if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+    return ApiError::PayloadTooLarge(message);
+  }
+  ApiError::BadRequest(message)
 }
 
 #[cfg(test)]
