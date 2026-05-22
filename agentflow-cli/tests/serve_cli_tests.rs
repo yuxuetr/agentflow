@@ -12,9 +12,42 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::path::PathBuf;
+
+/// Returns `Some(path)` if the `agentflow-server` binary is co-located
+/// with the test binary (the agentflow-cli target dir), `None` otherwise.
+///
+/// `cargo test -p agentflow-cli` does not pull in agentflow-server, so
+/// when developers run that command directly we'd otherwise spawn the
+/// CLI's `serve --check` path, which tries to locate the server binary,
+/// fails, and panics on empty-JSON stdout. Skipping here yields an
+/// informative reason instead of a confusing panic. CI sidesteps this by
+/// pre-building agentflow-server in the matrix step.
+fn server_binary_present() -> Option<PathBuf> {
+  let cli_bin = assert_cmd::cargo::cargo_bin("agentflow");
+  let exe_name = if cfg!(windows) {
+    "agentflow-server.exe"
+  } else {
+    "agentflow-server"
+  };
+  let candidate = cli_bin.parent()?.join(exe_name);
+  candidate.is_file().then_some(candidate)
+}
+
+macro_rules! skip_if_server_missing {
+  () => {
+    if server_binary_present().is_none() {
+      eprintln!(
+        "skipped: agentflow-server binary not built — run `cargo build -p agentflow-server` first"
+      );
+      return;
+    }
+  };
+}
 
 #[test]
 fn serve_check_outputs_a_structured_readiness_report() {
+  skip_if_server_missing!();
   // Use a dedicated token env var with a known-empty value so the
   // report's auth section is deterministic.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
@@ -62,6 +95,7 @@ fn serve_check_outputs_a_structured_readiness_report() {
 
 #[test]
 fn serve_check_production_without_token_fails_with_exit_code_2() {
+  skip_if_server_missing!();
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd.args([
     "serve",
@@ -89,6 +123,7 @@ fn serve_check_production_without_token_fails_with_exit_code_2() {
 
 #[test]
 fn serve_check_with_token_and_local_profile_warns_only_about_db() {
+  skip_if_server_missing!();
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd.args([
     "serve",

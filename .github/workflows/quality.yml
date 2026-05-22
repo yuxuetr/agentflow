@@ -85,6 +85,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Build agentflow-server for CLI integration tests
+        if: matrix.package == 'agentflow-cli'
+        # `agentflow serve --check` shells out to the agentflow-server
+        # binary. `cargo test -p agentflow-cli` doesn't pull it in, so we
+        # build it up front; tests that need it would otherwise fail with
+        # an empty-stdout panic instead of running the readiness probe.
+        run: cargo build -p agentflow-server
       - name: Run package tests
         run: cargo test -p ${{ matrix.package }} --all-targets
 
