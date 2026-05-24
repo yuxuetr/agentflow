@@ -6,16 +6,19 @@
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
-//! use agentflow_tools::{ToolRegistry, SandboxPolicy};
+//! use agentflow_tools::{ToolRegistry, SandboxPolicy, ToolError};
 //! use agentflow_tools::builtin::{ShellTool, FileTool, HttpTool};
 //!
+//! # fn main() -> Result<(), ToolError> {
 //! let policy = Arc::new(SandboxPolicy::permissive());
 //! let mut registry = ToolRegistry::new();
 //! registry.register(Arc::new(ShellTool::new(policy.clone())));
 //! registry.register(Arc::new(FileTool::new(policy.clone())));
-//! registry.register(Arc::new(HttpTool::new(policy.clone())));
+//! registry.register(Arc::new(HttpTool::new(policy.clone())?));
 //!
 //! println!("{}", registry.prompt_tools_description());
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod builtin;

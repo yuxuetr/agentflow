@@ -45,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
   // ── Register tools ───────────────────────────────────────────────────────
   let mut registry = ToolRegistry::new();
   registry.register(Arc::new(FileTool::new(policy.clone())));
-  registry.register(Arc::new(HttpTool::new(policy.clone())));
+  registry.register(Arc::new(
+    // Q1.2.2: HttpTool::new is fallible — propagate any client build error.
+    HttpTool::new(policy.clone())?,
+  ));
   let registry = Arc::new(registry);
 
   // ── In-memory session store (sliding 4 096-token window) ─────────────────

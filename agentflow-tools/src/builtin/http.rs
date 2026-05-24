@@ -30,17 +30,27 @@ pub struct HttpTool {
 }
 
 impl HttpTool {
-  pub fn new(policy: Arc<SandboxPolicy>) -> Self {
-    let client_result = Client::builder()
+  /// Build a default reqwest client (30 s timeout, no auto-redirects,
+  /// AgentFlow user-agent). Q1.2.2: returns the build error instead of
+  /// panicking — TLS init failures, OS resource exhaustion, or a
+  /// fingerprint-cert load problem should never abort the host process.
+  pub fn new(policy: Arc<SandboxPolicy>) -> Result<Self, ToolError> {
+    let client = Client::builder()
       .timeout(std::time::Duration::from_secs(30))
       .redirect(Policy::none())
       .user_agent("AgentFlow/0.1")
-      .build();
-    let client = match client_result {
-      Ok(client) => client,
-      Err(error) => panic!("Failed to build HTTP client: {}", error),
-    };
+      .build()
+      .map_err(|err| ToolError::ExecutionFailed {
+        message: format!("failed to build reqwest client for HttpTool: {err}"),
+      })?;
+    Ok(Self::with_client(client, policy))
+  }
 
+  /// Inject a pre-built reqwest client. Used by tests that need
+  /// `.no_proxy()` to talk to loopback servers (Q1.2.3), and by
+  /// production callers that want a shared connection pool or custom
+  /// TLS pinning.
+  pub fn with_client(client: Client, policy: Arc<SandboxPolicy>) -> Self {
     Self {
       client,
       policy,
@@ -48,7 +58,7 @@ impl HttpTool {
     }
   }
 
-  pub fn default_policy() -> Self {
+  pub fn default_policy() -> Result<Self, ToolError> {
     Self::new(Arc::new(SandboxPolicy::default()))
   }
 
@@ -353,9 +363,33 @@ mod tests {
     net::TcpListener,
   };
 
+  /// Build the reqwest client we use in tests. `.no_proxy()` is required
+  /// because a developer or CI runner with a system HTTP proxy
+  /// (Clash / V2Ray / corporate proxy) would otherwise route
+  /// `127.0.0.1:<port>` through the proxy and turn the test failures
+  /// into confusing `IncompleteMessage` errors. See CLAUDE.md's
+  /// "Rust HTTP Testing Guidelines" — Q1.2.3.
+  fn test_client() -> Client {
+    Client::builder()
+      .timeout(std::time::Duration::from_secs(30))
+      .redirect(Policy::none())
+      .user_agent("AgentFlow/0.1-test")
+      .no_proxy()
+      .build()
+      .expect("test reqwest client must build")
+  }
+
+  fn test_tool(policy: Arc<SandboxPolicy>) -> HttpTool {
+    HttpTool::with_client(test_client(), policy)
+  }
+
+  fn test_tool_default_policy() -> HttpTool {
+    test_tool(Arc::new(SandboxPolicy::default()))
+  }
+
   #[tokio::test]
   async fn default_policy_blocks_loopback_ip() {
-    let tool = HttpTool::default_policy();
+    let tool = test_tool_default_policy();
 
     let result = tool
       .execute(json!({
@@ -369,7 +403,7 @@ mod tests {
 
   #[tokio::test]
   async fn default_policy_blocks_localhost_dns_resolution() {
-    let tool = HttpTool::default_policy();
+    let tool = test_tool_default_policy();
 
     let result = tool
       .execute(json!({
@@ -383,7 +417,7 @@ mod tests {
 
   #[tokio::test]
   async fn default_policy_blocks_private_ip() {
-    let tool = HttpTool::default_policy();
+    let tool = test_tool_default_policy();
 
     let result = tool
       .execute(json!({
@@ -397,7 +431,7 @@ mod tests {
 
   #[tokio::test]
   async fn default_policy_blocks_cloud_metadata_ip() {
-    let tool = HttpTool::default_policy();
+    let tool = test_tool_default_policy();
 
     let result = tool
       .execute(json!({
@@ -418,7 +452,7 @@ mod tests {
       allow_loopback_network_access: true,
       ..SandboxPolicy::default()
     });
-    let tool = HttpTool::new(policy);
+    let tool = test_tool(policy);
 
     let output = tool.execute(json!({ "url": url })).await.unwrap();
 
@@ -436,12 +470,24 @@ mod tests {
       allow_loopback_network_access: true,
       ..SandboxPolicy::default()
     });
-    let tool = HttpTool::new(policy);
+    let tool = test_tool(policy);
 
     let result = tool.execute(json!({ "url": url })).await;
 
     assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
     server_task.await.unwrap();
+  }
+
+  /// Q1.2.2: HttpTool::new must propagate client-build failures via
+  /// `Result` rather than panicking. We cannot easily force a real
+  /// `Client::build()` failure in a unit test, so we exercise the
+  /// happy path and assert the type signature carries `Result` (the
+  /// audit's load-bearing claim was that the panic existed at all).
+  #[tokio::test]
+  async fn new_returns_result_so_callers_can_handle_build_failures() {
+    let policy = Arc::new(SandboxPolicy::default());
+    let tool: Result<HttpTool, ToolError> = HttpTool::new(policy);
+    assert!(tool.is_ok());
   }
 
   async fn spawn_one_response_server(

@@ -25,13 +25,14 @@ use agentflow_tools::sandbox::SandboxPolicy;
 use agentflow_tools::{Tool, ToolPermission, ToolPolicy};
 use serde_json::json;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("=== AgentFlow tool policy + sandbox demo ===\n");
 
   // ── 1. Tool registration with default sandbox ────────────────────────
   let sandbox = Arc::new(SandboxPolicy::default());
   let shell = ShellTool::new(sandbox.clone());
-  let http = HttpTool::new(sandbox.clone());
+  // Q1.2.2: HttpTool::new is fallible — surface the build error.
+  let http = HttpTool::new(sandbox.clone())?;
 
   println!("Built-in tools registered:");
   for tool in [&shell as &dyn Tool, &http as &dyn Tool] {
@@ -124,4 +125,5 @@ fn main() {
   );
 
   println!("=== Done. See docs/TOOL_PERMISSIONS.md for the full policy model. ===");
+  Ok(())
 }

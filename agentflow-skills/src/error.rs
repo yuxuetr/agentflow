@@ -35,4 +35,7 @@ pub enum SkillError {
 
   #[error("IO error: {0}")]
   IoError(String),
+
+  #[error("Tool construction failure: {0}")]
+  ToolBuildError(String),
 }

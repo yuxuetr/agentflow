@@ -76,7 +76,7 @@ impl SkillBuilder {
     manifest: &SkillManifest,
     skill_dir: &Path,
   ) -> Result<ToolRegistry, SkillError> {
-    let mut registry = build_tool_registry(&manifest.tools, &manifest.security, skill_dir);
+    let mut registry = build_tool_registry(&manifest.tools, &manifest.security, skill_dir)?;
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
     Ok(registry)
   }
@@ -208,7 +208,7 @@ fn build_tool_registry(
   tool_configs: &[ToolConfig],
   security: &SecurityConfig,
   skill_dir: &Path,
-) -> ToolRegistry {
+) -> Result<ToolRegistry, SkillError> {
   // SkillSecurity is the first layer of the three-way capability merge.
   // We populate both the legacy permission-based ToolPolicy (for
   // backward-compatible audit decisions) and the new capability layer that
@@ -227,7 +227,7 @@ fn build_tool_registry(
 
   if tool_configs.is_empty() {
     // No tools declared — return an empty registry.
-    return registry;
+    return Ok(registry);
   }
 
   // Merge all per-tool constraints into a single SandboxPolicy.
@@ -254,7 +254,9 @@ fn build_tool_registry(
         registry.register(Arc::new(FileTool::new(policy.clone())));
       }
       "http" => {
-        registry.register(Arc::new(HttpTool::new(policy.clone())));
+        let http_tool = HttpTool::new(policy.clone())
+          .map_err(|err| SkillError::ToolBuildError(err.to_string()))?;
+        registry.register(Arc::new(http_tool));
       }
       "script" => {
         let scripts_dir = skill_dir.join("scripts");
@@ -274,7 +276,7 @@ fn build_tool_registry(
     }
   }
 
-  registry
+  Ok(registry)
 }
 
 async fn register_mcp_tools(
