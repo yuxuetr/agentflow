@@ -28,7 +28,9 @@ pub use admission::{
 pub use distributed::{
   DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus, NodeExecutionPayload,
 };
-pub use grpc::{GrpcWorkerProtocol, GrpcWorkerService, WorkerControlServer};
+pub use grpc::{
+  AuthenticatedGrpcWorkerService, GrpcWorkerProtocol, GrpcWorkerService, WorkerControlServer,
+};
 pub use jwt::{JwtPolicy, JwtVerificationKey, JwtVerifyError, WorkerJwtClaims, verify_worker_jwt};
 
 /// Transport selected for the v1.0-rc distributed control plane.

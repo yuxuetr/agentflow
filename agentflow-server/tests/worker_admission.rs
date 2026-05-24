@@ -177,3 +177,91 @@ async fn token_rotation_does_not_drop_in_flight_tasks() {
     .await
     .expect("report under v2");
 }
+
+/// Q1.6.1 end-to-end deny test: with `AuthenticatedGrpcWorkerService`
+/// wired in, a worker that omits the `authorization` metadata is
+/// rejected with `permission_denied` before any task is dispatched.
+/// Pre-fix the gRPC adapter bypassed `AuthenticatedControlPlane`
+/// entirely and any anonymous worker could claim tasks.
+#[tokio::test]
+async fn grpc_claim_without_admission_token_is_rejected() {
+  use agentflow_server::{
+    AuthenticatedGrpcWorkerService, GrpcWorkerProtocol, WorkerControlServer, WorkerProtocol,
+  };
+  use std::sync::Arc;
+  use tokio::net::TcpListener;
+  use tokio::sync::oneshot;
+  use tonic::transport::Server;
+
+  let protocol = InMemoryWorkerProtocol::new();
+  let inner = WorkerControlPlane::new(protocol);
+  let admitted = worker("trusted");
+  let policy = psk_policy(&[(admitted.clone(), &["sekret"])]);
+  let plane = Arc::new(AuthenticatedControlPlane::new(inner, policy));
+
+  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  drop(listener);
+
+  let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+  let server = tokio::spawn({
+    let plane = plane.clone();
+    async move {
+      Server::builder()
+        .add_service(WorkerControlServer::new(
+          AuthenticatedGrpcWorkerService::new(plane),
+        ))
+        .serve_with_shutdown(addr, async {
+          let _ = shutdown_rx.await;
+        })
+        .await
+    }
+  });
+
+  // Spin until the server is listening.
+  let endpoint = format!("http://{addr}");
+  let client = loop {
+    if let Ok(c) = GrpcWorkerProtocol::connect(&endpoint).await {
+      break c;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+  };
+
+  // No admission token → server returns permission_denied → wrapped
+  // back into SchedulerError::Transport on the client.
+  let err = client
+    .claim_task(admitted.clone())
+    .await
+    .expect_err("claim without token must fail");
+  let message = err.to_string();
+  assert!(
+    message.to_lowercase().contains("permission")
+      || message.contains("psk")
+      || message.contains("missing"),
+    "expected permission-denied / missing-credential message, got: {message}"
+  );
+
+  // Same client + the right admission token succeeds. Confirms the
+  // server isn't a black hole — only unauthenticated calls are
+  // rejected.
+  let authenticated_client = GrpcWorkerProtocol::connect(&endpoint)
+    .await
+    .unwrap()
+    .with_admission_token("sekret");
+  // Schedule a task via the in-process inner so claim has something
+  // to return.
+  let task = WorkerTask::new(Uuid::new_v4(), "node-a", serde_json::json!({"n": 1}));
+  plane
+    .inner()
+    .schedule_task(task.clone())
+    .await
+    .expect("schedule");
+  let claimed = authenticated_client
+    .claim_task(admitted)
+    .await
+    .expect("authenticated claim must succeed");
+  assert!(claimed.is_some(), "authenticated claim should return task");
+
+  let _ = shutdown_tx.send(());
+  let _ = server.await;
+}

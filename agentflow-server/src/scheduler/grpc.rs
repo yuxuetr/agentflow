@@ -163,6 +163,143 @@ impl<P> GrpcWorkerService<P> {
   }
 }
 
+/// Q1.6.1: extract the `authorization` metadata from a tonic request as
+/// a bare token string. Returns `None` when the header is absent or
+/// malformed (caller decides whether absence is fatal). Strips the
+/// `Bearer ` prefix when present so callers receive only the PSK value.
+fn extract_admission_token<T>(request: &Request<T>) -> Option<String> {
+  let header = request.metadata().get("authorization")?;
+  let value = header.to_str().ok()?;
+  let token = value.strip_prefix("Bearer ").unwrap_or(value);
+  if token.is_empty() {
+    None
+  } else {
+    Some(token.to_string())
+  }
+}
+
+/// Server-side authenticated worker gRPC service. Each call extracts
+/// `authorization` metadata, builds a [`WorkerCredential`], and routes
+/// through [`AuthenticatedControlPlane`] which enforces PSK / JWT /
+/// fleet-cap admission before delegating to the inner protocol.
+///
+/// Closes Q1.6.1: the unauthenticated [`GrpcWorkerService`] is still
+/// available for the `memory://local` and in-process test paths, but
+/// production gRPC deployments wire this struct instead.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedGrpcWorkerService<P> {
+  authenticated: Arc<crate::scheduler::admission::AuthenticatedControlPlane<P>>,
+}
+
+impl<P> AuthenticatedGrpcWorkerService<P> {
+  pub fn new(
+    authenticated: Arc<crate::scheduler::admission::AuthenticatedControlPlane<P>>,
+  ) -> Self {
+    Self { authenticated }
+  }
+}
+
+#[async_trait]
+impl<P> WorkerControl for AuthenticatedGrpcWorkerService<P>
+where
+  P: WorkerProtocol + Clone + 'static,
+{
+  /// `submit_task` is gateway → server (not worker → server), so it
+  /// requires admission only if the deployment configured one. We
+  /// accept it without credentials to match the existing wire shape;
+  /// the `tonic::Request` is already constrained by the bearer
+  /// middleware applied to the parent HTTP server.
+  async fn submit_task(
+    &self,
+    request: Request<pb::SubmitTaskRequest>,
+  ) -> Result<Response<pb::Empty>, Status> {
+    let task = request
+      .into_inner()
+      .task
+      .ok_or_else(|| Box::new(Status::invalid_argument("task is required")))
+      .and_then(worker_task_from_proto)
+      .map_err(|e| *e)?;
+    self
+      .authenticated
+      .inner()
+      .schedule_task(task)
+      .await
+      .map_err(status_from_error)?;
+    Ok(Response::new(pb::Empty {}))
+  }
+
+  async fn claim_task(
+    &self,
+    request: Request<pb::ClaimTaskRequest>,
+  ) -> Result<Response<pb::ClaimTaskResponse>, Status> {
+    let token = extract_admission_token(&request);
+    let inner = request.into_inner();
+    let worker_id = WorkerId::new(inner.worker_id.clone())
+      .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    let credential = crate::scheduler::admission::WorkerCredential::new(worker_id.clone(), token);
+    let task = self
+      .authenticated
+      .claim_task(credential)
+      .await
+      .map_err(authn_status_from_error)?
+      .map(worker_task_to_proto);
+    Ok(Response::new(pb::ClaimTaskResponse { task }))
+  }
+
+  async fn report_result(
+    &self,
+    request: Request<pb::ReportResultRequest>,
+  ) -> Result<Response<pb::Empty>, Status> {
+    let token = extract_admission_token(&request);
+    let inner = request.into_inner();
+    let worker_id =
+      WorkerId::new(inner.worker_id).map_err(|err| Status::invalid_argument(err.to_string()))?;
+    let task_id = parse_uuid(&inner.task_id, "task_id").map_err(|e| *e)?;
+    let result = inner
+      .result
+      .ok_or_else(|| Box::new(Status::invalid_argument("result is required")))
+      .and_then(worker_task_result_from_proto)
+      .map_err(|e| *e)?;
+    let credential = crate::scheduler::admission::WorkerCredential::new(worker_id, token);
+    self
+      .authenticated
+      .report_result(credential, task_id, result)
+      .await
+      .map_err(authn_status_from_error)?;
+    Ok(Response::new(pb::Empty {}))
+  }
+
+  async fn heartbeat(
+    &self,
+    request: Request<pb::HeartbeatRequest>,
+  ) -> Result<Response<pb::Empty>, Status> {
+    let token = extract_admission_token(&request);
+    let inner = request.into_inner();
+    let worker_id = WorkerId::new(inner.worker_id.clone())
+      .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    let heartbeat = worker_heartbeat_from_proto(inner).map_err(|e| *e)?;
+    let credential = crate::scheduler::admission::WorkerCredential::new(worker_id, token);
+    self
+      .authenticated
+      .heartbeat(credential, heartbeat)
+      .await
+      .map_err(authn_status_from_error)?;
+    Ok(Response::new(pb::Empty {}))
+  }
+}
+
+/// Map [`crate::scheduler::admission::ControlError`] to a tonic Status,
+/// surfacing admission failures as `permission_denied` so the client
+/// distinguishes auth rejection from transport / state errors.
+fn authn_status_from_error(err: crate::scheduler::admission::ControlError) -> Status {
+  match err {
+    crate::scheduler::admission::ControlError::Admission(adm) => {
+      Status::permission_denied(adm.to_string())
+    }
+    crate::scheduler::admission::ControlError::Scheduler(sched) => status_from_error(sched),
+  }
+}
+
 #[async_trait]
 pub trait WorkerControl: Send + Sync + 'static {
   async fn submit_task(
@@ -479,6 +616,10 @@ impl<T> tonic::server::NamedService for WorkerControlServer<T> {
 #[derive(Debug, Clone)]
 pub struct GrpcWorkerProtocol {
   inner: Arc<Mutex<Grpc<Channel>>>,
+  /// Q1.6.1: admission token sent as `authorization: Bearer <token>`
+  /// gRPC metadata on every call. `None` keeps the legacy "no auth"
+  /// path for the `memory://local` and dev profiles.
+  admission_token: Option<Arc<str>>,
 }
 
 impl GrpcWorkerProtocol {
@@ -494,13 +635,25 @@ impl GrpcWorkerProtocol {
       })?;
     Ok(Self {
       inner: Arc::new(Mutex::new(Grpc::new(channel))),
+      admission_token: None,
     })
   }
 
   pub fn from_channel(channel: Channel) -> Self {
     Self {
       inner: Arc::new(Mutex::new(Grpc::new(channel))),
+      admission_token: None,
     }
+  }
+
+  /// Pin the admission token attached to every outgoing call as
+  /// `authorization: Bearer <token>` metadata. Required when the
+  /// server side runs [`AuthenticatedGrpcWorkerService`]; harmless
+  /// (just ignored) when the server is the unauthenticated
+  /// [`GrpcWorkerService`].
+  pub fn with_admission_token(mut self, token: impl Into<String>) -> Self {
+    self.admission_token = Some(Arc::from(token.into()));
+    self
   }
 
   async fn unary<Req, Resp>(
@@ -532,6 +685,26 @@ impl GrpcWorkerProtocol {
     // trace exists but is malformed".
     let mut req = Request::new(request);
     inject_traceparent_into_grpc_request(&mut req);
+    if let Some(token) = self.admission_token.as_deref() {
+      // Q1.6.1: every outbound RPC carries the admission credential.
+      // We rebuild the value each call instead of storing an
+      // AsciiMetadataValue because tonic's metadata map clones
+      // cheaply but the value itself isn't `Sync` in all versions.
+      let header = format!("Bearer {token}");
+      match tonic::metadata::AsciiMetadataValue::try_from(header.as_str()) {
+        Ok(value) => {
+          req.metadata_mut().insert("authorization", value);
+        }
+        Err(_) => {
+          // A token containing non-ASCII bytes is an operator error;
+          // refuse to send instead of letting the server pin the
+          // failure on a malformed header.
+          return Err(SchedulerError::Transport {
+            message: "admission token contains non-ASCII bytes; refusing to send".into(),
+          });
+        }
+      }
+    }
     inner
       .unary(req, path, codec)
       .await

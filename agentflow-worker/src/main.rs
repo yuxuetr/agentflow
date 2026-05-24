@@ -19,14 +19,43 @@ async fn run() -> Result<(), String> {
   config.heartbeat_interval = args.heartbeat_interval;
 
   if config.control_plane == "memory://local" {
+    if args.admission_token.is_some() {
+      eprintln!(
+        "agentflow-worker: warning — --admission-token / AGENTFLOW_ADMISSION_TOKEN is set but \
+         control-plane is memory://local, which is auth-exempt. The token will be ignored."
+      );
+    }
     let runtime = WorkerRuntime::new(InMemoryWorkerProtocol::new(), config);
     return run_runtime(runtime, args.once).await;
   }
 
   let endpoint = grpc_endpoint(&config.control_plane)?;
-  let protocol = GrpcWorkerProtocol::connect(&endpoint)
+  let mut protocol = GrpcWorkerProtocol::connect(&endpoint)
     .await
     .map_err(|e| e.to_string())?;
+  // Q1.6.1: attach the admission credential (PSK) sent as
+  // `authorization: Bearer <token>` gRPC metadata. Production
+  // deployments MUST set this; the server side rejects with
+  // permission_denied otherwise. CLI takes precedence over env so
+  // ops can rotate via systemd unit files without restarting.
+  if let Some(token) = args.admission_token.as_deref() {
+    protocol = protocol.with_admission_token(token);
+  } else {
+    eprintln!(
+      "agentflow-worker: warning — no --admission-token / AGENTFLOW_ADMISSION_TOKEN configured. \
+       The server will reject every RPC with permission_denied if it runs \
+       AuthenticatedGrpcWorkerService."
+    );
+  }
+  // TLS flags are accepted for CLI compatibility; current tonic
+  // wiring uses the channel as-is. Operators provide their own
+  // certificate material — no in-tree cert generation script.
+  if args.server_ca.is_some() || args.client_cert.is_some() || args.client_key.is_some() {
+    eprintln!(
+      "agentflow-worker: warning — TLS flags are accepted but not yet wired through the \
+       channel builder. Track Q3.x for the full mTLS uplift."
+    );
+  }
   let runtime = WorkerRuntime::new(protocol, config);
   run_runtime(runtime, args.once).await
 }
@@ -62,6 +91,15 @@ struct Args {
   once: bool,
   poll_interval: Duration,
   heartbeat_interval: Duration,
+  /// Q1.6.1: pre-shared admission token sent as gRPC `authorization`
+  /// metadata. Falls back to `AGENTFLOW_ADMISSION_TOKEN`.
+  admission_token: Option<String>,
+  /// PEM-encoded CA certificate used to validate the server cert.
+  /// Accepted today as a CLI surface but not yet wired into the
+  /// tonic channel — full mTLS lands in a follow-up.
+  server_ca: Option<String>,
+  client_cert: Option<String>,
+  client_key: Option<String>,
 }
 
 impl Args {
@@ -76,6 +114,10 @@ impl Args {
       once: false,
       poll_interval: Duration::from_millis(250),
       heartbeat_interval: Duration::from_secs(5),
+      admission_token: std::env::var("AGENTFLOW_ADMISSION_TOKEN").ok(),
+      server_ca: std::env::var("AGENTFLOW_WORKER_SERVER_CA").ok(),
+      client_cert: std::env::var("AGENTFLOW_WORKER_CLIENT_CERT").ok(),
+      client_key: std::env::var("AGENTFLOW_WORKER_CLIENT_KEY").ok(),
     };
 
     while let Some(arg) = args.next() {
@@ -89,6 +131,34 @@ impl Args {
           parsed.control_plane = args
             .next()
             .ok_or_else(|| "--control-plane requires a value".to_string())?;
+        }
+        "--admission-token" => {
+          parsed.admission_token = Some(
+            args
+              .next()
+              .ok_or_else(|| "--admission-token requires a value".to_string())?,
+          );
+        }
+        "--server-ca" => {
+          parsed.server_ca = Some(
+            args
+              .next()
+              .ok_or_else(|| "--server-ca requires a path to a PEM file".to_string())?,
+          );
+        }
+        "--client-cert" => {
+          parsed.client_cert = Some(
+            args
+              .next()
+              .ok_or_else(|| "--client-cert requires a path to a PEM file".to_string())?,
+          );
+        }
+        "--client-key" => {
+          parsed.client_key = Some(
+            args
+              .next()
+              .ok_or_else(|| "--client-key requires a path to a PEM file".to_string())?,
+          );
         }
         "--once" => parsed.once = true,
         "--poll-ms" => {
@@ -118,5 +188,13 @@ impl Args {
 }
 
 fn help() -> String {
-  "usage: agentflow-worker [--worker-id ID] [--control-plane memory://local|grpc://host:port|http://host:port] [--once] [--poll-ms N] [--heartbeat-ms N]".into()
+  "usage: agentflow-worker \
+   [--worker-id ID] \
+   [--control-plane memory://local|grpc://host:port|http://host:port] \
+   [--admission-token PSK]   # required for gRPC under AuthenticatedGrpcWorkerService \
+   [--server-ca PATH]        # PEM CA cert (TLS, not yet wired) \
+   [--client-cert PATH]      # PEM client cert (mTLS, not yet wired) \
+   [--client-key PATH]       # PEM client key (mTLS, not yet wired) \
+   [--once] [--poll-ms N] [--heartbeat-ms N]"
+    .into()
 }
