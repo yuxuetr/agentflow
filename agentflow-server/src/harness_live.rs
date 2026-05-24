@@ -140,6 +140,23 @@ fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
 pub struct LiveHarnessExecutor {
   approval_registry: PendingApprovalRegistry,
   approval_timeout: Duration,
+  /// Q3.4.3: bounds concurrent harness sessions. Each session spawns
+  /// a dedicated OS thread via `spawn_blocking`; uncapped that's a
+  /// DoS vector (`/v1/harness/sessions` has no rate limit). The
+  /// semaphore caps in-flight executions; callers wait for a permit
+  /// before starting their session's blocking runtime. Default cap
+  /// is set by `default_max_concurrent_sessions()` (32) and is
+  /// overridable via `with_max_concurrent_sessions()`.
+  concurrency_limit: Arc<tokio::sync::Semaphore>,
+}
+
+/// Q3.4.3: production-safe default cap on concurrent live harness
+/// sessions. Each session burns an OS thread for the duration of its
+/// run, so the cap is the upper bound on extra OS threads the live
+/// executor will materialize. 32 is a balance between local-dev
+/// ergonomics (rarely hit) and shared-infra survival.
+pub fn default_max_concurrent_sessions() -> usize {
+  32
 }
 
 impl LiveHarnessExecutor {
@@ -147,7 +164,18 @@ impl LiveHarnessExecutor {
     Self {
       approval_registry,
       approval_timeout,
+      concurrency_limit: Arc::new(tokio::sync::Semaphore::new(
+        default_max_concurrent_sessions(),
+      )),
     }
+  }
+
+  /// Q3.4.3: override the default concurrency cap. `0` is treated as
+  /// "1" so the executor always permits forward progress.
+  pub fn with_max_concurrent_sessions(mut self, max: usize) -> Self {
+    let max = max.max(1);
+    self.concurrency_limit = Arc::new(tokio::sync::Semaphore::new(max));
+    self
   }
 }
 
@@ -162,6 +190,21 @@ impl std::fmt::Debug for LiveHarnessExecutor {
 #[async_trait]
 impl HarnessSessionExecutor for LiveHarnessExecutor {
   async fn execute(&self, ctx: HarnessSessionContext) {
+    // Q3.4.3: acquire the per-process concurrency permit before
+    // spawning the OS thread that runs this session. Without this gate
+    // a flood of `POST /v1/harness/sessions` would spawn one OS thread
+    // per request — `spawn_blocking` doesn't bound thread count by
+    // itself. Permit is dropped when the future resolves, freeing the
+    // slot for the next session.
+    let permit = match self.concurrency_limit.clone().acquire_owned().await {
+      Ok(permit) => permit,
+      Err(_closed) => {
+        // Semaphore is permanently closed — collector shutdown.
+        warn!(session_id = %ctx.session_id, "harness concurrency semaphore closed; rejecting session");
+        return;
+      }
+    };
+    let _permit_guard = permit; // released on drop
     if let Err(err) = live_execute(self, &ctx).await {
       let err_msg = err.to_string();
       error!(session_id = %ctx.session_id, error = %err_msg, "live harness executor failed");
