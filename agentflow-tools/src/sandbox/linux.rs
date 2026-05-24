@@ -14,9 +14,12 @@
 //! * **No `FsWrite`** → mutating filesystem syscalls (`unlink`, `rmdir`,
 //!   `rename`, `mkdir`, `chmod`, `chown`, `truncate`, `link`, `symlink`,
 //!   `mknod`) are blocked. `write(2)` itself is **not** blocked because the
-//!   child legitimately writes to stdout/stderr; pure stdout-only behaviour
-//!   keeps working, but creating new files via `openat(O_WRONLY | O_CREAT)`
-//!   is denied through the path-creation syscalls.
+//!   child legitimately writes to stdout/stderr. New-file creation through
+//!   `openat`/`open`/`creat`/`openat2` is also blocked when the call carries
+//!   any of `O_WRONLY` / `O_RDWR` / `O_CREAT` / `O_TRUNC` (per-flag rules,
+//!   Q1.1.2). `openat2` cannot be argument-filtered (the flags live in a
+//!   `struct open_how` accessed by pointer), so it is denied unconditionally
+//!   under `!FsWrite`.
 //! * **No `Exec`** → cannot be enforced through seccomp alone, because the
 //!   child must `execve` once to start. Tools that don't grant `Exec` will
 //!   already have been denied at the in-process capability merge layer
@@ -39,7 +42,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};
+use seccompiler::{
+  BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+  SeccompRule, TargetArch,
+};
 use tokio::process::Command;
 
 use crate::capability::Capability;
@@ -146,6 +152,7 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
     for nr in fs_write_syscall_numbers() {
       rules.insert(*nr, vec![]);
     }
+    install_write_open_rules(&mut rules)?;
   }
 
   let filter = SeccompFilter::new(
@@ -187,7 +194,8 @@ fn net_syscall_numbers() -> &'static [i64] {
 
 /// Syscalls that mutate the filesystem layout. `write` itself is allowed
 /// because the child writes to stdout/stderr through it; new file creation
-/// is gated through the openat / creat / mknodat path-creation surface.
+/// is gated through the openat / creat / mknodat / openat2 path-creation
+/// surface (see [`install_write_open_rules`]).
 fn fs_write_syscall_numbers() -> &'static [i64] {
   &[
     libc::SYS_unlinkat,
@@ -202,6 +210,81 @@ fn fs_write_syscall_numbers() -> &'static [i64] {
     libc::SYS_truncate,
     libc::SYS_ftruncate,
   ]
+}
+
+/// Open-family flags that imply the call will write to a file. We deny any
+/// `open` / `openat` whose `flags` argument intersects this mask under
+/// `!FsWrite`. The bits are checked individually because seccompiler's
+/// `MaskedEq(mask)` matches when `arg & mask == value`; we want "any bit
+/// in the mask set", which we express as one rule per bit.
+fn write_open_flag_bits() -> &'static [u64] {
+  // O_WRONLY (0o1), O_RDWR (0o2), O_CREAT (0o100), O_TRUNC (0o1000).
+  // Hard-coded here (rather than read from `libc::O_*` at runtime) because
+  // the seccomp filter is built once on the host and applied in the child;
+  // libc constants are `c_int` and pulling them into a `const fn` context
+  // adds no value over the well-known POSIX/Linux numeric values.
+  const O_WRONLY: u64 = 0o1;
+  const O_RDWR: u64 = 0o2;
+  const O_CREAT: u64 = 0o100;
+  const O_TRUNC: u64 = 0o1000;
+  &[O_WRONLY, O_RDWR, O_CREAT, O_TRUNC]
+}
+
+/// Register seccomp rules that deny `open`/`openat`/`creat`/`openat2` when
+/// they imply a write. Called from [`compile_filter`] under `!FsWrite`.
+///
+/// * `openat(dirfd, path, flags, ...)` → `flags` is argument index 2. One
+///   rule per bit in [`write_open_flag_bits`] (rules are ORed within the
+///   same syscall).
+/// * `open(path, flags, ...)` → `flags` is argument index 1. Only emitted
+///   on `x86_64`, since `aarch64` does not export `SYS_open` (it's been
+///   replaced by `openat` system-wide).
+/// * `creat(path, mode)` → always implies `O_WRONLY | O_CREAT | O_TRUNC`.
+///   Denied unconditionally (x86_64 only — same reason as `open`).
+/// * `openat2(dirfd, path, how, size)` → `how` is a pointer to
+///   `struct open_how`; seccomp cannot dereference. Denied unconditionally
+///   to avoid a bypass via the newer syscall.
+fn install_write_open_rules(
+  rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+) -> Result<(), seccompiler::Error> {
+  for &mask in write_open_flag_bits() {
+    let cond_openat = SeccompCondition::new(
+      2,
+      SeccompCmpArgLen::Dword,
+      SeccompCmpOp::MaskedEq(mask),
+      mask,
+    )?;
+    rules
+      .entry(libc::SYS_openat)
+      .or_default()
+      .push(SeccompRule::new(vec![cond_openat])?);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+      let cond_open = SeccompCondition::new(
+        1,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(mask),
+        mask,
+      )?;
+      rules
+        .entry(libc::SYS_open)
+        .or_default()
+        .push(SeccompRule::new(vec![cond_open])?);
+    }
+  }
+
+  // `openat2` flags live in a pointed-to struct; can't filter by arg, so
+  // deny the syscall outright under !FsWrite.
+  rules.insert(libc::SYS_openat2, vec![]);
+
+  // `creat` always writes; deny unconditionally on platforms that ship it.
+  #[cfg(target_arch = "x86_64")]
+  {
+    rules.insert(libc::SYS_creat, vec![]);
+  }
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -225,6 +308,34 @@ mod tests {
     let restrictive = compile_filter(&[], arch).unwrap();
     // The restrictive filter must be larger because it carries deny rules.
     assert!(restrictive.len() > permissive.len());
+  }
+
+  #[test]
+  fn write_open_rules_emit_per_flag_under_no_fs_write() {
+    // Build the rule map directly to assert openat carries one rule per
+    // write-relevant flag bit, plus the syscall numbers we deny outright.
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    install_write_open_rules(&mut rules).expect("rules compile under no-fs-write");
+
+    let openat = rules
+      .get(&libc::SYS_openat)
+      .expect("openat rules must be present");
+    assert_eq!(openat.len(), write_open_flag_bits().len());
+
+    assert!(
+      rules.get(&libc::SYS_openat2).is_some_and(|r| r.is_empty()),
+      "openat2 must be denied unconditionally (empty-vec marker)"
+    );
+
+    #[cfg(target_arch = "x86_64")]
+    {
+      let open = rules.get(&libc::SYS_open).expect("open rules on x86_64");
+      assert_eq!(open.len(), write_open_flag_bits().len());
+      assert!(
+        rules.get(&libc::SYS_creat).is_some_and(|r| r.is_empty()),
+        "creat must be denied unconditionally on x86_64"
+      );
+    }
   }
 
   #[test]
