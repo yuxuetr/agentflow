@@ -330,7 +330,14 @@ async fn run_harness_inner(
     inputs.broker.clone(),
   ));
   let sinks = SinkChain::new().push(server_sink.clone());
-  let seq_counter = Arc::new(AtomicU64::new(0));
+
+  // Q1.7.1: one shared `Arc<AtomicU64>` for both the hook layer and
+  // the runtime. Pre-fix they each owned an independent counter and
+  // mixed events would collide on the JSON-Lines sink's
+  // `(session_id, seq)` PK. The hook config and the runtime both
+  // accept this counter via builder, then increment it atomically
+  // each time they emit.
+  let seq_counter = Arc::new(AtomicU64::new(inputs.initial_seq));
 
   let approval_provider: Arc<dyn ApprovalProvider> = Arc::new(ServerApprovalProvider::new(
     executor.approval_registry.clone(),
@@ -354,7 +361,7 @@ async fn run_harness_inner(
   let mut runtime = HarnessRuntime::new(Box::new(agent))
     .with_event_sink(server_sink.clone())
     .with_context_providers(default_providers())
-    .with_initial_seq(inputs.initial_seq);
+    .with_seq_counter(seq_counter.clone());
 
   let options = HarnessRunOptions::new(
     inputs.user_input,

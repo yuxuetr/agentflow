@@ -153,7 +153,13 @@ pub struct HarnessRuntime {
   inner: Box<dyn AgentRuntime>,
   context_providers: Vec<Arc<dyn ContextProvider>>,
   sinks: SinkChain,
-  initial_seq: u64,
+  /// Q1.7.1: the runtime and the hook layer (via `HookConfig`) used to
+  /// have independent `seq` counters. Mixed runtime + hook events
+  /// could collide on the same `(session_id, seq)` PK, breaking the
+  /// "monotonic, never gap" promise of the Beta-frozen `HarnessEvent`
+  /// envelope. Now both paths share this single `Arc<AtomicU64>`.
+  /// Surface it to callers via [`Self::seq_counter`].
+  seq_counter: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl HarnessRuntime {
@@ -165,7 +171,7 @@ impl HarnessRuntime {
       inner,
       context_providers: Vec::new(),
       sinks: SinkChain::new(),
-      initial_seq: 0,
+      seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     }
   }
 
@@ -208,8 +214,29 @@ impl HarnessRuntime {
   /// event will use this value; subsequent events increment from
   /// there, so `final_event_seq` in the result still equals the last
   /// emitted event's `seq`.
-  pub fn with_initial_seq(mut self, initial_seq: u64) -> Self {
-    self.initial_seq = initial_seq;
+  pub fn with_initial_seq(self, initial_seq: u64) -> Self {
+    self
+      .seq_counter
+      .store(initial_seq, std::sync::atomic::Ordering::SeqCst);
+    self
+  }
+
+  /// Q1.7.1: shared seq counter handle. Pass this `Arc<AtomicU64>` to
+  /// [`HookConfig::with_seq_counter`](crate::HookConfig::with_seq_counter)
+  /// so the hook-layer `tool_call_requested` / `approval_*` events use
+  /// the same monotonic series as the runtime's `session_started` /
+  /// `step_started` / `stopped` events. Clones are cheap (Arc bump).
+  pub fn seq_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+    self.seq_counter.clone()
+  }
+
+  /// Q1.7.1: inject a pre-existing seq counter so the runtime and the
+  /// hook layer share the same atomic. Use this from `harness_live`
+  /// where the registry (and therefore the `HookConfig`) is built
+  /// before the agent + runtime that owns it — both ends accept the
+  /// same `Arc` to keep the series monotonic.
+  pub fn with_seq_counter(mut self, counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
+    self.seq_counter = counter;
     self
   }
 
@@ -256,7 +283,6 @@ impl HarnessRuntime {
       .await?;
     let persona = assemble_persona(options.persona_prefix.as_deref(), &items);
 
-    let mut seq = self.initial_seq;
     let context_token_estimate: usize = items.iter().map(|item| item.token_estimate).sum();
     let started_payload = SessionStartedPayload {
       workspace_root: ctx.workspace_root.to_string_lossy().into_owned(),
@@ -271,8 +297,14 @@ impl HarnessRuntime {
       context_item_count: items.len(),
       context_token_estimate,
     };
+    // Q1.7.1: take seq from the shared counter so any HookConfig wired
+    // with `with_seq_counter(runtime.seq_counter())` shares the same
+    // monotonic series.
+    let started_seq = self
+      .seq_counter
+      .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let started_event = HarnessEvent {
-      seq,
+      seq: started_seq,
       session_id: session_id.clone(),
       ts: Utc::now(),
       body: HarnessEventBody::SessionStarted(started_payload),
@@ -299,7 +331,7 @@ impl HarnessRuntime {
       .await
       .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?;
 
-    let translated = translate_inner_events(&inner_result, &session_id, &mut seq);
+    let translated = translate_inner_events(&inner_result, &session_id, &self.seq_counter);
     for event in &translated {
       self.sinks.dispatch(event).await?;
     }
@@ -307,9 +339,11 @@ impl HarnessRuntime {
     let stop_reason_clone = inner_result.stop_reason.clone();
     let answer_clone = inner_result.answer.clone();
     let stopped_payload = stopped_payload_from(&stop_reason_clone, answer_clone.as_deref());
-    seq += 1;
+    let stopped_seq = self
+      .seq_counter
+      .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let stopped_event = HarnessEvent {
-      seq,
+      seq: stopped_seq,
       session_id: session_id.clone(),
       ts: Utc::now(),
       body: HarnessEventBody::Stopped(stopped_payload),
@@ -321,7 +355,7 @@ impl HarnessRuntime {
       session_id,
       answer: inner_result.answer.clone(),
       stop_reason: stop_reason_clone,
-      final_event_seq: seq,
+      final_event_seq: stopped_seq,
       context_items_admitted: items.len(),
       context_items_dropped: dropped,
       inner: inner_result,
@@ -409,16 +443,20 @@ fn priority_str(priority: ContextPriority) -> &'static str {
 fn translate_inner_events(
   result: &AgentRunResult,
   session_id: &str,
-  seq: &mut u64,
+  seq_counter: &std::sync::atomic::AtomicU64,
 ) -> Vec<HarnessEvent> {
   let mut out = Vec::new();
+  // Q1.7.1: every event takes its seq from the shared
+  // `Arc<AtomicU64>`. `fetch_add` is monotonic across the runtime +
+  // hook-layer writers — no more `&mut u64` racing with the hook's
+  // own counter.
+  let next_seq = || seq_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
   // Step boundaries from the recorded steps give us deterministic
   // ordering for `step_started` events that doesn't depend on the
   // inner runtime's choice of when to fire `AgentEvent::StepStarted`.
   for step in &result.steps {
-    *seq += 1;
     out.push(HarnessEvent {
-      seq: *seq,
+      seq: next_seq(),
       session_id: session_id.to_owned(),
       ts: step.timestamp,
       body: HarnessEventBody::StepStarted(StepStartedPayload {
@@ -427,9 +465,8 @@ fn translate_inner_events(
       }),
     });
     if let Some(payload) = tool_call_requested_from_step(step) {
-      *seq += 1;
       out.push(HarnessEvent {
-        seq: *seq,
+        seq: next_seq(),
         session_id: session_id.to_owned(),
         ts: step.timestamp,
         body: HarnessEventBody::ToolCallRequested(payload),
@@ -447,9 +484,8 @@ fn translate_inner_events(
       ..
     } = event
     {
-      *seq += 1;
       out.push(HarnessEvent {
-        seq: *seq,
+        seq: next_seq(),
         session_id: session_id.to_owned(),
         ts: *timestamp,
         body: HarnessEventBody::ToolCallCompleted(ToolCallCompletedPayload {
@@ -874,5 +910,67 @@ mod tests {
     assert_eq!(events.first().unwrap().seq, 0);
     let final_seq = events.iter().map(|e| e.seq).max().unwrap();
     assert_eq!(final_seq, result.final_event_seq);
+  }
+
+  /// Q1.7.1 regression: when the runtime and an external writer share
+  /// the same `Arc<AtomicU64>` (the way `harness_live.rs` wires
+  /// `HookConfig` against `HarnessRuntime`), every emitted seq is
+  /// strictly monotonic across both writers — no duplicates, no gaps
+  /// at the runtime/external boundary.
+  #[tokio::test]
+  async fn shared_seq_counter_keeps_runtime_and_hook_emissions_monotonic() {
+    use crate::persistence::InMemoryEventSink;
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("done", captured.clone());
+    inner.extra_steps.push(AgentStep::new(
+      1,
+      AgentStepKind::ToolCall {
+        tool: "echo".into(),
+        params: json!({"text": "hi"}),
+      },
+    ));
+
+    let shared_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let sink = Arc::new(InMemoryEventSink::new());
+
+    // Simulate the hook layer claiming a seq number BEFORE the
+    // runtime's first emission — this is what `HookConfig` does
+    // when a tool call fires early.
+    let hook_seq = shared_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>)
+      .with_seq_counter(shared_counter.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let result = runtime
+      .run(HarnessRunOptions::new("call tools", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    let runtime_events = sink.snapshot().await;
+    let mut all_seqs: Vec<u64> = runtime_events.iter().map(|e| e.seq).collect();
+    all_seqs.push(hook_seq);
+    all_seqs.sort();
+
+    // No duplicates anywhere.
+    let mut deduped = all_seqs.clone();
+    deduped.dedup();
+    assert_eq!(deduped.len(), all_seqs.len(), "no duplicate seqs allowed");
+
+    // Hook seq (0) precedes every runtime seq.
+    assert_eq!(all_seqs[0], 0);
+    assert_eq!(
+      runtime_events.first().unwrap().seq,
+      1,
+      "runtime first event must come right after the hook seq"
+    );
+    // final_event_seq matches the highest emitted seq.
+    assert_eq!(
+      result.final_event_seq,
+      *all_seqs.last().unwrap(),
+      "final_event_seq must equal the last emitted seq"
+    );
   }
 }
