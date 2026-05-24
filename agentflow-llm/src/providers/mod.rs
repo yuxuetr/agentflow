@@ -32,9 +32,32 @@ pub(crate) fn build_http_client(
   }
 }
 
+/// Default connect timeout for LLM provider HTTP calls. Mirrors
+/// `LLMError`'s `From<reqwest::Error>` synthetic value so the timeout
+/// reported to callers actually matches what `reqwest` enforces
+/// (Q1.8.2 — pre-fix the builder had no timeout at all, yet
+/// `LLMError::from(reqwest::Error)` reported `timeout_ms: 30000`).
+pub(crate) const DEFAULT_HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// Default request-level timeout for LLM provider HTTP calls. Larger
+/// than the connect timeout because LLM responses (especially with
+/// generated content > 1 K tokens) routinely take 20–60 s on the
+/// wire. The Anthropic / OpenAI clients themselves enforce this at
+/// 600 s in their canonical SDKs.
+pub(crate) const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 600;
+
 pub(crate) fn default_http_client() -> Result<reqwest::Client> {
   build_http_client(|disable_proxy| {
-    let builder = reqwest::Client::builder();
+    let builder = reqwest::Client::builder()
+      // Q1.8.2: pin timeouts. Without these the client waits
+      // indefinitely on a dropped connection / hung-but-not-closed
+      // socket. Aligned with the timeout `LLMError::from` already
+      // reports.
+      .connect_timeout(std::time::Duration::from_secs(
+        DEFAULT_HTTP_CONNECT_TIMEOUT_SECS,
+      ))
+      .timeout(std::time::Duration::from_secs(
+        DEFAULT_HTTP_REQUEST_TIMEOUT_SECS,
+      ));
     if disable_proxy {
       builder.no_proxy()
     } else {

@@ -42,13 +42,25 @@ impl GoogleProvider {
     })
   }
 
-  fn build_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    // Q1.8.1: the API key used to live in the URL `?key=...` query
+    // string. Any `reqwest::Error::to_string()` carried that URL into
+    // `LLMError` messages, logs, and traces. Moving the key into a
+    // header (Google publicly documents `x-goog-api-key` as
+    // equivalent to the query-string form) keeps it out of the
+    // error surface.
+    headers.insert(
+      "x-goog-api-key",
+      HeaderValue::from_str(&self.api_key).map_err(|err| LLMError::ConfigurationError {
+        message: format!("Google API key contains non-ASCII bytes: {err}"),
+      })?,
+    );
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   fn build_request_body(&self, request: &ProviderRequest) -> Value {
@@ -133,10 +145,10 @@ impl GoogleProvider {
     } else {
       "generateContent"
     };
-    format!(
-      "{}/v1beta/models/{}:{}?key={}",
-      self.base_url, model, method, self.api_key
-    )
+    // Q1.8.1: no `?key=` here anymore — the API key now travels in
+    // the `x-goog-api-key` header so it can't be picked up by a
+    // `reqwest::Error::to_string()` URL leak.
+    format!("{}/v1beta/models/{}:{}", self.base_url, model, method)
   }
 }
 
@@ -317,7 +329,7 @@ impl LLMProvider for GoogleProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -400,7 +412,7 @@ impl LLMProvider for GoogleProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -419,12 +431,14 @@ impl LLMProvider for GoogleProvider {
 
   async fn validate_config(&self) -> Result<()> {
     // Test with a simple model list request
-    let url = format!("{}/v1beta/models?key={}", self.base_url, self.api_key);
+    // Q1.8.1: same treatment as `get_model_endpoint` — no `?key=` in
+    // the URL, the API key rides along in `x-goog-api-key`.
+    let url = format!("{}/v1beta/models", self.base_url);
 
     let response = self
       .client
       .get(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .send()
       .await?;
 
@@ -634,10 +648,36 @@ mod tests {
     let provider = GoogleProvider::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    let headers = scope(ctx.clone(), async { provider.build_headers() })
+      .await
+      .expect("headers must build under a well-formed ASCII API key");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),
+    );
+    // Q1.8.1: the API key now lives in `x-goog-api-key` instead of
+    // the URL query string.
+    assert_eq!(
+      headers.get("x-goog-api-key").and_then(|v| v.to_str().ok()),
+      Some("test-key"),
+    );
+  }
+
+  /// Q1.8.1 regression: the model endpoint URL must not contain
+  /// `key=`. Pre-fix any `reqwest::Error::to_string()` would carry
+  /// the URL (and therefore the API key) straight into `LLMError`
+  /// messages and tracing.
+  #[test]
+  fn google_model_endpoint_url_no_longer_carries_api_key() {
+    let provider = GoogleProvider::new("secret-key-do-not-leak", None).unwrap();
+    let url = provider.get_model_endpoint("gemini-1.5-pro", false);
+    assert!(
+      !url.contains("key="),
+      "endpoint URL still embeds the API key: {url}"
+    );
+    assert!(
+      !url.contains("secret-key-do-not-leak"),
+      "endpoint URL still leaks the API key value: {url}"
     );
   }
 
@@ -673,7 +713,10 @@ mod tests {
 
     let endpoint = provider.get_model_endpoint("gemini-1.5-pro", false);
     assert!(endpoint.contains("generateContent"));
-    assert!(endpoint.contains("test-key"));
+    // Q1.8.1: the API key is no longer in the URL — it lives in the
+    // `x-goog-api-key` header now (see
+    // `google_model_endpoint_url_no_longer_carries_api_key`).
+    assert!(!endpoint.contains("test-key"));
 
     let streaming_endpoint = provider.get_model_endpoint("gemini-1.5-pro", true);
     assert!(streaming_endpoint.contains("streamGenerateContent"));

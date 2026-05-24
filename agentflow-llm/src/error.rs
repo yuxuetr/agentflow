@@ -79,8 +79,12 @@ pub type Result<T> = std::result::Result<T, LLMError>;
 impl From<reqwest::Error> for LLMError {
   fn from(error: reqwest::Error) -> Self {
     if error.is_timeout() {
+      // Q1.8.2: align the reported timeout with what
+      // `providers::default_http_client` actually enforces. Pre-fix
+      // this said 30000 ms even though the builder had no timeout at
+      // all.
       LLMError::TimeoutError {
-        timeout_ms: 30000, // Default timeout
+        timeout_ms: crate::providers::DEFAULT_HTTP_REQUEST_TIMEOUT_SECS * 1000,
       }
     } else if let Some(status) = error.status() {
       let status_code = status.as_u16();
