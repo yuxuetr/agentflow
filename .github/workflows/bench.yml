@@ -45,10 +45,20 @@ jobs:
   bench-gate:
     name: criterion regression gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Cache cargo registry + target dir across runs. Without this the
+      # job rebuilds the whole workspace + 6 bench targets from scratch
+      # (agentflow-rag pulls heavy embedding/vector deps), which on
+      # 2026-05-23 pushed the wall clock to 33m and tripped the
+      # timeout. `key` is keyed on bench.yml + workspace Cargo.lock so
+      # the cache invalidates only when deps or the workflow change.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench-gate
+          cache-on-failure: true
 
       # Each bench is run separately so a panic / timeout in one
       # doesn't take the rest with it. Output goes under
