@@ -234,7 +234,7 @@ pub async fn stream_events(
     let page = state
       .repos
       .events
-      .list_after(run_id, after_seq, 200)
+      .list_after(tenant.as_str(), run_id, after_seq, 200)
       .await?;
     if page.is_empty() {
       break;
@@ -330,7 +330,7 @@ pub async fn list_events(
   let raw_events: Vec<StreamedEvent> = state
     .repos
     .events
-    .list_after(run_id, after_seq, 1_000)
+    .list_after(tenant.as_str(), run_id, after_seq, 1_000)
     .await?
     .into_iter()
     .map(StreamedEvent::from)

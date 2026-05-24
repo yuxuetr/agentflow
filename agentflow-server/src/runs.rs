@@ -722,7 +722,7 @@ async fn publish_cancellation_event(
   run_id: Uuid,
   tenant_id: &str,
 ) -> Result<(), ApiError> {
-  let seq = next_event_seq(repos, run_id).await?;
+  let seq = next_event_seq(repos, tenant_id, run_id).await?;
   publish_through(
     repos,
     broker,
@@ -741,8 +741,15 @@ async fn publish_cancellation_event(
   Ok(())
 }
 
-async fn next_event_seq(repos: &Repositories, run_id: Uuid) -> Result<i64, ApiError> {
-  let events = repos.events.list_after(run_id, -1, 10_000).await?;
+async fn next_event_seq(
+  repos: &Repositories,
+  tenant_id: &str,
+  run_id: Uuid,
+) -> Result<i64, ApiError> {
+  let events = repos
+    .events
+    .list_after(tenant_id, run_id, -1, 10_000)
+    .await?;
   Ok(
     events
       .iter()

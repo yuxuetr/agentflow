@@ -132,7 +132,7 @@ async fn step_and_event_repos_round_trip() {
 
   let events_after_zero = repos
     .events
-    .list_after(run_id, 0, 100)
+    .list_after("default", run_id, 0, 100)
     .await
     .expect("list events");
   // seq > 0 means we get seq 1 and 2 only.
@@ -316,7 +316,7 @@ async fn skill_install_repo_upsert_replaces_on_conflict() {
   updated.checksum = Some("def".into());
   repos.skill_installs.upsert(updated).await.unwrap();
 
-  let listed = repos.skill_installs.list().await.unwrap();
+  let listed = repos.skill_installs.list("default").await.unwrap();
   let rows_for_this_skill: Vec<&SkillInstall> =
     listed.iter().filter(|s| s.name == skill_name).collect();
   assert_eq!(
@@ -340,10 +340,69 @@ async fn skill_install_repo_upsert_replaces_on_conflict() {
     })
     .await
     .unwrap();
-  let listed = repos.skill_installs.list().await.unwrap();
+  let listed = repos.skill_installs.list("default").await.unwrap();
   let rows_for_this_skill: Vec<&SkillInstall> =
     listed.iter().filter(|s| s.name == skill_name).collect();
   assert_eq!(rows_for_this_skill.len(), 2);
+}
+
+/// Q1.5.1 regression: `list(tenant)` must only return rows for the
+/// requested tenant. Pre-fix `list()` was tenant-agnostic and leaked
+/// every tenant's installed skill set through one call.
+#[tokio::test]
+async fn skill_install_repo_list_filters_by_tenant() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping skill_install_repo_list_filters_by_tenant");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+
+  let alpha = format!("tenant-alpha-{}", Uuid::new_v4());
+  let beta = format!("tenant-beta-{}", Uuid::new_v4());
+
+  repos
+    .skill_installs
+    .upsert(SkillInstall {
+      name: format!("skill-alpha-{}", Uuid::new_v4()),
+      version: "1.0.0".into(),
+      source: "local".into(),
+      installed_at: Utc::now(),
+      checksum: None,
+      tenant_id: alpha.clone(),
+    })
+    .await
+    .unwrap();
+  repos
+    .skill_installs
+    .upsert(SkillInstall {
+      name: format!("skill-beta-{}", Uuid::new_v4()),
+      version: "1.0.0".into(),
+      source: "local".into(),
+      installed_at: Utc::now(),
+      checksum: None,
+      tenant_id: beta.clone(),
+    })
+    .await
+    .unwrap();
+
+  let alpha_rows = repos.skill_installs.list(&alpha).await.unwrap();
+  assert!(
+    alpha_rows.iter().all(|r| r.tenant_id == alpha),
+    "alpha listing leaked rows from another tenant"
+  );
+  assert!(!alpha_rows.is_empty(), "alpha should see its own row");
+
+  let beta_rows = repos.skill_installs.list(&beta).await.unwrap();
+  assert!(
+    beta_rows.iter().all(|r| r.tenant_id == beta),
+    "beta listing leaked rows from another tenant"
+  );
+
+  // Cross-tenant guard: alpha must not see beta's rows even if their
+  // names happen to share a prefix.
+  for row in &alpha_rows {
+    assert_ne!(row.tenant_id, beta);
+  }
 }
 
 #[tokio::test]
@@ -364,6 +423,7 @@ async fn mcp_session_repo_open_and_close_lifecycle() {
       ended_at: None,
       tool_calls: 0,
       metadata: Some(json!({"version": "0.1"})),
+      tenant_id: "default".into(),
     })
     .await
     .unwrap();
@@ -492,7 +552,7 @@ async fn harness_event_repo_append_list_max_seq() {
   );
   let events_after_zero = repos
     .harness_events
-    .list_after(session_id, 0, 100)
+    .list_after("tenant-harness-resume", session_id, 0, 100)
     .await
     .unwrap();
   assert_eq!(events_after_zero.len(), 2);
@@ -556,7 +616,7 @@ async fn harness_session_reset_for_resume_wipes_events() {
   assert!(after.final_answer.is_none());
   let events = repos
     .harness_events
-    .list_after(session_id, -1, 100)
+    .list_after("tenant-harness-resume", session_id, -1, 100)
     .await
     .unwrap();
   assert!(
@@ -622,7 +682,7 @@ async fn harness_session_reset_for_append_resume_keeps_events() {
   // Append-resume preserves prior events for chronology.
   let events = repos
     .harness_events
-    .list_after(session_id, -1, 100)
+    .list_after("tenant-harness-resume", session_id, -1, 100)
     .await
     .unwrap();
   assert_eq!(events.len(), 1, "append-resume must keep prior events");

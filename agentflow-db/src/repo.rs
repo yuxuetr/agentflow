@@ -58,11 +58,17 @@ pub trait StepRepo: Send + Sync {
 #[async_trait]
 pub trait EventRepo: Send + Sync {
   async fn append(&self, event: NewEvent) -> Result<Event, DbError>;
-  /// Return events for `run_id` with `seq > after_seq`, ordered ascending.
+  /// Return events for `(tenant_id, run_id)` with `seq > after_seq`,
+  /// ordered ascending.
   ///
-  /// SSE subscribers pass their last-seen `seq` to resume after a reconnect.
+  /// SSE subscribers pass their last-seen `seq` to resume after a
+  /// reconnect. Q1.5.3 added the `tenant_id` parameter so the
+  /// composite `events_tenant_run_idx` index is reachable and the
+  /// db layer provides defense-in-depth even if a server route
+  /// forgets to filter by tenant first.
   async fn list_after(
     &self,
+    tenant_id: &str,
     run_id: Uuid,
     after_seq: i64,
     limit: i64,
@@ -78,7 +84,10 @@ pub trait ArtifactRepo: Send + Sync {
 #[async_trait]
 pub trait SkillInstallRepo: Send + Sync {
   async fn upsert(&self, install: SkillInstall) -> Result<(), DbError>;
-  async fn list(&self) -> Result<Vec<SkillInstall>, DbError>;
+  /// Q1.5.1: this used to be tenant-agnostic, leaking every tenant's
+  /// installed-skill catalog through one call. Callers must now pass
+  /// the tenant they own.
+  async fn list(&self, tenant_id: &str) -> Result<Vec<SkillInstall>, DbError>;
 }
 
 #[async_trait]
@@ -138,11 +147,17 @@ pub trait HarnessSessionRepo: Send + Sync {
 #[async_trait]
 pub trait HarnessEventRepo: Send + Sync {
   async fn append(&self, event: NewHarnessSessionEvent) -> Result<HarnessSessionEvent, DbError>;
-  /// Return events for `session_id` with `seq > after_seq`, ordered ascending.
+  /// Return events for `(tenant_id, session_id)` with `seq > after_seq`,
+  /// ordered ascending.
   ///
-  /// SSE subscribers pass their last-seen `seq` to resume after a reconnect.
+  /// SSE subscribers pass their last-seen `seq` to resume after a
+  /// reconnect. Q1.5.3 added the `tenant_id` parameter: because
+  /// `harness_session_events` itself carries no `tenant_id` column,
+  /// the SQL joins back to `harness_sessions` and filters there.
+  /// Defense-in-depth on top of the existing route-layer check.
   async fn list_after(
     &self,
+    tenant_id: &str,
     session_id: Uuid,
     after_seq: i64,
     limit: i64,
@@ -344,6 +359,7 @@ impl EventRepo for PgEventRepo {
 
   async fn list_after(
     &self,
+    tenant_id: &str,
     run_id: Uuid,
     after_seq: i64,
     limit: i64,
@@ -351,10 +367,11 @@ impl EventRepo for PgEventRepo {
     let rows = sqlx::query_as::<_, Event>(
       r#"SELECT run_id, seq, kind, payload, ts, tenant_id
          FROM events
-         WHERE run_id = $1 AND seq > $2
+         WHERE tenant_id = $1 AND run_id = $2 AND seq > $3
          ORDER BY seq ASC
-         LIMIT $3"#,
+         LIMIT $4"#,
     )
+    .bind(tenant_id)
     .bind(run_id)
     .bind(after_seq)
     .bind(limit)
@@ -431,11 +448,14 @@ impl SkillInstallRepo for PgSkillInstallRepo {
     Ok(())
   }
 
-  async fn list(&self) -> Result<Vec<SkillInstall>, DbError> {
+  async fn list(&self, tenant_id: &str) -> Result<Vec<SkillInstall>, DbError> {
     let rows = sqlx::query_as::<_, SkillInstall>(
       r#"SELECT name, version, source, installed_at, checksum, tenant_id
-         FROM skill_installs ORDER BY name ASC, version ASC"#,
+         FROM skill_installs
+         WHERE tenant_id = $1
+         ORDER BY name ASC, version ASC"#,
     )
+    .bind(tenant_id)
     .fetch_all(&self.read_pool)
     .await?;
     Ok(rows)
@@ -452,8 +472,8 @@ pub struct PgMcpSessionRepo {
 impl McpSessionRepo for PgMcpSessionRepo {
   async fn open(&self, session: McpSession) -> Result<(), DbError> {
     sqlx::query(
-      r#"INSERT INTO mcp_sessions (id, server, started_at, ended_at, tool_calls, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6)"#,
+      r#"INSERT INTO mcp_sessions (id, server, started_at, ended_at, tool_calls, metadata, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
     .bind(session.id)
     .bind(&session.server)
@@ -461,6 +481,7 @@ impl McpSessionRepo for PgMcpSessionRepo {
     .bind(session.ended_at)
     .bind(session.tool_calls)
     .bind(session.metadata.as_ref())
+    .bind(&session.tenant_id)
     .execute(&self.pool)
     .await?;
     Ok(())
@@ -665,17 +686,20 @@ impl HarnessEventRepo for PgHarnessEventRepo {
 
   async fn list_after(
     &self,
+    tenant_id: &str,
     session_id: Uuid,
     after_seq: i64,
     limit: i64,
   ) -> Result<Vec<HarnessSessionEvent>, DbError> {
     let rows = sqlx::query_as::<_, HarnessSessionEvent>(
-      r#"SELECT session_id, seq, kind, payload, ts
-         FROM harness_session_events
-         WHERE session_id = $1 AND seq > $2
-         ORDER BY seq ASC
-         LIMIT $3"#,
+      r#"SELECT e.session_id, e.seq, e.kind, e.payload, e.ts
+         FROM harness_session_events e
+         JOIN harness_sessions s ON s.id = e.session_id
+         WHERE s.tenant_id = $1 AND e.session_id = $2 AND e.seq > $3
+         ORDER BY e.seq ASC
+         LIMIT $4"#,
     )
+    .bind(tenant_id)
     .bind(session_id)
     .bind(after_seq)
     .bind(limit)

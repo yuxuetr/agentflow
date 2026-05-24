@@ -124,7 +124,7 @@ async fn submit_run_executes_fixed_dag_and_persists_workflow_events() {
       let events = state
         .repos
         .events
-        .list_after(run_id, -1, 100)
+        .list_after("default", run_id, -1, 100)
         .await
         .unwrap();
       assert!(events.iter().any(|event| event.kind == "workflow.started"));
@@ -428,7 +428,12 @@ async fn cancel_running_run_marks_cancelled_and_emits_event() {
   assert_eq!(body["status"], "cancelled");
   assert_eq!(body["cancelled"], true);
 
-  let events = state.repos.events.list_after(id, -1, 100).await.unwrap();
+  let events = state
+    .repos
+    .events
+    .list_after("default", id, -1, 100)
+    .await
+    .unwrap();
   assert!(events.iter().any(|event| event.kind == "run.cancelled"));
 }
 

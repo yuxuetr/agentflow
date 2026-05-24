@@ -192,6 +192,10 @@ pub struct McpSession {
   pub ended_at: Option<DateTime<Utc>>,
   pub tool_calls: i32,
   pub metadata: Option<serde_json::Value>,
+  /// Tenant the MCP session was opened under. Defaults to `"default"`
+  /// for backward-compat (Q1.5.2 added the column in migration 0006).
+  #[serde(default = "default_tenant_id")]
+  pub tenant_id: String,
 }
 
 /// Lifecycle states a `harness_sessions` row can hold.

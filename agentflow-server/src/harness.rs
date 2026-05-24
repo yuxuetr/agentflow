@@ -608,7 +608,7 @@ pub async fn cancel_harness_session(
       Some("cancel requested"),
     )
     .await?;
-  publish_cancel_event(&state.repos, &state.harness_broker, id).await?;
+  publish_cancel_event(&state.repos, &state.harness_broker, tenant.as_str(), id).await?;
   state
     .harness_broker
     .finalise_with_grace(id, broker_finalize_grace());
@@ -814,9 +814,10 @@ pub async fn resume_harness_session(
 async fn publish_cancel_event(
   repos: &Repositories,
   broker: &HarnessEventBroker,
+  tenant_id: &str,
   session_id: Uuid,
 ) -> Result<(), ApiError> {
-  let seq = next_event_seq(repos, session_id).await?;
+  let seq = next_event_seq(repos, tenant_id, session_id).await?;
   publish_through(
     repos,
     broker,
@@ -834,10 +835,14 @@ async fn publish_cancel_event(
   Ok(())
 }
 
-async fn next_event_seq(repos: &Repositories, session_id: Uuid) -> Result<i64, ApiError> {
+async fn next_event_seq(
+  repos: &Repositories,
+  tenant_id: &str,
+  session_id: Uuid,
+) -> Result<i64, ApiError> {
   let events = repos
     .harness_events
-    .list_after(session_id, -1, 10_000)
+    .list_after(tenant_id, session_id, -1, 10_000)
     .await?;
   Ok(
     events
@@ -885,7 +890,7 @@ pub async fn stream_harness_events(
     let page = state
       .repos
       .harness_events
-      .list_after(session_id, after_seq, 200)
+      .list_after(tenant.as_str(), session_id, after_seq, 200)
       .await?;
     if page.is_empty() {
       break;
@@ -944,7 +949,7 @@ pub async fn list_harness_events(
   let events = state
     .repos
     .harness_events
-    .list_after(session_id, after_seq, 1_000)
+    .list_after(tenant.as_str(), session_id, after_seq, 1_000)
     .await?
     .into_iter()
     .map(StreamedHarnessEvent::from)
