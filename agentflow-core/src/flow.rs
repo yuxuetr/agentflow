@@ -1361,12 +1361,23 @@ impl Flow {
   }
 
   fn topological_sort(&self) -> Result<Vec<String>, AgentFlowError> {
-    let mut in_degree: HashMap<String, usize> =
+    // Q2.4.1: use BTreeMap so iteration order is deterministic by
+    // node id. Pre-fix the in_degree and adjacency maps were
+    // HashMaps, so the order in which roots (in_degree == 0) entered
+    // the queue depended on HashMap's hashing/resizing state. That
+    // made trace replay non-reproducible across runs even when the
+    // workflow graph was identical.
+    let mut in_degree: std::collections::BTreeMap<String, usize> =
       self.nodes.keys().cloned().map(|id| (id, 0)).collect();
-    let mut adj: HashMap<String, Vec<String>> =
+    let mut adj: std::collections::BTreeMap<String, Vec<String>> =
       self.nodes.keys().cloned().map(|id| (id, vec![])).collect();
 
-    for (id, node) in &self.nodes {
+    // Iterate the nodes deterministically too — sorted by node id —
+    // so the adjacency-list construction is reproducible.
+    let mut node_ids: Vec<&String> = self.nodes.keys().collect();
+    node_ids.sort();
+    for id in node_ids {
+      let node = &self.nodes[id];
       for dep_id in &node.dependencies {
         if !self.nodes.contains_key(dep_id) {
           return Err(AgentFlowError::FlowDefinitionError {
@@ -1378,6 +1389,8 @@ impl Flow {
       }
     }
 
+    // BTreeMap iteration is already sorted, so the initial queue
+    // contents are deterministic.
     let mut queue: VecDeque<String> = in_degree
       .iter()
       .filter(|&(_, &d)| d == 0)
@@ -1388,7 +1401,10 @@ impl Flow {
     while let Some(u) = queue.pop_front() {
       sorted_order.push(u.clone());
       if let Some(neighbors) = adj.get(&u) {
-        for v in neighbors {
+        // Sort neighbors to keep enqueue order deterministic.
+        let mut sorted_neighbors: Vec<&String> = neighbors.iter().collect();
+        sorted_neighbors.sort();
+        for v in sorted_neighbors {
           in_degree.entry(v.clone()).and_modify(|d| *d -= 1);
           if *in_degree.get(v).unwrap_or(&1) == 0 {
             queue.push_back(v.clone());
@@ -3170,5 +3186,61 @@ mod tests {
     let final_state = Flow::new(vec![while_node]).run().await.unwrap();
     let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
     assert_eq!(while_result.get("count"), Some(&FlowValue::Json(json!(3))));
+  }
+
+  /// Q2.4.1 regression: `topological_sort` returns the same node
+  /// order across many invocations on the same graph. Pre-fix the
+  /// HashMap-driven queue construction made the order depend on the
+  /// HashMap's hashing/resizing state, breaking trace replay.
+  #[test]
+  fn topological_sort_is_deterministic_across_runs() {
+    use crate::async_node::AsyncNodeInputs;
+    use crate::async_node::AsyncNodeResult;
+    use async_trait::async_trait;
+
+    struct Stub;
+    #[async_trait]
+    impl AsyncNode for Stub {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::new())
+      }
+    }
+
+    fn graph_node(id: &str, deps: Vec<&str>) -> GraphNode {
+      GraphNode {
+        id: id.to_string(),
+        node_type: NodeType::Standard(Arc::new(Stub)),
+        dependencies: deps.into_iter().map(String::from).collect(),
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      }
+    }
+
+    // Diamond: a → b, a → c, b → d, c → d. b and c have equal
+    // in-degree after a is consumed; the order they enter the queue
+    // must be deterministic (alphabetical by id under our BTreeMap
+    // fix).
+    let make_graph = || -> Vec<GraphNode> {
+      vec![
+        graph_node("d", vec!["b", "c"]),
+        graph_node("b", vec!["a"]),
+        graph_node("c", vec!["a"]),
+        graph_node("a", vec![]),
+      ]
+    };
+
+    let mut seen_orders: std::collections::HashSet<Vec<String>> = std::collections::HashSet::new();
+    for _ in 0..50 {
+      let flow = Flow::new(make_graph());
+      let order = flow.topological_sort().unwrap();
+      seen_orders.insert(order);
+    }
+    assert_eq!(
+      seen_orders.len(),
+      1,
+      "topological_sort must be deterministic; observed {} distinct orders",
+      seen_orders.len()
+    );
   }
 }

@@ -223,15 +223,22 @@ where
   }
 }
 
-/// Execute a future with timeout and error context
+/// Execute a future with timeout and error context.
 ///
-/// Adds context information (node_id, workflow_id) to timeout errors.
+/// Q2.4.5: pre-fix the `operation`, `node_id`, and `workflow_id`
+/// parameters were prefixed with `_` and entirely discarded — the
+/// only thing the function did with them was satisfy the type
+/// checker. Now we emit them via `tracing::warn!` on timeout so the
+/// operator-facing log trail explains *which* operation timed out,
+/// in *which* node, in *which* workflow. The returned
+/// `TimeoutExceeded` error keeps its existing shape so callers that
+/// pattern-match the variant still compile.
 pub async fn with_timeout_context<F, T>(
   future: F,
   duration: Duration,
-  _operation: &str,
-  _node_id: Option<&str>,
-  _workflow_id: Option<&str>,
+  operation: &str,
+  node_id: Option<&str>,
+  workflow_id: Option<&str>,
 ) -> Result<T>
 where
   F: Future<Output = Result<T>>,
@@ -239,12 +246,26 @@ where
   match timeout(duration, future).await {
     Ok(result) => result,
     Err(_) => {
-      let error = AgentFlowError::TimeoutExceeded {
+      #[cfg(feature = "observability")]
+      tracing::warn!(
+        target = "agentflow_core::timeout",
+        operation,
+        node_id,
+        workflow_id,
+        duration_ms = duration.as_millis() as u64,
+        "operation timed out"
+      );
+      // Without `observability` we still need to "use" the names so
+      // they're not silently `_`-prefixed dead params; eprintln keeps
+      // the cost essentially zero in production builds that don't
+      // enable observability but still preserves the contract.
+      #[cfg(not(feature = "observability"))]
+      {
+        let _ = (operation, node_id, workflow_id);
+      }
+      Err(AgentFlowError::TimeoutExceeded {
         duration_ms: duration.as_millis() as u64,
-      };
-
-      // Add context if possible (would need ErrorContext support in AgentFlowError)
-      Err(error)
+      })
     }
   }
 }

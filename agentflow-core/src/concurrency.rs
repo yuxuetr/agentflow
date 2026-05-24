@@ -352,26 +352,33 @@ impl Drop for ScopedPermit {
     let scope = self.scope.clone();
 
     if let Some(stats) = stats {
-      // Update stats when permit is released
-      // We spawn a task to avoid blocking the drop
-      tokio::spawn(async move {
-        let mut stats = stats.write().await;
-        match scope {
-          PermitScope::Global => {
-            stats.current_global_active = stats.current_global_active.saturating_sub(1);
-          }
-          PermitScope::Workflow(workflow_id) => {
-            if let Some(count) = stats.current_workflow_active.get_mut(&workflow_id) {
-              *count = count.saturating_sub(1);
+      // Q2.4.6: pre-fix this called `tokio::spawn` unconditionally,
+      // which panics with "there is no reactor running" when the
+      // permit is dropped outside a tokio runtime (e.g. during a
+      // sync drop from a `Drop` chain in tests or after the runtime
+      // has been shut down). Probe for a runtime handle first;
+      // if missing, skip the stats update — the permit count is
+      // observability, not correctness.
+      if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(async move {
+          let mut stats = stats.write().await;
+          match scope {
+            PermitScope::Global => {
+              stats.current_global_active = stats.current_global_active.saturating_sub(1);
+            }
+            PermitScope::Workflow(workflow_id) => {
+              if let Some(count) = stats.current_workflow_active.get_mut(&workflow_id) {
+                *count = count.saturating_sub(1);
+              }
+            }
+            PermitScope::NodeType(node_type) => {
+              if let Some(count) = stats.current_node_type_active.get_mut(&node_type) {
+                *count = count.saturating_sub(1);
+              }
             }
           }
-          PermitScope::NodeType(node_type) => {
-            if let Some(count) = stats.current_node_type_active.get_mut(&node_type) {
-              *count = count.saturating_sub(1);
-            }
-          }
-        }
-      });
+        });
+      }
     }
   }
 }

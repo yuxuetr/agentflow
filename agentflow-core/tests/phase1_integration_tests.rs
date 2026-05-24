@@ -5,7 +5,7 @@
 use agentflow_core::{
   checkpoint::{CheckpointConfig, CheckpointManager},
   concurrency::{ConcurrencyConfig, ConcurrencyLimiter},
-  error::{AgentFlowError, ErrorCategory, ErrorContext},
+  error::{AgentFlowError, ErrorCategory, InlineErrorContext},
   resource_limits::ResourceLimits,
   resource_manager::{ResourceManager, ResourceManagerConfig},
   retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy},
@@ -23,7 +23,7 @@ use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_error_context_propagation() {
-  let context = ErrorContext::new()
+  let context = InlineErrorContext::new()
     .with_node_id("node_1")
     .with_workflow_id("workflow_123")
     .with_metadata("attempt", "2")
@@ -152,7 +152,7 @@ async fn test_retry_exhaustion() {
 
   assert!(result.is_err());
   // With max_attempts=2, expect either 2 or 3 actual attempts (depends on how retry counting works)
-  if let Err(AgentFlowError::RetryExhausted { attempts }) = result {
+  if let Err(AgentFlowError::RetryExhausted { attempts, .. }) = result {
     assert!(
       attempts == 2 || attempts == 3,
       "Expected 2 or 3 attempts, got {}",

@@ -73,6 +73,7 @@ where
 
           return Err(AgentFlowError::RetryExhausted {
             attempts: context.attempt + 1,
+            last_error: Box::new(error),
           });
         }
 
@@ -159,6 +160,7 @@ where
           let final_error = if retry_ctx.attempt > 0 {
             AgentFlowError::RetryExhausted {
               attempts: retry_ctx.attempt + 1,
+              last_error: Box::new(error),
             }
           } else {
             error
@@ -257,9 +259,20 @@ mod tests {
     .await;
 
     assert!(result.is_err());
-    if let Err(AgentFlowError::RetryExhausted { attempts }) = result {
+    if let Err(AgentFlowError::RetryExhausted {
+      attempts,
+      last_error,
+    }) = result
+    {
       // max_attempts=2 means we try initially + 2 retries = 3 total
       assert_eq!(attempts, 3);
+      // Q2.4.3: the last error must carry the underlying root cause.
+      match last_error.as_ref() {
+        AgentFlowError::NodeExecutionFailed { message } => {
+          assert_eq!(message, "Always fails");
+        }
+        other => panic!("expected NodeExecutionFailed last_error, got {other:?}"),
+      }
     } else {
       panic!("Expected RetryExhausted error");
     }

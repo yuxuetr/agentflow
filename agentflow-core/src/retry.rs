@@ -201,8 +201,15 @@ impl RetryStrategy {
         let mut delay = delay.min(*max_delay_ms as f64) as u64;
 
         if *jitter {
-          // Add ±25% jitter
-          let jitter_range = delay / 4;
+          // Add ±25% jitter.
+          //
+          // Q2.4.2: pre-fix this divided `delay / 4` and then took
+          // `rand::random::<u64>() % (jitter_range * 2)`. When the
+          // computed `delay` was 0..3 ms (entirely plausible for the
+          // first attempt), `jitter_range` was 0 and the modulo
+          // operation panicked. `.max(1)` makes the modulo safe and
+          // keeps the offset effectively 0 for tiny delays.
+          let jitter_range = (delay / 4).max(1);
           let jitter_offset =
             (rand::random::<u64>() % (jitter_range * 2)).saturating_sub(jitter_range);
           delay = delay.saturating_add(jitter_offset);
@@ -419,6 +426,28 @@ mod tests {
     assert_eq!(strategy.calculate_delay(0), Duration::from_millis(100));
     assert_eq!(strategy.calculate_delay(1), Duration::from_millis(150));
     assert_eq!(strategy.calculate_delay(2), Duration::from_millis(200));
+  }
+
+  /// Q2.4.2 regression: jitter must not panic on tiny delays.
+  /// Pre-fix `rand::random::<u64>() % (jitter_range * 2)` panicked
+  /// when `jitter_range` was 0 (i.e. when computed delay was 0..3
+  /// ms). Property-style sweep over the dangerous zone confirms
+  /// every call returns a finite Duration.
+  #[test]
+  fn exponential_backoff_with_jitter_does_not_panic_on_tiny_delays() {
+    let strategy = RetryStrategy::ExponentialBackoff {
+      initial_delay_ms: 0,
+      max_delay_ms: 100,
+      multiplier: 2.0,
+      jitter: true,
+    };
+    // The pre-fix bug fired specifically at delay = 0..3 ms because
+    // `delay / 4` rounded to zero. We exercise the boundary plus a
+    // handful of attempts so the multiplier exponentiation still
+    // lands inside the danger zone.
+    for attempt in 0..32 {
+      let _ = strategy.calculate_delay(attempt);
+    }
   }
 
   #[test]

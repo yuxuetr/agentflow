@@ -131,7 +131,7 @@ async fn example_selective_retry() -> Result<(), AgentFlowError> {
   })
   .await;
 
-  if let Err(AgentFlowError::RetryExhausted { attempts }) = result {
+  if let Err(AgentFlowError::RetryExhausted { attempts, .. }) = result {
     println!(
       "  ✓ ConfigurationError not retried (attempts: {})",
       attempts

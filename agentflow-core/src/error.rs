@@ -24,7 +24,7 @@ pub enum ErrorCategory {
 
 /// Error context for better debugging and observability
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorContext {
+pub struct InlineErrorContext {
   /// Node ID where error occurred (if applicable)
   pub node_id: Option<String>,
   /// Workflow ID where error occurred (if applicable)
@@ -38,7 +38,7 @@ pub struct ErrorContext {
   pub cause: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
-impl Clone for ErrorContext {
+impl Clone for InlineErrorContext {
   fn clone(&self) -> Self {
     Self {
       node_id: self.node_id.clone(),
@@ -50,7 +50,7 @@ impl Clone for ErrorContext {
   }
 }
 
-impl ErrorContext {
+impl InlineErrorContext {
   /// Create new error context
   pub fn new() -> Self {
     Self {
@@ -87,13 +87,13 @@ impl ErrorContext {
   }
 }
 
-impl Default for ErrorContext {
+impl Default for InlineErrorContext {
   fn default() -> Self {
     Self::new()
   }
 }
 
-impl fmt::Display for ErrorContext {
+impl fmt::Display for InlineErrorContext {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "[{}]", self.timestamp)?;
     if let Some(ref wf_id) = self.workflow_id {
@@ -173,8 +173,20 @@ pub enum AgentFlowError {
   #[error("Timeout exceeded after {duration_ms}ms")]
   TimeoutExceeded { duration_ms: u64 },
 
-  #[error("Retry attempts exhausted after {attempts} attempts")]
-  RetryExhausted { attempts: u32 },
+  /// Retry policy gave up after `attempts` failures.
+  ///
+  /// Q2.4.3: the variant now carries `last_error` so callers can
+  /// downcast / branch on the underlying cause (network, rate
+  /// limit, auth, etc.). Pre-fix every error funneled into a bare
+  /// `RetryExhausted { attempts }` and the original error was
+  /// thrown away by the executor.
+  #[error("Retry attempts exhausted after {attempts} attempts: {last_error}")]
+  RetryExhausted {
+    attempts: u32,
+    /// The error that the final attempt produced. `Box` keeps the
+    /// enum small even though `AgentFlowError` is moderately sized.
+    last_error: Box<AgentFlowError>,
+  },
 
   // ===== Fault Tolerance Errors =====
   #[error("Circuit breaker open for node: {node_id}")]
@@ -278,7 +290,7 @@ impl AgentFlowError {
   }
 
   /// Create error with context
-  pub fn with_context(self, context: ErrorContext) -> ContextualError {
+  pub fn with_context(self, context: InlineErrorContext) -> ContextualError {
     ContextualError {
       error: self,
       context,
@@ -290,7 +302,7 @@ impl AgentFlowError {
 #[derive(Debug)]
 pub struct ContextualError {
   pub error: AgentFlowError,
-  pub context: ErrorContext,
+  pub context: InlineErrorContext,
 }
 
 impl fmt::Display for ContextualError {
@@ -362,11 +374,18 @@ mod tests {
 
   #[test]
   fn test_retry_exhausted_error() {
-    let error = AgentFlowError::RetryExhausted { attempts: 3 };
-    assert_eq!(
-      error.to_string(),
-      "Retry attempts exhausted after 3 attempts"
-    );
+    // Q2.4.3: the variant carries the underlying cause so callers
+    // can downcast / branch on the actual root error.
+    let inner = AgentFlowError::NodeExecutionFailed {
+      message: "connection refused".into(),
+    };
+    let error = AgentFlowError::RetryExhausted {
+      attempts: 3,
+      last_error: Box::new(inner),
+    };
+    let rendered = error.to_string();
+    assert!(rendered.contains("Retry attempts exhausted after 3 attempts"));
+    assert!(rendered.contains("connection refused"));
   }
 
   #[test]
@@ -427,7 +446,7 @@ mod tests {
 
   #[test]
   fn test_error_context() {
-    let context = ErrorContext::new()
+    let context = InlineErrorContext::new()
       .with_node_id("test_node")
       .with_workflow_id("test_workflow")
       .with_metadata("key", "value");
@@ -442,7 +461,7 @@ mod tests {
     let error = AgentFlowError::NodeExecutionFailed {
       message: "test failure".into(),
     };
-    let context = ErrorContext::new().with_node_id("node1");
+    let context = InlineErrorContext::new().with_node_id("node1");
     let contextual = error.with_context(context);
 
     let error_str = contextual.to_string();
@@ -452,7 +471,7 @@ mod tests {
 
   #[test]
   fn test_error_context_display() {
-    let context = ErrorContext::new()
+    let context = InlineErrorContext::new()
       .with_node_id("test_node")
       .with_workflow_id("test_wf")
       .with_metadata("attempt", "3");
