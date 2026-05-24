@@ -627,8 +627,16 @@ enum AudioCommands {
     model: Option<String>,
     #[arg(short, long)]
     language: Option<String>,
+    /// Q2.7.1: free-text hint forwarded to the provider as
+    /// `AsrRequest.prompt`. Pre-fix this value was silently piped
+    /// into the handler's positional `output` slot and the user's
+    /// hint text became a file path that the CLI happily wrote to.
     #[arg(short, long)]
     prompt: Option<String>,
+    /// Optional file to write the transcription to. Use `-o /tmp/x.txt`
+    /// to persist the result; omit to print to stdout only.
+    #[arg(short = 'o', long = "output")]
+    output: Option<String>,
     #[arg(long, default_value = "text")]
     format: String,
   },
@@ -1647,8 +1655,9 @@ async fn main() {
         file_path,
         language,
         prompt,
+        output,
         format,
-      } => audio::asr::execute(file_path, model, format, language, prompt).await,
+      } => audio::asr::execute(file_path, model, format, language, prompt, output).await,
       AudioCommands::Clone {
         model,
         text,

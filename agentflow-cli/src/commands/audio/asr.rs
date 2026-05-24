@@ -7,6 +7,11 @@ pub async fn execute(
   model: Option<String>,
   format: String,
   language: Option<String>,
+  // Q2.7.1: `prompt` was previously elided here entirely — the
+  // value the user passed on the command line vanished. Now it
+  // travels into `AsrRequest.prompt` so the provider gets the
+  // operator's hint.
+  prompt: Option<String>,
   output: Option<String>,
 ) -> Result<()> {
   let model = model.unwrap_or_else(|| "step-asr".to_string());
@@ -19,6 +24,9 @@ pub async fn execute(
   println!("Format: {}", format);
   if let Some(lang) = &language {
     println!("Language: {}", lang);
+  }
+  if let Some(p) = &prompt {
+    println!("Prompt: {}", p);
   }
   if let Some(output) = &output {
     println!("Output: {}", output);
@@ -53,7 +61,7 @@ pub async fn execute(
     filename,
     language: language.clone(),
     temperature: None,
-    prompt: None,
+    prompt: prompt.clone(),
   };
 
   let start_time = std::time::Instant::now();
