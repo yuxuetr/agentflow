@@ -17,14 +17,14 @@
 //! temporarily unreachable.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use agentflow_rag::embeddings::EmbeddingProvider;
 use async_trait::async_trait;
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 
+use crate::sqlite_pool;
 use crate::{MemoryError, MemoryStore, Message, Role};
 
 // ── Public struct ─────────────────────────────────────────────────────────────
@@ -45,28 +45,14 @@ pub struct SemanticMemory {
 
 impl SemanticMemory {
   /// Open (or create) a persistent SQLite database at `path`.
+  ///
+  /// Q2.1.1/Q2.1.2: pool via [`sqlite_pool::build_pool`].
   pub async fn open<P: AsRef<Path>>(
     path: P,
     embedder: Arc<dyn EmbeddingProvider>,
     window_tokens: u32,
   ) -> Result<Self, MemoryError> {
-    let url = format!(
-      "sqlite://{}",
-      path
-        .as_ref()
-        .to_str()
-        .ok_or_else(|| MemoryError::StorageError("Invalid UTF-8 path".to_string()))?
-    );
-    let options = SqliteConnectOptions::from_str(&url)
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?
-      .create_if_missing(true);
-
-    let pool = SqlitePoolOptions::new()
-      .max_connections(5)
-      .connect_with(options)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_pool(path).await?;
     let store = Self {
       pool,
       embedder,
@@ -81,12 +67,7 @@ impl SemanticMemory {
     embedder: Arc<dyn EmbeddingProvider>,
     window_tokens: u32,
   ) -> Result<Self, MemoryError> {
-    let pool = SqlitePoolOptions::new()
-      .max_connections(1)
-      .connect("sqlite::memory:")
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_in_memory_pool().await?;
     let store = Self {
       pool,
       embedder,

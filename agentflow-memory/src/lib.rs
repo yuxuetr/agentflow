@@ -25,6 +25,7 @@ pub mod preference_encrypted;
 pub mod semantic;
 pub mod session;
 pub mod sqlite;
+mod sqlite_pool;
 pub mod store;
 pub mod types;
 

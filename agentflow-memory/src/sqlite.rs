@@ -2,9 +2,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
-use std::str::FromStr;
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 
+use crate::sqlite_pool;
 use crate::{MemoryError, MemoryStore, Message, Role};
 
 /// Persistent SQLite-backed memory store for long-term conversation history.
@@ -16,24 +16,13 @@ pub struct SqliteMemory {
 
 impl SqliteMemory {
   /// Open (or create) a SQLite database file at `path`.
+  ///
+  /// Q2.1.1/Q2.1.2: connection goes through [`sqlite_pool::build_pool`]
+  /// which applies WAL + `busy_timeout` + `foreign_keys` PRAGMAs and
+  /// constructs the connect options from a raw path (no URL parsing,
+  /// so paths with `?`/`#`/spaces no longer silently fail).
   pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, MemoryError> {
-    let url = format!(
-      "sqlite://{}",
-      path
-        .as_ref()
-        .to_str()
-        .ok_or_else(|| MemoryError::StorageError("Invalid path".to_string()))?
-    );
-    let options = SqliteConnectOptions::from_str(&url)
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?
-      .create_if_missing(true);
-
-    let pool = SqlitePoolOptions::new()
-      .max_connections(5)
-      .connect_with(options)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_pool(path).await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)
@@ -41,12 +30,7 @@ impl SqliteMemory {
 
   /// In-memory SQLite database — useful for tests or ephemeral sessions.
   pub async fn in_memory() -> Result<Self, MemoryError> {
-    let pool = SqlitePoolOptions::new()
-      .max_connections(1)
-      .connect("sqlite::memory:")
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_in_memory_pool().await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)

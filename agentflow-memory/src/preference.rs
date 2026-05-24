@@ -24,17 +24,17 @@
 //! the key-management plumbing.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 
 use crate::MemoryError;
 use crate::layer::{PreferenceScope, PreferenceStore, PreferenceValue};
+use crate::sqlite_pool;
 
 /// Persistent SQLite-backed [`PreferenceStore`].
 pub struct SqlitePreferenceStore {
@@ -43,24 +43,10 @@ pub struct SqlitePreferenceStore {
 
 impl SqlitePreferenceStore {
   /// Open (or create) a preference database at `path`.
+  ///
+  /// Q2.1.1/Q2.1.2: pool via [`sqlite_pool::build_pool`].
   pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, MemoryError> {
-    let url = format!(
-      "sqlite://{}",
-      path
-        .as_ref()
-        .to_str()
-        .ok_or_else(|| MemoryError::StorageError("Invalid UTF-8 path".to_string()))?
-    );
-    let options = SqliteConnectOptions::from_str(&url)
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?
-      .create_if_missing(true);
-
-    let pool = SqlitePoolOptions::new()
-      .max_connections(5)
-      .connect_with(options)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_pool(path).await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)
@@ -68,11 +54,7 @@ impl SqlitePreferenceStore {
 
   /// In-memory database for tests and ephemeral sessions.
   pub async fn in_memory() -> Result<Self, MemoryError> {
-    let pool = SqlitePoolOptions::new()
-      .max_connections(1)
-      .connect("sqlite::memory:")
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+    let pool = sqlite_pool::build_in_memory_pool().await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)

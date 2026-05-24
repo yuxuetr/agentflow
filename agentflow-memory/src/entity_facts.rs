@@ -24,14 +24,16 @@
 //! `docs/MEMORY_LAYERING.md` §4 for the rationale.
 
 use std::path::Path;
-use std::str::FromStr;
+// Q2.1: pool construction (PRAGMA + safe path handling) is shared
+// via `crate::sqlite_pool`.
+use crate::sqlite_pool;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 
 use crate::MemoryError;
 use crate::layer::{EntityFact, EntityFactStore};
@@ -43,24 +45,11 @@ pub struct SqliteEntityFactStore {
 
 impl SqliteEntityFactStore {
   /// Open (or create) an entity-facts database at `path`.
+  ///
+  /// Q2.1.1/Q2.1.2: pool is built via the shared
+  /// [`sqlite_pool::build_pool`] helper (WAL + busy_timeout + FK).
   pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, MemoryError> {
-    let url = format!(
-      "sqlite://{}",
-      path
-        .as_ref()
-        .to_str()
-        .ok_or_else(|| MemoryError::StorageError("Invalid UTF-8 path".to_string()))?
-    );
-    let options = SqliteConnectOptions::from_str(&url)
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?
-      .create_if_missing(true);
-
-    let pool = SqlitePoolOptions::new()
-      .max_connections(5)
-      .connect_with(options)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
+    let pool = sqlite_pool::build_pool(path).await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)
@@ -68,11 +57,7 @@ impl SqliteEntityFactStore {
 
   /// In-memory database for tests.
   pub async fn in_memory() -> Result<Self, MemoryError> {
-    let pool = SqlitePoolOptions::new()
-      .max_connections(1)
-      .connect("sqlite::memory:")
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+    let pool = sqlite_pool::build_in_memory_pool().await?;
     let store = Self { pool };
     store.init_schema().await?;
     Ok(store)
