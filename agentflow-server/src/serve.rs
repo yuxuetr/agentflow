@@ -445,9 +445,50 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
       source: err,
     })?;
 
+  // Q3.1.1: graceful shutdown on SIGTERM / Ctrl-C. Without this, k8s
+  // rolling deploys (which send SIGTERM and expect the pod to drain in
+  // its terminationGracePeriodSeconds window) instead killed every
+  // in-flight HTTP request mid-flight, leaving harness sessions /
+  // run submissions half-applied. The shutdown signal also fires on
+  // local Ctrl-C so `cargo run -p agentflow-server` exits cleanly.
   axum::serve(listener, app)
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .map_err(|err| ServeError::Runtime(err.to_string()))
+}
+
+/// Q3.1.1: shutdown trigger — fires when the runtime receives either
+/// `SIGTERM` (k8s, systemd, supervisord) or `SIGINT` / Ctrl-C. On
+/// non-unix targets only Ctrl-C is honored. The future resolves once
+/// any signal arrives, which `axum::serve(...).with_graceful_shutdown`
+/// uses as the cue to stop accepting new connections and drain
+/// in-flight requests.
+async fn shutdown_signal() {
+  let ctrl_c = async {
+    tokio::signal::ctrl_c()
+      .await
+      .expect("install ctrl_c signal handler");
+  };
+
+  #[cfg(unix)]
+  let terminate = async {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm =
+      signal(SignalKind::terminate()).expect("install SIGTERM signal handler");
+    sigterm.recv().await;
+  };
+
+  #[cfg(not(unix))]
+  let terminate = std::future::pending::<()>();
+
+  tokio::select! {
+    _ = ctrl_c => {
+      info!("received SIGINT / Ctrl-C; beginning graceful shutdown");
+    },
+    _ = terminate => {
+      info!("received SIGTERM; beginning graceful shutdown");
+    },
+  }
 }
 
 fn spawn_cleanup_loop(

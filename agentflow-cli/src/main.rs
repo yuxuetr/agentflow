@@ -742,17 +742,15 @@ enum LlmCommands {
     format: String,
   },
   /// Deprecated compatibility stub. Use `skill chat`, `skill run`, or workflow `skill_agent`.
+  ///
+  /// Q3.5.1: the previous `--model` / `--system` / `--save` / `--load`
+  /// flags were accepted by clap but unconditionally dropped by the
+  /// handler — accepting structured arguments that the command will
+  /// never read is misleading. All flags removed; the command itself
+  /// stays so users who still type `agentflow llm chat` get the
+  /// redirect message.
   #[command(hide = true)]
-  Chat {
-    #[arg(short, long)]
-    model: Option<String>,
-    #[arg(short, long)]
-    system: Option<String>,
-    #[arg(long)]
-    save: Option<String>,
-    #[arg(long)]
-    load: Option<String>,
-  },
+  Chat {},
 }
 
 #[derive(Subcommand)]
@@ -1726,12 +1724,7 @@ async fn main() {
         refresh_from_api,
         format,
       } => llm::models::execute(provider, detailed, refresh_from_api, format).await,
-      LlmCommands::Chat {
-        model: _,
-        system: _,
-        save: _,
-        load: _,
-      } => Err(anyhow::anyhow!(
+      LlmCommands::Chat {} => Err(anyhow::anyhow!(
         "`agentflow llm chat` has been retired. AgentFlow interactions are agent-first: use `agentflow skill chat`, `agentflow skill run`, or a workflow `skill_agent` node. Use `agentflow llm models` only for model discovery."
       )),
     },
