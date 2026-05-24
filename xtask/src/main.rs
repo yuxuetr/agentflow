@@ -222,7 +222,12 @@ const DEFAULT_REGRESSION_RATIO: f64 = 1.25;
 ///   `--threshold <ratio>` override the regression ratio (default 1.25)
 ///   `--allow-missing`     don't fail when a baseline entry has no
 ///                         matching Criterion result (useful for CI runs
-///                         that intentionally only ran a subset of benches)
+///                         that intentionally only ran a subset of
+///                         benches). Also tolerates the baseline file
+///                         itself being absent — emits a warning and
+///                         returns success, so a runner whose
+///                         `<host>.json` hasn't been captured yet
+///                         doesn't block the workflow.
 pub fn bench_gate_from_args(
   workspace_root: &Path,
   args: Vec<String>,
@@ -313,8 +318,25 @@ pub fn bench_gate_at_with_criterion_root(
   out: &mut impl Write,
   err: &mut impl Write,
 ) -> Result<()> {
-  let baseline_text = std::fs::read_to_string(baseline_path)
-    .with_context(|| format!("failed to read baseline file '{}'", baseline_path.display()))?;
+  let baseline_text = match std::fs::read_to_string(baseline_path) {
+    Ok(text) => text,
+    Err(e) if allow_missing && e.kind() == std::io::ErrorKind::NotFound => {
+      // CI runners that haven't had a `<host>.json` captured yet need
+      // the gate to no-op instead of hard-failing; the workflow opts
+      // into this by passing `--allow-missing`. Once a baseline ships,
+      // drop the flag and this branch is unreachable.
+      let _ = writeln!(
+        err,
+        "bench-gate: baseline file '{}' not found — skipping gate (--allow-missing)",
+        baseline_path.display()
+      );
+      return Ok(());
+    }
+    Err(e) => {
+      return Err(anyhow::Error::from(e))
+        .with_context(|| format!("failed to read baseline file '{}'", baseline_path.display()));
+    }
+  };
   let baseline: BaselineFile = serde_json::from_str(&baseline_text).with_context(|| {
     format!(
       "baseline file '{}' is not valid bench-gate JSON",
@@ -1378,6 +1400,44 @@ mod tests {
       result.is_ok(),
       "--allow-missing should not fail: {:?}",
       result.err()
+    );
+  }
+
+  #[test]
+  fn bench_gate_allow_missing_skips_when_baseline_file_is_absent() {
+    let root = tempdir();
+    let criterion = synth_workspace_for_gate(root.path());
+    let baseline = root.path().join("nonexistent-baseline.json");
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, true, &mut out, &mut err);
+    assert!(
+      result.is_ok(),
+      "--allow-missing should swallow NotFound on baseline file: {:?}",
+      result.err()
+    );
+    let err_text = String::from_utf8(err).unwrap();
+    assert!(
+      err_text.contains("not found") && err_text.contains("--allow-missing"),
+      "expected skip warning to mention the file and the flag, got: {err_text}"
+    );
+  }
+
+  #[test]
+  fn bench_gate_without_allow_missing_still_fails_on_absent_baseline_file() {
+    let root = tempdir();
+    let criterion = synth_workspace_for_gate(root.path());
+    let baseline = root.path().join("nonexistent-baseline.json");
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let result =
+      bench_gate_at_with_criterion_root(&criterion, &baseline, 1.25, false, &mut out, &mut err);
+    let err_obj = result.expect_err("missing baseline must still fail without --allow-missing");
+    let msg = format!("{err_obj:#}");
+    assert!(
+      msg.contains("failed to read baseline file"),
+      "error should retain original baseline-read context, got: {msg}"
     );
   }
 
