@@ -532,7 +532,7 @@ async fn execute_template_payload(payload: &NodeExecutionPayload) -> AsyncNodeRe
 }
 
 async fn execute_file_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
-  FileNode.execute(&payload.inputs).await
+  FileNode::default().execute(&payload.inputs).await
 }
 
 async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> AsyncNodeResult {
@@ -599,7 +599,7 @@ async fn execute_llm_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult 
 }
 
 async fn execute_http_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
-  HttpNode.execute(&payload.inputs).await
+  HttpNode::default().execute(&payload.inputs).await
 }
 
 async fn execute_mcp_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {

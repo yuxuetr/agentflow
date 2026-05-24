@@ -330,44 +330,12 @@ impl TextToImageNode {
     Ok(result)
   }
 
-  /// Mock image generation (for testing/fallback)
-  async fn execute_mock_image_generation(
-    &self,
-    config: &serde_json::Map<String, Value>,
-  ) -> Result<String, AgentFlowError> {
-    let prompt = config.get("prompt").unwrap().as_str().unwrap();
-    let model = config.get("model").unwrap().as_str().unwrap();
-    let size = config
-      .get("size")
-      .map(|s| s.as_str().unwrap_or("1024x1024"))
-      .unwrap_or("1024x1024");
-
-    println!("🎨 Executing Text-to-Image request (MOCK - API key not available):");
-    println!("   Model: {}", model);
-    println!("   Prompt: {}", prompt);
-    println!("   Size: {}", size);
-
-    // Simulate processing time
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Mock response based on response format
-    let mock_response = match &self.response_format {
-      ImageResponseFormat::Base64Json => {
-        // Mock base64 image data
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-      }
-      ImageResponseFormat::Url => {
-        // Mock URL
-        "https://example.com/generated-image-mock.png"
-      }
-    };
-
-    println!(
-      "✅ Image Generation (MOCK, {:?}): Generated {} image",
-      self.response_format, size
-    );
-    Ok(mock_response.to_string())
-  }
+  // Q1.3.3: the `execute_mock_image_generation` fallback was removed
+  // because callers were silently receiving a 1x1 placeholder when the
+  // upstream API failed. Workflows that genuinely need a stand-in
+  // should use `MockNode` or a conditional branch — the image
+  // generation path must fail loudly so operators can decide what to
+  // do with the error.
 }
 
 #[async_trait]
@@ -394,30 +362,26 @@ impl AsyncNode for TextToImageNode {
       println!("   Size: {}", size);
     }
 
+    // Q1.3.3: previously, an upstream API failure silently fell back to a
+    // 1x1 mock PNG so the workflow saw `Ok(...)` carrying a placeholder
+    // image. Downstream nodes (and operators) had no way to distinguish
+    // a real generation from a stand-in. The mock path is removed —
+    // upstream failures now surface as `AgentFlowError::AsyncExecutionError`
+    // with the underlying provider message intact. If a workflow author
+    // truly wants a placeholder, they should wire an explicit `MockNode`
+    // or use a conditional/fallback branch in the DAG.
+    let real_call = self.execute_real_image_generation(config.as_object().unwrap());
     let response = if let Some(timeout_ms) = self.timeout_ms {
       let timeout_duration = std::time::Duration::from_millis(timeout_ms);
-      match tokio::time::timeout(
-        timeout_duration,
-        self.execute_real_image_generation(config.as_object().unwrap()),
-      )
-      .await
-      {
+      match tokio::time::timeout(timeout_duration, real_call).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => {
-          // Fallback to mock if real API fails
-          match tokio::time::timeout(
-            timeout_duration,
-            self.execute_mock_image_generation(config.as_object().unwrap()),
-          )
-          .await
-          {
-            Ok(result) => result?,
-            Err(_) => {
-              return Err(AgentFlowError::TimeoutExceeded {
-                duration_ms: timeout_ms,
-              });
-            }
-          }
+        Ok(Err(err)) => {
+          return Err(AgentFlowError::AsyncExecutionError {
+            message: format!(
+              "TextToImage node '{}': image generation failed: {err}",
+              self.name
+            ),
+          });
         }
         Err(_) => {
           return Err(AgentFlowError::TimeoutExceeded {
@@ -426,18 +390,14 @@ impl AsyncNode for TextToImageNode {
         }
       }
     } else {
-      // Try real API first, fallback to mock
-      match self
-        .execute_real_image_generation(config.as_object().unwrap())
+      real_call
         .await
-      {
-        Ok(result) => result,
-        Err(_) => {
-          self
-            .execute_mock_image_generation(config.as_object().unwrap())
-            .await?
-        }
-      }
+        .map_err(|err| AgentFlowError::AsyncExecutionError {
+          message: format!(
+            "TextToImage node '{}': image generation failed: {err}",
+            self.name
+          ),
+        })?
     };
 
     let mut outputs = HashMap::new();
@@ -484,21 +444,27 @@ impl TextToImageNode {
 mod tests {
   use super::*;
 
+  /// Q1.3.3: without a configured API key, the real image generation
+  /// path must surface a real error — no more silent 1x1 PNG fallback.
+  /// We can't easily exercise the success path in CI (no API key), so
+  /// the unit test asserts the *failure mode*: callers see an error
+  /// instead of a placeholder image.
   #[tokio::test]
-  async fn test_text_to_image_node_execution() {
-    let node = TextToImageNode::new("test_gen", "dalle-3")
+  async fn execute_propagates_upstream_failure_instead_of_returning_mock() {
+    // Force a guaranteed failure by pointing at an invalid model / no
+    // env key. With the mock fallback removed, the node must return Err
+    // rather than `Ok(data:image/png;base64,...)`.
+    let node = TextToImageNode::new("test_gen", "definitely-not-a-real-model")
       .with_prompt("A beautiful sunset over mountains")
-      .with_size("512x512");
+      .with_size("512x512")
+      .with_timeout(500);
 
     let inputs = AsyncNodeInputs::new();
-
     let result = node.execute(&inputs).await;
-    assert!(result.is_ok());
-
-    let outputs = result.unwrap();
-    let output = outputs.get("test_gen_image").unwrap();
-    if let FlowValue::Json(Value::String(s)) = output {
-      assert!(s.starts_with("data:image"));
-    }
+    assert!(
+      result.is_err(),
+      "upstream failure must propagate; got Ok({:?})",
+      result.ok()
+    );
   }
 }

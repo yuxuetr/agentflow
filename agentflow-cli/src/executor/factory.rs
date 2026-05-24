@@ -74,8 +74,8 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       );
       Ok(NodeType::Standard(Arc::new(node)))
     }
-    "http" => Ok(NodeType::Standard(Arc::new(HttpNode))),
-    "file" => Ok(NodeType::Standard(Arc::new(FileNode))),
+    "http" => Ok(NodeType::Standard(Arc::new(HttpNode::default()))),
+    "file" => Ok(NodeType::Standard(Arc::new(FileNode::default()))),
     "shell" => {
       // F-A7-2 closure: shell node wraps `agentflow_tools::ShellTool`
       // with a SandboxPolicy built from YAML params. `allowed_commands`

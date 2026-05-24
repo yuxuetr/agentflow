@@ -58,6 +58,14 @@ impl HttpTool {
     }
   }
 
+  /// Override the maximum response size returned in the tool output.
+  /// Default is 8 000 characters. Callers like `HttpNode` (Q1.3.2)
+  /// disable truncation by setting `usize::MAX`.
+  pub fn with_max_response_chars(mut self, max_response_chars: usize) -> Self {
+    self.max_response_chars = max_response_chars;
+    self
+  }
+
   pub fn default_policy() -> Result<Self, ToolError> {
     Self::new(Arc::new(SandboxPolicy::default()))
   }
@@ -158,9 +166,15 @@ impl Tool for HttpTool {
   }
 
   fn idempotency(&self, params: &Value) -> ToolIdempotency {
-    match params["method"].as_str().unwrap_or("GET") {
-      "GET" => ToolIdempotency::Idempotent,
-      "POST" => ToolIdempotency::NonIdempotent,
+    match params["method"]
+      .as_str()
+      .unwrap_or("GET")
+      .to_uppercase()
+      .as_str()
+    {
+      // RFC 7231 idempotent / safe methods.
+      "GET" | "HEAD" | "PUT" | "DELETE" => ToolIdempotency::Idempotent,
+      "POST" | "PATCH" => ToolIdempotency::NonIdempotent,
       _ => ToolIdempotency::Unknown,
     }
   }
@@ -186,12 +200,19 @@ impl Tool for HttpTool {
     for redirect_count in 0..=MAX_REDIRECTS {
       self.validate_url_allowed(&current_url).await?;
 
-      let mut builder = match method {
+      let mut builder = match method.to_uppercase().as_str() {
         "GET" => self.client.get(current_url.clone()),
         "POST" => self.client.post(current_url.clone()),
+        "PUT" => self.client.put(current_url.clone()),
+        "DELETE" => self.client.delete(current_url.clone()),
+        "PATCH" => self.client.patch(current_url.clone()),
+        "HEAD" => self.client.head(current_url.clone()),
         other => {
           return Err(ToolError::InvalidParams {
-            message: format!("Unsupported HTTP method '{}'. Use GET or POST", other),
+            message: format!(
+              "Unsupported HTTP method '{}'. Use GET / POST / PUT / DELETE / PATCH / HEAD",
+              other
+            ),
           });
         }
       };
@@ -205,8 +226,9 @@ impl Tool for HttpTool {
         }
       }
 
-      // Attach body
-      if method == "POST"
+      // Attach body for methods that can carry one (POST/PUT/PATCH).
+      let method_upper = method.to_uppercase();
+      if matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH")
         && let Some(body) = params["body"].as_str()
       {
         builder = builder.body(body.to_string());

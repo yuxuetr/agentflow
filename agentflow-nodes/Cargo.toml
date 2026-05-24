@@ -28,6 +28,13 @@ agentflow-core = { path = "../agentflow-core", version = "0.2" }
 # LLM integration - required for real model execution
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 
+# Tool integration - FileNode and HttpNode delegate to agentflow-tools'
+# sandbox-aware FileTool / HttpTool so the workflow node surface inherits
+# path traversal / symlink / SSRF / private-IP defenses for free.
+# Added under Q1.3.1 / Q1.3.2 to close the policy-bypass found in the
+# 2026-05-24 audit (agentflow-nodes.md C2 + C3).
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+
 # MCP integration - optional for MCP tool calling
 agentflow-mcp = { path = "../agentflow-mcp", version = "0.2", optional = true }
 

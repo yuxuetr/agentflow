@@ -1,14 +1,57 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
   value::FlowValue,
 };
+use agentflow_tools::builtin::HttpTool;
+use agentflow_tools::{SandboxPolicy, Tool};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
-#[derive(Debug, Clone, Default)]
-pub struct HttpNode;
+/// Workflow node that performs an HTTP request.
+///
+/// `HttpNode` delegates to [`agentflow_tools::builtin::HttpTool`] so the
+/// workflow node surface inherits the same SSRF defenses (private-IP /
+/// cloud-metadata / link-local blocking), redirect cap (max 10 hops with
+/// per-hop re-validation), 30-second timeout, and host allowlist that
+/// the agent tool already enforces (Q1.3.2 — closes agentflow-nodes.md
+/// C2). The default policy is permissive on domain allow-listing but
+/// strict on private/loopback IP classes; pin via [`HttpNode::with_policy`]
+/// to lock down further.
+#[derive(Clone)]
+pub struct HttpNode {
+  policy: Arc<SandboxPolicy>,
+}
+
+impl std::fmt::Debug for HttpNode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("HttpNode").finish_non_exhaustive()
+  }
+}
+
+impl HttpNode {
+  pub fn new(policy: Arc<SandboxPolicy>) -> Self {
+    Self { policy }
+  }
+
+  pub fn with_policy(mut self, policy: Arc<SandboxPolicy>) -> Self {
+    self.policy = policy;
+    self
+  }
+}
+
+impl Default for HttpNode {
+  fn default() -> Self {
+    // The default policy denies private IPs / cloud metadata / loopback
+    // but allows arbitrary public domains (allowed_domains empty == permissive).
+    Self {
+      policy: Arc::new(SandboxPolicy::default()),
+    }
+  }
+}
 
 #[async_trait]
 impl AsyncNode for HttpNode {
@@ -18,49 +61,45 @@ impl AsyncNode for HttpNode {
     let headers = get_optional_map_input(inputs, "headers")?;
     let body = get_optional_string_input(inputs, "body")?;
 
-    let client = reqwest::Client::new();
-    let mut request = match method.to_uppercase().as_str() {
-      "GET" => client.get(url),
-      "POST" => client.post(url),
-      "PUT" => client.put(url),
-      "DELETE" => client.delete(url),
-      "PATCH" => client.patch(url),
-      _ => {
-        return Err(AgentFlowError::NodeInputError {
-          message: format!("Unsupported HTTP method: {}", method),
-        });
-      }
-    };
-
-    if let Some(h) = headers {
-      for (key, value) in h {
-        request = request.header(key, value);
-      }
-    }
-
+    // Build the params object expected by HttpTool. `usize::MAX` for
+    // max_response_chars preserves the legacy node behavior of returning
+    // the full response body; HttpTool's 8 KB default only matters for
+    // its agent-tool usage where a long body is noisy in transcripts.
+    let mut params = json!({
+        "url": url,
+        "method": method,
+    });
     if let Some(b) = body {
-      request = request.body(b.to_string());
+      params["body"] = json!(b);
+    }
+    if let Some(h) = headers {
+      params["headers"] = json!(h);
     }
 
-    let response = request
-      .send()
+    let tool = HttpTool::new(self.policy.clone())
+      .map_err(|err| AgentFlowError::AsyncExecutionError {
+        message: format!("HttpNode failed to build HTTP client: {err}"),
+      })?
+      .with_max_response_chars(usize::MAX);
+
+    let output = tool
+      .execute(params)
       .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
-        message: e.to_string(),
+      .map_err(|err| AgentFlowError::AsyncExecutionError {
+        message: err.to_string(),
       })?;
 
-    let status = response.status().as_u16();
-    let response_body = response
-      .text()
-      .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
-        message: e.to_string(),
-      })?;
-
+    // HttpTool emits a single-text-part `ToolOutput`. We don't have the
+    // HTTP status code at this layer because the tool flattens it into
+    // the body for prompt-engineering ergonomics, so the node returns
+    // `body` (with the legacy field name preserved) and signals success
+    // via `output.is_error`.
     let mut outputs = HashMap::new();
-    outputs.insert("status".to_string(), FlowValue::Json(json!(status)));
-    outputs.insert("body".to_string(), FlowValue::Json(json!(response_body)));
-
+    outputs.insert(
+      "status".to_string(),
+      FlowValue::Json(json!(if output.is_error { 500 } else { 200 })),
+    );
+    outputs.insert("body".to_string(), FlowValue::Json(json!(output.content)));
     Ok(outputs)
   }
 }
@@ -119,41 +158,69 @@ fn get_optional_map_input(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
-  };
+
+  /// Q1.3.2 regression: a freshly-constructed `HttpNode` must refuse
+  /// SSRF attempts at the cloud-metadata IP without the operator
+  /// having to wire any policy — the default policy denies the
+  /// LinkLocal / CloudMetadata classes automatically.
+  #[tokio::test]
+  async fn default_policy_rejects_cloud_metadata_ssrf() {
+    let node = HttpNode::default();
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert(
+      "url".to_string(),
+      FlowValue::Json(json!("http://169.254.169.254/latest/meta-data/")),
+    );
+
+    let err = node.execute(&inputs).await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+      message.contains("CloudMetadata")
+        || message.contains("LinkLocal")
+        || message.contains("Sandbox"),
+      "expected SSRF rejection message, got: {message}"
+    );
+  }
 
   #[tokio::test]
-  #[ignore] // Mock server sometimes returns 502, needs investigation
-  async fn test_http_get_node_with_mock_server() {
-    // Arrange
-    let server = MockServer::start().await;
-    let response_body = json!({ "success": true, "data": "it works" });
-
-    Mock::given(method("GET"))
-      .and(path("/test"))
-      .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-      .mount(&server)
-      .await;
-
-    let node = HttpNode;
+  async fn default_policy_rejects_private_ip() {
+    let node = HttpNode::default();
     let mut inputs = AsyncNodeInputs::new();
-    let url = format!("{}/test", server.uri());
-    inputs.insert("url".to_string(), FlowValue::Json(json!(url)));
+    inputs.insert("url".to_string(), FlowValue::Json(json!("http://10.0.0.1")));
 
-    // Act
-    let result = node.execute(&inputs).await;
+    let err = node.execute(&inputs).await.unwrap_err();
+    assert!(err.to_string().contains("Private") || err.to_string().contains("Sandbox"));
+  }
 
-    // Assert
-    assert!(result.is_ok());
-    let outputs = result.unwrap();
+  #[tokio::test]
+  async fn explicit_policy_allows_loopback_for_tests() {
+    // Confirms the policy wiring carries through. We can't easily run a
+    // mock HTTP server here without re-creating one, but proving the
+    // URL passes the validator (instead of being denied) is enough for
+    // the wiring regression; the actual GET happens in
+    // `agentflow-tools::builtin::http::tests` which has full coverage.
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
 
-    let status = outputs.get("status").unwrap();
-    assert_eq!(status, &FlowValue::Json(json!(200)));
-
-    let body = outputs.get("body").unwrap();
-    let expected_body = FlowValue::Json(json!(response_body.to_string()));
-    assert_eq!(body, &expected_body);
+    let policy = Arc::new(SandboxPolicy {
+      allow_loopback_network_access: true,
+      ..SandboxPolicy::default()
+    });
+    let node = HttpNode::new(policy);
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert(
+      "url".to_string(),
+      FlowValue::Json(json!(format!("http://127.0.0.1:{port}"))),
+    );
+    // The server is gone so we expect a connection error, not a
+    // sandbox denial — that proves the URL passed the validator.
+    let err = node.execute(&inputs).await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+      !message.contains("Loopback"),
+      "loopback should be allowed under explicit policy, but got: {message}"
+    );
   }
 }

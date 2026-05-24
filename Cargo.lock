@@ -305,6 +305,7 @@ dependencies = [
  "agentflow-llm",
  "agentflow-mcp",
  "agentflow-rag",
+ "agentflow-tools",
  "anyhow",
  "async-trait",
  "base64 0.21.7",

@@ -170,7 +170,7 @@ fn bench_file_read_write(c: &mut Criterion) {
   // bench MiB-scale payloads — that's a perf-of-`tokio::fs`
   // measurement, not an AgentFlow node measurement.
   let dir = TempDir::new().expect("tempdir");
-  let node = FileNode;
+  let node = FileNode::default();
 
   for (label, byte_count) in [("1k", 1024_usize), ("64k", 64 * 1024)] {
     let payload: String = "x".repeat(byte_count);
