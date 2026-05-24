@@ -61,6 +61,41 @@ async fn macos_sandbox_allows_baseline_echo() {
   );
 }
 
+/// Q1.1.3 regression: the SBPL profile used to grant `(allow file-read*
+/// (subpath "/Library"))` wholesale. We now grant only `/Library/Frameworks`
+/// and the global preferences plist literal, so reading an arbitrary
+/// `/Library` subtree must be denied by the sandbox kernel.
+#[tokio::test]
+async fn macos_sandbox_denies_blanket_library_read() {
+  if !sandbox_exec_usable() {
+    eprintln!("skipping: sandbox-exec is present but not usable in this environment");
+    return;
+  }
+
+  // `/Library/Preferences/SystemConfiguration/preferences.plist` exists on
+  // every macOS host (network configuration plist) and is precisely the
+  // kind of file the old blanket grant exposed. It is outside the narrow
+  // literals we still allow.
+  let target = "/Library/Preferences/SystemConfiguration/preferences.plist";
+  if !std::path::Path::new(target).exists() {
+    eprintln!("skipping: '{target}' not present, cannot exercise read-denied path");
+    return;
+  }
+
+  let tool = permissive_shell_with_sandbox();
+  let cmd = format!("/bin/cat {target}");
+  let result = tool
+    .execute(json!({"command": cmd}))
+    .await
+    .expect("tool call must complete");
+
+  assert!(
+    result.is_error,
+    "expected sandbox to block /Library blanket read, but got success: {}",
+    result.content
+  );
+}
+
 #[tokio::test]
 async fn macos_sandbox_blocks_write_outside_scope() {
   if !sandbox_exec_usable() {

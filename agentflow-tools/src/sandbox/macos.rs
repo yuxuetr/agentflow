@@ -128,15 +128,31 @@ fn build_profile(caps: &[Capability], scope: &SandboxScope) -> String {
   out.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
   out.push_str("(allow file-read* (subpath \"/usr/share\"))\n");
   out.push_str("(allow file-read* (subpath \"/System\"))\n");
-  out.push_str("(allow file-read* (subpath \"/Library\"))\n");
   out.push_str("(allow file-read* (subpath \"/private/var/db/dyld\"))\n");
-  out.push_str("(allow file-read* (subpath \"/private/etc\"))\n");
+  // Q1.1.3: narrow the default Library + /private/etc grants. The pre-fix
+  // profile allowed `/Library` and `/private/etc` wholesale, which exposed
+  // user-mode preferences, daemon configs, and `/etc/passwd` / `/etc/hosts`
+  // to every sandboxed child. Now we grant only the specific entries dyld
+  // and libSystem actually require at process start.
+  out.push_str("(allow file-read* (subpath \"/Library/Frameworks\"))\n");
+  out.push_str("(allow file-read* (literal \"/Library/Preferences/.GlobalPreferences.plist\"))\n");
+  // tz / locale info: needed by date-printing builtins and any tool that
+  // calls `localtime(3)`. Single-file literal grant, not a subpath blanket.
+  // `/private/etc/master.passwd` is intentionally NOT here — macOS uses
+  // Open Directory for `getpwuid_r`, so no caller in a sandboxed child
+  // legitimately needs to read the shadow file.
+  out.push_str("(allow file-read* (literal \"/private/etc/localtime\"))\n");
 
   if allow_exec {
     out.push_str("(allow process-exec)\n");
   }
   if allow_net {
     out.push_str("(allow network*)\n");
+    // DNS resolution: only when Net is granted, expose the minimal
+    // resolver config files. Still no blanket `/private/etc`.
+    out.push_str("(allow file-read* (literal \"/private/etc/resolv.conf\"))\n");
+    out.push_str("(allow file-read* (literal \"/private/etc/hosts\"))\n");
+    out.push_str("(allow file-read* (literal \"/private/etc/services\"))\n");
   }
   if allow_fs_read {
     for path in &scope.read_paths {
@@ -218,6 +234,50 @@ mod tests {
     assert!(profile.starts_with("(version 1)"));
     assert!(profile.contains("(deny default)"));
     assert!(profile.contains("(allow file-read* (subpath \"/usr/lib\"))"));
+  }
+
+  #[test]
+  fn profile_does_not_grant_blanket_library_or_private_etc() {
+    // Q1.1.3: regression — the old profile shipped wholesale grants for
+    // `/Library` and `/private/etc`. Anything under those paths beyond the
+    // narrow literals we still grant must be off by default.
+    let profile = build_profile(
+      &[Capability::FsRead, Capability::Exec],
+      &SandboxScope::new(),
+    );
+    assert!(
+      !profile.contains("(allow file-read* (subpath \"/Library\"))"),
+      "default profile must not grant blanket /Library read"
+    );
+    assert!(
+      !profile.contains("(allow file-read* (subpath \"/private/etc\"))"),
+      "default profile must not grant blanket /private/etc read"
+    );
+    assert!(
+      !profile.contains("master.passwd"),
+      "shadow passwd file must never be in the default allow list"
+    );
+    // The narrow replacements are still there.
+    assert!(profile.contains("(allow file-read* (subpath \"/Library/Frameworks\"))"));
+    assert!(profile.contains("(literal \"/Library/Preferences/.GlobalPreferences.plist\")"));
+    assert!(profile.contains("(literal \"/private/etc/localtime\")"));
+  }
+
+  #[test]
+  fn profile_only_exposes_resolver_files_when_net_capability_present() {
+    let no_net = build_profile(
+      &[Capability::FsRead, Capability::Exec],
+      &SandboxScope::new(),
+    );
+    assert!(!no_net.contains("resolv.conf"));
+    assert!(!no_net.contains("/etc/hosts") && !no_net.contains("private/etc/hosts"));
+
+    let with_net = build_profile(
+      &[Capability::Net, Capability::FsRead, Capability::Exec],
+      &SandboxScope::new(),
+    );
+    assert!(with_net.contains("(literal \"/private/etc/resolv.conf\")"));
+    assert!(with_net.contains("(literal \"/private/etc/hosts\")"));
   }
 
   #[test]
