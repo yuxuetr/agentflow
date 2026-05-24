@@ -10,14 +10,43 @@ use crate::sandbox::{
 };
 use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
-/// Execute a shell command via `sh -c` with sandbox enforcement.
+/// How a [`ShellTool`] interprets the `command` parameter.
+///
+/// `Argv` (the default after Q1.1.1) parses the command into an argv vector,
+/// rejecting unquoted shell metacharacters (`|`, `;`, `&`, `$`, `` ` ``, `>`,
+/// `<`, parentheses, newlines). This eliminates the `sh -c` bypass where
+/// `echo; rm -rf /` would pass the in-process `allowed_commands` check.
+///
+/// `Shell` re-enables `sh -c` interpretation but only when an enforcing OS
+/// sandbox backend is wired in. Callers MUST `.with_os_sandbox()` (or attach
+/// an enforcing backend manually) before constructing in `Shell` mode; the
+/// tool fails closed at execute time otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellInterpretation {
+  /// argv-only spawn, no shell metacharacters (default).
+  Argv,
+  /// `sh -c <command>` spawn; requires an enforcing OS sandbox backend.
+  Shell,
+}
+
+impl Default for ShellInterpretation {
+  fn default() -> Self {
+    Self::Argv
+  }
+}
+
+/// Execute a shell command. By default the command is parsed into an argv
+/// vector (no shell interpretation); opt in to `sh -c` semantics via
+/// [`ShellTool::with_shell_interpretation`].
 pub struct ShellTool {
   policy: Arc<SandboxPolicy>,
   backend: Arc<dyn SandboxBackend>,
+  mode: ShellInterpretation,
 }
 
 impl ShellTool {
-  /// Create a `ShellTool` whose OS sandbox is a no-op (current behaviour).
+  /// Create a `ShellTool` in [`ShellInterpretation::Argv`] mode. The OS
+  /// sandbox is a no-op until [`Self::with_os_sandbox`] is called.
   /// Capability and policy gating still apply via [`crate::ToolRegistry::execute`].
   pub fn new(policy: Arc<SandboxPolicy>) -> Self {
     Self {
@@ -25,6 +54,7 @@ impl ShellTool {
       backend: Arc::new(NoopSandboxBackend::new(
         "ShellTool default backend; opt in via with_os_sandbox()",
       )),
+      mode: ShellInterpretation::Argv,
     }
   }
 
@@ -47,6 +77,18 @@ impl ShellTool {
     self.backend = backend;
     self
   }
+
+  /// Switch into `sh -c` interpretation. The tool will refuse to spawn at
+  /// execute time unless the active backend reports `is_enforcing() == true`.
+  pub fn with_shell_interpretation(mut self) -> Self {
+    self.mode = ShellInterpretation::Shell;
+    self
+  }
+
+  /// Returns the configured interpretation mode (for tests / inspection).
+  pub fn interpretation(&self) -> ShellInterpretation {
+    self.mode
+  }
 }
 
 #[async_trait]
@@ -67,7 +109,7 @@ impl Tool for ShellTool {
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The shell command to execute (passed to `sh -c`)"
+                "description": "The shell command to execute (argv-only by default; shell interpretation requires explicit opt-in)"
             }
         },
         "required": ["command"]
@@ -93,17 +135,12 @@ impl Tool for ShellTool {
         message: "Missing required parameter 'command'".to_string(),
       })?;
 
-    // Extract the base command for sandbox check
-    let base_cmd = command.split_whitespace().next().unwrap_or("");
-    if !self.policy.is_command_allowed(base_cmd) {
-      return Err(ToolError::SandboxViolation {
-        message: format!("Command '{}' is not in the allowed-commands list", base_cmd),
-      });
-    }
+    let mut cmd = match self.mode {
+      ShellInterpretation::Argv => self.prepare_argv(command)?,
+      ShellInterpretation::Shell => self.prepare_shell(command)?,
+    };
 
     let timeout = Duration::from_secs(self.policy.max_exec_time_secs);
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c").arg(command);
 
     let scope = build_scope_from_policy(&self.policy);
     let caps = self.requires_capabilities();
@@ -149,6 +186,228 @@ impl Tool for ShellTool {
   }
 }
 
+impl ShellTool {
+  fn prepare_argv(&self, command: &str) -> Result<tokio::process::Command, ToolError> {
+    let argv = parse_argv_safe(command).map_err(|message| ToolError::SandboxViolation {
+      message: format!(
+        "argv parse failure (shell interpretation is disabled by default): {message}"
+      ),
+    })?;
+
+    let base_cmd = argv
+      .first()
+      .ok_or_else(|| ToolError::InvalidParams {
+        message: "command parsed into empty argv".to_string(),
+      })?
+      .as_str();
+    if !self.policy.is_command_allowed(base_cmd) {
+      return Err(ToolError::SandboxViolation {
+        message: format!("Command '{}' is not in the allowed-commands list", base_cmd),
+      });
+    }
+
+    let mut cmd = tokio::process::Command::new(base_cmd);
+    cmd.args(&argv[1..]);
+    Ok(cmd)
+  }
+
+  fn prepare_shell(&self, command: &str) -> Result<tokio::process::Command, ToolError> {
+    if !self.backend.is_enforcing() {
+      return Err(ToolError::SandboxViolation {
+        message:
+          "shell interpretation requires an enforcing OS sandbox backend (call .with_os_sandbox())"
+            .to_string(),
+      });
+    }
+
+    // Best-effort: split on shell separators and validate each segment's
+    // leading word. Full POSIX-shell parsing is out of scope; operators
+    // opting into shell interpretation accept this is best-effort and
+    // rely on the OS sandbox as the real boundary.
+    for segment in extract_shell_segments(command) {
+      let leading = segment
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '/' && c != '-');
+      if leading.is_empty() {
+        continue;
+      }
+      if !self.policy.is_command_allowed(leading) {
+        return Err(ToolError::SandboxViolation {
+          message: format!(
+            "Command '{}' (in shell segment '{}') is not in the allowed-commands list",
+            leading,
+            segment.trim()
+          ),
+        });
+      }
+    }
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c").arg(command);
+    Ok(cmd)
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParseState {
+  Plain,
+  Single,
+  Double,
+}
+
+/// Parse `command` into an argv vector, rejecting any unquoted shell
+/// metacharacter. The parser honors single- and double-quoted strings,
+/// treats `\\` as an escape outside single quotes, and rejects command
+/// substitution (`$(...)`, backticks) inside double quotes as well.
+///
+/// Returns `Err(reason)` for the first metacharacter found or when a
+/// quote is never terminated.
+fn parse_argv_safe(command: &str) -> Result<Vec<String>, String> {
+  let mut tokens: Vec<String> = Vec::new();
+  let mut current = String::new();
+  let mut has_token_started = false;
+  let mut state = ParseState::Plain;
+  let mut chars = command.chars().peekable();
+
+  while let Some(c) = chars.next() {
+    match state {
+      ParseState::Plain => match c {
+        '\'' => {
+          state = ParseState::Single;
+          has_token_started = true;
+        }
+        '"' => {
+          state = ParseState::Double;
+          has_token_started = true;
+        }
+        '\\' => {
+          // Backslash escapes the next char (POSIX-shell semantics outside quotes).
+          if let Some(next) = chars.next() {
+            current.push(next);
+            has_token_started = true;
+          } else {
+            return Err("trailing backslash with no escape target".to_string());
+          }
+        }
+        c if c.is_whitespace() => {
+          if has_token_started {
+            tokens.push(std::mem::take(&mut current));
+            has_token_started = false;
+          }
+        }
+        '|' | ';' | '&' | '$' | '`' | '>' | '<' | '(' | ')' | '\n' => {
+          return Err(format!(
+            "unquoted shell metacharacter '{c}' is not allowed in argv mode"
+          ));
+        }
+        other => {
+          current.push(other);
+          has_token_started = true;
+        }
+      },
+      ParseState::Single => match c {
+        '\'' => state = ParseState::Plain,
+        other => current.push(other),
+      },
+      ParseState::Double => match c {
+        '"' => state = ParseState::Plain,
+        '\\' => {
+          // Inside double quotes, backslash only escapes `\"`, `\\`, `\$`, ``\` ``, `\n`.
+          if let Some(&next) = chars.peek() {
+            if matches!(next, '"' | '\\' | '$' | '`' | '\n') {
+              current.push(next);
+              chars.next();
+            } else {
+              current.push('\\');
+            }
+          } else {
+            return Err("trailing backslash inside double quotes".to_string());
+          }
+        }
+        '$' | '`' => {
+          return Err(format!(
+            "shell command substitution character '{c}' is not allowed inside double quotes in argv mode"
+          ));
+        }
+        other => current.push(other),
+      },
+    }
+  }
+
+  if !matches!(state, ParseState::Plain) {
+    return Err("unterminated quoted string".to_string());
+  }
+  if has_token_started {
+    tokens.push(current);
+  }
+  if tokens.is_empty() {
+    return Err("command string is empty".to_string());
+  }
+  Ok(tokens)
+}
+
+/// Split a shell command on top-level separators (`;`, `&&`, `||`, `|`, newline).
+/// Best-effort: respects single/double quote boundaries to avoid splitting
+/// inside `awk 'BEGIN { ... }'` style arguments.
+fn extract_shell_segments(command: &str) -> Vec<String> {
+  let mut segments = Vec::new();
+  let mut current = String::new();
+  let mut state = ParseState::Plain;
+  let mut chars = command.chars().peekable();
+  while let Some(c) = chars.next() {
+    match state {
+      ParseState::Plain => match c {
+        '\'' => {
+          current.push(c);
+          state = ParseState::Single;
+        }
+        '"' => {
+          current.push(c);
+          state = ParseState::Double;
+        }
+        '\\' => {
+          current.push(c);
+          if let Some(next) = chars.next() {
+            current.push(next);
+          }
+        }
+        ';' | '\n' => {
+          segments.push(std::mem::take(&mut current));
+        }
+        '&' | '|' => {
+          // Detect `&&` and `||` as separators; single `|` and single `&`
+          // also split (pipe and background).
+          if matches!(chars.peek(), Some(&next) if next == c) {
+            chars.next();
+          }
+          segments.push(std::mem::take(&mut current));
+        }
+        other => current.push(other),
+      },
+      ParseState::Single => {
+        current.push(c);
+        if c == '\'' {
+          state = ParseState::Plain;
+        }
+      }
+      ParseState::Double => {
+        current.push(c);
+        if c == '"' {
+          state = ParseState::Plain;
+        } else if c == '\\' {
+          if let Some(next) = chars.next() {
+            current.push(next);
+          }
+        }
+      }
+    }
+  }
+  segments.push(current);
+  segments
+}
+
 /// Project a [`SandboxPolicy`] into the [`SandboxScope`] consumed by OS-level
 /// backends. We treat `allowed_paths` as both read- and write-allowed because
 /// the in-process layer does not split read vs. write at policy level — that
@@ -180,7 +439,7 @@ mod tests {
   use super::*;
 
   #[tokio::test]
-  async fn default_backend_is_noop_so_existing_behaviour_holds() {
+  async fn default_argv_mode_runs_simple_command() {
     let tool = ShellTool::default_policy();
     let result = tool
       .execute(json!({"command": "echo hello"}))
@@ -194,6 +453,145 @@ mod tests {
     let tool = ShellTool::default_policy();
     let result = tool.execute(json!({"command": "rm -rf /"})).await;
     assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+  }
+
+  #[tokio::test]
+  async fn semicolon_bypass_is_rejected_in_argv_mode() {
+    let tool = ShellTool::default_policy();
+    let result = tool
+      .execute(json!({"command": "echo hello; rm -rf /tmp/agentflow-should-not-run"}))
+      .await;
+    let err = result.expect_err("semicolon bypass must be rejected");
+    match err {
+      ToolError::SandboxViolation { message } => {
+        assert!(
+          message.contains("';'") || message.contains("metacharacter"),
+          "expected metacharacter rejection, got: {message}"
+        );
+      }
+      other => panic!("expected SandboxViolation, got {other:?}"),
+    }
+  }
+
+  #[tokio::test]
+  async fn double_ampersand_bypass_is_rejected_in_argv_mode() {
+    let tool = ShellTool::default_policy();
+    let result = tool
+      .execute(json!({"command": "echo hello && rm -rf /tmp/agentflow-should-not-run"}))
+      .await;
+    let err = result.expect_err("&& bypass must be rejected");
+    match err {
+      ToolError::SandboxViolation { message } => {
+        assert!(
+          message.contains("'&'") || message.contains("metacharacter"),
+          "expected metacharacter rejection, got: {message}"
+        );
+      }
+      other => panic!("expected SandboxViolation, got {other:?}"),
+    }
+  }
+
+  #[tokio::test]
+  async fn command_substitution_bypass_is_rejected_in_argv_mode() {
+    let tool = ShellTool::default_policy();
+    let result = tool
+      .execute(json!({"command": "echo $(rm -rf /tmp/agentflow-should-not-run)"}))
+      .await;
+    let err = result.expect_err("$() bypass must be rejected");
+    match err {
+      ToolError::SandboxViolation { message } => {
+        assert!(
+          message.contains("'$'") || message.contains("'('") || message.contains("metacharacter"),
+          "expected metacharacter rejection, got: {message}"
+        );
+      }
+      other => panic!("expected SandboxViolation, got {other:?}"),
+    }
+  }
+
+  #[tokio::test]
+  async fn pipe_bypass_is_rejected_in_argv_mode() {
+    let tool = ShellTool::default_policy();
+    let result = tool.execute(json!({"command": "echo hello | sh"})).await;
+    let err = result.expect_err("| bypass must be rejected");
+    assert!(matches!(err, ToolError::SandboxViolation { .. }));
+  }
+
+  #[tokio::test]
+  async fn backtick_bypass_is_rejected_in_argv_mode() {
+    let tool = ShellTool::default_policy();
+    let result = tool
+      .execute(json!({"command": "echo `rm -rf /tmp/agentflow-should-not-run`"}))
+      .await;
+    let err = result.expect_err("backtick bypass must be rejected");
+    assert!(matches!(err, ToolError::SandboxViolation { .. }));
+  }
+
+  #[tokio::test]
+  async fn quoted_arguments_are_preserved_in_argv_mode() {
+    let policy = Arc::new(SandboxPolicy {
+      allowed_commands: vec!["awk".to_string()],
+      max_exec_time_secs: 5,
+      ..SandboxPolicy::default()
+    });
+    let tool = ShellTool::new(policy);
+    // Single-quoted argument with shell metacharacters inside; they should be literal.
+    let result = tool
+      .execute(json!({"command": "awk 'BEGIN { print \"agentflow\" }'"}))
+      .await
+      .expect("quoted args must parse cleanly");
+    assert!(result.content.contains("agentflow"));
+  }
+
+  #[tokio::test]
+  async fn shell_mode_without_enforcing_backend_is_rejected() {
+    let tool = ShellTool::default_policy().with_shell_interpretation();
+    let result = tool.execute(json!({"command": "echo hello"})).await;
+    let err = result.expect_err("shell mode without OS sandbox must fail closed");
+    match err {
+      ToolError::SandboxViolation { message } => {
+        assert!(
+          message.contains("enforcing OS sandbox"),
+          "expected enforcing-OS-sandbox message, got: {message}"
+        );
+      }
+      other => panic!("expected SandboxViolation, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn argv_parser_splits_on_whitespace_respecting_quotes() {
+    let argv = parse_argv_safe(r#"git commit -m "fix: a thing""#).unwrap();
+    assert_eq!(argv, vec!["git", "commit", "-m", "fix: a thing"]);
+  }
+
+  #[test]
+  fn argv_parser_rejects_unterminated_quote() {
+    assert!(parse_argv_safe("echo 'hello").is_err());
+    assert!(parse_argv_safe("echo \"hello").is_err());
+  }
+
+  #[test]
+  fn argv_parser_handles_escaped_metacharacter() {
+    // A backslash-escaped `$` outside quotes should become a literal `$`.
+    let argv = parse_argv_safe(r#"echo \$HOME"#).unwrap();
+    assert_eq!(argv, vec!["echo", "$HOME"]);
+  }
+
+  #[test]
+  fn extract_shell_segments_splits_on_top_level_operators() {
+    let segs = extract_shell_segments("echo a; echo b && echo c | echo d");
+    let trimmed: Vec<String> = segs.into_iter().map(|s| s.trim().to_string()).collect();
+    assert_eq!(trimmed, vec!["echo a", "echo b", "echo c", "echo d"]);
+  }
+
+  #[test]
+  fn extract_shell_segments_respects_quotes() {
+    let segs = extract_shell_segments("awk 'BEGIN { print 1; print 2 }'");
+    let trimmed: Vec<String> = segs.into_iter().map(|s| s.trim().to_string()).collect();
+    // Should NOT split on the `;` inside the single-quoted block.
+    assert_eq!(trimmed.len(), 1);
+    assert!(trimmed[0].contains("BEGIN"));
   }
 
   #[test]

@@ -76,7 +76,10 @@ async fn macos_sandbox_blocks_write_outside_scope() {
   // Make sure the file doesn't already exist from a previous run.
   let _ = std::fs::remove_file(&path);
 
-  let tool = permissive_shell_with_sandbox();
+  // Stream redirection (`>`) needs the shell, so opt into shell
+  // interpretation. The enforcing backend wired in by
+  // `with_os_sandbox()` is what `with_shell_interpretation()` requires.
+  let tool = permissive_shell_with_sandbox().with_shell_interpretation();
   let cmd = format!("/bin/echo blocked > {path}");
   let result = tool
     .execute(json!({"command": cmd}))
