@@ -99,6 +99,35 @@ reads and stable writer output for its rows below.
 | SSE events | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/sse_events/` | `run_id`, monotonic `seq`, `kind`, `payload`, `ts`, backfill after `after_seq`, lag comments, and terminal event delivery. |
 | `HarnessEvent` / `ApprovalRequest` / `ApprovalDecision` | Experimental | `agentflow-harness` | `agentflow-harness/tests/fixtures/` | Closed kind set, session/approval envelopes, additive optional-field tolerance, and `HARNESS_ENVELOPE_SCHEMA_VERSION` ("harness/1") stability. |
 
+## Migration Notes
+
+### Q1.2.1 — `SandboxPolicy::allowed_paths` empty-set semantics
+
+Pre-Q1.2.1, `SandboxPolicy::allowed_paths == vec![]` meant "allow every
+path" (permissive). The default `SandboxPolicy::default()` shipped with
+that empty list, so any caller that constructed a `FileTool` from the
+default policy could read or overwrite arbitrary host paths (`/etc/passwd`,
+`~/.ssh/authorized_keys`, etc.) — exactly the opposite of the operator's
+expectation that "no allow-list configured" means "no access granted".
+
+Effective with this release the semantic is reversed: **empty
+`allowed_paths` means deny every path**. To opt into the prior permissive
+behavior set the new `allow_all_paths: bool` field explicitly. The same
+treatment applies to `allowed_commands` via `allow_all_commands` for
+parity, but `allowed_commands` rarely shipped empty (the default already
+enumerates 18 safe read-only commands).
+
+`SandboxPolicy::permissive()` is migrated to set both `allow_all_commands`
+and `allow_all_paths` to `true`. `ScriptTool::with_default_policy` now
+seeds the scripts directory into `allowed_paths` so the tool can still
+locate its own scripts. Callers that built a `SandboxPolicy` via the
+struct-update form (`..SandboxPolicy::default()`) require no source
+change — the new fields default to `false`, preserving the safe semantic
+while their explicit `allowed_*` lists continue to function.
+
+`allowed_domains` is intentionally NOT flipped in this change because
+operators would have to enumerate every cloud endpoint they use.
+
 ## Non-Stable Surfaces
 
 The following are intentionally not v1-stable yet:

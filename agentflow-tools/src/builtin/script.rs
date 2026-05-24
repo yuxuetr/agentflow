@@ -46,9 +46,17 @@ impl ScriptTool {
     }
   }
 
-  /// Convenience constructor with the default (restrictive) sandbox policy.
+  /// Convenience constructor with the default (restrictive) sandbox policy,
+  /// pre-populated so the scripts directory itself is reachable.
   pub fn with_default_policy(scripts_dir: PathBuf) -> Self {
-    Self::new(scripts_dir, Arc::new(SandboxPolicy::default()))
+    let policy = SandboxPolicy {
+      // Q1.2.1: empty `allowed_paths` is now "deny all", so we must seed
+      // the scripts directory here or the tool can't even locate its
+      // own scripts.
+      allowed_paths: vec![scripts_dir.clone()],
+      ..SandboxPolicy::default()
+    };
+    Self::new(scripts_dir, Arc::new(policy))
   }
 
   /// Sets the parameters schema for validation.
@@ -346,6 +354,9 @@ mod tests {
         "bash".to_string(),
         "node".to_string(),
       ],
+      // Q1.2.1: scripts_dir must be in allowed_paths now that an empty
+      // allow-list means "deny all" instead of "allow all".
+      allowed_paths: vec![dir.to_path_buf()],
       ..Default::default()
     };
     ScriptTool::new(dir.to_path_buf(), Arc::new(policy))
