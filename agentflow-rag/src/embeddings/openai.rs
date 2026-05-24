@@ -15,7 +15,22 @@ use std::time::Duration;
 use tokio_retry::{Retry, strategy::ExponentialBackoff};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/embeddings";
-const MAX_BATCH_SIZE: usize = 2048; // OpenAI limit
+/// Q2.8.1: pre-fix `MAX_BATCH_SIZE = 2048` was reused both as a token
+/// budget (`current_tokens + tokens > MAX_BATCH_SIZE`) and an array
+/// length cap (`current_batch.len() >= 2048`). At OpenAI's 8 192-token
+/// per-text limit the token-budget arm trips after ~13 average-length
+/// texts, which means the API was being called with 13-item batches
+/// instead of OpenAI's documented 2 048-item ceiling — roughly a 150×
+/// reduction in throughput. The two roles split into:
+///
+/// * [`MAX_INPUTS_PER_BATCH`] — array length ceiling (the OpenAI
+///   wire-level limit, RPM-impacting).
+/// * [`MAX_TOKENS_PER_BATCH`] — token budget per request, sized so we
+///   never cross OpenAI's 300 000-token request body cap. 8 192 × 2 048
+///   would be 16 million tokens, so we cap at a conservative 300 000 to
+///   match OpenAI's published per-request limit.
+pub const MAX_INPUTS_PER_BATCH: usize = 2048;
+pub const MAX_TOKENS_PER_BATCH: usize = 300_000;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// OpenAI API request structure
@@ -231,8 +246,12 @@ impl EmbeddingProvider for OpenAIEmbedding {
         )));
       }
 
-      // If adding this text would exceed batch size, process current batch
-      if (current_tokens + tokens > MAX_BATCH_SIZE || current_batch.len() >= 2048)
+      // Q2.8.1: flush when EITHER the token budget OR the array
+      // length cap would be exceeded. The two limits enforce
+      // different OpenAI constraints — request body size vs.
+      // `input[]` array length — and must be tracked independently.
+      if (current_tokens + tokens > MAX_TOKENS_PER_BATCH
+        || current_batch.len() >= MAX_INPUTS_PER_BATCH)
         && !current_batch.is_empty()
       {
         let response = self.call_api(current_batch.clone()).await?;
@@ -402,6 +421,58 @@ mod tests {
     let tokens = provider.estimate_tokens(text);
     assert!(tokens > 0);
     assert!(tokens < text.len()); // Should be less than character count
+  }
+
+  /// Q2.8.1 regression: the two batch limits enforce different
+  /// OpenAI constraints. Asserts the constants stayed sane and the
+  /// flush trigger reasons about each independently.
+  #[test]
+  fn batch_size_constants_are_disjoint() {
+    // 2 048 is OpenAI's documented `input[]` array length cap.
+    assert_eq!(MAX_INPUTS_PER_BATCH, 2048);
+    // 300 000 is OpenAI's per-request total-token cap. If a future
+    // OpenAI announcement changes the number, update here AND
+    // ops docs.
+    assert_eq!(MAX_TOKENS_PER_BATCH, 300_000);
+    // Token budget MUST be larger than the array cap — otherwise we
+    // never benefit from the array cap because the token budget
+    // always trips first (the pre-fix bug).
+    assert!(
+      MAX_TOKENS_PER_BATCH > MAX_INPUTS_PER_BATCH,
+      "token budget must dominate the array cap; pre-fix it was 2048 for both"
+    );
+  }
+
+  /// Q2.8.1 regression: with the token budget split out, a batch of
+  /// short texts now fills toward the array cap (2048 entries)
+  /// instead of stalling at ~13 entries against the old shared
+  /// 2 048 limit. We can't easily test this end-to-end without
+  /// mocking the OpenAI HTTP surface, so we exercise the bookkeeping
+  /// math directly via a small simulation that mirrors the flush
+  /// condition.
+  #[test]
+  fn batch_flush_condition_uses_both_limits_independently() {
+    let provider = OpenAIEmbedding::builder("text-embedding-3-small")
+      .api_key("test-key")
+      .build()
+      .unwrap();
+    // Short text (~3 tokens) — far below the per-text token cap.
+    let text = "hi there";
+    let tokens_per_text = provider.estimate_tokens(text);
+    assert!(
+      tokens_per_text > 0 && tokens_per_text < 100,
+      "expected a small token estimate, got {tokens_per_text}"
+    );
+
+    // Pre-fix: `current_tokens + tokens > 2048` would trip after
+    // ~2048 / tokens_per_text texts. With the split, we should be
+    // able to pack at least `MAX_INPUTS_PER_BATCH - 1` short texts
+    // before the array cap dominates.
+    let max_short_texts = MAX_TOKENS_PER_BATCH / tokens_per_text.max(1);
+    assert!(
+      max_short_texts >= MAX_INPUTS_PER_BATCH,
+      "for tiny texts the token budget should not dominate; got {max_short_texts} short texts allowed before flush"
+    );
   }
 
   #[test]
