@@ -231,7 +231,6 @@ dependencies = [
 name = "agentflow-llm"
 version = "0.2.0"
 dependencies = [
- "agentflow-core",
  "anyhow",
  "async-trait",
  "base64 0.21.7",

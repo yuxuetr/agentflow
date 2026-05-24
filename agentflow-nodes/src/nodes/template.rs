@@ -83,10 +83,23 @@ impl AsyncNode for TemplateNode {
 
     println!("📝 Rendering template for node '{}'", self.name);
 
-    // Render the template using Tera
+    // Q3.8.2: avoid the `.lock().unwrap()` panic on a poisoned mutex.
+    // A poisoned Tera mutex means a previous render panicked mid-flight;
+    // the engine's internal state may be inconsistent. Rather than
+    // crashing the workflow, surface the poison as an
+    // `AsyncExecutionError` so the caller's retry / error-handling
+    // logic gets a chance. We recover the guard via `into_inner` so
+    // subsequent renders proceed (Tera::render_str takes `&mut self`
+    // only because Tera caches parsed templates internally; the cache
+    // is best-effort and a stale entry is acceptable).
     let rendered = {
-      let mut tera = tera.lock().unwrap();
-      tera.render_str(&self.template, &context).map_err(|e| {
+      let mut tera_guard = tera.lock().unwrap_or_else(|poisoned| {
+        eprintln!(
+          "[agentflow-nodes:template] Tera template engine mutex was poisoned by a prior panic; recovering and continuing"
+        );
+        poisoned.into_inner()
+      });
+      tera_guard.render_str(&self.template, &context).map_err(|e| {
         AgentFlowError::AsyncExecutionError {
           message: format!("Template rendering failed: {}", e),
         }

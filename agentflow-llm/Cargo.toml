@@ -62,8 +62,10 @@ log = "0.4"
 # BPE family).
 tiktoken-rs = "0.6"
 
-# AgentFlow integration
-agentflow-core = { path = "../agentflow-core", version = "0.2" }
+# Q3.6.1: removed the dead `agentflow-core` dependency. It was declared
+# in [dependencies] but never imported anywhere in this crate's source,
+# bloating compile times and creating a false impression of a coupling
+# direction (llm → core) that doesn't actually exist.
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
