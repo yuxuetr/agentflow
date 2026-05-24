@@ -22,6 +22,8 @@ use tokio::time::{Duration, timeout};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const TENANT_HEADER: &str = "x-agentflow-tenant";
+
 fn live_url() -> Option<String> {
   std::env::var("AGENTFLOW_DATABASE_TEST_URL").ok()
 }
@@ -53,12 +55,15 @@ async fn submit_basic_session(app: axum::Router, prompt: &str) -> Uuid {
 /// Variant that pins a specific tenant so list-ordering tests can isolate
 /// themselves from parallel test inserts on the shared `default` tenant.
 async fn submit_for_tenant(app: axum::Router, prompt: &str, tenant: &str) -> Uuid {
+  // Q1.4.3: tenant comes from the header; body field is still allowed
+  // (must match) for backwards-compat smoke.
   let response = app
     .oneshot(
       Request::builder()
         .method("POST")
         .uri("/v1/harness/sessions")
         .header("content-type", "application/json")
+        .header(TENANT_HEADER, tenant)
         .body(Body::from(
           serde_json::to_vec(&json!({
             "user_input": prompt,
@@ -160,7 +165,8 @@ async fn list_sessions_returns_newest_first() {
     .oneshot(
       Request::builder()
         .method("GET")
-        .uri(format!("/v1/harness/sessions?tenant_id={}", tenant))
+        .uri("/v1/harness/sessions")
+        .header(TENANT_HEADER, tenant.as_str())
         .body(Body::empty())
         .unwrap(),
     )
@@ -656,8 +662,9 @@ async fn post_action_unknown_suffix_returns_400() {
 // harness endpoint, lock the contract down: seed a session as one
 // tenant, hit the endpoint as a different tenant, expect 404. The
 // shape mirrors `cross_tenant_get_run_returns_404` in `e2e_runs.rs`.
-
-const TENANT_HEADER: &str = "x-agentflow-tenant";
+//
+// `TENANT_HEADER` const is now defined at the top of this file so the
+// Q1.4.x rewrites of the listing / submit tests can also use it.
 
 #[tokio::test]
 async fn cross_tenant_get_harness_session_returns_404() {

@@ -24,6 +24,8 @@ use agentflow_db::{NewRun, RunRepo, RunStatus};
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
 use crate::runs::{CreateRunResponse, RunContext};
+use crate::tenant::TenantId;
+use axum::Extension;
 
 /// Read-only view of a skill registry, suitable for serving over HTTP.
 ///
@@ -172,6 +174,7 @@ pub struct RunSkillRequest {
 /// that handles `/v1/runs`. Skill agent integration lands in task #14.
 pub async fn run_skill(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Path(name): Path<String>,
   JsonReq(req): JsonReq<RunSkillRequest>,
 ) -> Result<Json<CreateRunResponse>, ApiError> {
@@ -195,7 +198,16 @@ pub async fn run_skill(
     _ => format!("@skill:{}", resolved.name),
   };
   let run_id = Uuid::new_v4();
-  let tenant_id = req.tenant_id.unwrap_or_else(|| "default".into());
+  let tenant_id = tenant.as_str().to_string();
+  // Q1.4.3: body tenant_id is no longer authoritative; if present it
+  // must match the auth-bound tenant.
+  if let Some(body_tenant) = &req.tenant_id
+    && body_tenant != &tenant_id
+  {
+    return Err(ApiError::TenantMismatch(format!(
+      "request body tenant_id '{body_tenant}' does not match authenticated tenant '{tenant_id}'"
+    )));
+  }
 
   let run = state
     .repos

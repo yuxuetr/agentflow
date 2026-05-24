@@ -64,6 +64,13 @@ pub enum ApiError {
   #[error("Forbidden: invalid token")]
   Forbidden,
 
+  /// Authenticated, but the request body/path attempted to act on a
+  /// different tenant than the one bound by the auth middleware.
+  /// Q1.4.3: introduced so server-side checks can refuse cross-tenant
+  /// writes with a specific code instead of generic `forbidden`.
+  #[error("Forbidden: {0}")]
+  TenantMismatch(String),
+
   /// Server has no auth configured but a request reached an authenticated
   /// route. Distinct from `Unauthorized` so operators can see a config gap.
   #[error("Server misconfiguration: {0}")]
@@ -85,7 +92,7 @@ impl ApiError {
       ApiError::NotFound(_) => StatusCode::NOT_FOUND,
       ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
       ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
-      ApiError::Forbidden => StatusCode::FORBIDDEN,
+      ApiError::Forbidden | ApiError::TenantMismatch(_) => StatusCode::FORBIDDEN,
       ApiError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
     }
   }
@@ -98,6 +105,7 @@ impl ApiError {
       ApiError::BadRequest(_) => "bad_request",
       ApiError::Unauthorized => "unauthorized",
       ApiError::Forbidden => "forbidden",
+      ApiError::TenantMismatch(_) => "tenant_mismatch",
       ApiError::Misconfigured(_) => "server_misconfigured",
       ApiError::PayloadTooLarge(_) => "payload_too_large",
     }

@@ -51,7 +51,12 @@ pub struct CreateRunRequest {
   pub workflow: Option<String>,
   /// Reference to a workflow stored elsewhere (future use).
   pub workflow_id: Option<String>,
-  /// Optional tenant override (defaults to `"default"`).
+  /// Optional tenant echo. Q1.4.3: this is no longer authoritative —
+  /// the auth-middleware-bound `X-Agentflow-Tenant` header is the
+  /// only source of truth. When the body still carries `tenant_id`
+  /// it must match the header, otherwise the request is rejected
+  /// with 403. Leaving this field in the body shape preserves the
+  /// wire compatibility for existing clients during the transition.
   #[serde(default)]
   pub tenant_id: Option<String>,
   /// Per-run retention overrides (P10.14.1). Either field can pin
@@ -476,6 +481,7 @@ async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
 /// dispatch the executor in the background, return the new id immediately.
 pub async fn submit_run(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   JsonReq(req): JsonReq<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, ApiError> {
   let workflow = req.workflow.or_else(|| {
@@ -501,8 +507,19 @@ pub async fn submit_run(
     None => (None, None),
   };
 
+  let tenant_id = tenant.as_str().to_string();
+  // Q1.4.3: refuse to accept a body tenant_id that disagrees with the
+  // auth-bound tenant. We don't silently override (that masks bugs in
+  // the client); instead force the client to either omit the field or
+  // align it with the header.
+  if let Some(body_tenant) = &req.tenant_id
+    && body_tenant != &tenant_id
+  {
+    return Err(ApiError::TenantMismatch(format!(
+      "request body tenant_id '{body_tenant}' does not match authenticated tenant '{tenant_id}'"
+    )));
+  }
   let run_id = Uuid::new_v4();
-  let tenant_id = req.tenant_id.unwrap_or_else(|| "default".into());
   let run_base_dir = run_base_dir_for_request();
   let run_dir = run_dir_for_run(&run_base_dir, run_id);
 
@@ -565,9 +582,6 @@ pub struct RunResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ListRunsQuery {
-  /// Tenant to list. Defaults to the single-tenant local-dev bucket.
-  #[serde(default)]
-  pub tenant_id: Option<String>,
   /// Max rows to return, clamped to 1..=100.
   #[serde(default)]
   pub limit: Option<i64>,
@@ -600,13 +614,12 @@ pub struct ResumePlanQuery {
 
 /// `GET /v1/runs` — list recent runs for a tenant, newest first.
 ///
-/// Tenant resolution (P2.6): the explicit `?tenant_id=` query param
-/// wins so existing callers / dashboards keep working; otherwise the
-/// `X-Agentflow-Tenant` header bound by the middleware is used
-/// (defaults to `"default"` for single-tenant local-dev).
+/// Tenant resolution (Q1.4.1): the `X-Agentflow-Tenant` header bound by
+/// the auth middleware is the only source of truth. The previous
+/// `?tenant_id=` query parameter is gone — it overrode the header and
+/// let any authenticated client list arbitrary tenants' runs.
 ///
 /// Query parameters:
-/// - `tenant_id` (override; defaults to the header-bound tenant)
 /// - `limit` (default 25, clamped to 1..=100)
 /// - `offset` (default 0, clamped to ≥ 0)
 /// - `status` (one of the canonical [`RunStatus`] strings; rejects
@@ -616,9 +629,7 @@ pub async fn list_runs(
   Extension(tenant): Extension<TenantId>,
   Query(params): Query<ListRunsQuery>,
 ) -> Result<Json<ListRunsResponse>, ApiError> {
-  let tenant_id = params
-    .tenant_id
-    .unwrap_or_else(|| tenant.as_str().to_string());
+  let tenant_id = tenant.as_str();
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
   let offset = params.offset.unwrap_or(0).max(0);
   let status = match params.status.as_deref() {
@@ -628,7 +639,7 @@ pub async fn list_runs(
   let runs = state
     .repos
     .runs
-    .list_filtered(&tenant_id, status, limit, offset)
+    .list_filtered(tenant_id, status, limit, offset)
     .await?;
   Ok(Json(ListRunsResponse { runs }))
 }

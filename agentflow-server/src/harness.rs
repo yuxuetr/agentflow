@@ -241,9 +241,6 @@ pub struct ListHarnessSessionsResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ListHarnessSessionsQuery {
-  /// Tenant to list. Defaults to the single-tenant local-dev bucket.
-  #[serde(default)]
-  pub tenant_id: Option<String>,
   /// Max rows to return, clamped to 1..=100.
   #[serde(default)]
   pub limit: Option<i64>,
@@ -406,8 +403,13 @@ pub fn default_harness_executor() -> Arc<dyn HarnessSessionExecutor> {
 /// `POST /v1/harness/sessions` — accept a session submission, persist a
 /// `running` session row, dispatch the executor in the background, return
 /// the new id immediately.
+///
+/// Q1.4.3: tenant comes from the auth-bound `Extension<TenantId>`; if
+/// the body still carries a `tenant_id` it must match, otherwise the
+/// request is rejected with `tenant_mismatch` (HTTP 403).
 pub async fn submit_harness_session(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   JsonReq(req): JsonReq<CreateHarnessSessionRequest>,
 ) -> Result<Json<CreateHarnessSessionResponse>, ApiError> {
   let user_input = req.user_input.trim();
@@ -424,7 +426,14 @@ pub async fn submit_harness_session(
   }
 
   let session_id = Uuid::new_v4();
-  let tenant_id = req.tenant_id.unwrap_or_else(|| "default".into());
+  let tenant_id = tenant.as_str().to_string();
+  if let Some(body_tenant) = &req.tenant_id
+    && body_tenant != &tenant_id
+  {
+    return Err(ApiError::TenantMismatch(format!(
+      "request body tenant_id '{body_tenant}' does not match authenticated tenant '{tenant_id}'"
+    )));
+  }
   let profile = req.profile.unwrap_or_else(|| DEFAULT_PROFILE.into());
   let runtime_kind = req
     .runtime_kind
@@ -477,14 +486,18 @@ pub async fn submit_harness_session(
 }
 
 /// `GET /v1/harness/sessions` — list recent sessions for a tenant, newest
-/// first.
+/// first. Q1.4.2: the tenant comes exclusively from the auth-middleware
+/// `X-Agentflow-Tenant` extension. The previous code ignored that
+/// extension entirely and exposed every tenant's sessions to any
+/// authenticated client through the `?tenant_id=` query parameter.
 pub async fn list_harness_sessions(
   State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
   Query(params): Query<ListHarnessSessionsQuery>,
 ) -> Result<Json<ListHarnessSessionsResponse>, ApiError> {
-  let tenant_id = params.tenant_id.unwrap_or_else(|| "default".into());
+  let tenant_id = tenant.as_str();
   let limit = params.limit.unwrap_or(25).clamp(1, 100);
-  let sessions = state.repos.harness_sessions.list(&tenant_id, limit).await?;
+  let sessions = state.repos.harness_sessions.list(tenant_id, limit).await?;
   Ok(Json(ListHarnessSessionsResponse { sessions }))
 }
 

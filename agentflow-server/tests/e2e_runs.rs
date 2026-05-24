@@ -89,12 +89,14 @@ async fn list_runs_offset_pagination_returns_disjoint_pages() {
   let tenant = format!("tenant-page-{}", Uuid::new_v4());
   let _ids = seed_runs(&state, &tenant, RunStatus::Queued, 5).await;
 
-  // Page 1 — first 2 rows newest-first.
+  // Page 1 — first 2 rows newest-first. Q1.4.1: tenant comes from the
+  // header, not a `?tenant_id=` query param.
   let app = create_router(state.clone());
   let response = app
     .oneshot(
       Request::builder()
-        .uri(format!("/v1/runs?tenant_id={tenant}&limit=2&offset=0"))
+        .uri("/v1/runs?limit=2&offset=0")
+        .header(TENANT_HEADER, tenant.as_str())
         .body(Body::empty())
         .unwrap(),
     )
@@ -115,7 +117,8 @@ async fn list_runs_offset_pagination_returns_disjoint_pages() {
   let response = app
     .oneshot(
       Request::builder()
-        .uri(format!("/v1/runs?tenant_id={tenant}&limit=2&offset=2"))
+        .uri("/v1/runs?limit=2&offset=2")
+        .header(TENANT_HEADER, tenant.as_str())
         .body(Body::empty())
         .unwrap(),
     )
@@ -156,9 +159,8 @@ async fn list_runs_status_filter_isolates_running_rows() {
   let response = app
     .oneshot(
       Request::builder()
-        .uri(format!(
-          "/v1/runs?tenant_id={tenant}&status=running&limit=10"
-        ))
+        .uri("/v1/runs?status=running&limit=10")
+        .header(TENANT_HEADER, tenant.as_str())
         .body(Body::empty())
         .unwrap(),
     )
@@ -188,7 +190,8 @@ async fn list_runs_rejects_unknown_status_value() {
   let response = app
     .oneshot(
       Request::builder()
-        .uri("/v1/runs?tenant_id=default&status=invented_state")
+        .uri("/v1/runs?status=invented_state")
+        .header(TENANT_HEADER, "default")
         .body(Body::empty())
         .unwrap(),
     )
@@ -221,7 +224,8 @@ async fn list_runs_offset_beyond_total_returns_empty_page() {
   let response = app
     .oneshot(
       Request::builder()
-        .uri(format!("/v1/runs?tenant_id={tenant}&limit=10&offset=500"))
+        .uri("/v1/runs?limit=10&offset=500")
+        .header(TENANT_HEADER, tenant.as_str())
         .body(Body::empty())
         .unwrap(),
     )
@@ -498,10 +502,15 @@ async fn list_runs_uses_header_tenant_when_query_param_absent() {
   }
 }
 
+/// Q1.4.1 regression: the `?tenant_id=` query parameter no longer
+/// exists. Even if a client appends it (treating it as a spurious key),
+/// the header-bound tenant is the only authoritative source. Pre-fix
+/// the query won and any authenticated client could read another
+/// tenant's runs by appending `?tenant_id=<victim>`.
 #[tokio::test]
-async fn list_runs_query_param_overrides_header() {
+async fn list_runs_ignores_unknown_tenant_id_query_param() {
   let Some(state) = fresh_state().await else {
-    eprintln!("skipping list_runs_query_param_overrides_header");
+    eprintln!("skipping list_runs_ignores_unknown_tenant_id_query_param");
     return;
   };
   let alpha = format!("tenant-override-alpha-{}", Uuid::new_v4());
@@ -510,8 +519,8 @@ async fn list_runs_query_param_overrides_header() {
   let _beta = seed_runs(&state, &beta, RunStatus::Queued, 1).await;
 
   let app = create_router(state);
-  // Header says alpha, query says beta — query wins for backward compat
-  // with existing dashboards. Documented explicitly in the handler doc.
+  // Header says alpha, query says beta — the query is ignored and the
+  // listing reflects only alpha's runs.
   let response = app
     .oneshot(
       Request::builder()
@@ -530,8 +539,10 @@ async fn list_runs_query_param_overrides_header() {
   )
   .unwrap();
   let runs = body["runs"].as_array().unwrap();
-  assert_eq!(runs.len(), 1);
-  assert_eq!(runs[0]["tenant_id"], beta);
+  assert_eq!(runs.len(), 2);
+  for run in runs {
+    assert_eq!(run["tenant_id"], alpha);
+  }
 }
 
 #[tokio::test]
@@ -688,4 +699,73 @@ async fn cross_tenant_stream_events_sse_returns_404() {
     .await
     .unwrap();
   assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Q1.4.3 regression: when the request body carries a `tenant_id` that
+/// disagrees with the auth-bound tenant header, the submit handler
+/// refuses with HTTP 403 / code `tenant_mismatch` rather than silently
+/// honoring the body. Pre-fix any authenticated client could plant
+/// runs in any tenant by spoofing the body field.
+#[tokio::test]
+async fn submit_run_rejects_body_tenant_id_that_disagrees_with_header() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_rejects_body_tenant_id_that_disagrees_with_header");
+    return;
+  };
+  let app = create_router(state);
+  let body = json!({
+    "workflow": FIXED_DAG,
+    "tenant_id": "tenant-victim",
+  })
+  .to_string();
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .header(TENANT_HEADER, "tenant-attacker")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  let body: Value = serde_json::from_slice(
+    &axum::body::to_bytes(response.into_body(), 4096)
+      .await
+      .unwrap(),
+  )
+  .unwrap();
+  assert_eq!(body["error"]["code"], "tenant_mismatch");
+}
+
+/// Companion to Q1.4.3: when the body tenant_id matches the header
+/// (the legitimate echo case), submit still succeeds.
+#[tokio::test]
+async fn submit_run_accepts_body_tenant_id_that_matches_header() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_run_accepts_body_tenant_id_that_matches_header");
+    return;
+  };
+  let tenant = format!("tenant-match-{}", Uuid::new_v4());
+  let app = create_router(state);
+  let body = json!({
+    "workflow": FIXED_DAG,
+    "tenant_id": tenant.clone(),
+  })
+  .to_string();
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .header(TENANT_HEADER, tenant.as_str())
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
 }
