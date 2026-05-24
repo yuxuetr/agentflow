@@ -14,6 +14,32 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
 
+/// Q3.2.1: env vars that are safe to inherit when sandboxing the spawned
+/// MCP server. PATH lets it find `node`/`python`/etc.; locale + HOME +
+/// USER + SHELL are needed by many CLI tools to behave correctly. Any
+/// LC_* var is additionally forwarded by the spawn code. Anything not
+/// on this list — API keys, AWS creds, SSH agent sockets, OPENAI_*,
+/// ANTHROPIC_*, etc. — is dropped on the floor unless the caller passes
+/// it explicitly via `with_env(...)`.
+const SAFE_INHERITED_ENV_VARS: &[&str] = &[
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TZ",
+  "TERM",
+  "TMPDIR",
+  "PWD",
+  // Windows equivalents (harmless on unix, no value, just skipped).
+  "USERNAME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "SYSTEMROOT",
+];
+
 /// Stdio transport for local MCP servers
 ///
 /// This transport spawns a local process and communicates via stdin/stdout
@@ -40,6 +66,14 @@ pub struct StdioTransport {
   command: Vec<String>,
   /// Environment variables to set on the spawned process
   env: HashMap<String, String>,
+  /// Q3.2.1: when `false` (the default), the spawned MCP server inherits
+  /// only a hardened, opt-in safe-list of env vars from the parent
+  /// process (PATH, locale, HOME, USER, etc.) plus whatever `env`
+  /// declares explicitly. The parent's `OPENAI_API_KEY`,
+  /// `ANTHROPIC_API_KEY`, AWS creds, SSH keys, etc. **do not** leak
+  /// to a third-party MCP server. Operators who genuinely need full
+  /// parent inheritance can flip this with `with_inherit_parent_env(true)`.
+  inherit_parent_env: bool,
   /// Spawned child process
   process: Option<Child>,
   /// Buffered stdin writer
@@ -92,6 +126,7 @@ impl StdioTransport {
     Self {
       command,
       env: HashMap::new(),
+      inherit_parent_env: false,
       process: None,
       stdin: None,
       stdout: None,
@@ -106,6 +141,15 @@ impl StdioTransport {
   /// Set environment variables for the spawned MCP server process.
   pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
     self.env = env;
+    self
+  }
+
+  /// Q3.2.1: opt back into full parent-environment inheritance for the
+  /// spawned MCP server. Default is `false` (sandboxed). Only set this
+  /// to `true` for trusted MCP servers where leaking the parent's
+  /// secrets (LLM keys, AWS creds, SSH agent socket) is acceptable.
+  pub fn with_inherit_parent_env(mut self, inherit: bool) -> Self {
+    self.inherit_parent_env = inherit;
     self
   }
 
@@ -238,6 +282,29 @@ impl Transport for StdioTransport {
     let mut cmd = Command::new(&self.command[0]);
     if self.command.len() > 1 {
       cmd.args(&self.command[1..]);
+    }
+
+    // Q3.2.1: sandboxed env by default. `Command::new` inherits the
+    // parent's full environment, which leaks every API key / secret
+    // the host process happens to hold to whatever third-party MCP
+    // binary we just launched. Wipe parent env, then re-grant a
+    // hardened safe-list of vars the child genuinely needs to run
+    // (PATH so it can locate `node` / `python`; locale so its output
+    // isn't garbled; HOME / USER so it can find its config). Anything
+    // sensitive must be opted-in via `with_env(...)` per call.
+    if !self.inherit_parent_env {
+      cmd.env_clear();
+      for safe_var in SAFE_INHERITED_ENV_VARS {
+        if let Ok(value) = std::env::var(safe_var) {
+          cmd.env(safe_var, value);
+        }
+      }
+      // Locale vars are prefix-matched (LC_*), preserved by iterating.
+      for (key, value) in std::env::vars() {
+        if key.starts_with("LC_") {
+          cmd.env(key, value);
+        }
+      }
     }
     if !self.env.is_empty() {
       cmd.envs(&self.env);
@@ -547,6 +614,103 @@ mod tests {
     assert_eq!(transport.timeout_ms(), Some(10_000));
     assert_eq!(transport.max_message_size(), Some(2 * 1024 * 1024));
     assert!(!transport.is_connected());
+  }
+
+  // Q3.2.1: by default a third-party MCP server must NOT see the parent's
+  // secrets. We can't trivially observe the spawned child's env from the
+  // parent process, but we can verify the spawn-sandbox path *runs* (no
+  // env vars escape the construction stage) and that the opt-in flag
+  // flips back to inherit-mode without panicking.
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn spawn_sandboxes_parent_env_by_default() {
+    // Set a secret in the parent that the child would inherit by
+    // default if we hadn't sandboxed. Use a unique key so we can detect
+    // leakage even in parallel test runs.
+    let secret_key = "Q3_2_1_LEAK_TEST_OPENAI_API_KEY";
+    let secret_value = "sk-must-not-leak";
+    // SAFETY: test single-threaded w.r.t. this var; no other thread reads it.
+    unsafe {
+      std::env::set_var(secret_key, secret_value);
+    }
+
+    // The child writes its full environment to stdout, so we can grep
+    // for the secret.
+    let mut transport = StdioTransport::new(vec![
+      "/usr/bin/env".to_string(),
+    ])
+    .with_timeout(Duration::from_secs(5));
+
+    let _ = transport.connect().await; // env exits with code 0; transport may then EOF.
+    // Read whatever the child wrote on stdout before exiting.
+    let mut stdout_collected = String::new();
+    if let Some(stdout) = transport.stdout.as_mut() {
+      use tokio::io::AsyncReadExt;
+      // Bounded read so we never hang.
+      let mut buf = [0u8; 8192];
+      while let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(500), stdout.read(&mut buf)).await
+      {
+        if n == 0 {
+          break;
+        }
+        stdout_collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+      }
+    }
+    let _ = transport.disconnect().await;
+
+    // SAFETY: test cleanup; var was set by us in the same test.
+    unsafe {
+      std::env::remove_var(secret_key);
+    }
+
+    assert!(
+      !stdout_collected.contains(secret_value),
+      "parent secret leaked to spawned MCP child by default; got env:\n{stdout_collected}"
+    );
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn spawn_inherits_parent_env_when_explicitly_opted_in() {
+    let secret_key = "Q3_2_1_OPTIN_TEST_VAR";
+    let secret_value = "opted-in-on-purpose";
+    // SAFETY: test single-threaded w.r.t. this var; no other thread reads it.
+    unsafe {
+      std::env::set_var(secret_key, secret_value);
+    }
+
+    let mut transport = StdioTransport::new(vec![
+      "/usr/bin/env".to_string(),
+    ])
+    .with_timeout(Duration::from_secs(5))
+    .with_inherit_parent_env(true);
+
+    let _ = transport.connect().await;
+    let mut stdout_collected = String::new();
+    if let Some(stdout) = transport.stdout.as_mut() {
+      use tokio::io::AsyncReadExt;
+      let mut buf = [0u8; 8192];
+      while let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(500), stdout.read(&mut buf)).await
+      {
+        if n == 0 {
+          break;
+        }
+        stdout_collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+      }
+    }
+    let _ = transport.disconnect().await;
+
+    // SAFETY: test cleanup; var was set by us in the same test.
+    unsafe {
+      std::env::remove_var(secret_key);
+    }
+
+    assert!(
+      stdout_collected.contains(secret_value),
+      "with_inherit_parent_env(true) must restore parent env; got:\n{stdout_collected}"
+    );
   }
 
   // ============================================================================

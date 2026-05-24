@@ -547,12 +547,26 @@ pub fn create_router(state: AppState) -> Router {
   // so single-tenant local-dev stays zero-config.
   let v1 = v1.layer(middleware::from_fn(tenant::extract_tenant_id));
 
+  // Q3.4.1: install the global request body cap so every route gets a
+  // sane upper bound, not just the three (`/v1/runs`, `/v1/skills/...`,
+  // `/v1/harness/sessions`) that override with route-local limits.
+  // Before this layer was added, `AGENTFLOW_MAX_REQUEST_BODY_BYTES`
+  // (and the security profile default) were parsed into
+  // `request_limits.max_request_body_bytes` but never applied —
+  // arbitrary POST bodies to e.g. `/v1/preferences` could exhaust
+  // server memory. The route-local `DefaultBodyLimit::max(...)` calls
+  // for workflow/skill/harness bodies remain in place and shadow
+  // this global cap when present (per-route always wins under
+  // `tower-http`'s layering semantics).
+  let global_body_limit = state.security.request_limits.max_request_body_bytes as usize;
+
   Router::new()
     .merge(health)
     .merge(v1)
     .merge(ui_router())
     .layer(cors_layer(&state.security))
     .layer(TraceLayer::new_for_http())
+    .layer(DefaultBodyLimit::max(global_body_limit))
     .with_state(state)
 }
 

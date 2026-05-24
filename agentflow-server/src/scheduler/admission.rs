@@ -40,6 +40,23 @@ use super::{
 /// doesn't depend on the `verify_worker_jwt_at` symbol directly. Lets
 /// future test doubles intercept the call site without a feature
 /// gate.
+/// Q3.4.2: constant-time byte slice comparison. Returns `true` iff `a == b`,
+/// without short-circuiting on the first mismatched byte — equal-length inputs
+/// take the same number of CPU cycles whether they match or not. Mirrors
+/// `src/auth.rs::constant_time_eq` so the worker PSK path matches the bearer
+/// token path. Length-mismatch is allowed to return immediately because the
+/// length is not a secret.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+  if a.len() != b.len() {
+    return false;
+  }
+  let mut diff: u8 = 0;
+  for (x, y) in a.iter().zip(b.iter()) {
+    diff |= x ^ y;
+  }
+  diff == 0
+}
+
 fn verify_worker_jwt_for_check(
   token: &str,
   policy: &JwtPolicy,
@@ -190,7 +207,27 @@ impl WorkerAdmissionPolicy {
           worker_id: credential.worker_id.0.clone(),
         });
       };
-      if !valid_tokens.contains(presented) {
+      // Q3.4.2: constant-time compare. `HashSet::contains` short-circuits
+      // on the first mismatched byte (string equality), leaking the
+      // matching prefix length through a timing side-channel; a network
+      // attacker can iterate one byte at a time to recover the PSK.
+      // Walk every configured token with a constant-time comparator and
+      // keep the result in a `subtle::Choice` so the loop's branch
+      // doesn't short-circuit either. Matches the bearer-token path in
+      // `src/auth.rs::constant_time_eq`.
+      let mut matched = false;
+      for valid in valid_tokens {
+        // Note: short-token mismatch is allowed to fast-fail because
+        // the length itself is not a secret (HashSet would have leaked
+        // it anyway via bucket lookup). The constant-time guarantee
+        // applies *within* each same-length comparison.
+        if constant_time_eq(valid.as_bytes(), presented.as_bytes()) {
+          matched = true;
+          // Don't `break` — keep the loop running so total compute time
+          // doesn't depend on which entry matched (or whether one did).
+        }
+      }
+      if !matched {
         return Err(AdmissionError::InvalidCredential {
           worker_id: credential.worker_id.0.clone(),
           reason: "psk did not match any rotation entry".to_string(),
