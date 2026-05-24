@@ -626,6 +626,20 @@ pub struct TraceMetadata {
 
   /// Environment (e.g., "production", "development")
   pub environment: String,
+
+  /// Q2.2.3: when set, this trace was started inside an upstream
+  /// `traceparent` context (e.g. an HTTP request from another service).
+  /// The 16-byte hex trace_id from that traceparent is recorded here so
+  /// the OTel exporter can emit spans under the *parent's* trace_id,
+  /// stitching cross-service traces together. `parent_span_id` carries
+  /// the upstream caller's span_id for the same purpose.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub external_trace_id: Option<String>,
+
+  /// Q2.2.3: upstream caller's span_id (8-byte hex). Used as the root
+  /// span's `parent_span_id` in OTel export.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub external_parent_span_id: Option<String>,
 }
 
 impl Default for TraceMetadata {
@@ -635,6 +649,8 @@ impl Default for TraceMetadata {
       session_id: None,
       tags: Vec::new(),
       environment: "development".to_string(),
+      external_trace_id: None,
+      external_parent_span_id: None,
     }
   }
 }

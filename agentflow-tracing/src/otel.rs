@@ -191,7 +191,15 @@ pub enum OtelStatusCode {
 }
 
 pub fn trace_to_spans(trace: &ExecutionTrace, config: &OtelExporterConfig) -> Vec<OtelSpan> {
-  let trace_id = trace_id(&trace.workflow_id);
+  // Q2.2.3: stitch into the upstream W3C trace when one was captured at
+  // `WorkflowStarted` time. Falls back to a fresh random trace_id when
+  // the workflow had no inbound `traceparent`.
+  let trace_id = trace
+    .metadata
+    .external_trace_id
+    .clone()
+    .unwrap_or_else(|| trace_id(&trace.workflow_id));
+  let workflow_parent_span_id = trace.metadata.external_parent_span_id.clone();
   let workflow_span_id = span_id(&trace.workflow_id, "workflow");
   let workflow_start = unix_nanos(trace.started_at);
   let workflow_end = trace.completed_at.map(unix_nanos).unwrap_or(workflow_start);
@@ -199,7 +207,7 @@ pub fn trace_to_spans(trace: &ExecutionTrace, config: &OtelExporterConfig) -> Ve
   let mut spans = vec![OtelSpan {
     trace_id: trace_id.clone(),
     span_id: workflow_span_id.clone(),
-    parent_span_id: None,
+    parent_span_id: workflow_parent_span_id,
     name: format!("agentflow.workflow {}", trace.workflow_id),
     kind: OtelSpanKind::Internal,
     start_time_unix_nano: workflow_start,
@@ -524,29 +532,43 @@ fn add_ms(start_unix_nano: u64, duration_ms: u64) -> u64 {
   start_unix_nano.saturating_add(duration_ms.saturating_mul(1_000_000))
 }
 
-fn trace_id(workflow_id: &str) -> String {
-  hex_hash(workflow_id, 16)
+/// Q2.2.2: generate a W3C-compliant 16-byte trace_id from cryptographically
+/// random bytes. The previous implementation derived the id deterministically
+/// from `workflow_id` via FNV-1a, which (1) violated the W3C "MUST be random"
+/// requirement, (2) produced predictable IDs (security smell), and (3) made
+/// trace_id uniqueness depend on workflow_id uniqueness even though IDs span
+/// processes. We ignore `_workflow_id` for hashing now; it remains in the
+/// signature only because callers still want a single trace_id per
+/// `ExecutionTrace` (passed down to child spans).
+fn trace_id(_workflow_id: &str) -> String {
+  random_hex_id::<16>()
 }
 
-fn span_id(workflow_id: &str, name: &str) -> String {
-  hex_hash(&format!("{workflow_id}:{name}"), 8)
+/// Q2.2.2: 8-byte random span_id per W3C spec. The `(workflow_id, name)`
+/// tuple is no longer used for derivation — spans get their identity from
+/// random bytes, and parent/child relationships are tracked explicitly via
+/// `parent_span_id` (which is what OTel exporters care about anyway).
+fn span_id(_workflow_id: &str, _name: &str) -> String {
+  random_hex_id::<8>()
 }
 
-fn hex_hash(input: &str, bytes: usize) -> String {
-  let mut hash = 0xcbf29ce484222325u64;
-  for byte in input.as_bytes() {
-    hash ^= u64::from(*byte);
-    hash = hash.wrapping_mul(0x100000001b3);
+fn random_hex_id<const N: usize>() -> String {
+  use rand::RngCore;
+  let mut bytes = [0u8; N];
+  loop {
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    // W3C: MUST NOT be all zeros. Defensive — OsRng yielding all-zero is
+    // astronomically unlikely but spec-required to check.
+    if bytes.iter().any(|b| *b != 0) {
+      break;
+    }
   }
-
-  let mut out = format!("{hash:016x}");
-  let required_len = bytes * 2;
-  while out.len() < required_len {
-    hash ^= hash.rotate_left(13);
-    hash = hash.wrapping_mul(0x100000001b3);
-    out.push_str(&format!("{hash:016x}"));
+  // Lowercase hex per W3C traceparent format.
+  let mut out = String::with_capacity(N * 2);
+  for b in bytes.iter() {
+    use std::fmt::Write as _;
+    let _ = write!(out, "{b:02x}");
   }
-  out.truncate(required_len);
   out
 }
 
@@ -678,5 +700,53 @@ mod tests {
       .attributes
       .iter()
       .any(|attr| attr.key == key && &attr.value == value)
+  }
+
+  // Q2.2.2: regression — trace_id / span_id must be W3C-compliant random
+  // hex strings (16 bytes / 8 bytes) and must NOT be deterministic given
+  // the workflow_id. Previous FNV-1a implementation violated both.
+  #[test]
+  fn trace_id_is_thirty_two_lowercase_hex_chars() {
+    let id = trace_id("wf-anything");
+    assert_eq!(id.len(), 32, "trace_id must be 16 bytes = 32 hex chars");
+    assert!(
+      id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+      "trace_id must be lowercase hex, got {id}"
+    );
+    assert!(id.chars().any(|c| c != '0'), "trace_id must not be all zeros");
+  }
+
+  #[test]
+  fn span_id_is_sixteen_lowercase_hex_chars() {
+    let id = span_id("wf-anything", "workflow");
+    assert_eq!(id.len(), 16, "span_id must be 8 bytes = 16 hex chars");
+    assert!(
+      id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+      "span_id must be lowercase hex, got {id}"
+    );
+    assert!(id.chars().any(|c| c != '0'), "span_id must not be all zeros");
+  }
+
+  #[test]
+  fn trace_id_is_unique_per_call_for_same_workflow_id() {
+    // Two ExecutionTraces with the same workflow_id (e.g. retries) must
+    // produce distinct trace_ids. The FNV-derived implementation
+    // returned the same id, defeating cross-run trace correlation.
+    let a = trace_id("same-workflow");
+    let b = trace_id("same-workflow");
+    assert_ne!(
+      a, b,
+      "two trace_id calls for the same workflow must yield distinct random ids"
+    );
+  }
+
+  #[test]
+  fn span_id_is_unique_per_call_for_same_workflow_and_name() {
+    let a = span_id("wf", "workflow");
+    let b = span_id("wf", "workflow");
+    assert_ne!(
+      a, b,
+      "span_id must be random per call, not derived from workflow_id + name"
+    );
   }
 }

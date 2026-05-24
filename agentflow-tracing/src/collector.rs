@@ -5,8 +5,11 @@ use crate::redaction::{RedactionConfig, redact_trace, redact_value};
 use crate::storage::TraceStorage;
 use crate::types::*;
 use agentflow_core::events::{EventListener, WorkflowEvent};
+use futures::FutureExt;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 
 /// Trace collector configuration
@@ -108,7 +111,19 @@ pub struct TraceCollector {
   /// — `WorkflowCompleted` would sometimes save the trace before an
   /// earlier `NodeCompleted` finished updating the node row, yielding
   /// `status=running` on the final node in TUI/replay output.
-  drain_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<WorkflowEvent>>,
+  /// Q2.2.3: each entry is `(captured_traceparent, event)`. The
+  /// traceparent is read SYNCHRONOUSLY from the task-local in
+  /// `on_event`, so we capture the producer's W3C context before the
+  /// event hops to the drain task (which runs outside the scope).
+  drain_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(Option<String>, WorkflowEvent)>>,
+
+  /// Q2.2.1: flipped to `true` if the drain task observes too many
+  /// consecutive panics or fatal errors. `on_event` consults this flag
+  /// and drops further sends so the unbounded channel doesn't keep
+  /// growing into a dead sink. Producers see no error (event tracing is
+  /// best-effort), but the in-process logs surface the panic loudly via
+  /// `tracing::error!` so the failure isn't silent.
+  drain_poisoned: Arc<AtomicBool>,
 }
 
 impl TraceCollector {
@@ -121,7 +136,15 @@ impl TraceCollector {
       pending_llm: Arc::new(RwLock::new(HashMap::new())),
       exporters: Vec::new(),
       drain_tx: std::sync::OnceLock::new(),
+      drain_poisoned: Arc::new(AtomicBool::new(false)),
     }
+  }
+
+  /// Q2.2.1: visible for tests + diagnostics. Returns `true` once the
+  /// drain task has terminated (typically because too many panics in a
+  /// row); further `on_event` calls become no-ops.
+  pub fn is_drain_poisoned(&self) -> bool {
+    self.drain_poisoned.load(Ordering::SeqCst)
   }
 
   /// Attach an exporter for completed or failed traces.
@@ -178,6 +201,20 @@ impl TraceCollector {
         let mut trace = ExecutionTrace::new(workflow_id.clone());
         trace.metadata.environment =
           std::env::var("AGENTFLOW_ENV").unwrap_or_else(|_| "development".to_string());
+
+        // Q2.2.3: honor inbound W3C `traceparent`. When the workflow runs
+        // inside `crate::context::scope(...)` (typically because the
+        // server gateway installed a parent context off the incoming
+        // HTTP header), record the upstream trace_id + span_id so the
+        // OTel exporter stitches our spans into that trace instead of
+        // generating a fresh, orphaned trace. Without this, CLAUDE.md's
+        // "W3C traceparent propagation" was outbound-only.
+        if let Some(tp) = crate::context::current_traceparent()
+          && let Some((external_trace_id, external_parent_span_id)) = parse_traceparent(&tp)
+        {
+          trace.metadata.external_trace_id = Some(external_trace_id);
+          trace.metadata.external_parent_span_id = Some(external_parent_span_id);
+        }
 
         traces.write().await.insert(workflow_id, trace);
       }
@@ -443,6 +480,47 @@ impl TraceCollector {
   }
 }
 
+/// Q2.2.3: parse a W3C `traceparent` into `(trace_id, parent_span_id)`. The
+/// header has the form `00-<32-hex trace_id>-<16-hex span_id>-<2-hex flags>`.
+/// Returns `None` for anything that doesn't match the version-00 shape; we
+/// don't attempt to interpret newer versions (per the W3C compatibility
+/// rule: "MUST be ignored if version is unknown but in a future format").
+fn parse_traceparent(header: &str) -> Option<(String, String)> {
+  let parts: Vec<&str> = header.split('-').collect();
+  if parts.len() != 4 {
+    return None;
+  }
+  if parts[0] != "00" {
+    return None;
+  }
+  let trace_id = parts[1];
+  let span_id = parts[2];
+  if trace_id.len() != 32 || span_id.len() != 16 {
+    return None;
+  }
+  if !trace_id.chars().all(|c| c.is_ascii_hexdigit())
+    || !span_id.chars().all(|c| c.is_ascii_hexdigit())
+  {
+    return None;
+  }
+  if trace_id.chars().all(|c| c == '0') || span_id.chars().all(|c| c == '0') {
+    return None;
+  }
+  Some((trace_id.to_string(), span_id.to_string()))
+}
+
+/// Q2.2.1: format an unwound panic payload into a printable message for the
+/// drain task's error log. Mirrors `std::panic::PanicInfo` formatting.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+  if let Some(s) = payload.downcast_ref::<&'static str>() {
+    return (*s).to_string();
+  }
+  if let Some(s) = payload.downcast_ref::<String>() {
+    return s.clone();
+  }
+  "<non-string panic payload>".to_string()
+}
+
 impl EventListener for TraceCollector {
   fn on_event(&self, event: &WorkflowEvent) {
     // Clone what we need for async task
@@ -455,38 +533,96 @@ impl EventListener for TraceCollector {
 
     // Spawn async task to process event (non-blocking)
     if self.config.async_storage {
+      // Q2.2.1: short-circuit when the drain task has poisoned itself
+      // after repeated panics. Without this guard the unbounded channel
+      // would grow without bound (the receiver is dead), turning a one-
+      // time bug into a memory leak.
+      if self.drain_poisoned.load(Ordering::SeqCst) {
+        return;
+      }
       // Lazily set up a single drain task on first use so events are
       // applied to `current_traces` in arrival order. The previous
       // `tokio::spawn` per event raced across tasks for the same
       // workflow's RwLock — see field-level comment on `drain_tx`.
       let tx = self.drain_tx.get_or_init(|| {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
+        let (tx, mut rx) =
+          tokio::sync::mpsc::unbounded_channel::<(Option<String>, WorkflowEvent)>();
         let storage_drain = storage.clone();
         let traces_drain = traces.clone();
         let pending_drain = pending_llm.clone();
         let config_drain = config.clone();
         let exporters_drain = exporters.clone();
+        let poisoned_drain = self.drain_poisoned.clone();
         tokio::spawn(async move {
-          while let Some(ev) = rx.recv().await {
-            if let Err(e) = Self::process_event(
-              storage_drain.clone(),
-              traces_drain.clone(),
-              pending_drain.clone(),
-              config_drain.clone(),
-              exporters_drain.clone(),
-              ev,
-            )
-            .await
-            {
-              Self::handle_storage_error(&config_drain, e);
+          // Q2.2.1: each event handler is wrapped in `catch_unwind` so a
+          // panic in `process_event` / exporter / storage / handle_storage_error
+          // (`FailWorkflow` policy used to call `panic!`) no longer kills
+          // the drain task and silently swallows every subsequent event.
+          // Consecutive panics beyond CONSECUTIVE_PANIC_BUDGET poison the
+          // drain so producers stop filling the channel.
+          const CONSECUTIVE_PANIC_BUDGET: u32 = 16;
+          let mut consecutive_panics: u32 = 0;
+          while let Some((captured_tp, ev)) = rx.recv().await {
+            let storage_for_event = storage_drain.clone();
+            let traces_for_event = traces_drain.clone();
+            let pending_for_event = pending_drain.clone();
+            let config_for_event = config_drain.clone();
+            let exporters_for_event = exporters_drain.clone();
+            // Q2.2.3: re-install the producer's traceparent for the
+            // duration of `process_event`. The drain task itself does
+            // not inherit task-locals, so we restore the scope here so
+            // `current_traceparent()` inside `process_event` sees the
+            // upstream context.
+            let fut = async move {
+              let work = async {
+                if let Err(e) = Self::process_event(
+                  storage_for_event,
+                  traces_for_event,
+                  pending_for_event,
+                  config_for_event.clone(),
+                  exporters_for_event,
+                  ev,
+                )
+                .await
+                {
+                  Self::handle_storage_error(&config_for_event, e);
+                }
+              };
+              match captured_tp {
+                Some(tp) => crate::context::scope(tp, work).await,
+                None => work.await,
+              }
+            };
+            match AssertUnwindSafe(fut).catch_unwind().await {
+              Ok(()) => consecutive_panics = 0,
+              Err(payload) => {
+                consecutive_panics += 1;
+                let msg = panic_payload_message(&payload);
+                tracing::error!(
+                  consecutive_panics,
+                  panic = %msg,
+                  "trace collector drain task caught panic; continuing"
+                );
+                if consecutive_panics >= CONSECUTIVE_PANIC_BUDGET {
+                  tracing::error!(
+                    panic_budget = CONSECUTIVE_PANIC_BUDGET,
+                    "trace collector drain task poisoning itself after repeated panics; dropping further events"
+                  );
+                  poisoned_drain.store(true, Ordering::SeqCst);
+                  return;
+                }
+              }
             }
           }
         });
         tx
       });
+      // Q2.2.3: capture the producer's W3C `traceparent` *now* (we are
+      // still synchronously inside the producer's task-local scope).
+      let captured_tp = crate::context::current_traceparent();
       // Drop on send failure: receiver only goes away on collector drop,
       // and at that point storage IO is best-effort by design.
-      let _ = tx.send(event);
+      let _ = tx.send((captured_tp, event));
     } else {
       // Blocking mode (for testing or special cases)
       let rt = tokio::runtime::Handle::current();
@@ -809,5 +945,199 @@ mod tests {
     assert_eq!(agent.tool_calls[0].is_error, Some(false));
     assert_eq!(agent.tool_calls[0].duration_ms, Some(12));
     assert!(node.output.is_some());
+  }
+
+  // Q2.2.3: parse_traceparent rejects malformed inputs and accepts the
+  // canonical version-00 form. Without these guards we'd happily install
+  // a garbage trace_id from a typo'd header.
+  #[test]
+  fn parse_traceparent_accepts_canonical_v00() {
+    let (trace_id, span_id) = parse_traceparent(
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    )
+    .expect("canonical traceparent must parse");
+    assert_eq!(trace_id, "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert_eq!(span_id, "00f067aa0ba902b7");
+  }
+
+  #[test]
+  fn parse_traceparent_rejects_unknown_version() {
+    assert!(
+      parse_traceparent("01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_none(),
+      "version != 00 must be rejected (W3C: ignore unknown version)"
+    );
+  }
+
+  #[test]
+  fn parse_traceparent_rejects_all_zero_ids() {
+    assert!(
+      parse_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01").is_none(),
+      "all-zero trace_id is forbidden by W3C"
+    );
+    assert!(
+      parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01").is_none(),
+      "all-zero span_id is forbidden by W3C"
+    );
+  }
+
+  #[test]
+  fn parse_traceparent_rejects_wrong_length_or_non_hex() {
+    assert!(parse_traceparent("00-deadbeef-00f067aa0ba902b7-01").is_none());
+    assert!(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-XYZ-01").is_none());
+    assert!(parse_traceparent("not a traceparent").is_none());
+  }
+
+  // Q2.2.3 integration — when WorkflowStarted runs inside
+  // `crate::context::scope(traceparent)`, the resulting ExecutionTrace
+  // must carry the upstream trace_id, and `trace_to_spans` must emit
+  // spans under that id (stitching cross-service traces).
+  #[tokio::test]
+  async fn workflow_started_inherits_inbound_traceparent() {
+    use crate::otel::{OtelExporterConfig, trace_to_spans};
+
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let collector = Arc::new(TraceCollector::new(
+      storage.clone(),
+      TraceConfig::development(),
+    ));
+
+    let parent_traceparent =
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string();
+    let workflow_id = "wf-inbound-tp".to_string();
+
+    {
+      let collector = collector.clone();
+      let workflow_id = workflow_id.clone();
+      crate::context::scope(parent_traceparent.clone(), async move {
+        collector.on_event(&WorkflowEvent::WorkflowStarted {
+          workflow_id: workflow_id.clone(),
+          timestamp: std::time::Instant::now(),
+        });
+        collector.on_event(&WorkflowEvent::WorkflowCompleted {
+          workflow_id,
+          duration: StdDuration::from_millis(1),
+          timestamp: std::time::Instant::now(),
+        });
+      })
+      .await;
+    }
+
+    tokio::time::sleep(StdDuration::from_millis(150)).await;
+
+    let trace = storage
+      .get_trace(&workflow_id)
+      .await
+      .unwrap()
+      .expect("trace must be stored");
+
+    assert_eq!(
+      trace.metadata.external_trace_id.as_deref(),
+      Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+      "captured trace_id must equal the upstream traceparent's trace_id"
+    );
+    assert_eq!(
+      trace.metadata.external_parent_span_id.as_deref(),
+      Some("00f067aa0ba902b7"),
+      "captured parent_span_id must equal the upstream traceparent's span_id"
+    );
+
+    // Spans emitted by the OTel exporter must inherit the upstream trace_id
+    // and reference the upstream span_id as the workflow's parent.
+    let spans = trace_to_spans(&trace, &OtelExporterConfig::default());
+    let workflow_span = spans
+      .iter()
+      .find(|s| s.name.starts_with("agentflow.workflow"))
+      .expect("workflow span must exist");
+    assert_eq!(
+      workflow_span.trace_id, "4bf92f3577b34da6a3ce929d0e0e4736",
+      "OTel workflow span must carry inbound trace_id"
+    );
+    assert_eq!(
+      workflow_span.parent_span_id.as_deref(),
+      Some("00f067aa0ba902b7"),
+      "OTel workflow span's parent_span_id must equal inbound caller's span_id"
+    );
+  }
+
+  /// Q2.2.1 regression — a panicking exporter must NOT silently kill the
+  /// drain task and start swallowing every subsequent event. The drain
+  /// task is wrapped in `catch_unwind`; we feed one workflow that panics
+  /// the exporter, then a second workflow, and assert the second one
+  /// still lands in storage.
+  #[tokio::test]
+  async fn drain_task_survives_exporter_panic() {
+    /// Exporter that panics on a single target workflow_id but exports
+    /// every other trace normally. Wrapped exports go through `await`,
+    /// so the panic surfaces inside the spawned drain future.
+    struct PoisonExporter {
+      poison_workflow_id: String,
+      exported: tokio::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl TraceExporter for PoisonExporter {
+      async fn export_trace(&self, trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
+        if trace.workflow_id == self.poison_workflow_id {
+          panic!("intentional drain-task panic for Q2.2.1 regression");
+        }
+        self.exported.lock().await.push(trace.workflow_id.clone());
+        Ok(())
+      }
+    }
+
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let exporter = Arc::new(PoisonExporter {
+      poison_workflow_id: "wf-poison".to_string(),
+      exported: Default::default(),
+    });
+    let collector = TraceCollector::new(storage.clone(), TraceConfig::development())
+      .with_exporter(exporter.clone());
+
+    // Workflow that panics the exporter on completion.
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "wf-poison".to_string(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "wf-poison".to_string(),
+      duration: StdDuration::from_millis(1),
+      timestamp: std::time::Instant::now(),
+    });
+
+    // Give the drain task time to process the panicking export.
+    tokio::time::sleep(StdDuration::from_millis(150)).await;
+
+    // Drain should still be alive — not poisoned by a single panic.
+    assert!(
+      !collector.is_drain_poisoned(),
+      "single panic should not poison drain"
+    );
+
+    // A second workflow MUST still flow through.
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "wf-survivor".to_string(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "wf-survivor".to_string(),
+      duration: StdDuration::from_millis(1),
+      timestamp: std::time::Instant::now(),
+    });
+
+    tokio::time::sleep(StdDuration::from_millis(150)).await;
+
+    let exported = exporter.exported.lock().await;
+    assert!(
+      exported.iter().any(|id| id == "wf-survivor"),
+      "survivor workflow must reach exporter despite earlier panic; got {exported:?}"
+    );
+
+    let stored = storage.get_trace("wf-survivor").await.unwrap();
+    assert!(
+      stored.is_some(),
+      "survivor workflow must land in storage despite earlier panic"
+    );
   }
 }
