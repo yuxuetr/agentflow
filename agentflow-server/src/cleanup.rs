@@ -127,6 +127,11 @@ pub struct CleanupReport {
   /// IDs of the terminal runs the sweep targeted. Limited to the
   /// most recent 100 entries to keep the report bounded.
   pub run_ids_targeted: Vec<Uuid>,
+  /// Q2.3.4: file-backed trace files (`<workflow_id>.json` under
+  /// `AGENTFLOW_TRACE_DIR`) older than `runs_retention_days`. Skipped
+  /// when the trace dir is unset.
+  #[serde(default)]
+  pub trace_files_deleted: u64,
   pub started_at: DateTime<Utc>,
   pub finished_at: DateTime<Utc>,
 }
@@ -137,6 +142,7 @@ pub struct CleanupReport {
 pub async fn cleanup_expired(
   db: &Database,
   run_dir_root: Option<&Path>,
+  trace_dir_root: Option<&Path>,
   config: &CleanupConfig,
 ) -> Result<CleanupReport, CleanupError> {
   let started_at = Utc::now();
@@ -176,6 +182,20 @@ pub async fn cleanup_expired(
     .await?;
     report.run_dirs_deleted = deleted;
     report.run_dirs_skipped_active = skipped;
+  }
+
+  // Q2.3.4: file-backed trace dir sweep. Mirrors run_dir retention so
+  // operators can flip `AGENTFLOW_TRACE_DIR=...` in production without
+  // a quietly-growing disk. Use the runs retention window — trace
+  // files exist primarily for run debugging.
+  if let Some(root) = trace_dir_root {
+    let deleted = sweep_trace_dir(
+      root,
+      config.runs_retention_days as i64,
+      config.dry_run,
+    )
+    .await?;
+    report.trace_files_deleted = deleted;
   }
 
   report.finished_at = Utc::now();
@@ -374,6 +394,64 @@ async fn sweep_run_dir(
   Ok((deleted, skipped))
 }
 
+/// Q2.3.4: delete `<workflow_id>.json` trace files older than `days`
+/// from the file-backed trace dir. Files keep no run-state index, so
+/// unlike `sweep_run_dir` we have no "active" check — but the trace
+/// is only ever written at trace lifecycle terminal events, so an
+/// old file always corresponds to a completed run.
+async fn sweep_trace_dir(
+  root: &Path,
+  days: i64,
+  dry_run: bool,
+) -> Result<u64, CleanupError> {
+  if !root.exists() {
+    return Ok(0);
+  }
+  let mut deleted = 0u64;
+  let entries = std::fs::read_dir(root).map_err(|err| CleanupError::Filesystem {
+    path: root.to_path_buf(),
+    source: err,
+  })?;
+  let cutoff = Utc::now() - chrono::Duration::days(days);
+
+  for entry in entries.flatten() {
+    let path = entry.path();
+    // Trace files are flat JSON; skip subdirectories and non-.json files.
+    if path.extension().and_then(|s| s.to_str()) != Some("json") {
+      continue;
+    }
+    if !path.is_file() {
+      continue;
+    }
+    let metadata = match entry.metadata() {
+      Ok(m) => m,
+      Err(err) => {
+        return Err(CleanupError::Filesystem {
+          path: path.clone(),
+          source: err,
+        });
+      }
+    };
+    let modified = metadata
+      .modified()
+      .ok()
+      .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+      .map(|d| DateTime::<Utc>::from_timestamp(d.as_secs() as i64, 0).unwrap_or(cutoff));
+    let too_young = modified.is_some_and(|m| m > cutoff);
+    if too_young {
+      continue;
+    }
+    if !dry_run {
+      std::fs::remove_file(&path).map_err(|err| CleanupError::Filesystem {
+        path: path.clone(),
+        source: err,
+      })?;
+    }
+    deleted += 1;
+  }
+  Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -424,6 +502,53 @@ mod tests {
     assert!(Uuid::parse_str(invalid).is_err());
   }
 
+  // Q2.3.4: file-backed trace files older than the runs_retention
+  // window must be deleted; younger files and non-.json files stay.
+  #[tokio::test]
+  async fn sweep_trace_dir_deletes_old_json_only() {
+    use std::time::{Duration as StdDur, SystemTime};
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    // Old trace file (should be deleted)
+    let old_path = root.join("wf-old.json");
+    fs::write(&old_path, "{}").unwrap();
+    let old_mtime = SystemTime::now() - StdDur::from_secs(60 * 60 * 24 * 100);
+    filetime::set_file_mtime(
+      &old_path,
+      filetime::FileTime::from_system_time(old_mtime),
+    )
+    .ok();
+
+    // Young trace file (should stay)
+    let young_path = root.join("wf-young.json");
+    fs::write(&young_path, "{}").unwrap();
+
+    // Non-json file (should stay regardless of age)
+    let other_path = root.join("notes.txt");
+    fs::write(&other_path, "hello").unwrap();
+    filetime::set_file_mtime(
+      &other_path,
+      filetime::FileTime::from_system_time(old_mtime),
+    )
+    .ok();
+
+    let deleted = sweep_trace_dir(root, 30, false).await.unwrap();
+    assert_eq!(deleted, 1, "only old .json should be deleted");
+    assert!(!old_path.exists(), "old json must be gone");
+    assert!(young_path.exists(), "young json must stay");
+    assert!(other_path.exists(), "non-json must stay");
+  }
+
+  #[tokio::test]
+  async fn sweep_trace_dir_returns_zero_when_root_missing() {
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("does-not-exist");
+    let deleted = sweep_trace_dir(&missing, 30, false).await.unwrap();
+    assert_eq!(deleted, 0);
+  }
+
   #[test]
   fn cleanup_report_serializes_with_dry_run_flag() {
     let report = CleanupReport {
@@ -434,6 +559,7 @@ mod tests {
       run_dirs_deleted: 2,
       run_dirs_skipped_active: 1,
       run_ids_targeted: vec![Uuid::nil()],
+      trace_files_deleted: 0,
       started_at: Utc::now(),
       finished_at: Utc::now(),
     };

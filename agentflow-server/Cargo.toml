@@ -60,3 +60,5 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 futures = "0.3"
 tempfile = "3"
 urlencoding = "2"
+# Q2.3.4 sweep_trace_dir test needs to backdate file mtime.
+filetime = "0.2"

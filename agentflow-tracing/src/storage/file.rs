@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 /// File-based trace storage
 ///
@@ -76,9 +77,44 @@ impl FileTraceStorage {
 #[async_trait]
 impl TraceStorage for FileTraceStorage {
   async fn save_trace(&self, trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
-    let path = self.trace_path(&trace.workflow_id);
+    // Q2.3.4: crash-safe + permission-tight trace persistence.
+    //
+    // Previously `fs::write(path, json).await` (a) made the file
+    // world-readable under the default umask (typically 0o644) and
+    // (b) had no fsync, so a crash between write and flush could
+    // leave a zero-byte / partial-JSON file that future reads would
+    // happily deserialize-error on. Switching to write-temp + fsync
+    // + rename gives atomic, durable replacement; unix-only `mode`
+    // sets the bits at create time so there's no readable window.
+    let final_path = self.trace_path(&trace.workflow_id);
     let json = serde_json::to_string_pretty(trace)?;
-    fs::write(path, json).await?;
+
+    let tmp_name = match final_path.file_name() {
+      Some(name) => {
+        let mut s = name.to_os_string();
+        s.push(".tmp");
+        s
+      }
+      None => {
+        return Err(anyhow::anyhow!(
+          "trace path has no file name component: {}",
+          final_path.display()
+        ));
+      }
+    };
+    let tmp_path = self.base_path.join(tmp_name);
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&tmp_path).await?;
+    file.write_all(json.as_bytes()).await?;
+    file.flush().await?;
+    file.sync_data().await?;
+    drop(file);
+
+    fs::rename(&tmp_path, &final_path).await?;
     Ok(())
   }
 
@@ -246,5 +282,48 @@ mod tests {
 
     let result = storage.get_trace("nonexistent").await.unwrap();
     assert!(result.is_none());
+  }
+
+  // Q2.3.4: saved trace files must have 0o600 permissions on unix so a
+  // shared workstation's other users can't read redacted-but-still-
+  // attacker-interesting payloads.
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn save_trace_uses_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let storage = FileTraceStorage::new(dir.path().to_path_buf()).unwrap();
+    let trace = ExecutionTrace::new("wf-perm".to_string());
+    storage.save_trace(&trace).await.unwrap();
+
+    let path = dir.path().join("wf-perm.json");
+    let meta = std::fs::metadata(&path).expect("trace file must exist");
+    let mode = meta.permissions().mode() & 0o777;
+    assert_eq!(
+      mode, 0o600,
+      "trace files must be 0o600 (owner-only), got 0o{mode:o}"
+    );
+  }
+
+  // Q2.3.4: write-temp + fsync + rename is atomic — even a crash mid-
+  // write must not leave a partial-JSON `.json` file. We can't simulate
+  // a crash easily, but we can verify the tmp file is gone after a
+  // successful save and the final file deserializes.
+  #[tokio::test]
+  async fn save_trace_is_atomic_and_leaves_no_tmp_file() {
+    let dir = tempdir().unwrap();
+    let storage = FileTraceStorage::new(dir.path().to_path_buf()).unwrap();
+    let trace = ExecutionTrace::new("wf-atomic".to_string());
+    storage.save_trace(&trace).await.unwrap();
+
+    let final_path = dir.path().join("wf-atomic.json");
+    let tmp_path = dir.path().join("wf-atomic.json.tmp");
+    assert!(final_path.exists(), "final json must exist after save");
+    assert!(!tmp_path.exists(), "tmp file must not survive a successful rename");
+
+    let json = std::fs::read_to_string(&final_path).unwrap();
+    let round_trip: ExecutionTrace = serde_json::from_str(&json).unwrap();
+    assert_eq!(round_trip.workflow_id, "wf-atomic");
   }
 }

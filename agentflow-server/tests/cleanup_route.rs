@@ -96,7 +96,7 @@ async fn cleanup_dry_run_targets_old_terminal_runs_without_deleting() {
   let active_id = insert_run(&db, RunStatus::Running, None).await;
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local).with_dry_run(true);
-  let report = cleanup_expired(&db, None, &cfg).await.unwrap();
+  let report = cleanup_expired(&db, None, None, &cfg).await.unwrap();
 
   assert!(report.dry_run);
   assert!(report.run_ids_targeted.contains(&old_id));
@@ -124,7 +124,7 @@ async fn cleanup_deletes_terminal_runs_past_retention() {
   let active_id = insert_run(&db, RunStatus::Running, None).await;
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
-  let report = cleanup_expired(&db, None, &cfg).await.unwrap();
+  let report = cleanup_expired(&db, None, None, &cfg).await.unwrap();
   assert!(!report.dry_run);
   assert!(report.runs_deleted >= 1);
 
@@ -181,7 +181,7 @@ async fn cleanup_skips_terminal_run_pinned_by_events_override() {
   let unpinned = insert_run(&db, RunStatus::Succeeded, Some(60)).await;
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
-  let report = cleanup_expired(&db, None, &cfg).await.unwrap();
+  let report = cleanup_expired(&db, None, None, &cfg).await.unwrap();
 
   // The pinned run must NOT be in run_ids_targeted, and must
   // survive the sweep.
@@ -261,7 +261,7 @@ async fn cleanup_skips_events_pinned_by_override() {
     .unwrap();
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
-  cleanup_expired(&db, None, &cfg).await.unwrap();
+  cleanup_expired(&db, None, None, &cfg).await.unwrap();
 
   // The event row must still be there.
   let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM events WHERE run_id = $1")
@@ -305,7 +305,7 @@ async fn cleanup_filesystem_sweep_removes_orphaned_dirs() {
   fs::create_dir_all(&active_dir).unwrap();
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
-  let report = cleanup_expired(&db, Some(tmp.path()), &cfg).await.unwrap();
+  let report = cleanup_expired(&db, Some(tmp.path()), None, &cfg).await.unwrap();
   assert!(report.run_dirs_skipped_active >= 1);
   assert!(!orphan_dir.exists(), "orphan dir must be deleted");
   assert!(active_dir.exists(), "active run's dir must be retained");

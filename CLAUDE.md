@@ -103,7 +103,7 @@ Observability:
 - Event collection via `EventListener` (non-invasive); the in-process drain task processes events in arrival order so terminal node state cannot race the `WorkflowCompleted` save
 - Persistence: JSONL (default) or SQLite/Postgres (feature-gated). Producer-side wiring is live in CLI (`agentflow workflow run` always writes file traces under `AGENTFLOW_TRACE_DIR` / `~/.agentflow/traces` by default) and in the gateway (`POST /v1/runs` writes file traces only when `AGENTFLOW_TRACE_DIR` is explicitly set, since the cleanup sweep does not cover that dir). Harness sessions (`HarnessEvent`) persist to Postgres + SSE only; file-backed trace integration would need a separate `HarnessEventListener → ExecutionTrace` adapter and is not wired today.
 - `agentflow trace replay` + TUI timeline (read from the directories above)
-- OpenTelemetry exporter (OTLP) with W3C trace context propagation
+- OpenTelemetry span model (`OtelSpan` / `OtelSpanSink` trait) + W3C trace context propagation (inbound `traceparent` honored via `context::scope`; outbound via `LlmTraceContext`). No OTLP HTTP/gRPC transport is built into the workspace — operators bring their own `OtelSpanSink` implementation backed by `opentelemetry-otlp` or similar. A first-party OTLP exporter with TLS / auth is deferred (Q2.3.3, `docs/audit/agentflow-tracing.md` M3).
 - Redaction for API keys, env secrets, sensitive tool params
 - `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` for explicit storage roots
 
@@ -154,7 +154,7 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - **Multi-agent collaboration** — Handoff, Blackboard, Debate supervisors; `multi_agent` YAML node
 - **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag search|index|collections|eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
 - **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks, checkpoint recovery, retry, resource management, structured logging, Prometheus metrics
-- **Tracing** — `EventListener`, JSONL/SQLite/Postgres persistence, `trace replay` TUI, OTel OTLP exporter, W3C `traceparent` propagation through LLM HTTP calls
+- **Tracing** — `EventListener`, JSONL/SQLite/Postgres persistence, `trace replay` TUI, OTel span model + W3C `traceparent` propagation (inbound on workflow start + outbound through LLM HTTP calls). First-party OTLP transport (HTTP/gRPC + TLS + auth) is **deferred** (Q2.3.3) — operators wire their own `OtelSpanSink`.
 - **OS-level sandbox** — macOS sandbox-exec / Linux seccomp backends for shell/script tools (opt-in via `security.os_sandbox`); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output
 - **Platform skeleton** — server gateway routes (`/v1/runs`, SSE, skills) + DB schema/repos + auth
 - **Distributed worker foundation** — `agentflow-worker` runtime/binary, gRPC `WorkerProtocol`, server control-plane façade, stitched worker traces mapped to OTel spans (node-payload coverage is partial; see P2.8)

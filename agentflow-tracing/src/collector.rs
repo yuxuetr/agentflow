@@ -32,6 +32,17 @@ pub struct TraceConfig {
 
   /// Redaction policy applied before trace persistence and export.
   pub redaction: RedactionConfig,
+
+  /// Q2.3.1: bounded capacity of the in-process event channel. When the
+  /// drain task can't keep up (slow storage / slow exporter), `on_event`
+  /// drops the newest event and bumps `events_dropped` instead of
+  /// growing the queue without bound. Default 8192 events.
+  pub event_channel_capacity: usize,
+
+  /// Q2.3.2: per-exporter timeout for `TraceExporter::export_trace`.
+  /// A stuck OTLP sink no longer blocks the drain task for every other
+  /// workflow's events. Default 10 seconds.
+  pub exporter_timeout: std::time::Duration,
 }
 
 impl Default for TraceConfig {
@@ -43,6 +54,8 @@ impl Default for TraceConfig {
       async_storage: true,
       on_storage_error: StorageErrorPolicy::LogError,
       redaction: RedactionConfig::default(),
+      event_channel_capacity: 8192,
+      exporter_timeout: std::time::Duration::from_secs(10),
     }
   }
 }
@@ -57,6 +70,8 @@ impl TraceConfig {
       async_storage: true,
       on_storage_error: StorageErrorPolicy::LogError,
       redaction: RedactionConfig::default(),
+      event_channel_capacity: 8192,
+      exporter_timeout: std::time::Duration::from_secs(10),
     }
   }
 
@@ -69,6 +84,8 @@ impl TraceConfig {
       async_storage: true,
       on_storage_error: StorageErrorPolicy::Ignore,
       redaction: RedactionConfig::default().with_max_value_bytes(10 * 1024 * 1024),
+      event_channel_capacity: 8192,
+      exporter_timeout: std::time::Duration::from_secs(10),
     }
   }
 }
@@ -115,7 +132,17 @@ pub struct TraceCollector {
   /// traceparent is read SYNCHRONOUSLY from the task-local in
   /// `on_event`, so we capture the producer's W3C context before the
   /// event hops to the drain task (which runs outside the scope).
-  drain_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(Option<String>, WorkflowEvent)>>,
+  ///
+  /// Q2.3.1: bounded channel sized at `config.event_channel_capacity`.
+  /// `on_event` uses `try_send`; on a full queue the newest event is
+  /// dropped and `events_dropped` is bumped.
+  drain_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<(Option<String>, WorkflowEvent)>>,
+
+  /// Q2.3.1: monotonic count of events dropped because the bounded
+  /// channel was full. Producers (workflows) keep running but tracing
+  /// is best-effort under pressure; the counter is the observability
+  /// signal that ingest is falling behind.
+  events_dropped: Arc<std::sync::atomic::AtomicU64>,
 
   /// Q2.2.1: flipped to `true` if the drain task observes too many
   /// consecutive panics or fatal errors. `on_event` consults this flag
@@ -137,7 +164,15 @@ impl TraceCollector {
       exporters: Vec::new(),
       drain_tx: std::sync::OnceLock::new(),
       drain_poisoned: Arc::new(AtomicBool::new(false)),
+      events_dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     }
+  }
+
+  /// Q2.3.1: monotonic count of events dropped because the bounded
+  /// trace-event channel was full. Visible for tests, dashboards, and
+  /// `agentflow trace doctor` integrations.
+  pub fn events_dropped(&self) -> u64 {
+    self.events_dropped.load(Ordering::SeqCst)
   }
 
   /// Q2.2.1: visible for tests + diagnostics. Returns `true` once the
@@ -226,6 +261,20 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id) {
+          // Q2.3.7: if a prior attempt of this node id is still "Running"
+          // (because its terminal NodeCompleted / NodeFailed was lost,
+          // or this is a retry without an interleaved completion event),
+          // close it out as Failed so the persisted trace doesn't carry
+          // a phantom never-finishing row. Retry / loop / Map sub-node
+          // scenarios are the typical sources.
+          for prior in trace
+            .nodes
+            .iter_mut()
+            .filter(|n| n.node_id == node_id && n.status == NodeStatus::Running)
+          {
+            prior.fail("superseded by new attempt".to_string());
+          }
+
           // Extract node_type from node_id (format: "type:id" or just "id")
           let node_type = node_id.split(':').next().unwrap_or("Unknown").to_string();
 
@@ -244,8 +293,15 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id)
-          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+          && let Some(node) = trace
+            .nodes
+            .iter_mut()
+            .rev()
+            .find(|n| n.node_id == node_id && n.status == NodeStatus::Running)
         {
+          // Q2.3.7: only match the still-open row; if all rows for this
+          // node id are already terminal, a stale event arrives and we
+          // skip it instead of silently overwriting a closed attempt.
           node.complete();
           node.duration_ms = Some(duration.as_millis() as u64);
         }
@@ -269,8 +325,13 @@ impl TraceCollector {
 
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id)
-          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+          && let Some(node) = trace
+            .nodes
+            .iter_mut()
+            .rev()
+            .find(|n| n.node_id == node_id && n.status == NodeStatus::Running)
         {
+          // Q2.3.7: attach output to the open attempt only.
           if config.capture_io {
             node.output = Some(output);
           }
@@ -290,8 +351,13 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id)
-          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+          && let Some(node) = trace
+            .nodes
+            .iter_mut()
+            .rev()
+            .find(|n| n.node_id == node_id && n.status == NodeStatus::Running)
         {
+          // Q2.3.7: only fail the still-open attempt.
           node.fail(error);
           node.duration_ms = Some(duration.as_millis() as u64);
         }
@@ -305,8 +371,13 @@ impl TraceCollector {
       } => {
         let mut traces_guard = traces.write().await;
         if let Some(trace) = traces_guard.get_mut(&workflow_id)
-          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+          && let Some(node) = trace
+            .nodes
+            .iter_mut()
+            .rev()
+            .find(|n| n.node_id == node_id && n.status == NodeStatus::Running)
         {
+          // Q2.3.7: only mark the open attempt skipped.
           node.status = NodeStatus::Skipped;
           node.error = Some(format!("Skipped: {}", reason));
         }
@@ -380,8 +451,13 @@ impl TraceCollector {
           // Attach to node trace
           let mut traces_guard = traces.write().await;
           if let Some(trace) = traces_guard.get_mut(&workflow_id)
-            && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+            && let Some(node) = trace
+              .nodes
+              .iter_mut()
+              .rev()
+              .find(|n| n.node_id == node_id && n.status == NodeStatus::Running)
           {
+            // Q2.3.7: LLM response belongs to the still-open attempt.
             node.llm_details = Some(llm_trace);
           }
         }
@@ -440,9 +516,22 @@ impl TraceCollector {
     exporters: &[Arc<dyn TraceExporter>],
     trace: &ExecutionTrace,
   ) {
+    // Q2.3.2: wrap every exporter call in a timeout so one stuck OTLP
+    // endpoint can't block the drain task (and every other workflow's
+    // events) indefinitely. Errors (including timeout) route through
+    // the configured StorageErrorPolicy.
     for exporter in exporters {
-      if let Err(e) = exporter.export_trace(trace).await {
-        Self::handle_storage_error(config, e);
+      let export_fut = exporter.export_trace(trace);
+      match tokio::time::timeout(config.exporter_timeout, export_fut).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => Self::handle_storage_error(config, e),
+        Err(_elapsed) => Self::handle_storage_error(
+          config,
+          anyhow::anyhow!(
+            "trace exporter timed out after {:?}",
+            config.exporter_timeout
+          ),
+        ),
       }
     }
   }
@@ -545,8 +634,12 @@ impl EventListener for TraceCollector {
       // `tokio::spawn` per event raced across tasks for the same
       // workflow's RwLock — see field-level comment on `drain_tx`.
       let tx = self.drain_tx.get_or_init(|| {
-        let (tx, mut rx) =
-          tokio::sync::mpsc::unbounded_channel::<(Option<String>, WorkflowEvent)>();
+        // Q2.3.1: bounded channel — `try_send` failures drop the
+        // newest event and bump `events_dropped`, so a slow consumer
+        // cannot grow the queue indefinitely.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(Option<String>, WorkflowEvent)>(
+          self.config.event_channel_capacity.max(1),
+        );
         let storage_drain = storage.clone();
         let traces_drain = traces.clone();
         let pending_drain = pending_llm.clone();
@@ -620,9 +713,27 @@ impl EventListener for TraceCollector {
       // Q2.2.3: capture the producer's W3C `traceparent` *now* (we are
       // still synchronously inside the producer's task-local scope).
       let captured_tp = crate::context::current_traceparent();
-      // Drop on send failure: receiver only goes away on collector drop,
-      // and at that point storage IO is best-effort by design.
-      let _ = tx.send((captured_tp, event));
+      // Q2.3.1: non-blocking send — when the bounded queue is full, drop
+      // the newest event and bump the dropped counter. Producers must
+      // never block on tracing.
+      match tx.try_send((captured_tp, event)) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+          let prev = self.events_dropped.fetch_add(1, Ordering::SeqCst);
+          // Log at every power-of-two boundary so a slow consumer
+          // leaves a visible breadcrumb without flooding logs.
+          if prev == 0 || (prev + 1).is_power_of_two() {
+            tracing::warn!(
+              dropped_total = prev + 1,
+              capacity = self.config.event_channel_capacity,
+              "trace event channel full; dropping events (best-effort tracing under backpressure)"
+            );
+          }
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+          // Receiver was dropped — collector going away. Best effort.
+        }
+      }
     } else {
       // Blocking mode (for testing or special cases)
       let rt = tokio::runtime::Handle::current();
@@ -1057,6 +1168,191 @@ mod tests {
       workflow_span.parent_span_id.as_deref(),
       Some("00f067aa0ba902b7"),
       "OTel workflow span's parent_span_id must equal inbound caller's span_id"
+    );
+  }
+
+  // Q2.3.7: when a retry / loop re-emits NodeStarted for an id that's
+  // still in Running state (because its terminal event was lost or
+  // never fired), the previous row must be closed out — otherwise the
+  // persisted trace carries a phantom never-finishing node.
+  #[tokio::test]
+  async fn node_started_supersedes_stale_running_row() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let collector = TraceCollector::new(storage.clone(), TraceConfig::development());
+
+    let wf = "wf-retry".to_string();
+    let node = "retried_node".to_string();
+
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: wf.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    // First attempt starts but never completes (events lost).
+    collector.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: wf.clone(),
+      node_id: node.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    // Second attempt starts.
+    collector.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: wf.clone(),
+      node_id: node.clone(),
+      timestamp: std::time::Instant::now(),
+    });
+    // Second attempt completes.
+    collector.on_event(&WorkflowEvent::NodeCompleted {
+      workflow_id: wf.clone(),
+      node_id: node.clone(),
+      duration: StdDuration::from_millis(5),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: wf.clone(),
+      duration: StdDuration::from_millis(10),
+      timestamp: std::time::Instant::now(),
+    });
+
+    tokio::time::sleep(StdDuration::from_millis(150)).await;
+
+    let trace = storage.get_trace(&wf).await.unwrap().expect("stored trace");
+    assert_eq!(trace.nodes.len(), 2, "two attempts must produce two rows");
+
+    let running_count = trace
+      .nodes
+      .iter()
+      .filter(|n| n.status == NodeStatus::Running)
+      .count();
+    assert_eq!(
+      running_count, 0,
+      "no phantom Running row may persist — first attempt should be Failed (superseded), second should be Completed"
+    );
+
+    // First (older) attempt: superseded → Failed
+    assert_eq!(trace.nodes[0].status, NodeStatus::Failed);
+    assert!(trace.nodes[0]
+      .error
+      .as_ref()
+      .map(|e| e.contains("superseded"))
+      .unwrap_or(false));
+    // Second attempt: properly completed.
+    assert_eq!(trace.nodes[1].status, NodeStatus::Completed);
+  }
+
+  // Q2.3.1: when the bounded event channel is saturated, `on_event`
+  // must drop new events and bump the counter rather than block or
+  // grow the queue without bound. We construct a config with a 1-slot
+  // channel and immediately push 100 events; only the first can fit
+  // (and even that may be drained quickly), so most should land in
+  // the dropped counter.
+  #[tokio::test]
+  async fn on_event_drops_when_channel_full() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+
+    // Block the drain task by pointing it at a storage that takes a
+    // long time per event. We approximate with a custom slow exporter
+    // that holds each event for 30ms; with a 1-slot channel, push 50
+    // events quickly so the drain task can never catch up.
+    struct SlowExporter;
+    #[async_trait]
+    impl TraceExporter for SlowExporter {
+      async fn export_trace(&self, _trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
+        tokio::time::sleep(StdDuration::from_millis(30)).await;
+        Ok(())
+      }
+    }
+
+    let mut config = TraceConfig::development();
+    config.event_channel_capacity = 1;
+    let collector =
+      TraceCollector::new(storage, config).with_exporter(Arc::new(SlowExporter));
+
+    for i in 0..50 {
+      let workflow_id = format!("wf-drop-{i}");
+      collector.on_event(&WorkflowEvent::WorkflowStarted {
+        workflow_id: workflow_id.clone(),
+        timestamp: std::time::Instant::now(),
+      });
+      collector.on_event(&WorkflowEvent::WorkflowCompleted {
+        workflow_id,
+        duration: StdDuration::from_millis(1),
+        timestamp: std::time::Instant::now(),
+      });
+    }
+
+    // No sleep — we want to observe the dropped count *during* backpressure.
+    // The first sends fill the 1-slot channel; the rest must be dropped.
+    let dropped = collector.events_dropped();
+    assert!(
+      dropped > 0,
+      "events_dropped should be > 0 under saturation, got {dropped}"
+    );
+  }
+
+  // Q2.3.2: a hung exporter must not block the drain task forever.
+  // We configure a 100ms timeout and an exporter that sleeps 5s.
+  // The drain task should record the timeout (via the configured
+  // storage error policy — Ignore in development()) and continue
+  // processing subsequent workflows.
+  #[tokio::test]
+  async fn exporter_timeout_isolates_drain_task() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+
+    struct HungExporter {
+      seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl TraceExporter for HungExporter {
+      async fn export_trace(&self, trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
+        self.seen.lock().await.push(trace.workflow_id.clone());
+        // Far longer than the configured timeout.
+        tokio::time::sleep(StdDuration::from_secs(5)).await;
+        Ok(())
+      }
+    }
+
+    let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let mut config = TraceConfig::development();
+    config.exporter_timeout = StdDuration::from_millis(100);
+    let collector = TraceCollector::new(storage.clone(), config).with_exporter(Arc::new(
+      HungExporter {
+        seen: seen.clone(),
+      },
+    ));
+
+    // First workflow: exporter will time out after 100ms.
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "wf-hung-1".to_string(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "wf-hung-1".to_string(),
+      duration: StdDuration::from_millis(1),
+      timestamp: std::time::Instant::now(),
+    });
+
+    // Second workflow: should NOT have to wait 5s for the first export
+    // to finish — the timeout unsticks the drain task within ~100ms.
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "wf-hung-2".to_string(),
+      timestamp: std::time::Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "wf-hung-2".to_string(),
+      duration: StdDuration::from_millis(1),
+      timestamp: std::time::Instant::now(),
+    });
+
+    // 300ms is well over the 100ms timeout but well under the 5s sleep.
+    tokio::time::sleep(StdDuration::from_millis(500)).await;
+
+    let stored_2 = storage.get_trace("wf-hung-2").await.unwrap();
+    assert!(
+      stored_2.is_some(),
+      "second workflow must be storage-persisted within the 500ms window — the hung exporter must NOT block the drain task"
     );
   }
 

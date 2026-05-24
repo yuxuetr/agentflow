@@ -196,18 +196,81 @@ where
 }
 
 fn redact_assignment_token(token: &str, config: &RedactionConfig) -> String {
+  // Q2.3.6: walk every `key=value` / `key:value` pair inside this
+  // whitespace-delimited token (URL query strings, JSON snippets,
+  // semicolon-separated cookies, etc.) and only replace the *value*
+  // segment of sensitive pairs. The previous implementation split on
+  // the first delimiter and consumed the entire suffix, so
+  // `?api_key=secret&q=test` collapsed to `?api_key=[REDACTED]`,
+  // losing trailing query parameters and JSON closing characters.
+  //
+  // We scan left to right, looking for boundary characters that
+  // separate pairs (`&`, `;`, `,`, `}`, `]`) and re-emitting each
+  // segment with selective redaction. Quoted JSON keys (`"api_key"`)
+  // and CLI-style flags (`--token=value`) hit the same boundary
+  // logic because their leading punctuation is stripped before the
+  // key match.
+  if !token.contains('=') && !token.contains(':') {
+    return token.to_string();
+  }
+
+  fn is_pair_boundary(ch: char) -> bool {
+    matches!(ch, '&' | ';' | ',')
+  }
+
+  let mut out = String::with_capacity(token.len());
+  let mut idx = 0;
+  let chars: Vec<(usize, char)> = token.char_indices().collect();
+  // We need to walk segments separated by &/;/, while remembering that
+  // JSON objects use `}` / `]` to close — those characters terminate
+  // the *value* but should be carried through to the output.
+  while idx < chars.len() {
+    // Find next pair boundary (`&`, `;`, `,`) — pairs end at these.
+    let mut end = chars.len();
+    for (i, (_, ch)) in chars.iter().enumerate().skip(idx) {
+      if is_pair_boundary(*ch) {
+        end = i;
+        break;
+      }
+    }
+    let segment_start_byte = chars[idx].0;
+    let segment_end_byte = if end == chars.len() {
+      token.len()
+    } else {
+      chars[end].0
+    };
+    let segment = &token[segment_start_byte..segment_end_byte];
+    out.push_str(&redact_single_pair(segment, config));
+    if end < chars.len() {
+      out.push(chars[end].1);
+      idx = end + 1;
+    } else {
+      idx = end;
+    }
+  }
+
+  out
+}
+
+/// Redact a single `key<delim>value` segment with no embedded `&`/`;`/`,`
+/// boundaries. Preserves JSON-tail characters (`}`, `]`, `)`) so closing
+/// braces don't get eaten with the value.
+fn redact_single_pair(segment: &str, config: &RedactionConfig) -> String {
   for delimiter in ['=', ':'] {
-    if let Some(index) = token.find(delimiter) {
-      let (key, value_with_delimiter) = token.split_at(index);
-      let key = key
+    if let Some(index) = segment.find(delimiter) {
+      let (key, value_with_delimiter) = segment.split_at(index);
+      let trimmed_key = key
         .trim_start_matches('-')
-        .trim_matches(|ch| matches!(ch, '"' | '\'' | '{' | '['));
-      if is_sensitive_key(key, config) {
+        .trim_start_matches(|ch: char| matches!(ch, '"' | '\'' | '{' | '[' | '?'))
+        .trim_end_matches(|ch: char| matches!(ch, '"' | '\''));
+      if is_sensitive_key(trimmed_key, config) {
         let value = &value_with_delimiter[delimiter.len_utf8()..];
+        // Pull off any trailing JSON/closing-bracket characters so they
+        // travel with the rest of the original payload, not the value.
         let suffix = value
           .chars()
           .rev()
-          .take_while(|ch| matches!(ch, ',' | ';' | ')' | ']' | '}'))
+          .take_while(|ch| matches!(ch, ')' | ']' | '}' | '"' | '\''))
           .collect::<String>()
           .chars()
           .rev()
@@ -216,8 +279,7 @@ fn redact_assignment_token(token: &str, config: &RedactionConfig) -> String {
       }
     }
   }
-
-  token.to_string()
+  segment.to_string()
 }
 
 fn is_sensitive_key(key: &str, config: &RedactionConfig) -> bool {
@@ -248,20 +310,39 @@ fn is_environment_variable_name_key(normalized_key: &str) -> bool {
 }
 
 fn default_sensitive_key_patterns() -> Vec<String> {
+  // Q2.3.5: expanded default list. Audit (M8) called out missing
+  // coverage for JWTs, cookies, AWS access-key ids, webhooks, etc.
+  // Substring matching still applies, but with these additional
+  // tokens the common shapes are covered without a substring-collision
+  // mode change. Patterns are normalized (alphanumeric, lowercase) so
+  // spelling variants (`x-secret`, `aws_access_key_id`, `SetCookie`)
+  // all hit the canonical form.
   [
     "api_key",
     "apikey",
     "authorization",
     "auth_token",
     "bearer_token",
+    "client_secret",
+    "cookie",
+    "set_cookie",
     "credential",
     "env_secret",
+    "jwt",
     "password",
     "private_key",
+    "refresh_token",
     "secret",
     "session_token",
+    "signature",
+    "ssh_key",
+    "pgp_key",
     "token",
+    "webhook",
     "x_api_key",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
   ]
   .into_iter()
   .map(ToString::to_string)
@@ -383,5 +464,93 @@ mod tests {
     assert!(!redacted.contains("abc"));
     assert!(!redacted.contains("secret"));
     assert!(!redacted.contains("xyz"));
+  }
+
+  // Q2.3.5: default sensitive-key list must cover JWT, cookies, AWS
+  // access keys, refresh tokens, webhooks, signatures. Without these
+  // additions a substring matcher passed common shapes through.
+  #[test]
+  fn default_patterns_cover_jwt_cookie_aws_refresh_webhook() {
+    let cfg = RedactionConfig::default();
+    let mut value = serde_json::json!({
+      "jwt": "eyJ.payload.sig",
+      "Set-Cookie": "session=opaque",
+      "aws_access_key_id": "AKIA...",
+      "refresh_token": "rt_xxx",
+      "webhook_url": "https://hooks.example/abc",
+      "signature": "deadbeef",
+    });
+    redact_value(&mut value, &cfg);
+    let obj = value.as_object().unwrap();
+    for k in [
+      "jwt",
+      "Set-Cookie",
+      "aws_access_key_id",
+      "refresh_token",
+      "webhook_url",
+      "signature",
+    ] {
+      assert_eq!(
+        obj[k].as_str(),
+        Some("[REDACTED]"),
+        "{k} must be redacted by default"
+      );
+    }
+  }
+
+  // Q2.3.6: URL query strings must redact only the sensitive value;
+  // trailing parameters must be preserved. Previously the entire suffix
+  // after the first `=` was eaten.
+  #[test]
+  fn redacts_url_query_string_preserves_other_params() {
+    let redacted = redact_text(
+      "https://api.example.test/data?api_key=secret&q=test&user=alice",
+      &RedactionConfig::default(),
+    );
+    assert!(
+      redacted.contains("api_key=[REDACTED]"),
+      "sensitive query param must be redacted, got {redacted}"
+    );
+    assert!(
+      redacted.contains("q=test"),
+      "trailing query params must be preserved, got {redacted}"
+    );
+    assert!(
+      redacted.contains("user=alice"),
+      "non-sensitive trailing params must be preserved, got {redacted}"
+    );
+    assert!(!redacted.contains("secret"));
+  }
+
+  // Q2.3.6: JSON body fragments inside a single whitespace-delimited
+  // token must redact only the value; the closing brace must survive.
+  #[test]
+  fn redacts_inline_json_preserves_closing_braces() {
+    let redacted = redact_text(
+      r#"body={"api_key":"secret","model":"gpt"}"#,
+      &RedactionConfig::default(),
+    );
+    assert!(
+      !redacted.contains("secret"),
+      "value must be removed, got {redacted}"
+    );
+    assert!(
+      redacted.contains("\"api_key\":[REDACTED]") || redacted.contains("api_key:[REDACTED]"),
+      "redaction must mark the api_key field, got {redacted}"
+    );
+  }
+
+  // Q2.3.6: cookie-style semicolon-separated pairs must each be
+  // independently redacted when the key is sensitive.
+  #[test]
+  fn redacts_semicolon_separated_cookie_pairs() {
+    let redacted = redact_text(
+      "session_token=opaque;path=/;httponly",
+      &RedactionConfig::default(),
+    );
+    assert!(redacted.contains("session_token=[REDACTED]"));
+    assert!(redacted.contains("path=/"));
+    assert!(redacted.contains("httponly"));
+    assert!(!redacted.contains("opaque"));
   }
 }

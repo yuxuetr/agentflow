@@ -430,7 +430,12 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
   // Spawn the background cleanup loop (`P2.2`). Uses the active
   // security profile's retention defaults; the interval defaults to
   // 1 h. Failures are logged but never crash the gateway.
-  spawn_cleanup_loop(db.clone(), config.security_profile, config.run_dir.clone());
+  spawn_cleanup_loop(
+    db.clone(),
+    config.security_profile,
+    config.run_dir.clone(),
+    config.trace_dir.clone(),
+  );
 
   info!("Starting AgentFlow Gateway on {}", config.bind);
   let listener = tokio::net::TcpListener::bind(config.bind)
@@ -445,20 +450,33 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     .map_err(|err| ServeError::Runtime(err.to_string()))
 }
 
-fn spawn_cleanup_loop(db: Database, profile: SecurityProfile, run_dir: Option<std::path::PathBuf>) {
+fn spawn_cleanup_loop(
+  db: Database,
+  profile: SecurityProfile,
+  run_dir: Option<std::path::PathBuf>,
+  trace_dir: Option<std::path::PathBuf>,
+) {
   let cfg = crate::cleanup::CleanupConfig::for_profile(profile);
   tokio::spawn(async move {
     // Initial delay so the gateway is fully serving before the
     // first sweep kicks in.
     tokio::time::sleep(cfg.interval).await;
     loop {
-      match crate::cleanup::cleanup_expired(&db, run_dir.as_deref(), &cfg).await {
+      match crate::cleanup::cleanup_expired(
+        &db,
+        run_dir.as_deref(),
+        trace_dir.as_deref(),
+        &cfg,
+      )
+      .await
+      {
         Ok(report) => {
           info!(
             runs_deleted = report.runs_deleted,
             events_deleted = report.events_deleted,
             artifacts_deleted = report.artifacts_deleted,
             run_dirs_deleted = report.run_dirs_deleted,
+            trace_files_deleted = report.trace_files_deleted,
             "background cleanup completed"
           );
         }

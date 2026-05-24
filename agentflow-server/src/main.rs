@@ -107,7 +107,14 @@ async fn run_cleanup_once(
   let db = Database::connect_and_migrate(db_url, 4).await?;
   let cleanup_cfg = CleanupConfig::for_profile(config.security_profile).with_dry_run(dry_run);
   let run_root: Option<PathBuf> = config.run_dir.clone();
-  let report = cleanup_expired(&db, run_root.as_deref(), &cleanup_cfg).await?;
+  let trace_root: Option<PathBuf> = config.trace_dir.clone();
+  let report = cleanup_expired(
+    &db,
+    run_root.as_deref(),
+    trace_root.as_deref(),
+    &cleanup_cfg,
+  )
+  .await?;
   Ok(report)
 }
 
