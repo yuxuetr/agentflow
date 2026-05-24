@@ -234,23 +234,50 @@ fn executable_name(command: &str) -> String {
 
 /// Resolve a knowledge path (possibly a glob) relative to `skill_dir`.
 /// Returns all matching absolute paths.
+///
+/// Q1.10.2: any path that escapes `skill_dir` is silently dropped from
+/// the result. The previous behaviour resolved `../../etc/passwd` and
+/// happily returned the matched file, letting a malicious marketplace
+/// skill scrape arbitrary host files into the persona prompt context.
+/// We canonicalize the skill root once and reject every match whose
+/// canonical form doesn't `starts_with` it. `..` components in the
+/// raw pattern are also rejected up front so glob expansion doesn't
+/// get a chance to materialize symlink-followed escapes.
 pub fn resolve_knowledge_path(pattern: &str, skill_dir: &Path) -> Vec<PathBuf> {
-  // If the pattern is absolute, use it directly.
+  // Hard reject `..` in the configured pattern — any legitimate
+  // knowledge entry should be inside the skill directory.
+  if pattern
+    .split(|c| c == '/' || c == '\\')
+    .any(|component| component == "..")
+  {
+    return Vec::new();
+  }
+
   let base = if Path::new(pattern).is_absolute() {
     pattern.to_string()
   } else {
     skill_dir.join(pattern).to_string_lossy().into_owned()
   };
 
-  // Try as a glob first.
-  match glob::glob(&base) {
+  let skill_root = skill_dir
+    .canonicalize()
+    .unwrap_or_else(|_| skill_dir.to_path_buf());
+
+  let matches: Vec<PathBuf> = match glob::glob(&base) {
     Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
     Err(_) => {
-      // Fall back to exact path check.
       let p = PathBuf::from(&base);
       if p.exists() { vec![p] } else { vec![] }
     }
-  }
+  };
+
+  matches
+    .into_iter()
+    .filter(|p| {
+      let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
+      canonical.starts_with(&skill_root)
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -439,6 +466,45 @@ path = "./knowledge/missing.md"
     write_file(&dir.path().join("knowledge").join("b.md"), "B");
     let paths = resolve_knowledge_path("./knowledge/*.md", dir.path());
     assert_eq!(paths.len(), 2);
+  }
+
+  /// Q1.10.2 regression: a manifest that references a relative path
+  /// with `..` components must not be allowed to read files outside
+  /// the skill's own directory.
+  #[test]
+  fn knowledge_path_with_parent_dir_traversal_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("inside.md"), "ok");
+
+    // Place a "victim" file as a sibling of the skill dir.
+    let parent = dir.path().parent().unwrap();
+    let victim = parent.join("victim.md");
+    fs::write(&victim, "secret").unwrap();
+
+    let paths = resolve_knowledge_path("../victim.md", dir.path());
+    assert!(paths.is_empty(), "traversal escape resolved to {paths:?}");
+
+    // Clean up — the temp dir's drop won't reach this sibling.
+    let _ = fs::remove_file(&victim);
+  }
+
+  /// Q1.10.2 regression: an absolute path that doesn't live under the
+  /// skill directory is dropped even though it exists. Pre-fix the
+  /// loader would happily fold `/etc/hosts` into the agent persona.
+  #[test]
+  fn knowledge_absolute_path_outside_skill_dir_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("inside.md"), "ok");
+
+    let outside_dir = TempDir::new().unwrap();
+    let outside = outside_dir.path().join("outside.md");
+    fs::write(&outside, "leak me").unwrap();
+
+    let paths = resolve_knowledge_path(outside.to_str().unwrap(), dir.path());
+    assert!(
+      paths.is_empty(),
+      "absolute outside-skill-dir path resolved to {paths:?}"
+    );
   }
 
   // ── script tool tests ─────────────────────────────────────────────────────

@@ -17,10 +17,27 @@ use crate::SkillError;
 
 pub const DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION: u32 = 1;
 
+/// Default upper bound on a remote marketplace manifest body. 1 MiB is
+/// well above any realistic skill / plugin manifest (the largest in
+/// the test fixtures is < 8 KiB) and matches the cost of holding the
+/// bytes in memory. Q1.10.2.
+pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+/// Default upper bound on a downloaded marketplace artifact. 256 MiB
+/// is generous enough for plugin tarballs that ship native binaries
+/// while still capping the memory pressure of a misbehaving server
+/// streaming infinite bytes. Q1.10.2.
+pub const DEFAULT_MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Read-only HTTP client for remote marketplace registries.
 #[derive(Clone)]
 pub struct RemoteMarketplaceClient {
   client: reqwest::Client,
+  /// Q1.10.2: ceiling on a manifest body. Servers that exceed this
+  /// see a `SkillError::HttpError` instead of an unbounded read.
+  max_manifest_bytes: u64,
+  /// Q1.10.2: ceiling on an artifact body.
+  max_artifact_bytes: u64,
 }
 
 impl std::fmt::Debug for RemoteMarketplaceClient {
@@ -45,11 +62,31 @@ impl RemoteMarketplaceClient {
       .no_proxy()
       .build()
       .expect("reqwest client builder with no_proxy should be infallible");
-    Self { client }
+    Self {
+      client,
+      max_manifest_bytes: DEFAULT_MAX_MANIFEST_BYTES,
+      max_artifact_bytes: DEFAULT_MAX_ARTIFACT_BYTES,
+    }
   }
 
   pub fn with_client(client: reqwest::Client) -> Self {
-    Self { client }
+    Self {
+      client,
+      max_manifest_bytes: DEFAULT_MAX_MANIFEST_BYTES,
+      max_artifact_bytes: DEFAULT_MAX_ARTIFACT_BYTES,
+    }
+  }
+
+  /// Override the manifest body size cap. Q1.10.2.
+  pub fn with_max_manifest_bytes(mut self, max: u64) -> Self {
+    self.max_manifest_bytes = max;
+    self
+  }
+
+  /// Override the artifact body size cap. Q1.10.2.
+  pub fn with_max_artifact_bytes(mut self, max: u64) -> Self {
+    self.max_artifact_bytes = max;
+    self
   }
 
   /// Fetch a remote marketplace manifest over HTTP(S), then parse and validate
@@ -71,43 +108,129 @@ impl RemoteMarketplaceClient {
         url, status
       )));
     }
-    let body = response.text().await.map_err(|err| {
+    // Q1.10.2: refuse manifests that the server advertises as larger
+    // than our cap (pre-check via Content-Length) AND verify the
+    // bytes we actually read also stay under the cap (some servers
+    // lie about Content-Length, or stream chunked).
+    if let Some(announced) = content_length(&response)
+      && announced > self.max_manifest_bytes
+    {
+      return Err(SkillError::HttpError(format!(
+        "manifest at '{}' announces {} bytes, exceeding cap {}",
+        url, announced, self.max_manifest_bytes
+      )));
+    }
+    let bytes = response.bytes().await.map_err(|err| {
       SkillError::HttpError(format!(
         "failed to read response body from '{}': {}",
         url, err
       ))
     })?;
-    RemoteMarketplaceManifest::parse_toml(&body)
+    if bytes.len() as u64 > self.max_manifest_bytes {
+      return Err(SkillError::HttpError(format!(
+        "manifest at '{}' streamed {} bytes, exceeding cap {}",
+        url,
+        bytes.len(),
+        self.max_manifest_bytes
+      )));
+    }
+    let body = std::str::from_utf8(&bytes).map_err(|err| {
+      SkillError::HttpError(format!("manifest at '{}' is not valid UTF-8: {}", url, err))
+    })?;
+    RemoteMarketplaceManifest::parse_toml(body)
   }
 
   /// Fetch package bytes from an artifact URL. Callers should pass the bytes
   /// through [`RemoteMarketplaceCache`] before using them.
+  ///
+  /// Q1.10.2: honors the `max_artifact_bytes` cap (default 256 MiB)
+  /// and ships an optional `If-None-Match: <etag>` header so callers
+  /// that already have a cached copy can short-circuit on `304 Not
+  /// Modified`.
   pub async fn fetch_artifact_bytes(&self, url: &str) -> Result<Vec<u8>, SkillError> {
+    self
+      .fetch_artifact_bytes_with_etag(url, None)
+      .await
+      .map(|out| out.bytes)
+  }
+
+  pub async fn fetch_artifact_bytes_with_etag(
+    &self,
+    url: &str,
+    if_none_match: Option<&str>,
+  ) -> Result<ArtifactFetchOutcome, SkillError> {
     validate_registry_url(url)?;
-    let response = self
-      .client
-      .get(url)
+    let mut request = self.client.get(url);
+    if let Some(etag) = if_none_match {
+      request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    }
+    let response = request
       .send()
       .await
       .map_err(|err| SkillError::HttpError(format!("failed to fetch '{}': {}", url, err)))?;
+
     let status = response.status();
+    if status == reqwest::StatusCode::NOT_MODIFIED {
+      return Ok(ArtifactFetchOutcome {
+        bytes: Vec::new(),
+        etag: if_none_match.map(|s| s.to_string()),
+        not_modified: true,
+      });
+    }
     if !status.is_success() {
       return Err(SkillError::HttpError(format!(
         "failed to fetch '{}': HTTP {}",
         url, status
       )));
     }
-    response
-      .bytes()
-      .await
-      .map(|bytes| bytes.to_vec())
-      .map_err(|err| {
-        SkillError::HttpError(format!(
-          "failed to read artifact body from '{}': {}",
-          url, err
-        ))
-      })
+    if let Some(announced) = content_length(&response)
+      && announced > self.max_artifact_bytes
+    {
+      return Err(SkillError::HttpError(format!(
+        "artifact at '{}' announces {} bytes, exceeding cap {}",
+        url, announced, self.max_artifact_bytes
+      )));
+    }
+    let etag = response
+      .headers()
+      .get(reqwest::header::ETAG)
+      .and_then(|v| v.to_str().ok())
+      .map(|s| s.to_string());
+    let bytes = response.bytes().await.map_err(|err| {
+      SkillError::HttpError(format!(
+        "failed to read artifact body from '{}': {}",
+        url, err
+      ))
+    })?;
+    if bytes.len() as u64 > self.max_artifact_bytes {
+      return Err(SkillError::HttpError(format!(
+        "artifact at '{}' streamed {} bytes, exceeding cap {}",
+        url,
+        bytes.len(),
+        self.max_artifact_bytes
+      )));
+    }
+    Ok(ArtifactFetchOutcome {
+      bytes: bytes.to_vec(),
+      etag,
+      not_modified: false,
+    })
   }
+}
+
+/// Result of a [`RemoteMarketplaceClient::fetch_artifact_bytes_with_etag`]
+/// call. `not_modified` is `true` when the server returned 304 in
+/// response to the `If-None-Match` header — the cached copy is
+/// authoritative and `bytes` is empty.
+#[derive(Debug, Clone)]
+pub struct ArtifactFetchOutcome {
+  pub bytes: Vec<u8>,
+  pub etag: Option<String>,
+  pub not_modified: bool,
+}
+
+fn content_length(response: &reqwest::Response) -> Option<u64> {
+  response.content_length()
 }
 
 /// Local cache for downloaded marketplace artifacts.
