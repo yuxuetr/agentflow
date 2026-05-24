@@ -8,10 +8,11 @@ use crate::error::{MCPError, MCPResult};
 use crate::transport::traits::{Transport, TransportConfig, TransportType};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::task::JoinHandle;
 
 /// Stdio transport for local MCP servers
 ///
@@ -45,6 +46,17 @@ pub struct StdioTransport {
   stdin: Option<BufWriter<ChildStdin>>,
   /// Buffered stdout reader
   stdout: Option<BufReader<ChildStdout>>,
+  /// Q2.6.1: ring buffer of `Value`s that arrived between calls and
+  /// did not match a pending request id (typically notifications).
+  /// `send_message` drains them via `receive_message` so a
+  /// notification arriving before the matching response no longer
+  /// permanently desyncs the JSON-RPC session.
+  pending_inbox: VecDeque<Value>,
+  /// Q2.6.2: handle to the stderr drain task. Set on `connect`,
+  /// dropped on `disconnect`. Forwards every stderr line to
+  /// `tracing::warn!` so the server's stderr can't fill Linux's
+  /// 64 KiB pipe buffer and deadlock the child.
+  stderr_drain: Option<JoinHandle<()>>,
   /// Connection status
   connected: bool,
   /// Timeout for I/O operations
@@ -83,6 +95,8 @@ impl StdioTransport {
       process: None,
       stdin: None,
       stdout: None,
+      pending_inbox: VecDeque::new(),
+      stderr_drain: None,
       connected: false,
       timeout: Duration::from_millis(Self::DEFAULT_TIMEOUT_MS),
       max_message_size: Self::DEFAULT_MAX_MESSAGE_SIZE,
@@ -253,6 +267,14 @@ impl Transport for StdioTransport {
       .take()
       .ok_or_else(|| MCPError::connection("Failed to capture stdout"))?;
 
+    // Q2.6.2: take stderr and spawn a drain task so the server can
+    // log to stderr without ever blocking on a full pipe. Forward
+    // each line to `tracing::warn!` so operators see the server's
+    // diagnostic output through the same observability stack.
+    if let Some(stderr) = child.stderr.take() {
+      self.stderr_drain = Some(spawn_stderr_drain(stderr));
+    }
+
     // Set up buffered I/O
     self.stdin = Some(BufWriter::new(stdin));
     self.stdout = Some(BufReader::new(stdout));
@@ -268,6 +290,13 @@ impl Transport for StdioTransport {
       .check_process_health()
       .map_err(|e| e.context("Process health check failed before sending message"))?;
 
+    // Q2.6.1: snapshot the request id so we can correlate the
+    // response on the wire. Pre-fix `send_message` blindly read the
+    // next line and assumed it was the response — a notification
+    // sent by the server before the response permanently shifted
+    // every subsequent request by one read.
+    let expected_id = request.get("id").cloned();
+
     // Serialize and send request
     let request_str = serde_json::to_string(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize JSON-RPC request"))?;
@@ -277,16 +306,37 @@ impl Transport for StdioTransport {
       .await
       .map_err(|e| e.context("Failed to write JSON-RPC request"))?;
 
-    // Read and parse response
-    let response_str = self
-      .read_line_with_timeout()
-      .await
-      .map_err(|e| e.context("Failed to read JSON-RPC response"))?;
+    // Loop reading lines until we see a message whose `id` matches
+    // the request. Anything else is a notification or out-of-band
+    // payload — buffer it on `pending_inbox` so a subsequent
+    // `receive_message` can deliver it to the caller rather than
+    // dropping it on the floor.
+    loop {
+      let response_str = self
+        .read_line_with_timeout()
+        .await
+        .map_err(|e| e.context("Failed to read JSON-RPC response"))?;
 
-    let response: Value = serde_json::from_str(&response_str)
-      .map_err(|e| MCPError::from(e).context("Failed to parse JSON-RPC response"))?;
+      let response: Value = serde_json::from_str(&response_str)
+        .map_err(|e| MCPError::from(e).context("Failed to parse JSON-RPC response"))?;
 
-    Ok(response)
+      let response_id = response.get("id");
+      if response_id == expected_id.as_ref() {
+        return Ok(response);
+      }
+
+      // Out-of-band (notification or stale response). Queue it for
+      // `receive_message` consumers — losing the message would
+      // surprise a caller that legitimately subscribed to server
+      // notifications via the receive surface.
+      tracing::debug!(
+        target = "agentflow_mcp::stdio",
+        expected_id = ?expected_id,
+        got_id = ?response_id,
+        "queued out-of-band stdio message while waiting for matching response"
+      );
+      self.pending_inbox.push_back(response);
+    }
   }
 
   async fn send_notification(&mut self, notification: Value) -> MCPResult<()> {
@@ -308,6 +358,14 @@ impl Transport for StdioTransport {
   }
 
   async fn receive_message(&mut self) -> MCPResult<Option<Value>> {
+    // Q2.6.1: drain any out-of-band messages that `send_message`
+    // queued while it was waiting for a matching response id. This
+    // is the single way callers can observe server notifications
+    // that arrived interleaved with request responses.
+    if let Some(buffered) = self.pending_inbox.pop_front() {
+      return Ok(Some(buffered));
+    }
+
     // Check process health
     self
       .check_process_health()
@@ -332,6 +390,13 @@ impl Transport for StdioTransport {
     // Drop stdin/stdout first to signal EOF
     self.stdin = None;
     self.stdout = None;
+    self.pending_inbox.clear();
+    // Q2.6.2: stop the stderr drain. The process exit will close
+    // the pipe so the task would unblock anyway, but aborting
+    // explicitly keeps shutdown deterministic for tests.
+    if let Some(handle) = self.stderr_drain.take() {
+      handle.abort();
+    }
 
     // Kill and wait for process
     if let Some(mut process) = self.process.take() {
@@ -393,10 +458,37 @@ impl Drop for StdioTransport {
     //   2. `Command::kill_on_drop(true)` (set at spawn time) makes tokio
     //      SIGKILL the child when the `Child` is dropped, as long as the
     //      runtime is still alive.
+    if let Some(handle) = self.stderr_drain.take() {
+      handle.abort();
+    }
     drop(self.process.take());
     drop(self.stdin.take());
     drop(self.stdout.take());
   }
+}
+
+/// Q2.6.2: stream the child's stderr into `tracing::warn!` so it
+/// never blocks on a full pipe. We deliberately ignore I/O errors
+/// — once stderr closes (child exits / disconnect aborts the task)
+/// the loop terminates.
+fn spawn_stderr_drain(stderr: ChildStderr) -> JoinHandle<()> {
+  tokio::spawn(async move {
+    let mut reader = BufReader::new(stderr);
+    let mut line = String::new();
+    loop {
+      line.clear();
+      match reader.read_line(&mut line).await {
+        Ok(0) => break, // EOF
+        Ok(_) => {
+          let trimmed = line.trim_end_matches(['\r', '\n']);
+          if !trimmed.is_empty() {
+            tracing::warn!(target = "agentflow_mcp::stdio::stderr", "{trimmed}");
+          }
+        }
+        Err(_) => break,
+      }
+    }
+  })
 }
 
 #[cfg(test)]
@@ -643,6 +735,83 @@ mod tests {
   // Echo Process Integration Tests
   // ============================================================================
   // These tests use simple Unix commands to test the full transport flow
+
+  /// Q2.6.1 regression: a server that emits a notification before
+  /// the matching response no longer permanently desyncs the
+  /// session. Pre-fix `send_message` returned the notification as
+  /// the response and the actual response had to be consumed via a
+  /// separate read; here we craft a shell session that ships
+  /// `notif → response` for every line, send a request, and verify
+  /// the returned message has the matching id.
+  #[tokio::test]
+  #[cfg(unix)]
+  async fn send_message_skips_notifications_until_matching_id() {
+    // The shell script:
+    //  - reads one line (the request)
+    //  - emits a notification (no id)
+    //  - echoes the request back unchanged as the response
+    // Without Q2.6.1, the client would read the notification line
+    // and treat it as the response.
+    let mut transport = StdioTransport::new(vec![
+      "sh".to_string(),
+      "-c".to_string(),
+      "while read line; do \
+         echo '{\"jsonrpc\":\"2.0\",\"method\":\"server/notify\",\"params\":{\"hi\":1}}'; \
+         echo \"$line\"; \
+       done"
+        .to_string(),
+    ])
+    .with_timeout(Duration::from_secs(2));
+    transport.connect().await.unwrap();
+
+    let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 42});
+    let response = transport.send_message(request.clone()).await.unwrap();
+    assert_eq!(response.get("id"), Some(&json!(42)));
+    assert_eq!(response, request, "response payload must round-trip");
+
+    // The notification we buffered must be observable via
+    // `receive_message`.
+    let buffered = transport.receive_message().await.unwrap().unwrap();
+    assert_eq!(
+      buffered.get("method").and_then(|v| v.as_str()),
+      Some("server/notify"),
+      "queued notification not delivered: {buffered:?}"
+    );
+
+    transport.disconnect().await.unwrap();
+  }
+
+  /// Q2.6.2 regression: a server writing > 64 KiB of stderr stays
+  /// healthy because the drain task keeps the pipe empty. Without
+  /// the drain, the child would block in `write(2)` to stderr the
+  /// moment the pipe fills and never send a response.
+  #[tokio::test]
+  #[cfg(unix)]
+  async fn stderr_does_not_deadlock_when_server_floods_it() {
+    // Print 128 KiB of stderr in 1 KiB chunks before echoing each
+    // request. 128 KiB is comfortably above Linux's default 64 KiB
+    // pipe buffer, so an undrained pipe would deadlock here.
+    let mut transport = StdioTransport::new(vec![
+      "sh".to_string(),
+      "-c".to_string(),
+      "for i in $(seq 1 128); do \
+         printf 'stderr noise %d %s\\n' \"$i\" \"$(printf '%.0sx' {1..980})\" >&2; \
+       done; \
+       while read line; do echo \"$line\"; done"
+        .to_string(),
+    ])
+    .with_timeout(Duration::from_secs(5));
+    transport.connect().await.unwrap();
+
+    // Give the script a beat to push the stderr noise.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 7});
+    let response = transport.send_message(request.clone()).await.unwrap();
+    assert_eq!(response, request);
+
+    transport.disconnect().await.unwrap();
+  }
 
   #[tokio::test]
   #[cfg(unix)] // These tests rely on Unix utilities
