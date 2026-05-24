@@ -288,7 +288,7 @@ impl SemanticMemory {
 
 #[async_trait]
 impl MemoryStore for SemanticMemory {
-  async fn add_message(&mut self, message: Message) -> Result<(), MemoryError> {
+  async fn add_message(&self, message: Message) -> Result<(), MemoryError> {
     let session_id = message.session_id.clone();
     let message_id = message.id.to_string();
     let should_embed = matches!(message.role, Role::User | Role::Assistant);
@@ -411,7 +411,7 @@ impl MemoryStore for SemanticMemory {
     }
   }
 
-  async fn clear_session(&mut self, session_id: &str) -> Result<(), MemoryError> {
+  async fn clear_session(&self, session_id: &str) -> Result<(), MemoryError> {
     // Remove embeddings first (to avoid orphaned rows)
     sqlx::query("DELETE FROM embeddings WHERE session_id = ?1")
       .bind(session_id)

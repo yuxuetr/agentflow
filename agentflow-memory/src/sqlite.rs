@@ -87,11 +87,26 @@ fn row_to_message(row: &SqliteRow) -> Result<Message, MemoryError> {
     .try_get("token_count")
     .map_err(|e| MemoryError::StorageError(e.to_string()))?;
 
-  let id = uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4());
+  // Q2.10.1: pre-fix the `unwrap_or_else` fallbacks silently minted a
+  // fresh UUID and a `now()` timestamp every time a row failed to
+  // parse — making the same row return different ids/timestamps on
+  // each read and breaking the `AgentNodeResumeContract` key
+  // invariant (the resume contract assumes message ids are stable
+  // across reads). Surface the parse failure as `StorageError` so
+  // the caller can decide whether to repair, skip, or abort.
+  let id = uuid::Uuid::parse_str(&id_str).map_err(|err| {
+    MemoryError::StorageError(format!(
+      "corrupt row: invalid UUID '{id_str}' in messages.id: {err}"
+    ))
+  })?;
   let role = Role::from(role_str.as_str());
   let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
     .map(|dt| dt.with_timezone(&chrono::Utc))
-    .unwrap_or_else(|_| chrono::Utc::now());
+    .map_err(|err| {
+      MemoryError::StorageError(format!(
+        "corrupt row (id={id}): invalid RFC3339 timestamp '{ts_str}': {err}"
+      ))
+    })?;
 
   Ok(Message {
     id,
@@ -106,7 +121,7 @@ fn row_to_message(row: &SqliteRow) -> Result<Message, MemoryError> {
 
 #[async_trait]
 impl MemoryStore for SqliteMemory {
-  async fn add_message(&mut self, message: Message) -> Result<(), MemoryError> {
+  async fn add_message(&self, message: Message) -> Result<(), MemoryError> {
     sqlx::query(
       "INSERT OR REPLACE INTO messages
                 (id, session_id, role, content, timestamp, tool_name, token_count)
@@ -178,7 +193,7 @@ impl MemoryStore for SqliteMemory {
     Ok(messages)
   }
 
-  async fn clear_session(&mut self, session_id: &str) -> Result<(), MemoryError> {
+  async fn clear_session(&self, session_id: &str) -> Result<(), MemoryError> {
     sqlx::query("DELETE FROM messages WHERE session_id = ?1")
       .bind(session_id)
       .execute(&self.pool)
@@ -198,5 +213,79 @@ impl MemoryStore for SqliteMemory {
 
     let total: i64 = row.try_get("total").unwrap_or(0);
     Ok(total as u32)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use chrono::Utc;
+  use uuid::Uuid;
+
+  /// Q2.10.1 regression: a row with a malformed UUID returns
+  /// `StorageError`. Pre-fix the loader minted a fresh `Uuid::new_v4()`
+  /// every time it was read, so the same row produced different
+  /// message ids across reads and broke
+  /// `AgentNodeResumeContract`'s message-id key.
+  #[tokio::test]
+  async fn row_to_message_returns_err_on_corrupt_uuid() {
+    let mem = SqliteMemory::in_memory().await.unwrap();
+    // Bypass the model layer to inject a corrupt id directly.
+    sqlx::query(
+      "INSERT INTO messages (id, session_id, role, content, timestamp, tool_name, token_count)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind("not-a-uuid")
+    .bind("sess-corrupt")
+    .bind("user")
+    .bind("hello")
+    .bind(Utc::now().to_rfc3339())
+    .bind::<Option<String>>(None)
+    .bind(1_i64)
+    .execute(&mem.pool)
+    .await
+    .unwrap();
+
+    let err = mem
+      .get_all("sess-corrupt")
+      .await
+      .expect_err("corrupt row must surface as error");
+    let msg = err.to_string();
+    assert!(
+      msg.contains("invalid UUID") || msg.contains("corrupt row"),
+      "expected corrupt-row error, got: {msg}"
+    );
+  }
+
+  /// Q2.10.2 regression: many concurrent `add_message` calls land
+  /// without serializing through a `&mut self` borrow. Pre-fix the
+  /// trait required `&mut self`, so the ReAct H3 parallel
+  /// tool-call dispatcher was forced to acquire an outer lock and
+  /// fanned out writes serially.
+  #[tokio::test]
+  async fn add_message_supports_concurrent_writers() {
+    let mem = std::sync::Arc::new(SqliteMemory::in_memory().await.unwrap());
+    let mut handles = Vec::new();
+    for i in 0..32 {
+      let mem = mem.clone();
+      handles.push(tokio::spawn(async move {
+        let msg = Message {
+          id: Uuid::new_v4(),
+          session_id: "sess-concurrent".into(),
+          role: Role::User,
+          content: format!("msg-{i}"),
+          timestamp: Utc::now(),
+          tool_name: None,
+          token_count: 1,
+        };
+        mem.add_message(msg).await
+      }));
+    }
+    for handle in handles {
+      handle.await.unwrap().unwrap();
+    }
+
+    let all = mem.get_all("sess-concurrent").await.unwrap();
+    assert_eq!(all.len(), 32, "every concurrent insert must land");
   }
 }
