@@ -454,11 +454,20 @@ impl HookedTool {
     }
 
     // Build a fresh ApprovalRequest.
+    // Q1.7.2: redact `params_summary` before it leaves this hook.
+    // Pre-fix the raw params (which may include API keys, bearer
+    // tokens, passwords) were copied straight into the JSONL / SSE
+    // event envelopes the human or upstream UI sees.
     let request_id = format!("req-{}", uuid::Uuid::new_v4());
     let now = Utc::now();
     let expires_at = now
       + chrono::Duration::from_std(self.config.approval_timeout)
         .unwrap_or_else(|_| chrono::Duration::seconds(60));
+    let mut params_summary = pending.params.clone();
+    agentflow_tracing::redaction::redact_value(
+      &mut params_summary,
+      &agentflow_tracing::redaction::RedactionConfig::default(),
+    );
     let request = ApprovalRequest {
       id: request_id.clone(),
       session_id: pending.session_id.clone(),
@@ -467,7 +476,7 @@ impl HookedTool {
       source: pending.source.clone(),
       permissions: pending.permissions.clone(),
       idempotency: pending.idempotency,
-      params_summary: pending.params.clone(),
+      params_summary,
       risk,
       reason,
       requested_at: now,
@@ -977,6 +986,52 @@ mod tests {
       *self.counter.lock().unwrap() += 1;
       Ok(())
     }
+  }
+
+  /// Q1.7.2 regression: `ApprovalRequest.params_summary` emitted via
+  /// the `ApprovalRequested` event must have sensitive fields
+  /// redacted. Pre-fix the raw `params.clone()` flowed through to
+  /// the JSONL / SSE sinks and an operator's prompt log could leak
+  /// API keys or bearer tokens.
+  #[tokio::test]
+  async fn approval_request_redacts_sensitive_params_before_emit() {
+    let (tool, _) = ProbeTool::new("probe", ToolIdempotency::NonIdempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(AutoAllowApprovalProvider::new()), sinks)
+      .with_pre_hook(Arc::new(RequireApprovalHook));
+    let registry = wrap_registry(registry, config);
+    registry
+      .execute(
+        "probe",
+        serde_json::json!({
+          "url": "https://api.example.com/login",
+          "headers": {"Authorization": "Bearer sk-live-abc123"},
+          "api_key": "ant-api03-leak-me-not"
+        }),
+      )
+      .await
+      .unwrap();
+
+    let events = sink.snapshot().await;
+    let request = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::ApprovalRequested(payload) => Some(&payload.request),
+        _ => None,
+      })
+      .expect("ApprovalRequested must fire");
+    let rendered = serde_json::to_string(&request.params_summary).unwrap();
+    assert!(
+      !rendered.contains("sk-live-abc123"),
+      "bearer token leaked to operator approval prompt: {rendered}"
+    );
+    assert!(
+      !rendered.contains("ant-api03-leak-me-not"),
+      "api_key leaked: {rendered}"
+    );
+    assert!(rendered.contains("api.example.com"));
   }
 
   #[tokio::test]

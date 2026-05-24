@@ -18,6 +18,10 @@ homepage.workspace = true
 [dependencies]
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+# Q1.7.2: redact secrets in `ApprovalRequest.params_summary` /
+# `ToolCallRequestedPayload.params_summary` before they hit JSONL /
+# SSE / stdout sinks.
+agentflow-tracing = { path = "../agentflow-tracing", version = "0.1" }
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

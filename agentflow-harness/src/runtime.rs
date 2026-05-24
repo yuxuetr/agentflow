@@ -504,14 +504,26 @@ fn translate_inner_events(
 
 fn tool_call_requested_from_step(step: &AgentStep) -> Option<ToolCallRequestedPayload> {
   match &step.kind {
-    AgentStepKind::ToolCall { tool, params } => Some(ToolCallRequestedPayload {
-      step_index: step.index,
-      tool: tool.clone(),
-      source: None,
-      permissions: Vec::new(),
-      idempotency: None,
-      params_summary: params.clone(),
-    }),
+    AgentStepKind::ToolCall { tool, params } => {
+      // Q1.7.2: same treatment as the hook-side ApprovalRequest —
+      // strip secrets out of `params_summary` before the event flows
+      // into the JSONL / SSE / stdout sinks. The agent inner step
+      // still holds the raw params (it owns them), but the event
+      // envelope only sees the redacted form.
+      let mut params_summary = params.clone();
+      agentflow_tracing::redaction::redact_value(
+        &mut params_summary,
+        &agentflow_tracing::redaction::RedactionConfig::default(),
+      );
+      Some(ToolCallRequestedPayload {
+        step_index: step.index,
+        tool: tool.clone(),
+        source: None,
+        permissions: Vec::new(),
+        idempotency: None,
+        params_summary,
+      })
+    }
     _ => None,
   }
 }
@@ -910,6 +922,61 @@ mod tests {
     assert_eq!(events.first().unwrap().seq, 0);
     let final_seq = events.iter().map(|e| e.seq).max().unwrap();
     assert_eq!(final_seq, result.final_event_seq);
+  }
+
+  /// Q1.7.2 regression: `tool_call_requested_from_step` redacts
+  /// secrets out of `params_summary` before they hit the event sink.
+  /// Pre-fix the raw params (which may include API keys / passwords)
+  /// were copied straight into the JSONL log.
+  #[tokio::test]
+  async fn tool_call_requested_redacts_sensitive_params_before_emit() {
+    use crate::persistence::InMemoryEventSink;
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("done", captured.clone());
+    inner.extra_steps.push(AgentStep::new(
+      1,
+      AgentStepKind::ToolCall {
+        tool: "http".into(),
+        params: json!({
+          "url": "https://api.example.com/login",
+          "headers": {
+            "Authorization": "Bearer sk-live-supersecret123",
+          },
+          "api_key": "ant-api03-do-not-log",
+        }),
+      },
+    ));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("login flow", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    let events = sink.snapshot().await;
+    let requested = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::ToolCallRequested(p) => Some(p),
+        _ => None,
+      })
+      .expect("tool_call_requested must be emitted");
+
+    let json_str = serde_json::to_string(&requested.params_summary).unwrap();
+    assert!(
+      !json_str.contains("sk-live-supersecret123"),
+      "bearer token leaked into params_summary: {json_str}"
+    );
+    assert!(
+      !json_str.contains("ant-api03-do-not-log"),
+      "api_key leaked into params_summary: {json_str}"
+    );
+    // Non-secret fields still survive so the operator sees what was
+    // attempted (URL, tool name, etc.).
+    assert!(json_str.contains("api.example.com"));
   }
 
   /// Q1.7.1 regression: when the runtime and an external writer share

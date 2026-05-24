@@ -215,6 +215,7 @@ dependencies = [
  "agentflow-llm",
  "agentflow-memory",
  "agentflow-tools",
+ "agentflow-tracing",
  "async-trait",
  "chrono",
  "serde",
