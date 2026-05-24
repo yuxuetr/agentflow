@@ -43,6 +43,14 @@ type StreamedEvent = {
 
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
 
+/// Q1.9.1: the API token used to live in `localStorage`, which meant
+/// (a) it survived browser restarts across multiple operator sessions,
+/// (b) any XSS payload could exfiltrate it via `localStorage.getItem`,
+/// and (c) the UI labels claimed "API token is never saved" while the
+/// code was happily persisting it. The token now lives in
+/// `sessionStorage` (cleared on tab close) plus the React component
+/// tree's in-memory state, so it never outlives the active session and
+/// no string with this constant name lands in the persistent store.
 const tokenKey = 'agentflow.ui.apiToken';
 const workflowKey = 'agentflow.ui.workflowDraft';
 const tenantKey = 'agentflow.ui.tenantId';
@@ -123,6 +131,28 @@ const readStorage = (key: string, fallback: string) => {
 const writeStorage = (key: string, value: string) => {
   try {
     window.localStorage.setItem(key, value);
+  } catch {
+    // Storage is best-effort; the console still works without it.
+  }
+};
+
+/// Q1.9.1: session-scoped storage for the API token. Cleared when
+/// the tab closes — never persists across browser restarts.
+const readSessionStorage = (key: string, fallback: string) => {
+  try {
+    return window.sessionStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeSessionStorage = (key: string, value: string) => {
+  try {
+    if (value) {
+      window.sessionStorage.setItem(key, value);
+    } else {
+      window.sessionStorage.removeItem(key);
+    }
   } catch {
     // Storage is best-effort; the console still works without it.
   }
@@ -1893,33 +1923,77 @@ function HarnessSessionDetail({
     void fetchEventsFallback();
 
     setStreamState('loading');
-    let source: EventSource | null = null;
+    // Q1.9.2: native `EventSource` cannot send custom headers, so
+    // there was no way to attach the `Authorization: Bearer <token>`
+    // a production-profile gateway requires. The old code happily
+    // built `new EventSource(...)` and silently fell back to 5-second
+    // polling when the server returned 401 — operators saw "live"
+    // updates but they were actually arriving from the history
+    // endpoint with seconds of lag. We now use `fetch` +
+    // ReadableStream so the auth header travels with the SSE
+    // request; auto-reconnect is implemented by re-entering the
+    // same loop on stream end.
+    const abortController = new AbortController();
     let fallbackHandle: number | null = null;
-    try {
-      source = new EventSource(`/v1/harness/sessions/${sessionId}/events`);
-      source.onopen = () => setStreamState('streaming');
-      source.onmessage = (msg) => {
+    let reconnectHandle: number | null = null;
+    let closed = false;
+
+    const startStream = async () => {
+      while (!closed && !abortController.signal.aborted) {
         try {
-          const parsed = JSON.parse(msg.data) as HarnessEvent;
-          mergeEvent(parsed);
-        } catch {
-          // Non-JSON keep-alive comment — ignore.
+          const response = await apiFetch(
+            `/v1/harness/sessions/${sessionId}/events`,
+            apiToken,
+            { signal: abortController.signal, headers: { Accept: 'text/event-stream' } },
+          );
+          if (!response.ok || response.body === null) {
+            setStreamState('error');
+            if (fallbackHandle === null) {
+              fallbackHandle = window.setInterval(() => {
+                void fetchEventsFallback();
+              }, 5000);
+            }
+            // Wait before retrying to avoid hot-looping on a 401.
+            await new Promise<void>((resolve) => {
+              reconnectHandle = window.setTimeout(() => resolve(), 5000);
+            });
+            continue;
+          }
+          setStreamState('streaming');
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (!closed && !abortController.signal.aborted) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const { events, rest } = parseSseChunk(buffer);
+            buffer = rest;
+            for (const ev of events) {
+              mergeEvent(ev as unknown as HarnessEvent);
+            }
+          }
+        } catch (err) {
+          if (abortController.signal.aborted) {
+            break;
+          }
+          setStreamState('error');
+          if (fallbackHandle === null) {
+            fallbackHandle = window.setInterval(() => {
+              void fetchEventsFallback();
+            }, 5000);
+          }
+          await new Promise<void>((resolve) => {
+            reconnectHandle = window.setTimeout(() => resolve(), 5000);
+          });
         }
-      };
-      source.onerror = () => {
-        setStreamState('error');
-        // EventSource auto-reconnects; we just flip the state so the
-        // UI surfaces the degraded mode. Fall back to history polling
-        // until SSE recovers so the timeline stays up-to-date even if
-        // the broker channel is closed (a known case for
-        // long-completed sessions per the workflow `EventBroker`
-        // contract).
-        if (fallbackHandle === null) {
-          fallbackHandle = window.setInterval(() => {
-            void fetchEventsFallback();
-          }, 5000);
-        }
-      };
+      }
+    };
+
+    try {
+      void startStream();
     } catch (err) {
       setStreamState('error');
       setError(err instanceof Error ? err.message : String(err));
@@ -1932,10 +2006,14 @@ function HarnessSessionDetail({
     }, 2000);
 
     return () => {
-      source?.close();
+      closed = true;
+      abortController.abort();
       window.clearInterval(sessionHandle);
       if (fallbackHandle !== null) {
         window.clearInterval(fallbackHandle);
+      }
+      if (reconnectHandle !== null) {
+        window.clearTimeout(reconnectHandle);
       }
       setStreamState('closed');
     };
@@ -2570,7 +2648,10 @@ function DiagnosticsPanel({
 
 function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
-  const [apiToken, setApiToken] = useState(() => readStorage(tokenKey, ''));
+  // Q1.9.1: token comes from sessionStorage (tab-scoped) instead of
+  // localStorage. Operators who close the tab re-enter it; an XSS
+  // payload that fires after the operator left no longer finds it.
+  const [apiToken, setApiToken] = useState(() => readSessionStorage(tokenKey, ''));
 
   useEffect(() => {
     const handler = () => setPathname(window.location.pathname);
@@ -2579,7 +2660,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    writeStorage(tokenKey, apiToken);
+    writeSessionStorage(tokenKey, apiToken);
   }, [apiToken]);
 
   if (pathname === '/ui/runs/new') {
