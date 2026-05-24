@@ -23,8 +23,18 @@ pub struct MarkMapConfig {
 
 impl Default for MarkMapConfig {
   fn default() -> Self {
+    // Q3.8.1: the previous default api_url pointed at a personal
+    // Cloudflare Worker (`markmap-api.jinpeng-ti.workers.dev`) — a
+    // single-developer endpoint silently shipped into every user's
+    // production workload. There is no upstream contract that the
+    // endpoint stays up, doesn't rate-limit, doesn't log payloads, or
+    // doesn't disappear when the developer stops paying the CF bill.
+    // The default now reads `AGENTFLOW_MARKMAP_API_URL` if set,
+    // otherwise leaves the field `None` so the node fails fast with a
+    // clear "configure api_url" message instead of silently exfiltrating
+    // markdown to a third party.
     Self {
-      api_url: Some("https://markmap-api.jinpeng-ti.workers.dev".to_string()),
+      api_url: std::env::var("AGENTFLOW_MARKMAP_API_URL").ok(),
       title: Some("Mind Map".to_string()),
       theme: Some("light".to_string()),
       color_freeze_level: Some(6),
@@ -140,7 +150,9 @@ impl AsyncNode for MarkMapNode {
       .api_url
       .as_ref()
       .ok_or_else(|| AgentFlowError::ConfigurationError {
-        message: "API URL not configured".to_string(),
+        message:
+          "MarkMap api_url not configured. Set `AGENTFLOW_MARKMAP_API_URL=https://your-own-renderer` or pass it explicitly via MarkMapConfig.api_url. (Q3.8.1: the previous hardcoded personal Cloudflare Worker default was removed for security.)"
+            .to_string(),
       })?;
 
     let timeout_duration = std::time::Duration::from_secs(config.timeout_seconds.unwrap_or(30));
@@ -193,13 +205,29 @@ mod tests {
   use super::*;
   use serde_json::json;
 
+  // Q3.8.1: with no default api_url (per security audit), execution must
+  // surface a configuration error rather than silently hitting a
+  // previously-hardcoded personal Cloudflare Worker. This replaces the
+  // prior live-network test, which was both flaky and a smoke test for
+  // the personal endpoint.
   #[tokio::test]
-  async fn test_markmap_node_execution() {
+  async fn test_markmap_node_requires_api_url_configuration() {
+    // Ensure the env var isn't accidentally set in CI.
+    // SAFETY: test-scoped env mutation; var has no semantic meaning to other tests.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MARKMAP_API_URL");
+    }
+
     let node = MarkMapNode::new("test_map", "# {{title}}\n## Item 1\n## Item 2");
     let mut inputs = AsyncNodeInputs::new();
     inputs.insert("title".to_string(), FlowValue::Json(json!("My Test Map")));
 
     let result = node.execute(&inputs).await;
-    assert!(result.is_ok());
+    let err = result.expect_err("must fail without configured api_url");
+    let msg = format!("{err}");
+    assert!(
+      msg.contains("api_url not configured"),
+      "error must instruct operator to configure api_url, got: {msg}"
+    );
   }
 }

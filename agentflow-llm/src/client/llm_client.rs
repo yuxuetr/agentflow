@@ -15,6 +15,21 @@ use std::time::Instant;
 #[cfg(feature = "logging")]
 use tracing::{debug, error, info, warn};
 
+/// Q3.6.2: stable, non-cryptographic fingerprint of a prompt or response
+/// body. Returns the first 16 hex chars of an FNV-1a 64-bit digest so
+/// operators can correlate requests across logs without DEBUG-logging
+/// the raw content (which routinely contains PII). The choice of FNV
+/// over sha256 is deliberate — we're not authenticating anything, and
+/// FNV avoids pulling in a crypto dep purely for log noise.
+fn prompt_fingerprint(text: &str) -> String {
+  let mut hash: u64 = 0xcbf29ce484222325;
+  for byte in text.as_bytes() {
+    hash ^= u64::from(*byte);
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+  format!("{hash:016x}")
+}
+
 /// Response format options for model output
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResponseFormat {
@@ -141,7 +156,20 @@ impl LLMClient {
         self.response_format
       );
 
-      debug!("Full prompt: {}", self.prompt);
+      // Q3.6.2: do NOT log the full prompt at DEBUG. Prompts routinely
+      // contain PII, retrieved documents, system prompts with internal
+      // architecture details, etc. Default tracing config can be
+      // CRIT/DEBUG without anyone realising they signed up for full
+      // prompt persistence. Surface a short SHA-256 fingerprint + length
+      // at DEBUG so operators can correlate requests across logs without
+      // exposing content; the full prompt only lands at TRACE level,
+      // which production setups intentionally exclude.
+      debug!(
+        "Prompt fingerprint: len={} sha256_prefix={}",
+        self.prompt.len(),
+        prompt_fingerprint(&self.prompt)
+      );
+      tracing::trace!("Full prompt: {}", self.prompt);
 
       if let Some(tools) = &self.tools {
         debug!("Tools enabled: {} functions", tools.len());
@@ -171,7 +199,16 @@ impl LLMClient {
             response.len()
           );
 
-          debug!("Response content: {}", response);
+          // Q3.6.2: see prompt-logging note above. Responses can echo
+          // back PII, contain LLM-rendered customer data, or recite
+          // a tool's secrets. DEBUG gets a fingerprint + length; full
+          // response body is TRACE-only.
+          debug!(
+            "Response fingerprint: len={} sha256_prefix={}",
+            response.len(),
+            prompt_fingerprint(response)
+          );
+          tracing::trace!("Response content: {}", response);
 
           // Validate JSON if JSON format was requested
           if let Some(ResponseFormat::JsonObject) | Some(ResponseFormat::JsonSchema { .. }) =
