@@ -44,19 +44,22 @@ impl MoonshotProvider {
     })
   }
 
-  fn build_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    // Note: API key is validated in new(), so this should always succeed
+    // Q2.5.3: invalid API key → ConfigurationError, not panic.
     headers.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
-        .expect("API key contains invalid characters"),
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
+        LLMError::ConfigurationError {
+          message: format!("Moonshot API key contains invalid characters: {err}"),
+        }
+      })?,
     );
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   fn build_request_body(&self, request: &ProviderRequest) -> Value {
@@ -102,7 +105,7 @@ impl LLMProvider for MoonshotProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -171,7 +174,7 @@ impl LLMProvider for MoonshotProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -195,7 +198,7 @@ impl LLMProvider for MoonshotProvider {
     let response = self
       .client
       .get(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .send()
       .await?;
 
@@ -285,9 +288,7 @@ pub struct MoonshotStreamingResponse {
   finished: bool,
 }
 
-// Make it Send + Sync
-unsafe impl Send for MoonshotStreamingResponse {}
-unsafe impl Sync for MoonshotStreamingResponse {}
+// Q2.5.4: `unsafe impl Send + Sync` removed (trait no longer needs Sync).
 
 impl MoonshotStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
@@ -321,6 +322,7 @@ impl MoonshotStreamingResponse {
         metadata: None,
         usage: None,
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       });
     }
 
@@ -338,6 +340,7 @@ impl MoonshotStreamingResponse {
           total_tokens: Some(u.total_tokens),
         }),
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       });
     }
 
@@ -406,7 +409,9 @@ mod tests {
     let provider = MoonshotProvider::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    let headers = scope(ctx.clone(), async { provider.build_headers() })
+      .await
+      .expect("ASCII key builds cleanly");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),

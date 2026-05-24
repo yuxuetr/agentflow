@@ -68,19 +68,22 @@ impl StepFunProvider {
     })
   }
 
-  fn build_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    // Note: API key is validated in new(), so this should always succeed
+    // Q2.5.3: invalid API key → ConfigurationError, not panic.
     headers.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
-        .expect("API key contains invalid characters"),
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
+        LLMError::ConfigurationError {
+          message: format!("StepFun API key contains invalid characters: {err}"),
+        }
+      })?,
     );
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   fn build_request_body(&self, request: &ProviderRequest) -> Value {
@@ -142,7 +145,7 @@ impl StepFunProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -222,7 +225,7 @@ impl StepFunProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -320,7 +323,7 @@ impl LLMProvider for StepFunProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&test_body)
       .send()
       .await?;
@@ -445,9 +448,7 @@ pub struct StepFunStreamingResponse {
   finished: bool,
 }
 
-// Make it Send + Sync
-unsafe impl Send for StepFunStreamingResponse {}
-unsafe impl Sync for StepFunStreamingResponse {}
+// Q2.5.4: `unsafe impl Send + Sync` removed (trait no longer needs Sync).
 
 impl StepFunStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
@@ -481,6 +482,7 @@ impl StepFunStreamingResponse {
         metadata: None,
         usage: None,
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       });
     }
 
@@ -504,6 +506,7 @@ impl StepFunStreamingResponse {
           total_tokens: Some(u.total_tokens),
         }),
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       });
     }
 
@@ -752,18 +755,21 @@ impl StepFunSpecializedClient {
     })
   }
 
-  fn build_auth_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_auth_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
-    // Note: API key is validated in new(), so this should always succeed
+    // Q2.5.3: invalid API key → ConfigurationError, not panic.
     headers.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
-        .expect("API key contains invalid characters"),
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
+        LLMError::ConfigurationError {
+          message: format!("StepFun API key contains invalid characters: {err}"),
+        }
+      })?,
     );
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   /// Generate image from text prompt
@@ -772,7 +778,7 @@ impl StepFunSpecializedClient {
 
     let url = format!("{}/images/generations", self.base_url);
 
-    let mut headers = self.build_auth_headers();
+    let mut headers = self.build_auth_headers()?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
@@ -805,7 +811,7 @@ impl StepFunSpecializedClient {
 
     let url = format!("{}/images/image2image", self.base_url);
 
-    let mut headers = self.build_auth_headers();
+    let mut headers = self.build_auth_headers()?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
@@ -876,7 +882,7 @@ impl StepFunSpecializedClient {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_auth_headers())
+      .headers(self.build_auth_headers()?)
       .multipart(form)
       .send()
       .await?;
@@ -900,7 +906,7 @@ impl StepFunSpecializedClient {
 
     let url = format!("{}/audio/speech", self.base_url);
 
-    let mut headers = self.build_auth_headers();
+    let mut headers = self.build_auth_headers()?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
@@ -930,7 +936,7 @@ impl StepFunSpecializedClient {
 
     let url = format!("{}/audio/voices", self.base_url);
 
-    let mut headers = self.build_auth_headers();
+    let mut headers = self.build_auth_headers()?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = self
@@ -986,7 +992,7 @@ impl StepFunSpecializedClient {
     let response = self
       .client
       .get(&url)
-      .headers(self.build_auth_headers())
+      .headers(self.build_auth_headers()?)
       .send()
       .await?;
 
@@ -1020,7 +1026,7 @@ impl StepFunSpecializedClient {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_auth_headers())
+      .headers(self.build_auth_headers()?)
       .multipart(form)
       .send()
       .await?;
@@ -1397,7 +1403,9 @@ mod tests {
     let provider = StepFunProvider::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    let headers = scope(ctx.clone(), async { provider.build_headers() })
+      .await
+      .expect("ASCII key builds cleanly");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),
@@ -1411,7 +1419,9 @@ mod tests {
     let client = StepFunSpecializedClient::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { client.build_auth_headers() }).await;
+    let headers = scope(ctx.clone(), async { client.build_auth_headers() })
+      .await
+      .expect("ASCII key builds cleanly");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),

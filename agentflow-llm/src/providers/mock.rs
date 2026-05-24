@@ -163,6 +163,7 @@ impl StreamingResponse for MockStreamingResponse {
         metadata: None,
         usage: None,
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       }))
     }
   }

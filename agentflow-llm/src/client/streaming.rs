@@ -17,6 +17,34 @@ pub struct StreamChunk {
   pub usage: Option<TokenUsage>,
   /// Content type hint for this chunk (e.g., "text", "image", "audio")
   pub content_type: Option<String>,
+  /// Q2.5.2: incremental tool_call updates within this chunk, when the
+  /// provider streams tool_calls. Empty by default. Consumers merge by
+  /// `index`, appending `arguments_delta` and overwriting `id`/`name`
+  /// when present (those fields are sent once at the start of a block).
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub tool_call_deltas: Vec<ToolCallDelta>,
+}
+
+/// Incremental tool_call payload streamed by a provider. Multiple deltas
+/// with the same `index` belong to the same tool_call; consumers
+/// concatenate `arguments_delta` to reconstruct the JSON-serialized
+/// arguments. `id` and `name` are typically set on the first delta for
+/// a given `index` and absent afterward.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ToolCallDelta {
+  /// Zero-based position of this tool_call in the assistant message.
+  pub index: u32,
+  /// Tool-call id from the provider (e.g., `call_abc123`, `toolu_xyz`).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub id: Option<String>,
+  /// Function name (typically only set on the first delta).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub name: Option<String>,
+  /// Partial JSON fragment of the arguments. Concatenating every
+  /// delta's `arguments_delta` for a given `index` yields the final
+  /// JSON string the provider would have returned non-streamed.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub arguments_delta: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,9 +54,17 @@ pub struct TokenUsage {
   pub total_tokens: Option<u32>,
 }
 
-/// Trait for streaming LLM responses
+/// Trait for streaming LLM responses.
+///
+/// Q2.5.4: previously required `Send + Sync`. The `Sync` bound forced
+/// every provider to ship an `unsafe impl Sync` on its
+/// `*StreamingResponse` because the inner `Pin<Box<dyn Stream + Send>>`
+/// isn't `Sync` in general. Streams are inherently sequential —
+/// consumers borrow `&mut self` to call `next_chunk`, so `Sync`
+/// (multi-threaded `&Self`) is never useful. Dropping the bound
+/// removes 5 `unsafe impl`s with no observable behavior change.
 #[async_trait]
-pub trait StreamingResponse: Send + Sync {
+pub trait StreamingResponse: Send {
   /// Get the next chunk from the stream
   async fn next_chunk(&mut self) -> Result<Option<StreamChunk>>;
 

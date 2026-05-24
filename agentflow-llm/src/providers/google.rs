@@ -522,8 +522,7 @@ pub struct GoogleStreamingResponse {
 }
 
 // Make it Send + Sync
-unsafe impl Send for GoogleStreamingResponse {}
-unsafe impl Sync for GoogleStreamingResponse {}
+// Q2.5.4: `unsafe impl Send + Sync` removed (trait no longer needs Sync).
 
 impl GoogleStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
@@ -566,6 +565,7 @@ impl GoogleStreamingResponse {
             total_tokens: Some(u.total_token_count),
           }),
           content_type: Some("text".to_string()),
+          tool_call_deltas: Vec::new(),
         });
       }
 
@@ -581,6 +581,7 @@ impl GoogleStreamingResponse {
             total_tokens: Some(u.total_token_count),
           }),
           content_type: Some("text".to_string()),
+          tool_call_deltas: Vec::new(),
         });
       }
     }

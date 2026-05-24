@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result,
-  client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
+  client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
@@ -45,19 +45,23 @@ impl OpenAIProvider {
     })
   }
 
-  fn build_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    // Note: API key is validated in new(), so this should always succeed
+    // Q2.5.3: surface invalid-character API keys as
+    // `ConfigurationError` instead of panicking the runtime.
     headers.insert(
       AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key))
-        .expect("API key contains invalid characters"),
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
+        LLMError::ConfigurationError {
+          message: format!("OpenAI API key contains invalid characters: {err}"),
+        }
+      })?,
     );
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   fn build_request_body(&self, request: &ProviderRequest) -> Value {
@@ -165,7 +169,7 @@ impl LLMProvider for OpenAIProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -251,7 +255,7 @@ impl LLMProvider for OpenAIProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -275,7 +279,7 @@ impl LLMProvider for OpenAIProvider {
     let response = self
       .client
       .get(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .send()
       .await?;
 
@@ -359,6 +363,30 @@ struct OpenAIStreamingChoice {
 struct OpenAIStreamingDelta {
   role: Option<String>,
   content: Option<serde_json::Value>, // Can be string or array of content objects
+  /// Q2.5.2: streamed tool_call deltas. The provider sends partial JSON
+  /// for `function.arguments`; consumers must concatenate per-index.
+  #[serde(default)]
+  tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
+}
+
+/// Q2.5.2: incremental tool_call entry inside a streaming delta.
+#[derive(Debug, Deserialize, Serialize)]
+struct OpenAIStreamingToolCall {
+  index: u32,
+  #[serde(default)]
+  id: Option<String>,
+  #[serde(default, rename = "type")]
+  _kind: Option<String>,
+  #[serde(default)]
+  function: Option<OpenAIStreamingToolCallFunction>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpenAIStreamingToolCallFunction {
+  #[serde(default)]
+  name: Option<String>,
+  #[serde(default)]
+  arguments: Option<String>,
 }
 
 pub struct OpenAIStreamingResponse {
@@ -367,9 +395,9 @@ pub struct OpenAIStreamingResponse {
   finished: bool,
 }
 
-// Make it Send + Sync
-unsafe impl Send for OpenAIStreamingResponse {}
-unsafe impl Sync for OpenAIStreamingResponse {}
+// Q2.5.4: removed `unsafe impl Send + Sync`. The inner pinned
+// `dyn Stream + Send` is auto-Send already, and the trait no longer
+// requires Sync (streams are sequentially consumed via &mut self).
 
 impl OpenAIStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
@@ -403,18 +431,46 @@ impl OpenAIStreamingResponse {
         metadata: None,
         usage: None,
         content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
       });
     }
 
     if let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data)
       && let Some(choice) = chunk.choices.first()
-      && let Some(content) = &choice.delta.content
     {
-      // Handle both string and array content in streaming
-      let content_text = match content {
-        serde_json::Value::String(text) => text.clone(),
-        _ => content.to_string(), // Convert other types to string
+      let content_text = match &choice.delta.content {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
       };
+
+      let tool_call_deltas = choice
+        .delta
+        .tool_calls
+        .as_ref()
+        .map(|calls| {
+          calls
+            .iter()
+            .map(|call| ToolCallDelta {
+              index: call.index,
+              id: call.id.clone(),
+              name: call.function.as_ref().and_then(|f| f.name.clone()),
+              arguments_delta: call.function.as_ref().and_then(|f| f.arguments.clone()),
+            })
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+      // Q2.5.2: emit a chunk when there is *any* signal — text content,
+      // tool_call delta, finish_reason, or usage — so tool-call-only
+      // turns don't get silently dropped between [DONE] sentinels.
+      let has_signal = !content_text.is_empty()
+        || !tool_call_deltas.is_empty()
+        || choice.finish_reason.is_some()
+        || chunk.usage.is_some();
+      if !has_signal {
+        return None;
+      }
 
       return Some(StreamChunk {
         content: content_text,
@@ -426,6 +482,7 @@ impl OpenAIStreamingResponse {
           total_tokens: Some(u.total_tokens),
         }),
         content_type: Some("text".to_string()),
+        tool_call_deltas,
       });
     }
 
@@ -510,7 +567,9 @@ mod tests {
     let provider = OpenAIProvider::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    let headers = scope(ctx.clone(), async { provider.build_headers() })
+      .await
+      .expect("headers must build under a well-formed ASCII API key");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),
@@ -520,8 +579,57 @@ mod tests {
   #[test]
   fn build_headers_omits_traceparent_when_no_scope_active() {
     let provider = OpenAIProvider::new("test-key", None).unwrap();
-    let headers = provider.build_headers();
+    let headers = provider.build_headers().expect("ASCII key builds cleanly");
     assert!(headers.get("traceparent").is_none());
+  }
+
+  /// Q2.5.3 regression: invalid-character API key surfaces as
+  /// ConfigurationError instead of panicking the runtime.
+  #[test]
+  fn build_headers_returns_err_on_invalid_api_key() {
+    let provider = OpenAIProvider::new("bad\nkey", None).unwrap();
+    let err = provider
+      .build_headers()
+      .expect_err("newline-in-key must fail closed");
+    assert!(matches!(err, LLMError::ConfigurationError { .. }));
+  }
+
+  // Q2.5.2: OpenAI streams tool_calls via `choices[0].delta.tool_calls`. The
+  // first delta carries id/name; subsequent deltas append `function.arguments`
+  // partial JSON. Concatenating all `arguments_delta` per index yields the
+  // canonical argument JSON.
+  #[test]
+  fn streaming_tool_call_delta_carries_id_and_name() {
+    let chunk = OpenAIStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 0);
+    assert_eq!(delta.id.as_deref(), Some("call_abc"));
+    assert_eq!(delta.name.as_deref(), Some("get_weather"));
+    assert_eq!(delta.arguments_delta.as_deref(), Some(""));
+    assert!(!chunk.is_final);
+  }
+
+  #[test]
+  fn streaming_tool_call_subsequent_delta_appends_arguments() {
+    let chunk = OpenAIStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 0);
+    assert!(delta.id.is_none());
+    assert!(delta.name.is_none());
+    assert_eq!(delta.arguments_delta.as_deref(), Some("{\"city\":"));
+  }
+
+  #[test]
+  fn streaming_done_sentinel_finalizes() {
+    let chunk = OpenAIStreamingResponse::parse_sse_chunk("data: [DONE]").unwrap();
+    assert!(chunk.is_final);
+    assert!(chunk.tool_call_deltas.is_empty());
   }
 
   #[test]

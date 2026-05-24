@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result,
-  client::streaming::{StreamChunk, StreamingResponse},
+  client::streaming::{StreamChunk, StreamingResponse, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
@@ -45,19 +45,24 @@ impl AnthropicProvider {
     })
   }
 
-  fn build_headers(&self) -> reqwest::header::HeaderMap {
+  fn build_headers(&self) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    // Note: API key is validated in new(), so this should always succeed
+    // Q2.5.3: pre-fix this called `.expect("API key contains invalid
+    // characters")` and panicked the entire runtime if a `.env` file
+    // ended the value with a stray `\n`. Surface as
+    // `ConfigurationError` so callers can degrade gracefully.
     headers.insert(
       "x-api-key",
-      HeaderValue::from_str(&self.api_key).expect("API key contains invalid characters"),
+      HeaderValue::from_str(&self.api_key).map_err(|err| LLMError::ConfigurationError {
+        message: format!("Anthropic API key contains invalid characters: {err}"),
+      })?,
     );
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     crate::trace_context::inject_into_headers(&mut headers);
-    headers
+    Ok(headers)
   }
 
   fn build_request_body(&self, request: &ProviderRequest) -> Value {
@@ -183,7 +188,7 @@ impl LLMProvider for AnthropicProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -253,7 +258,7 @@ impl LLMProvider for AnthropicProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&body)
       .send()
       .await?;
@@ -282,7 +287,7 @@ impl LLMProvider for AnthropicProvider {
     let response = self
       .client
       .post(&url)
-      .headers(self.build_headers())
+      .headers(self.build_headers()?)
       .json(&test_body)
       .send()
       .await?;
@@ -363,8 +368,7 @@ pub struct AnthropicStreamingResponse {
 }
 
 // Make it Send + Sync
-unsafe impl Send for AnthropicStreamingResponse {}
-unsafe impl Sync for AnthropicStreamingResponse {}
+// Q2.5.4: `unsafe impl Send + Sync` removed (trait no longer needs Sync).
 
 impl AnthropicStreamingResponse {
   fn new(response: reqwest::Response) -> Self {
@@ -399,36 +403,81 @@ impl AnthropicStreamingResponse {
       && let Some(event_type) = event.get("type").and_then(|t| t.as_str())
     {
       match event_type {
-        "content_block_delta" => {
-          if let Some(delta) = event.get("delta")
-            && let Some(text) = delta.get("text")
-            && let Some(text_str) = text.as_str()
+        "content_block_start" => {
+          // Q2.5.2: tool_use blocks emit their `id` and `name` here, before any
+          // `input_json_delta`. Surface them as a ToolCallDelta with empty args
+          // so downstream consumers learn the tool_call exists.
+          if let Some(block) = event.get("content_block")
+            && block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
           {
+            let index = event.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let id = block.get("id").and_then(|i| i.as_str()).map(String::from);
+            let name = block.get("name").and_then(|n| n.as_str()).map(String::from);
             return Some(StreamChunk {
-              content: text_str.to_string(),
+              content: String::new(),
               is_final: false,
               metadata: Some(event.clone()),
               usage: None,
-              content_type: Some("text".to_string()),
+              content_type: Some("tool_use".to_string()),
+              tool_call_deltas: vec![ToolCallDelta {
+                index,
+                id,
+                name,
+                arguments_delta: None,
+              }],
             });
           }
         }
-        "message_stop" => {
-          return Some(StreamChunk {
-            content: String::new(),
-            is_final: true,
-            metadata: Some(event.clone()),
-            usage: None,
-            content_type: Some("text".to_string()),
-          });
+        "content_block_delta" => {
+          if let Some(delta) = event.get("delta") {
+            let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            // Q2.5.2: `input_json_delta` carries partial JSON for a tool_use
+            // block's `input` field. Concatenate per index downstream.
+            if delta_type == "input_json_delta"
+              && let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str())
+            {
+              let index = event.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+              return Some(StreamChunk {
+                content: String::new(),
+                is_final: false,
+                metadata: Some(event.clone()),
+                usage: None,
+                content_type: Some("tool_use".to_string()),
+                tool_call_deltas: vec![ToolCallDelta {
+                  index,
+                  id: None,
+                  name: None,
+                  arguments_delta: Some(partial.to_string()),
+                }],
+              });
+            }
+            // Existing path: text_delta on a text block.
+            if let Some(text) = delta.get("text")
+              && let Some(text_str) = text.as_str()
+            {
+              return Some(StreamChunk {
+                content: text_str.to_string(),
+                is_final: false,
+                metadata: Some(event.clone()),
+                usage: None,
+                content_type: Some("text".to_string()),
+                tool_call_deltas: Vec::new(),
+              });
+            }
+          }
         }
-        "content_block_stop" => {
+        "message_stop" => {
+          // Q2.5.1: Anthropic emits `message_stop` exactly once at the end of the
+          // entire response. `content_block_stop` fires after each block (text,
+          // tool_use, …) and previously terminated the stream early, dropping
+          // every block after the first one. Now only `message_stop` ends it.
           return Some(StreamChunk {
             content: String::new(),
             is_final: true,
             metadata: Some(event.clone()),
             usage: None,
             content_type: Some("text".to_string()),
+            tool_call_deltas: Vec::new(),
           });
         }
         _ => {}
@@ -498,11 +547,33 @@ mod tests {
     let provider = AnthropicProvider::new("test-key", None).unwrap();
     let ctx = LlmTraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331").unwrap();
 
-    let headers = scope(ctx.clone(), async { provider.build_headers() }).await;
+    let headers = scope(ctx.clone(), async { provider.build_headers() })
+      .await
+      .expect("headers must build under a well-formed ASCII API key");
     assert_eq!(
       headers.get("traceparent").and_then(|v| v.to_str().ok()),
       Some(ctx.to_traceparent().as_str()),
     );
+  }
+
+  /// Q2.5.3 regression: an API key with a stray non-ASCII byte
+  /// (typical `.env` mistake — trailing `\n` from copy-paste)
+  /// surfaces as `ConfigurationError` instead of panicking.
+  #[test]
+  fn build_headers_returns_err_on_invalid_api_key() {
+    let provider = AnthropicProvider::new("bad\nkey", None).unwrap();
+    let err = provider
+      .build_headers()
+      .expect_err("newline-in-key must fail closed");
+    match err {
+      LLMError::ConfigurationError { message } => {
+        assert!(
+          message.contains("invalid characters") || message.contains("API key"),
+          "expected configuration error, got: {message}"
+        );
+      }
+      other => panic!("expected ConfigurationError, got {other:?}"),
+    }
   }
 
   #[test]
@@ -608,5 +679,66 @@ mod tests {
       text: "hello".to_string(),
     }];
     assert!(parse_anthropic_tool_use_blocks(&content).is_empty());
+  }
+
+  // Q2.5.1: `content_block_stop` must NOT terminate the stream; only
+  // `message_stop` may. Multi-block responses (text + tool_use) were
+  // truncated to the first block before the fix.
+  #[test]
+  fn streaming_content_block_stop_does_not_finalize() {
+    let chunk = AnthropicStreamingResponse::parse_sse_event(
+      "data: {\"type\":\"content_block_stop\",\"index\":0}",
+    );
+    assert!(
+      chunk.is_none(),
+      "content_block_stop should be ignored, got {chunk:?}"
+    );
+  }
+
+  #[test]
+  fn streaming_message_stop_does_finalize() {
+    let chunk =
+      AnthropicStreamingResponse::parse_sse_event("data: {\"type\":\"message_stop\"}").unwrap();
+    assert!(chunk.is_final);
+  }
+
+  // Q2.5.2: tool_use blocks stream their identity via `content_block_start`
+  // and their JSON arguments via `input_json_delta` chunks. The parser must
+  // surface both as `ToolCallDelta` entries so concatenated `arguments_delta`
+  // values reconstruct the full argument JSON.
+  #[test]
+  fn streaming_tool_use_block_start_emits_id_and_name() {
+    let chunk = AnthropicStreamingResponse::parse_sse_event(
+      "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_abc\",\"name\":\"get_weather\",\"input\":{}}}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 1);
+    assert_eq!(delta.id.as_deref(), Some("toolu_abc"));
+    assert_eq!(delta.name.as_deref(), Some("get_weather"));
+    assert!(delta.arguments_delta.is_none());
+    assert!(!chunk.is_final);
+  }
+
+  #[test]
+  fn streaming_input_json_delta_emits_arguments_fragment() {
+    let chunk = AnthropicStreamingResponse::parse_sse_event(
+      "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\"}}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 1);
+    assert_eq!(delta.arguments_delta.as_deref(), Some("{\"city\":"));
+    assert!(delta.id.is_none());
+    assert!(delta.name.is_none());
+  }
+
+  #[test]
+  fn streaming_text_delta_remains_unaffected() {
+    let chunk = AnthropicStreamingResponse::parse_sse_event(
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}",
+    ).unwrap();
+    assert_eq!(chunk.content, "hi");
+    assert!(chunk.tool_call_deltas.is_empty());
   }
 }
