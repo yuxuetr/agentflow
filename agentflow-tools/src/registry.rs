@@ -206,6 +206,39 @@ impl ToolRegistry {
     lines.join("\n")
   }
 
+  /// Q2.9.3: validate `params` against the tool's declared
+  /// `parameters_schema` (a JSON-Schema fragment) without executing.
+  ///
+  /// Agent dispatchers call this before forwarding LLM-produced
+  /// arguments to `execute`, so a malformed call surfaces as
+  /// [`ToolError::SchemaViolation`] and can be replayed back to the
+  /// LLM for self-correction instead of crashing the tool or
+  /// running with garbage input. Returns `Ok(())` if no tool with
+  /// `name` is registered — that path is handled by `execute`'s
+  /// `NotFound` branch.
+  pub fn validate_params(&self, name: &str, params: &Value) -> Result<(), ToolError> {
+    let Some(tool) = self.tools.get(name) else {
+      // Defer NotFound classification to `execute` so callers get a
+      // single source of truth for unknown tools.
+      return Ok(());
+    };
+    let schema = tool.parameters_schema();
+    let compiled = jsonschema::JSONSchema::options()
+      .compile(&schema)
+      .map_err(|err| ToolError::SchemaViolation {
+        tool: name.to_string(),
+        message: format!("declared parameters_schema is not valid JSON Schema: {err}"),
+      })?;
+    if let Err(errors) = compiled.validate(params) {
+      let detail = errors.map(|e| e.to_string()).collect::<Vec<_>>().join(", ");
+      return Err(ToolError::SchemaViolation {
+        tool: name.to_string(),
+        message: detail,
+      });
+    }
+    Ok(())
+  }
+
   /// Execute a named tool with the given JSON parameters.
   ///
   /// Enforcement order:
@@ -252,6 +285,14 @@ impl ToolRegistry {
           .unwrap_or_else(|| format!("tool '{}' was denied by capability check", name)),
       });
     }
+
+    // Q2.9.3: validate `params` against the tool's declared schema
+    // before forwarding to `tool.execute(params)`. Any caller (agent
+    // dispatcher, CLI, workflow node) that hands a tool malformed
+    // arguments now sees `ToolError::SchemaViolation` instead of
+    // either crashing the tool or running with garbage input. LLM
+    // agents can replay this back to the model for self-correction.
+    self.validate_params(name, &params)?;
 
     tool.execute(params).await
   }
@@ -515,5 +556,71 @@ mod tests {
     assert_eq!(audit.len(), 1);
     assert!(audit[0].allowed);
     assert_eq!(audit[0].params_summary["url"], json!("string"));
+  }
+
+  /// Q2.9.3 regression: validate_params returns SchemaViolation
+  /// when params disagree with the tool's declared schema.
+  #[test]
+  fn validate_params_rejects_schema_violations() {
+    struct StrictTool;
+    #[async_trait]
+    impl Tool for StrictTool {
+      fn name(&self) -> &str {
+        "strict"
+      }
+      fn description(&self) -> &str {
+        "tool that requires a url string"
+      }
+      fn parameters_schema(&self) -> Value {
+        json!({
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "format": "uri" }
+          },
+          "required": ["url"]
+        })
+      }
+      fn metadata(&self) -> ToolMetadata {
+        ToolMetadata::builtin_named("strict")
+      }
+      async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::success("ok"))
+      }
+    }
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StrictTool));
+
+    // Missing required `url` field.
+    let err = registry
+      .validate_params("strict", &json!({}))
+      .expect_err("missing required field must violate schema");
+    match err {
+      ToolError::SchemaViolation { tool, message } => {
+        assert_eq!(tool, "strict");
+        assert!(
+          message.contains("url") || message.contains("required"),
+          "expected mention of missing 'url', got: {message}"
+        );
+      }
+      other => panic!("expected SchemaViolation, got {other:?}"),
+    }
+
+    // Wrong type for `url`.
+    let err = registry
+      .validate_params("strict", &json!({"url": 42}))
+      .expect_err("wrong type must violate schema");
+    assert!(matches!(err, ToolError::SchemaViolation { .. }));
+
+    // Valid params pass.
+    registry
+      .validate_params("strict", &json!({"url": "https://example.test"}))
+      .expect("valid params must pass schema");
+
+    // Unknown tool is NOT a schema violation — let `execute` raise
+    // `NotFound` so callers have a single source of truth.
+    registry
+      .validate_params("not-a-tool", &json!({}))
+      .expect("unknown tool returns Ok from validate_params");
   }
 }

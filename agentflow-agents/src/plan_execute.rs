@@ -167,6 +167,11 @@ impl PlanExecuteAgent {
     let max_steps = context.limits.max_steps.unwrap_or(self.config.max_steps);
     let max_tool_calls = context.limits.max_tool_calls;
     let timeout_ms = context.limits.timeout_ms;
+    // Q2.9.2: respect `token_budget` like ReActAgent does. Pre-fix
+    // PlanExecute read every other RuntimeLimits field but silently
+    // dropped `token_budget`, so a workflow that capped the planner
+    // at e.g. 4096 tokens still ran unbounded.
+    let token_budget = context.limits.token_budget;
     let cancellation_token = context.cancellation_token.clone();
     let run_started_at = Instant::now();
 
@@ -212,6 +217,23 @@ impl PlanExecuteAgent {
         &*self.message_counter,
       ))
       .await?;
+
+    // Q2.9.2: enforce `token_budget` after the planner reply lands
+    // in memory. ReActAgent does the same check at the top of each
+    // iteration; for PlanExecute the natural check-point is right
+    // after we've ingested the planner output (it's the largest
+    // single token consumer in the run).
+    if let Some(budget) = token_budget {
+      let used = self.memory.session_token_count(&self.session_id).await?;
+      if used > budget {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::TokenBudgetExceeded { used, budget },
+          steps,
+          events,
+        ));
+      }
+    }
 
     let plan = if !planner_response.tool_calls.is_empty() {
       // Native tool calls drive the plan directly: each call becomes one

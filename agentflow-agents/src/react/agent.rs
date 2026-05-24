@@ -2068,9 +2068,29 @@ impl ReActAgent {
     //    sees a single reflective summary rather than n reflections.
     let mut error_summary = String::new();
     for (i, prep) in prepared.iter().enumerate() {
-      let (output, duration_ms) = outputs[i]
-        .take()
-        .expect("every prepared call must have an output by this point");
+      // Q2.9.1: previous code `expect`ed every prepared call to have
+      // an output set by the earlier loop. The invariant should
+      // hold (the previous loop fills `outputs[i]` for every i in
+      // 0..prepared.len()) but a panic here would crash the entire
+      // ReAct runtime mid-batch. Fall back to a synthetic error
+      // output + warning so the rest of the batch still completes
+      // and the operator sees the inconsistency in the trace.
+      let (output, duration_ms) = match outputs[i].take() {
+        Some(pair) => pair,
+        None => {
+          warn!(
+            tool = %prep.tool,
+            index = i,
+            "internal invariant violation: prepared call has no recorded output; emitting synthetic error"
+          );
+          (
+            agentflow_tools::ToolOutput::error(
+              "internal invariant violation: tool call has no output recorded".to_string(),
+            ),
+            0,
+          )
+        }
+      };
       let observation = if output.is_error {
         format!("[ERROR] {}", output.content)
       } else {
