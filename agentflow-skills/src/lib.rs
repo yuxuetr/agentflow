@@ -70,10 +70,11 @@ pub use policy::{
   resolve_tool_policy,
 };
 pub use remote_marketplace::{
-  CachedMarketplaceArtifact, ChecksumSha256SignatureVerifier,
-  DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, MarketplacePackageType, MarketplaceSignature,
-  MarketplaceSignatureVerifier, MarketplaceSource, RemoteMarketplaceCache, RemoteMarketplaceClient,
-  RemoteMarketplaceEntry, RemoteMarketplaceManifest,
+  ArtifactFetchOutcome, CachedMarketplaceArtifact, ChecksumSha256SignatureVerifier,
+  DEFAULT_MAX_ARTIFACT_BYTES, DEFAULT_MAX_MANIFEST_BYTES,
+  DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, Ed25519SignatureVerifier, MarketplacePackageType,
+  MarketplaceSignature, MarketplaceSignatureVerifier, MarketplaceSource, RemoteMarketplaceCache,
+  RemoteMarketplaceClient, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
 };
 pub use skill_md::SkillMd;
 pub use validator::{

@@ -128,6 +128,45 @@ while their explicit `allowed_*` lists continue to function.
 `allowed_domains` is intentionally NOT flipped in this change because
 operators would have to enumerate every cloud endpoint they use.
 
+### Q1.10.1 — Marketplace signature verifier
+
+Pre-Q1.10.1 the default `ChecksumSha256SignatureVerifier` was a
+self-checksum (the artifact's SHA-256 compared against the field the
+publisher themselves embedded in the manifest), not a signature. An
+attacker who modified the artifact and recomputed the checksum
+trivially "passed" verification.
+
+`Ed25519SignatureVerifier` is the new production verifier:
+
+1. The verifier loads Ed25519 public keys from a configured directory,
+   default `~/.agentflow/marketplace-keys/`. Each file is named
+   `<key_id>.pub` and contains a single line of base64-encoded 32-byte
+   raw Ed25519 public-key material.
+2. The marketplace catalog entry references the same `key_id` and
+   embeds a base64-encoded detached signature over the raw artifact
+   bytes:
+
+   ```toml
+   [entries.signature]
+   algorithm = "ed25519"
+   key_id = "yuxuetr-publisher-2026"
+   value = "<base64 detached signature>"
+   ```
+
+3. `require_signature` defaults to `true`; an entry without a
+   `[signature]` block is rejected outright. Local-dev workflows can
+   construct the verifier with `.with_require_signature(false)`.
+4. `key_id` is used directly as a filename component, so the
+   verifier rejects values containing `..`, `/`, or `\` to prevent
+   path-traversal escape from the keys directory.
+
+`ChecksumSha256SignatureVerifier` is retained as
+`MarketplaceSignatureVerifier::ChecksumSha256` for local fixtures
+and is the default for `RemoteMarketplaceCache::new(...)` —
+production deployments must explicitly opt in to
+`Ed25519SignatureVerifier::new(default_keys_dir())` via
+`RemoteMarketplaceCache::with_client_and_verifier`.
+
 ## Non-Stable Surfaces
 
 The following are intentionally not v1-stable yet:

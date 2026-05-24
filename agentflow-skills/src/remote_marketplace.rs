@@ -414,6 +414,169 @@ impl MarketplaceSignatureVerifier for ChecksumSha256SignatureVerifier {
   }
 }
 
+/// Q1.10.1: real Ed25519 signature verifier.
+///
+/// The pre-fix `ChecksumSha256SignatureVerifier` only re-computes
+/// the artifact's SHA-256 and compares against the manifest field —
+/// it is not a signature at all, just a self-checksum. An attacker
+/// who modifies the artifact and recomputes the checksum trivially
+/// passes verification. This struct loads Ed25519 public keys from a
+/// configured directory (one PEM-or-base64 file per publisher,
+/// keyed by `signature.key_id`) and verifies a base64-encoded
+/// detached signature over the raw artifact bytes.
+///
+/// **Key format**: each file in `keys_dir` is named `<key_id>.pub`
+/// and contains a single line of base64-encoded 32-byte raw Ed25519
+/// public key material (`ED25519_PUBLIC_KEY_LENGTH = 32`). The
+/// canonical command to produce one with `openssl` is:
+///
+/// ```text
+/// openssl genpkey -algorithm ed25519 -out priv.pem
+/// openssl pkey -in priv.pem -pubout -outform DER \
+///     | tail -c 32 | base64 > <key_id>.pub
+/// ```
+///
+/// **Manifest shape**: the corresponding entry in the marketplace
+/// catalog references the same `key_id` and embeds a base64 detached
+/// signature:
+///
+/// ```toml
+/// [entries.signature]
+/// algorithm = "ed25519"
+/// key_id = "yuxuetr-publisher-2026"
+/// value = "<base64 signature>"
+/// ```
+#[derive(Debug, Clone)]
+pub struct Ed25519SignatureVerifier {
+  keys_dir: PathBuf,
+  /// When true, an entry without a `[signature]` block is rejected
+  /// outright. Production deployments should leave this as true
+  /// (the default); local dev / fixture tests can disable it to
+  /// install unsigned packages.
+  require_signature: bool,
+}
+
+impl Ed25519SignatureVerifier {
+  pub fn new(keys_dir: impl Into<PathBuf>) -> Self {
+    Self {
+      keys_dir: keys_dir.into(),
+      require_signature: true,
+    }
+  }
+
+  /// Default key directory: `~/.agentflow/marketplace-keys/`. Falls
+  /// back to `./.agentflow/marketplace-keys/` when no home dir is
+  /// detectable (mostly CI sandbox setups).
+  pub fn default_keys_dir() -> PathBuf {
+    dirs::home_dir()
+      .unwrap_or_else(|| PathBuf::from("."))
+      .join(".agentflow")
+      .join("marketplace-keys")
+  }
+
+  pub fn with_require_signature(mut self, require: bool) -> Self {
+    self.require_signature = require;
+    self
+  }
+
+  fn load_public_key(&self, key_id: &str) -> Result<ed25519_dalek::VerifyingKey, SkillError> {
+    use std::io::Read;
+
+    // Q1.10.2-adjacent guard: `key_id` is used as a filename, so
+    // refuse anything with `..` or path separators.
+    if key_id.contains("..") || key_id.contains('/') || key_id.contains('\\') || key_id.is_empty() {
+      return Err(validation_error(format!(
+        "marketplace key_id '{}' is not a valid filename component",
+        key_id
+      )));
+    }
+    let path = self.keys_dir.join(format!("{}.pub", key_id));
+    let mut file = fs::File::open(&path).map_err(|err| {
+      validation_error(format!(
+        "marketplace public key '{}' not found at {}: {}",
+        key_id,
+        path.display(),
+        err
+      ))
+    })?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).map_err(|err| {
+      validation_error(format!(
+        "failed to read marketplace public key {}: {}",
+        path.display(),
+        err
+      ))
+    })?;
+    let bytes = base64_decode(&content.trim())?;
+    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+      bytes.as_slice().try_into().map_err(|_| {
+        validation_error(format!(
+          "marketplace public key {} must be exactly {} bytes, got {}",
+          path.display(),
+          ed25519_dalek::PUBLIC_KEY_LENGTH,
+          bytes.len()
+        ))
+      })?;
+    ed25519_dalek::VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+      validation_error(format!(
+        "marketplace public key {} is malformed: {}",
+        path.display(),
+        err
+      ))
+    })
+  }
+}
+
+impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
+  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError> {
+    use ed25519_dalek::Verifier;
+
+    let Some(signature) = &entry.signature else {
+      if self.require_signature {
+        return Err(validation_error(format!(
+          "marketplace entry '{}@{}' has no [signature] block but Ed25519 verifier requires one",
+          entry.name, entry.version
+        )));
+      }
+      return Ok(());
+    };
+    let algorithm = signature.algorithm.trim().to_ascii_lowercase();
+    if algorithm != "ed25519" {
+      return Err(validation_error(format!(
+        "Ed25519 verifier rejected algorithm '{}' for '{}@{}'",
+        signature.algorithm, entry.name, entry.version
+      )));
+    }
+    let public_key = self.load_public_key(&signature.key_id)?;
+    let sig_bytes = base64_decode(signature.value.trim())?;
+    let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+      sig_bytes.as_slice().try_into().map_err(|_| {
+        validation_error(format!(
+          "Ed25519 signature for '{}@{}' must be exactly {} bytes, got {}",
+          entry.name,
+          entry.version,
+          ed25519_dalek::SIGNATURE_LENGTH,
+          sig_bytes.len()
+        ))
+      })?;
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+    public_key.verify(artifact, &sig).map_err(|err| {
+      validation_error(format!(
+        "Ed25519 signature verification failed for '{}@{}': {}",
+        entry.name, entry.version, err
+      ))
+    })?;
+    Ok(())
+  }
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, SkillError> {
+  use base64::Engine;
+  base64::engine::general_purpose::STANDARD
+    .decode(input)
+    .map_err(|err| validation_error(format!("invalid base64 in marketplace data: {}", err)))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteMarketplaceManifest {
   #[serde(default = "default_schema_version")]
@@ -969,6 +1132,135 @@ value = "abc"
 
     let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
     assert!(err.to_string().contains("Unsupported signature algorithm"));
+  }
+
+  // ── Q1.10.1: Ed25519 signature verifier ───────────────────────────────
+
+  fn test_signing_key() -> ed25519_dalek::SigningKey {
+    // Deterministic 32-byte seed — different from any real key.
+    let seed: [u8; 32] = *b"agentflow-test-key-do-not-deploy";
+    ed25519_dalek::SigningKey::from_bytes(&seed)
+  }
+
+  fn write_test_pub_key(dir: &Path, key_id: &str, sk: &ed25519_dalek::SigningKey) {
+    use base64::Engine;
+    let pub_b64 = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join(format!("{}.pub", key_id)), pub_b64).unwrap();
+  }
+
+  #[test]
+  fn ed25519_verifier_accepts_correctly_signed_artifact() {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+
+    let key_dir = TempDir::new().unwrap();
+    let sk = test_signing_key();
+    write_test_pub_key(key_dir.path(), "publisher-a", &sk);
+
+    let artifact = b"hello world";
+    let sig = sk.sign(artifact);
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+    let entry = RemoteMarketplaceEntry {
+      name: "skill-a".into(),
+      version: "1.0.0".into(),
+      package_type: MarketplacePackageType::Skill,
+      source: MarketplaceSource {
+        registry_url: "https://example.test/registry".into(),
+        artifact_url: "https://example.test/skill-a.tar.gz".into(),
+        checksum_sha256: sha256_bytes(artifact),
+      },
+      signature: Some(MarketplaceSignature {
+        algorithm: "ed25519".into(),
+        key_id: "publisher-a".into(),
+        value: sig_b64,
+      }),
+      aliases: vec![],
+      description: None,
+    };
+
+    let verifier = Ed25519SignatureVerifier::new(key_dir.path());
+    verifier
+      .verify(&entry, artifact)
+      .expect("verification must pass for legit sig");
+  }
+
+  #[test]
+  fn ed25519_verifier_rejects_tampered_artifact() {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+
+    let key_dir = TempDir::new().unwrap();
+    let sk = test_signing_key();
+    write_test_pub_key(key_dir.path(), "publisher-a", &sk);
+
+    let original = b"hello world";
+    let sig = sk.sign(original);
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+    let tampered = b"goodbye world"; // same length, different content
+    let entry = RemoteMarketplaceEntry {
+      name: "skill-a".into(),
+      version: "1.0.0".into(),
+      package_type: MarketplacePackageType::Skill,
+      source: MarketplaceSource {
+        registry_url: "https://example.test/registry".into(),
+        artifact_url: "https://example.test/skill-a.tar.gz".into(),
+        checksum_sha256: sha256_bytes(tampered),
+      },
+      signature: Some(MarketplaceSignature {
+        algorithm: "ed25519".into(),
+        key_id: "publisher-a".into(),
+        value: sig_b64,
+      }),
+      aliases: vec![],
+      description: None,
+    };
+
+    let verifier = Ed25519SignatureVerifier::new(key_dir.path());
+    let err = verifier.verify(&entry, tampered).unwrap_err();
+    assert!(
+      err.to_string().contains("verification failed"),
+      "expected verification failure, got: {err}"
+    );
+  }
+
+  #[test]
+  fn ed25519_verifier_rejects_unsigned_entry_when_required() {
+    let key_dir = TempDir::new().unwrap();
+    let mut entry = signed_entry_for_bytes(b"data");
+    entry.signature = None;
+
+    let verifier = Ed25519SignatureVerifier::new(key_dir.path());
+    let err = verifier.verify(&entry, b"data").unwrap_err();
+    assert!(err.to_string().contains("requires one"));
+  }
+
+  #[test]
+  fn ed25519_verifier_rejects_path_traversal_in_key_id() {
+    let key_dir = TempDir::new().unwrap();
+    let entry = RemoteMarketplaceEntry {
+      name: "skill-a".into(),
+      version: "1.0.0".into(),
+      package_type: MarketplacePackageType::Skill,
+      source: MarketplaceSource {
+        registry_url: "https://example.test/registry".into(),
+        artifact_url: "https://example.test/skill-a.tar.gz".into(),
+        checksum_sha256: sha256_bytes(b"data"),
+      },
+      signature: Some(MarketplaceSignature {
+        algorithm: "ed25519".into(),
+        key_id: "../etc/passwd".into(),
+        value: "AAAA".into(),
+      }),
+      aliases: vec![],
+      description: None,
+    };
+
+    let verifier = Ed25519SignatureVerifier::new(key_dir.path());
+    let err = verifier.verify(&entry, b"data").unwrap_err();
+    assert!(err.to_string().contains("not a valid filename component"));
   }
 
   #[test]

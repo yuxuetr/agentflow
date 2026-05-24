@@ -31,6 +31,12 @@ glob        = "0.3"
 semver      = "1"
 sha2        = "0.10"
 reqwest     = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Q1.10.1: Ed25519 verification for marketplace artifact signatures.
+# Pure Rust, no native binding required. `default-features = false`
+# drops the `rand_core` requirement that's only needed for key
+# generation (verification only needs `VerifyingKey + Signature`).
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64      = "0.21"
 
 [dev-dependencies]
 tokio-test = "0.4"
