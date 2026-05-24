@@ -20,11 +20,14 @@
 //!   Q1.1.2). `openat2` cannot be argument-filtered (the flags live in a
 //!   `struct open_how` accessed by pointer), so it is denied unconditionally
 //!   under `!FsWrite`.
-//! * **No `Exec`** → cannot be enforced through seccomp alone, because the
-//!   child must `execve` once to start. Tools that don't grant `Exec` will
-//!   already have been denied at the in-process capability merge layer
-//!   ([`crate::registry::ToolRegistry::execute`]); the kernel filter does
-//!   not need a redundant rule here.
+//! * **No `Exec`** → process-creation syscalls (`clone`, `clone3`, `fork`,
+//!   `vfork`, `execve`, `execveat`) are denied. In practice the in-process
+//!   capability layer already rejects any tool that doesn't grant `Exec`
+//!   before we reach the seccomp filter, so these rules are defense in
+//!   depth (Q1.1.4): they make the filter's contract match its name even
+//!   if a future caller bypasses the registry merge. A child running under
+//!   a no-`Exec` filter cannot start at all (the initial `execve` from the
+//!   parent fails with `EPERM`) — that is the intended failure mode.
 //!
 //! ## Limits
 //!
@@ -139,6 +142,7 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
   let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
   let allow_net = caps.contains(&Capability::Net);
   let allow_fs_write = caps.contains(&Capability::FsWrite);
+  let allow_exec = caps.contains(&Capability::Exec);
 
   // The `*_syscall_numbers` helpers return `&'static [i64]`, so the
   // for-loop binding is `&i64`. The seccomp rules map keys on owned
@@ -153,6 +157,18 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
       rules.insert(*nr, vec![]);
     }
     install_write_open_rules(&mut rules)?;
+  }
+  if !allow_exec {
+    for nr in process_creation_syscall_numbers() {
+      rules.insert(*nr, vec![]);
+    }
+    // `SYS_fork` / `SYS_vfork` only exist on x86_64; aarch64 routes both
+    // through `clone(SIGCHLD, ...)` which is already in the deny list.
+    #[cfg(target_arch = "x86_64")]
+    {
+      rules.insert(libc::SYS_fork, vec![]);
+      rules.insert(libc::SYS_vfork, vec![]);
+    }
   }
 
   let filter = SeccompFilter::new(
@@ -209,6 +225,24 @@ fn fs_write_syscall_numbers() -> &'static [i64] {
     libc::SYS_fchownat,
     libc::SYS_truncate,
     libc::SYS_ftruncate,
+  ]
+}
+
+/// Syscalls that create new processes or replace the address space.
+/// Denied under `!Exec` (Q1.1.4). This deliberately includes `execve` /
+/// `execveat`: with these in the deny set the initial `execve` performed
+/// by the parent after `fork()` fails with EPERM, which is the correct
+/// containment outcome — a tool that doesn't earn the `Exec` capability
+/// must not be able to spawn a subprocess at all.
+fn process_creation_syscall_numbers() -> &'static [i64] {
+  &[
+    libc::SYS_clone,
+    // `clone3` is a Linux 5.3+ superset of `clone` and would be a bypass
+    // route if we only blocked `clone`. libc 0.2.174 exports it for the
+    // architectures we support.
+    libc::SYS_clone3,
+    libc::SYS_execve,
+    libc::SYS_execveat,
   ]
 }
 
@@ -336,6 +370,35 @@ mod tests {
         "creat must be denied unconditionally on x86_64"
       );
     }
+  }
+
+  /// Q1.1.4 regression: under `!Exec` the filter must populate the
+  /// process-creation syscall deny set. We can't easily exercise the
+  /// runtime deny path (a no-`Exec` sandbox would fail to spawn its own
+  /// child by design, which is the whole point), so we assert rule shape
+  /// via [`compile_filter`] instead.
+  #[test]
+  fn process_creation_syscalls_denied_when_exec_capability_absent() {
+    let arch = detect_target_arch().expect("running on a supported arch");
+
+    // With Exec, none of these rules should be present.
+    let with_exec = compile_filter(&[Capability::Exec], arch).unwrap();
+    let no_exec = compile_filter(&[], arch).unwrap();
+    assert!(
+      no_exec.len() > with_exec.len(),
+      "no-Exec filter must carry more deny rules than Exec-enabled filter"
+    );
+
+    // Spot-check by rebuilding the rule map directly. Going through the
+    // BpfProgram opaque slice would tie the test to seccompiler internals.
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    for nr in process_creation_syscall_numbers() {
+      rules.insert(*nr, vec![]);
+    }
+    assert!(rules.contains_key(&libc::SYS_clone));
+    assert!(rules.contains_key(&libc::SYS_clone3));
+    assert!(rules.contains_key(&libc::SYS_execve));
+    assert!(rules.contains_key(&libc::SYS_execveat));
   }
 
   #[test]

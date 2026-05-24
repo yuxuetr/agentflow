@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use agentflow_tools::Tool;
 use agentflow_tools::builtin::ShellTool;
-use agentflow_tools::sandbox::SandboxPolicy;
+use agentflow_tools::sandbox::{
+  LinuxSeccompBackend, SandboxBackend as _, SandboxPolicy, SandboxScope,
+};
 use serde_json::json;
 
 fn permissive_shell_with_sandbox() -> ShellTool {
@@ -78,6 +80,43 @@ async fn linux_seccomp_blocks_socket_when_net_capability_absent() {
     !result.content.contains("opened"),
     "socket() unexpectedly succeeded: {}",
     result.content
+  );
+}
+
+/// Q1.1.4 deny-flow regression: a child process whose seccomp filter is
+/// built without `Capability::Exec` must not be able to start at all. The
+/// kernel applies the BPF filter via `pre_exec` after the fork but before
+/// the parent's `execve(target_binary)`. Without `execve` in the allow set
+/// that initial transition fails with `EPERM`, surfacing as an `io::Error`
+/// from `Command::output()`.
+///
+/// This guarantees that even if a future change skipped the in-process
+/// capability check, the kernel filter would still gate process creation.
+#[tokio::test]
+async fn linux_seccomp_no_exec_filter_blocks_child_spawn() {
+  let backend = LinuxSeccompBackend::new();
+  if !backend.is_enforcing() {
+    eprintln!("skipping: seccomp backend is not enforcing on this arch");
+    return;
+  }
+
+  let mut cmd = tokio::process::Command::new("/bin/true");
+  backend
+    .wrap_command(&mut cmd, &[], &SandboxScope::new())
+    .expect("wrap_command compiles a no-Exec filter");
+
+  // Spawning must fail (the std lib reports the EPERM from execve back to
+  // the parent through the post-fork status pipe). We don't pin a specific
+  // ErrorKind because Rust's Command can report this as PermissionDenied
+  // or Other depending on the libc layer.
+  let outcome = cmd.output().await;
+  assert!(
+    outcome.is_err(),
+    "spawn under no-Exec seccomp filter must fail; instead got: {:?}",
+    outcome
+      .as_ref()
+      .ok()
+      .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
   );
 }
 
