@@ -249,7 +249,17 @@ impl ArxivNode {
         all_tex_files.push_str(&content);
         all_tex_files.push_str("\n\n"); // Separator
 
-        if content.contains(r"\\begin{document}") {
+        // Q3.8.6: real arXiv .tex sources contain literal
+        // `\begin{document}` (one backslash). The previous raw
+        // string `r"\\begin{document}"` searches for two literal
+        // backslashes and therefore never matched — `main_content`
+        // silently fell back to the concatenated `all_tex_files`
+        // for every paper. The audit's suggested fix
+        // (`r"\\begin\{document\}"`) is still two backslashes; the
+        // correct literal is `r"\begin{document}"`. Helper kept as
+        // a free fn so the regression test below can exercise the
+        // marker logic without spinning up a tar archive.
+        if contains_document_marker(&content) {
           main_content = content;
         }
       }
@@ -276,5 +286,54 @@ impl ArxivNode {
     let no_end = end_re.replace_all(&no_begin, "");
     let no_tags = tag_re.replace_all(&no_end, "");
     no_tags.trim().to_string()
+  }
+}
+
+/// Q3.8.6: free helper so the marker test below can run without a
+/// tar archive. Returns true when `content` looks like the main
+/// LaTeX source (contains the literal `\begin{document}` macro).
+fn contains_document_marker(content: &str) -> bool {
+  content.contains(r"\begin{document}")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::contains_document_marker;
+
+  /// Q3.8.6 regression: pre-fix the search literal was
+  /// `r"\\begin{document}"` (two backslashes) and therefore never
+  /// matched real LaTeX (which uses a single backslash). Confirm
+  /// both a positive (real LaTeX) and negative (no marker) sample.
+  #[test]
+  fn detects_real_latex_begin_document_marker() {
+    let real_latex = r#"\documentclass{article}
+\title{Hello}
+\begin{document}
+Body text here.
+\end{document}
+"#;
+    assert!(
+      contains_document_marker(real_latex),
+      "real .tex must be recognised as the main file; one-backslash literal didn't match"
+    );
+
+    let with_macros = r"
+\usepackage{amsmath}
+\begin{document}
+Even with neighbouring text \alpha + \beta, the marker still matches.
+\end{document}
+";
+    assert!(contains_document_marker(with_macros));
+  }
+
+  #[test]
+  fn ignores_supporting_tex_files_without_marker() {
+    let figure_only = r#"\input{figures/main}
+\caption{Some helper caption.}
+"#;
+    assert!(
+      !contains_document_marker(figure_only),
+      "supporting .tex without \\begin{{document}} must not be picked as main"
+    );
   }
 }
