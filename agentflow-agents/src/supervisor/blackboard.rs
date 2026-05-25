@@ -95,11 +95,19 @@ impl Blackboard {
   }
 
   fn write_internal(&self, key: &str, value: Value, agent: &str) {
+    // Q3.12.2: poison-tolerant lock acquisition matching the
+    // `if let Ok(...)` convention used by the entries / ops sites
+    // below. The version counter is incrementing-monotonic — even
+    // after a prior thread panicked while holding the lock, the
+    // payload is just a `u64` with no torn-write risk, so we
+    // recover via `into_inner()` rather than propagating the panic
+    // out of `Blackboard::write` (which would in turn poison the
+    // supervisor's outer Tokio task).
     let version = {
-      let mut counter = self
-        .next_version
-        .lock()
-        .expect("blackboard version poisoned");
+      let mut counter = match self.next_version.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+      };
       *counter += 1;
       *counter
     };
@@ -1045,6 +1053,50 @@ providers:
       .filter(|s| matches!(s.kind, AgentStepKind::FinalAnswer { .. }))
       .count();
     assert_eq!(final_steps, 2, "parallel schedule must run both agents");
+  }
+
+  /// Q3.12.2 regression — a panic in a prior writer must not poison
+  /// the version `Mutex` to the point that subsequent `write_*` calls
+  /// also panic. Pre-fix `write_internal` used `.expect("blackboard
+  /// version poisoned")`, so one bad agent killed every subsequent
+  /// write. The fix recovers the lock via `into_inner()` (mirroring
+  /// the `if let Ok` convention used for the entries/ops sites
+  /// directly below it), so the second writer still observes the
+  /// monotonic version counter and persists its entry.
+  #[test]
+  fn write_survives_prior_version_lock_panic() {
+    let blackboard = Blackboard::new();
+
+    // Intentionally poison the inner version mutex from a thread
+    // that panics while holding the lock — this is the literal
+    // failure mode `expect()` would have re-propagated.
+    let counter = blackboard.next_version.clone();
+    let panic_join = std::thread::spawn(move || {
+      let _guard = counter.lock().expect("test pre-condition");
+      panic!("intentional panic to poison the version mutex");
+    })
+    .join();
+    assert!(
+      panic_join.is_err(),
+      "the worker thread must have panicked so the version mutex is poisoned"
+    );
+    assert!(
+      blackboard.next_version.is_poisoned(),
+      "Q3.12.2: pre-condition — mutex must report as poisoned"
+    );
+
+    // After the poison, a subsequent write must still land — no
+    // panic, and the entry must be observable.
+    blackboard.write_internal("after-poison", json!({"ok": true}), "agent-survivor");
+    let entry = blackboard
+      .get("after-poison")
+      .expect("entry must be persisted after recovering from poison");
+    assert_eq!(entry.value, json!({"ok": true}));
+    assert_eq!(entry.written_by, "agent-survivor");
+    assert_eq!(
+      entry.version, 1,
+      "version counter must still tick monotonically from 1 after lock recovery"
+    );
   }
 
   #[tokio::test]
