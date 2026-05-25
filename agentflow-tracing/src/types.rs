@@ -126,6 +126,16 @@ pub enum TraceStatus {
     /// Error message
     error: String,
   },
+
+  /// Q3.1.2: workflow was cancelled, typically via SIGINT/SIGTERM
+  /// (CLI Ctrl-C path) or an upstream `FlowCancellationToken::cancel`.
+  /// Distinct from `Failed` so consumers (TUI replay, dashboards)
+  /// can render cancellation differently from a real error.
+  Cancelled {
+    /// Human-readable cancellation reason, e.g. "cancellation token
+    /// signalled" or "operator pressed Ctrl-C".
+    reason: String,
+  },
 }
 
 /// Trace for a single node execution

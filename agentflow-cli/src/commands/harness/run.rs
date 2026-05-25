@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicU64;
 use anyhow::{Context, Result};
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_agents::runtime::RuntimeLimits;
+use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
   CliApprovalProvider, HarnessEventSink, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
@@ -113,10 +113,15 @@ pub async fn execute(
     runtime = runtime.with_event_sink(sink.clone());
   }
 
+  // Q3.1.2: shared cancellation token so the Ctrl-C / SIGTERM future
+  // below can ask the inner agent to stop the loop after the current
+  // step instead of the runtime aborting the in-flight LLM call.
+  let cancel_token = AgentCancellationToken::new();
   let mut options = HarnessRunOptions::new(user_input, workspace.clone(), &model)
     .with_runtime_kind(runtime_kind)
     .with_profile(profile)
-    .with_session_id(session_id);
+    .with_session_id(session_id)
+    .with_cancellation_token(cancel_token.clone());
   if let Some(name) = skill_name.as_ref() {
     options = options.with_skill_name(name.clone());
   }
@@ -138,10 +143,24 @@ pub async fn execute(
     eprintln!("   session log: {}", session_dir.display());
   }
 
-  let result = runtime
-    .run(options)
-    .await
-    .context("Harness session failed")?;
+  // Q3.1.2: race the harness session against SIGINT/SIGTERM. On signal
+  // we trip the cancellation token (the inner ReAct/plan-execute loop
+  // notices on its next iteration and exits with `AgentStopReason::Cancelled`),
+  // give the agent a bounded drain window to surface the terminal
+  // `stopped` event through the sink chain, then exit 130.
+  let run_future = runtime.run(options);
+  tokio::pin!(run_future);
+  let result = tokio::select! {
+    biased;
+    res = &mut run_future => res.context("Harness session failed")?,
+    _ = crate::shutdown::shutdown_signal() => {
+      eprintln!("\n🛑 Cancelled (received SIGINT/SIGTERM)");
+      cancel_token.cancel();
+      const CANCEL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+      let _ = tokio::time::timeout(CANCEL_DRAIN_TIMEOUT, &mut run_future).await;
+      std::process::exit(crate::shutdown::SIGINT_EXIT_CODE);
+    }
+  };
   let elapsed = started.elapsed();
 
   match output {

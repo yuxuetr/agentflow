@@ -5,6 +5,7 @@ use std::path::Path;
 use super::error_context::mcp_context;
 use super::runtime_options::{apply_memory_override, memory_label};
 use crate::redaction::redact_cli_text;
+use crate::shutdown::{SIGINT_EXIT_CODE, shutdown_signal};
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 
@@ -109,19 +110,36 @@ pub async fn execute(
     print!("⏳ Thinking...\r");
     stdout.flush().ok();
 
+    // Q3.1.2: race the in-flight agent call against SIGINT/SIGTERM so
+    // Ctrl-C during "Thinking..." doesn't leave the user staring at a
+    // dangling line. We exit 130 instead of returning to the REPL —
+    // returning would require also unwinding any in-flight tool calls
+    // safely, which the skill agent doesn't yet expose.
     let start = std::time::Instant::now();
-    match agent.run(trimmed).await {
-      Ok(answer) => {
+    let agent_fut = agent.run(trimmed);
+    tokio::pin!(agent_fut);
+    let outcome = tokio::select! {
+      biased;
+      res = &mut agent_fut => Some(res),
+      _ = shutdown_signal() => None,
+    };
+    match outcome {
+      Some(Ok(answer)) => {
         let elapsed = start.elapsed();
         // Clear the "Thinking..." line
         print!("\r                    \r");
         println!("🤖  {}", redact_cli_text(&answer));
         println!("    ⏱  {:.2?}\n", elapsed);
       }
-      Err(e) => {
+      Some(Err(e)) => {
         print!("\r                    \r");
         eprintln!("❌  Agent error: {}", redact_cli_text(e.to_string()));
         eprintln!("    Use /reset to start a fresh session or /exit to quit.\n");
+      }
+      None => {
+        print!("\r                    \r");
+        eprintln!("🛑 Cancelled (received SIGINT/SIGTERM)");
+        std::process::exit(SIGINT_EXIT_CODE);
       }
     }
 

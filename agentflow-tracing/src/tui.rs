@@ -250,6 +250,7 @@ fn trace_status_label(status: &TraceStatus) -> String {
     TraceStatus::Running => "running".to_string(),
     TraceStatus::Completed => "completed".to_string(),
     TraceStatus::Failed { error } => format!("failed ({error})"),
+    TraceStatus::Cancelled { reason } => format!("cancelled ({reason})"),
   }
 }
 

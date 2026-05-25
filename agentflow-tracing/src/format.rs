@@ -127,6 +127,7 @@ pub fn format_trace_summary(trace: &ExecutionTrace) -> String {
     TraceStatus::Running => "⏳",
     TraceStatus::Completed => "✅",
     TraceStatus::Failed { .. } => "❌",
+    TraceStatus::Cancelled { .. } => "🛑",
   };
 
   let duration = trace
@@ -142,6 +143,7 @@ pub fn format_trace_summary(trace: &ExecutionTrace) -> String {
       TraceStatus::Running => "running",
       TraceStatus::Completed => "completed",
       TraceStatus::Failed { .. } => "failed",
+      TraceStatus::Cancelled { .. } => "cancelled",
     },
     trace.nodes.len(),
     duration

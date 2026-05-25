@@ -51,6 +51,13 @@ pub struct HarnessRunOptions {
   /// Free-form structured metadata attached to the underlying
   /// `AgentContext` and emitted on `session_started`.
   pub metadata: serde_json::Value,
+  /// Q3.1.2: optional cancellation token forwarded to the inner
+  /// `AgentContext` so the CLI Ctrl-C path (or any other supervisor)
+  /// can stop the agent loop after the current step instead of
+  /// dropping the future mid-`await`. Default `None` keeps the
+  /// pre-Q3.1.2 behaviour for callers that build the agent context
+  /// themselves.
+  pub cancellation_token: Option<agentflow_agents::runtime::AgentCancellationToken>,
 }
 
 impl HarnessRunOptions {
@@ -71,6 +78,7 @@ impl HarnessRunOptions {
       persona_prefix: None,
       context_token_budget: None,
       metadata: serde_json::Value::Null,
+      cancellation_token: None,
     }
   }
 
@@ -111,6 +119,18 @@ impl HarnessRunOptions {
 
   pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
     self.metadata = metadata;
+    self
+  }
+
+  /// Q3.1.2: attach a cancellation token that the inner agent loop
+  /// honors. The CLI Ctrl-C handler creates a fresh token, hands one
+  /// clone here, and keeps the other clone to call `cancel()` from
+  /// the signal future.
+  pub fn with_cancellation_token(
+    mut self,
+    token: agentflow_agents::runtime::AgentCancellationToken,
+  ) -> Self {
+    self.cancellation_token = Some(token);
     self
   }
 }
@@ -323,6 +343,12 @@ impl HarnessRuntime {
       // Leave the default empty object set by AgentContext::new.
     } else {
       agent_context.metadata = options.metadata.clone();
+    }
+    // Q3.1.2: forward the optional cancellation token from options into
+    // the inner agent's context so the CLI Ctrl-C handler can stop the
+    // ReAct / plan-execute loop gracefully.
+    if let Some(token) = options.cancellation_token.clone() {
+      agent_context = agent_context.with_cancellation_token(token);
     }
 
     let inner_result = self

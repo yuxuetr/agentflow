@@ -488,6 +488,11 @@ fn status_from_trace(status: &TraceStatus) -> OtelStatus {
     },
     TraceStatus::Completed => OtelStatus::ok(),
     TraceStatus::Failed { error } => OtelStatus::error(error),
+    // Q3.1.2: cancellation is not an OK terminal, but it's also not a
+    // failure in the OTel sense — operators intentionally stopped the
+    // run. Map to `Error` with the reason so OTel UIs flag it as
+    // non-success without polluting failure dashboards.
+    TraceStatus::Cancelled { reason } => OtelStatus::error(format!("cancelled: {reason}")),
   }
 }
 
@@ -512,6 +517,7 @@ fn trace_status_name(status: &TraceStatus) -> &'static str {
     TraceStatus::Running => "running",
     TraceStatus::Completed => "completed",
     TraceStatus::Failed { .. } => "failed",
+    TraceStatus::Cancelled { .. } => "cancelled",
   }
 }
 

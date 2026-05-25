@@ -1,10 +1,12 @@
 use crate::redaction::redact_cli_value;
+use crate::shutdown::{DEFAULT_TRACE_FLUSH_TIMEOUT, SIGINT_EXIT_CODE, shutdown_signal};
 use crate::{
   commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
   config::v2::FlowDefinitionV2, executor::build_flow_from_definition,
 };
 use agentflow_core::{
-  FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow, value::FlowValue,
+  FlowCancellationToken, FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow,
+  value::FlowValue,
 };
 use agentflow_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
 use anyhow::{Context, Result, bail};
@@ -79,6 +81,11 @@ pub async fn execute(
   // tui <workflow_id>` against the JSON written below.
   let workflow_id = Uuid::new_v4().to_string();
   let trace_dir = resolve_trace_dir()?;
+  // Q3.1.2: keep an Arc clone of the trace collector so the Ctrl-C
+  // path can `flush()` the drain queue before exiting. Without this
+  // the JSONL trace file the CLI just told the operator to inspect
+  // could be missing the terminal `WorkflowCancelled` event.
+  let mut trace_collector: Option<Arc<TraceCollector>> = None;
   if let Some(dir) = trace_dir.as_ref() {
     fs::create_dir_all(dir)
       .with_context(|| format!("Failed to create trace dir {}", dir.display()))?;
@@ -87,7 +94,8 @@ pub async fn execute(
         .with_context(|| format!("Failed to initialise trace storage at {}", dir.display()))?,
     );
     let collector = Arc::new(TraceCollector::new(storage, TraceConfig::development()));
-    flow = flow.with_event_listener(collector);
+    flow = flow.with_event_listener(collector.clone());
+    trace_collector = Some(collector);
     println!(
       "📓 Tracing enabled — workflow_id={} dir={}",
       workflow_id,
@@ -107,7 +115,12 @@ pub async fn execute(
 
   let timeout_duration =
     parse_duration(&timeout).with_context(|| format!("Invalid --timeout value '{}'", timeout))?;
-  let execution_config = parse_execution_config(&execution_mode, max_concurrency, run_dir)?;
+  let mut execution_config = parse_execution_config(&execution_mode, max_concurrency, run_dir)?;
+  // Q3.1.2: install a FlowCancellationToken so the Ctrl-C handler
+  // below can ask the flow to stop after the current node instead of
+  // the runtime aborting the in-flight node mid-`await`.
+  let cancel_token = FlowCancellationToken::new();
+  execution_config = execution_config.with_cancellation_token(cancel_token.clone());
   if execution_config.mode == agentflow_core::FlowExecutionMode::Concurrent {
     println!(
       "⚙️  Execution mode: concurrent (max_concurrency={})",
@@ -121,15 +134,44 @@ pub async fn execute(
   // 3. Execute the flow
   println!("\n▶️  Running flow...");
   let start_time = std::time::Instant::now();
-  let final_state = run_with_retries(
+  let run_future = run_with_retries(
     flow,
     workflow_id,
     initial_inputs,
     timeout_duration,
     max_retries,
     execution_config,
-  )
-  .await?;
+  );
+  // Q3.1.2: race the run against SIGINT/SIGTERM. On signal we flip
+  // the cancellation token (the flow then emits `WorkflowCancelled`
+  // and returns `TaskCancelled` after the current node finishes),
+  // wait for the trace drain to catch up, then exit 130. Without
+  // this Ctrl-C silently corrupts the JSONL trace file.
+  tokio::pin!(run_future);
+  let final_state = tokio::select! {
+    biased;
+    res = &mut run_future => res?,
+    _ = shutdown_signal() => {
+      eprintln!("\n🛑 Cancelled (received SIGINT/SIGTERM)");
+      cancel_token.cancel();
+      // Give the in-flight node a bounded window to observe the
+      // cancellation and let the flow emit `WorkflowCancelled`.
+      // 10s is conservative — most nodes either complete or check
+      // the token within their own timeout much sooner.
+      const CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+      let _ = tokio::time::timeout(CANCEL_DRAIN_TIMEOUT, &mut run_future).await;
+      if let Some(collector) = trace_collector.as_ref() {
+        let drained = collector.flush(DEFAULT_TRACE_FLUSH_TIMEOUT).await;
+        if !drained {
+          eprintln!(
+            "⚠  trace drain timed out after {:?}; some events may be missing from the JSONL file",
+            DEFAULT_TRACE_FLUSH_TIMEOUT
+          );
+        }
+      }
+      std::process::exit(SIGINT_EXIT_CODE);
+    }
+  };
   let duration = start_time.elapsed();
   println!("\n✅ Workflow completed in {:.2?}.", duration);
 

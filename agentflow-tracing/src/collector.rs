@@ -151,6 +151,18 @@ pub struct TraceCollector {
   /// best-effort), but the in-process logs surface the panic loudly via
   /// `tracing::error!` so the failure isn't silent.
   drain_poisoned: Arc<AtomicBool>,
+
+  /// Q3.1.2: total events successfully placed into the drain channel
+  /// (i.e. `try_send` returned Ok). Paired with `processed_count` to
+  /// power [`Self::flush`]: callers (notably the CLI Ctrl-C path) can
+  /// wait for the drain task to catch up before the process exits.
+  submitted_count: Arc<std::sync::atomic::AtomicU64>,
+
+  /// Q3.1.2: total events fully processed by the drain task. Incremented
+  /// after each `process_event` returns, regardless of whether the
+  /// underlying storage write succeeded or panicked (the catch_unwind
+  /// branch counts too — the event left the queue).
+  processed_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl TraceCollector {
@@ -165,6 +177,8 @@ impl TraceCollector {
       drain_tx: std::sync::OnceLock::new(),
       drain_poisoned: Arc::new(AtomicBool::new(false)),
       events_dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+      submitted_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+      processed_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     }
   }
 
@@ -180,6 +194,54 @@ impl TraceCollector {
   /// row); further `on_event` calls become no-ops.
   pub fn is_drain_poisoned(&self) -> bool {
     self.drain_poisoned.load(Ordering::SeqCst)
+  }
+
+  /// Q3.1.2: wait for every event that was successfully submitted into
+  /// the drain channel to be processed, up to `timeout`. Returns `true`
+  /// if the drain caught up, `false` if the timeout expired with events
+  /// still in flight.
+  ///
+  /// **Why:** the trace collector is async — `on_event` returns as soon
+  /// as the event is queued, but the storage write happens on a
+  /// separate drain task. When the CLI receives Ctrl-C and is about to
+  /// exit, "the JSONL file is complete" requires the drain task to have
+  /// caught up. Without this, `agentflow trace tui <id>` could read a
+  /// half-written file missing the final `WorkflowCancelled` event.
+  ///
+  /// **How to apply:** call this immediately before `std::process::exit`
+  /// or before dropping the last `Arc<TraceCollector>` clone. Pass a
+  /// generous timeout (a few seconds) — the drain task is normally only
+  /// blocked when storage is unusually slow.
+  pub async fn flush(&self, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+      let submitted = self.submitted_count.load(Ordering::SeqCst);
+      let processed = self.processed_count.load(Ordering::SeqCst);
+      if processed >= submitted {
+        return true;
+      }
+      if self.drain_poisoned.load(Ordering::SeqCst) {
+        // Drain task is dead; processed will never catch up. Surface
+        // that as a failed drain rather than spinning until timeout.
+        return false;
+      }
+      if std::time::Instant::now() >= deadline {
+        return false;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+  }
+
+  /// Q3.1.2: count of events successfully placed into the drain
+  /// channel. Visible for diagnostics + the `flush` regression test.
+  pub fn submitted_count(&self) -> u64 {
+    self.submitted_count.load(Ordering::SeqCst)
+  }
+
+  /// Q3.1.2: count of events the drain task has fully processed.
+  /// Equals [`Self::submitted_count`] once the drain has caught up.
+  pub fn processed_count(&self) -> u64 {
+    self.processed_count.load(Ordering::SeqCst)
   }
 
   /// Attach an exporter for completed or failed traces.
@@ -504,6 +566,33 @@ impl TraceCollector {
         }
       }
 
+      // Q3.1.2: persist the cancellation as a terminal status so the
+      // JSONL trace file reflects the run that the CLI Ctrl-C handler
+      // just aborted. Before this branch the event was silently
+      // dropped and `agentflow trace tui` would show the workflow as
+      // perpetually "Running".
+      WorkflowEvent::WorkflowCancelled {
+        workflow_id,
+        reason,
+        duration: _,
+        timestamp: _,
+      } => {
+        let mut traces_guard = traces.write().await;
+        if let Some(mut trace) = traces_guard.remove(&workflow_id) {
+          trace.completed_at = Some(chrono::Utc::now());
+          trace.status = TraceStatus::Cancelled {
+            reason: reason.clone(),
+          };
+
+          let trace = Self::prepare_terminal_trace(trace, &config);
+
+          if let Err(e) = storage.save_trace(&trace).await {
+            Self::handle_storage_error(&config, e);
+          }
+          Self::export_trace_to_sinks(&config, &exporters, &trace).await;
+        }
+      }
+
       // Other events can be ignored for now
       _ => {}
     }
@@ -646,6 +735,7 @@ impl EventListener for TraceCollector {
         let config_drain = config.clone();
         let exporters_drain = exporters.clone();
         let poisoned_drain = self.drain_poisoned.clone();
+        let processed_drain = self.processed_count.clone();
         tokio::spawn(async move {
           // Q2.2.1: each event handler is wrapped in `catch_unwind` so a
           // panic in `process_event` / exporter / storage / handle_storage_error
@@ -686,7 +776,15 @@ impl EventListener for TraceCollector {
                 None => work.await,
               }
             };
-            match AssertUnwindSafe(fut).catch_unwind().await {
+            let outcome = AssertUnwindSafe(fut).catch_unwind().await;
+            // Q3.1.2: count this event as processed regardless of
+            // whether the storage write succeeded or the handler
+            // panicked — the event has left the channel either way.
+            // `flush()` callers care about queue drain, not write
+            // success (storage errors are surfaced through their own
+            // policy path).
+            processed_drain.fetch_add(1, Ordering::SeqCst);
+            match outcome {
               Ok(()) => consecutive_panics = 0,
               Err(payload) => {
                 consecutive_panics += 1;
@@ -717,7 +815,11 @@ impl EventListener for TraceCollector {
       // the newest event and bump the dropped counter. Producers must
       // never block on tracing.
       match tx.try_send((captured_tp, event)) {
-        Ok(()) => {}
+        Ok(()) => {
+          // Q3.1.2: bump the submitted counter so `flush()` can wait
+          // for processed >= submitted before the CLI exits.
+          self.submitted_count.fetch_add(1, Ordering::SeqCst);
+        }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
           let prev = self.events_dropped.fetch_add(1, Ordering::SeqCst);
           // Log at every power-of-two boundary so a slow consumer
@@ -751,6 +853,11 @@ impl EventListener for TraceCollector {
           Self::handle_storage_error(&config, e);
         }
       });
+      // Q3.1.2: in blocking mode the event is processed before
+      // `on_event` returns, so submitted == processed always holds.
+      // Bump both counters together to keep `flush()` consistent.
+      self.submitted_count.fetch_add(1, Ordering::SeqCst);
+      self.processed_count.fetch_add(1, Ordering::SeqCst);
     }
   }
 }
@@ -1434,6 +1541,88 @@ mod tests {
     assert!(
       stored.is_some(),
       "survivor workflow must land in storage despite earlier panic"
+    );
+  }
+
+  /// Q3.1.2 regression — the trace collector must expose a `flush` API
+  /// so the CLI Ctrl-C path can wait for the async drain task before
+  /// the process exits. Without this, the JSONL trace file the CLI
+  /// tells operators to inspect could be missing the terminal
+  /// `WorkflowCancelled` event.
+  #[tokio::test]
+  async fn flush_waits_until_drain_catches_up() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let collector = TraceCollector::new(storage.clone(), TraceConfig::development());
+
+    for i in 0..20u32 {
+      let workflow_id = format!("wf-flush-{i}");
+      collector.on_event(&WorkflowEvent::WorkflowStarted {
+        workflow_id: workflow_id.clone(),
+        timestamp: std::time::Instant::now(),
+      });
+      collector.on_event(&WorkflowEvent::WorkflowCompleted {
+        workflow_id,
+        duration: StdDuration::from_millis(1),
+        timestamp: std::time::Instant::now(),
+      });
+    }
+
+    let submitted = collector.submitted_count();
+    assert!(
+      submitted >= 40,
+      "20 workflows × 2 events each should land in the queue (or be dropped if full); got submitted={submitted}"
+    );
+
+    // Pre-flush: processed < submitted is normal — the drain task is
+    // still working through events.
+    let drained = collector.flush(StdDuration::from_secs(5)).await;
+    assert!(drained, "flush must catch up within 5s on a quiet system");
+    assert_eq!(
+      collector.processed_count(),
+      collector.submitted_count(),
+      "after flush, every queued event must have been processed"
+    );
+
+    // The terminal `WorkflowCompleted` events should now be observable
+    // via the storage path — proving the drain has actually flushed.
+    for i in 0..20u32 {
+      let workflow_id = format!("wf-flush-{i}");
+      let trace = storage.get_trace(&workflow_id).await.unwrap();
+      assert!(
+        trace.is_some(),
+        "workflow {workflow_id} must be persisted after flush"
+      );
+    }
+  }
+
+  /// Q3.1.2 regression — flush must return `false` (not hang) when the
+  /// drain task is poisoned and submitted will never equal processed.
+  #[tokio::test]
+  async fn flush_returns_false_when_drain_is_poisoned() {
+    let dir = tempdir().unwrap();
+    let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
+    let collector = TraceCollector::new(storage, TraceConfig::development());
+
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "wf-flush-poison".to_string(),
+      timestamp: std::time::Instant::now(),
+    });
+
+    // Manually poison the drain to simulate the failure mode.
+    collector.drain_poisoned.store(true, Ordering::SeqCst);
+
+    // Fake an outstanding submission that will never be processed.
+    collector
+      .submitted_count
+      .fetch_add(1, Ordering::SeqCst);
+
+    let started = std::time::Instant::now();
+    let drained = collector.flush(StdDuration::from_secs(2)).await;
+    assert!(!drained, "flush must surface drain failure, not hang");
+    assert!(
+      started.elapsed() < StdDuration::from_millis(500),
+      "flush must short-circuit on poisoned drain rather than wait the full timeout"
     );
   }
 }
