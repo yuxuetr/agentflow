@@ -71,6 +71,17 @@ pub enum LLMError {
 
   #[error("Unsupported operation: {message}")]
   UnsupportedOperation { message: String },
+
+  /// Model does not support the requested feature (e.g. thinking/reasoning
+  /// configured for a model whose registry entry has no `supports_thinking`
+  /// flag). Fail-fast at request-build time so callers don't waste an API
+  /// call discovering the silent drop on the provider side.
+  #[error(
+    "Model '{model}' does not support feature '{feature}'. \
+     Set `supports_thinking: true` and `thinking_kind` on the model in your registry, \
+     or use a model that does (e.g. claude-3-7-sonnet, o3-mini, gemini-2.5-pro, deepseek-reasoner)."
+  )]
+  UnsupportedFeature { model: String, feature: String },
 }
 
 pub type Result<T> = std::result::Result<T, LLMError>;

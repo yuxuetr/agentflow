@@ -169,6 +169,12 @@ pub struct LLMResponse {
   pub usage: Option<crate::providers::TokenUsage>,
   /// Provider-specific raw payload, useful for logging / replay.
   pub raw_metadata: Option<Value>,
+  /// Model-emitted reasoning / "thinking" text when the provider returns
+  /// it. Populated for Anthropic `thinking` blocks, DeepSeek-R1
+  /// `reasoning_content`, and OpenAI reasoning models when supported.
+  /// `None` when the model didn't emit reasoning text or thinking wasn't
+  /// requested. See [`crate::ThinkingConfig`] for how to ask for it.
+  pub thinking: Option<String>,
 }
 
 impl LLMResponse {
@@ -252,6 +258,7 @@ mod tests {
       stop_reason: Some(StopReason::ToolCalls),
       usage: None,
       raw_metadata: None,
+      thinking: None,
     };
     assert!(resp.has_tool_calls());
   }

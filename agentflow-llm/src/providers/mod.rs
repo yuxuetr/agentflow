@@ -1,5 +1,6 @@
 use crate::{
   LLMError, Result, StreamingResponse,
+  thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
@@ -84,6 +85,16 @@ pub struct ProviderRequest {
   /// Selection strategy for `tools`. Ignored when `tools` is `None`.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub tool_choice: Option<ToolChoice>,
+  /// Extended-reasoning / "thinking" configuration.
+  ///
+  /// Travels as a typed field rather than via `parameters` because
+  /// providers like Anthropic and Google whitelist keys in their
+  /// `parameters` map and would otherwise silently drop a `thinking` key.
+  /// Each provider adapter is responsible for serialising this into its
+  /// native wire shape (Anthropic `thinking` block, OpenAI
+  /// `reasoning_effort`, Google `thinkingConfig`).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub thinking: Option<ThinkingConfig>,
 }
 
 impl ProviderRequest {
@@ -96,6 +107,7 @@ impl ProviderRequest {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     }
   }
 }
@@ -222,6 +234,14 @@ pub struct ProviderResponse {
   /// Reason the model stopped generating, normalised across providers.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub stop_reason: Option<StopReason>,
+  /// Model-emitted reasoning / "thinking" text, when the provider returns
+  /// it. Anthropic emits `type: thinking` content blocks; DeepSeek-R1
+  /// emits `reasoning_content` alongside `content`; OpenAI o-series may
+  /// emit reasoning summaries on the new `output[*].type == "reasoning"`
+  /// shape. Stays `None` when the model didn't return reasoning text or
+  /// when thinking wasn't requested.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

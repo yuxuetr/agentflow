@@ -1,6 +1,7 @@
 use crate::{
   LLMError, Result,
   model_types::{InputType, ModelCapabilities, ModelType},
+  thinking::ThinkingKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -91,6 +92,27 @@ pub struct ModelConfig {
   /// Whether this model supports multimodal input (images)
   pub supports_multimodal: Option<bool>,
 
+  /// Whether this model supports the extended-reasoning / "thinking" knob
+  /// (Anthropic `thinking` block, OpenAI `reasoning_effort`, Google
+  /// `thinkingConfig`, DeepSeek-R1 `reasoning_content`).
+  ///
+  /// When `true`, callers can pass [`crate::ThinkingConfig`] via
+  /// `LLMClientBuilder::thinking(...)` and the provider adapter will emit
+  /// the native wire shape. When unset/`false`, calling `.thinking(...)`
+  /// fails fast with [`LLMError::UnsupportedFeature`] — silent drops on
+  /// the provider side are the kind of "I configured X but didn't get X"
+  /// bug we want to avoid.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub supports_thinking: Option<bool>,
+
+  /// How this model accepts the thinking/reasoning knob on the wire.
+  ///
+  /// Must be set when `supports_thinking: true`. Each variant maps to a
+  /// distinct provider serialisation branch — see
+  /// [`crate::ThinkingKind`] for the full mapping.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub thinking_kind: Option<ThinkingKind>,
+
   /// Response format configuration (e.g., "json_object")
   pub response_format: Option<String>,
 
@@ -180,6 +202,27 @@ impl ModelConfig {
   /// `false` means callers must fall back to prompt-based ReAct.
   pub fn supports_native_tool_calling(&self) -> bool {
     self.get_capabilities().native_tool_calling
+  }
+
+  /// Whether this model supports the extended-reasoning ("thinking") knob.
+  ///
+  /// Returns `true` only when the registry entry has `supports_thinking:
+  /// true` AND `thinking_kind` set. The two-field requirement is
+  /// intentional: a `supports_thinking: true` entry without a
+  /// `thinking_kind` is misconfigured and treated as unsupported so the
+  /// caller hits a hard error instead of a silent drop.
+  pub fn supports_thinking(&self) -> bool {
+    self.supports_thinking.unwrap_or(false) && self.thinking_kind.is_some()
+  }
+
+  /// How this model accepts the thinking knob. `None` when the model is
+  /// not configured for thinking; see [`Self::supports_thinking`].
+  pub fn thinking_kind(&self) -> Option<ThinkingKind> {
+    if self.supports_thinking.unwrap_or(false) {
+      self.thinking_kind
+    } else {
+      None
+    }
   }
 
   /// Check if this is a multimodal model (legacy method for backward compatibility)

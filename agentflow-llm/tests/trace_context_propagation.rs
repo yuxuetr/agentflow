@@ -119,6 +119,7 @@ fn provider_request(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 

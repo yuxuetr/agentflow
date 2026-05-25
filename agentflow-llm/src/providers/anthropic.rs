@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
@@ -124,8 +125,32 @@ impl AnthropicProvider {
       body["tool_choice"] = tool_choice_to_anthropic_value(choice);
     }
 
+    if let Some(thinking) = &request.thinking
+      && let Some(block) = thinking_config_to_anthropic_value(thinking)
+    {
+      body["thinking"] = block;
+    }
+
     body
   }
+}
+
+/// Encode a [`ThinkingConfig`] as Anthropic's `thinking` request block.
+///
+/// Anthropic only accepts `{ type: "enabled", budget_tokens: N }` or
+/// `{ type: "disabled" }`. `Auto` maps to `enabled` with the model's
+/// default budget — Anthropic uses 5000 tokens when none is specified
+/// for Claude 3.7+, but we send an explicit baseline of 4096 so behaviour
+/// is reproducible across `Auto` and `Medium`.
+pub(crate) fn thinking_config_to_anthropic_value(config: &ThinkingConfig) -> Option<Value> {
+  if config.is_disabled() {
+    return Some(json!({ "type": "disabled" }));
+  }
+  let budget = config.to_token_budget().unwrap_or(4096);
+  Some(json!({
+    "type": "enabled",
+    "budget_tokens": budget,
+  }))
 }
 
 /// Encode a `ToolSpec` as Anthropic's `{ name, description, input_schema }`.
@@ -164,9 +189,29 @@ pub(crate) fn parse_anthropic_tool_use_blocks(
         name: name.clone(),
         arguments: input.clone(),
       }),
-      AnthropicContent::Text { .. } => None,
+      AnthropicContent::Text { .. } | AnthropicContent::Thinking { .. } => None,
     })
     .collect()
+}
+
+/// Concatenate the text from every `thinking` block in an Anthropic
+/// response. Returns `None` when no thinking blocks were emitted (the
+/// caller's thinking config may have been disabled, the model may not
+/// have used the budget, or thinking simply wasn't requested).
+pub(crate) fn parse_anthropic_thinking_blocks(content: &[AnthropicContent]) -> Option<String> {
+  let joined: String = content
+    .iter()
+    .filter_map(|block| match block {
+      AnthropicContent::Thinking { thinking, .. } => Some(thinking.as_str()),
+      AnthropicContent::Text { .. } | AnthropicContent::ToolUse { .. } => None,
+    })
+    .collect::<Vec<_>>()
+    .join("");
+  if joined.is_empty() {
+    None
+  } else {
+    Some(joined)
+  }
 }
 
 #[async_trait]
@@ -211,7 +256,7 @@ impl LLMProvider for AnthropicProvider {
       .iter()
       .filter_map(|block| match block {
         AnthropicContent::Text { text } => Some(text.as_str()),
-        AnthropicContent::ToolUse { .. } => None,
+        AnthropicContent::ToolUse { .. } | AnthropicContent::Thinking { .. } => None,
       })
       .collect::<Vec<_>>()
       .join("");
@@ -232,6 +277,10 @@ impl LLMProvider for AnthropicProvider {
       .stop_reason
       .as_deref()
       .map(StopReason::from_anthropic_stop_reason);
+    // Anthropic claude-3.7+ emits `type: "thinking"` content blocks
+    // alongside `text` blocks when extended thinking is enabled. Surface
+    // their concatenated text on the typed channel.
+    let thinking = parse_anthropic_thinking_blocks(&anthropic_response.content);
 
     Ok(ProviderResponse {
       content,
@@ -239,6 +288,7 @@ impl LLMProvider for AnthropicProvider {
       metadata: Some(serde_json::to_value(&anthropic_response)?),
       tool_calls,
       stop_reason,
+      thinking,
     })
   }
 
@@ -343,6 +393,17 @@ pub(crate) enum AnthropicContent {
     id: String,
     name: String,
     input: Value,
+  },
+  /// Extended-thinking block emitted by Claude 3.7+ when `thinking: {
+  /// type: "enabled" }` is set on the request. Carries the model's chain
+  /// of thought; the `signature` is opaque and used by Anthropic for
+  /// integrity verification on multi-turn replays. We don't act on the
+  /// signature today but accept the field so deserialisation succeeds.
+  #[serde(rename = "thinking")]
+  Thinking {
+    thinking: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
   },
 }
 
@@ -594,6 +655,7 @@ mod tests {
       parameters: params,
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -624,6 +686,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -731,6 +794,94 @@ mod tests {
     assert_eq!(delta.arguments_delta.as_deref(), Some("{\"city\":"));
     assert!(delta.id.is_none());
     assert!(delta.name.is_none());
+  }
+
+  // ----- Thinking serialisation + parse coverage -----
+
+  /// `ThinkingConfig::Medium` must be emitted as Anthropic's typed
+  /// `thinking: { type: "enabled", budget_tokens: 4096 }` block on the
+  /// request body — bypassing the parameters whitelist that would
+  /// otherwise silently drop it.
+  #[test]
+  fn build_request_body_serialises_thinking_medium() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "claude-3-7-sonnet-20250219".to_string(),
+      messages: vec![json!({"role": "user", "content": "reason"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Medium),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["thinking"]["budget_tokens"], 4096);
+  }
+
+  #[test]
+  fn build_request_body_thinking_disabled_emits_disabled_type() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "claude-3-7-sonnet-20250219".to_string(),
+      messages: vec![json!({"role": "user", "content": "no thinking"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Disabled),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["thinking"]["type"], "disabled");
+    assert!(body["thinking"].get("budget_tokens").is_none());
+  }
+
+  #[test]
+  fn build_request_body_no_thinking_omits_the_block() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![json!({"role": "user", "content": "hi"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+    };
+    let body = provider.build_request_body(&request);
+    assert!(
+      body.get("thinking").is_none(),
+      "no thinking config → no `thinking` key on the wire body"
+    );
+  }
+
+  #[test]
+  fn parse_anthropic_thinking_blocks_concatenates_when_present() {
+    let raw = json!({
+      "id": "msg_x",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-20250514",
+      "content": [
+        {"type": "thinking", "thinking": "Step 1: ", "signature": "sig_abc"},
+        {"type": "thinking", "thinking": "Step 2 done."},
+        {"type": "text", "text": "Final answer."}
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {"input_tokens": 12, "output_tokens": 8}
+    });
+    let parsed: AnthropicResponse = serde_json::from_value(raw).unwrap();
+    let thinking = parse_anthropic_thinking_blocks(&parsed.content);
+    assert_eq!(thinking.as_deref(), Some("Step 1: Step 2 done."));
+  }
+
+  #[test]
+  fn parse_anthropic_thinking_blocks_returns_none_when_absent() {
+    let content = vec![AnthropicContent::Text {
+      text: "no reasoning here".to_string(),
+    }];
+    assert!(parse_anthropic_thinking_blocks(&content).is_none());
   }
 
   #[test]

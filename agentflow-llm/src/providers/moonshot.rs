@@ -155,6 +155,7 @@ impl LLMProvider for MoonshotProvider {
       metadata: Some(serde_json::to_value(&moonshot_response)?),
       tool_calls,
       stop_reason,
+      thinking: None,
     })
   }
 
@@ -433,6 +434,7 @@ mod tests {
       parameters: params,
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -455,6 +457,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Auto),
+      thinking: None,
     };
     let body = provider.build_request_body(&request);
     let tools = body["tools"].as_array().expect("tools array");

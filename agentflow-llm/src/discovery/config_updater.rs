@@ -133,6 +133,8 @@ impl ConfigUpdater {
       supports_tools: Some(self.model_supports_tools(&model.id, vendor)),
       native_tool_calling: Some(self.model_supports_native_tool_calling(&model.id, vendor)),
       supports_multimodal: Some(self.model_supports_multimodal(&model.id, vendor)),
+      supports_thinking: None,
+      thinking_kind: None,
       response_format: None,
       additional_params: HashMap::new(),
     };

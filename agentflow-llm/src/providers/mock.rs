@@ -218,6 +218,7 @@ impl LLMProvider for MockProvider {
       })),
       tool_calls,
       stop_reason,
+      thinking: None,
     })
   }
 
@@ -283,6 +284,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -305,6 +307,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -325,6 +328,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let result = provider.execute(&request).await;
@@ -345,6 +349,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let start = std::time::Instant::now();
@@ -372,6 +377,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -390,6 +396,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
     let response = provider.execute(&request).await.unwrap();
     assert!(response.tool_calls.is_empty());
@@ -412,6 +419,7 @@ mod tests {
       parameters: HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let _stream = provider.execute_streaming(&request).await.unwrap();

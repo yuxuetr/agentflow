@@ -153,6 +153,7 @@ fn provider_request(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 
@@ -178,6 +179,7 @@ fn provider_request_with_tools(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: Some(vec![weather_tool]),
     tool_choice: Some(ToolChoice::Required),
+    thinking: None,
   }
 }
 
@@ -524,6 +526,7 @@ fn provider_request_streaming(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 
@@ -793,6 +796,7 @@ fn provider_request_multimodal_openai_style(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 
@@ -817,6 +821,7 @@ fn provider_request_multimodal_anthropic_style(model: &str) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 
@@ -1116,6 +1121,7 @@ fn provider_request_with_choice(model: &str, choice: ToolChoice) -> ProviderRequ
     parameters: HashMap::new(),
     tools: Some(vec![weather_tool]),
     tool_choice: Some(choice),
+    thinking: None,
   }
 }
 

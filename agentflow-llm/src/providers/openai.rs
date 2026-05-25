@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
@@ -83,8 +84,24 @@ impl OpenAIProvider {
       body["tool_choice"] = tool_choice_to_openai_value(choice);
     }
 
+    if let Some(thinking) = &request.thinking
+      && let Some(effort) = thinking_config_to_openai_effort(thinking)
+    {
+      body["reasoning_effort"] = Value::String(effort.to_string());
+    }
+
     body
   }
+}
+
+/// Encode a [`ThinkingConfig`] as OpenAI's `reasoning_effort` request field.
+///
+/// Returns `None` for [`ThinkingConfig::Disabled`] — caller omits the field
+/// entirely so the model uses its default behaviour. The four accepted
+/// values are `minimal`, `low`, `medium`, `high`; unknown caller-supplied
+/// strings get normalised in [`ThinkingConfig::to_openai_effort`].
+pub(crate) fn thinking_config_to_openai_effort(config: &ThinkingConfig) -> Option<&'static str> {
+  config.to_openai_effort()
 }
 
 /// Encode a `ToolSpec` as the OpenAI `{ "type": "function", "function": ... }`
@@ -230,12 +247,20 @@ impl LLMProvider for OpenAIProvider {
       Some(StopReason::ToolCalls)
     };
 
+    // Reasoning text — for DeepSeek-R1 the provider returns
+    // `reasoning_content` alongside `content`; for vanilla OpenAI chat
+    // completions it's `None`. See `OpenAIMessage::reasoning_content`.
+    let thinking = first_choice
+      .and_then(|c| c.message.reasoning_content.clone())
+      .filter(|s| !s.is_empty());
+
     Ok(ProviderResponse {
       content,
       usage,
       metadata: Some(serde_json::to_value(&openai_response)?),
       tool_calls,
       stop_reason,
+      thinking,
     })
   }
 
@@ -332,6 +357,13 @@ struct OpenAIMessage {
   content: Option<serde_json::Value>, // Can be string or array of content objects
   #[serde(default, skip_serializing_if = "Option::is_none")]
   tool_calls: Option<serde_json::Value>,
+  /// DeepSeek-R1 surfaces the model's chain-of-thought here, alongside
+  /// `content`. Captured so the typed `ProviderResponse.thinking` channel
+  /// can carry it rather than relying on the raw metadata blob. Vanilla
+  /// OpenAI chat completions don't emit this field; the `default` lets
+  /// deserialisation succeed in both cases.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -535,6 +567,71 @@ impl StreamingResponse for OpenAIStreamingResponse {
 mod tests {
   use super::*;
 
+  /// `ThinkingConfig::High` must emit `reasoning_effort: "high"` on the
+  /// request body. OpenAI is pass-through but the field must still appear
+  /// on the wire even when `parameters` is empty.
+  #[test]
+  fn build_request_body_emits_reasoning_effort_for_thinking_high() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "o3-mini".to_string(),
+      messages: vec![json!({"role": "user", "content": "reason"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::High),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["reasoning_effort"], "high");
+  }
+
+  #[test]
+  fn build_request_body_omits_reasoning_effort_when_disabled() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "o3-mini".to_string(),
+      messages: vec![json!({"role": "user", "content": "no reasoning"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Disabled),
+    };
+    let body = provider.build_request_body(&request);
+    assert!(body.get("reasoning_effort").is_none());
+  }
+
+  /// DeepSeek-R1 routes through `OpenAIProvider` (per `providers/mod.rs::
+  /// create_provider`) and returns `reasoning_content` alongside
+  /// `content`. The deserialise path must capture it so the typed
+  /// `ProviderResponse.thinking` channel carries the reasoning text.
+  #[test]
+  fn openai_message_deserialises_reasoning_content_for_deepseek_r1() {
+    let raw = json!({
+      "role": "assistant",
+      "content": "The answer is 42.",
+      "reasoning_content": "Let me think step by step about this..."
+    });
+    let msg: OpenAIMessage = serde_json::from_value(raw).unwrap();
+    assert_eq!(
+      msg.reasoning_content.as_deref(),
+      Some("Let me think step by step about this...")
+    );
+  }
+
+  /// Vanilla OpenAI chat completions do NOT emit `reasoning_content`.
+  /// Deserialise must succeed and leave the field `None`.
+  #[test]
+  fn openai_message_reasoning_content_is_optional() {
+    let raw = json!({
+      "role": "assistant",
+      "content": "hi"
+    });
+    let msg: OpenAIMessage = serde_json::from_value(raw).unwrap();
+    assert!(msg.reasoning_content.is_none());
+  }
+
   #[test]
   fn test_openai_provider_creation() {
     let provider = OpenAIProvider::new("test-key", None);
@@ -647,6 +744,7 @@ mod tests {
       parameters: params,
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -677,6 +775,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -700,6 +799,7 @@ mod tests {
       tool_choice: Some(ToolChoice::Tool {
         name: "x".to_string(),
       }),
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);

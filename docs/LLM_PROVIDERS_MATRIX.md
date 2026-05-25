@@ -26,6 +26,7 @@ field on `ProviderRequest` fails CI until this section is updated.**
 | `parameters` | `HashMap<String, Value>` | ✅ | Free-form provider passthrough (temperature, top_p, max_tokens, custom flags). Adapters whitelist and rename as needed; unknown keys are ignored. |
 | `tools` | `Option<Vec<ToolSpec>>` | – | Native tool / function-calling specification. `None` skips tool wiring entirely. |
 | `tool_choice` | `Option<ToolChoice>` | – | Selection strategy used together with `tools`. See the [`ToolChoice` table](#toolchoice-modes). |
+| `thinking` | `Option<ThinkingConfig>` | – | Extended-reasoning ("thinking") configuration. Travels as a typed field so Anthropic/Google whitelists don't drop it. Adapters map to native shapes: Anthropic `thinking: { budget_tokens }`, OpenAI `reasoning_effort`, Google `generationConfig.thinkingConfig.thinkingBudget`. `None` disables. |
 
 ## ToolChoice modes
 

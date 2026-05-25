@@ -4,6 +4,7 @@ use crate::{
   multimodal::MultimodalMessage,
   providers::ProviderRequest,
   registry::ModelRegistry,
+  thinking::ThinkingConfig,
   tool_calling::{LLMResponse, ToolChoice, ToolSpec},
   trace_context::{LlmTraceContext, scope as trace_scope},
 };
@@ -63,6 +64,11 @@ pub struct LLMClient {
   /// Selection strategy when `tools` is set.
   pub tool_choice: Option<ToolChoice>,
   pub response_format: Option<ResponseFormat>,
+  /// Extended-reasoning / "thinking" configuration. See
+  /// [`crate::ThinkingConfig`] for the cross-provider mapping. Setting this
+  /// on a model whose registry entry doesn't have `supports_thinking: true`
+  /// produces [`LLMError::UnsupportedFeature`] at request-build time.
+  pub thinking: Option<ThinkingConfig>,
   pub enable_logging: bool,
   pub additional_params: HashMap<String, Value>,
   /// Optional W3C trace context to propagate to the underlying HTTP call.
@@ -90,6 +96,7 @@ impl LLMClient {
       tools: None,
       tool_choice: None,
       response_format: None,
+      thinking: None,
       enable_logging: true,
       additional_params: HashMap::new(),
       trace_context: None,
@@ -283,6 +290,7 @@ impl LLMClient {
       stop_reason: provider_response.stop_reason.clone(),
       usage: provider_response.usage.clone(),
       raw_metadata: provider_response.metadata.clone(),
+      thinking: provider_response.thinking.clone(),
     };
 
     if self.enable_logging {
@@ -460,6 +468,20 @@ impl LLMClient {
       vec![self.build_message_content(model_config)?]
     };
 
+    // Fail-fast: caller asked for thinking but the model isn't configured
+    // for it. Better here than after the HTTP round trip — silent provider-
+    // side drops are the exact "I set X but didn't get X" bug class we
+    // want to avoid.
+    if let Some(thinking) = &self.thinking
+      && !thinking.is_disabled()
+      && !model_config.supports_thinking()
+    {
+      return Err(LLMError::UnsupportedFeature {
+        model: self.model_name.clone(),
+        feature: "thinking".to_string(),
+      });
+    }
+
     Ok(ProviderRequest {
       model: model_config
         .model_id
@@ -470,6 +492,7 @@ impl LLMClient {
       parameters: params,
       tools: self.tools.clone(),
       tool_choice: self.tool_choice.clone(),
+      thinking: self.thinking.clone(),
     })
   }
 
@@ -653,6 +676,28 @@ impl LLMClientBuilder {
 
   pub fn response_format(mut self, format: ResponseFormat) -> Self {
     self.client.response_format = Some(format);
+    self
+  }
+
+  /// Enable extended reasoning / "thinking" for this request.
+  ///
+  /// Maps the unified [`ThinkingConfig`] onto the provider's native wire
+  /// shape (Anthropic `thinking` block, OpenAI `reasoning_effort`, Google
+  /// `thinkingConfig`). For models without thinking support (e.g.
+  /// `gpt-4o`, `claude-3-5-sonnet-20241022`), `execute*` returns
+  /// [`LLMError::UnsupportedFeature`] before any HTTP call — silent
+  /// drops on the provider side would otherwise mask the misconfiguration.
+  ///
+  /// Example:
+  /// ```ignore
+  /// AgentFlow::model("claude-sonnet-4-6")
+  ///   .prompt("Reason step by step about ...")
+  ///   .thinking(ThinkingConfig::Medium)
+  ///   .execute_full()
+  ///   .await?;
+  /// ```
+  pub fn thinking(mut self, config: ThinkingConfig) -> Self {
+    self.client.thinking = Some(config);
     self
   }
 

@@ -18,6 +18,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemini-2.5-pro-preview-06-05:
     vendor: google
@@ -34,6 +36,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   qwen-max-0428:
     vendor: dashscope
@@ -475,6 +479,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemini-2.0-flash:
     vendor: google
@@ -507,6 +513,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemini-2.0-flash-001:
     vendor: google
@@ -693,6 +701,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   deepseek-v3:
     vendor: dashscope
@@ -955,6 +965,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: budget_tokens
     response_format: null
   deepseek-r1-distill-qwen-32b:
     vendor: dashscope
@@ -1109,6 +1121,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   qwen2.5-coder-32b-instruct:
     vendor: dashscope
@@ -1294,6 +1308,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: budget_tokens
     response_format: null
   qwen-math-plus-0919:
     vendor: dashscope
@@ -1340,6 +1356,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemini-2.0-flash-lite:
     vendor: google
@@ -1539,6 +1557,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   qwen2.5-math-1.5b-instruct:
     vendor: dashscope
@@ -1829,6 +1849,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemini-2.0-flash-thinking-exp:
     vendor: google
@@ -1845,6 +1867,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   qwen3-coder-plus:
     vendor: dashscope
@@ -1922,6 +1946,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   gemma-3-12b-it:
     vendor: google
@@ -2228,6 +2254,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: false
+    supports_thinking: true
+    thinking_kind: budget_tokens
     response_format: null
   qwen-mt-plus:
     vendor: dashscope
@@ -2366,6 +2394,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   qwen-7b-chat:
     vendor: dashscope
@@ -2595,6 +2625,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    supports_thinking: true
+    thinking_kind: thinking_config_budget
     response_format: null
   veo-3.0-fast-generate-preview:
     vendor: google
@@ -3090,6 +3122,8 @@ models:
     supports_tools: true
     native_tool_calling: true
     supports_multimodal: false
+    supports_thinking: true
+    thinking_kind: output_only
     response_format: null
   deepseek-v4-flash:
     vendor: deepseek

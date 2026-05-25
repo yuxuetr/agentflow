@@ -214,6 +214,7 @@ impl StepFunProvider {
       metadata: Some(serde_json::to_value(&stepfun_response)?),
       tool_calls,
       stop_reason,
+      thinking: None,
     })
   }
 
@@ -1448,6 +1449,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
+      thinking: None,
     };
     let body = provider.build_request_body(&request);
     let tools = body["tools"].as_array().expect("tools array");

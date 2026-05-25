@@ -2,6 +2,7 @@ use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
 use async_trait::async_trait;
@@ -118,6 +119,12 @@ impl GoogleProvider {
         "top_k" => generation_config["topK"] = value.clone(),
         _ => {}
       }
+    }
+
+    if let Some(thinking) = &request.thinking
+      && let Some(block) = thinking_config_to_google_value(thinking)
+    {
+      generation_config["thinkingConfig"] = block;
     }
 
     if !generation_config.as_object().unwrap().is_empty() {
@@ -287,6 +294,22 @@ pub(crate) fn tool_choice_to_google_value(
   }
 }
 
+/// Encode a [`ThinkingConfig`] as Gemini's `generationConfig.thinkingConfig`.
+///
+/// Gemini 2.5+ accepts `thinkingBudget: N` (negative `-1` for "dynamic"
+/// auto-budget). `Auto` maps to `thinkingBudget: -1`; explicit qualitative
+/// levels and `Budget(n)` map to integer token counts. `Disabled` emits
+/// `thinkingBudget: 0` per Google's documented "thinking off" form.
+pub(crate) fn thinking_config_to_google_value(config: &ThinkingConfig) -> Option<Value> {
+  if config.is_disabled() {
+    return Some(json!({ "thinkingBudget": 0 }));
+  }
+  match config.to_token_budget() {
+    Some(budget) => Some(json!({ "thinkingBudget": budget })),
+    None => Some(json!({ "thinkingBudget": -1 })),
+  }
+}
+
 /// Pull `functionCall` parts out of the first candidate and convert them to
 /// typed `ToolCallRequest`s. Gemini does not include ids — we synthesise
 /// stable `call_<index>` ids so downstream tool-result correlation works.
@@ -393,6 +416,10 @@ impl LLMProvider for GoogleProvider {
       metadata: Some(serde_json::to_value(&google_response)?),
       tool_calls,
       stop_reason,
+      // Gemini 2.5+ returns reasoning text on parts with `thought: true`;
+      // capturing that is part of a future patch. For now we surface
+      // None so the response shape matches other providers.
+      thinking: None,
     })
   }
 
@@ -633,6 +660,67 @@ impl StreamingResponse for GoogleStreamingResponse {
 mod tests {
   use super::*;
 
+  /// Gemini 2.5+ accepts `thinkingConfig.thinkingBudget` under
+  /// `generationConfig`. `ThinkingConfig::Medium` must land there
+  /// (not on a top-level `thinking` field).
+  #[test]
+  fn build_request_body_emits_thinking_config_under_generation_config() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-2.5-pro".to_string(),
+      messages: vec![json!({"role": "user", "content": "reason"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Medium),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(
+      body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+      4096
+    );
+  }
+
+  #[test]
+  fn build_request_body_thinking_auto_uses_dynamic_budget() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-2.5-flash".to_string(),
+      messages: vec![json!({"role": "user", "content": "reason"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Auto),
+    };
+    let body = provider.build_request_body(&request);
+    // Google uses -1 as the "auto / dynamic" budget signal.
+    assert_eq!(
+      body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+      -1
+    );
+  }
+
+  #[test]
+  fn build_request_body_thinking_disabled_emits_zero_budget() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-2.5-pro".to_string(),
+      messages: vec![json!({"role": "user", "content": "no thinking"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(ThinkingConfig::Disabled),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(
+      body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+      0
+    );
+  }
+
   #[test]
   fn test_google_provider_creation() {
     let provider = GoogleProvider::new("test-key", None);
@@ -700,6 +788,7 @@ mod tests {
       parameters: params,
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -742,6 +831,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -882,6 +972,7 @@ mod tests {
       parameters: std::collections::HashMap::new(),
       tools: None,
       tool_choice: None,
+      thinking: None,
     };
 
     let body = provider.build_request_body(&request);
