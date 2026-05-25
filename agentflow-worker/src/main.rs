@@ -11,6 +11,41 @@ async fn main() {
   }
 }
 
+/// Q3.1.3: future that resolves on SIGINT (all platforms) or SIGTERM
+/// (unix). Mirrors the helper in `agentflow-cli::shutdown` and the
+/// server's `shutdown_signal`. Kept private to the binary so the
+/// library has zero direct dependency on `tokio::signal`.
+async fn shutdown_signal() {
+  let ctrl_c = async {
+    if let Err(err) = tokio::signal::ctrl_c().await {
+      eprintln!("agentflow-worker: failed to install ctrl_c handler: {err}");
+      std::future::pending::<()>().await;
+    }
+  };
+
+  #[cfg(unix)]
+  let terminate = async {
+    use tokio::signal::unix::{SignalKind, signal};
+    match signal(SignalKind::terminate()) {
+      Ok(mut sigterm) => {
+        let _ = sigterm.recv().await;
+      }
+      Err(err) => {
+        eprintln!("agentflow-worker: failed to install SIGTERM handler: {err}");
+        std::future::pending::<()>().await;
+      }
+    }
+  };
+
+  #[cfg(not(unix))]
+  let terminate = std::future::pending::<()>();
+
+  tokio::select! {
+    _ = ctrl_c => {}
+    _ = terminate => {}
+  }
+}
+
 async fn run() -> Result<(), String> {
   let args = Args::parse(std::env::args().skip(1))?;
   let worker_id = WorkerId::new(args.worker_id).map_err(|e| e.to_string())?;
@@ -66,9 +101,44 @@ where
 {
   if once {
     let _ = runtime.run_once().await.map_err(|e| e.to_string())?;
-    Ok(())
-  } else {
-    runtime.run_forever().await.map_err(|e| e.to_string())
+    return Ok(());
+  }
+
+  // Q3.1.3: install a SIGINT/SIGTERM hook so k8s rolling deploys (and
+  // local Ctrl-C) can drain the runtime instead of `SIGKILL`-ing an
+  // in-flight node execution. `run_forever` exits naturally once the
+  // cancellation flag flips; we then award the loop a bounded
+  // drain window for the current dispatch to settle.
+  let cancel = runtime.cancellation_token();
+  let run_future = runtime.run_forever();
+  tokio::pin!(run_future);
+  let signal_future = shutdown_signal();
+  tokio::pin!(signal_future);
+
+  tokio::select! {
+    biased;
+    res = &mut run_future => res.map_err(|e| e.to_string()),
+    _ = &mut signal_future => {
+      eprintln!("agentflow-worker: received SIGINT/SIGTERM; beginning graceful drain");
+      cancel.cancel();
+      // 30s is generous — even an LLM node usually finishes within
+      // its own timeout (default 300s in `WorkerResourceLimits` but
+      // ops typically set lower). If the worker is still busy when
+      // the deadline expires, the supervisor will follow up with
+      // SIGKILL; the in-flight task is reported as `cancelled` by
+      // `execute_stub` so the scheduler requeues immediately
+      // instead of waiting the stale-heartbeat timeout.
+      const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+      match tokio::time::timeout(DRAIN_TIMEOUT, &mut run_future).await {
+        Ok(res) => res.map_err(|e| e.to_string()),
+        Err(_) => {
+          eprintln!(
+            "agentflow-worker: drain timed out after {DRAIN_TIMEOUT:?}; exiting anyway"
+          );
+          Ok(())
+        }
+      }
+    }
   }
 }
 

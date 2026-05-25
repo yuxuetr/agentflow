@@ -105,6 +105,90 @@ pub struct WorkerConfig {
   /// nodes can set this to skip the server-side filter cost on
   /// unmatched tasks.
   pub capabilities: WorkerCapabilities,
+  /// Q3.1.3: knobs for the `run_forever` reconnect backoff. The
+  /// runtime treats `SchedulerError::Transport` as recoverable —
+  /// instead of aborting the process on the first control-plane
+  /// blip (which forced operators to wrap the binary in an external
+  /// supervisor), it sleeps with jittered exponential backoff and
+  /// retries. `max_reconnect_attempts = None` means "retry forever";
+  /// any `Some(n)` caps total consecutive transport errors before
+  /// the loop exits with `WorkerError::Scheduler(Transport)` —
+  /// useful for fail-fast deployment smoke tests.
+  pub reconnect_backoff: ReconnectBackoff,
+}
+
+/// Q3.1.3: bounded exponential backoff config for `run_forever`'s
+/// recovery from `SchedulerError::Transport`. Defaults yield a curve
+/// of 100ms → 200ms → 400ms → ... capped at 30s, with ±25% jitter to
+/// avoid every worker in a fleet retrying in lockstep after a shared
+/// control-plane restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconnectBackoff {
+  /// Smallest sleep after the first transport error.
+  pub initial: Duration,
+  /// Hard cap on the per-attempt sleep.
+  pub max: Duration,
+  /// Multiplier applied to the previous sleep (clamped at `max`).
+  /// Stored as percent (`200` = 2×) so the struct stays `Eq`.
+  pub multiplier_percent: u32,
+  /// `None` = retry forever; `Some(n)` = give up after `n`
+  /// consecutive transport errors and let the caller decide.
+  pub max_attempts: Option<u32>,
+  /// Whether to randomize each sleep by ±25%. Almost always `true`
+  /// in production; the default `false` is reserved for the
+  /// deterministic regression tests in `tests/`.
+  pub jitter: bool,
+}
+
+impl Default for ReconnectBackoff {
+  fn default() -> Self {
+    Self {
+      initial: Duration::from_millis(100),
+      max: Duration::from_secs(30),
+      multiplier_percent: 200,
+      max_attempts: None,
+      jitter: true,
+    }
+  }
+}
+
+impl ReconnectBackoff {
+  /// Deterministic variant for tests — disables jitter so the
+  /// sequence is `initial, initial*mult, ..., max, max, ...`.
+  pub fn deterministic(initial: Duration, max: Duration) -> Self {
+    Self {
+      initial,
+      max,
+      multiplier_percent: 200,
+      max_attempts: None,
+      jitter: false,
+    }
+  }
+
+  /// Compute the next sleep given the previous one (or `None` on the
+  /// first failure). Pure function — testable without an Rng.
+  pub fn next_delay(&self, prev: Option<Duration>) -> Duration {
+    let base_ms = match prev {
+      None => self.initial.as_millis() as u64,
+      Some(p) => {
+        let prev_ms = p.as_millis() as u64;
+        let mult = self.multiplier_percent as u64;
+        prev_ms.saturating_mul(mult).saturating_div(100)
+      }
+    };
+    let capped = base_ms.min(self.max.as_millis() as u64);
+    if !self.jitter {
+      return Duration::from_millis(capped);
+    }
+    // ±25% jitter. We use `rand::random::<u32>()` mod the window
+    // rather than pulling a full Rng — backoff jitter doesn't need
+    // a crypto-grade source.
+    let window = capped.saturating_div(2); // half-width = 25% × 2
+    let half_window = window.saturating_div(2);
+    let r = rand::random::<u64>() % window.max(1);
+    let jittered = capped.saturating_add(r).saturating_sub(half_window);
+    Duration::from_millis(jittered)
+  }
 }
 
 impl WorkerConfig {
@@ -121,11 +205,18 @@ impl WorkerConfig {
       // `with_resource_limits` with the prod-leaning preset.
       resource_limits: WorkerResourceLimits::unlimited(),
       capabilities: WorkerCapabilities::default(),
+      reconnect_backoff: ReconnectBackoff::default(),
     }
   }
 
   pub fn with_resource_limits(mut self, limits: WorkerResourceLimits) -> Self {
     self.resource_limits = limits;
+    self
+  }
+
+  /// Override the `run_forever` reconnect backoff curve.
+  pub fn with_reconnect_backoff(mut self, backoff: ReconnectBackoff) -> Self {
+    self.reconnect_backoff = backoff;
     self
   }
 
@@ -246,14 +337,56 @@ where
     Ok(Some(task))
   }
 
-  /// Run until the process is interrupted.
+  /// Run until cancelled. Q3.1.3: `SchedulerError::Transport` is now
+  /// treated as recoverable — `run_forever` logs the error and sleeps
+  /// with jittered exponential backoff before retrying, rather than
+  /// aborting the process on the first control-plane blip. Non-
+  /// transport errors (e.g. `InvalidWorkerId`, `TaskNotClaimed`) are
+  /// still fatal so misconfigurations surface loudly.
   pub async fn run_forever(&self) -> Result<(), WorkerError> {
+    let mut last_backoff: Option<Duration> = None;
+    let mut transport_failures: u32 = 0;
     loop {
       if self.cancellation.is_cancelled() {
         return Ok(());
       }
-      let _ = self.run_once().await?;
-      sleep(self.config.poll_interval).await;
+      match self.run_once().await {
+        Ok(_) => {
+          // Reset the backoff curve only on a successful cycle. The
+          // claim itself may have returned `Ok(None)` (idle queue) —
+          // that still proves the transport is healthy.
+          last_backoff = None;
+          transport_failures = 0;
+          sleep(self.config.poll_interval).await;
+        }
+        Err(WorkerError::Scheduler(SchedulerError::Transport { message })) => {
+          transport_failures = transport_failures.saturating_add(1);
+          if let Some(cap) = self.config.reconnect_backoff.max_attempts {
+            if transport_failures > cap {
+              eprintln!(
+                "agentflow-worker: transport error past --max-reconnect-attempts ({cap}); \
+                 giving up. last error: {message}"
+              );
+              return Err(WorkerError::Scheduler(SchedulerError::Transport { message }));
+            }
+          }
+          let delay = self.config.reconnect_backoff.next_delay(last_backoff);
+          eprintln!(
+            "agentflow-worker: transport error (attempt {transport_failures}); \
+             retrying in {delay:?}. error: {message}"
+          );
+          last_backoff = Some(delay);
+          // Race the backoff sleep against cancellation so SIGTERM
+          // unblocks the loop without waiting the full curve.
+          let sleep_fut = sleep(delay);
+          tokio::pin!(sleep_fut);
+          tokio::select! {
+            _ = &mut sleep_fut => {}
+            _ = wait_for_cancel(&self.cancellation) => return Ok(()),
+          }
+        }
+        Err(other) => return Err(other),
+      }
     }
   }
 }
@@ -1030,5 +1163,248 @@ mod tests {
   fn unused_local_addr() -> SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap()
+  }
+
+  // ─── Q3.1.3 backoff + cancellation regression suite ───────────────
+
+  /// Mock protocol that returns `SchedulerError::Transport` for the
+  /// first N heartbeat calls and then succeeds. Used to drive
+  /// `run_forever`'s recovery path without spinning up a real gRPC
+  /// server.
+  struct FlakyProtocol {
+    transport_failures_remaining: std::sync::Mutex<u32>,
+    heartbeat_count: std::sync::Mutex<u32>,
+  }
+
+  impl FlakyProtocol {
+    fn new(initial_failures: u32) -> Self {
+      Self {
+        transport_failures_remaining: std::sync::Mutex::new(initial_failures),
+        heartbeat_count: std::sync::Mutex::new(0),
+      }
+    }
+
+    fn heartbeat_count(&self) -> u32 {
+      *self.heartbeat_count.lock().unwrap()
+    }
+  }
+
+  #[async_trait::async_trait]
+  impl WorkerProtocol for FlakyProtocol {
+    async fn submit_task(&self, _task: WorkerTask) -> Result<(), SchedulerError> {
+      Ok(())
+    }
+    async fn claim_task(
+      &self,
+      _worker_id: WorkerId,
+    ) -> Result<Option<WorkerTask>, SchedulerError> {
+      Ok(None)
+    }
+    async fn report_result(
+      &self,
+      _worker_id: WorkerId,
+      _task_id: Uuid,
+      _result: WorkerTaskResult,
+    ) -> Result<(), SchedulerError> {
+      Ok(())
+    }
+    async fn heartbeat(
+      &self,
+      _heartbeat: WorkerHeartbeat,
+    ) -> Result<(), SchedulerError> {
+      *self.heartbeat_count.lock().unwrap() += 1;
+      let mut remaining = self.transport_failures_remaining.lock().unwrap();
+      if *remaining > 0 {
+        *remaining -= 1;
+        return Err(SchedulerError::Transport {
+          message: "simulated control-plane blip".into(),
+        });
+      }
+      Ok(())
+    }
+  }
+
+  #[test]
+  fn reconnect_backoff_doubles_until_cap() {
+    let backoff = ReconnectBackoff::deterministic(
+      Duration::from_millis(100),
+      Duration::from_secs(1),
+    );
+    // First failure → initial.
+    assert_eq!(backoff.next_delay(None), Duration::from_millis(100));
+    // Subsequent failures double until capped.
+    assert_eq!(
+      backoff.next_delay(Some(Duration::from_millis(100))),
+      Duration::from_millis(200)
+    );
+    assert_eq!(
+      backoff.next_delay(Some(Duration::from_millis(200))),
+      Duration::from_millis(400)
+    );
+    assert_eq!(
+      backoff.next_delay(Some(Duration::from_millis(400))),
+      Duration::from_millis(800)
+    );
+    // Cap kicks in.
+    assert_eq!(
+      backoff.next_delay(Some(Duration::from_millis(800))),
+      Duration::from_secs(1)
+    );
+    assert_eq!(
+      backoff.next_delay(Some(Duration::from_secs(1))),
+      Duration::from_secs(1)
+    );
+  }
+
+  #[test]
+  fn reconnect_backoff_jitter_stays_within_window() {
+    // ±25% jitter band; with cap=200ms the value must always land in
+    // [150, 250].
+    let mut backoff = ReconnectBackoff::default();
+    backoff.initial = Duration::from_millis(200);
+    backoff.max = Duration::from_millis(200);
+    backoff.jitter = true;
+    for _ in 0..50 {
+      let d = backoff.next_delay(Some(Duration::from_millis(200))).as_millis() as u64;
+      assert!(
+        (150..=250).contains(&d),
+        "jittered backoff must stay within ±25% of cap; got {d}ms"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn run_forever_recovers_from_transport_blip() {
+    // The flaky protocol fails the first 3 heartbeats then succeeds.
+    // `run_forever` must keep going instead of returning Err on the
+    // very first transport failure (the pre-Q3.1.3 behaviour).
+    let protocol = Arc::new(FlakyProtocol::new(3));
+    let worker_id = WorkerId::new("worker-flaky").unwrap();
+    let mut config = WorkerConfig::new(worker_id, "memory://local");
+    config.poll_interval = Duration::from_millis(5);
+    config.reconnect_backoff = ReconnectBackoff::deterministic(
+      Duration::from_millis(1),
+      Duration::from_millis(5),
+    );
+    let runtime = WorkerRuntime::new(ArcProtocol(protocol.clone()), config);
+    let cancel = runtime.cancellation_token();
+
+    let handle = tokio::spawn(async move { runtime.run_forever().await });
+
+    // Wait until the runtime has clearly recovered (at least 5
+    // heartbeats — 3 failed + several succeeded), then cancel.
+    for _ in 0..200 {
+      if protocol.heartbeat_count() >= 5 {
+        break;
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+      protocol.heartbeat_count() >= 5,
+      "runtime did not recover from transient transport errors; \
+       heartbeat_count={}",
+      protocol.heartbeat_count()
+    );
+    cancel.cancel();
+
+    let result = tokio::time::timeout(Duration::from_secs(2), handle)
+      .await
+      .expect("runtime must exit within 2s after cancel")
+      .expect("join");
+    assert!(result.is_ok(), "run_forever must return Ok after cancel; got {result:?}");
+  }
+
+  #[tokio::test]
+  async fn run_forever_gives_up_after_max_attempts() {
+    // 100 failures, but max_attempts=3 — the loop must surface the
+    // error instead of retrying forever.
+    let protocol = Arc::new(FlakyProtocol::new(100));
+    let worker_id = WorkerId::new("worker-cap").unwrap();
+    let mut config = WorkerConfig::new(worker_id, "memory://local");
+    let mut backoff = ReconnectBackoff::deterministic(
+      Duration::from_millis(1),
+      Duration::from_millis(2),
+    );
+    backoff.max_attempts = Some(3);
+    config.reconnect_backoff = backoff;
+    let runtime = WorkerRuntime::new(ArcProtocol(protocol.clone()), config);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), runtime.run_forever()).await;
+    let outcome = result.expect("must not hang past max_attempts");
+    assert!(
+      matches!(
+        outcome,
+        Err(WorkerError::Scheduler(SchedulerError::Transport { .. }))
+      ),
+      "must surface Transport error past max_attempts; got {outcome:?}"
+    );
+    assert_eq!(
+      protocol.heartbeat_count(),
+      4,
+      "max_attempts=3 allows 3 retries past the initial failure (4 total)"
+    );
+  }
+
+  #[tokio::test]
+  async fn run_forever_cancellation_unblocks_backoff_sleep() {
+    // A long backoff sleep must yield to cancellation immediately —
+    // otherwise SIGTERM would have to wait the full backoff window
+    // before the runtime sees the flag.
+    let protocol = Arc::new(FlakyProtocol::new(100));
+    let worker_id = WorkerId::new("worker-cancel-during-backoff").unwrap();
+    let mut config = WorkerConfig::new(worker_id, "memory://local");
+    config.reconnect_backoff = ReconnectBackoff::deterministic(
+      Duration::from_secs(60),
+      Duration::from_secs(60),
+    );
+    let runtime = WorkerRuntime::new(ArcProtocol(protocol), config);
+    let cancel = runtime.cancellation_token();
+
+    let handle = tokio::spawn(async move { runtime.run_forever().await });
+
+    // Give the runtime time to enter the first 60s backoff sleep.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    cancel.cancel();
+
+    let result = tokio::time::timeout(Duration::from_secs(2), handle)
+      .await
+      .expect("cancel must interrupt the 60s backoff in well under 2s")
+      .expect("join");
+    assert!(
+      result.is_ok(),
+      "run_forever must return Ok after cancel mid-backoff; got {result:?}"
+    );
+  }
+
+  /// Thin Arc wrapper so we can share a single FlakyProtocol between
+  /// the runtime under test and the assertions side.
+  #[derive(Clone)]
+  struct ArcProtocol(Arc<FlakyProtocol>);
+
+  #[async_trait::async_trait]
+  impl WorkerProtocol for ArcProtocol {
+    async fn submit_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
+      self.0.submit_task(task).await
+    }
+    async fn claim_task(
+      &self,
+      worker_id: WorkerId,
+    ) -> Result<Option<WorkerTask>, SchedulerError> {
+      self.0.claim_task(worker_id).await
+    }
+    async fn report_result(
+      &self,
+      worker_id: WorkerId,
+      task_id: Uuid,
+      result: WorkerTaskResult,
+    ) -> Result<(), SchedulerError> {
+      self.0.report_result(worker_id, task_id, result).await
+    }
+    async fn heartbeat(
+      &self,
+      heartbeat: WorkerHeartbeat,
+    ) -> Result<(), SchedulerError> {
+      self.0.heartbeat(heartbeat).await
+    }
   }
 }
