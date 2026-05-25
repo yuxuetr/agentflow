@@ -26,16 +26,33 @@ pub struct SentenceChunker {
 }
 
 impl SentenceChunker {
-  /// Create a new sentence-based chunker
+  /// Create a new sentence-based chunker.
   ///
-  /// # Arguments
-  /// * `chunk_size` - Target maximum size for each chunk (in characters)
-  /// * `overlap` - Number of characters to overlap between chunks
+  /// Q3.9.1: clamps `chunk_size` to `>= 1` and `overlap` to
+  /// `< chunk_size` so the iteration in `chunk()` is guaranteed to
+  /// make forward progress on every step. Use [`try_new`](Self::try_new)
+  /// when a misconfiguration should surface as an error rather than
+  /// be silently clamped.
   pub fn new(chunk_size: usize, overlap: usize) -> Self {
-    Self {
-      chunk_size,
-      overlap,
+    let chunk_size = chunk_size.max(1);
+    let overlap = overlap.min(chunk_size.saturating_sub(1));
+    Self { chunk_size, overlap }
+  }
+
+  /// Q3.9.1: fallible constructor that rejects `chunk_size == 0` and
+  /// `overlap >= chunk_size`.
+  pub fn try_new(chunk_size: usize, overlap: usize) -> crate::error::Result<Self> {
+    if chunk_size == 0 {
+      return Err(crate::error::RAGError::chunking(
+        "SentenceChunker requires chunk_size > 0",
+      ));
     }
+    if overlap >= chunk_size {
+      return Err(crate::error::RAGError::chunking(format!(
+        "SentenceChunker requires overlap < chunk_size; got overlap={overlap} chunk_size={chunk_size}"
+      )));
+    }
+    Ok(Self { chunk_size, overlap })
   }
 
   /// Split text into sentences using Unicode sentence boundary rules
