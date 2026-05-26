@@ -3,43 +3,31 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { compileFilter, applyFilter, type FilterEvent } from './eventFilter';
 import { usePreferenceSync } from './usePreferenceSync';
-
-type RunRecord = {
-  id: string;
-  workflow: string;
-  status: string;
-  tenant_id?: string;
-  started_at?: string;
-  finished_at?: string | null;
-  run_dir?: string | null;
-  error?: string | null;
-};
-
-type RunEnvelope = RunRecord & {
-  run?: RunRecord;
-};
-
-type ListRunsEnvelope = {
-  runs: RunRecord[];
-};
-
-type CreateRunEnvelope = {
-  run_id: string;
-  status: string;
-};
-
-type CancelRunEnvelope = {
-  run: RunRecord;
-  cancelled: boolean;
-};
-
-type StreamedEvent = {
-  run_id: string;
-  seq: number;
-  kind: string;
-  payload: unknown;
-  ts: string;
-};
+import {
+  CancelRunEnvelopeSchema,
+  CreateRunEnvelopeSchema,
+  DiagnosticsReportSchema,
+  HarnessEventArraySchema,
+  HarnessEventSchema,
+  HarnessSessionArraySchema,
+  HarnessSessionSchema,
+  PendingApprovalArraySchema,
+  ListRunsEnvelopeSchema,
+  RunEnvelopeSchema,
+  StreamedEventArraySchema,
+  StreamedEventSchema,
+  parseJson,
+  parseJsonResponse,
+  type DiagnosticsDirCheck,
+  type DiagnosticsReport,
+  type DiagnosticsStatus,
+  type HarnessEvent,
+  type HarnessSession,
+  type PendingApproval,
+  type RunEnvelope,
+  type RunRecord,
+  type StreamedEvent,
+} from './schemas';
 
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
 
@@ -184,8 +172,17 @@ const apiFetch = (path: string, token: string, init: RequestInit = {}) => {
   });
 };
 
-const parseSseChunk = (buffer: string) => {
-  const events: StreamedEvent[] = [];
+// Generic SSE chunk parser used by both the workflow runs detail view
+// (`StreamedEventSchema` shape) and the harness session detail view
+// (`HarnessEventSchema` shape). Caller picks the schema so the same
+// chunk parser can validate either wire shape without sharing the
+// run_id / session_id field name (Q3.7.2).
+const parseSseChunk = <T,>(
+  buffer: string,
+  schema: import('zod').ZodType<T>,
+  contextLabel: string,
+): { events: T[]; rest: string } => {
+  const events: T[] = [];
   let cursor = buffer;
   let boundary = cursor.indexOf('\n\n');
   while (boundary >= 0) {
@@ -197,7 +194,12 @@ const parseSseChunk = (buffer: string) => {
       .map((line) => line.slice(5).trimStart())
       .join('\n');
     if (data) {
-      events.push(JSON.parse(data) as StreamedEvent);
+      // Q3.7.2: validate SSE event shape before pushing into UI state.
+      // A malformed event from a misbehaving server (or a future
+      // schema change) now surfaces as a SchemaValidationError that
+      // the parseSse caller can recover from, instead of leaking into
+      // downstream rendering with `kind=undefined` / `seq=NaN`.
+      events.push(parseJson(schema, JSON.parse(data), contextLabel));
     }
     boundary = cursor.indexOf('\n\n');
   }
@@ -324,7 +326,11 @@ function RunCreateForm({ apiToken, onTokenChange }: { apiToken: string; onTokenC
         const text = await response.text();
         throw new Error(`run submission failed with HTTP ${response.status}: ${text}`);
       }
-      const payload = (await response.json()) as CreateRunEnvelope;
+      const payload = await parseJsonResponse(
+        CreateRunEnvelopeSchema,
+        response,
+        'POST /v1/runs',
+      );
       // Stash the freshly-submitted workflow into the console's draft
       // slot so the run detail view can reuse it.
       writeStorage(workflowKey, workflowYaml);
@@ -501,8 +507,12 @@ async function fetchEventsHistory(
   if (!response.ok) {
     throw new Error(`run ${runId}: ${response.status} ${response.statusText}`);
   }
-  const body = (await response.json()) as { events: StreamedEvent[] };
-  return body.events ?? [];
+  // Q3.7.2: validate the history payload before merging into compare
+  // view. Endpoint wraps events in `{ events: [...] }`; build a
+  // narrow inline schema so we don't need a one-off export.
+  const raw = (await response.json()) as { events?: unknown };
+  const events = StreamedEventArraySchema.parse(raw?.events ?? []);
+  return events;
 }
 
 function RunCompare({
@@ -907,7 +917,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
     if (!response.ok) {
       throw new Error(`run list failed with HTTP ${response.status}`);
     }
-    const payload = (await response.json()) as ListRunsEnvelope;
+    const payload = await parseJsonResponse(
+      ListRunsEnvelopeSchema,
+      response,
+      'GET /v1/runs',
+    );
     setRuns(payload.runs);
     if (!runId && payload.runs[0]) {
       setRunId(payload.runs[0].id);
@@ -961,7 +975,7 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
           break;
         }
         buffer += value;
-        const parsed = parseSseChunk(buffer);
+        const parsed = parseSseChunk(buffer, StreamedEventSchema, 'workflow SSE event');
         buffer = parsed.rest;
         for (const event of parsed.events) {
           appendEvent(event);
@@ -975,7 +989,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         if (!response.ok) {
           throw new Error(`run lookup failed with HTTP ${response.status}`);
         }
-        const payload = (await response.json()) as RunEnvelope;
+        const payload = await parseJsonResponse(
+          RunEnvelopeSchema,
+          response,
+          `GET /v1/runs/${runId}`,
+        );
         if (cancelled) {
           return;
         }
@@ -1012,7 +1030,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         }
         let afterSeq = -1;
         if (historyResponse.ok) {
-          const history = (await historyResponse.json()) as StreamedEvent[];
+          const history = await parseJsonResponse(
+            StreamedEventArraySchema,
+            historyResponse,
+            `GET /v1/runs/${runId}/events/history`,
+          );
           setEvents(history);
           setSelectedSeq(history.at(-1)?.seq ?? null);
           afterSeq = history.at(-1)?.seq ?? -1;
@@ -1097,7 +1119,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
       if (!response.ok) {
         throw new Error(`run submission failed with HTTP ${response.status}`);
       }
-      const payload = (await response.json()) as CreateRunEnvelope;
+      const payload = await parseJsonResponse(
+        CreateRunEnvelopeSchema,
+        response,
+        'POST /v1/runs (resubmit)',
+      );
       setRunId(payload.run_id);
       setState('loading');
       await loadRuns(tenantId.trim() || 'default');
@@ -1119,7 +1145,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
       if (!response.ok) {
         throw new Error(`run cancellation failed with HTTP ${response.status}`);
       }
-      const payload = (await response.json()) as CancelRunEnvelope;
+      const payload = await parseJsonResponse(
+        CancelRunEnvelopeSchema,
+        response,
+        `POST /v1/runs/${activeRun.id}:cancel`,
+      );
       setActiveRun(payload.run);
       setState('closed');
       abortRef.current?.abort();
@@ -1353,46 +1383,12 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
 }
 
 // ─── P-H.5 slice 3 — Harness Mode Web UI ─────────────────────────
+//
+// `HarnessSession` / `HarnessEvent` shapes live in `./schemas.ts` (Q3.7.2)
+// so the runtime validators and the TS types stay in lock-step. They're
+// imported at the top of this file.
 
-type HarnessSession = {
-  id: string;
-  tenant_id: string;
-  status: string;
-  user_input: string;
-  workspace_root: string;
-  profile: string;
-  runtime_kind: string;
-  model: string;
-  skill_name?: string | null;
-  started_at?: string;
-  finished_at?: string | null;
-  final_answer?: string | null;
-  error?: string | null;
-};
-
-type HarnessEvent = {
-  session_id: string;
-  seq: number;
-  kind: string;
-  payload: unknown;
-  ts: string;
-};
-
-type PendingApproval = {
-  id: string;
-  session_id: string;
-  step_index: number;
-  tool: string;
-  source?: string | null;
-  permissions?: string[];
-  idempotency?: string;
-  params_summary?: unknown;
-  risk: string;
-  reason: string;
-  requested_at: string;
-  expires_at?: string | null;
-};
-
+// `PendingApproval` shape lives in `./schemas.ts` (Q3.7.2).
 type ApprovalOutcome = 'allow' | 'deny' | 'deny_and_stop';
 type ApprovalScope = 'once' | 'session' | 'run';
 
@@ -1465,8 +1461,11 @@ function HarnessSessionList({
         const text = await response.text();
         throw new Error(`list failed: HTTP ${response.status} ${text}`);
       }
-      const body = (await response.json()) as { sessions: HarnessSession[] };
-      setSessions(body.sessions);
+      // Q3.7.2: validate session list. Endpoint returns `{ sessions: [...] }`;
+      // unwrap then run the dedicated array schema.
+      const raw = (await response.json()) as { sessions?: unknown };
+      const sessions = HarnessSessionArraySchema.parse(raw?.sessions ?? []);
+      setSessions(sessions);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1688,8 +1687,18 @@ function HarnessSubmitForm({
         const text = await response.text();
         throw new Error(`HTTP ${response.status}: ${text}`);
       }
-      const payload = (await response.json()) as { session_id: string };
-      window.location.assign(`/ui/harness/sessions/${encodeURIComponent(payload.session_id)}`);
+      // Q3.7.2: validate the create-session response shape — the
+      // session_id is used in a URL, so a missing/wrong field would
+      // navigate to a 404.
+      const raw = (await response.json()) as { session_id?: unknown };
+      if (typeof raw?.session_id !== 'string' || raw.session_id.length === 0) {
+        throw new Error(
+          'POST /v1/harness/sessions: response missing session_id (got: ' +
+            JSON.stringify(raw) +
+            ')',
+        );
+      }
+      window.location.assign(`/ui/harness/sessions/${encodeURIComponent(raw.session_id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1866,7 +1875,11 @@ function HarnessSessionDetail({
         const text = await response.text();
         throw new Error(`session fetch failed: HTTP ${response.status} ${text}`);
       }
-      const body = (await response.json()) as HarnessSession;
+      const body = await parseJsonResponse(
+        HarnessSessionSchema,
+        response,
+        `GET /v1/harness/sessions/${sessionId}`,
+      );
       setSession(body);
       setError(null);
     } catch (err) {
@@ -1887,7 +1900,11 @@ function HarnessSessionDetail({
         const text = await response.text();
         throw new Error(`events fetch failed: HTTP ${response.status} ${text}`);
       }
-      const body = (await response.json()) as HarnessEvent[];
+      const body = await parseJsonResponse(
+        HarnessEventArraySchema,
+        response,
+        `GET /v1/harness/sessions/${sessionId}/events/history`,
+      );
       replaceEvents(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1904,8 +1921,11 @@ function HarnessSessionDetail({
         const text = await response.text();
         throw new Error(`approvals fetch failed: HTTP ${response.status} ${text}`);
       }
-      const body = (await response.json()) as { approvals: PendingApproval[] };
-      setApprovals(body.approvals);
+      // Q3.7.2: validate pending-approval list. Endpoint wraps in
+      // `{ approvals: [...] }`; unwrap then run the array schema.
+      const raw = (await response.json()) as { approvals?: unknown };
+      const approvals = PendingApprovalArraySchema.parse(raw?.approvals ?? []);
+      setApprovals(approvals);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1969,10 +1989,14 @@ function HarnessSessionDetail({
               break;
             }
             buffer += decoder.decode(value, { stream: true });
-            const { events, rest } = parseSseChunk(buffer);
+            const { events, rest } = parseSseChunk(
+              buffer,
+              HarnessEventSchema,
+              'harness SSE event',
+            );
             buffer = rest;
             for (const ev of events) {
-              mergeEvent(ev as unknown as HarnessEvent);
+              mergeEvent(ev);
             }
           }
         } catch (err) {
@@ -2397,56 +2421,9 @@ function ApprovalCard({
 
 // ─── P6.2 Diagnostics panel ──────────────────────────────────────
 
-type DiagnosticsStatus = 'ok' | 'warning' | 'fail';
-
-type DiagnosticsDirCheck = {
-  path: string;
-  source: string;
-  exists: boolean;
-  writable: boolean;
-  error?: string | null;
-};
-
-type DiagnosticsReport = {
-  version?: string;
-  profile?: string;
-  status: DiagnosticsStatus;
-  features?: { rag?: boolean; plugin?: boolean; mcp_workflow_nodes?: boolean };
-  config?: {
-    models_config_source?: string;
-    models_config_path?: string;
-    models_config_exists?: boolean;
-    models_config_loadable?: boolean;
-    models?: number;
-    providers?: number;
-    missing_env_vars?: string[];
-    warnings?: string[];
-    error?: string | null;
-  };
-  security?: {
-    env_var?: string;
-    profile?: string;
-    warning?: string | null;
-  };
-  sandbox?: {
-    backend?: string;
-    enforcement?: string;
-    enforcing?: boolean;
-    capabilities?: string[];
-    warnings?: string[];
-  };
-  environment?: {
-    agentflow_run_dir?: string | null;
-    agentflow_trace_dir?: string | null;
-    agentflow_api_token_set?: boolean;
-    agentflow_skills_index?: string | null;
-  };
-  disk?: {
-    run_dir?: DiagnosticsDirCheck;
-    trace_dir?: DiagnosticsDirCheck;
-    marketplace_cache?: DiagnosticsDirCheck;
-  };
-};
+// `DiagnosticsReport` / `DiagnosticsDirCheck` / `DiagnosticsStatus`
+// shapes live in `./schemas.ts` (Q3.7.2) and are imported at the top
+// of this file alongside the other shape types.
 
 /**
  * Mask a tokenish value down to its last 4 characters. The doctor
@@ -2552,7 +2529,11 @@ function DiagnosticsPanel({
         setReport(null);
         return;
       }
-      const json = (await response.json()) as DiagnosticsReport;
+      const json = await parseJsonResponse(
+        DiagnosticsReportSchema,
+        response,
+        'GET /v1/doctor',
+      );
       setReport(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
