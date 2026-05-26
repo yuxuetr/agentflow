@@ -1,9 +1,14 @@
 //! gRPC transport adapter for distributed workers.
 //!
 //! The protobuf schema is checked in under
-//! `proto/agentflow/scheduler/v1/worker.proto`. This module keeps the generated
-//! surface small and hand-written so the scheduler crate does not need a build
-//! script in the first transport milestone.
+//! `proto/agentflow/scheduler/v1/worker.proto`. As of Q3.3.3 the
+//! prost message structs in `pb` are generated from that .proto by
+//! `build.rs` (`tonic-build`) so non-Rust language bindings stay
+//! byte-compatible with the Rust path. Only the message structs are
+//! generated — the tonic `Service` impl + the `WorkerControl` trait
+//! stay hand-written below because they wire in custom W3C
+//! traceparent scope handling + admission credential extraction
+//! that the generated stubs do not model.
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,124 +35,15 @@ use super::{
 type BoxedStatusResult<T> = std::result::Result<T, Box<Status>>;
 
 /// Protobuf wire messages for `agentflow.scheduler.v1`.
+///
+/// Q3.3.3: generated from `proto/agentflow/scheduler/v1/worker.proto`
+/// at build time via `tonic-build` in `build.rs`. The .proto file is
+/// the source of truth — to add or change a field, edit the .proto
+/// and rebuild. Non-Rust language bindings (Python `grpcio-tools`, Go
+/// `protoc-gen-go`, …) regenerate from the same file so the wire
+/// shape stays consistent across stacks.
 pub mod pb {
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct Empty {}
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct WorkerTask {
-    #[prost(string, tag = "1")]
-    pub task_id: String,
-    #[prost(string, tag = "2")]
-    pub run_id: String,
-    #[prost(string, tag = "3")]
-    pub node_id: String,
-    #[prost(uint32, tag = "4")]
-    pub attempt: u32,
-    #[prost(string, tag = "5")]
-    pub payload_json: String,
-    /// Capability label for worker-side filtering (P10.16.2-FU1).
-    /// Empty string = "untagged" (= `WorkerTask::node_type ==
-    /// None`). Capability-restricted workers still accept
-    /// untagged tasks per `WorkerCapabilities::accepts`, so this
-    /// field's absence is a no-op for pre-FU1 workers.
-    #[prost(string, tag = "6")]
-    pub node_type: String,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct WorkerTraceEvent {
-    #[prost(int64, tag = "1")]
-    pub seq: i64,
-    #[prost(string, tag = "2")]
-    pub kind: String,
-    #[prost(string, tag = "3")]
-    pub payload_json: String,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct WorkerTaskResult {
-    #[prost(enumeration = "worker_task_result::Status", tag = "1")]
-    pub status: i32,
-    #[prost(string, tag = "2")]
-    pub output_json: String,
-    #[prost(string, tag = "3")]
-    pub error: String,
-    #[prost(bool, tag = "4")]
-    pub retryable: bool,
-    #[prost(message, repeated, tag = "5")]
-    pub events: Vec<WorkerTraceEvent>,
-  }
-
-  pub mod worker_task_result {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Status {
-      Unspecified = 0,
-      Succeeded = 1,
-      Failed = 2,
-    }
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct SubmitTaskRequest {
-    #[prost(message, optional, tag = "1")]
-    pub task: Option<WorkerTask>,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct ClaimTaskRequest {
-    #[prost(string, tag = "1")]
-    pub worker_id: String,
-    /// Capability filter (P10.16.2-FU1). Empty list = "any task,"
-    /// matching the pre-FU1 wire (capabilities default to empty).
-    /// When non-empty, the server skips tasks whose `node_type`
-    /// isn't in this set. Untagged tasks (empty `node_type`)
-    /// always pass regardless of the filter.
-    #[prost(string, repeated, tag = "2")]
-    pub accepted_node_types: Vec<String>,
-    /// Locality preference (P10.16.2-FU1). When non-empty, the
-    /// server prefers tasks whose `run_id` matches this value,
-    /// falling back to FIFO when no match exists. Empty = "no
-    /// preference," matching the pre-FU1 behavior.
-    #[prost(string, tag = "3")]
-    pub locality_run_id: String,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct ClaimTaskResponse {
-    #[prost(message, optional, tag = "1")]
-    pub task: Option<WorkerTask>,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct ReportResultRequest {
-    #[prost(string, tag = "1")]
-    pub worker_id: String,
-    #[prost(string, tag = "2")]
-    pub task_id: String,
-    #[prost(message, optional, tag = "3")]
-    pub result: Option<WorkerTaskResult>,
-  }
-
-  #[derive(Clone, PartialEq, ::prost::Message)]
-  pub struct HeartbeatRequest {
-    #[prost(string, tag = "1")]
-    pub worker_id: String,
-    #[prost(string, tag = "2")]
-    pub active_task_id: String,
-    #[prost(uint32, tag = "3")]
-    pub free_slots: u32,
-    #[prost(string, tag = "4")]
-    pub timestamp_rfc3339: String,
-    /// Per-heartbeat capability advertisement (P10.16.2-FU1).
-    /// Same semantics as `ClaimTaskRequest::accepted_node_types`.
-    /// The server snapshots this so subsequent claims by the
-    /// same worker can use the most-recent capability set even
-    /// when the claim call doesn't supply hints inline.
-    #[prost(string, repeated, tag = "5")]
-    pub accepted_node_types: Vec<String>,
-  }
+  tonic::include_proto!("agentflow.scheduler.v1");
 }
 
 /// Server-side implementation of the worker gRPC service.
@@ -1297,6 +1193,157 @@ mod hint_proto_tests {
     let back = worker_heartbeat_from_proto(wire).expect("decode");
     assert!(back.capabilities.node_types.is_empty());
     assert!(back.capabilities.accepts(Some("any")));
+  }
+}
+
+#[cfg(test)]
+mod proto_schema_drift_tests {
+  //! Q3.3.3: pin `worker.proto` against the prost types so the
+  //! audit-found drift (proto missing `node_type` /
+  //! `accepted_node_types` / `locality_run_id`) cannot silently
+  //! re-occur. Two layers of protection:
+  //!
+  //! 1. Build-time: `build.rs` generates `pb::*` from the .proto via
+  //!    `tonic-build`. A field removed from the .proto fails to
+  //!    compile because the rest of `grpc.rs` references it.
+  //! 2. Test-time (this module): textually pin the .proto file to
+  //!    the expected field/tag triples. Catches the inverse drift —
+  //!    someone editing prost-side code by hand (after a future
+  //!    refactor away from include_proto!) and forgetting the .proto.
+  use super::*;
+  use prost::Message as _;
+
+  const WORKER_PROTO: &str = include_str!("../../proto/agentflow/scheduler/v1/worker.proto");
+
+  /// Each tuple is `(field_name, tag = "N")`. Order doesn't matter
+  /// but every entry must appear as a `... = N;` line in
+  /// `worker.proto` for the wire shape to match the prost structs
+  /// the rest of the file relies on.
+  fn assert_proto_has_field(field: &str, tag: u32) {
+    let needle = format!("{field} = {tag};");
+    assert!(
+      WORKER_PROTO.contains(&needle),
+      "worker.proto missing field declaration `{needle}` — \
+       drift between .proto and prost::pb detected (Q3.3.3)"
+    );
+  }
+
+  #[test]
+  fn worker_task_fields_pinned_to_proto_tags() {
+    // Pre-FU1 fields.
+    assert_proto_has_field("string task_id", 1);
+    assert_proto_has_field("string run_id", 2);
+    assert_proto_has_field("string node_id", 3);
+    assert_proto_has_field("uint32 attempt", 4);
+    assert_proto_has_field("string payload_json", 5);
+    // P10.16.2-FU1 — these are the three the audit found missing
+    // from the .proto before Q3.3.3.
+    assert_proto_has_field("string node_type", 6);
+  }
+
+  #[test]
+  fn claim_task_request_carries_capability_and_locality_fields() {
+    assert_proto_has_field("string worker_id", 1);
+    assert_proto_has_field("repeated string accepted_node_types", 2);
+    assert_proto_has_field("string locality_run_id", 3);
+  }
+
+  #[test]
+  fn heartbeat_request_carries_capability_advertisement() {
+    assert_proto_has_field("string worker_id", 1);
+    assert_proto_has_field("string active_task_id", 2);
+    assert_proto_has_field("uint32 free_slots", 3);
+    assert_proto_has_field("string timestamp_rfc3339", 4);
+    assert_proto_has_field("repeated string accepted_node_types", 5);
+  }
+
+  /// The .proto declares `repeated WorkerTraceEvent events = 5` on
+  /// `WorkerTaskResult`. The audit didn't flag this one but it's
+  /// load-bearing — `report_result` round-trips event lists across
+  /// the wire, so renumbering the field would silently drop events
+  /// in mixed-deployment scenarios.
+  #[test]
+  fn worker_task_result_pins_status_and_events_tags() {
+    assert_proto_has_field("Status status", 1);
+    assert_proto_has_field("string output_json", 2);
+    assert_proto_has_field("string error", 3);
+    assert_proto_has_field("bool retryable", 4);
+    assert_proto_has_field("repeated WorkerTraceEvent events", 5);
+  }
+
+  /// Proto3 + prost interop guarantee: encoding a message with the
+  /// new fields populated and decoding into the same struct
+  /// round-trips bit-for-bit. The build path uses
+  /// `tonic::include_proto!`, so a successful build already implies
+  /// the prost derive matches; we still re-prove the contract here
+  /// against a representative non-default payload so a future change
+  /// (e.g. swapping `string` ↔ `bytes`) would break a focused test
+  /// before it broke wire compatibility.
+  #[test]
+  fn claim_task_request_with_new_fields_round_trips() {
+    let original = pb::ClaimTaskRequest {
+      worker_id: "worker-q333".into(),
+      accepted_node_types: vec!["template".into(), "file".into()],
+      locality_run_id: "11111111-1111-1111-1111-111111111111".into(),
+    };
+    let bytes = original.encode_to_vec();
+    let decoded = pb::ClaimTaskRequest::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(decoded.worker_id, "worker-q333");
+    assert_eq!(decoded.accepted_node_types, vec!["template", "file"]);
+    assert_eq!(
+      decoded.locality_run_id,
+      "11111111-1111-1111-1111-111111111111"
+    );
+  }
+
+  #[test]
+  fn heartbeat_request_with_capabilities_round_trips() {
+    let original = pb::HeartbeatRequest {
+      worker_id: "worker-q333".into(),
+      active_task_id: String::new(),
+      free_slots: 4,
+      timestamp_rfc3339: "2025-01-01T00:00:00Z".into(),
+      accepted_node_types: vec!["llm".into()],
+    };
+    let bytes = original.encode_to_vec();
+    let decoded = pb::HeartbeatRequest::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(decoded.free_slots, 4);
+    assert_eq!(decoded.accepted_node_types, vec!["llm"]);
+  }
+
+  #[test]
+  fn worker_task_with_node_type_round_trips() {
+    let original = pb::WorkerTask {
+      task_id: "00000000-0000-0000-0000-000000000001".into(),
+      run_id: "00000000-0000-0000-0000-000000000002".into(),
+      node_id: "node-x".into(),
+      attempt: 2,
+      payload_json: "{\"k\":1}".into(),
+      node_type: "template".into(),
+    };
+    let bytes = original.encode_to_vec();
+    let decoded = pb::WorkerTask::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(decoded.node_type, "template");
+    assert_eq!(decoded.attempt, 2);
+  }
+
+  /// Pre-FU1 wire bytes (empty `node_type` / `accepted_node_types` /
+  /// `locality_run_id`) must decode to the same default values
+  /// `ClaimHints::none()` represents. Proto3 default semantics make
+  /// these the zero value, but pinning the assumption with a
+  /// regression test keeps a future codec swap honest.
+  #[test]
+  fn pre_fu1_empty_payload_decodes_to_defaults() {
+    let empty_claim: Vec<u8> = pb::ClaimTaskRequest {
+      worker_id: "legacy".into(),
+      accepted_node_types: Vec::new(),
+      locality_run_id: String::new(),
+    }
+    .encode_to_vec();
+    let decoded = pb::ClaimTaskRequest::decode(empty_claim.as_slice()).expect("decode");
+    assert_eq!(decoded.worker_id, "legacy");
+    assert!(decoded.accepted_node_types.is_empty());
+    assert!(decoded.locality_run_id.is_empty());
   }
 }
 

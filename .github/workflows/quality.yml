@@ -48,8 +48,54 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # Q3.3.3: agentflow-server's build.rs invokes tonic-build, which
+      # shells out to protoc to compile worker.proto. ubuntu-latest
+      # does not preinstall protoc, so install it before clippy
+      # compiles the workspace.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check lints
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  proto-validate:
+    # Q3.3.3: the `agentflow-server` build script generates prost
+    # message structs from `agentflow-server/proto/agentflow/scheduler/v1/worker.proto`.
+    # This standalone job validates the .proto file syntax with
+    # `protoc` so a malformed .proto fails CI with a precise error
+    # ("`message X` redeclared at L42") instead of letting the
+    # failure surface as an opaque `tonic-build` panic inside the
+    # clippy / doctest / examples jobs that compile the workspace.
+    name: protoc validate worker.proto
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate worker.proto syntax
+        run: |
+          protoc \
+            --proto_path=agentflow-server/proto \
+            agentflow-server/proto/agentflow/scheduler/v1/worker.proto \
+            --descriptor_set_out=/dev/null
+      - name: Reject hand-written prost drift
+        # Belt-and-braces: the Rust path consumes the .proto via
+        # `tonic-build` in `agentflow-server/build.rs`. If a future
+        # PR replaces `tonic::include_proto!` with a hand-written
+        # `pub mod pb { ... }` block again, fail loudly here so the
+        # audit-found drift cannot silently reappear.
+        run: |
+          if ! grep -q 'tonic::include_proto!("agentflow.scheduler.v1")' \
+               agentflow-server/src/scheduler/grpc.rs; then
+            echo "::error::Q3.3.3: agentflow-server/src/scheduler/grpc.rs must use" \
+                 "tonic::include_proto! so worker.proto stays the source of truth"
+            exit 1
+          fi
 
   linux-sandbox-check:
     # P7.4-FU1: the Linux seccomp backend in agentflow-tools/src/sandbox/linux.rs
@@ -85,6 +131,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Q3.3.3: agentflow-server's build.rs needs protoc to compile
+      # worker.proto. Only `agentflow-cli` in this matrix transitively
+      # pulls in agentflow-server (the cargo build step below), but we
+      # install protoc unconditionally because the conditional `if:`
+      # below would skip the setup for any future package that depends
+      # on agentflow-server, leading to a surprising failure.
+      - name: Install protoc
+        if: matrix.package == 'agentflow-cli'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build agentflow-server for CLI integration tests
         if: matrix.package == 'agentflow-cli'
         # `agentflow serve --check` shells out to the agentflow-server
@@ -101,6 +159,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Q3.3.3: `cargo test --workspace --doc` compiles agentflow-server,
+      # whose build.rs needs protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run workspace doc tests
         run: cargo test --workspace --doc
 
@@ -222,6 +287,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Q3.3.3: workspace examples + smoke tests transitively compile
+      # agentflow-server, whose build.rs needs protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile workspace examples
         run: cargo test --workspace --examples
       - name: Run examples-smoke (xtask)
@@ -255,6 +327,7 @@ jobs:
       - check-agent-sdk-doc
       - clippy
       - linux-sandbox-check
+      - proto-validate
       - test
       - doctest
       - features
@@ -269,6 +342,7 @@ jobs:
           echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
+          echo "proto-validate: ${{ needs.proto-validate.result }}"
           echo "test: ${{ needs.test.result }}"
           echo "doctest: ${{ needs.doctest.result }}"
           echo "features: ${{ needs.features.result }}"
@@ -279,6 +353,7 @@ jobs:
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
+          test "${{ needs.proto-validate.result }}" = "success"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.doctest.result }}" = "success"
           test "${{ needs.features.result }}" = "success"

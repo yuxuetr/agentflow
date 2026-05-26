@@ -1,5 +1,17 @@
 syntax = "proto3";
 
+// Schema for the AgentFlow scheduler ↔ worker gRPC control plane.
+//
+// This file is the canonical wire-shape definition: the Rust prost
+// structs in `agentflow-server/src/scheduler/grpc.rs::pb` are
+// generated from it via `build.rs` (`tonic-build`). Cross-language
+// bindings (Python, Go, …) should regenerate from this file directly
+// so the on-wire bytes stay byte-for-byte compatible with the Rust
+// path.
+//
+// Field numbers are stable for the lifetime of v1; new fields use new
+// numbers and the wire-shape stays backward compatible with pre-FU1
+// workers that never set the new fields.
 package agentflow.scheduler.v1;
 
 service WorkerControl {
@@ -17,6 +29,12 @@ message WorkerTask {
   string node_id = 3;
   uint32 attempt = 4;
   string payload_json = 5;
+  // P10.16.2-FU1: capability label for worker-side filtering. Empty
+  // string == "untagged"; capability-restricted workers still accept
+  // untagged tasks via `WorkerCapabilities::accepts`. Pre-FU1
+  // workers that never set this field round-trip cleanly as an
+  // untagged task.
+  string node_type = 6;
 }
 
 message WorkerTraceEvent {
@@ -45,6 +63,15 @@ message SubmitTaskRequest {
 
 message ClaimTaskRequest {
   string worker_id = 1;
+  // P10.16.2-FU1: capability filter. Empty list == "any task,"
+  // matching the pre-FU1 wire shape. When non-empty, the server
+  // skips tasks whose `WorkerTask.node_type` isn't in this set;
+  // untagged tasks (empty `node_type`) always pass.
+  repeated string accepted_node_types = 2;
+  // P10.16.2-FU1: locality preference. When non-empty, the server
+  // prefers tasks whose `run_id` matches this value, falling back
+  // to FIFO when no match exists. Empty == "no preference."
+  string locality_run_id = 3;
 }
 
 message ClaimTaskResponse {
@@ -62,4 +89,10 @@ message HeartbeatRequest {
   string active_task_id = 2;
   uint32 free_slots = 3;
   string timestamp_rfc3339 = 4;
+  // P10.16.2-FU1: per-heartbeat capability advertisement. Same
+  // semantics as `ClaimTaskRequest.accepted_node_types`. The server
+  // snapshots this so subsequent claims by the same worker can use
+  // the most-recent capability set even when the claim call
+  // doesn't supply hints inline.
+  repeated string accepted_node_types = 5;
 }
