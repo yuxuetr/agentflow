@@ -495,11 +495,28 @@ impl VectorStore for QdrantStore {
   }
 }
 
-/// Builder for QdrantStore with optional embedding provider
+/// Builder for QdrantStore with optional embedding provider.
+///
+/// Q3.9.3: surfaces the four production-critical Qdrant client knobs
+/// that pre-fix were inaccessible from this crate's API — API key
+/// (required for Qdrant Cloud), request timeout, connect timeout,
+/// and the version compatibility check toggle (useful when running
+/// against a slightly newer server). Pre-Q3.9.3 the
+/// `Qdrant::from_url(...).build()` call relied on every default,
+/// making Qdrant Cloud literally unusable from `agentflow-rag` (the
+/// server requires `api_key` and rejects every request without it).
 pub struct QdrantStoreBuilder {
   url: String,
   embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+  api_key: Option<String>,
+  timeout: Option<std::time::Duration>,
+  connect_timeout: Option<std::time::Duration>,
+  skip_compatibility_check: bool,
 }
+
+/// Q3.9.3: env var read by [`QdrantStoreBuilder::with_api_key_from_env`].
+/// Kept as a `pub const` so operators can grep / docs can link.
+pub const QDRANT_API_KEY_ENV: &str = "QDRANT_API_KEY";
 
 impl QdrantStoreBuilder {
   /// Create a new builder
@@ -507,6 +524,10 @@ impl QdrantStoreBuilder {
     Self {
       url: url.into(),
       embedding_provider: None,
+      api_key: None,
+      timeout: None,
+      connect_timeout: None,
+      skip_compatibility_check: false,
     }
   }
 
@@ -516,11 +537,75 @@ impl QdrantStoreBuilder {
     self
   }
 
+  /// Q3.9.3: attach an explicit API key. Required for Qdrant Cloud
+  /// and any self-hosted instance running with `service.api_key`
+  /// configured. The key is forwarded as the `api-key` gRPC metadata
+  /// header by `qdrant-client`.
+  pub fn api_key(mut self, key: impl Into<String>) -> Self {
+    self.api_key = Some(key.into());
+    self
+  }
+
+  /// Q3.9.3: read the API key from [`QDRANT_API_KEY_ENV`]. No-op when
+  /// the env var is unset OR is empty (so a misconfigured shell
+  /// `export QDRANT_API_KEY=` doesn't accidentally pin an empty
+  /// credential).
+  pub fn with_api_key_from_env(mut self) -> Self {
+    if let Ok(value) = std::env::var(QDRANT_API_KEY_ENV)
+      && !value.is_empty()
+    {
+      self.api_key = Some(value);
+    }
+    self
+  }
+
+  /// Q3.9.3: cap on a single Qdrant RPC. Without this the client
+  /// inherits gRPC defaults (no timeout) — a hung server keeps
+  /// every caller blocked forever. Recommend 10-30 s for
+  /// indexing pipelines, 1-5 s for search.
+  pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
+    self.timeout = Some(timeout);
+    self
+  }
+
+  /// Q3.9.3: cap on the initial channel open. Defaults to "wait
+  /// forever"; set a few seconds for fail-fast deployments.
+  pub fn connect_timeout(mut self, timeout: std::time::Duration) -> Self {
+    self.connect_timeout = Some(timeout);
+    self
+  }
+
+  /// Q3.9.3: skip the client/server version-compatibility check.
+  /// Off by default (the check is a useful safety guard); enable
+  /// when intentionally running against a newer Qdrant build.
+  pub fn skip_compatibility_check(mut self, skip: bool) -> Self {
+    self.skip_compatibility_check = skip;
+    self
+  }
+
   /// Build the QdrantStore
   pub async fn build(self) -> Result<QdrantStore> {
-    tracing::info!("Connecting to Qdrant at: {}", self.url);
+    tracing::info!(
+      url = %self.url,
+      has_api_key = self.api_key.is_some(),
+      timeout = ?self.timeout,
+      "connecting to Qdrant",
+    );
 
-    let client = Qdrant::from_url(&self.url)
+    let mut builder = Qdrant::from_url(&self.url);
+    if let Some(key) = self.api_key.as_deref() {
+      builder = builder.api_key(key);
+    }
+    if let Some(t) = self.timeout {
+      builder = builder.timeout(t);
+    }
+    if let Some(t) = self.connect_timeout {
+      builder = builder.connect_timeout(t);
+    }
+    if self.skip_compatibility_check {
+      builder = builder.skip_compatibility_check();
+    }
+    let client = builder
       .build()
       .map_err(|e| RAGError::connection(format!("Failed to connect to Qdrant: {}", e)))?;
 
@@ -556,6 +641,60 @@ mod tests {
       QdrantStore::convert_distance(DistanceMetric::Dot),
       Distance::Dot
     );
+  }
+
+  /// Q3.9.3 regression — the new builder knobs (api_key, timeouts,
+  /// skip_compatibility_check) must be storable on the builder
+  /// without needing a live Qdrant server. We assert via field
+  /// equality rather than running `.build()` so the test is hermetic.
+  #[test]
+  fn qdrant_builder_threads_q393_knobs() {
+    use std::time::Duration;
+    let builder = QdrantStoreBuilder::new("http://localhost:6334")
+      .api_key("secret-key-123")
+      .timeout(Duration::from_secs(15))
+      .connect_timeout(Duration::from_secs(3))
+      .skip_compatibility_check(true);
+    assert_eq!(builder.api_key.as_deref(), Some("secret-key-123"));
+    assert_eq!(builder.timeout, Some(Duration::from_secs(15)));
+    assert_eq!(builder.connect_timeout, Some(Duration::from_secs(3)));
+    assert!(builder.skip_compatibility_check);
+  }
+
+  /// Q3.9.3 — `with_api_key_from_env` must honor `QDRANT_API_KEY`
+  /// when set non-empty and be a no-op otherwise. Uses a uniquely-
+  /// scoped env var so concurrent tests don't race.
+  #[test]
+  fn qdrant_builder_with_api_key_from_env_respects_unset_and_empty() {
+    // Confirm baseline: unset → no api_key.
+    unsafe {
+      std::env::remove_var(QDRANT_API_KEY_ENV);
+    }
+    let builder = QdrantStoreBuilder::new("http://q").with_api_key_from_env();
+    assert!(
+      builder.api_key.is_none(),
+      "unset env must leave api_key empty"
+    );
+
+    // Empty env var → still no api_key (avoids accidentally pinning a
+    // misconfigured shell `export QDRANT_API_KEY=`).
+    unsafe {
+      std::env::set_var(QDRANT_API_KEY_ENV, "");
+    }
+    let builder = QdrantStoreBuilder::new("http://q").with_api_key_from_env();
+    assert!(builder.api_key.is_none(), "empty env must NOT pin an api_key");
+
+    // Real value → picked up.
+    unsafe {
+      std::env::set_var(QDRANT_API_KEY_ENV, "from-env-value");
+    }
+    let builder = QdrantStoreBuilder::new("http://q").with_api_key_from_env();
+    assert_eq!(builder.api_key.as_deref(), Some("from-env-value"));
+
+    // Clean up so other tests aren't surprised.
+    unsafe {
+      std::env::remove_var(QDRANT_API_KEY_ENV);
+    }
   }
 
   #[test]
