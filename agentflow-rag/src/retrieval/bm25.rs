@@ -6,6 +6,7 @@
 
 use crate::types::SearchResult;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// BM25 retriever for keyword-based search
 ///
@@ -40,20 +41,35 @@ pub struct BM25Retriever {
   /// Documents indexed by ID
   documents: HashMap<String, DocumentIndex>,
 
-  /// Inverse document frequency for each term
-  idf: HashMap<String, f32>,
-
   /// Total number of documents
   num_docs: usize,
 
-  /// Average document length
-  avg_doc_length: f32,
+  /// Q3.9.5: derived statistics (IDF table + avg_doc_length) stored
+  /// behind a Mutex with a `dirty` flag. `add_document` /
+  /// `remove_document` flip the flag in O(1) instead of running a
+  /// full O(N) recompute every call; `search` does a lazy recompute
+  /// on its first call after the last mutation. This collapses
+  /// batch indexing from O(N²) to O(N + N×T_search). Mutex is
+  /// chosen over `&mut self` so `search(&self)` stays compatible
+  /// with `HybridRetriever::search(&self)`.
+  derived: Mutex<DerivedStats>,
 
   /// Term frequency saturation parameter (typically 1.2-2.0)
   k1: f32,
 
   /// Length normalization parameter (typically 0.75)
   b: f32,
+}
+
+/// Q3.9.5: derived per-corpus statistics computed lazily from
+/// `BM25Retriever::documents`. Kept in one struct so the search
+/// path only has to grab one lock to read both IDF and the
+/// length normaliser.
+#[derive(Debug, Default)]
+struct DerivedStats {
+  idf: HashMap<String, f32>,
+  avg_doc_length: f32,
+  dirty: bool,
 }
 
 /// Document index containing term frequencies and metadata
@@ -80,9 +96,8 @@ impl BM25Retriever {
   pub fn new() -> Self {
     Self {
       documents: HashMap::new(),
-      idf: HashMap::new(),
       num_docs: 0,
-      avg_doc_length: 0.0,
+      derived: Mutex::new(DerivedStats::default()),
       k1: 1.2,
       b: 0.75,
     }
@@ -96,9 +111,8 @@ impl BM25Retriever {
   pub fn with_params(k1: f32, b: f32) -> Self {
     Self {
       documents: HashMap::new(),
-      idf: HashMap::new(),
       num_docs: 0,
-      avg_doc_length: 0.0,
+      derived: Mutex::new(DerivedStats::default()),
       k1,
       b: b.clamp(0.0, 1.0),
     }
@@ -133,7 +147,13 @@ impl BM25Retriever {
     self.add_document_with_metadata(id, content, HashMap::new());
   }
 
-  /// Add a document with metadata to the index
+  /// Add a document with metadata to the index.
+  ///
+  /// Q3.9.5: O(1) — only marks the derived stats dirty. The IDF
+  /// recompute happens lazily on the next `search()` call. To
+  /// pre-warm the index after a batch insert, call
+  /// [`Self::finalize`] explicitly (e.g. before serving live
+  /// traffic so the first user-visible search isn't slow).
   pub fn add_document_with_metadata(
     &mut self,
     id: impl Into<String>,
@@ -156,34 +176,84 @@ impl BM25Retriever {
 
     self.documents.insert(id, doc_index);
     self.num_docs = self.documents.len();
-
-    // Recompute IDF and average document length
-    self.recompute_statistics();
+    self.mark_dirty();
   }
 
-  /// Remove a document from the index
+  /// Q3.9.5: convenience batch-insert. Marks the index dirty exactly
+  /// once at the end so a 10k-document load is O(N) for ingestion
+  /// instead of O(N²). The first `search` after the batch pays for
+  /// the recompute; subsequent searches read the cached IDF for
+  /// free.
+  pub fn add_documents<I, S1, S2>(&mut self, docs: I)
+  where
+    I: IntoIterator<Item = (S1, S2)>,
+    S1: Into<String>,
+    S2: Into<String>,
+  {
+    for (id, content) in docs {
+      let id = id.into();
+      let content = content.into();
+      let tokens = Self::tokenize(&content);
+      let term_freq = Self::compute_term_freq(&tokens);
+      let doc_length = tokens.len();
+      self.documents.insert(
+        id.clone(),
+        DocumentIndex {
+          id,
+          content,
+          term_freq,
+          doc_length,
+          metadata: HashMap::new(),
+        },
+      );
+    }
+    self.num_docs = self.documents.len();
+    self.mark_dirty();
+  }
+
+  /// Remove a document from the index. Q3.9.5: O(1) — defers
+  /// recompute to next search.
   pub fn remove_document(&mut self, id: &str) -> bool {
     let removed = self.documents.remove(id).is_some();
     if removed {
       self.num_docs = self.documents.len();
-      self.recompute_statistics();
+      self.mark_dirty();
     }
     removed
   }
 
-  /// Recompute IDF values and average document length
-  fn recompute_statistics(&mut self) {
+  /// Q3.9.5: pre-warm the IDF cache so the first search after a
+  /// batch insert doesn't pay the recompute cost on a hot path.
+  /// Equivalent to `let _ = self.search("", 0);` but doesn't
+  /// allocate a result vector or run the search loop.
+  pub fn finalize(&self) {
+    let mut derived = self.derived.lock().expect("derived stats lock poisoned");
+    self.refresh_derived_if_dirty(&mut derived);
+  }
+
+  fn mark_dirty(&self) {
+    if let Ok(mut derived) = self.derived.lock() {
+      derived.dirty = true;
+    }
+  }
+
+  /// Q3.9.5: shared recompute path used by `finalize` and by every
+  /// `search` on the first call after a mutation. Caller holds the
+  /// mutex; we just refresh the contents in place.
+  fn refresh_derived_if_dirty(&self, derived: &mut DerivedStats) {
+    if !derived.dirty {
+      return;
+    }
     if self.documents.is_empty() {
-      self.idf.clear();
-      self.avg_doc_length = 0.0;
+      derived.idf.clear();
+      derived.avg_doc_length = 0.0;
+      derived.dirty = false;
       return;
     }
 
-    // Compute average document length
     let total_length: usize = self.documents.values().map(|doc| doc.doc_length).sum();
-    self.avg_doc_length = total_length as f32 / self.num_docs as f32;
+    derived.avg_doc_length = total_length as f32 / self.num_docs as f32;
 
-    // Compute document frequency for each term
     let mut doc_freq: HashMap<String, usize> = HashMap::new();
     for doc in self.documents.values() {
       for term in doc.term_freq.keys() {
@@ -191,21 +261,29 @@ impl BM25Retriever {
       }
     }
 
-    // Compute IDF for each term
-    self.idf.clear();
+    derived.idf.clear();
     for (term, df) in doc_freq {
       let idf = ((self.num_docs as f32 - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
-      self.idf.insert(term, idf);
+      derived.idf.insert(term, idf);
     }
+    derived.dirty = false;
   }
 
-  /// Calculate BM25 score for a document given query terms
-  fn calculate_score(&self, doc: &DocumentIndex, query_terms: &[String]) -> f32 {
+  /// Calculate BM25 score for a document given query terms.
+  /// Q3.9.5: takes derived stats by reference so the caller can
+  /// hold the mutex once across a batch of `calculate_score` calls
+  /// instead of locking per-document.
+  fn calculate_score(
+    &self,
+    doc: &DocumentIndex,
+    query_terms: &[String],
+    derived: &DerivedStats,
+  ) -> f32 {
     let mut score = 0.0;
 
     for term in query_terms {
       // Get IDF for term (0.0 if term not in corpus)
-      let idf = self.idf.get(term).copied().unwrap_or(0.0);
+      let idf = derived.idf.get(term).copied().unwrap_or(0.0);
 
       // Get term frequency in document
       let tf = doc.term_freq.get(term).copied().unwrap_or(0) as f32;
@@ -213,8 +291,8 @@ impl BM25Retriever {
       if tf > 0.0 {
         // Calculate BM25 component for this term
         let numerator = tf * (self.k1 + 1.0);
-        let denominator =
-          tf + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / self.avg_doc_length);
+        let denominator = tf
+          + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / derived.avg_doc_length);
 
         score += idf * (numerator / denominator);
       }
@@ -241,12 +319,20 @@ impl BM25Retriever {
       return Vec::new();
     }
 
+    // Q3.9.5: lazy IDF recompute on first search after a mutation.
+    // Holding the mutex across the score loop is fine — this method
+    // takes `&self` so concurrent searches serialize at the mutex,
+    // not at the recompute (which is a one-time cost).
+    let derived = self.derived.lock().expect("derived stats lock poisoned");
+    let mut derived = derived;
+    self.refresh_derived_if_dirty(&mut derived);
+
     // Calculate scores for all documents
     let mut scores: Vec<(String, f32)> = self
       .documents
       .values()
       .map(|doc| {
-        let score = self.calculate_score(doc, &query_terms);
+        let score = self.calculate_score(doc, &query_terms, &derived);
         (doc.id.clone(), score)
       })
       .filter(|(_, score)| *score > 0.0) // Only return documents with non-zero score
@@ -278,9 +364,12 @@ impl BM25Retriever {
   /// Clear all documents from the index
   pub fn clear(&mut self) {
     self.documents.clear();
-    self.idf.clear();
     self.num_docs = 0;
-    self.avg_doc_length = 0.0;
+    if let Ok(mut derived) = self.derived.lock() {
+      derived.idf.clear();
+      derived.avg_doc_length = 0.0;
+      derived.dirty = false;
+    }
   }
 }
 
@@ -424,16 +513,20 @@ mod tests {
     retriever.add_document("doc2", "the lazy dog");
     retriever.add_document("doc3", "quick brown fox");
 
+    // Q3.9.5: IDF is now lazily computed; pre-warm via finalize().
+    retriever.finalize();
+    let derived = retriever.derived.lock().unwrap();
+
     // "the" appears in 2 out of 3 documents
-    let idf_the = retriever.idf.get("the").copied().unwrap();
+    let idf_the = derived.idf.get("the").copied().unwrap();
     assert!(idf_the > 0.0);
 
     // "fox" appears in 2 out of 3 documents
-    let idf_fox = retriever.idf.get("fox").copied().unwrap();
+    let idf_fox = derived.idf.get("fox").copied().unwrap();
     assert!(idf_fox > 0.0);
 
     // "lazy" appears in 1 out of 3 documents (more rare, higher IDF)
-    let idf_lazy = retriever.idf.get("lazy").copied().unwrap();
+    let idf_lazy = derived.idf.get("lazy").copied().unwrap();
     assert!(idf_lazy > idf_the);
   }
 
@@ -455,5 +548,101 @@ mod tests {
     // Short document should score higher due to length normalization
     assert_eq!(results[0].id, "short");
     assert!(results[0].score > results[1].score);
+  }
+
+  /// Q3.9.5 — `add_document` must NOT recompute IDF eagerly. The
+  /// derived stats stay `dirty = true` until the next `search`
+  /// (or explicit `finalize`) triggers a one-shot recompute.
+  #[test]
+  fn add_document_defers_idf_recompute() {
+    let mut retriever = BM25Retriever::new();
+    retriever.add_document("doc1", "alpha beta gamma");
+    retriever.add_document("doc2", "alpha delta");
+    retriever.add_document("doc3", "beta gamma");
+    // Right after add_document the derived stats must be empty + dirty.
+    {
+      let derived = retriever.derived.lock().unwrap();
+      assert!(
+        derived.dirty,
+        "derived stats must be marked dirty after add_document"
+      );
+      assert!(
+        derived.idf.is_empty(),
+        "IDF must NOT be recomputed eagerly; got {:?}",
+        derived.idf
+      );
+      assert_eq!(derived.avg_doc_length, 0.0);
+    }
+    // First search triggers the lazy recompute.
+    let _ = retriever.search("alpha", 10);
+    {
+      let derived = retriever.derived.lock().unwrap();
+      assert!(
+        !derived.dirty,
+        "first search must clear the dirty flag"
+      );
+      assert!(
+        !derived.idf.is_empty(),
+        "IDF must be populated after first search"
+      );
+      assert!(derived.avg_doc_length > 0.0);
+    }
+  }
+
+  /// Q3.9.5 — `add_documents` batch convenience must mark dirty
+  /// exactly once at the end (vs. N times for N individual adds),
+  /// so batch ingestion is O(N) instead of O(N²).
+  #[test]
+  fn add_documents_batch_marks_dirty_once() {
+    let mut retriever = BM25Retriever::new();
+    retriever.add_documents([
+      ("doc1", "the quick brown fox"),
+      ("doc2", "the lazy dog"),
+      ("doc3", "quick brown fox"),
+    ]);
+    {
+      let derived = retriever.derived.lock().unwrap();
+      assert!(derived.dirty);
+      assert!(derived.idf.is_empty());
+    }
+    assert_eq!(retriever.num_documents(), 3);
+    // After search, IDF for "the" is populated.
+    let results = retriever.search("the", 10);
+    assert_eq!(results.len(), 2);
+  }
+
+  /// Q3.9.5 — `finalize()` pre-warms the IDF without running a
+  /// search. Useful for hot-path serving where the first user
+  /// request shouldn't pay the recompute cost.
+  #[test]
+  fn finalize_prewarms_idf() {
+    let mut retriever = BM25Retriever::new();
+    retriever.add_document("doc1", "alpha beta");
+    retriever.add_document("doc2", "alpha gamma");
+    retriever.finalize();
+    let derived = retriever.derived.lock().unwrap();
+    assert!(!derived.dirty);
+    assert!(derived.idf.contains_key("alpha"));
+    assert!(derived.idf.contains_key("beta"));
+    assert!(derived.idf.contains_key("gamma"));
+    assert!(derived.avg_doc_length > 0.0);
+  }
+
+  /// Q3.9.5 — `remove_document` marks dirty without recomputing.
+  #[test]
+  fn remove_document_defers_recompute() {
+    let mut retriever = BM25Retriever::new();
+    retriever.add_document("doc1", "alpha");
+    retriever.add_document("doc2", "beta");
+    retriever.finalize();
+    // Confirm not dirty after finalize.
+    assert!(!retriever.derived.lock().unwrap().dirty);
+    retriever.remove_document("doc1");
+    assert!(
+      retriever.derived.lock().unwrap().dirty,
+      "remove_document must mark dirty"
+    );
+    let _ = retriever.search("beta", 10);
+    assert!(!retriever.derived.lock().unwrap().dirty);
   }
 }
