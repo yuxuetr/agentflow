@@ -16,7 +16,16 @@ path = "src/main.rs"
 
 
 [features]
-default = []
+# Q3.5.2: `plugin` and `rag` are documented in CLAUDE.md / RoadMap.md
+# N10 as production-ready / closed and `agentflow plugin` / `agentflow
+# rag *` are surfaced in the help text. Shipping them off-by-default
+# meant a fresh `cargo install agentflow-cli` produced a stub
+# `FeatureUnavailableArgs` message instead of the actual command —
+# pure doc-vs-build drift. Keep `mcp` opt-in because `agentflow mcp
+# *` itself does not need the `agentflow-nodes/mcp` feature (the CLI
+# already depends on `agentflow-mcp` directly); the gate only
+# matters when a workflow uses `type: mcp`.
+default = ["plugin", "rag"]
 mcp = ["agentflow-nodes/mcp"]
 rag = ["agentflow-nodes/rag", "agentflow-rag"]
 # Enables the subprocess plugin runtime for `type: plugin` workflow nodes.
