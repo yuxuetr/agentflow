@@ -4,6 +4,40 @@ use tracing::info;
 
 use crate::error::DbError;
 
+/// Q3.11.2: defaults applied to every PgPool the gateway constructs.
+///
+/// **Why these knobs:**
+/// * `test_before_acquire = true` — cloud Postgres load balancers
+///   (RDS, GCP Cloud SQL, Aiven, Neon, etc.) silently reap idle TCP
+///   connections after a per-vendor timeout (RDS/Aurora: 60s by
+///   default with the proxy, otherwise unbounded; GCP CSP: 10m;
+///   Neon: 5min). Without this flag the pool hands out a dead
+///   connection on the next `acquire`, the caller gets a confusing
+///   `connection closed` error far from the root cause, and the
+///   request fails — but the pool keeps the dead handle. Enabling
+///   `test_before_acquire` (one cheap `SELECT 1`) catches the dead
+///   handle pre-handoff and triggers a transparent reconnect.
+/// * `max_lifetime = 30 min` — even outside an idle reap, persistent
+///   connections accumulate per-backend memory in Postgres and don't
+///   pick up server-side config changes (e.g. role re-grants). A
+///   bounded lifetime forces a recycle so the pool returns to a
+///   fresh state periodically. 30 min sits well under typical LB
+///   idle reaps and well above the per-request scale.
+/// * `idle_timeout = 10 min` — explicit cap on how long an unused
+///   handle hangs around before the pool drops it. Without it a
+///   burst-then-quiet workload holds the full `max_connections`
+///   fanout indefinitely.
+///
+/// These defaults apply to BOTH the primary pool and any replica
+/// pool — read replicas suffer the same LB reaping problem.
+fn apply_pool_defaults(opts: PgPoolOptions) -> PgPoolOptions {
+  opts
+    .acquire_timeout(Duration::from_secs(3))
+    .test_before_acquire(true)
+    .max_lifetime(Some(Duration::from_secs(30 * 60)))
+    .idle_timeout(Some(Duration::from_secs(10 * 60)))
+}
+
 /// Database connection manager.
 ///
 /// The `pool` field is the **primary** (write-capable) pool. The
@@ -35,9 +69,10 @@ impl Database {
   pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self, DbError> {
     info!("Connecting to database...");
 
-    let pool = PgPoolOptions::new()
-      .max_connections(max_connections)
-      .acquire_timeout(Duration::from_secs(3))
+    // Q3.11.2: route through `apply_pool_defaults` so cloud LB idle
+    // reaping doesn't manifest as opaque `connection closed` errors
+    // at the next acquire.
+    let pool = apply_pool_defaults(PgPoolOptions::new().max_connections(max_connections))
       .connect(database_url)
       .await?;
 
@@ -64,11 +99,12 @@ impl Database {
   ) -> Result<Self, DbError> {
     let primary = Self::connect(database_url, max_connections).await?;
     info!("Connecting to read replica...");
-    let read_pool = PgPoolOptions::new()
-      .max_connections(replica_max_connections)
-      .acquire_timeout(Duration::from_secs(3))
-      .connect(read_database_url)
-      .await?;
+    // Q3.11.2: replicas suffer the same LB-reap problem as the
+    // primary, especially in Aurora reader endpoints. Same defaults.
+    let read_pool =
+      apply_pool_defaults(PgPoolOptions::new().max_connections(replica_max_connections))
+        .connect(read_database_url)
+        .await?;
     info!("Successfully connected to read replica.");
     Ok(Self {
       pool: primary.pool,
@@ -158,6 +194,32 @@ mod tests {
     // hand back the *same* pool when no replica is set, not a
     // clone, so connection accounting stays per-pool.
     assert!(std::ptr::eq(db.read_pool(), &db.pool));
+  }
+
+  /// Q3.11.2: pin the defaults `apply_pool_defaults` applies so a
+  /// future refactor doesn't accidentally drop `test_before_acquire`
+  /// (the keystone protection against cloud LB silent reaps).
+  #[test]
+  fn pool_defaults_enable_test_before_acquire_and_max_lifetime() {
+    // PgPoolOptions getters exist for every knob we set, so we can
+    // build an options struct, apply our helper, and assert the
+    // results without touching a live database.
+    let opts = apply_pool_defaults(PgPoolOptions::new());
+    assert!(
+      opts.get_test_before_acquire(),
+      "Q3.11.2: test_before_acquire must be on so the pool catches dead handles before handing them out"
+    );
+    assert_eq!(
+      opts.get_max_lifetime(),
+      Some(Duration::from_secs(30 * 60)),
+      "Q3.11.2: max_lifetime must be capped so connections recycle"
+    );
+    assert_eq!(
+      opts.get_idle_timeout(),
+      Some(Duration::from_secs(10 * 60)),
+      "Q3.11.2: idle_timeout must release unused connections so a quiet pool doesn't hold the full fanout"
+    );
+    assert_eq!(opts.get_acquire_timeout(), Duration::from_secs(3));
   }
 
   #[tokio::test]
