@@ -1,12 +1,13 @@
-//! Repository abstractions over the gateway's six tables.
+//! Repository abstractions over the gateway's nine tables.
 //!
 //! Server handlers depend on these traits, not on `sqlx` directly, so we can
 //! later swap in a different storage backend (or in-memory test fakes) without
 //! changing the route layer. The current production implementation is
 //! Postgres-only — see [`PgRunRepo`], [`PgStepRepo`], [`PgEventRepo`],
-//! [`PgArtifactRepo`], [`PgSkillInstallRepo`], [`PgMcpSessionRepo`].
+//! [`PgArtifactRepo`], [`PgSkillInstallRepo`], [`PgMcpSessionRepo`],
+//! [`PgHarnessSessionRepo`], [`PgHarnessEventRepo`], [`PgUserPreferenceRepo`].
 //!
-//! `Repositories` bundles all six together for convenient injection into
+//! `Repositories` bundles all nine together for convenient injection into
 //! `agentflow-server::AppState`.
 
 use async_trait::async_trait;

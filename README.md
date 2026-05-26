@@ -150,7 +150,7 @@ agentflow workflow run workflow_v2.yml
 
 ## ✨ New in v0.2.0: Production-Ready Stability
 
-AgentFlow v0.2.0 introduces comprehensive stability and observability improvements for production workflows:
+AgentFlow v0.2.0 introduces comprehensive stability and observability improvements for production workflows. The 2026-05-24 deep audit (`docs/audit/`) flagged several gaps in the retry / timeout / checkpoint paths; those are tracked in `TODOs.md` under the Q2 wave and progressively hardened — most recently `ExponentialBackoff` jitter (Q2.4.2), retry error-cause preservation (Q2.4.3), and graceful Ctrl-C / SIGTERM handling for CLI + worker + server (Q3.1.1 / Q3.1.2 / Q3.1.3). The examples below reflect the post-audit shape; see `TODOs.md` "Quality Gates" for any open items.
 
 ### 🔄 Retry Mechanism
 Automatic retry with configurable strategies for handling transient failures.

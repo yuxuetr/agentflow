@@ -36,7 +36,7 @@ DAG execution engine and core abstractions:
 - Production primitives: retry/retry_executor, timeout, checkpoint, resource_manager, resource_limits, health, state_monitor, events
 
 #### L2 — agentflow-nodes
-Built-in `AsyncNode` library: 16+ node types (`llm`, `template`, `http`, `file`, `arxiv`, `markmap`, `batch`, `conditional`, `while`, `mcp`, `rag`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_edit`, `image_understand`). Feature-gated; factory pattern in `factory_traits.rs`.
+Built-in `AsyncNode` library: 16+ node types (`llm`, `template`, `http`, `file`, `arxiv`, `markmap`, `batch`, `conditional`, `while`, `mcp`, `rag`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_edit`, `image_understand`). Crate feature flags: defaults are `["llm", "http", "file", "template"]`; `mcp`, `rag`, `batch`, `conditional` are opt-in via Cargo features. Per-modality flags for `asr` / `tts` / `text_to_image` / `image_*` are NOT individually gated today — those nodes ship in the base crate regardless of features. Factory pattern in `factory_traits.rs`.
 
 #### L2 — agentflow-llm
 LLM provider abstraction:
@@ -55,10 +55,10 @@ Unified tool abstraction:
 - OS-level sandbox backends (macOS sandbox-exec / Linux seccomp) for `ShellTool` / `ScriptTool`
 
 #### L2 — agentflow-mcp
-Model Context Protocol integration: client + server + transport (stdio first), JSON-RPC 2.0, retry/timeout/reconnect, latency benchmarks. Adapter into `agentflow-tools::ToolRegistry`.
+Model Context Protocol integration: client + server + transport (stdio first), JSON-RPC 2.0, retry/timeout/reconnect, latency benchmarks. The MCP→`agentflow-tools::Tool` adapter (`McpToolAdapter` + `McpClientPool`) lives in `agentflow-skills/src/mcp_tools.rs`, not in this crate — `agentflow-skills` owns the conversion because the skill builder is the entry point that knows which MCP servers a skill manifest declares.
 
 #### L2 — agentflow-rag
-Retrieval-Augmented Generation: document chunking, embeddings (OpenAI/StepFun API or local ONNX), Qdrant vectorstore, retrieval, reranking. Sources: PDF, HTML, CSV, text. Eval harness (`eval` module): JSONL dataset format (`corpus`/`queries`/`qrels`), Recall@K / MRR / nDCG@K metrics, baseline comparison with paired sign test, CLI `agentflow rag eval`.
+Retrieval-Augmented Generation: document chunking, embeddings (OpenAI API or local ONNX), Qdrant vectorstore, retrieval, reranking. Sources: PDF, HTML, CSV, text (PDF/HTML loaders carry a default 50 MiB / 10 MiB size cap, override via `with_max_bytes`). Eval harness (`eval` module): JSONL dataset format (`corpus`/`queries`/`qrels`), Recall@K / MRR / nDCG@K metrics, baseline comparison with paired sign test, CLI `agentflow rag eval`. (StepFun embedding provider mentioned in earlier drafts is not implemented; only OpenAI + local ONNX exist today.)
 
 #### L2 — agentflow-memory
 Agent conversation memory: `MemoryStore` trait with `SessionMemory` (token-windowed in-memory) and `SqliteMemory` (persistent). `SemanticMemory` for similarity search (interlocks with `agentflow-rag`).
@@ -88,7 +88,7 @@ Harness Agent Mode crate (Phase H0 contract freeze + H1 runtime MVP + H2 hooks/a
 - **Parallel tool calls (H3):** `ReActAgent::run_with_context` adds a batch dispatcher (in `agentflow-agents/src/react/agent.rs`) that activates when the LLM returns `>= 2` native tool calls in one turn. Idempotent calls run concurrently via `futures::future::join_all`; `NonIdempotent` / `Unknown` calls run serially in LLM-returned order. `ToolPolicyDecision` / `ToolCapabilityDecision` / `ToolCallStarted` / `ToolCall` step rows all fire in LLM-returned order before any execution begins, so trace replay stays deterministic. Partial failures keep the batch moving; pre-cancel and `max_tool_calls` checks are atomic.
 - **Background tasks (H4):** `agentflow-harness::tasks` provides `TaskRuntime` + `TaskHandle` + `TaskAgentFactory` plus 5 built-in tools (`task_create`, `task_get`, `task_list`, `task_stop`, `task_output`). Each task spawns a `tokio::task` running an inner agent; lifecycle transitions (`Pending → Running → Completed | Failed | Cancelled`) emit `BackgroundTaskUpdated` through the parent `SinkChain`. Nested task spawning is rejected via a `tokio::task_local!` flag. Output capture is bounded by `max_output_bytes` (default 64 KiB).
 - **CLI surface:** `agentflow harness run|resume|list|inspect` with `--output text|json|stream-json` and the full flag set documented in `docs/HARNESS_MODE.md`.
-- Stability tier **beta** as of P-H.5 closure: `HarnessEvent` envelope, `ApprovalRequest`, and `ApprovalDecision` are plumbed through both the in-process hook runtime and the HTTP surface (`/v1/harness/sessions/{id}/events`, `/approvals`). See `docs/HARNESS_MODE.md` for the implementation spec and `docs/STABILITY.md` for the wire-shape promise.
+- Stability tier **beta** as of P-H.5 closure (with caveats): `HarnessEvent` envelope, `ApprovalRequest`, and `ApprovalDecision` are plumbed through both the in-process hook runtime and the HTTP surface (`/v1/harness/sessions/{id}/events`, `/approvals`). See `docs/HARNESS_MODE.md` for the implementation spec and `docs/STABILITY.md` for the wire-shape promise. Two related items are still **open** and tracked in `TODOs.md`: (a) `tracing_bridge` currently returns only `JsonlEventSink` rather than wiring the full `HarnessEvent → ExecutionTrace` adapter (Q3.10.4); (b) first-party OTLP exporter transport (HTTP/gRPC + TLS + auth) is deferred (Q2.3.3) — operators bring their own `OtelSpanSink` impl. Both surfaces are stable; the implementations behind them are not yet feature-complete.
 
 #### L3 — agentflow-cli
 Unified user interface:
@@ -108,10 +108,10 @@ Observability:
 - `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` for explicit storage roots
 
 #### L4 — agentflow-server
-Axum gateway for platform mode. Workflow surface: `/v1/runs` (POST/GET), `/v1/runs/{id}/events` (SSE with backfill), `/v1/skills`, `/v1/skills/{name}:run`. Harness Mode surface (P-H.5, closed): `/v1/harness/sessions` (POST/GET), `/v1/harness/sessions/{id}` (GET + `:cancel` POST + `:resume` POST), `/v1/harness/sessions/{id}/events` (SSE with backfill), `/v1/harness/sessions/{id}/events/history` (JSON), `/v1/harness/sessions/{id}/approvals` (GET pending) + `POST .../{request_id}` (decide), backed by `LiveHarnessExecutor` in production (wires `HarnessRuntime` + `ReActAgent` + hook-wrapped tool registry + `ServerApprovalProvider`) and `StubHarnessExecutor` in tests. `:resume` accepts `mode: "rerun" | "append"` (default `rerun` for backwards compat); rerun clears prior events and restarts the seq series at 0, append preserves the prior log and continues at `MAX(seq) + 1` via the upstream `HarnessRuntime::with_initial_seq` knob. Bearer-token auth, unified error envelope, `WorkflowEventListener` bridge to DB. Real Flow runner replacing `StubExecutor` lands in v0.4.0.
+Axum gateway for platform mode. Workflow surface: `/v1/runs` (POST/GET), `/v1/runs/{id}/events` (SSE with backfill), `/v1/skills`, `/v1/skills/{name}:run`. Harness Mode surface (P-H.5, closed): `/v1/harness/sessions` (POST/GET), `/v1/harness/sessions/{id}` (GET + `:cancel` POST + `:resume` POST), `/v1/harness/sessions/{id}/events` (SSE with backfill), `/v1/harness/sessions/{id}/events/history` (JSON), `/v1/harness/sessions/{id}/approvals` (GET pending) + `POST .../{request_id}` (decide), backed by `LiveHarnessExecutor` in production (wires `HarnessRuntime` + `ReActAgent` + hook-wrapped tool registry + `ServerApprovalProvider`) and `StubHarnessExecutor` in tests. `:resume` accepts `mode: "rerun" | "append"` (default `rerun` for backwards compat); rerun clears prior events and restarts the seq series at 0, append preserves the prior log and continues at `MAX(seq) + 1` via the upstream `HarnessRuntime::with_initial_seq` knob. Bearer-token auth, unified error envelope, `WorkflowEventListener` bridge to DB. `FlowRunExecutor` is the production default and runs config-first workflows in-process; `StubExecutor` remains as the test-only stand-in for route-plumbing tests that don't need real execution.
 
 #### L4 — agentflow-db
-PostgreSQL persistence for the gateway. Eight-table schema (runs / steps / events / artifacts / skill_installs / mcp_sessions + harness_sessions / harness_session_events) via `sqlx::migrate!()`. Repository layer: `RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` / `HarnessSessionRepo` / `HarnessEventRepo`.
+PostgreSQL persistence for the gateway. Nine-table schema (runs / steps / events / artifacts / skill_installs / mcp_sessions + harness_sessions / harness_session_events + user_preferences) via `sqlx::migrate!()`. Repository layer: `RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo` / `HarnessSessionRepo` / `HarnessEventRepo` / `UserPreferenceRepo`.
 
 #### L4 — agentflow-worker
 Standalone worker process for distributed DAG execution. Speaks `WorkerProtocol` over gRPC to the server control plane, pulls assigned tasks, executes the node payload locally, and streams events back with W3C `traceparent` continuity so worker spans stitch into the parent OTel trace. Today the supported node payloads are limited (template/file); extending to LLM / HTTP / MCP / agent payloads is tracked as P2.8.
@@ -264,7 +264,7 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 
 ---
 
-**Last Updated**: 2026-05-14
+**Last Updated**: 2026-05-26 (Q4 doc-drift sweep)
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
 **Composite Maturity Rating**: A (per `docs/archive/PROJECT_EVALUATION_2026-05-19.md`)

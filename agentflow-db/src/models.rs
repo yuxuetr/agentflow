@@ -1,4 +1,7 @@
-//! Strongly-typed row models for the gateway's six-table schema.
+//! Strongly-typed row models for the gateway's nine-table schema
+//! (`runs`, `steps`, `events`, `artifacts`, `skill_installs`,
+//! `mcp_sessions`, `harness_sessions`, `harness_session_events`,
+//! `user_preferences`).
 //!
 //! These structs round-trip through `sqlx::FromRow` for queries and `Serialize`
 //! for HTTP responses, so they double as the wire format for `agentflow-server`
