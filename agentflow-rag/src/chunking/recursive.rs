@@ -175,10 +175,18 @@ impl RecursiveChunker {
         // Add current chunk to result
         result.push(current.clone());
 
-        // Add overlap from end of current chunk
+        // Add overlap from end of current chunk.
+        // Q3.9.2: `current.len() - self.overlap` is a byte offset.
+        // If that byte falls inside a multi-byte UTF-8 codepoint
+        // (every CJK char is 3 bytes, every emoji is 4 bytes), the
+        // `&current[overlap_start..]` slice panics with "byte
+        // index N is not a char boundary". Use `floor_char_boundary`
+        // semantics (via `char_indices().rev()`) to snap to the
+        // nearest valid boundary at or below the target offset.
         if self.overlap > 0 && current.len() > self.overlap {
-          let overlap_start = current.len() - self.overlap;
-          current = format!("{}{}", &current[overlap_start..], chunk);
+          let target = current.len() - self.overlap;
+          let safe_start = floor_char_boundary(&current, target);
+          current = format!("{}{}", &current[safe_start..], chunk);
         } else {
           current = chunk;
         }
@@ -252,6 +260,22 @@ impl ChunkingStrategy for RecursiveChunker {
   fn strategy_name(&self) -> &str {
     "recursive"
   }
+}
+
+/// Q3.9.2: stable-Rust replacement for the unstable
+/// `str::floor_char_boundary`. Returns the largest byte index at or
+/// below `target` that lies on a UTF-8 codepoint boundary in `text`.
+/// Always within `0..=text.len()`.
+fn floor_char_boundary(text: &str, target: usize) -> usize {
+  let target = target.min(text.len());
+  // `is_char_boundary` is O(1) — it just looks at one byte's top
+  // bits. Walking down from `target` is bounded by the longest
+  // possible codepoint (4 bytes) so the loop runs at most 4 times.
+  let mut idx = target;
+  while idx > 0 && !text.is_char_boundary(idx) {
+    idx -= 1;
+  }
+  idx
 }
 
 #[cfg(test)]
@@ -364,5 +388,71 @@ mod tests {
     assert_eq!(separators[3], ", "); // Clauses
     assert_eq!(separators[4], " "); // Words
     assert_eq!(separators[5], ""); // Characters
+  }
+
+  /// Q3.9.2 regression — pre-fix `merge_and_overlap` sliced via
+  /// `&current[current.len() - self.overlap..]`. With CJK content
+  /// every char is 3 UTF-8 bytes, so the `overlap_start` byte often
+  /// fell mid-codepoint and panicked with "byte index N is not a
+  /// char boundary". This test feeds 100 Chinese chars through a
+  /// chunker whose chunk_size + overlap intentionally land the
+  /// slice cursor inside multi-byte chars; pre-fix the test panics,
+  /// post-fix it returns at least 2 chunks with intact content.
+  #[test]
+  fn recursive_chunker_handles_cjk_overlap_without_panic() {
+    // 9-char Chinese sentence × 12 = 108 chars = 324 bytes total.
+    let text = "这是一个测试句子。".repeat(12);
+    assert!(text.len() > 100, "fixture must be byte-large");
+    // chunk_size=30, overlap=10 — 10 % 3 != 0, so the overlap
+    // boundary lands mid-codepoint without the fix.
+    let chunker = RecursiveChunker::new(30, 10);
+    let chunks = chunker.chunk(&text).expect("must not panic on CJK");
+    assert!(chunks.len() > 1, "CJK input must split into multiple chunks");
+    // Every chunk's content must be valid UTF-8 (this is trivially
+    // true if the String constructor succeeded, but we check that
+    // no chunk lost CJK chars to mid-codepoint truncation).
+    for chunk in &chunks {
+      assert!(
+        chunk.content.is_char_boundary(0)
+          && chunk.content.is_char_boundary(chunk.content.len()),
+        "every chunk must start + end on a char boundary"
+      );
+      // Sanity: chunk content has at least one full Chinese char,
+      // not a stream of replacement chars from a panicked decode.
+      assert!(
+        chunk.content.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)),
+        "chunk must retain at least one CJK char, got: {:?}",
+        chunk.content
+      );
+    }
+  }
+
+  /// Q3.9.2 — same hazard with emoji (4-byte codepoints).
+  #[test]
+  fn recursive_chunker_handles_emoji_overlap_without_panic() {
+    // Repeating emoji string; every "🚀" is 4 bytes.
+    let text = "Launch the 🚀 to the moon. ".repeat(20);
+    let chunker = RecursiveChunker::new(40, 11);
+    let chunks = chunker.chunk(&text).expect("must not panic on emoji");
+    assert!(chunks.len() > 1);
+    for chunk in &chunks {
+      assert!(chunk.content.is_char_boundary(chunk.content.len()));
+    }
+  }
+
+  /// Q3.9.2 — `floor_char_boundary` helper invariants.
+  #[test]
+  fn floor_char_boundary_returns_valid_offset() {
+    // 3-byte Chinese chars: "中" = 0xE4 0xB8 0xAD, etc.
+    let text = "中国人";
+    assert_eq!(floor_char_boundary(text, 0), 0);
+    assert_eq!(floor_char_boundary(text, 1), 0); // mid-char 1
+    assert_eq!(floor_char_boundary(text, 2), 0); // mid-char 2
+    assert_eq!(floor_char_boundary(text, 3), 3); // boundary
+    assert_eq!(floor_char_boundary(text, 4), 3); // mid-char 2
+    assert_eq!(floor_char_boundary(text, 9), 9); // boundary end
+    assert_eq!(floor_char_boundary(text, 100), 9); // clamp to len
+    // ASCII fast path: every byte is a boundary.
+    assert_eq!(floor_char_boundary("hello", 3), 3);
   }
 }
