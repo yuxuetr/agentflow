@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { compileFilter, applyFilter, type FilterEvent } from './eventFilter';
 import { usePreferenceSync } from './usePreferenceSync';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   CancelRunEnvelopeSchema,
   CreateRunEnvelopeSchema,
@@ -2682,5 +2683,15 @@ function App() {
 
 const container = document.getElementById('agentflow-debugger');
 if (container) {
-  createRoot(container).render(<App />);
+  // Q3.7.1: ErrorBoundary catches unhandled throws inside `<App />` —
+  // a malformed payload that slips past zod (Q3.7.2), a stale property
+  // access after a schema migration, or any other runtime crash — and
+  // shows a diagnostic panel with the error message + reset / reload
+  // controls. Without the wrap, any such throw white-screens the page
+  // with no URL change to indicate what happened.
+  createRoot(container).render(
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>,
+  );
 }
