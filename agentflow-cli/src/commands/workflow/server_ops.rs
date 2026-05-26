@@ -221,21 +221,119 @@ pub async fn logs(
     return print_events_history(format, run_id, &body);
   }
 
-  // Follow mode: stream events and print each as it arrives.
-  client
-    .stream_events_sse(run_id, after_seq, |event| {
-      // Errors writing to stdout/stderr surface as broken pipes
-      // only when the consumer (e.g., `| head -10`) closed early;
-      // honour that by terminating the process via `Result` only
-      // after the stream loop ends. Print errors go through
-      // `eprintln!` here because emitting a JSON error in the
-      // middle of a JSONL stream would corrupt downstream parsers.
-      if let Err(err) = print_single_event(format, &event) {
-        eprintln!("warning: failed to render event: {err}");
+  // Q3.5.3: follow mode wraps `stream_events_sse` in a reconnect
+  // loop with bounded exponential backoff. Without this, any
+  // mid-stream TCP blip (network reset, server rolling restart,
+  // gateway 502) terminated the consumer with a hard error and the
+  // operator had to manually rerun with `--after-seq <last_seen>`.
+  // We track the highest observed `seq` across reconnects so events
+  // already printed are not re-emitted.
+  stream_events_with_reconnect(&client, run_id, after_seq, format).await
+}
+
+/// Q3.5.3: follow-mode driver — calls `stream_events_sse` in a loop,
+/// resuming past the highest seq we've successfully printed. Transport
+/// errors trigger an exponential-backoff sleep (1s → 30s cap) before
+/// the next reconnect; HTTP-level errors (4xx/5xx from the server)
+/// stay fatal because they typically mean misconfiguration, not a
+/// transient hiccup.
+///
+/// Distinguishing a terminal close from a transient drop is the
+/// trickiest bit: the SSE wire has no explicit "we're done" marker,
+/// but the server guarantees that the LAST event before a clean
+/// finalise is one of `run_finished` / `run_failed` /
+/// `run_cancelled` (see `agentflow-server::events_stream::broker_finalise_with_grace`).
+/// So we treat "stream closed AND the last event we saw was terminal"
+/// as a normal exit; "stream closed without a terminal event" is a
+/// mid-stream blip that triggers the reconnect path.
+async fn stream_events_with_reconnect(
+  client: &crate::server_client::ServerClient,
+  run_id: &str,
+  initial_after_seq: Option<i64>,
+  format: &str,
+) -> Result<()> {
+  use std::time::Duration;
+
+  // Highest seq we've already handed to `print_single_event`. The
+  // server's `?after_seq=N` filter is strictly `seq > N`, so passing
+  // the last printed seq directly resumes without duplicates.
+  let mut high_water_mark: Option<i64> = initial_after_seq;
+  let mut saw_terminal_event = false;
+  // Backoff state — bumped on each consecutive transport failure,
+  // reset whenever at least one event flows through cleanly.
+  const BACKOFF_FLOOR: Duration = Duration::from_secs(1);
+  const BACKOFF_CEILING: Duration = Duration::from_secs(30);
+  let mut next_backoff = BACKOFF_FLOOR;
+
+  loop {
+    let mut events_since_reconnect: u64 = 0;
+    let stream_result = {
+      let high_water_mark_ref = &mut high_water_mark;
+      let events_since_reconnect_ref = &mut events_since_reconnect;
+      let saw_terminal_event_ref = &mut saw_terminal_event;
+      client
+        .stream_events_sse(run_id, *high_water_mark_ref, |event| {
+          if let Some(seq) = event.get("seq").and_then(|s| s.as_i64()) {
+            *high_water_mark_ref = Some(match *high_water_mark_ref {
+              Some(prev) => prev.max(seq),
+              None => seq,
+            });
+          }
+          if let Some(kind) = event.get("kind").and_then(|k| k.as_str())
+            && is_terminal_run_event_kind(kind)
+          {
+            *saw_terminal_event_ref = true;
+          }
+          *events_since_reconnect_ref += 1;
+          if let Err(err) = print_single_event(format, &event) {
+            eprintln!("warning: failed to render event: {err}");
+          }
+        })
+        .await
+    };
+
+    if events_since_reconnect > 0 {
+      next_backoff = BACKOFF_FLOOR;
+    }
+
+    match stream_result {
+      Ok(()) if saw_terminal_event => {
+        // Clean close after a terminal event — the run is genuinely
+        // done; exit without reconnecting.
+        return Ok(());
       }
-    })
-    .await?;
-  Ok(())
+      Ok(()) => {
+        // Stream closed without a terminal marker — treat as a
+        // transient drop and reconnect after the backoff window.
+        eprintln!(
+          "⚠  workflow logs stream closed mid-run after {events_since_reconnect} events; \
+           reconnecting in {next_backoff:?}"
+        );
+        tokio::time::sleep(next_backoff).await;
+        next_backoff = (next_backoff.saturating_mul(2)).min(BACKOFF_CEILING);
+      }
+      Err(err) => {
+        eprintln!(
+          "⚠  workflow logs stream dropped after {events_since_reconnect} events; \
+           reconnecting in {next_backoff:?}. cause: {err}"
+        );
+        tokio::time::sleep(next_backoff).await;
+        next_backoff = (next_backoff.saturating_mul(2)).min(BACKOFF_CEILING);
+      }
+    }
+  }
+}
+
+/// Terminal event kinds the server emits before closing a SSE stream.
+/// Sourced from `agentflow-server::runs::is_terminal_status` (whose
+/// status values are mirrored 1:1 onto event kinds in
+/// `publish_*_event`). Update both sides together when a new
+/// terminal status lands.
+fn is_terminal_run_event_kind(kind: &str) -> bool {
+  matches!(
+    kind,
+    "run_finished" | "run_failed" | "run_cancelled" | "run.cancelled" | "run.completed" | "run.failed"
+  )
 }
 
 fn print_events_history(format: &str, run_id: &str, body: &serde_json::Value) -> Result<()> {
