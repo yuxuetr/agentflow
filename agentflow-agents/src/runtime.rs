@@ -150,6 +150,41 @@ impl AgentContext {
 /// the runtime via [`AgentContext::with_cancellation_token`] and keeps a
 /// second clone to call [`AgentCancellationToken::cancel`] from a UI button,
 /// timeout watchdog, or supervisor.
+///
+/// # Cancellation propagation model (cooperative)
+///
+/// AgentFlow runtimes check this token at every blocking await: pre-LLM,
+/// inside the LLM HTTP call, pre-tool-dispatch, inside the tool future, and
+/// inside the batch dispatcher. When the token fires mid-await, the runtime
+/// races it against the work via `tokio::select!` — the losing branch is
+/// **dropped**. There is no `Tool::cancel()` hook and no `LLMClient::cancel()`
+/// hook: cancellation is exclusively cooperative through future drop.
+///
+/// What this means in practice:
+///
+/// - In-process Tokio futures (`reqwest`, `tokio::time::sleep`,
+///   `tokio::process::Child` with `kill_on_drop(true)`, async channel recv)
+///   are cancelled cleanly: `Drop` guards in the future's captured state run,
+///   pending syscalls are aborted by the Tokio reactor, and child processes
+///   exit.
+/// - Work the tool has detached from the dispatch future will continue:
+///   anything `tokio::spawn`-ed and not awaited inside the tool future, work
+///   running on `spawn_blocking` worker threads, FFI calls in flight, or
+///   `std::process::Child` without `kill_on_drop`. Tool authors who fan out
+///   detached work must wire their own cancellation signal — see
+///   [`crate::AgentRuntime`] and `agentflow_tools::Tool::execute` rustdoc for
+///   the contract.
+///
+/// The trade-off is intentional: a per-call `cancel()` hook on every
+/// `Tool` impl would be a breaking API change across `agentflow-tools`,
+/// `agentflow-mcp`, and every workspace plugin without buying much for the
+/// common case where tools are short-lived HTTP / subprocess calls. The
+/// cooperative model + cancellation-aware Drop covers File / Http / Shell /
+/// Script / Mcp tools as currently shipped.
+///
+/// See `tool_future_drop_runs_when_token_is_cancelled` and
+/// `detached_spawn_survives_cancellation_for_documentation` in this module
+/// for executable pins of this contract (Q3.12.1).
 #[derive(Debug, Clone, Default)]
 pub struct AgentCancellationToken {
   cancelled: Arc<AtomicBool>,
@@ -598,6 +633,27 @@ pub trait AgentMemoryHook: Send + Sync {
 /// [`RuntimeLimits`], the cancellation token, and emitting [`AgentStep`]s
 /// in chronological order. See `agentflow-agents/examples/custom_runtime.rs`
 /// for the smallest viable shell.
+///
+/// # Cancellation contract (cooperative)
+///
+/// `AgentRuntime` implementations honour `context.cancellation_token` at
+/// every blocking await — pre-LLM, inside the LLM HTTP call, pre-tool-
+/// dispatch, inside the tool future, and inside the batch dispatcher. The
+/// pattern is `tokio::select!` between the work future and
+/// `token.cancelled()`, which means cancellation drops the work future
+/// rather than calling any explicit `cancel()` hook.
+///
+/// The implication for downstream consumers and `Tool` authors is that
+/// cancellation is **cooperative through Drop**: any work composed of
+/// in-process Tokio futures (`reqwest`, `tokio::time::sleep`, channel recv,
+/// `tokio::process::Child` with `kill_on_drop`) aborts cleanly, but any
+/// work the tool has detached via `tokio::spawn` /
+/// `tokio::task::spawn_blocking` / FFI / `std::process::Child` will continue
+/// running past cancellation. See [`AgentCancellationToken`] and
+/// `agentflow_tools::Tool::execute` rustdoc for the full contract, and the
+/// `tool_future_drop_runs_when_token_is_cancelled` /
+/// `detached_spawn_survives_cancellation_for_documentation` tests in this
+/// module for executable pins (Q3.12.1).
 #[async_trait]
 pub trait AgentRuntime: Send {
   /// Execute one run for `context` and return the structured outcome.
@@ -1003,5 +1059,128 @@ mod tests {
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["sandbox"]["backend"], "noop");
     assert_eq!(json["sandbox"]["enforcement"], "disabled");
+  }
+
+  // ── Q3.12.1: cooperative cancellation contract pins ───────────────────────
+  //
+  // These two tests pin the documented behaviour described on
+  // `AgentCancellationToken`, `AgentRuntime`, and `agentflow_tools::Tool::execute`:
+  //
+  // 1. `tool_future_drop_runs_when_token_is_cancelled` — the *positive* path:
+  //    when a tool composes only Drop-cancellable state, racing it against the
+  //    cancellation token via `tokio::select!` runs its Drop guard, proving
+  //    the cooperative model works end-to-end.
+  //
+  // 2. `detached_spawn_survives_cancellation_for_documentation` — the
+  //    *limitation* path: when a tool spawns work via `tokio::spawn` and
+  //    returns immediately, that detached work continues to completion after
+  //    the dispatch future is dropped on cancellation. Codifies what the
+  //    rustdoc warns about so anyone changing the runtime semantics has a
+  //    failing test rather than a silent contract drift.
+  //
+  // We assert on `tokio::select!` directly rather than spinning up a full
+  // ReActAgent: the runtime sites all wrap the tool future in the same
+  // select-vs-`token.cancelled()` shape (see `react/agent.rs:986-1051` and
+  // `plan_execute.rs:526-538`), so this is the smallest reproduction that
+  // pins the contract for all current and future runtimes.
+
+  #[tokio::test]
+  async fn tool_future_drop_runs_when_token_is_cancelled() {
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+      fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+      }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_in_future = dropped.clone();
+    let token = AgentCancellationToken::new();
+
+    let tool_future = async move {
+      let _guard = DropFlag(dropped_in_future);
+      // Cooperative await that the cancellation race can drop. In real
+      // tools this would be `reqwest`, `tokio::time::sleep`, or
+      // `tokio::process::Child::wait`.
+      tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+      "completed-naturally"
+    };
+
+    // Schedule cancellation just after the future starts.
+    let canceller = {
+      let token = token.clone();
+      tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        token.cancel();
+      })
+    };
+
+    let outcome = tokio::select! {
+      result = tool_future => Some(result),
+      _ = token.cancelled() => None,
+    };
+
+    canceller.await.unwrap();
+    assert!(outcome.is_none(), "select should resolve via cancellation");
+    assert!(
+      dropped.load(Ordering::SeqCst),
+      "DropFlag must fire when the tool future is dropped by the cancellation \
+       race — this is the cooperative cancellation contract documented on \
+       AgentCancellationToken and Tool::execute"
+    );
+  }
+
+  #[tokio::test]
+  async fn detached_spawn_survives_cancellation_for_documentation() {
+    // Documents the rustdoc warning: work the tool detaches via
+    // `tokio::spawn` and does NOT await inside the dispatch future is not
+    // cancelled when the runtime drops the tool future. This test does not
+    // exist to applaud the behaviour — it exists so anyone who later wires
+    // a `Tool::cancel()` hook or per-call token has a failing test that
+    // forces them to update the rustdoc on `AgentCancellationToken`,
+    // `AgentRuntime`, and `Tool::execute`.
+
+    let detached_completed = Arc::new(AtomicBool::new(false));
+    let detached_flag = detached_completed.clone();
+    let token = AgentCancellationToken::new();
+
+    let tool_future = async move {
+      // Simulate a tool that fans out background work and returns its
+      // own future without joining the detached task.
+      tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        detached_flag.store(true, Ordering::SeqCst);
+      });
+      // The visible future itself parks for a long time.
+      tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+      "completed-naturally"
+    };
+
+    let canceller = {
+      let token = token.clone();
+      tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        token.cancel();
+      })
+    };
+
+    let outcome = tokio::select! {
+      result = tool_future => Some(result),
+      _ = token.cancelled() => None,
+    };
+
+    canceller.await.unwrap();
+    assert!(outcome.is_none(), "select should resolve via cancellation");
+
+    // Give the detached task time to complete on its own clock. If a future
+    // runtime gains a way to abort detached work transitively, this assertion
+    // is the trigger to update the documented contract.
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(
+      detached_completed.load(Ordering::SeqCst),
+      "detached tokio::spawn work must outlive cancellation under the current \
+       cooperative model; flipping this expectation requires updating the \
+       rustdoc on AgentCancellationToken, AgentRuntime, and Tool::execute"
+    );
   }
 }

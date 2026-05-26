@@ -372,7 +372,38 @@ pub trait Tool: Send + Sync {
     None
   }
 
-  /// Execute the tool and return its output
+  /// Execute the tool and return its output.
+  ///
+  /// # Cancellation contract (cooperative)
+  ///
+  /// AgentFlow's runtimes (`ReActAgent`, `PlanExecuteAgent`, supervisors) race
+  /// this future against the run's [`AgentCancellationToken`] via
+  /// `tokio::select!`. When the token fires, the runtime **drops** this future
+  /// — there is no explicit `cancel()` hook on the trait. As a result:
+  ///
+  /// - Futures composed entirely of cooperatively-cancellable awaits
+  ///   (`tokio::time::sleep`, `tokio::process::Child::wait`, `reqwest`,
+  ///   `tokio::io::*`, channel recv) are cancelled cleanly: any
+  ///   `Drop` guards in the future's state run, in-flight `tokio` syscalls are
+  ///   aborted, and child processes spawned via `tokio::process::Command` are
+  ///   killed (when `Command::kill_on_drop(true)` is set).
+  /// - Work that the tool has **detached** from this future will NOT be
+  ///   aborted. Concretely: anything spawned via `tokio::spawn` /
+  ///   `tokio::task::spawn_blocking` without joining inside the same future,
+  ///   blocking syscalls run on a thread you don't own, FFI calls that do not
+  ///   honour Drop, and `std::process::Command` (without `kill_on_drop`).
+  ///
+  /// Tool authors who need to abort detached work must wire up their own
+  /// cancellation signal (e.g. an `Arc<AtomicBool>` checked by their worker,
+  /// or `tokio_util::sync::CancellationToken` whose `cancel()` they call from
+  /// a guard struct held by the returned future). The runtime cannot do this
+  /// for you because the `Tool` trait is sync-cancellable only via Drop.
+  ///
+  /// See `agentflow-agents/src/runtime.rs` (`AgentCancellationToken` docs +
+  /// `tool_future_drop_runs_when_token_is_cancelled` regression test) for the
+  /// reference behaviour pinned by `Q3.12.1`.
+  ///
+  /// [`AgentCancellationToken`]: ../../agentflow_agents/runtime/struct.AgentCancellationToken.html
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError>;
 
   /// Convenience: build the full tool definition
