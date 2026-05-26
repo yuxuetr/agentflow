@@ -157,12 +157,14 @@ pub fn evaluate_with_remapping(
   chunk_to_doc: &Option<HashMap<String, String>>,
   config: &EvalConfig,
 ) -> Result<EvalReport> {
-  if config.k_values.is_empty() {
-    return Err(crate::error::RAGError::invalid_input(
+  // `.max() == None` on an empty `k_values` collapses the pre-Q5.1
+  // explicit `is_empty()` early-return with the unwrap into one
+  // `ok_or_else` chain. Same error message, same observable behaviour.
+  let max_k = *config.k_values.iter().max().ok_or_else(|| {
+    crate::error::RAGError::invalid_input(
       "EvalConfig::k_values must contain at least one K".to_string(),
-    ));
-  }
-  let max_k = *config.k_values.iter().max().unwrap();
+    )
+  })?;
 
   // Pair queries with judgments. Skip queries whose judgment is missing —
   // the dataset validator already complains if judgments reference unknown

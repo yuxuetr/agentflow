@@ -113,8 +113,11 @@ impl AnthropicProvider {
       }
     }
 
-    // Anthropic requires max_tokens to be specified
-    if !body.as_object().unwrap().contains_key("max_tokens") {
+    // Anthropic requires max_tokens to be specified. `body` is always a JSON
+    // object (constructed from `json!({...})` above), so `body.get(...)` is
+    // a safe, infallible alternative to `as_object().unwrap()` and avoids a
+    // clippy `unwrap_used` deny under Q5.1.
+    if body.get("max_tokens").is_none() {
       body["max_tokens"] = json!(4096);
     }
 

@@ -11,7 +11,63 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::LazyLock;
 use tar::Archive;
+
+// Compile-time-known regex patterns. Built lazily on first use, panic on
+// pattern bug at init (not per-call). Q5.1 moved these out of per-call
+// `Regex::new(...).unwrap()` so the clippy `unwrap_used` deny applies
+// cleanly to the rest of the file without `#[allow]` clutter.
+//
+// The `Result::expect` inside each `LazyLock::new` initializer fires only
+// on `regex::Error::Syntax` for a literal pattern that is exhaustively
+// covered by the unit tests below (see `nodes::arxiv` tests). A failure
+// here would be a build-time / test-time bug, not a runtime error.
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static ARXIV_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v(\d+))?")
+    .expect("ARXIV_URL_RE pattern is malformed — this is a bug in agentflow-nodes")
+});
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static ARXIV_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"<id>http://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v(\d+))?</id>")
+    .expect("ARXIV_ID_RE pattern is malformed — this is a bug in agentflow-nodes")
+});
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static LATEX_COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?m)%.*$").expect("LATEX_COMMENT_RE is malformed — bug in agentflow-nodes")
+});
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static LATEX_BEGIN_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"\\begin\{.*?\}").expect("LATEX_BEGIN_RE is malformed — bug in agentflow-nodes")
+});
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static LATEX_END_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"\\end\{.*?\}").expect("LATEX_END_RE is malformed — bug in agentflow-nodes")
+});
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literals; covered by unit tests in module"
+)]
+static LATEX_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"\\[a-zA-Z@]+\s*(?:\\\[.*?\])?\s*(?:\{.*?\})?")
+    .expect("LATEX_TAG_RE is malformed — bug in agentflow-nodes")
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArxivNode {
@@ -132,9 +188,7 @@ impl ArxivNode {
 
   async fn fetch_arxiv_paper(&self, url: &str) -> Result<ArxivPaper, AgentFlowError> {
     // Check if it's a valid arXiv URL
-    let re = Regex::new(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v(\d+))?").unwrap();
-
-    if let Some(caps) = re.captures(url) {
+    if let Some(caps) = ARXIV_URL_RE.captures(url) {
       let paper_id = caps.get(1).map(|m| m.as_str().to_string()).ok_or_else(|| {
         AgentFlowError::NodeInputError {
           message: "Could not parse paper ID from arXiv URL".to_string(),
@@ -172,8 +226,7 @@ impl ArxivNode {
 
     // Parse XML response to extract paper ID
     // Look for <id>http://arxiv.org/abs/XXXX.XXXXX</id>
-    let id_re = Regex::new(r"<id>http://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v(\d+))?</id>").unwrap();
-    let caps = id_re
+    let caps = ARXIV_ID_RE
       .captures(&body)
       .ok_or_else(|| AgentFlowError::NodeInputError {
         message: format!("No papers found for query: {}", query),
@@ -276,15 +329,10 @@ impl ArxivNode {
   }
 
   fn simplify_latex_content(&self, latex: &str) -> String {
-    let comment_re = Regex::new(r"(?m)%.*$").unwrap();
-    let begin_re = Regex::new(r"\\begin\{.*?\}").unwrap();
-    let end_re = Regex::new(r"\\end\{.*?\}").unwrap();
-    let tag_re = Regex::new(r"\\[a-zA-Z@]+\s*(?:\\\[.*?\])?\s*(?:\{.*?\})?").unwrap();
-
-    let no_comments = comment_re.replace_all(latex, "");
-    let no_begin = begin_re.replace_all(&no_comments, "");
-    let no_end = end_re.replace_all(&no_begin, "");
-    let no_tags = tag_re.replace_all(&no_end, "");
+    let no_comments = LATEX_COMMENT_RE.replace_all(latex, "");
+    let no_begin = LATEX_BEGIN_RE.replace_all(&no_comments, "");
+    let no_end = LATEX_END_RE.replace_all(&no_begin, "");
+    let no_tags = LATEX_TAG_RE.replace_all(&no_end, "");
     no_tags.trim().to_string()
   }
 }

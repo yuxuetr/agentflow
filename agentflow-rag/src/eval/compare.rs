@@ -125,9 +125,17 @@ pub fn compare(baseline: &EvalReport, candidate: &EvalReport) -> ComparisonRepor
     intersect
   };
 
+  // `common_ks` is the set intersection, so `find` is guaranteed to hit on
+  // both sides. Use `zip`-equivalent `.filter_map` with safe destructuring
+  // instead of `unwrap` so the Q5.1 lint deny applies (the unreachable
+  // miss path is a defensive no-op).
   for k in &common_ks {
-    let b = baseline.per_k.iter().find(|r| r.k == *k).unwrap();
-    let c = candidate.per_k.iter().find(|r| r.k == *k).unwrap();
+    let (Some(b), Some(c)) = (
+      baseline.per_k.iter().find(|r| r.k == *k),
+      candidate.per_k.iter().find(|r| r.k == *k),
+    ) else {
+      continue;
+    };
     deltas.push(metric_delta(&format!("Recall@{}", k), b.recall, c.recall));
     deltas.push(metric_delta(&format!("nDCG@{}", k), b.ndcg, c.ndcg));
   }

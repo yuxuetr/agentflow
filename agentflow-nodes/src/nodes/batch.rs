@@ -111,9 +111,18 @@ impl BatchNode {
         .collect();
     }
 
+    // Both branches that populate `results` (lines 95-101 and 104-111) insert
+    // the "output" key explicitly, so `h.get("output")` is statically present.
+    // Use `cloned()` + `unwrap_or` to fall through to JSON null on the
+    // unreachable miss path instead of panicking — keeps Q5.1 happy without
+    // adding a new fail mode at the call site.
     let flattened_results = results
       .into_iter()
-      .map(|h| h.get("output").unwrap().clone())
+      .map(|h| {
+        h.get("output")
+          .cloned()
+          .unwrap_or(FlowValue::Json(Value::Null))
+      })
       .collect();
 
     Ok(flattened_results)

@@ -237,7 +237,15 @@ impl ReActAgentFactory {
   /// declares no validator" — the same behaviour as a skill with
   /// `kind = "none"`.
   fn resolve_validator(&self, skill_dir: &str) -> Option<Arc<dyn SkillValidatorImpl>> {
-    if let Some(cached) = self.validators.lock().unwrap().get(skill_dir).cloned() {
+    // Mutex poison recovery: a prior holder panicked but the cache state is
+    // still a sound HashMap — recover the inner map rather than propagating
+    // the panic. Same pattern as `supervisor::blackboard::write_internal`
+    // after Q3.12.2.
+    let cached = match self.validators.lock() {
+      Ok(guard) => guard.get(skill_dir).cloned(),
+      Err(poisoned) => poisoned.into_inner().get(skill_dir).cloned(),
+    };
+    if let Some(cached) = cached {
       return cached;
     }
     let dir = Path::new(skill_dir);
@@ -246,11 +254,11 @@ impl ReActAgentFactory {
       let _warnings = SkillLoader::validate(&manifest, dir).ok()?;
       build_validator(&manifest, dir).ok().flatten()
     })();
-    self
-      .validators
-      .lock()
-      .unwrap()
-      .insert(skill_dir.to_string(), resolved.clone());
+    let mut guard = match self.validators.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.insert(skill_dir.to_string(), resolved.clone());
     resolved
   }
 }

@@ -150,12 +150,16 @@ impl TextToImageNode {
     Ok(resolved)
   }
 
-  /// Create configuration for image generation
+  /// Create configuration for image generation.
+  ///
+  /// Returns the raw `serde_json::Map` rather than `Value::Object(...)` so
+  /// the caller can pass `&Map<...>` to `execute_real_image_generation`
+  /// without an `as_object().unwrap()` round-trip (Q5.1).
   fn create_image_config(
     &self,
     resolved_prompt: &str,
     inputs: &AsyncNodeInputs,
-  ) -> Result<Value, AgentFlowError> {
+  ) -> Result<serde_json::Map<String, Value>, AgentFlowError> {
     let mut config = serde_json::Map::new();
 
     config.insert("model".to_string(), Value::String(self.model.clone()));
@@ -184,9 +188,16 @@ impl TextToImageNode {
       config.insert("size".to_string(), Value::String(size.clone()));
     }
 
+    // `ImageResponseFormat` is a renamed unit-variant enum — serialization
+    // cannot fail. Mapping it through `serde_json::to_value` was Q5.1
+    // unwrap-bait; use the rename literals directly.
+    let response_format_str = match self.response_format {
+      ImageResponseFormat::Base64Json => "b64_json",
+      ImageResponseFormat::Url => "url",
+    };
     config.insert(
       "response_format".to_string(),
-      serde_json::to_value(&self.response_format).unwrap(),
+      Value::String(response_format_str.to_string()),
     );
 
     if let Some(steps) = self.steps {
@@ -206,10 +217,18 @@ impl TextToImageNode {
     }
 
     if let Some(ref style_ref) = self.style_reference {
-      config.insert(
-        "style_reference".to_string(),
-        serde_json::to_value(style_ref).unwrap(),
-      );
+      // `serde_json::to_value` only fails on non-finite f32 (NaN/Inf) inside
+      // `style_weight`; surface as a validation error rather than panicking
+      // (Q5.1).
+      let style_value =
+        serde_json::to_value(style_ref).map_err(|err| AgentFlowError::NodeInputError {
+          message: format!(
+            "TextToImage node '{}': style_reference contains a non-finite \
+             style_weight value: {err}",
+            self.name
+          ),
+        })?;
+      config.insert("style_reference".to_string(), style_value);
     }
 
     if let Some(n) = self.n {
@@ -223,7 +242,7 @@ impl TextToImageNode {
       );
     }
 
-    Ok(Value::Object(config))
+    Ok(config)
   }
 
   /// Execute real image generation through the modality dispatcher.
@@ -370,7 +389,7 @@ impl AsyncNode for TextToImageNode {
     // with the underlying provider message intact. If a workflow author
     // truly wants a placeholder, they should wire an explicit `MockNode`
     // or use a conditional/fallback branch in the DAG.
-    let real_call = self.execute_real_image_generation(config.as_object().unwrap());
+    let real_call = self.execute_real_image_generation(&config);
     let response = if let Some(timeout_ms) = self.timeout_ms {
       let timeout_duration = std::time::Duration::from_millis(timeout_ms);
       match tokio::time::timeout(timeout_duration, real_call).await {

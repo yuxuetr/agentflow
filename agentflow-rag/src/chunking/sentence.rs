@@ -36,7 +36,10 @@ impl SentenceChunker {
   pub fn new(chunk_size: usize, overlap: usize) -> Self {
     let chunk_size = chunk_size.max(1);
     let overlap = overlap.min(chunk_size.saturating_sub(1));
-    Self { chunk_size, overlap }
+    Self {
+      chunk_size,
+      overlap,
+    }
   }
 
   /// Q3.9.1: fallible constructor that rejects `chunk_size == 0` and
@@ -52,7 +55,10 @@ impl SentenceChunker {
         "SentenceChunker requires overlap < chunk_size; got overlap={overlap} chunk_size={chunk_size}"
       )));
     }
-    Ok(Self { chunk_size, overlap })
+    Ok(Self {
+      chunk_size,
+      overlap,
+    })
   }
 
   /// Split text into sentences using Unicode sentence boundary rules
@@ -113,11 +119,15 @@ impl ChunkingStrategy for SentenceChunker {
       let sentence_len = sentence.len();
 
       // Check if adding this sentence would exceed chunk_size
-      if !current_chunk_sentences.is_empty() && current_chunk_size + sentence_len > self.chunk_size
+      // Use `last().copied()` + `if let Some(...)` instead of guard +
+      // `last().unwrap()` so the Q5.1 clippy deny doesn't fire on a true
+      // invariant ("we already know the vec is non-empty").
+      if let Some(&last_idx) = current_chunk_sentences.last()
+        && current_chunk_size + sentence_len > self.chunk_size
       {
         // Create chunk from accumulated sentences
         let start_idx = sentences[current_chunk_sentences[0]].0;
-        let end_idx = sentences[*current_chunk_sentences.last().unwrap()].1;
+        let end_idx = sentences[last_idx].1;
         let chunk_text: String = current_chunk_sentences
           .iter()
           .map(|&idx| sentences[idx].2.as_str())
@@ -146,10 +156,10 @@ impl ChunkingStrategy for SentenceChunker {
       current_chunk_size += sentence_len;
     }
 
-    // Add final chunk if there are remaining sentences
-    if !current_chunk_sentences.is_empty() {
+    // Add final chunk if there are remaining sentences.
+    if let Some(&last_idx) = current_chunk_sentences.last() {
       let start_idx = sentences[current_chunk_sentences[0]].0;
-      let end_idx = sentences[*current_chunk_sentences.last().unwrap()].1;
+      let end_idx = sentences[last_idx].1;
       let chunk_text: String = current_chunk_sentences
         .iter()
         .map(|&idx| sentences[idx].2.as_str())

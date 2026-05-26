@@ -83,11 +83,19 @@ impl OpenAIAsrProvider {
     let file_part = Part::bytes(request.audio_data.clone())
       .file_name(request.filename.clone())
       .mime_str(mime_for_filename(&request.filename))
-      .unwrap_or_else(|_| {
+      .or_else(|_| {
         Part::bytes(request.audio_data.clone())
           .file_name(request.filename.clone())
           .mime_str("application/octet-stream")
-          .expect("application/octet-stream is always a valid MIME")
+      })
+      .unwrap_or_else(|_| {
+        // `application/octet-stream` is RFC-2046 canonical and cannot fail
+        // `mime_str` parsing in any reqwest version we ship — the
+        // unreachable branch returns a part without explicit MIME, where
+        // reqwest defaults to `application/octet-stream` server-side.
+        // unreachable! would also satisfy the Q5.1 lint, but a graceful
+        // fallback keeps the upload path infallible end-to-end.
+        Part::bytes(request.audio_data.clone()).file_name(request.filename.clone())
       });
 
     let mut form = Form::new()

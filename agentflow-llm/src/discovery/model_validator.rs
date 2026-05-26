@@ -84,13 +84,16 @@ impl ModelValidator {
   ) -> Result<bool> {
     let vendor_config = VendorConfig::get_by_name(&model_config.vendor);
 
-    // If vendor doesn't support model listing, assume model is valid
-    if vendor_config.is_none() || !vendor_config.as_ref().unwrap().supports_model_list {
-      info!(
-        "Vendor {} doesn't support model listing, skipping validation for {}",
-        model_config.vendor, model_name
-      );
-      return Ok(true);
+    // If vendor doesn't support model listing, assume model is valid.
+    match &vendor_config {
+      Some(cfg) if cfg.supports_model_list => {}
+      _ => {
+        info!(
+          "Vendor {} doesn't support model listing, skipping validation for {}",
+          model_config.vendor, model_name
+        );
+        return Ok(true);
+      }
     }
 
     // Get the actual model ID to check (use model_id if specified, otherwise use model_name)
@@ -228,11 +231,11 @@ impl ModelValidator {
   }
 }
 
-impl Default for ModelValidator {
-  fn default() -> Self {
-    Self::new().expect("Failed to create ModelValidator")
-  }
-}
+// `Default` is intentionally not implemented: `Self::new()` is fallible
+// (returns `Result<Self>`) because the underlying `ModelFetcher::new()` can
+// fail to build the HTTP client. Callers go through `ModelValidator::new()?`
+// so they can surface the error. A panic-inside-`default()` would violate
+// the user-rules "no unwrap/expect in production" sweep (Q5.1).
 
 #[cfg(test)]
 mod tests {

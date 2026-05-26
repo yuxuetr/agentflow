@@ -99,11 +99,11 @@ impl AsyncNode for TemplateNode {
         );
         poisoned.into_inner()
       });
-      tera_guard.render_str(&self.template, &context).map_err(|e| {
-        AgentFlowError::AsyncExecutionError {
+      tera_guard
+        .render_str(&self.template, &context)
+        .map_err(|e| AgentFlowError::AsyncExecutionError {
           message: format!("Template rendering failed: {}", e),
-        }
-      })?
+        })?
     };
 
     // Parse result based on output format
@@ -164,13 +164,16 @@ impl AsyncNode for TemplateNode {
         // otherwise hide as a downstream "wrong type" error far
         // from the producing template.
         let trimmed = rendered.trim_start();
-        if matches!(trimmed.chars().next(), Some('[') | Some('{'))
+        // Capture the first char once so the log line below can reuse it
+        // without a second `chars().next().unwrap()` (Q5.1).
+        let first_char = trimmed.chars().next();
+        if matches!(first_char, Some('[') | Some('{'))
           && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
         {
           println!(
             "✅ Template rendered successfully (auto-detected JSON {} via leading '{}')",
             if parsed.is_array() { "array" } else { "object" },
-            trimmed.chars().next().unwrap()
+            first_char.unwrap_or('?')
           );
           let mut outputs = HashMap::new();
           outputs.insert(self.output_key.clone(), FlowValue::Json(parsed));

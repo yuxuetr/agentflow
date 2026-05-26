@@ -328,11 +328,14 @@ impl ONNXEmbeddingBuilder {
       .map_err(|e| RAGError::embedding(format!("Failed to load ONNX model: {}", e)))?;
 
     let model_name = self.model_name.unwrap_or_else(|| {
+      // `file_stem()` returns `None` only for paths ending in `..` or with
+      // no file component, both of which would have failed `commit_from_file`
+      // above. Fall back to the literal "onnx-model" rather than panicking
+      // so the constructor never aborts on user-supplied paths (Q5.1).
       model_path
         .file_stem()
-        .unwrap()
-        .to_string_lossy()
-        .to_string()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "onnx-model".to_string())
     });
 
     let dimension = self.dimension.unwrap_or(384); // Default for MiniLM

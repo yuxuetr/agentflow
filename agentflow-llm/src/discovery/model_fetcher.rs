@@ -176,11 +176,12 @@ impl ModelFetcher {
   }
 }
 
-impl Default for ModelFetcher {
-  fn default() -> Self {
-    Self::new().expect("Failed to create ModelFetcher")
-  }
-}
+// `Default` is intentionally not implemented: `Self::new()` is fallible
+// (returns `Result<Self>`) because building the underlying `reqwest::Client`
+// can fail on platforms with broken TLS / proxy configuration. Callers go
+// through `ModelFetcher::new()?` so they can surface the error. A
+// panic-inside-`default()` would violate the user-rules "no unwrap/expect in
+// production" sweep (Q5.1).
 
 #[cfg(test)]
 mod tests {

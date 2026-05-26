@@ -644,7 +644,7 @@ pub struct TTSRequest {
   pub sample_rate: Option<u32>, // 8000, 16000, 22050, 24000
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VoiceLabel {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub language: Option<String>, // 粤语, 四川话, 日语
@@ -1160,38 +1160,29 @@ impl TTSBuilder {
   }
 
   pub fn language(mut self, language: &str) -> Self {
-    if self.request.voice_label.is_none() {
-      self.request.voice_label = Some(VoiceLabel {
-        language: None,
-        emotion: None,
-        style: None,
-      });
-    }
-    self.request.voice_label.as_mut().unwrap().language = Some(language.to_string());
+    self
+      .request
+      .voice_label
+      .get_or_insert_with(VoiceLabel::default)
+      .language = Some(language.to_string());
     self
   }
 
   pub fn emotion(mut self, emotion: &str) -> Self {
-    if self.request.voice_label.is_none() {
-      self.request.voice_label = Some(VoiceLabel {
-        language: None,
-        emotion: None,
-        style: None,
-      });
-    }
-    self.request.voice_label.as_mut().unwrap().emotion = Some(emotion.to_string());
+    self
+      .request
+      .voice_label
+      .get_or_insert_with(VoiceLabel::default)
+      .emotion = Some(emotion.to_string());
     self
   }
 
   pub fn style(mut self, style: &str) -> Self {
-    if self.request.voice_label.is_none() {
-      self.request.voice_label = Some(VoiceLabel {
-        language: None,
-        emotion: None,
-        style: None,
-      });
-    }
-    self.request.voice_label.as_mut().unwrap().style = Some(style.to_string());
+    self
+      .request
+      .voice_label
+      .get_or_insert_with(VoiceLabel::default)
+      .style = Some(style.to_string());
     self
   }
 

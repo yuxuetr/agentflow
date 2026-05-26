@@ -227,7 +227,14 @@ impl BM25Retriever {
   /// Equivalent to `let _ = self.search("", 0);` but doesn't
   /// allocate a result vector or run the search loop.
   pub fn finalize(&self) {
-    let mut derived = self.derived.lock().expect("derived stats lock poisoned");
+    // Mutex poison recovery: the derived-stats counter is monotonically
+    // rebuilt by `refresh_derived_if_dirty`, so a poisoned guard's inner
+    // state is still safe to mutate. Same recovery pattern as
+    // `supervisor::blackboard::write_internal` (agentflow-agents Q3.12.2).
+    let mut derived = match self.derived.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    };
     self.refresh_derived_if_dirty(&mut derived);
   }
 
@@ -291,8 +298,8 @@ impl BM25Retriever {
       if tf > 0.0 {
         // Calculate BM25 component for this term
         let numerator = tf * (self.k1 + 1.0);
-        let denominator = tf
-          + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / derived.avg_doc_length);
+        let denominator =
+          tf + self.k1 * (1.0 - self.b + self.b * doc.doc_length as f32 / derived.avg_doc_length);
 
         score += idf * (numerator / denominator);
       }
@@ -323,8 +330,11 @@ impl BM25Retriever {
     // Holding the mutex across the score loop is fine — this method
     // takes `&self` so concurrent searches serialize at the mutex,
     // not at the recompute (which is a one-time cost).
-    let derived = self.derived.lock().expect("derived stats lock poisoned");
-    let mut derived = derived;
+    // Mutex poison recovery: see `finalize()` above for rationale (Q5.1).
+    let mut derived = match self.derived.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    };
     self.refresh_derived_if_dirty(&mut derived);
 
     // Calculate scores for all documents
@@ -577,10 +587,7 @@ mod tests {
     let _ = retriever.search("alpha", 10);
     {
       let derived = retriever.derived.lock().unwrap();
-      assert!(
-        !derived.dirty,
-        "first search must clear the dirty flag"
-      );
+      assert!(!derived.dirty, "first search must clear the dirty flag");
       assert!(
         !derived.idf.is_empty(),
         "IDF must be populated after first search"

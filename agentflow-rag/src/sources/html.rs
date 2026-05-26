@@ -16,7 +16,15 @@ static SCRIPT_REGEX: OnceLock<Regex> = OnceLock::new();
 /// Regex pattern for removing style tags
 static STYLE_REGEX: OnceLock<Regex> = OnceLock::new();
 
-/// Get or initialize the script removal regex
+/// Get or initialize the script removal regex.
+///
+/// The `expect` fires only if the literal regex pattern itself fails to
+/// compile — a build-time bug, not a runtime risk on user input. Covered by
+/// `html.rs`'s unit tests below (Q5.1).
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests in module"
+)]
 fn script_regex() -> &'static Regex {
   SCRIPT_REGEX.get_or_init(|| {
     Regex::new(r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>")
@@ -24,7 +32,13 @@ fn script_regex() -> &'static Regex {
   })
 }
 
-/// Get or initialize the style removal regex
+/// Get or initialize the style removal regex.
+///
+/// See `script_regex` for the `expect_used` allow rationale.
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests in module"
+)]
 fn style_regex() -> &'static Regex {
   STYLE_REGEX.get_or_init(|| {
     Regex::new(r"<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>")
@@ -180,11 +194,12 @@ impl DocumentLoader for HtmlLoader {
   async fn load(&self, path: &Path) -> Result<Document> {
     // Q3.9.6: stat-and-check before allocating the full string.
     if let Some(max) = self.max_bytes {
-      let metadata = fs::metadata(path)
-        .await
-        .map_err(|e| crate::error::RAGError::DocumentError {
-          message: format!("Failed to stat HTML {}: {}", path.display(), e),
-        })?;
+      let metadata =
+        fs::metadata(path)
+          .await
+          .map_err(|e| crate::error::RAGError::DocumentError {
+            message: format!("Failed to stat HTML {}: {}", path.display(), e),
+          })?;
       if metadata.len() > max {
         return Err(crate::error::RAGError::DocumentError {
           message: format!(
@@ -411,9 +426,7 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("oversize.html");
     // 4 KiB of HTML-looking content — bigger than our 1 KiB cap.
-    let big = "<html><body>".to_string()
-      + &"<p>filler</p>".repeat(400)
-      + "</body></html>";
+    let big = "<html><body>".to_string() + &"<p>filler</p>".repeat(400) + "</body></html>";
     fs::write(&file_path, &big).await.unwrap();
     assert!(big.len() > 1024);
 
@@ -421,8 +434,7 @@ mod tests {
     let err = loader.load(&file_path).await.unwrap_err();
     let msg = err.to_string();
     assert!(
-      msg.contains("exceeds the configured max_bytes")
-        || msg.contains("exceeds max_bytes"),
+      msg.contains("exceeds the configured max_bytes") || msg.contains("exceeds max_bytes"),
       "error must explain the size-cap rejection; got: {msg}"
     );
   }

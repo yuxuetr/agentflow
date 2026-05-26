@@ -44,7 +44,16 @@ static EMAIL_REGEX: OnceLock<Regex> = OnceLock::new();
 /// Regex pattern for collapsing whitespace
 static WHITESPACE_REGEX: OnceLock<Regex> = OnceLock::new();
 
+// All four regex accessors below `expect()` on a compile-time-constant
+// literal pattern: failure means the pattern itself is malformed — a
+// build-time / test-time bug, not a runtime risk on user input. Covered by
+// unit tests in `tests/` (Q5.1).
+
 /// Get or initialize the HTML tag removal regex
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests"
+)]
 fn html_tag_regex() -> &'static Regex {
   HTML_TAG_REGEX.get_or_init(|| {
     Regex::new(r"<[^>]+>")
@@ -53,6 +62,10 @@ fn html_tag_regex() -> &'static Regex {
 }
 
 /// Get or initialize the URL removal regex
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests"
+)]
 fn url_regex() -> &'static Regex {
   URL_REGEX.get_or_init(|| {
     Regex::new(r"https?://\S+")
@@ -61,6 +74,10 @@ fn url_regex() -> &'static Regex {
 }
 
 /// Get or initialize the email removal regex
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests"
+)]
 fn email_regex() -> &'static Regex {
   EMAIL_REGEX.get_or_init(|| {
     Regex::new(r"\S+@\S+\.\S+")
@@ -69,6 +86,10 @@ fn email_regex() -> &'static Regex {
 }
 
 /// Get or initialize the whitespace collapse regex
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; covered by unit tests"
+)]
 fn whitespace_regex() -> &'static Regex {
   WHITESPACE_REGEX.get_or_init(|| {
     Regex::new(r"\s+")

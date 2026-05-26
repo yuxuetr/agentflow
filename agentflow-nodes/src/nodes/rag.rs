@@ -285,9 +285,10 @@ impl RAGNode {
           message: format!("Invalid documents format: {}", e),
         }
       })?
-    } else if documents_json.is_string() {
-      // Single string document
-      vec![Document::new(documents_json.as_str().unwrap())]
+    } else if let Some(s) = documents_json.as_str() {
+      // Single string document — match-via-as_str avoids the
+      // `is_string() + as_str().unwrap()` redundancy (Q5.1).
+      vec![Document::new(s)]
     } else {
       return Err(AgentFlowError::NodeInputError {
         message: "documents must be an array or string".to_string(),

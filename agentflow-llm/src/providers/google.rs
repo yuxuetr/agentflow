@@ -127,7 +127,13 @@ impl GoogleProvider {
       generation_config["thinkingConfig"] = block;
     }
 
-    if !generation_config.as_object().unwrap().is_empty() {
+    // `generation_config` is always a JSON object (constructed from
+    // `json!({...})` upstream), so `as_object().is_some_and(...)` is the
+    // unwrap-free equivalent that survives the Q5.1 sweep.
+    if generation_config
+      .as_object()
+      .is_some_and(|obj| !obj.is_empty())
+    {
       body["generationConfig"] = generation_config;
     }
 

@@ -419,11 +419,11 @@ impl UpdateResult {
   }
 }
 
-impl Default for ConfigUpdater {
-  fn default() -> Self {
-    Self::new().expect("Failed to create ConfigUpdater")
-  }
-}
+// `Default` is intentionally not implemented: `Self::new()` is fallible
+// (returns `Result<Self>`) because the underlying `ModelFetcher::new()` can
+// fail to build the HTTP client. Callers go through `ConfigUpdater::new()?`
+// so they can surface the error. A panic-inside-`default()` would violate
+// the user-rules "no unwrap/expect in production" sweep (Q5.1).
 
 #[cfg(test)]
 mod tests {
