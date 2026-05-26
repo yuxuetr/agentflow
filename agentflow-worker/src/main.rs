@@ -97,7 +97,11 @@ async fn run() -> Result<(), String> {
 
 async fn run_runtime<P>(runtime: WorkerRuntime<P>, once: bool) -> Result<(), String>
 where
-  P: agentflow_server::WorkerProtocol,
+  // Q3.3.2: `run_forever` spawns concurrent dispatches and needs
+  // `P: Clone + Send + 'static` to share the protocol handle across
+  // spawned tasks. Both `InMemoryWorkerProtocol` and
+  // `GrpcWorkerProtocol` already derive `Clone`.
+  P: agentflow_server::WorkerProtocol + Clone + Send + 'static,
 {
   if once {
     let _ = runtime.run_once().await.map_err(|e| e.to_string())?;

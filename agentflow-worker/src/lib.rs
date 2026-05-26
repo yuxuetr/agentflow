@@ -276,6 +276,14 @@ pub struct WorkerRuntime<P> {
   protocol: P,
   config: WorkerConfig,
   cancellation: WorkerCancellationToken,
+  /// Q3.3.2: free-slot semaphore. Initialised to `config.free_slots`
+  /// permits at construction. Every concurrent dispatch in
+  /// `run_forever` acquires one permit; the heartbeat reports the
+  /// real-time `available_permits()` count instead of the static
+  /// config value, so the scheduler's placement decisions match
+  /// what the worker can actually accept. With `free_slots = 1`
+  /// the behavior is identical to pre-Q3.3.2 (serial dispatch).
+  dispatch_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl<P> WorkerRuntime<P>
@@ -283,10 +291,21 @@ where
   P: WorkerProtocol,
 {
   pub fn new(protocol: P, config: WorkerConfig) -> Self {
+    // Q3.3.2: clamp to >= 1 so a misconfigured `free_slots = 0` does
+    // not deadlock the dispatcher (semaphore::acquire would block
+    // forever). Surface a warn so the operator notices the override.
+    let slots = config.free_slots.max(1) as usize;
+    if slots != config.free_slots as usize {
+      eprintln!(
+        "agentflow-worker: free_slots={} clamped to 1 to avoid dispatch deadlock",
+        config.free_slots
+      );
+    }
     Self {
       protocol,
       config,
       cancellation: WorkerCancellationToken::new(),
+      dispatch_slots: Arc::new(tokio::sync::Semaphore::new(slots)),
     }
   }
 
@@ -302,11 +321,21 @@ where
   }
 
   /// Run one heartbeat/claim/execute/report cycle.
+  ///
+  /// Q3.3.2: the heartbeat now reports the dynamic
+  /// `dispatch_slots.available_permits()` count rather than the
+  /// static `config.free_slots`. With concurrent dispatch in
+  /// `run_forever` this lets the server see "this worker is
+  /// currently saturated; route elsewhere" without waiting for a
+  /// stale-heartbeat timeout. Single-dispatch callers of
+  /// `run_once` continue to see the configured value because no
+  /// permit is held at the call site.
   pub async fn run_once(&self) -> Result<Option<WorkerTask>, WorkerError> {
+    let advertised_free = self.dispatch_slots.available_permits() as u32;
     self
       .protocol
       .heartbeat(
-        WorkerHeartbeat::now(self.config.worker_id.clone(), None, self.config.free_slots)
+        WorkerHeartbeat::now(self.config.worker_id.clone(), None, advertised_free)
           .with_capabilities(self.config.capabilities.clone()),
       )
       .await?;
@@ -337,38 +366,68 @@ where
     Ok(Some(task))
   }
 
-  /// Run until cancelled. Q3.1.3: `SchedulerError::Transport` is now
-  /// treated as recoverable — `run_forever` logs the error and sleeps
-  /// with jittered exponential backoff before retrying, rather than
-  /// aborting the process on the first control-plane blip. Non-
-  /// transport errors (e.g. `InvalidWorkerId`, `TaskNotClaimed`) are
-  /// still fatal so misconfigurations surface loudly.
-  pub async fn run_forever(&self) -> Result<(), WorkerError> {
+  /// Run until cancelled. Q3.1.3 + Q3.3.2: the loop dispatches up
+  /// to `config.free_slots` concurrent tasks, with each in-flight
+  /// claim holding one semaphore permit until the spawned execute+
+  /// report future completes. With `free_slots = 1` the behavior
+  /// matches the pre-Q3.3.2 serial dispatcher; with `free_slots > 1`
+  /// the loop saturates concurrent capacity instead of pinning at 1
+  /// task per `poll_interval`.
+  ///
+  /// Error handling mirrors the prior serial loop: transport errors
+  /// from the claim path trigger backoff retry; other errors are
+  /// fatal; SIGTERM unblocks the backoff sleep immediately.
+  pub async fn run_forever(&self) -> Result<(), WorkerError>
+  where
+    P: Clone + Send + 'static,
+  {
     let mut last_backoff: Option<Duration> = None;
     let mut transport_failures: u32 = 0;
     loop {
       if self.cancellation.is_cancelled() {
+        // Wait for any in-flight dispatch to surrender its permit
+        // before returning. The semaphore caps at `free_slots`
+        // total permits, so once we can re-acquire all of them
+        // every spawned task has finished.
+        let total = self.config.free_slots.max(1) as u32;
+        let _drain = self
+          .dispatch_slots
+          .acquire_many(total)
+          .await
+          .ok(); // semaphore can be closed; ignore in shutdown path
         return Ok(());
       }
-      match self.run_once().await {
-        Ok(_) => {
-          // Reset the backoff curve only on a successful cycle. The
-          // claim itself may have returned `Ok(None)` (idle queue) —
-          // that still proves the transport is healthy.
+
+      // Q3.3.2: block here until a slot is free. Race against the
+      // cancellation token so SIGTERM doesn't wait for in-flight
+      // tasks indefinitely (the drain branch above runs next).
+      let permit = {
+        let acquire_fut = self.dispatch_slots.clone().acquire_owned();
+        tokio::pin!(acquire_fut);
+        tokio::select! {
+          permit = &mut acquire_fut => match permit {
+            Ok(p) => p,
+            Err(_) => return Ok(()), // semaphore closed
+          },
+          _ = wait_for_cancel(&self.cancellation) => continue,
+        }
+      };
+
+      match self.dispatch_one_with_permit(permit).await {
+        Ok(()) => {
           last_backoff = None;
           transport_failures = 0;
-          sleep(self.config.poll_interval).await;
         }
         Err(WorkerError::Scheduler(SchedulerError::Transport { message })) => {
           transport_failures = transport_failures.saturating_add(1);
-          if let Some(cap) = self.config.reconnect_backoff.max_attempts {
-            if transport_failures > cap {
-              eprintln!(
-                "agentflow-worker: transport error past --max-reconnect-attempts ({cap}); \
-                 giving up. last error: {message}"
-              );
-              return Err(WorkerError::Scheduler(SchedulerError::Transport { message }));
-            }
+          if let Some(cap) = self.config.reconnect_backoff.max_attempts
+            && transport_failures > cap
+          {
+            eprintln!(
+              "agentflow-worker: transport error past --max-reconnect-attempts ({cap}); \
+               giving up. last error: {message}"
+            );
+            return Err(WorkerError::Scheduler(SchedulerError::Transport { message }));
           }
           let delay = self.config.reconnect_backoff.next_delay(last_backoff);
           eprintln!(
@@ -376,8 +435,6 @@ where
              retrying in {delay:?}. error: {message}"
           );
           last_backoff = Some(delay);
-          // Race the backoff sleep against cancellation so SIGTERM
-          // unblocks the loop without waiting the full curve.
           let sleep_fut = sleep(delay);
           tokio::pin!(sleep_fut);
           tokio::select! {
@@ -388,6 +445,74 @@ where
         Err(other) => return Err(other),
       }
     }
+  }
+
+  /// Q3.3.2: claim + dispatch one task with the supplied permit
+  /// in hand. The permit is moved into the spawned task and
+  /// released only when execute+report completes, so the
+  /// semaphore acts as the real free_slots gate.
+  ///
+  /// Returns `Ok(())` on (a) claim returned no task — permit is
+  /// released here so the next loop iteration can re-claim, OR
+  /// (b) a task was successfully spawned. Returns `Err` only on
+  /// heartbeat / claim transport failures (so `run_forever`'s
+  /// backoff branch fires); execute+report errors live inside
+  /// the spawned task and are reported back through the
+  /// protocol as `WorkerTaskResult::Failed`.
+  async fn dispatch_one_with_permit(
+    &self,
+    permit: tokio::sync::OwnedSemaphorePermit,
+  ) -> Result<(), WorkerError>
+  where
+    P: Clone + Send + 'static,
+  {
+    let advertised_free = self.dispatch_slots.available_permits() as u32;
+    self
+      .protocol
+      .heartbeat(
+        WorkerHeartbeat::now(self.config.worker_id.clone(), None, advertised_free)
+          .with_capabilities(self.config.capabilities.clone()),
+      )
+      .await?;
+    let hints = ClaimHints::default().with_capabilities(self.config.capabilities.clone());
+    let Some(task) = self
+      .protocol
+      .claim_task_with_hints(self.config.worker_id.clone(), &hints)
+      .await?
+    else {
+      // No work — release the permit immediately so the next iter
+      // can try again. `permit` drops at end of scope, but we make
+      // it explicit so future readers don't think it leaks.
+      drop(permit);
+      // Idle pause so we don't tight-loop the control plane.
+      let sleep_fut = sleep(self.config.poll_interval);
+      tokio::pin!(sleep_fut);
+      tokio::select! {
+        _ = &mut sleep_fut => {}
+        _ = wait_for_cancel(&self.cancellation) => {}
+      }
+      return Ok(());
+    };
+
+    // Spawn execute+report; the permit lives until the task ends.
+    let protocol = self.protocol.clone();
+    let worker_id = self.config.worker_id.clone();
+    let limits = self.config.resource_limits.clone();
+    let cancellation = self.cancellation.clone();
+    tokio::spawn(async move {
+      let result = execute_stub(&worker_id, &task, &limits, &cancellation).await;
+      if let Err(err) = protocol.report_result(worker_id, task.task_id, result).await {
+        // Best-effort: log + drop. The scheduler will eventually
+        // requeue the task via stale-heartbeat reaping.
+        eprintln!(
+          "agentflow-worker: failed to report result for task {}: {err}",
+          task.task_id
+        );
+      }
+      // permit drops here, freeing the slot.
+      drop(permit);
+    });
+    Ok(())
   }
 }
 
@@ -1374,6 +1499,325 @@ mod tests {
       result.is_ok(),
       "run_forever must return Ok after cancel mid-backoff; got {result:?}"
     );
+  }
+
+  // ─── Q3.3.2 free_slots parallel dispatch suite ───────────────────
+
+  /// Protocol that holds a configurable queue of tasks and slows
+  /// `report_result` by a fixed delay so we can observe whether the
+  /// runtime's spawn-per-permit machinery actually achieves wall-
+  /// clock concurrency. `claims_observed` + `reports_observed` are
+  /// the assertion knobs.
+  struct SlowReportProtocol {
+    queue: std::sync::Mutex<std::collections::VecDeque<WorkerTask>>,
+    report_delay: Duration,
+    /// Atomic counter of completed `report_result` calls.
+    reports_observed: std::sync::atomic::AtomicU32,
+    /// Tracks the high-water mark of concurrent reports in flight.
+    /// `run_forever` must drive this above 1 for a parallel test.
+    in_flight: std::sync::atomic::AtomicU32,
+    max_concurrent: std::sync::atomic::AtomicU32,
+  }
+
+  impl SlowReportProtocol {
+    fn new(tasks: Vec<WorkerTask>, report_delay: Duration) -> Self {
+      Self {
+        queue: std::sync::Mutex::new(tasks.into()),
+        report_delay,
+        reports_observed: std::sync::atomic::AtomicU32::new(0),
+        in_flight: std::sync::atomic::AtomicU32::new(0),
+        max_concurrent: std::sync::atomic::AtomicU32::new(0),
+      }
+    }
+  }
+
+  #[async_trait::async_trait]
+  impl WorkerProtocol for SlowReportProtocol {
+    async fn submit_task(&self, _task: WorkerTask) -> Result<(), SchedulerError> {
+      Ok(())
+    }
+    async fn claim_task(
+      &self,
+      _worker_id: WorkerId,
+    ) -> Result<Option<WorkerTask>, SchedulerError> {
+      Ok(self.queue.lock().unwrap().pop_front())
+    }
+    async fn report_result(
+      &self,
+      _worker_id: WorkerId,
+      _task_id: Uuid,
+      _result: WorkerTaskResult,
+    ) -> Result<(), SchedulerError> {
+      use std::sync::atomic::Ordering;
+      // Bump in_flight + record the high water mark atomically.
+      let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+      self
+        .max_concurrent
+        .fetch_max(now, Ordering::SeqCst);
+      tokio::time::sleep(self.report_delay).await;
+      self.in_flight.fetch_sub(1, Ordering::SeqCst);
+      self.reports_observed.fetch_add(1, Ordering::SeqCst);
+      Ok(())
+    }
+    async fn heartbeat(
+      &self,
+      _heartbeat: WorkerHeartbeat,
+    ) -> Result<(), SchedulerError> {
+      Ok(())
+    }
+  }
+
+  #[derive(Clone)]
+  struct ArcSlowProtocol(Arc<SlowReportProtocol>);
+
+  #[async_trait::async_trait]
+  impl WorkerProtocol for ArcSlowProtocol {
+    async fn submit_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
+      self.0.submit_task(task).await
+    }
+    async fn claim_task(
+      &self,
+      worker_id: WorkerId,
+    ) -> Result<Option<WorkerTask>, SchedulerError> {
+      self.0.claim_task(worker_id).await
+    }
+    async fn report_result(
+      &self,
+      worker_id: WorkerId,
+      task_id: Uuid,
+      result: WorkerTaskResult,
+    ) -> Result<(), SchedulerError> {
+      self.0.report_result(worker_id, task_id, result).await
+    }
+    async fn heartbeat(
+      &self,
+      heartbeat: WorkerHeartbeat,
+    ) -> Result<(), SchedulerError> {
+      self.0.heartbeat(heartbeat).await
+    }
+  }
+
+  /// Q3.3.2 — `free_slots = 4` must actually let 4 dispatches run
+  /// in parallel. The mock `report_result` sleeps 400ms and tracks
+  /// the high-water concurrency mark; with `free_slots = 4` the
+  /// runtime should drive the mark to 4 (or close to it) and the
+  /// 4 reports should finish in ~400ms wall clock, not 4×400ms
+  /// serial.
+  #[tokio::test]
+  async fn free_slots_4_dispatches_concurrently() {
+    use std::sync::atomic::Ordering;
+    let run_id = Uuid::new_v4();
+    let tasks: Vec<WorkerTask> = (0..4)
+      .map(|i| WorkerTask::new(run_id, format!("node-{i}"), serde_json::json!({"n": i})))
+      .collect();
+    let slow = Arc::new(SlowReportProtocol::new(
+      tasks,
+      Duration::from_millis(400),
+    ));
+    let mut config = WorkerConfig::new(
+      WorkerId::new("worker-parallel").unwrap(),
+      "memory://local",
+    );
+    config.free_slots = 4;
+    config.poll_interval = Duration::from_millis(10);
+    let runtime = WorkerRuntime::new(ArcSlowProtocol(slow.clone()), config);
+    let cancel = runtime.cancellation_token();
+
+    let started = std::time::Instant::now();
+    let join = tokio::spawn(async move { runtime.run_forever().await });
+    // Wait until the queue is drained.
+    for _ in 0..200 {
+      if slow.reports_observed.load(Ordering::SeqCst) >= 4 {
+        break;
+      }
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let elapsed = started.elapsed();
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
+
+    assert_eq!(
+      slow.reports_observed.load(Ordering::SeqCst),
+      4,
+      "all 4 tasks must be reported"
+    );
+    let peak = slow.max_concurrent.load(Ordering::SeqCst);
+    assert!(
+      peak >= 2,
+      "Q3.3.2: peak in-flight reports must exceed 1 (parallel dispatch); got {peak}"
+    );
+    // Serial wall clock would be ≥ 4 × 400ms = 1600ms.
+    // Parallel with free_slots=4 should land near 400ms; allow
+    // generous headroom for spawn + scheduler scheduling.
+    assert!(
+      elapsed < Duration::from_millis(1200),
+      "Q3.3.2: 4 × 400ms parallel reports must finish < 1.2s; took {elapsed:?}"
+    );
+  }
+
+  /// Q3.3.2 — `free_slots = 1` must preserve the pre-Q3.3.2 serial
+  /// behavior: peak in-flight stays at 1.
+  #[tokio::test]
+  async fn free_slots_1_keeps_serial_dispatch() {
+    use std::sync::atomic::Ordering;
+    let run_id = Uuid::new_v4();
+    let tasks: Vec<WorkerTask> = (0..3)
+      .map(|i| WorkerTask::new(run_id, format!("node-{i}"), serde_json::json!({})))
+      .collect();
+    let slow = Arc::new(SlowReportProtocol::new(
+      tasks,
+      Duration::from_millis(50),
+    ));
+    let mut config = WorkerConfig::new(
+      WorkerId::new("worker-serial").unwrap(),
+      "memory://local",
+    );
+    config.free_slots = 1;
+    config.poll_interval = Duration::from_millis(5);
+    let runtime = WorkerRuntime::new(ArcSlowProtocol(slow.clone()), config);
+    let cancel = runtime.cancellation_token();
+    let join = tokio::spawn(async move { runtime.run_forever().await });
+    for _ in 0..200 {
+      if slow.reports_observed.load(Ordering::SeqCst) >= 3 {
+        break;
+      }
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
+    let peak = slow.max_concurrent.load(Ordering::SeqCst);
+    assert_eq!(
+      peak, 1,
+      "free_slots=1 must serialize; got peak in-flight {peak}"
+    );
+  }
+
+  /// Q3.3.2 — heartbeat must report dynamic available_permits, not
+  /// the static config value. We capture the heartbeat
+  /// `free_slots` field by intercepting via a custom protocol
+  /// that records every heartbeat call.
+  #[tokio::test]
+  async fn heartbeat_reports_dynamic_available_permits() {
+    use std::sync::atomic::Ordering;
+
+    struct HeartbeatRecorder {
+      observed_free: std::sync::Mutex<Vec<u32>>,
+      block_report: tokio::sync::Notify,
+      report_seen: std::sync::atomic::AtomicU32,
+    }
+    #[async_trait::async_trait]
+    impl WorkerProtocol for HeartbeatRecorder {
+      async fn submit_task(&self, _task: WorkerTask) -> Result<(), SchedulerError> {
+        Ok(())
+      }
+      async fn claim_task(
+        &self,
+        _worker_id: WorkerId,
+      ) -> Result<Option<WorkerTask>, SchedulerError> {
+        // Only hand out one task — we want to see the heartbeat
+        // drop the advertised free count once a permit is held.
+        if self.report_seen.load(Ordering::SeqCst) == 0 {
+          Ok(Some(WorkerTask::new(
+            Uuid::new_v4(),
+            "node-a",
+            serde_json::json!({}),
+          )))
+        } else {
+          Ok(None)
+        }
+      }
+      async fn report_result(
+        &self,
+        _worker_id: WorkerId,
+        _task_id: Uuid,
+        _result: WorkerTaskResult,
+      ) -> Result<(), SchedulerError> {
+        // Block until the test releases us — gives us a window where
+        // the permit is held so the next heartbeat sees free=1
+        // instead of 2.
+        self.block_report.notified().await;
+        self.report_seen.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+      }
+      async fn heartbeat(
+        &self,
+        heartbeat: WorkerHeartbeat,
+      ) -> Result<(), SchedulerError> {
+        self.observed_free.lock().unwrap().push(heartbeat.free_slots);
+        Ok(())
+      }
+    }
+    #[derive(Clone)]
+    struct ArcRecorder(Arc<HeartbeatRecorder>);
+    #[async_trait::async_trait]
+    impl WorkerProtocol for ArcRecorder {
+      async fn submit_task(&self, t: WorkerTask) -> Result<(), SchedulerError> {
+        self.0.submit_task(t).await
+      }
+      async fn claim_task(
+        &self,
+        w: WorkerId,
+      ) -> Result<Option<WorkerTask>, SchedulerError> {
+        self.0.claim_task(w).await
+      }
+      async fn report_result(
+        &self,
+        w: WorkerId,
+        t: Uuid,
+        r: WorkerTaskResult,
+      ) -> Result<(), SchedulerError> {
+        self.0.report_result(w, t, r).await
+      }
+      async fn heartbeat(&self, h: WorkerHeartbeat) -> Result<(), SchedulerError> {
+        self.0.heartbeat(h).await
+      }
+    }
+
+    let recorder = Arc::new(HeartbeatRecorder {
+      observed_free: std::sync::Mutex::new(Vec::new()),
+      block_report: tokio::sync::Notify::new(),
+      report_seen: std::sync::atomic::AtomicU32::new(0),
+    });
+    let mut config = WorkerConfig::new(
+      WorkerId::new("worker-hb").unwrap(),
+      "memory://local",
+    );
+    config.free_slots = 2;
+    config.poll_interval = Duration::from_millis(5);
+    let runtime = WorkerRuntime::new(ArcRecorder(recorder.clone()), config);
+    let cancel = runtime.cancellation_token();
+    let join = tokio::spawn(async move { runtime.run_forever().await });
+
+    // Wait long enough for run_forever to: heartbeat (free=2), claim
+    // (acquires permit, now 1 left), spawn report (which blocks),
+    // loop back, acquire 2nd permit, heartbeat (free=1 now), then
+    // get Ok(None) on claim and idle-sleep.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let observed = recorder.observed_free.lock().unwrap().clone();
+    // Note: heartbeat happens AFTER the permit is acquired inside
+    // dispatch_one_with_permit, so the highest free count we
+    // observe is one less than `config.free_slots`. The key
+    // assertion is that free MOVES (which proves the value is
+    // dynamic, not the static config) and at least one heartbeat
+    // hit the lower bound.
+    assert!(
+      !observed.is_empty(),
+      "must observe at least one heartbeat; got {observed:?}"
+    );
+    assert!(
+      observed.iter().any(|n| *n < 2),
+      "Q3.3.2: heartbeat must observe free_slots < 2 while a permit is held; got {observed:?}"
+    );
+    assert!(
+      observed.iter().any(|n| *n == 0),
+      "Q3.3.2: once both permits are held, heartbeat must report 0; got {observed:?}"
+    );
+
+    // Release the blocked report so the runtime can drain.
+    recorder.block_report.notify_waiters();
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
   }
 
   /// Thin Arc wrapper so we can share a single FlakyProtocol between
