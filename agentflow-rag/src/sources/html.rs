@@ -52,14 +52,29 @@ pub struct HtmlLoader {
   content_selector: Option<String>,
   /// Remove script and style tags
   remove_scripts: bool,
+  /// Q3.9.6: file-size cap in bytes. `scraper::Html::parse_document`
+  /// is roughly O(n) memory in the document size and a malicious
+  /// upload (or an unbounded crawl target) can easily push hundreds
+  /// of MiB through this loader. The 10 MiB default fits any real
+  /// web page (the median page is ~2 MiB) while still bounding the
+  /// blast radius. `None` disables the cap for trusted pipelines.
+  max_bytes: Option<u64>,
 }
 
+/// Q3.9.6: default `max_bytes` cap for the HTML loader.
+/// 10 MiB is well above the median web page size (~2 MiB) so this
+/// rarely fires in practice — it exists to bound the blast radius
+/// of a malicious upload or a runaway crawl target.
+pub const DEFAULT_HTML_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 impl HtmlLoader {
-  /// Create a new HTML loader
+  /// Create a new HTML loader with a 10 MiB file-size cap. Pass
+  /// `Some(N)` / `None` to [`Self::with_max_bytes`] to override.
   pub fn new() -> Self {
     Self {
       content_selector: None,
       remove_scripts: true,
+      max_bytes: Some(DEFAULT_HTML_MAX_BYTES),
     }
   }
 
@@ -80,6 +95,13 @@ impl HtmlLoader {
   /// Include script and style tags in content
   pub fn include_scripts(mut self) -> Self {
     self.remove_scripts = false;
+    self
+  }
+
+  /// Q3.9.6: override the file-size cap. Pass `Some(N)` to lower /
+  /// raise the limit, or `None` to disable entirely.
+  pub fn with_max_bytes(mut self, max_bytes: Option<u64>) -> Self {
+    self.max_bytes = max_bytes;
     self
   }
 
@@ -156,7 +178,39 @@ impl Default for HtmlLoader {
 #[async_trait]
 impl DocumentLoader for HtmlLoader {
   async fn load(&self, path: &Path) -> Result<Document> {
+    // Q3.9.6: stat-and-check before allocating the full string.
+    if let Some(max) = self.max_bytes {
+      let metadata = fs::metadata(path)
+        .await
+        .map_err(|e| crate::error::RAGError::DocumentError {
+          message: format!("Failed to stat HTML {}: {}", path.display(), e),
+        })?;
+      if metadata.len() > max {
+        return Err(crate::error::RAGError::DocumentError {
+          message: format!(
+            "HTML {} is {} bytes which exceeds the configured max_bytes={}; \
+             raise the limit with HtmlLoader::with_max_bytes or `None` to disable",
+            path.display(),
+            metadata.len(),
+            max
+          ),
+        });
+      }
+    }
     let html_content = fs::read_to_string(path).await?;
+    // Re-check after read in case the file was being written to.
+    if let Some(max) = self.max_bytes
+      && html_content.len() as u64 > max
+    {
+      return Err(crate::error::RAGError::DocumentError {
+        message: format!(
+          "HTML {} grew to {} bytes during read which exceeds max_bytes={}",
+          path.display(),
+          html_content.len(),
+          max
+        ),
+      });
+    }
     let text = self.extract_text(&html_content)?;
 
     let mut doc = Document::new(text);
@@ -265,10 +319,10 @@ mod tests {
 
     assert!(doc.content.contains("Hello"));
     assert!(doc.content.contains("World"));
-    assert_eq!(
-      doc.metadata.get("file_type").unwrap().to_string(),
-      "\"html\""
-    );
+    assert!(matches!(
+      doc.metadata.get("file_type"),
+      Some(crate::types::MetadataValue::String(s)) if s == "html"
+    ));
   }
 
   #[tokio::test]
@@ -337,10 +391,10 @@ mod tests {
     let loader = HtmlLoader::new();
     let doc = loader.load(&file_path).await.unwrap();
 
-    assert_eq!(
-      doc.metadata.get("title").unwrap().to_string(),
-      "\"Page Title\""
-    );
+    assert!(matches!(
+      doc.metadata.get("title"),
+      Some(crate::types::MetadataValue::String(s)) if s == "Page Title"
+    ));
   }
 
   #[test]
@@ -348,5 +402,35 @@ mod tests {
     let loader = HtmlLoader::new();
     let exts = loader.supported_extensions();
     assert_eq!(exts, vec!["html", "htm"]);
+  }
+
+  /// Q3.9.6 regression — HTML files above the configured cap must
+  /// fail fast instead of being loaded into scraper's parser.
+  #[tokio::test]
+  async fn html_loader_rejects_files_above_max_bytes() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("oversize.html");
+    // 4 KiB of HTML-looking content — bigger than our 1 KiB cap.
+    let big = "<html><body>".to_string()
+      + &"<p>filler</p>".repeat(400)
+      + "</body></html>";
+    fs::write(&file_path, &big).await.unwrap();
+    assert!(big.len() > 1024);
+
+    let loader = HtmlLoader::new().with_max_bytes(Some(1024));
+    let err = loader.load(&file_path).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+      msg.contains("exceeds the configured max_bytes")
+        || msg.contains("exceeds max_bytes"),
+      "error must explain the size-cap rejection; got: {msg}"
+    );
+  }
+
+  #[test]
+  fn html_loader_default_has_10_mib_cap() {
+    let loader = HtmlLoader::default();
+    assert_eq!(loader.max_bytes, Some(DEFAULT_HTML_MAX_BYTES));
+    assert_eq!(DEFAULT_HTML_MAX_BYTES, 10 * 1024 * 1024);
   }
 }
