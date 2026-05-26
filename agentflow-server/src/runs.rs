@@ -746,18 +746,14 @@ async fn next_event_seq(
   tenant_id: &str,
   run_id: Uuid,
 ) -> Result<i64, ApiError> {
-  let events = repos
-    .events
-    .list_after(tenant_id, run_id, -1, 10_000)
-    .await?;
-  Ok(
-    events
-      .iter()
-      .map(|event| event.seq)
-      .max()
-      .map(|seq| seq + 1)
-      .unwrap_or(0),
-  )
+  // Q3.11.1: O(1) `MAX(seq)` aggregate instead of paging
+  // `list_after(..., 10_000)`. A run with > 10 000 events would
+  // silently roll the seq counter back to a value already in
+  // `events.(run_id, seq)` and collide the primary key on the next
+  // `append`. Mirrors the long-standing pattern already used by
+  // `harness_events.max_seq`.
+  let max = repos.events.max_seq(tenant_id, run_id).await?;
+  Ok(max.map(|seq| seq + 1).unwrap_or(0))
 }
 
 /// `GET /v1/runs/{id}/resume-plan` — derive a structured resume plan

@@ -73,6 +73,15 @@ pub trait EventRepo: Send + Sync {
     after_seq: i64,
     limit: i64,
   ) -> Result<Vec<Event>, DbError>;
+  /// Q3.11.1: return the largest `seq` recorded for `(tenant_id,
+  /// run_id)`, or `None` if no events exist yet. Used by
+  /// `agentflow-server`'s `next_event_seq` helper instead of paging
+  /// `list_after(..., 10_000)`: a run with > 10 000 events would
+  /// silently roll the seq counter back to a value already in
+  /// `events.(run_id, seq)` and collide the primary key. Mirrors
+  /// [`HarnessEventRepo::max_seq`]; SQL is a one-row `MAX(seq)`
+  /// scan that uses the `events_tenant_run_idx` covering index.
+  async fn max_seq(&self, tenant_id: &str, run_id: Uuid) -> Result<Option<i64>, DbError>;
 }
 
 #[async_trait]
@@ -378,6 +387,23 @@ impl EventRepo for PgEventRepo {
     .fetch_all(&self.read_pool)
     .await?;
     Ok(rows)
+  }
+
+  async fn max_seq(&self, tenant_id: &str, run_id: Uuid) -> Result<Option<i64>, DbError> {
+    // Q3.11.1: single-row aggregate over the `events_tenant_run_idx`
+    // covering index — O(1) reads regardless of how many events the
+    // run has accumulated. Replaces the previous
+    // `list_after(..., 10_000)` workaround that silently rolled the
+    // seq counter back into a colliding range once a run crossed
+    // the cap.
+    let row: Option<(Option<i64>,)> = sqlx::query_as(
+      "SELECT MAX(seq) FROM events WHERE tenant_id = $1 AND run_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_optional(&self.read_pool)
+    .await?;
+    Ok(row.and_then(|(value,)| value))
   }
 }
 

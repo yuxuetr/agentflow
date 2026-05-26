@@ -837,21 +837,20 @@ async fn publish_cancel_event(
 
 async fn next_event_seq(
   repos: &Repositories,
-  tenant_id: &str,
+  _tenant_id: &str,
   session_id: Uuid,
 ) -> Result<i64, ApiError> {
-  let events = repos
-    .harness_events
-    .list_after(tenant_id, session_id, -1, 10_000)
-    .await?;
-  Ok(
-    events
-      .iter()
-      .map(|event| event.seq)
-      .max()
-      .map(|seq| seq + 1)
-      .unwrap_or(0),
-  )
+  // Q3.11.1: O(1) MAX(seq) aggregate instead of paging
+  // `list_after(..., 10_000)`. A session whose event count crossed
+  // the cap would have silently rolled the seq counter back into a
+  // colliding range, breaking the
+  // `harness_session_events.(session_id, seq)` primary key on the
+  // next `append`. `harness_events.max_seq` itself enforces the
+  // tenant boundary via FK join to `harness_sessions`, so the
+  // tenant_id parameter stays on the surface for symmetry with
+  // [`runs.rs::next_event_seq`] but is not forwarded.
+  let max = repos.harness_events.max_seq(session_id).await?;
+  Ok(max.map(|seq| seq + 1).unwrap_or(0))
 }
 
 /// `GET /v1/harness/sessions/{id}/events` — SSE stream.
