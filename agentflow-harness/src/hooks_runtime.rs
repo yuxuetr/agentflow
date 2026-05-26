@@ -82,6 +82,15 @@ pub struct HookConfig {
   /// share the same monotonic `seq` namespace as the run lifecycle
   /// events (`session_started` / `stopped` / etc).
   seq_counter: Arc<AtomicU64>,
+  /// Q3.10.1: monotonic step index handed to each `PendingToolCall`
+  /// the hooked registry emits. Pre-Q3.10.1 `build_pending` hardcoded
+  /// `step_index: 0`, so every approval / hook event the operator
+  /// audit log showed claimed to belong to the first step — making
+  /// it impossible to correlate a denied tool call with the agent
+  /// step that requested it. Increments per `execute` call. Callers
+  /// can plug their own counter via [`HookConfig::with_step_index_counter`]
+  /// when an upstream coordinator already owns the step series.
+  step_index_counter: Arc<AtomicU64>,
 }
 
 impl HookConfig {
@@ -131,6 +140,7 @@ impl HookConfig {
       hook_timeout: DEFAULT_HOOK_TIMEOUT,
       approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
       seq_counter: Arc::new(AtomicU64::new(0)),
+      step_index_counter: Arc::new(AtomicU64::new(0)),
     }
   }
 
@@ -176,6 +186,16 @@ impl HookConfig {
     self.seq_counter = counter;
     self
   }
+
+  /// Q3.10.1: inject a pre-existing step counter so the hook layer's
+  /// `PendingToolCall.step_index` series shares numbering with any
+  /// upstream coordinator (e.g. the live server's per-session step
+  /// dispatcher). Default `None` keeps the auto-incrementing
+  /// per-config counter behaviour.
+  pub fn with_step_index_counter(mut self, counter: Arc<AtomicU64>) -> Self {
+    self.step_index_counter = counter;
+    self
+  }
 }
 
 /// Wrap every tool already registered in `registry` with a
@@ -194,6 +214,7 @@ pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegi
     hook_timeout: config.hook_timeout,
     approval_timeout: config.approval_timeout,
     seq_counter: config.seq_counter,
+    step_index_counter: config.step_index_counter,
     approval_cache: Arc::new(Mutex::new(ApprovalCache::default())),
   });
   let tools = registry.list();
@@ -217,6 +238,9 @@ struct SharedHookConfig {
   hook_timeout: Duration,
   approval_timeout: Duration,
   seq_counter: Arc<AtomicU64>,
+  /// Q3.10.1: per-call monotonic step index source. See
+  /// [`HookConfig::step_index_counter`] for the rationale.
+  step_index_counter: Arc<AtomicU64>,
   approval_cache: Arc<Mutex<ApprovalCache>>,
 }
 
@@ -336,9 +360,23 @@ impl HookedTool {
     requested_at: chrono::DateTime<chrono::Utc>,
   ) -> PendingToolCall {
     let metadata = self.inner.metadata();
+    // Q3.10.1: increment the shared step counter so each emitted
+    // `PendingToolCall` carries a unique monotonic step_index instead
+    // of the hardcoded `0` every call used to claim. Operators
+    // correlating an approval prompt with an agent step now have a
+    // real ordinal to grep on.
+    //
+    // PendingToolCall.step_index is `usize`; the counter is `u64` so
+    // a shared series with the runtime never wraps on 32-bit. `as
+    // usize` truncates above 2^32 on 32-bit targets, which is way
+    // above any realistic per-session step count — a saturating
+    // conversion is the safe choice over `unwrap()`.
+    let step_index =
+      usize::try_from(self.config.step_index_counter.fetch_add(1, Ordering::SeqCst))
+        .unwrap_or(usize::MAX);
     PendingToolCall {
       session_id: self.config.session_id.clone(),
-      step_index: 0,
+      step_index,
       tool: self.inner.name().to_string(),
       source: Some(metadata.source.clone()),
       permissions: metadata.permissions.permissions.clone(),
@@ -459,7 +497,7 @@ impl HookedTool {
       cache.lookup(&pending.tool)
     } {
       self
-        .emit_cached_decision(&pending.tool, scope, outcome)
+        .emit_cached_decision(pending, scope, outcome, risk, &reason)
         .await?;
       return Ok(decide_from_outcome(outcome));
     }
@@ -521,18 +559,58 @@ impl HookedTool {
     Ok(decide_from_outcome(decision.decision))
   }
 
+  /// Q3.10.3: emit BOTH halves of the approval pair when reusing a
+  /// cached decision. Pre-fix this method emitted only the
+  /// `ApprovalDecided` envelope, so an operator tailing the SSE /
+  /// JSONL log saw `Decided` events with no matching `Requested` —
+  /// the UI's "pending approval" widget had nothing to render and
+  /// audit log replay broke its `request_id` correlation. The
+  /// synthetic `ApprovalRequested` carries the same `cached-*` id
+  /// the decision references, so the pair joins cleanly. The
+  /// `request_id` includes a uuid suffix so consecutive cached hits
+  /// for the same tool are still distinguishable.
   async fn emit_cached_decision(
     &self,
-    tool: &str,
+    pending: &PendingToolCall,
     scope: ApprovalScope,
     outcome: ApprovalOutcome,
+    risk: ApprovalRisk,
+    reason: &str,
   ) -> Result<(), HarnessError> {
+    let request_id = format!("cached-{}-{}", pending.tool, uuid::Uuid::new_v4());
+    let now = Utc::now();
+    // Same redaction rules as the live request path so the synthetic
+    // event cannot leak header values / API keys either.
+    let mut params_summary = pending.params.clone();
+    agentflow_tracing::redaction::redact_value(
+      &mut params_summary,
+      &agentflow_tracing::redaction::RedactionConfig::default(),
+    );
+    let request = ApprovalRequest {
+      id: request_id.clone(),
+      session_id: pending.session_id.clone(),
+      step_index: pending.step_index,
+      tool: pending.tool.clone(),
+      source: pending.source.clone(),
+      permissions: pending.permissions.clone(),
+      idempotency: pending.idempotency,
+      params_summary,
+      risk,
+      reason: reason.to_string(),
+      requested_at: now,
+      expires_at: None,
+    };
+    self
+      .emit_event(HarnessEventBody::ApprovalRequested(
+        ApprovalRequestedPayload { request },
+      ))
+      .await?;
     let decision = ApprovalDecision {
-      request_id: format!("cached-{tool}"),
+      request_id,
       decision: outcome,
       scope,
       decided_by: "cache".into(),
-      decided_at: Utc::now(),
+      decided_at: now,
       reason: Some(format!(
         "reused {:?}-scope decision from earlier call",
         scope
@@ -907,7 +985,12 @@ mod tests {
       "approval provider should be hit once"
     );
     let events = sink.snapshot().await;
-    // 1 request + 3 decisions (first real, 2 cached).
+    // Q3.10.3: pre-fix only the first call emitted an
+    // ApprovalRequested; cached hits emitted a bare ApprovalDecided
+    // with no matching `request_id`. Now each cached hit also
+    // emits its own synthetic ApprovalRequested (id `cached-*`) so
+    // the UI's pending-approval pairing and replay correlation
+    // both work. 3 calls → 3 Requested + 3 Decided.
     let requested = events
       .iter()
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_)))
@@ -916,8 +999,25 @@ mod tests {
       .iter()
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalDecided(_)))
       .count();
-    assert_eq!(requested, 1);
+    assert_eq!(requested, 3);
     assert_eq!(decided, 3);
+    // Pair up by request_id: every Decided must reference a Requested.
+    let request_ids: std::collections::HashSet<_> = events
+      .iter()
+      .filter_map(|e| match &e.body {
+        HarnessEventBody::ApprovalRequested(p) => Some(p.request.id.clone()),
+        _ => None,
+      })
+      .collect();
+    for event in &events {
+      if let HarnessEventBody::ApprovalDecided(p) = &event.body {
+        assert!(
+          request_ids.contains(&p.decision.request_id),
+          "Q3.10.3: Decided id {} must correlate to a Requested in the same stream",
+          p.decision.request_id
+        );
+      }
+    }
   }
 
   #[tokio::test]
@@ -1045,6 +1145,126 @@ mod tests {
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalDecided(_)))
       .count();
     assert_eq!(decided, 2, "expect a Decided event paired with each Requested");
+  }
+
+  /// Q3.10.1 regression — `PendingToolCall.step_index` must increment
+  /// per execute, not be hardcoded to 0. Pre-fix every approval /
+  /// hook event the operator saw claimed `step_index: 0`, making it
+  /// impossible to grep the audit log for the step that requested a
+  /// specific tool call.
+  #[tokio::test]
+  async fn pending_step_index_increments_per_call() {
+    use std::sync::Mutex as StdMutex;
+
+    // Pre-hook that captures the step_index it sees so the test can
+    // assert each successive call observed a distinct value. Always
+    // returns Allow so the call flow runs to completion.
+    struct StepIndexProbe {
+      seen: Arc<StdMutex<Vec<usize>>>,
+    }
+    #[async_trait]
+    impl PreToolHook for StepIndexProbe {
+      fn name(&self) -> &str {
+        "step_index_probe"
+      }
+      async fn before_tool(
+        &self,
+        call: &PendingToolCall,
+      ) -> Result<PreToolDecision, HarnessError> {
+        self.seen.lock().unwrap().push(call.step_index);
+        Ok(PreToolDecision::Allow)
+      }
+    }
+
+    let (tool, _) = ProbeTool::new("probe", ToolIdempotency::Idempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let seen = Arc::new(StdMutex::new(Vec::<usize>::new()));
+    let config = HookConfig::new(
+      "sess-step-index",
+      Arc::new(AutoAllowApprovalProvider::new()),
+      sinks,
+    )
+    .with_pre_hook(Arc::new(StepIndexProbe {
+      seen: seen.clone(),
+    }));
+    let registry = wrap_registry(registry, config);
+
+    for _ in 0..3 {
+      registry
+        .execute("probe", serde_json::json!({}))
+        .await
+        .unwrap();
+    }
+
+    let observed = seen.lock().unwrap().clone();
+    assert_eq!(
+      observed,
+      vec![0, 1, 2],
+      "Q3.10.1: step_index must increment monotonically per execute, got {observed:?}"
+    );
+  }
+
+  /// Q3.10.1 — `HookConfig::with_step_index_counter` lets an upstream
+  /// coordinator (e.g. a server-side dispatcher) share a single step
+  /// series across multiple wrapped registries.
+  #[tokio::test]
+  async fn shared_step_index_counter_is_honored() {
+    use std::sync::Mutex as StdMutex;
+
+    struct StepIndexProbe {
+      seen: Arc<StdMutex<Vec<usize>>>,
+    }
+    #[async_trait]
+    impl PreToolHook for StepIndexProbe {
+      fn name(&self) -> &str {
+        "step_index_probe"
+      }
+      async fn before_tool(
+        &self,
+        call: &PendingToolCall,
+      ) -> Result<PreToolDecision, HarnessError> {
+        self.seen.lock().unwrap().push(call.step_index);
+        Ok(PreToolDecision::Allow)
+      }
+    }
+
+    let counter = Arc::new(AtomicU64::new(42));
+    let (tool, _) = ProbeTool::new("probe", ToolIdempotency::Idempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let seen = Arc::new(StdMutex::new(Vec::<usize>::new()));
+    let config = HookConfig::new(
+      "sess-shared-step",
+      Arc::new(AutoAllowApprovalProvider::new()),
+      sinks,
+    )
+    .with_step_index_counter(counter.clone())
+    .with_pre_hook(Arc::new(StepIndexProbe {
+      seen: seen.clone(),
+    }));
+    let registry = wrap_registry(registry, config);
+
+    registry
+      .execute("probe", serde_json::json!({}))
+      .await
+      .unwrap();
+    registry
+      .execute("probe", serde_json::json!({}))
+      .await
+      .unwrap();
+
+    let observed = seen.lock().unwrap().clone();
+    assert_eq!(
+      observed,
+      vec![42, 43],
+      "Q3.10.1: injected counter must seed the step_index series"
+    );
+    // The counter is also bumped by the hook layer, so subsequent
+    // increments from the upstream coordinator continue from 44.
+    assert_eq!(counter.load(Ordering::SeqCst), 44);
   }
 
   /// Q3.10.2 regression — the synthetic gate events must carry the
