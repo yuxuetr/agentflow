@@ -76,6 +76,13 @@ pub struct ServeConfig {
 impl ServeConfig {
   pub fn defaults() -> Self {
     Self {
+      // `DEFAULT_SERVE_BIND` is a `const &str` set at line 39 to a literal
+      // `IPv4:port`; `SocketAddr::from_str` cannot fail on it. The expect
+      // is a build-time invariant, not a runtime panic risk on user input.
+      #[allow(
+        clippy::expect_used,
+        reason = "compile-time literal SocketAddr; covered by ServeConfig::defaults_round_trip test"
+      )]
       bind: DEFAULT_SERVE_BIND
         .parse()
         .expect("DEFAULT_SERVE_BIND is a valid SocketAddr"),
@@ -493,13 +500,8 @@ fn spawn_cleanup_loop(
     // first sweep kicks in.
     tokio::time::sleep(cfg.interval).await;
     loop {
-      match crate::cleanup::cleanup_expired(
-        &db,
-        run_dir.as_deref(),
-        trace_dir.as_deref(),
-        &cfg,
-      )
-      .await
+      match crate::cleanup::cleanup_expired(&db, run_dir.as_deref(), trace_dir.as_deref(), &cfg)
+        .await
       {
         Ok(report) => {
           info!(

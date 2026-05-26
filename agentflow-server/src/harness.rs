@@ -112,14 +112,25 @@ impl HarnessEventBroker {
     Self::default()
   }
 
+  /// Lock the per-session channel map, recovering on poison so a panicked
+  /// publisher can't deadlock every subsequent subscriber. The map is
+  /// mutated one channel-entry at a time, so the inner state is sound to
+  /// keep using after a poisoning panic. Mirrors `EventBroker::lock_inner`
+  /// in `events_stream.rs`. (Q5.1)
+  fn lock_inner(
+    &self,
+  ) -> std::sync::MutexGuard<'_, HashMap<Uuid, broadcast::Sender<StreamedHarnessEvent>>> {
+    match self.inner.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    }
+  }
+
   /// Subscribe to live events for `session_id`. Creates the channel if no
   /// subscriber has registered for this session yet so publishers don't
   /// need to coordinate with subscribers.
   pub fn subscribe(&self, session_id: Uuid) -> broadcast::Receiver<StreamedHarnessEvent> {
-    let mut map = self
-      .inner
-      .lock()
-      .expect("harness event broker mutex poisoned");
+    let mut map = self.lock_inner();
     map
       .entry(session_id)
       .or_insert_with(|| broadcast::channel(SESSION_CHANNEL_CAPACITY).0)
@@ -129,10 +140,7 @@ impl HarnessEventBroker {
   /// Publish without persisting. Use [`publish_through`] (free function
   /// below) when you also want a DB row.
   pub fn publish(&self, event: StreamedHarnessEvent) {
-    let mut map = self
-      .inner
-      .lock()
-      .expect("harness event broker mutex poisoned");
+    let mut map = self.lock_inner();
     let sender = map
       .entry(event.session_id)
       .or_insert_with(|| broadcast::channel(SESSION_CHANNEL_CAPACITY).0);
@@ -142,10 +150,7 @@ impl HarnessEventBroker {
   /// Drop the channel for a finished session so it doesn't leak. Safe to
   /// call multiple times.
   pub fn finalise(&self, session_id: Uuid) {
-    let mut map = self
-      .inner
-      .lock()
-      .expect("harness event broker mutex poisoned");
+    let mut map = self.lock_inner();
     map.remove(&session_id);
   }
 
@@ -172,10 +177,7 @@ impl HarnessEventBroker {
   /// Returns the number of receivers currently subscribed to
   /// `session_id`. `0` when the channel is missing entirely.
   pub fn receiver_count(&self, session_id: Uuid) -> usize {
-    let map = self
-      .inner
-      .lock()
-      .expect("harness event broker mutex poisoned");
+    let map = self.lock_inner();
     map
       .get(&session_id)
       .map(|sender| sender.receiver_count())

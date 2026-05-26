@@ -209,9 +209,13 @@ impl NodeTrace {
 
   /// Mark node as completed
   pub fn complete(&mut self) {
-    self.completed_at = Some(Utc::now());
+    // Capture `now` once so the duration math uses the same instant we
+    // assigned to `completed_at`, sidestepping the prior `unwrap()` on the
+    // option we just set on the previous line (Q5.1).
+    let now = Utc::now();
+    self.completed_at = Some(now);
     self.duration_ms = Some(
-      (self.completed_at.unwrap() - self.started_at)
+      (now - self.started_at)
         .to_std()
         .unwrap_or_default()
         .as_millis() as u64,
@@ -221,9 +225,10 @@ impl NodeTrace {
 
   /// Mark node as failed
   pub fn fail(&mut self, error: String) {
-    self.completed_at = Some(Utc::now());
+    let now = Utc::now();
+    self.completed_at = Some(now);
     self.duration_ms = Some(
-      (self.completed_at.unwrap() - self.started_at)
+      (now - self.started_at)
         .to_std()
         .unwrap_or_default()
         .as_millis() as u64,

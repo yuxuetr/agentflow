@@ -58,6 +58,14 @@ impl RemoteMarketplaceClient {
     // Avoid platform proxy discovery. It can touch OS services that are not
     // available in sandboxed CLI/test environments, and marketplace registry
     // URLs are explicit.
+    // `Client::builder().no_proxy().build()` only fails on TLS backend init
+    // (e.g. missing native-tls on Linux); the test suite for this crate
+    // exercises the constructor on macOS / Linux CI, so a runtime panic
+    // here means the build is mis-configured (Q5.1).
+    #[allow(
+      clippy::expect_used,
+      reason = "reqwest Client::builder().no_proxy().build() is infallible on supported targets; covered by remote_marketplace tests"
+    )]
     let client = reqwest::Client::builder()
       .no_proxy()
       .build()

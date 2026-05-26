@@ -190,7 +190,14 @@ pub fn hash_mcp_servers(servers: &[McpServerConfig]) -> String {
   canonical.sort_by(|a, b| a.name.cmp(b.name));
 
   // serde_json with sorted maps + stable field order → byte-stable
-  // input to the hasher.
+  // input to the hasher. `to_vec` only fails on non-finite floats
+  // (NaN/Inf) or map keys that aren't strings — neither is reachable
+  // for the `CanonicalServerView` shape (Vec of structs with String
+  // / &str fields only). The `expect` is a build-time invariant.
+  #[allow(
+    clippy::expect_used,
+    reason = "CanonicalServerView has only String/&str fields; serde_json::to_vec cannot fail"
+  )]
   let body = serde_json::to_vec(&canonical).expect("canonical hash input must serialise");
   let mut hasher = Sha256::new();
   hasher.update(&body);

@@ -82,11 +82,24 @@ impl EventBroker {
     Self::default()
   }
 
+  /// Lock the per-run channel map, recovering the inner map on poison so
+  /// a panicked publisher can't deadlock every subsequent subscriber. The
+  /// map mutates one channel-entry at a time, so the inner state is
+  /// always sound to keep using after a poisoning panic. (Q5.1)
+  fn lock_inner(
+    &self,
+  ) -> std::sync::MutexGuard<'_, HashMap<Uuid, broadcast::Sender<StreamedEvent>>> {
+    match self.inner.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    }
+  }
+
   /// Subscribe to live events for `run_id`. Creates the channel if no
   /// subscriber has registered for this run yet — that's deliberate so
   /// publishers don't need to coordinate with subscribers.
   pub fn subscribe(&self, run_id: Uuid) -> broadcast::Receiver<StreamedEvent> {
-    let mut map = self.inner.lock().expect("event broker mutex poisoned");
+    let mut map = self.lock_inner();
     map
       .entry(run_id)
       .or_insert_with(|| broadcast::channel(RUN_CHANNEL_CAPACITY).0)
@@ -97,7 +110,7 @@ impl EventBroker {
   /// you also want a DB row — keeps the persisted log and live stream in
   /// sync.
   pub fn publish(&self, event: StreamedEvent) {
-    let mut map = self.inner.lock().expect("event broker mutex poisoned");
+    let mut map = self.lock_inner();
     let sender = map
       .entry(event.run_id)
       .or_insert_with(|| broadcast::channel(RUN_CHANNEL_CAPACITY).0);
@@ -110,7 +123,7 @@ impl EventBroker {
   /// is called, their `recv()` will return `Closed` after the existing
   /// queue drains — the SSE handler treats that as end-of-stream.
   pub fn finalise(&self, run_id: Uuid) {
-    let mut map = self.inner.lock().expect("event broker mutex poisoned");
+    let mut map = self.lock_inner();
     map.remove(&run_id);
   }
 
@@ -145,7 +158,7 @@ impl EventBroker {
   /// integration tests to assert drop-on-disconnect and by
   /// operational diagnostics.
   pub fn receiver_count(&self, run_id: Uuid) -> usize {
-    let map = self.inner.lock().expect("event broker mutex poisoned");
+    let map = self.lock_inner();
     map
       .get(&run_id)
       .map(|sender| sender.receiver_count())

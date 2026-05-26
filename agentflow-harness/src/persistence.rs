@@ -136,10 +136,13 @@ impl HarnessEventSink for JsonlEventSink {
       .map_err(|err| HarnessError::Envelope(format!("encode harness event: {err}")))?;
     let mut state = self.state.lock().await;
     self.ensure_open(&mut state, &event.session_id).await?;
-    let file = state
-      .file
-      .as_mut()
-      .expect("file opened by ensure_open above");
+    // `ensure_open` guarantees `state.file = Some(...)` on success; the `?`
+    // above already propagates the error path. Use `ok_or_else` instead of
+    // `expect` so the Q5.1 lint deny applies without papering over the
+    // (unreachable) miss path.
+    let file = state.file.as_mut().ok_or_else(|| {
+      HarnessError::Envelope("ensure_open returned Ok but state.file is None — bug".to_string())
+    })?;
     file
       .write_all(line.as_bytes())
       .await

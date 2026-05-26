@@ -184,6 +184,12 @@ fn parse_clause(raw: &str) -> Result<Clause, FilterParseError> {
     // Try two-char ops first to avoid `>` matching when `>=` was meant.
     for op_str in [">=", "<=", "!=", ">", "<", "="] {
       if let Some(num) = rest.strip_prefix(op_str) {
+        // `op_str` is one of the six string literals iterated above, all of
+        // which `Op::parse` accepts. The expect is a build-time invariant.
+        #[allow(
+          clippy::expect_used,
+          reason = "op_str iterates over Op::parse's accepted prefix set; covered by parse tests below"
+        )]
         let op = Op::parse(op_str).expect("op_str is in the prefix list");
         let threshold = num.trim().parse::<i64>().map_err(|err| {
           FilterParseError(format!(

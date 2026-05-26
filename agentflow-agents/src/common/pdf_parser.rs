@@ -32,12 +32,21 @@ impl StepFunPDFParser {
     println!("📄 Uploading PDF: {}", path.display());
     println!("📋 File size: {} bytes", file_data.len());
 
+    // `path.file_name()` returns `None` only for `..`-terminated paths; we
+    // already `tokio::fs::read`-ed the file above, so the path must be a
+    // real file. Fall back to a sentinel so the upload still succeeds
+    // rather than panicking on a degenerate caller-supplied path (Q5.1).
+    let upload_filename = path
+      .file_name()
+      .map(|s| s.to_string_lossy().into_owned())
+      .unwrap_or_else(|| "upload.pdf".to_string());
+
     // Step 1: Upload PDF
     let form = reqwest::multipart::Form::new()
       .part(
         "file",
         reqwest::multipart::Part::bytes(file_data)
-          .file_name(path.file_name().unwrap().to_string_lossy().to_string())
+          .file_name(upload_filename)
           .mime_str("application/pdf")?,
       )
       .text("purpose", "file-extract");
@@ -123,7 +132,10 @@ impl StepFunPDFParser {
         file_id: file_id.to_string(),
         content: final_content,
         token_count,
-        filename: path.file_name().unwrap().to_string_lossy().to_string(),
+        filename: path
+          .file_name()
+          .map(|s| s.to_string_lossy().into_owned())
+          .unwrap_or_else(|| "upload.pdf".to_string()),
       });
     }
   }

@@ -977,7 +977,14 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
       return Ok(None);
     };
     // Remove from the deque without disturbing the order of the
-    // remaining tasks.
+    // remaining tasks. `idx` was returned by `state.queued.iter().position(..)`
+    // a few lines above (line 970-972), so it is guaranteed to be in range
+    // while still holding `state` — no other task has had a chance to mutate
+    // the deque between `position` and `remove`. Q5.1.
+    #[allow(
+      clippy::expect_used,
+      reason = "idx came from .position() on the same locked deque"
+    )]
     let task = state.queued.remove(idx).expect("index from position");
     state
       .last_claimed_run

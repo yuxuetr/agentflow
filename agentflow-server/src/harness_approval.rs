@@ -84,13 +84,25 @@ impl PendingApprovalRegistry {
     Self::default()
   }
 
+  /// Lock the registry, recovering the inner map on poison so a panicked
+  /// caller can't deadlock every subsequent approval flow. The registry
+  /// state is monotonic — entries are inserted/removed by `(session, id)`
+  /// key and never partially mutated mid-call — so the inner state is safe
+  /// to keep using after a poisoning panic. (Q5.1)
+  fn lock_inner(&self) -> std::sync::MutexGuard<'_, RegistryState> {
+    match self.inner.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    }
+  }
+
   /// Register a pending request and return the responder side of the
   /// oneshot. The caller (typically [`ServerApprovalProvider::request`])
   /// awaits the receiver after registering.
   fn park(&self, request: ApprovalRequest) -> oneshot::Receiver<ApprovalDecision> {
     let (tx, rx) = oneshot::channel();
     let key = (request.session_id.clone(), request.id.clone());
-    let mut state = self.inner.lock().expect("approval registry mutex poisoned");
+    let mut state = self.lock_inner();
     state.entries.insert(
       key,
       PendingEntry {
@@ -105,7 +117,7 @@ impl PendingApprovalRegistry {
   /// provider future was cancelled / timed out so the responder doesn't
   /// linger forever.
   fn drop_pending(&self, session_id: &str, request_id: &str) {
-    let mut state = self.inner.lock().expect("approval registry mutex poisoned");
+    let mut state = self.lock_inner();
     state
       .entries
       .remove(&(session_id.to_string(), request_id.to_string()));
@@ -115,7 +127,7 @@ impl PendingApprovalRegistry {
   /// `requested_at` ascending so the oldest pending decision surfaces
   /// first in UI lists.
   pub fn list(&self, session_id: &str) -> Vec<ApprovalRequest> {
-    let state = self.inner.lock().expect("approval registry mutex poisoned");
+    let state = self.lock_inner();
     let mut entries: Vec<ApprovalRequest> = state
       .entries
       .iter()
@@ -135,7 +147,7 @@ impl PendingApprovalRegistry {
     request_id: &str,
     decision: ApprovalDecision,
   ) -> Result<(), ApprovalResolveError> {
-    let mut state = self.inner.lock().expect("approval registry mutex poisoned");
+    let mut state = self.lock_inner();
     let Some(entry) = state
       .entries
       .remove(&(session_id.to_string(), request_id.to_string()))

@@ -60,6 +60,32 @@ jobs:
       - name: Check lints
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  clippy-lib-deny:
+    # Q5.1: enforce no `unwrap()` / `expect()` in production library
+    # code workspace-wide. Tests / examples / benches / build scripts
+    # are intentionally exempt — the `--lib --no-deps` scope skips
+    # them. Sites with a documented build-time invariant carry a
+    # per-site `#[allow(clippy::expect_used, reason = "...")]`
+    # annotation; the lint stays at deny so a regression flips CI red.
+    name: cargo clippy --lib (unwrap/expect deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enforce unwrap/expect deny on production code
+        run: |
+          cargo clippy --workspace --lib --no-deps -- \
+            -A warnings \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used
+
   proto-validate:
     # Q3.3.3: the `agentflow-server` build script generates prost
     # message structs from `agentflow-server/proto/agentflow/scheduler/v1/worker.proto`.
@@ -326,6 +352,7 @@ jobs:
       - verify-edition
       - check-agent-sdk-doc
       - clippy
+      - clippy-lib-deny
       - linux-sandbox-check
       - proto-validate
       - test
@@ -341,6 +368,7 @@ jobs:
           echo "verify-edition: ${{ needs.verify-edition.result }}"
           echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
+          echo "clippy-lib-deny: ${{ needs.clippy-lib-deny.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "proto-validate: ${{ needs.proto-validate.result }}"
           echo "test: ${{ needs.test.result }}"
@@ -352,6 +380,7 @@ jobs:
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
+          test "${{ needs.clippy-lib-deny.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.proto-validate.result }}" = "success"
           test "${{ needs.test.result }}" = "success"

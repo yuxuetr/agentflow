@@ -2,6 +2,22 @@
 //!
 //! This module provides a mock transport that simulates MCP server responses
 //! for testing purposes without requiring a real server.
+//!
+//! # Lint exemption
+//!
+//! The `unwrap()` / `expect()` calls below operate on `Mutex<...>` guards
+//! that are unique to one test process and never crossed by panicking
+//! threads in practice. The whole module is a public test fixture (it lives
+//! in `src/` because downstream crates consume it for their own tests via
+//! `agentflow_mcp::transport::MockTransport`) — panics here are acceptable
+//! and consistent with how `tokio::sync::Mutex` poison semantics propagate
+//! into other test infrastructure. Annotated at file level so the Q5.1
+//! `clippy::unwrap_used = "deny"` lint (when enabled workspace-wide) doesn't
+//! flood callers with per-line warnings.
+#![allow(
+  clippy::unwrap_used,
+  reason = "test-fixture mutex unwraps; see module-level rationale"
+)]
 
 use crate::error::{MCPError, MCPResult};
 use crate::transport::{Transport, TransportType};

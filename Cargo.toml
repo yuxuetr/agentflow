@@ -41,3 +41,30 @@ homepage = "https://github.com/yuxuetr/agentflow"
 
 [profile.dev.package."*"]
 debug = 1
+
+# Q5.1 (wave 2 closure, 2026-05-26): production library code is
+# `unwrap()` / `expect()` clean across the workspace.
+#
+# Enforcement lives in CI, not here:
+#   The workspace `[lints]` table applies uniformly to every target,
+#   and the existing clippy CI job runs `-D warnings`. Setting a
+#   `warn`-level lint here would escalate to deny and break ~438
+#   legitimate `unwrap()`/`expect()` sites in test code that the
+#   wave-2 scope doesn't include.
+#
+#   Instead a dedicated `.github/workflows/quality.yml` `clippy-lib-deny`
+#   step runs:
+#     cargo clippy --workspace --lib --no-deps \
+#       -- -D clippy::unwrap_used -D clippy::expect_used -A warnings
+#   so production library code is enforced without touching tests.
+#
+#   When wave 3 batches test-side annotations, swap to a workspace-level
+#   `[workspace.lints.clippy]` block with priorities tuned for `-D warnings`
+#   coexistence (or simply require the per-test `#![allow]` preamble at
+#   the top of every `tests/*.rs` file).
+#
+# Production-code annotations: sites where the lint correctly fires on a
+# documented build-time invariant (compile-time regex, JSON serialisation
+# of a String-only struct, etc.) are explicitly annotated with
+# `#[allow(clippy::expect_used, reason = "...")]` so the rationale
+# travels with the code rather than living in this file.

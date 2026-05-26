@@ -35,6 +35,13 @@ impl BatchProcessor {
       let item_clone = item.clone();
 
       let handle = tokio::spawn(async move {
+        // `Semaphore::acquire` only errors when the semaphore is closed; we
+        // hold the only `Arc<Semaphore>` and never call `close()`, so this
+        // is a build-time invariant (Q5.1).
+        #[allow(
+          clippy::unwrap_used,
+          reason = "semaphore is private + never closed within this function"
+        )]
         let _permit = sem.acquire().await.unwrap();
         let result = proc(item_clone.clone()).await;
         (item_clone, result)
@@ -86,6 +93,11 @@ impl BatchProcessor {
       let comp = completed.clone();
 
       let handle = tokio::spawn(async move {
+        // See `process_items` above for the unwrap rationale (Q5.1).
+        #[allow(
+          clippy::unwrap_used,
+          reason = "semaphore is private + never closed within this function"
+        )]
         let _permit = sem.acquire().await.unwrap();
         let result = proc(item.clone()).await;
 

@@ -8,6 +8,17 @@
 //! `WorkerControl` trait remain hand-written in `grpc.rs` because
 //! they layer custom W3C-traceparent scope handling + admission
 //! credential extraction on top of the generated message types.
+//!
+//! Q5.1: build scripts are exempt from the workspace `unwrap_used` /
+//! `expect_used` deny lint by convention — a build-script panic
+//! surfaces as a clear CI compile error with the panic message, which
+//! is exactly what we want when `protoc` is missing or `worker.proto`
+//! is malformed. Annotated at file level so the panic message reaches
+//! the operator without per-call clutter.
+#![allow(
+  clippy::expect_used,
+  reason = "build script: panics surface as CI compile errors with the message intact"
+)]
 
 fn main() {
   let proto_root = "proto";

@@ -186,13 +186,23 @@ impl RunCancellationRegistry {
     Self::default()
   }
 
+  /// Lock the entry map, recovering on poison so a panicked caller can't
+  /// strand every subsequent cancellation request. Same poison-recovery
+  /// pattern as [`crate::events_stream::EventBroker::lock_inner`]. (Q5.1)
+  fn lock_inner(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, RunCancellationEntry>> {
+    match self.inner.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    }
+  }
+
   pub fn register(
     &self,
     run_id: Uuid,
     token: FlowCancellationToken,
     abort_handle: tokio::task::AbortHandle,
   ) {
-    let mut entries = self.inner.lock().expect("run cancellation mutex poisoned");
+    let mut entries = self.lock_inner();
     entries.insert(
       run_id,
       RunCancellationEntry {
@@ -203,13 +213,7 @@ impl RunCancellationRegistry {
   }
 
   pub fn cancel(&self, run_id: Uuid) -> bool {
-    let Some(entry) = self
-      .inner
-      .lock()
-      .expect("run cancellation mutex poisoned")
-      .get(&run_id)
-      .cloned()
-    else {
+    let Some(entry) = self.lock_inner().get(&run_id).cloned() else {
       return false;
     };
 
@@ -219,7 +223,7 @@ impl RunCancellationRegistry {
   }
 
   pub fn complete(&self, run_id: Uuid) {
-    let mut entries = self.inner.lock().expect("run cancellation mutex poisoned");
+    let mut entries = self.lock_inner();
     entries.remove(&run_id);
   }
 }
