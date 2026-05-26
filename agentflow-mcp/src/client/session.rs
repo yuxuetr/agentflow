@@ -44,8 +44,21 @@ use super::builder::ClientConfig;
 /// # }
 /// ```
 pub struct MCPClient {
-  /// Transport for communication
-  transport: Arc<Mutex<Box<dyn Transport>>>,
+  /// Transport for communication.
+  ///
+  /// Q3.2.2: pre-fix this was `Arc<Mutex<Box<dyn Transport>>>` — every
+  /// outbound JSON-RPC call took the outer mutex, serializing all
+  /// requests across the agent's parallel-tool-call dispatcher.
+  /// `Transport` now provides per-request interior mutability
+  /// (oneshot demux for stdio, internal `Arc<Mutex>` for mock), so
+  /// the client owns the transport directly with no outer lock and
+  /// `send_request` / `send_notification` are `&self`. The
+  /// `connect` / `disconnect` paths still need `&mut self` to
+  /// invoke the transport's `&mut` lifecycle methods. Upstream
+  /// callers that want to fan out parallel requests wrap the
+  /// connected `MCPClient` in `Arc<MCPClient>` (see
+  /// `agentflow-skills::McpClientPool`).
+  transport: Box<dyn Transport>,
   /// Client configuration
   config: ClientConfig,
   /// Session ID
@@ -86,7 +99,7 @@ impl MCPClient {
   /// Create a new MCP client (internal constructor)
   pub(super) fn new(transport: Box<dyn Transport>, config: ClientConfig) -> Self {
     Self {
-      transport: Arc::new(Mutex::new(transport)),
+      transport,
       config,
       session_id: Uuid::new_v4().to_string(),
       connected: Arc::new(Mutex::new(false)),
@@ -134,7 +147,7 @@ impl MCPClient {
 
     // Connect transport with timeout
     let timeout = self.config.timeout;
-    let connect_result = tokio::time::timeout(timeout, self.transport.lock().await.connect()).await;
+    let connect_result = tokio::time::timeout(timeout, self.transport.connect()).await;
 
     match connect_result {
       Ok(Ok(())) => {
@@ -242,8 +255,6 @@ impl MCPClient {
     // Disconnect transport
     self
       .transport
-      .lock()
-      .await
       .disconnect()
       .await
       .context("Failed to disconnect transport")?;
@@ -305,44 +316,37 @@ impl MCPClient {
     &self.session_id
   }
 
-  /// Send a JSON-RPC request and wait for response
+  /// Send a JSON-RPC request and wait for response.
   ///
-  /// This method applies:
-  /// - Retry logic with exponential backoff (for transient errors)
-  /// - Timeout enforcement from client configuration
-  pub(super) async fn send_request(&mut self, request: JsonRpcRequest) -> MCPResult<Value> {
+  /// Q3.2.2: `&self` (was `&mut self`) so an `Arc<MCPClient>` can
+  /// fan out concurrent requests across the shared transport. The
+  /// underlying [`Transport`] now exposes per-request demux via
+  /// internal oneshot channels, so dispatching N requests
+  /// simultaneously no longer serializes behind a single outer
+  /// mutex.
+  ///
+  /// Applies retry-with-backoff for transient errors and the
+  /// per-call timeout configured on the client.
+  pub(super) async fn send_request(&self, request: JsonRpcRequest) -> MCPResult<Value> {
     use crate::client::retry::{RetryConfig, retry_with_backoff};
 
-    // P3.8: stitch the OTel trace across the MCP hop. When an active
-    // `agentflow_tracing::context::current_traceparent()` is in
-    // scope, inject it as `params._meta.traceparent` on every
-    // outbound request. No-op when there's no upstream context — we
-    // never emit an empty `_meta` so consumers can tell apart "no
-    // upstream trace" from "upstream trace exists but is empty".
+    // P3.8: traceparent injection for cross-hop OTel.
     let mut request = request;
     crate::protocol::traceparent::inject_traceparent_into_request(&mut request);
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
-    // Create retry config from client config
     let retry_config = RetryConfig::new(self.config.max_retries, self.config.retry_backoff_ms);
-
-    // Clone what we need for the retry closure
-    let transport = self.transport.clone();
     let timeout = self.config.timeout;
+    // Borrow rather than clone — the closure runs sequentially
+    // inside `retry_with_backoff` so the borrow lasts only across
+    // each await before the next retry iteration.
+    let transport = &*self.transport;
 
-    // Apply retry + timeout wrapper
     let response = retry_with_backoff(&retry_config, || {
-      let transport = transport.clone();
       let request_value = request_value.clone();
-
       async move {
-        // Apply timeout to the transport operation
-        let result = tokio::time::timeout(timeout, async {
-          transport.lock().await.send_message(request_value).await
-        })
-        .await;
-
+        let result = tokio::time::timeout(timeout, transport.send_message(request_value)).await;
         match result {
           Ok(Ok(response)) => Ok(response),
           Ok(Err(e)) => Err(e.context("Failed to send message")),
@@ -358,11 +362,11 @@ impl MCPClient {
     Ok(response)
   }
 
-  /// Send a JSON-RPC notification (no response expected)
+  /// Send a JSON-RPC notification (no response expected).
   ///
-  /// This method applies timeout enforcement from client configuration.
-  /// Notifications typically don't get retried as they don't expect responses.
-  pub(super) async fn send_notification(&mut self, notification: JsonRpcRequest) -> MCPResult<()> {
+  /// Q3.2.2: `&self` for the same parallel-fan-out reason as
+  /// [`Self::send_request`].
+  pub(super) async fn send_notification(&self, notification: JsonRpcRequest) -> MCPResult<()> {
     // P3.8: traceparent injection on notifications too. The MCP
     // server side may correlate notifications with their parent
     // span (e.g. `notifications/progress` emitted during a long
@@ -374,15 +378,8 @@ impl MCPClient {
 
     // Apply timeout to notification
     let timeout = self.config.timeout;
-    let result = tokio::time::timeout(
-      timeout,
-      self
-        .transport
-        .lock()
-        .await
-        .send_notification(notification_value),
-    )
-    .await;
+    let result =
+      tokio::time::timeout(timeout, self.transport.send_notification(notification_value)).await;
 
     match result {
       Ok(Ok(())) => Ok(()),

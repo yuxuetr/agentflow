@@ -59,81 +59,43 @@ impl std::fmt::Display for TransportType {
 /// ```
 #[async_trait]
 pub trait Transport: Send + Sync {
-  /// Connect to the MCP server/endpoint
+  /// Connect to the MCP server/endpoint.
   ///
-  /// This method establishes the underlying connection (e.g., spawns a process
-  /// for stdio, opens HTTP connection, etc.).
-  ///
-  /// # Errors
-  ///
-  /// Returns an error if connection fails.
+  /// `connect` / `disconnect` keep their `&mut self` signature because
+  /// they own the underlying I/O resource (e.g. for stdio: spawn the
+  /// child process and start the demux reader task). Once connected,
+  /// every per-request method below uses interior mutability so the
+  /// client can fire concurrent `send_message` calls over the same
+  /// connection (Q3.2.2) — pre-fix `MCPClient` wrapped the whole
+  /// transport in `Arc<Mutex<Box<dyn Transport>>>` and serialized
+  /// every RPC behind that lock.
   async fn connect(&mut self) -> MCPResult<()>;
 
-  /// Send a message and receive the response
-  ///
-  /// This is the primary method for request-response communication. It sends
-  /// a JSON-RPC request and waits for the corresponding response.
-  ///
-  /// # Arguments
-  ///
-  /// * `request` - The JSON-RPC request to send
-  ///
-  /// # Returns
-  ///
-  /// The JSON-RPC response, which may contain either a result or an error.
-  ///
-  /// # Errors
-  ///
-  /// Returns an error if:
-  /// - The transport is not connected
-  /// - Writing to the transport fails
-  /// - Reading from the transport fails
-  /// - The response times out
-  /// - The response is malformed
-  async fn send_message(&mut self, request: Value) -> MCPResult<Value>;
+  /// Send a request and wait for the matching response. Q3.2.2:
+  /// `&self` so multiple concurrent calls can be in flight at once
+  /// over the same transport. Implementations correlate responses
+  /// back to the right caller via the JSON-RPC `id` field — see
+  /// [`StdioTransport`]'s reader-task + per-request oneshot
+  /// demultiplexer.
+  async fn send_message(&self, request: Value) -> MCPResult<Value>;
 
-  /// Send a notification (no response expected)
-  ///
-  /// Notifications are JSON-RPC messages without an `id` field. The server
-  /// will not send a response.
-  ///
-  /// # Arguments
-  ///
-  /// * `notification` - The JSON-RPC notification to send
-  ///
-  /// # Errors
-  ///
-  /// Returns an error if:
-  /// - The transport is not connected
-  /// - Writing to the transport fails
-  async fn send_notification(&mut self, notification: Value) -> MCPResult<()>;
+  /// Send a notification (no response expected). Q3.2.2: `&self`
+  /// so notifications don't queue behind in-flight `send_message`
+  /// calls.
+  async fn send_notification(&self, notification: Value) -> MCPResult<()>;
 
-  /// Receive a message (for server-initiated requests)
-  ///
-  /// This method is used to receive messages initiated by the server, such as
-  /// progress notifications or server-initiated tool calls.
-  ///
-  /// # Returns
+  /// Receive a server-initiated message (e.g. notifications,
+  /// progress updates). Q3.2.2: `&self` — the underlying reader
+  /// task feeds notifications into an internal queue that multiple
+  /// callers can drain.
   ///
   /// - `Ok(Some(message))` if a message was received
-  /// - `Ok(None)` if no message is available (timeout or non-blocking mode)
+  /// - `Ok(None)` if no message is available (timeout / non-blocking)
   /// - `Err(...)` if an error occurred
-  ///
-  /// # Note
-  ///
-  /// Not all transports support server-initiated messages. HTTP without SSE
-  /// will always return `Ok(None)`.
-  async fn receive_message(&mut self) -> MCPResult<Option<Value>>;
+  async fn receive_message(&self) -> MCPResult<Option<Value>>;
 
-  /// Close the connection
-  ///
-  /// Gracefully closes the underlying connection. For stdio, this terminates
-  /// the spawned process. For HTTP, this closes the connection.
-  ///
-  /// # Errors
-  ///
-  /// Returns an error if disconnection fails, though the transport should
-  /// still be considered disconnected after this call.
+  /// Close the connection. See [`Self::connect`] for why this stays
+  /// on `&mut self`.
   async fn disconnect(&mut self) -> MCPResult<()>;
 
   /// Check if the transport is currently connected

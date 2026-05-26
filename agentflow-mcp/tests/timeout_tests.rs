@@ -127,7 +127,7 @@ impl Transport for DelayedMockTransport {
   }
 
   async fn send_message(
-    &mut self,
+    &self,
     request: serde_json::Value,
   ) -> agentflow_mcp::error::MCPResult<serde_json::Value> {
     // Delay before responding
@@ -136,7 +136,7 @@ impl Transport for DelayedMockTransport {
   }
 
   async fn send_notification(
-    &mut self,
+    &self,
     notification: serde_json::Value,
   ) -> agentflow_mcp::error::MCPResult<()> {
     tokio::time::sleep(self.delay).await;
@@ -144,7 +144,7 @@ impl Transport for DelayedMockTransport {
   }
 
   async fn receive_message(
-    &mut self,
+    &self,
   ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
     self.inner.receive_message().await
   }
@@ -209,7 +209,7 @@ async fn test_retry_after_timeout() {
     }
 
     async fn send_message(
-      &mut self,
+      &self,
       request: serde_json::Value,
     ) -> agentflow_mcp::error::MCPResult<serde_json::Value> {
       let attempt = self.attempt_count.fetch_add(1, Ordering::SeqCst);
@@ -226,14 +226,14 @@ async fn test_retry_after_timeout() {
     }
 
     async fn send_notification(
-      &mut self,
+      &self,
       notification: serde_json::Value,
     ) -> agentflow_mcp::error::MCPResult<()> {
       self.inner.send_notification(notification).await
     }
 
     async fn receive_message(
-      &mut self,
+      &self,
     ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
       self.inner.receive_message().await
     }
@@ -295,7 +295,7 @@ async fn test_timeout_exhausts_retries() {
     }
 
     async fn send_message(
-      &mut self,
+      &self,
       _request: serde_json::Value,
     ) -> agentflow_mcp::error::MCPResult<serde_json::Value> {
       self.attempt_count.fetch_add(1, Ordering::SeqCst);
@@ -303,14 +303,14 @@ async fn test_timeout_exhausts_retries() {
     }
 
     async fn send_notification(
-      &mut self,
+      &self,
       notification: serde_json::Value,
     ) -> agentflow_mcp::error::MCPResult<()> {
       self.inner.send_notification(notification).await
     }
 
     async fn receive_message(
-      &mut self,
+      &self,
     ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
       self.inner.receive_message().await
     }

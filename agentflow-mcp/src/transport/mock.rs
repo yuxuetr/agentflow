@@ -193,7 +193,7 @@ impl Transport for MockTransport {
     Ok(())
   }
 
-  async fn send_message(&mut self, request: Value) -> MCPResult<Value> {
+  async fn send_message(&self, request: Value) -> MCPResult<Value> {
     if !*self.connected.lock().unwrap() {
       return Err(MCPError::connection("Not connected"));
     }
@@ -212,7 +212,7 @@ impl Transport for MockTransport {
     Ok(response)
   }
 
-  async fn send_notification(&mut self, notification: Value) -> MCPResult<()> {
+  async fn send_notification(&self, notification: Value) -> MCPResult<()> {
     if !*self.connected.lock().unwrap() {
       return Err(MCPError::connection("Not connected"));
     }
@@ -223,7 +223,7 @@ impl Transport for MockTransport {
     Ok(())
   }
 
-  async fn receive_message(&mut self) -> MCPResult<Option<Value>> {
+  async fn receive_message(&self) -> MCPResult<Option<Value>> {
     if !*self.connected.lock().unwrap() {
       return Err(MCPError::connection("Not connected"));
     }

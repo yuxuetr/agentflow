@@ -38,6 +38,9 @@ agentflow-tracing = { path = "../agentflow-tracing", version = "0.1", default-fe
 [dev-dependencies]
 tokio-test = "0.4"
 proptest = "1.5"
+# Q3.2.2: env-isolation tests + the new multiplex regression need
+# a scratch tmp dir / file outside the workspace.
+tempfile = "3.8"
 
 [features]
 default = []
