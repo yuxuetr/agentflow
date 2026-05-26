@@ -11,40 +11,12 @@ async fn main() {
   }
 }
 
-/// Q3.1.3: future that resolves on SIGINT (all platforms) or SIGTERM
-/// (unix). Mirrors the helper in `agentflow-cli::shutdown` and the
-/// server's `shutdown_signal`. Kept private to the binary so the
-/// library has zero direct dependency on `tokio::signal`.
-async fn shutdown_signal() {
-  let ctrl_c = async {
-    if let Err(err) = tokio::signal::ctrl_c().await {
-      eprintln!("agentflow-worker: failed to install ctrl_c handler: {err}");
-      std::future::pending::<()>().await;
-    }
-  };
-
-  #[cfg(unix)]
-  let terminate = async {
-    use tokio::signal::unix::{SignalKind, signal};
-    match signal(SignalKind::terminate()) {
-      Ok(mut sigterm) => {
-        let _ = sigterm.recv().await;
-      }
-      Err(err) => {
-        eprintln!("agentflow-worker: failed to install SIGTERM handler: {err}");
-        std::future::pending::<()>().await;
-      }
-    }
-  };
-
-  #[cfg(not(unix))]
-  let terminate = std::future::pending::<()>();
-
-  tokio::select! {
-    _ = ctrl_c => {}
-    _ = terminate => {}
-  }
-}
+/// Q3.1.3 + Q5.3: thin re-export of the shared
+/// `agentflow_core::shutdown::shutdown_signal` future. Keeps the
+/// local binary callsite stable while moving the actual SIGINT /
+/// SIGTERM handling into the workspace-shared helper introduced in
+/// Q5.3.
+use agentflow_core::shutdown::shutdown_signal;
 
 async fn run() -> Result<(), String> {
   let args = Args::parse(std::env::args().skip(1))?;

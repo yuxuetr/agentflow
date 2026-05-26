@@ -30,6 +30,10 @@ pub mod state_size;
 // Observability (lightweight events only)
 pub mod events;
 
+// Q5.3: shared SIGINT/SIGTERM shutdown handling used by the CLI,
+// server, and worker binaries.
+pub mod shutdown;
+
 // Plugin runtime (subprocess-based; gated behind the `plugin` feature)
 #[cfg(feature = "plugin")]
 pub mod plugin;
