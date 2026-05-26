@@ -10,7 +10,6 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use tokio::sync::Mutex;
 use tonic::body::BoxBody;
 use tonic::client::Grpc;
 use tonic::codegen::{BoxFuture, Service, StdError, http};
@@ -613,9 +612,21 @@ impl<T> tonic::server::NamedService for WorkerControlServer<T> {
 }
 
 /// WorkerProtocol implementation backed by a remote tonic service.
+///
+/// Q3.3.1: pre-fix this struct held `Arc<Mutex<Grpc<Channel>>>`,
+/// serializing every outbound RPC behind a single async mutex.
+/// `tonic::transport::Channel` is `Clone + Send + Sync` and is
+/// explicitly designed for many concurrent in-flight RPCs over one
+/// HTTP/2 connection; the mutex defeated that and the Q3.3.2
+/// per-worker free_slots parallelism would have collapsed back to
+/// serial as soon as the worker tried to fire its heartbeat and
+/// report_result concurrently. Store the `Channel` directly and
+/// build a fresh `Grpc::new(channel.clone())` per call — `Grpc` is
+/// just a thin wrapper around the channel + codec, cloning the
+/// channel is an `Arc::clone`.
 #[derive(Debug, Clone)]
 pub struct GrpcWorkerProtocol {
-  inner: Arc<Mutex<Grpc<Channel>>>,
+  channel: Channel,
   /// Q1.6.1: admission token sent as `authorization: Bearer <token>`
   /// gRPC metadata on every call. `None` keeps the legacy "no auth"
   /// path for the `memory://local` and dev profiles.
@@ -634,14 +645,14 @@ impl GrpcWorkerProtocol {
         message: err.to_string(),
       })?;
     Ok(Self {
-      inner: Arc::new(Mutex::new(Grpc::new(channel))),
+      channel,
       admission_token: None,
     })
   }
 
   pub fn from_channel(channel: Channel) -> Self {
     Self {
-      inner: Arc::new(Mutex::new(Grpc::new(channel))),
+      channel,
       admission_token: None,
     }
   }
@@ -665,7 +676,15 @@ impl GrpcWorkerProtocol {
     Req: prost::Message + Default + 'static,
     Resp: prost::Message + Default + 'static,
   {
-    let mut inner = self.inner.lock().await;
+    // Q3.3.1: fresh `Grpc::new` per call — cloning the underlying
+    // `Channel` is an `Arc::clone`, and `Grpc` itself just wraps
+    // the channel + codec. The `.ready()` ping is preserved because
+    // tonic's `Channel` uses an internal `Buffer<...>` whose
+    // `Service::call` contract requires `poll_ready` to have been
+    // observed first; the previous serializing mutex hid that
+    // requirement from the call site but the constraint is real.
+    // `ready()` itself is cheap — it just polls the buffer state.
+    let mut inner = Grpc::new(self.channel.clone());
     inner
       .ready()
       .await
@@ -1278,5 +1297,152 @@ mod hint_proto_tests {
     let back = worker_heartbeat_from_proto(wire).expect("decode");
     assert!(back.capabilities.node_types.is_empty());
     assert!(back.capabilities.accepts(Some("any")));
+  }
+}
+
+#[cfg(test)]
+mod grpc_concurrency_tests {
+  //! Q3.3.1: prove that `GrpcWorkerProtocol` actually fires
+  //! concurrent unary RPCs over the shared HTTP/2 channel.
+  //! Pre-fix the inner `Mutex<Grpc<Channel>>` serialized every
+  //! call; the test would see peak in-flight = 1. Post-fix the
+  //! channel is cloned per call and tonic muxes the requests
+  //! onto the same H/2 connection, so we observe peak ≥ 2.
+  use super::*;
+  use crate::scheduler::{WorkerHeartbeat, WorkerId, WorkerProtocol};
+  use std::sync::atomic::{AtomicU32, Ordering};
+  use std::time::Duration;
+  use tokio::net::TcpListener;
+  use tokio::sync::oneshot;
+  use tonic::transport::Server;
+
+  /// Counters held in Arc so the test can read them after handing
+  /// `SlowConcurrencyServer` to `WorkerControlServer::new` (which
+  /// consumes by value).
+  #[derive(Clone, Default)]
+  struct ConcurrencyCounters {
+    in_flight: Arc<AtomicU32>,
+    peak: Arc<AtomicU32>,
+    total: Arc<AtomicU32>,
+  }
+
+  #[derive(Clone)]
+  struct SlowConcurrencyServer {
+    delay: Duration,
+    counters: ConcurrencyCounters,
+  }
+
+  #[async_trait]
+  impl WorkerControl for SlowConcurrencyServer {
+    async fn submit_task(
+      &self,
+      _request: Request<pb::SubmitTaskRequest>,
+    ) -> Result<Response<pb::Empty>, Status> {
+      // Not exercised by this test; reply Ok so the server type
+      // is well-formed even if a stray RPC arrives.
+      Ok(Response::new(pb::Empty {}))
+    }
+    async fn claim_task(
+      &self,
+      _request: Request<pb::ClaimTaskRequest>,
+    ) -> Result<Response<pb::ClaimTaskResponse>, Status> {
+      Ok(Response::new(pb::ClaimTaskResponse { task: None }))
+    }
+    async fn report_result(
+      &self,
+      _request: Request<pb::ReportResultRequest>,
+    ) -> Result<Response<pb::Empty>, Status> {
+      Ok(Response::new(pb::Empty {}))
+    }
+    async fn heartbeat(
+      &self,
+      _request: Request<pb::HeartbeatRequest>,
+    ) -> Result<Response<pb::Empty>, Status> {
+      let now = self.counters.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+      self.counters.peak.fetch_max(now, Ordering::SeqCst);
+      tokio::time::sleep(self.delay).await;
+      self.counters.in_flight.fetch_sub(1, Ordering::SeqCst);
+      self.counters.total.fetch_add(1, Ordering::SeqCst);
+      Ok(Response::new(pb::Empty {}))
+    }
+  }
+
+  async fn unused_local_addr() -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener);
+    addr
+  }
+
+  async fn connect_with_retry(endpoint: &str) -> GrpcWorkerProtocol {
+    for _ in 0..20 {
+      if let Ok(protocol) = GrpcWorkerProtocol::connect(endpoint).await {
+        return protocol;
+      }
+      tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("connect retry exhausted");
+  }
+
+  /// Q3.3.1 regression — one `GrpcWorkerProtocol` cloned across 8
+  /// async tasks must fire heartbeats concurrently. Pre-fix this
+  /// pinned at peak in-flight = 1 because the inner Mutex
+  /// serialized every call; post-fix the H/2 channel mux drives
+  /// peak above 1 and 8 × 200ms RPCs finish well under the 1.6s
+  /// serial bound.
+  #[tokio::test]
+  async fn grpc_protocol_fires_concurrent_heartbeats() {
+    let counters = ConcurrencyCounters::default();
+    let server = SlowConcurrencyServer {
+      delay: Duration::from_millis(200),
+      counters: counters.clone(),
+    };
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let addr = unused_local_addr().await;
+    let server_task = tokio::spawn(async move {
+      Server::builder()
+        .add_service(WorkerControlServer::new(server))
+        .serve_with_shutdown(addr, async {
+          let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    let endpoint = format!("http://{addr}");
+    let protocol = connect_with_retry(&endpoint).await;
+    let worker_id = WorkerId::new("worker-q331").unwrap();
+
+    let started = std::time::Instant::now();
+    let mut handles = Vec::with_capacity(8);
+    for _ in 0..8 {
+      let p = protocol.clone();
+      let wid = worker_id.clone();
+      handles.push(tokio::spawn(async move {
+        p.heartbeat(WorkerHeartbeat::now(wid, None, 0)).await
+      }));
+    }
+    for h in handles {
+      h.await.expect("join").expect("heartbeat ok");
+    }
+    let elapsed = started.elapsed();
+
+    let peak = counters.peak.load(Ordering::SeqCst);
+    let total = counters.total.load(Ordering::SeqCst);
+    assert_eq!(total, 8, "server must have received every heartbeat");
+    assert!(
+      peak >= 2,
+      "Q3.3.1: peak in-flight must exceed 1 (concurrent RPCs); got {peak}"
+    );
+    // Serial wall clock bound: 8 × 200ms = 1.6s. Allow generous
+    // headroom for handshake + scheduling; assert well below the
+    // serial bound to leave no doubt the parallelism is real.
+    assert!(
+      elapsed < Duration::from_millis(1200),
+      "Q3.3.1: 8 concurrent 200ms heartbeats must finish < 1.2s (serial would need 1.6s); took {elapsed:?}"
+    );
+
+    let _ = shutdown_tx.send(());
+    server_task.await.unwrap().unwrap();
   }
 }
