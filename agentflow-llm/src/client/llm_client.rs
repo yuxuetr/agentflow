@@ -22,7 +22,11 @@ use tracing::{debug, error, info, warn};
 /// the raw content (which routinely contains PII). The choice of FNV
 /// over sha256 is deliberate — we're not authenticating anything, and
 /// FNV avoids pulling in a crypto dep purely for log noise.
-fn prompt_fingerprint(text: &str) -> String {
+///
+/// Q5.2: re-exported from `agentflow_llm::prompt_fingerprint` so other
+/// crates (agentflow-agents in particular) can apply the same
+/// DEBUG-vs-TRACE redaction discipline without duplicating the helper.
+pub fn prompt_fingerprint(text: &str) -> String {
   let mut hash: u64 = 0xcbf29ce484222325;
   for byte in text.as_bytes() {
     hash ^= u64::from(*byte);

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentflow_llm::{AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec};
+use agentflow_llm::{
+  AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
+};
 use agentflow_memory::{MemoryStore, Message};
 use agentflow_tools::{ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
@@ -209,7 +211,14 @@ impl PlanExecuteAgent {
       Err(err) => return Err(err),
     };
     let planner_text = planner_response.content.clone();
-    debug!(response = %planner_text, "PlanExecute planner responded");
+    // Q5.2: planner output may contain user input / PII echoed back —
+    // DEBUG emits fingerprint + length only, full text TRACE-only.
+    debug!(
+      response_len = planner_text.len(),
+      response_sha = %prompt_fingerprint(&planner_text),
+      "PlanExecute planner responded"
+    );
+    tracing::trace!(response = %planner_text, "PlanExecute planner response body");
     self
       .add_memory_message(Message::assistant_with_counter(
         &self.session_id,

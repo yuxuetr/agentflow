@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentflow_llm::{AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec};
+use agentflow_llm::{
+  AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
+};
 use agentflow_memory::{MemoryStore, Message, Role};
 use agentflow_tools::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
@@ -770,7 +772,16 @@ impl ReActAgent {
       });
 
       let raw_response = llm_response.content.clone();
-      debug!(response = %raw_response, "LLM responded");
+      // Q5.2: LLM responses routinely echo back user PII, customer
+      // data, or tool secrets — DEBUG emits a fingerprint + length
+      // only, the full body lands at TRACE (matches the same
+      // discipline Q3.6.2 wired up in agentflow-llm::log_request_complete).
+      debug!(
+        response_len = raw_response.len(),
+        response_sha = %prompt_fingerprint(&raw_response),
+        "LLM responded"
+      );
+      tracing::trace!(response = %raw_response, "LLM response body");
 
       // --- Check stop conditions ---
       if let Some(condition) = self
@@ -1208,7 +1219,16 @@ impl ReActAgent {
         }
 
         AgentResponse::Answer { thought, answer } => {
-          info!(thought = %thought, "Final answer reached");
+          // Q5.2: `thought` is the LLM's pre-answer reasoning chain
+          // and routinely contains user input verbatim. INFO logs are
+          // typically shipped to centralized log aggregators —
+          // fingerprint + length only at INFO; full text at TRACE.
+          info!(
+            thought_len = thought.len(),
+            thought_sha = %prompt_fingerprint(&thought),
+            "Final answer reached"
+          );
+          tracing::trace!(thought = %thought, "Final answer thought body");
           if !thought.trim().is_empty() {
             steps.push(AgentStep::new(step_index, AgentStepKind::Plan { thought }));
             step_index += 1;

@@ -98,7 +98,7 @@ pub mod tool_calling;
 pub mod trace_context;
 
 // Re-export main API components
-pub use client::{LLMClient, ResponseFormat, StreamingResponse};
+pub use client::{LLMClient, ResponseFormat, StreamingResponse, prompt_fingerprint};
 pub use config::{
   LLMConfig, LLMConfigSource, LLMConfigSourceKind, LoadingBenchmark, MODELS_CONFIG_ENV,
   ModelConfig, PerformanceComparison, VendorConfigManager,

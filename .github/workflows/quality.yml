@@ -60,6 +60,24 @@ jobs:
       - name: Check lints
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  redaction-lint:
+    # Q5.2: workspace redaction audit. Scans every
+    # `agentflow-*/src/**/*.rs` file for `(debug|info|warn|error)!(...)`
+    # macro calls that interpolate raw user prompt / response / content /
+    # body / params without going through
+    # `agentflow_tracing::redaction::redact_text` (for plain strings) or
+    # `agentflow_llm::prompt_fingerprint` (for opaque correlation IDs).
+    # `trace!` is intentionally exempt because production deployments
+    # exclude it. Suppress a known-false-positive with
+    # `// allow-redaction-lint: <reason>` on the same line.
+    name: cargo xtask redaction-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run redaction-lint
+        run: cargo xtask redaction-lint
+
   clippy-lib-deny:
     # Q5.1: enforce no `unwrap()` / `expect()` in production library
     # code workspace-wide. Tests / examples / benches / build scripts
@@ -353,6 +371,7 @@ jobs:
       - check-agent-sdk-doc
       - clippy
       - clippy-lib-deny
+      - redaction-lint
       - linux-sandbox-check
       - proto-validate
       - test
@@ -369,6 +388,7 @@ jobs:
           echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
           echo "clippy-lib-deny: ${{ needs.clippy-lib-deny.result }}"
+          echo "redaction-lint: ${{ needs.redaction-lint.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "proto-validate: ${{ needs.proto-validate.result }}"
           echo "test: ${{ needs.test.result }}"
@@ -381,6 +401,7 @@ jobs:
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
           test "${{ needs.clippy-lib-deny.result }}" = "success"
+          test "${{ needs.redaction-lint.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.proto-validate.result }}" = "success"
           test "${{ needs.test.result }}" = "success"

@@ -553,4 +553,200 @@ mod tests {
     assert!(redacted.contains("httponly"));
     assert!(!redacted.contains("opaque"));
   }
+
+  // ── Q5.2: extended redaction dataset ─────────────────────────────────────
+  //
+  // These tests stress-shape patterns that the wider Q5.2 audit
+  // identified as common-but-subtle leak vectors. Each test pins one
+  // category so a regression that removes coverage surfaces immediately.
+
+  // Q5.2: JWT in an Authorization header — most common API auth shape.
+  // The `Bearer <jwt>` form should redact the token completely.
+  #[test]
+  fn redacts_jwt_in_authorization_header_value() {
+    let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIn0.signature_part";
+    let header = format!("Authorization: Bearer {jwt}");
+    let redacted = redact_text(&header, &RedactionConfig::default());
+    assert!(
+      !redacted.contains(jwt),
+      "raw JWT must be removed, got {redacted}"
+    );
+    assert!(
+      redacted.contains("Bearer [REDACTED]"),
+      "Bearer redaction must trigger, got {redacted}"
+    );
+  }
+
+  // Q5.2: JWT as a `jwt=...` form field — covered by the structured key
+  // path (matched against `jwt` in the default patterns).
+  #[test]
+  fn redacts_jwt_as_url_or_form_field() {
+    let redacted = redact_text(
+      "https://api.example.test/auth?jwt=eyJ.payload.sig&keep=visible",
+      &RedactionConfig::default(),
+    );
+    assert!(!redacted.contains("eyJ.payload.sig"));
+    assert!(redacted.contains("jwt=[REDACTED]"));
+    assert!(redacted.contains("keep=visible"));
+  }
+
+  // Q5.2: AWS keys in env-style assignment form. AWS_SECRET_ACCESS_KEY
+  // is one of the most copy-pasted credentials in logs.
+  #[test]
+  fn redacts_aws_credentials_in_env_dump_form() {
+    let dump = "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
+                AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+                AWS_SESSION_TOKEN=FwoGZXIvYXdzEJr token=opaque";
+    let redacted = redact_text(dump, &RedactionConfig::default());
+    for plaintext in [
+      "AKIAIOSFODNN7EXAMPLE",
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "FwoGZXIvYXdzEJr",
+      "opaque",
+    ] {
+      assert!(
+        !redacted.contains(plaintext),
+        "{plaintext} must be removed, got {redacted}"
+      );
+    }
+    assert!(redacted.contains("AWS_ACCESS_KEY_ID=[REDACTED]"));
+    assert!(redacted.contains("AWS_SECRET_ACCESS_KEY=[REDACTED]"));
+    assert!(redacted.contains("AWS_SESSION_TOKEN=[REDACTED]"));
+  }
+
+  // Q5.2: CRLF in the middle of a log line is the HTTP-response-splitting
+  // / log-injection vector. Redaction must keep working when an
+  // attacker-controlled value contains `\r\n` — the redactor walks
+  // whitespace-delimited tokens, and `\r` / `\n` are both whitespace
+  // under `char::is_whitespace`, so each tokenised side is processed
+  // independently. This test pins that we don't accidentally drop or
+  // double-emit the CRLF, and that a sensitive value sandwiched between
+  // CRLFs still gets redacted.
+  #[test]
+  fn redacts_sensitive_value_around_crlf_boundary() {
+    let input = "user=alice\r\napi_key=leaked-secret\r\ntrailing=ok";
+    let redacted = redact_text(input, &RedactionConfig::default());
+    assert!(
+      !redacted.contains("leaked-secret"),
+      "sensitive value before CRLF must be removed, got {redacted:?}"
+    );
+    assert!(
+      redacted.contains("api_key=[REDACTED]"),
+      "api_key on a separate CRLF-line must be redacted, got {redacted:?}"
+    );
+    assert!(
+      redacted.contains("user=alice"),
+      "benign prior line must survive, got {redacted:?}"
+    );
+    assert!(
+      redacted.contains("trailing=ok"),
+      "benign trailing line must survive, got {redacted:?}"
+    );
+    // The CRLF separators themselves must be preserved (whitespace mode
+    // is verbatim, not collapsing) so structured log parsers don't see
+    // a merged line.
+    assert!(
+      redacted.contains("\r\n"),
+      "CRLF separators must be preserved, got {redacted:?}"
+    );
+  }
+
+  // Q5.2: lone `\n` separators (Unix log style) — same expectation as
+  // CRLF but for the more common newline-only form.
+  #[test]
+  fn redacts_sensitive_value_across_lf_only_lines() {
+    let input = "GET /v1/data\napi_key=topsecret\nuser=alice";
+    let redacted = redact_text(input, &RedactionConfig::default());
+    assert!(!redacted.contains("topsecret"));
+    assert!(redacted.contains("api_key=[REDACTED]"));
+    assert!(redacted.contains("user=alice"));
+  }
+
+  // Q5.2: cookie header in compact (no-whitespace-around-colon) shape
+  // — the redactor's whitespace tokenizer keys off whitespace boundaries,
+  // so a colon-delimited `Cookie:session=abc` (no space after `:`) is
+  // one token and round-trips through `redact_assignment_token`.
+  // Attributes after the first `;` boundary are preserved.
+  #[test]
+  fn redacts_cookie_header_compact_form_preserves_attributes() {
+    let redacted = redact_text(
+      "Cookie:session_token=abc123def;Path=/;Domain=.example.test;Secure;HttpOnly",
+      &RedactionConfig::default(),
+    );
+    assert!(
+      !redacted.contains("abc123def"),
+      "raw cookie value must be removed, got {redacted}"
+    );
+    assert!(
+      redacted.contains("Path=/"),
+      "Path attribute must survive, got {redacted}"
+    );
+    assert!(
+      redacted.contains("Domain=.example.test"),
+      "Domain attribute must survive, got {redacted}"
+    );
+    assert!(
+      redacted.contains("Secure"),
+      "Secure flag must survive, got {redacted}"
+    );
+    assert!(
+      redacted.contains("HttpOnly"),
+      "HttpOnly flag must survive, got {redacted}"
+    );
+  }
+
+  // Q5.2 (known-limitation pin): the inline `redact_text` tokenizer
+  // splits on whitespace and treats each token independently. If a
+  // header is emitted as `Set-Cookie: session=value` with whitespace
+  // *after* the colon, `Set-Cookie:` is one token (sensitive key with
+  // empty value, gets redacted to a literal `Set-Cookie:[REDACTED]`)
+  // and `session=value` is a separate token where the key `session`
+  // isn't in the default sensitive patterns. The actual cookie value
+  // then leaks. This test pins the limitation so we don't accidentally
+  // claim coverage for it; the structured `redact_value` path inside
+  // a JSON object (the normal trace path) does NOT have this gap
+  // because object keys are walked recursively.
+  //
+  // Fix avenue (deferred): teach the tokenizer to recognise
+  // `<sensitive-header>:\s+<value>` shapes by carrying a "redact next
+  // token" flag — same trick `redact_bearer_tokens` uses for
+  // `Bearer <token>`. Out of scope for Q5.2 (audit + lint + dataset).
+  #[test]
+  fn known_limitation_set_cookie_with_whitespace_leaks_value_via_redact_text() {
+    let redacted = redact_text(
+      "Set-Cookie: session=abc123def; Path=/",
+      &RedactionConfig::default(),
+    );
+    // The `Set-Cookie:` token gets `[REDACTED]` because Set-Cookie is a
+    // sensitive key, but the value sits in the next whitespace-separated
+    // token. Use this assertion as a tripwire — if a future redactor
+    // change starts catching this case, delete the test and add it to
+    // `redacts_cookie_header_compact_form_preserves_attributes` above.
+    assert!(
+      redacted.contains("Set-Cookie:[REDACTED]"),
+      "Set-Cookie key still redacts to a stub, got {redacted}"
+    );
+    assert!(
+      redacted.contains("abc123def"),
+      "BUG-PIN: cookie value with whitespace after colon currently leaks via redact_text — \
+       structured trace path (redact_value) is unaffected. See Q5.2 deferred fix avenue."
+    );
+  }
+
+  // Q5.2: structured trace path (the production path for tool call
+  // params, agent steps, etc.) does NOT have the whitespace gap above
+  // — `redact_value` walks JSON keys recursively and the Set-Cookie
+  // field gets fully redacted.
+  #[test]
+  fn structured_path_redacts_set_cookie_value_completely() {
+    let mut value = serde_json::json!({
+      "headers": {
+        "Set-Cookie": "session=abc123def; Path=/; Domain=.example.test",
+        "Cookie": "auth=opaque; theme=dark"
+      }
+    });
+    redact_value(&mut value, &RedactionConfig::default());
+    assert_eq!(value["headers"]["Set-Cookie"], REDACTED_VALUE);
+    assert_eq!(value["headers"]["Cookie"], REDACTED_VALUE);
+  }
 }
