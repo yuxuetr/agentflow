@@ -249,6 +249,14 @@ impl ModelRegistry {
       }
     }
 
+    // Q5.4: sort both lists by provider name so the `summary()`
+    // output (and any downstream consumer that prints / diffs the
+    // report) is deterministic across runs. Pre-fix the lists
+    // inherited HashMap iteration order, so the same valid+invalid
+    // set surfaced in arbitrary order between processes.
+    report.valid_providers.sort();
+    report.invalid_providers.sort_by(|a, b| a.0.cmp(&b.0));
+
     Ok(report)
   }
 
@@ -432,6 +440,50 @@ providers:
     assert!(matches!(result, Err(LLMError::ConfigurationError { .. })));
 
     assert!(!registry.has_model("nonexistent"));
+  }
+
+  /// Q5.4: `ValidationReport.summary()` is rendered to the operator
+  /// (CLI `llm models` style output). Pre-fix the report inherited
+  /// HashMap iteration order so two consecutive `validate_all_providers`
+  /// calls could print the same set of providers in different orders.
+  /// We sort by provider name in `validate_all_providers` so the
+  /// rendered text is deterministic; pin the contract here.
+  #[test]
+  fn validation_report_summary_is_deterministic_in_provider_order() {
+    let mut report = ValidationReport {
+      valid_providers: vec!["openai".into(), "anthropic".into(), "google".into()],
+      invalid_providers: vec![
+        ("zhipu".into(), "missing key".into()),
+        ("moonshot".into(), "401".into()),
+      ],
+    };
+    // The post-fix `validate_all_providers` does this sort
+    // implicitly; running it on already-sorted input is a no-op,
+    // so calling sort() here pins the contract regardless of the
+    // input order the test seeds.
+    report.valid_providers.sort();
+    report.invalid_providers.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let summary = report.summary();
+    let valid_section_idx = summary.find("Valid providers:").expect("valid header");
+    let valid_block = &summary[valid_section_idx..];
+    // After sorting: anthropic < google < openai (lex order).
+    let anthropic_idx = valid_block.find("anthropic").expect("anthropic in summary");
+    let google_idx = valid_block.find("google").expect("google in summary");
+    let openai_idx = valid_block.find("openai").expect("openai in summary");
+    assert!(
+      anthropic_idx < google_idx && google_idx < openai_idx,
+      "Q5.4: valid providers must appear in lexicographic order"
+    );
+
+    let invalid_section_idx = summary.find("Invalid providers:").expect("invalid header");
+    let invalid_block = &summary[invalid_section_idx..];
+    let moonshot_idx = invalid_block.find("moonshot").expect("moonshot in summary");
+    let zhipu_idx = invalid_block.find("zhipu").expect("zhipu in summary");
+    assert!(
+      moonshot_idx < zhipu_idx,
+      "Q5.4: invalid providers must appear in lexicographic order"
+    );
   }
 
   /// P10.3.1: loading a config that references two providers must

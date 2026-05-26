@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -14,8 +14,17 @@ use crate::{
 /// Register tools once at startup; an agent runtime (e.g. the ReAct agent
 /// in `agentflow-agents`) uses the registry to look up and dispatch tool
 /// calls from LLM responses.
+///
+/// Q5.4: `tools` is a `BTreeMap` keyed by tool name (not `HashMap`)
+/// so iteration yields tools in lexicographic name order. That order
+/// flows directly into [`Self::openai_tools_array`] / [`Self::list`]
+/// / [`Self::prompt_tools_description`] — i.e. into the LLM request
+/// body and trace output. With `HashMap`, two processes registering
+/// the same tools could produce different wire bytes; with
+/// `BTreeMap`, identical input ⇒ identical output, which the
+/// determinism regression test below pins.
 pub struct ToolRegistry {
-  tools: HashMap<String, Arc<dyn Tool>>,
+  tools: BTreeMap<String, Arc<dyn Tool>>,
   policy: ToolPolicy,
   policy_audit: Arc<Mutex<Vec<ToolPolicyDecision>>>,
   capability_audit: Arc<Mutex<Vec<EffectiveCapabilities>>>,
@@ -26,7 +35,7 @@ pub struct ToolRegistry {
 impl ToolRegistry {
   pub fn new() -> Self {
     Self {
-      tools: HashMap::new(),
+      tools: BTreeMap::new(),
       policy: ToolPolicy::allow_all(),
       policy_audit: Arc::new(Mutex::new(Vec::new())),
       capability_audit: Arc::new(Mutex::new(Vec::new())),
@@ -412,6 +421,82 @@ mod tests {
 
     assert_eq!(metadata.source, ToolSource::Builtin);
     assert!(metadata.permissions.permissions.is_empty());
+  }
+
+  /// Q5.4 regression: same set of tools registered in any order must
+  /// produce byte-identical `openai_tools_array()` / `list()` /
+  /// `prompt_tools_description()` output. Pre-fix the underlying
+  /// `HashMap` iteration order was a function of process-randomised
+  /// hash seeds, so two runs of the same workflow could send
+  /// different `tools: [...]` payloads to the LLM — silently
+  /// breaking caching and trace replay invariants.
+  #[test]
+  fn registry_iteration_is_deterministic_across_registration_orders() {
+    let names = ["zebra", "alpha", "mango", "delta", "echo"];
+    let make_tool = |name: &'static str| -> Arc<dyn Tool> {
+      Arc::new(StaticTool {
+        name,
+        metadata: ToolMetadata::builtin_named(name),
+      })
+    };
+
+    let build_in_order = |order: &[&'static str]| {
+      let mut reg = ToolRegistry::new();
+      for &n in order {
+        reg.register(make_tool(n));
+      }
+      reg
+    };
+
+    let mut forward_order: Vec<&'static str> = names.to_vec();
+    let mut reverse_order: Vec<&'static str> = forward_order.clone();
+    reverse_order.reverse();
+    let shuffled_order: Vec<&'static str> = vec!["mango", "echo", "zebra", "alpha", "delta"];
+
+    let reg_forward = build_in_order(&forward_order);
+    let reg_reverse = build_in_order(&reverse_order);
+    let reg_shuffled = build_in_order(&shuffled_order);
+
+    // openai_tools_array → JSON. Must be byte-identical across
+    // registration orders so two processes that registered the
+    // same tools produce identical LLM request bodies.
+    let json_forward = serde_json::to_string(&reg_forward.openai_tools_array()).unwrap();
+    let json_reverse = serde_json::to_string(&reg_reverse.openai_tools_array()).unwrap();
+    let json_shuffled = serde_json::to_string(&reg_shuffled.openai_tools_array()).unwrap();
+    assert_eq!(json_forward, json_reverse, "Q5.4: openai_tools_array");
+    assert_eq!(json_forward, json_shuffled, "Q5.4: openai_tools_array");
+
+    // list() must yield the same name sequence regardless of
+    // registration order. (BTreeMap → lexicographic.)
+    let names_forward: Vec<String> = reg_forward.list().iter().map(|t| t.name().into()).collect();
+    let names_reverse: Vec<String> = reg_reverse.list().iter().map(|t| t.name().into()).collect();
+    let names_shuffled: Vec<String> = reg_shuffled
+      .list()
+      .iter()
+      .map(|t| t.name().into())
+      .collect();
+    assert_eq!(names_forward, names_reverse, "Q5.4: list() order");
+    assert_eq!(names_forward, names_shuffled, "Q5.4: list() order");
+    // The pinned order itself must be lexicographic — anchoring
+    // the contract so downstream consumers can rely on it.
+    forward_order.sort();
+    let expected: Vec<String> = forward_order.iter().map(|s| s.to_string()).collect();
+    assert_eq!(names_forward, expected);
+
+    // prompt_tools_description() pre-Q5.4 already called
+    // `lines.sort()` so it was deterministic, but we pin it
+    // alongside the others so a future refactor that drops the
+    // sort still has coverage.
+    assert_eq!(
+      reg_forward.prompt_tools_description(),
+      reg_reverse.prompt_tools_description(),
+      "Q5.4: prompt_tools_description"
+    );
+
+    // shuffled_order is used to seed reg_shuffled above; reference
+    // it again to keep clippy from warning about the intermediate
+    // binding even though the test reads from reg_shuffled, not it.
+    assert_eq!(shuffled_order.len(), names.len());
   }
 
   #[tokio::test]
