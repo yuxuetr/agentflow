@@ -150,6 +150,13 @@ export function HarnessSessionDetail({
     let fallbackHandle: number | null = null;
     let reconnectHandle: number | null = null;
     let closed = false;
+    // Q3.7.3 M5: in-flight guards prevent stacked requests when the
+    // gateway is slow. Each poll-loop call inside `setInterval`
+    // skips its tick if the previous request hasn't returned yet —
+    // turns the interval into a "fire only if idle" loop without
+    // losing the cadence.
+    let sessionInFlight = false;
+    let fallbackInFlight = false;
 
     const startStream = async () => {
       while (!closed && !abortController.signal.aborted) {
@@ -163,7 +170,13 @@ export function HarnessSessionDetail({
             setStreamState('error');
             if (fallbackHandle === null) {
               fallbackHandle = window.setInterval(() => {
-                void fetchEventsFallback();
+                if (closed || fallbackInFlight) {
+                  return;
+                }
+                fallbackInFlight = true;
+                void fetchEventsFallback().finally(() => {
+                  fallbackInFlight = false;
+                });
               }, 5000);
             }
             // Wait before retrying to avoid hot-looping on a 401.
@@ -199,7 +212,13 @@ export function HarnessSessionDetail({
           setStreamState('error');
           if (fallbackHandle === null) {
             fallbackHandle = window.setInterval(() => {
-              void fetchEventsFallback();
+              if (closed || fallbackInFlight) {
+                return;
+              }
+              fallbackInFlight = true;
+              void fetchEventsFallback().finally(() => {
+                fallbackInFlight = false;
+              });
             }, 5000);
           }
           await new Promise<void>((resolve) => {
@@ -217,9 +236,17 @@ export function HarnessSessionDetail({
     }
 
     // Approval poll + session row poll, every 2 s while not terminal.
+    // Q3.7.3 M5: in-flight guard skips ticks while a previous poll is
+    // still outstanding; the next sample arrives on the next interval
+    // without queuing concurrent requests against the gateway.
     const sessionHandle = window.setInterval(() => {
-      void fetchSession();
-      void fetchApprovals();
+      if (closed || sessionInFlight) {
+        return;
+      }
+      sessionInFlight = true;
+      void Promise.all([fetchSession(), fetchApprovals()]).finally(() => {
+        sessionInFlight = false;
+      });
     }, 2000);
 
     return () => {

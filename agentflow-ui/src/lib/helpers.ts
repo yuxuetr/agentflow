@@ -86,3 +86,28 @@ export const eventNodeId = (event: StreamedEvent): string => {
   const payload = event.payload as Record<string, unknown>;
   return String(payload.node_id ?? payload.node_name ?? payload.node ?? payload.step ?? '').trim();
 };
+
+/**
+ * Q3.7.3: exponential-backoff schedule for SSE reconnects.
+ *
+ * Returns the delay in milliseconds before the *next* reconnect attempt
+ * given the current attempt counter (zero-indexed). The schedule
+ * doubles each time and caps at 30 seconds:
+ *
+ *   attempt 0 →   250 ms
+ *   attempt 1 →   500 ms
+ *   attempt 2 → 1,000 ms
+ *   attempt 3 → 2,000 ms
+ *   attempt 4 → 4,000 ms
+ *   attempt 5 → 8,000 ms
+ *   attempt 6 → 16,000 ms
+ *   attempt 7+ → 30,000 ms (cap)
+ *
+ * Extracted as a pure function so the schedule can be unit-tested
+ * without spinning up a React render tree.
+ */
+export const reconnectDelayMs = (attempt: number): number => {
+  const safe = Math.max(0, Math.floor(attempt));
+  const base = 250 * Math.pow(2, safe);
+  return Math.min(base, 30_000);
+};

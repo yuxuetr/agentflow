@@ -28,6 +28,7 @@ import {
   formatTime,
   isTerminalRun,
   prettyJson,
+  reconnectDelayMs,
   runFromEnvelope,
 } from './lib/helpers';
 import {
@@ -378,6 +379,21 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'cancelling'>('idle');
   const [lastReconnect, setLastReconnect] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Q3.7.3: SSE reconnect needs the latest seen `seq` to resume the
+  // stream with `?after_seq=N` instead of re-replaying the whole
+  // history. We can't use the `events` state directly because the
+  // effect's deps list excludes it (intentionally — see comment at
+  // the end of the effect). A ref keeps the latest value visible
+  // inside the long-lived `connect()` closure across reconnect
+  // attempts.
+  const latestSeqRef = useRef<number>(-1);
+  // Q3.7.3: continuous reconnect with exponential backoff. The pre-fix
+  // code retried once on a 1.2s timeout and then surrendered to the
+  // `error` state; operators saw a permanent "error" pill the moment
+  // the SSE channel had a transient blip. We now retry indefinitely
+  // with capped backoff so a 5-second network glitch self-recovers
+  // without operator intervention.
+  const reconnectAttemptRef = useRef<number>(0);
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.seq === selectedSeq) ?? events.at(-1) ?? null,
@@ -518,9 +534,40 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
   };
 
   useEffect(() => {
-    void loadRuns().catch(() => {
-      // Explicit run connection still works when the list is unavailable.
-    });
+    // Q3.7.3 M6: auto-refresh the run list every 4 seconds (mirrors
+    // the HarnessSessionList pattern). Without this, the runs sidebar
+    // is stale until the operator changes tenant or reloads — new
+    // runs submitted from a different tab never show up.
+    //
+    // Q3.7.3 M5: in-flight guard prevents stacked requests when the
+    // gateway is slow / under load. `inFlight` flips while a request
+    // is outstanding; the next tick is skipped (next sample will
+    // still arrive on the following interval).
+    let inFlight = false;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled || inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        await loadRuns();
+      } catch {
+        // Explicit run connection still works when the list is unavailable.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void tick();
+    const handle = window.setInterval(() => {
+      void tick();
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiToken, tenantId]);
 
@@ -532,6 +579,11 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
     let cancelled = false;
     let reconnectTimer: number | undefined;
     abortRef.current?.abort();
+    // Q3.7.3: reset per-connection state. The seq ref starts at -1
+    // (replay-from-beginning); each appended event bumps it. The
+    // attempt counter drives the exponential-backoff delay.
+    latestSeqRef.current = -1;
+    reconnectAttemptRef.current = 0;
 
     const appendEvent = (event: StreamedEvent) => {
       setEvents((current) => {
@@ -541,6 +593,12 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         return [...current, event].sort((left, right) => left.seq - right.seq);
       });
       setSelectedSeq((current) => current ?? event.seq);
+      // Q3.7.3: keep the ref in lock-step with the visible events so a
+      // mid-stream reconnect resumes from the last seen seq rather
+      // than re-replaying from -1.
+      if (event.seq > latestSeqRef.current) {
+        latestSeqRef.current = event.seq;
+      }
     };
 
     const connectStream = async (afterSeq: number) => {
@@ -555,6 +613,9 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         throw new Error(`event stream failed with HTTP ${response.status}`);
       }
       setState('streaming');
+      // Q3.7.3: successful (re)connect resets the backoff counter so
+      // subsequent disconnects start from the 250ms floor again.
+      reconnectAttemptRef.current = 0;
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
       let buffer = '';
       while (!cancelled) {
@@ -569,6 +630,36 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
           appendEvent(event);
         }
       }
+    };
+
+    // Q3.7.3: exponential backoff schedule for SSE reconnects lives in
+    // `lib/helpers.ts` so unit tests can pin the cadence without
+    // spinning up a React renderer.
+
+    const scheduleReconnect = () => {
+      if (cancelled) {
+        return;
+      }
+      const attempt = reconnectAttemptRef.current;
+      reconnectAttemptRef.current = attempt + 1;
+      const delay = reconnectDelayMs(attempt);
+      setLastReconnect(formatTime(new Date().toISOString()));
+      setState('reconnecting');
+      reconnectTimer = window.setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+        // Resume from the latest seq we've actually seen — the ref
+        // sidesteps the M4 stale-closure bug where `events` was
+        // captured at `[]` after the initial `setEvents([])` call.
+        void connectStream(latestSeqRef.current).catch((streamErr) => {
+          if (cancelled || (streamErr instanceof DOMException && streamErr.name === 'AbortError')) {
+            return;
+          }
+          setError(streamErr instanceof Error ? streamErr.message : String(streamErr));
+          scheduleReconnect();
+        });
+      }, delay);
     };
 
     const connect = async () => {
@@ -626,6 +717,10 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
           setEvents(history);
           setSelectedSeq(history.at(-1)?.seq ?? null);
           afterSeq = history.at(-1)?.seq ?? -1;
+          // Q3.7.3: seed the seq ref with the initial-history high-watermark
+          // so a reconnect that fires before the first live event still
+          // resumes from the right point.
+          latestSeqRef.current = afterSeq;
         }
 
         // P10.13.1: the `/v1/runs/{id}/graph` fetch + the
@@ -648,20 +743,12 @@ function RunConsole({ apiToken, onTokenChange }: { apiToken: string; onTokenChan
         if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
           return;
         }
-        const lastSeq = events.at(-1)?.seq ?? -1;
-        setLastReconnect(formatTime(new Date().toISOString()));
-        setState('reconnecting');
-        reconnectTimer = window.setTimeout(() => {
-          if (!cancelled) {
-            void connectStream(lastSeq).catch((streamErr) => {
-              if (!cancelled) {
-                setError(streamErr instanceof Error ? streamErr.message : String(streamErr));
-                setState('error');
-              }
-            });
-          }
-        }, 1200);
         setError(err instanceof Error ? err.message : String(err));
+        // Q3.7.3: kick off the indefinite-with-backoff reconnect loop.
+        // The previous code did a single 1200ms retry and then surrendered
+        // to the `error` state; with this change a transient network
+        // blip self-recovers without operator intervention.
+        scheduleReconnect();
       }
     };
 

@@ -51,11 +51,34 @@ export function HarnessSessionList({
   };
 
   useEffect(() => {
-    void refresh();
+    // Q3.7.3 M5: in-flight guard prevents stacked refresh requests
+    // when the gateway is slow. The pre-fix code fired a fresh
+    // `refresh()` every 4s regardless of whether the previous one
+    // had returned, so a 6-second response stamped over a 4-second
+    // response with stale data (last-response-wins-not-most-recent-
+    // request). The guard turns the interval into a "fire only if
+    // idle" loop without losing the cadence.
+    let cancelled = false;
+    let inFlight = false;
+    const tick = async () => {
+      if (cancelled || inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        await refresh();
+      } finally {
+        inFlight = false;
+      }
+    };
+    void tick();
     const handle = window.setInterval(() => {
-      void refresh();
+      void tick();
     }, 4000);
-    return () => window.clearInterval(handle);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
     // We intentionally exclude `refresh` from deps: it closes over
     // tenantId+apiToken which we want to re-resolve via the explicit
     // dependency below.
