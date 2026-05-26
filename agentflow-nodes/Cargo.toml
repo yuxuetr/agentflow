@@ -11,6 +11,33 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
+# Q3.8.5: the actual feature gate matrix.
+#
+# - `llm` / `http` / `file` / `template` are the default-on
+#   workflow nodes. Some only gate the module `pub mod ...` in
+#   `nodes/mod.rs`, others additionally gate transitive deps
+#   (`reqwest` for `http`, `handlebars` for `template`). `llm` and
+#   `file` are empty placeholders that only gate `pub use` re-
+#   exports today — kept for symmetry with the documented default
+#   set; pruning them is a breaking API change.
+# - `batch` / `conditional` opt-in.
+# - `mcp` / `rag` opt-in; these pull substantial transitive deps.
+#
+# Heavy AI-modality nodes (asr / tts / text_to_image /
+# image_to_image / image_edit / image_understand) and the
+# specialized content nodes (arxiv, markmap) ship in the base
+# crate without per-feature gates. The audit (`docs/audit/
+# agentflow-nodes.md` M7) flagged this; the trade-off considered
+# in Q3.8.5 was:
+#   - Add 8 feature flags + matrix CI rows for a marginal binary-
+#     size win (agentflow-llm itself is still a hard dep, so the
+#     transitive footprint barely shrinks), OR
+#   - Document the intentional shape and pin it with a regression
+#     test so the doc-vs-code drift cannot silently reappear.
+# CLAUDE.md (Q4.5) + this comment + the `feature_gate_pin_tests`
+# module take the second path. If a future contributor *does*
+# decide to gate one of these modalities, they must update
+# CLAUDE.md, this comment, and the pin test in lockstep.
 default = ["llm", "http", "file", "template"]
 llm = []
 http = ["reqwest"]
