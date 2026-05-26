@@ -441,9 +441,20 @@ impl HookedTool {
     if let Some((scope, outcome)) = {
       let cache = self.config.approval_cache.lock().await;
       if cache.stop_after_deny {
-        return Ok(Proceed::Deny {
-          reason: "previous approval requested deny-and-stop; aborting further tool calls".into(),
-        });
+        // Q3.10.2: pre-fix this branch silently returned `Deny`
+        // without emitting any approval event, so operators
+        // tailing the JSONL / SSE log saw the tool call never
+        // happen but had no envelope to explain why. Emit a
+        // synthetic ApprovalRequested + ApprovalDecided pair
+        // (request_id namespaced as `stop-after-deny-<tool>` so
+        // it's never confused with a real provider response) so
+        // the gate path is fully audit-visible.
+        let stop_reason: String =
+          "previous approval requested deny-and-stop; aborting further tool calls".into();
+        self
+          .emit_stop_after_deny_gate(pending, risk, &stop_reason)
+          .await?;
+        return Ok(Proceed::Deny { reason: stop_reason });
       }
       cache.lookup(&pending.tool)
     } {
@@ -526,6 +537,62 @@ impl HookedTool {
         "reused {:?}-scope decision from earlier call",
         scope
       )),
+    };
+    self
+      .emit_event(HarnessEventBody::ApprovalDecided(ApprovalDecidedPayload {
+        decision,
+      }))
+      .await
+  }
+
+  /// Q3.10.2: emit a synthetic ApprovalRequested + ApprovalDecided
+  /// pair so the stop-after-deny gate is visible in JSONL / SSE
+  /// instead of being silently dropped. The `request_id` is
+  /// namespaced as `stop-after-deny-<tool>-<uuid>` so a downstream
+  /// parser can distinguish synthetic gate events from real
+  /// provider-issued ones.
+  async fn emit_stop_after_deny_gate(
+    &self,
+    pending: &PendingToolCall,
+    risk: ApprovalRisk,
+    stop_reason: &str,
+  ) -> Result<(), HarnessError> {
+    let request_id = format!("stop-after-deny-{}-{}", pending.tool, uuid::Uuid::new_v4());
+    let now = Utc::now();
+    // Same redaction rules as the live request path — synthetic
+    // events still flow through the operator's log so we cannot
+    // leak unredacted params here either.
+    let mut params_summary = pending.params.clone();
+    agentflow_tracing::redaction::redact_value(
+      &mut params_summary,
+      &agentflow_tracing::redaction::RedactionConfig::default(),
+    );
+    let request = ApprovalRequest {
+      id: request_id.clone(),
+      session_id: pending.session_id.clone(),
+      step_index: pending.step_index,
+      tool: pending.tool.clone(),
+      source: pending.source.clone(),
+      permissions: pending.permissions.clone(),
+      idempotency: pending.idempotency,
+      params_summary,
+      risk,
+      reason: stop_reason.to_string(),
+      requested_at: now,
+      expires_at: None,
+    };
+    self
+      .emit_event(HarnessEventBody::ApprovalRequested(
+        ApprovalRequestedPayload { request },
+      ))
+      .await?;
+    let decision = ApprovalDecision {
+      request_id,
+      decision: ApprovalOutcome::DenyAndStop,
+      scope: ApprovalScope::Run,
+      decided_by: "stop-after-deny-gate".into(),
+      decided_at: now,
+      reason: Some(stop_reason.to_string()),
     };
     self
       .emit_event(HarnessEventBody::ApprovalDecided(ApprovalDecidedPayload {
@@ -963,14 +1030,93 @@ mod tests {
     let second = registry.execute("probe", serde_json::json!({})).await;
     assert!(matches!(second, Err(ToolError::PolicyDenied { .. })));
     assert_eq!(*counter.lock().unwrap(), 0);
-    // Only one ApprovalRequested + ApprovalDecided emitted; the
-    // second call short-circuits via the cache's stop flag.
+    // First call → real provider ApprovalRequested + ApprovalDecided.
+    // Second call → Q3.10.2 synthetic `stop-after-deny-*` gate pair
+    // so the audit log shows operators *why* the second call never
+    // hit the tool, instead of silently dropping it.
     let events = sink.snapshot().await;
     let requested = events
       .iter()
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_)))
       .count();
-    assert_eq!(requested, 1);
+    assert_eq!(requested, 2, "expect one real + one synthetic gate request");
+    let decided = events
+      .iter()
+      .filter(|event| matches!(event.body, HarnessEventBody::ApprovalDecided(_)))
+      .count();
+    assert_eq!(decided, 2, "expect a Decided event paired with each Requested");
+  }
+
+  /// Q3.10.2 regression — the synthetic gate events must carry the
+  /// `stop-after-deny-<tool>-*` request_id namespace so downstream
+  /// parsers can distinguish them from real provider responses, and
+  /// must be `decided_by = "stop-after-deny-gate"` so the audit log
+  /// makes the gate path obvious.
+  #[tokio::test]
+  async fn stop_after_deny_gate_emits_namespaced_events_with_redacted_params() {
+    let (tool, _) = ProbeTool::new("probe", ToolIdempotency::NonIdempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(DenyAndStopProvider), sinks)
+      .with_pre_hook(Arc::new(RequireApprovalHook));
+    let registry = wrap_registry(registry, config);
+
+    // First call trips deny-and-stop; second call hits the gate.
+    let _ = registry.execute("probe", serde_json::json!({})).await;
+    let _ = registry
+      .execute(
+        "probe",
+        serde_json::json!({
+          "url": "https://api.example.com",
+          "headers": {"Authorization": "Bearer sk-leak-me"}
+        }),
+      )
+      .await;
+
+    let events = sink.snapshot().await;
+    let gate_request = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::ApprovalRequested(payload)
+          if payload.request.id.starts_with("stop-after-deny-") =>
+        {
+          Some(&payload.request)
+        }
+        _ => None,
+      })
+      .expect("Q3.10.2: synthetic ApprovalRequested for the gated second call must exist");
+    assert!(
+      gate_request.id.starts_with("stop-after-deny-probe-"),
+      "request id must namespace tool name; got {}",
+      gate_request.id
+    );
+    assert!(
+      gate_request.reason.contains("deny-and-stop"),
+      "reason must reference the originating decision; got {}",
+      gate_request.reason
+    );
+    // Redaction must still apply on the synthetic path — sensitive
+    // header values should not appear verbatim.
+    let summary = serde_json::to_string(&gate_request.params_summary).unwrap();
+    assert!(
+      !summary.contains("sk-leak-me"),
+      "synthetic gate event must not leak Authorization values; got {summary}"
+    );
+
+    let gate_decision = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::ApprovalDecided(payload)
+          if payload.decision.request_id.starts_with("stop-after-deny-") =>
+        {
+          Some(&payload.decision)
+        }
+        _ => None,
+      })
+      .expect("Q3.10.2: synthetic ApprovalDecided for the gated call must exist");
+    assert_eq!(gate_decision.decision, ApprovalOutcome::DenyAndStop);
+    assert_eq!(gate_decision.decided_by, "stop-after-deny-gate");
   }
 
   struct CountingPostHook {
