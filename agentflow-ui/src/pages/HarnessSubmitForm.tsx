@@ -108,11 +108,20 @@ export function HarnessSubmitForm({
       if (skillTrimmed) {
         body.skill_name = skillTrimmed;
       }
-      const response = await apiFetch('/v1/harness/sessions', apiToken, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      // The trimmed tenant goes into both the body (`tenant_id`) and
+      // the `X-Agentflow-Tenant` header so the gateway's Q1.4.3 strict
+      // tenant boundary accepts the submit — body must match header.
+      const tenantHeader = (body.tenant_id as string) ?? 'default';
+      const response = await apiFetch(
+        '/v1/harness/sessions',
+        apiToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        tenantHeader,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`HTTP ${response.status}: ${text}`);
@@ -128,7 +137,17 @@ export function HarnessSubmitForm({
             ')',
         );
       }
-      window.location.assign(`/ui/harness/sessions/${encodeURIComponent(raw.session_id)}`);
+      // Encode tenant into the detail-page URL so a fresh tab / direct
+      // link knows which tenant to scope its GETs / SSE to. Without
+      // this every non-`default` tenant would 404 the row it just
+      // created.
+      const tenantQuery =
+        tenantHeader && tenantHeader !== 'default'
+          ? `?tenant=${encodeURIComponent(tenantHeader)}`
+          : '';
+      window.location.assign(
+        `/ui/harness/sessions/${encodeURIComponent(raw.session_id)}${tenantQuery}`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

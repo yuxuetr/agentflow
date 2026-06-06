@@ -9,12 +9,30 @@ import { parseJson } from '../schemas';
  * call `fetch`. Trims whitespace and skips the header entirely when
  * the token is empty so the gateway treats it as "no auth provided"
  * rather than "literal empty token" (the gateway distinguishes those).
+ *
+ * The optional `tenant` argument sets `X-Agentflow-Tenant`. The
+ * gateway treats this header as the authoritative tenant binding
+ * (Q1.4.2 / Q1.4.3) — submit endpoints reject body `tenant_id`
+ * fields that disagree with it, and every `:id`-bound GET / SSE /
+ * action 404s cross-tenant rows. UI flows that operate on a single
+ * tenant (harness sessions, run console) propagate the same tenant
+ * to every related call so non-`default` tenants don't 404 their
+ * own resources after a successful submit.
  */
-export const apiFetch = (path: string, token: string, init: RequestInit = {}): Promise<Response> => {
+export const apiFetch = (
+  path: string,
+  token: string,
+  init: RequestInit = {},
+  tenant?: string,
+): Promise<Response> => {
   const headers = new Headers(init.headers);
   const trimmed = token.trim();
   if (trimmed) {
     headers.set('Authorization', `Bearer ${trimmed}`);
+  }
+  const trimmedTenant = tenant?.trim();
+  if (trimmedTenant) {
+    headers.set('X-Agentflow-Tenant', trimmedTenant);
   }
   return fetch(path, {
     ...init,

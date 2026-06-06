@@ -32,8 +32,18 @@ export function HarnessSessionList({
     setBusy(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ tenant_id: tenantId.trim() || 'default' });
-      const response = await apiFetch(`/v1/harness/sessions?${params.toString()}`, apiToken);
+      // Q1.4.2 dropped `?tenant_id=` as an authoritative source; the
+      // gateway now reads the tenant from the `X-Agentflow-Tenant`
+      // header that `apiFetch` forwards below. The query string is
+      // kept off the URL on purpose so we never send conflicting
+      // signals.
+      const trimmedTenant = tenantId.trim() || 'default';
+      const response = await apiFetch(
+        `/v1/harness/sessions`,
+        apiToken,
+        {},
+        trimmedTenant,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`list failed: HTTP ${response.status} ${text}`);
@@ -160,7 +170,19 @@ export function HarnessSessionList({
                 <tr
                   key={session.id}
                   data-testid="harness-list-row"
-                  onClick={() => window.location.assign(`/ui/harness/sessions/${session.id}`)}
+                  onClick={() => {
+                    // Propagate the current list tenant to the detail
+                    // page so its GETs / SSE scope to the same tenant
+                    // under Q1.4.2/3 strict tenant boundary.
+                    const trimmedTenant = tenantId.trim();
+                    const suffix =
+                      trimmedTenant && trimmedTenant !== 'default'
+                        ? `?tenant=${encodeURIComponent(trimmedTenant)}`
+                        : '';
+                    window.location.assign(
+                      `/ui/harness/sessions/${session.id}${suffix}`,
+                    );
+                  }}
                   className="harness-row"
                 >
                   <td>{formatTime(session.started_at)}</td>

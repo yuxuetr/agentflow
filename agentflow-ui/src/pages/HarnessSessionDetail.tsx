@@ -25,6 +25,26 @@ import {
 
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
 
+/**
+ * Pull the tenant out of `?tenant=<name>` on the current page URL. The
+ * submit form encodes it on redirect so the detail view scopes its
+ * `X-Agentflow-Tenant` header correctly under the gateway's strict
+ * tenant boundary (Q1.4.2/3). When absent we fall back to `default` to
+ * keep zero-config single-tenant deployments working.
+ */
+const readTenantFromUrl = (): string => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const value = params.get('tenant');
+    if (value && value.trim()) {
+      return value.trim();
+    }
+  } catch {
+    // SSR / no-window — defensive only; the SPA always runs in browser.
+  }
+  return 'default';
+};
+
 export function HarnessSessionDetail({
   sessionId,
   apiToken,
@@ -34,6 +54,10 @@ export function HarnessSessionDetail({
   apiToken: string;
   onTokenChange: (token: string) => void;
 }) {
+  // Tenant comes from the URL query param so a fresh tab / direct link
+  // works without relying on localStorage residue. The form encodes it
+  // on redirect (`/ui/harness/sessions/{id}?tenant=...`).
+  const [tenant] = useState<string>(() => readTenantFromUrl());
   const [session, setSession] = useState<HarnessSession | null>(null);
   const [events, setEvents] = useState<HarnessEvent[]>([]);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
@@ -63,7 +87,12 @@ export function HarnessSessionDetail({
 
   const fetchSession = async () => {
     try {
-      const response = await apiFetch(`/v1/harness/sessions/${sessionId}`, apiToken);
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}`,
+        apiToken,
+        {},
+        tenant,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`session fetch failed: HTTP ${response.status} ${text}`);
@@ -88,6 +117,8 @@ export function HarnessSessionDetail({
       const response = await apiFetch(
         `/v1/harness/sessions/${sessionId}/events/history`,
         apiToken,
+        {},
+        tenant,
       );
       if (!response.ok) {
         const text = await response.text();
@@ -109,6 +140,8 @@ export function HarnessSessionDetail({
       const response = await apiFetch(
         `/v1/harness/sessions/${sessionId}/approvals`,
         apiToken,
+        {},
+        tenant,
       );
       if (!response.ok) {
         const text = await response.text();
@@ -165,6 +198,7 @@ export function HarnessSessionDetail({
             `/v1/harness/sessions/${sessionId}/events`,
             apiToken,
             { signal: abortController.signal, headers: { Accept: 'text/event-stream' } },
+            tenant,
           );
           if (!response.ok || response.body === null) {
             setStreamState('error');
@@ -280,6 +314,7 @@ export function HarnessSessionDetail({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ decision, scope, decided_by: 'ui' }),
         },
+        tenant,
       );
       if (!response.ok) {
         const text = await response.text();
@@ -299,9 +334,12 @@ export function HarnessSessionDetail({
     setError(null);
     setInfo(null);
     try {
-      const response = await apiFetch(`/v1/harness/sessions/${sessionId}:cancel`, apiToken, {
-        method: 'POST',
-      });
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}:cancel`,
+        apiToken,
+        { method: 'POST' },
+        tenant,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`cancel failed: HTTP ${response.status} ${text}`);
@@ -330,11 +368,16 @@ export function HarnessSessionDetail({
       if (trimmed) {
         body.user_input = trimmed;
       }
-      const response = await apiFetch(`/v1/harness/sessions/${sessionId}:resume`, apiToken, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}:resume`,
+        apiToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        tenant,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`resume failed: HTTP ${response.status} ${text}`);
