@@ -189,12 +189,7 @@ pub async fn cleanup_expired(
   // a quietly-growing disk. Use the runs retention window — trace
   // files exist primarily for run debugging.
   if let Some(root) = trace_dir_root {
-    let deleted = sweep_trace_dir(
-      root,
-      config.runs_retention_days as i64,
-      config.dry_run,
-    )
-    .await?;
+    let deleted = sweep_trace_dir(root, config.runs_retention_days as i64, config.dry_run).await?;
     report.trace_files_deleted = deleted;
   }
 
@@ -399,11 +394,7 @@ async fn sweep_run_dir(
 /// unlike `sweep_run_dir` we have no "active" check — but the trace
 /// is only ever written at trace lifecycle terminal events, so an
 /// old file always corresponds to a completed run.
-async fn sweep_trace_dir(
-  root: &Path,
-  days: i64,
-  dry_run: bool,
-) -> Result<u64, CleanupError> {
+async fn sweep_trace_dir(root: &Path, days: i64, dry_run: bool) -> Result<u64, CleanupError> {
   if !root.exists() {
     return Ok(0);
   }
@@ -515,11 +506,7 @@ mod tests {
     let old_path = root.join("wf-old.json");
     fs::write(&old_path, "{}").unwrap();
     let old_mtime = SystemTime::now() - StdDur::from_secs(60 * 60 * 24 * 100);
-    filetime::set_file_mtime(
-      &old_path,
-      filetime::FileTime::from_system_time(old_mtime),
-    )
-    .ok();
+    filetime::set_file_mtime(&old_path, filetime::FileTime::from_system_time(old_mtime)).ok();
 
     // Young trace file (should stay)
     let young_path = root.join("wf-young.json");
@@ -528,11 +515,7 @@ mod tests {
     // Non-json file (should stay regardless of age)
     let other_path = root.join("notes.txt");
     fs::write(&other_path, "hello").unwrap();
-    filetime::set_file_mtime(
-      &other_path,
-      filetime::FileTime::from_system_time(old_mtime),
-    )
-    .ok();
+    filetime::set_file_mtime(&other_path, filetime::FileTime::from_system_time(old_mtime)).ok();
 
     let deleted = sweep_trace_dir(root, 30, false).await.unwrap();
     assert_eq!(deleted, 1, "only old .json should be deleted");

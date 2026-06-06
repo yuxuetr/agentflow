@@ -682,7 +682,10 @@ mod tests {
       std::env::set_var(QDRANT_API_KEY_ENV, "");
     }
     let builder = QdrantStoreBuilder::new("http://q").with_api_key_from_env();
-    assert!(builder.api_key.is_none(), "empty env must NOT pin an api_key");
+    assert!(
+      builder.api_key.is_none(),
+      "empty env must NOT pin an api_key"
+    );
 
     // Real value → picked up.
     unsafe {

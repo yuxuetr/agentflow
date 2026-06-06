@@ -397,13 +397,12 @@ impl EventRepo for PgEventRepo {
     // `list_after(..., 10_000)` workaround that silently rolled the
     // seq counter back into a colliding range once a run crossed
     // the cap.
-    let row: Option<(Option<i64>,)> = sqlx::query_as(
-      "SELECT MAX(seq) FROM events WHERE tenant_id = $1 AND run_id = $2",
-    )
-    .bind(tenant_id)
-    .bind(run_id)
-    .fetch_optional(&self.read_pool)
-    .await?;
+    let row: Option<(Option<i64>,)> =
+      sqlx::query_as("SELECT MAX(seq) FROM events WHERE tenant_id = $1 AND run_id = $2")
+        .bind(tenant_id)
+        .bind(run_id)
+        .fetch_optional(&self.read_pool)
+        .await?;
     Ok(row.and_then(|(value,)| value))
   }
 }

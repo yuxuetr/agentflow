@@ -292,6 +292,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Q3.3.3 follow-up: `agentflow-cli --features rag` transitively
+      # depends on `agentflow-server`, whose `build.rs` shells out to
+      # protoc to compile `worker.proto`. ubuntu-latest does not
+      # preinstall protoc, so install it before any `cargo` invocation
+      # below tries to build the workspace.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run RAG eval CI fixture (BM25, schema gate)
         run: cargo test -p agentflow-cli --features rag --test rag_eval_cli_tests
       - name: Run RAG eval gate-logic unit tests

@@ -82,11 +82,12 @@ impl DocumentLoader for PdfLoader {
     // again after read in case the file grew between stat and read
     // (rare but possible with a producer that's still writing).
     if let Some(max) = self.max_bytes {
-      let metadata = fs::metadata(path)
-        .await
-        .map_err(|e| crate::error::RAGError::DocumentError {
-          message: format!("Failed to stat PDF {}: {}", path.display(), e),
-        })?;
+      let metadata =
+        fs::metadata(path)
+          .await
+          .map_err(|e| crate::error::RAGError::DocumentError {
+            message: format!("Failed to stat PDF {}: {}", path.display(), e),
+          })?;
       if metadata.len() > max {
         return Err(crate::error::RAGError::DocumentError {
           message: format!(
@@ -227,8 +228,7 @@ mod tests {
     let err = loader.load(&path).await.unwrap_err();
     let msg = err.to_string();
     assert!(
-      msg.contains("exceeds the configured max_bytes")
-        || msg.contains("exceeds max_bytes"),
+      msg.contains("exceeds the configured max_bytes") || msg.contains("exceeds max_bytes"),
       "error must explain the size-cap rejection; got: {msg}"
     );
     assert!(

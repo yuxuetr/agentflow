@@ -371,9 +371,13 @@ impl HookedTool {
     // usize` truncates above 2^32 on 32-bit targets, which is way
     // above any realistic per-session step count — a saturating
     // conversion is the safe choice over `unwrap()`.
-    let step_index =
-      usize::try_from(self.config.step_index_counter.fetch_add(1, Ordering::SeqCst))
-        .unwrap_or(usize::MAX);
+    let step_index = usize::try_from(
+      self
+        .config
+        .step_index_counter
+        .fetch_add(1, Ordering::SeqCst),
+    )
+    .unwrap_or(usize::MAX);
     PendingToolCall {
       session_id: self.config.session_id.clone(),
       step_index,
@@ -492,7 +496,9 @@ impl HookedTool {
         self
           .emit_stop_after_deny_gate(pending, risk, &stop_reason)
           .await?;
-        return Ok(Proceed::Deny { reason: stop_reason });
+        return Ok(Proceed::Deny {
+          reason: stop_reason,
+        });
       }
       cache.lookup(&pending.tool)
     } {
@@ -1144,7 +1150,10 @@ mod tests {
       .iter()
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalDecided(_)))
       .count();
-    assert_eq!(decided, 2, "expect a Decided event paired with each Requested");
+    assert_eq!(
+      decided, 2,
+      "expect a Decided event paired with each Requested"
+    );
   }
 
   /// Q3.10.1 regression — `PendingToolCall.step_index` must increment
@@ -1167,10 +1176,7 @@ mod tests {
       fn name(&self) -> &str {
         "step_index_probe"
       }
-      async fn before_tool(
-        &self,
-        call: &PendingToolCall,
-      ) -> Result<PreToolDecision, HarnessError> {
+      async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError> {
         self.seen.lock().unwrap().push(call.step_index);
         Ok(PreToolDecision::Allow)
       }
@@ -1186,9 +1192,7 @@ mod tests {
       Arc::new(AutoAllowApprovalProvider::new()),
       sinks,
     )
-    .with_pre_hook(Arc::new(StepIndexProbe {
-      seen: seen.clone(),
-    }));
+    .with_pre_hook(Arc::new(StepIndexProbe { seen: seen.clone() }));
     let registry = wrap_registry(registry, config);
 
     for _ in 0..3 {
@@ -1221,10 +1225,7 @@ mod tests {
       fn name(&self) -> &str {
         "step_index_probe"
       }
-      async fn before_tool(
-        &self,
-        call: &PendingToolCall,
-      ) -> Result<PreToolDecision, HarnessError> {
+      async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError> {
         self.seen.lock().unwrap().push(call.step_index);
         Ok(PreToolDecision::Allow)
       }
@@ -1242,9 +1243,7 @@ mod tests {
       sinks,
     )
     .with_step_index_counter(counter.clone())
-    .with_pre_hook(Arc::new(StepIndexProbe {
-      seen: seen.clone(),
-    }));
+    .with_pre_hook(Arc::new(StepIndexProbe { seen: seen.clone() }));
     let registry = wrap_registry(registry, config);
 
     registry

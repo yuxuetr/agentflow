@@ -1170,10 +1170,9 @@ mod tests {
   // a garbage trace_id from a typo'd header.
   #[test]
   fn parse_traceparent_accepts_canonical_v00() {
-    let (trace_id, span_id) = parse_traceparent(
-      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    )
-    .expect("canonical traceparent must parse");
+    let (trace_id, span_id) =
+      parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        .expect("canonical traceparent must parse");
     assert_eq!(trace_id, "4bf92f3577b34da6a3ce929d0e0e4736");
     assert_eq!(span_id, "00f067aa0ba902b7");
   }
@@ -1220,8 +1219,7 @@ mod tests {
       TraceConfig::development(),
     ));
 
-    let parent_traceparent =
-      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string();
+    let parent_traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string();
     let workflow_id = "wf-inbound-tp".to_string();
 
     {
@@ -1337,11 +1335,13 @@ mod tests {
 
     // First (older) attempt: superseded → Failed
     assert_eq!(trace.nodes[0].status, NodeStatus::Failed);
-    assert!(trace.nodes[0]
-      .error
-      .as_ref()
-      .map(|e| e.contains("superseded"))
-      .unwrap_or(false));
+    assert!(
+      trace.nodes[0]
+        .error
+        .as_ref()
+        .map(|e| e.contains("superseded"))
+        .unwrap_or(false)
+    );
     // Second attempt: properly completed.
     assert_eq!(trace.nodes[1].status, NodeStatus::Completed);
   }
@@ -1372,8 +1372,7 @@ mod tests {
 
     let mut config = TraceConfig::development();
     config.event_channel_capacity = 1;
-    let collector =
-      TraceCollector::new(storage, config).with_exporter(Arc::new(SlowExporter));
+    let collector = TraceCollector::new(storage, config).with_exporter(Arc::new(SlowExporter));
 
     for i in 0..50 {
       let workflow_id = format!("wf-drop-{i}");
@@ -1424,11 +1423,8 @@ mod tests {
     let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let mut config = TraceConfig::development();
     config.exporter_timeout = StdDuration::from_millis(100);
-    let collector = TraceCollector::new(storage.clone(), config).with_exporter(Arc::new(
-      HungExporter {
-        seen: seen.clone(),
-      },
-    ));
+    let collector = TraceCollector::new(storage.clone(), config)
+      .with_exporter(Arc::new(HungExporter { seen: seen.clone() }));
 
     // First workflow: exporter will time out after 100ms.
     collector.on_event(&WorkflowEvent::WorkflowStarted {
@@ -1613,9 +1609,7 @@ mod tests {
     collector.drain_poisoned.store(true, Ordering::SeqCst);
 
     // Fake an outstanding submission that will never be processed.
-    collector
-      .submitted_count
-      .fetch_add(1, Ordering::SeqCst);
+    collector.submitted_count.fetch_add(1, Ordering::SeqCst);
 
     let started = std::time::Instant::now();
     let drained = collector.flush(StdDuration::from_secs(2)).await;

@@ -749,8 +749,20 @@ enum LlmCommands {
   /// never read is misleading. All flags removed; the command itself
   /// stays so users who still type `agentflow llm chat` get the
   /// redirect message.
+  ///
+  /// Old invocations almost always carry `--model <X>` and friends
+  /// because that was the pre-retirement contract. Without
+  /// `allow_hyphen_values`, clap would reject those flags as
+  /// "unexpected argument" with exit code 2 before our redirect
+  /// handler runs, leaving the user staring at a confusing clap
+  /// error instead of the migration message. Collect leftover args
+  /// into a `_extra` sink so any legacy flag form lands on the
+  /// retired-message handler.
   #[command(hide = true)]
-  Chat {},
+  Chat {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    _extra: Vec<String>,
+  },
 }
 
 #[derive(Subcommand)]
@@ -1724,7 +1736,7 @@ async fn main() {
         refresh_from_api,
         format,
       } => llm::models::execute(provider, detailed, refresh_from_api, format).await,
-      LlmCommands::Chat {} => Err(anyhow::anyhow!(
+      LlmCommands::Chat { _extra: _ } => Err(anyhow::anyhow!(
         "`agentflow llm chat` has been retired. AgentFlow interactions are agent-first: use `agentflow skill chat`, `agentflow skill run`, or a workflow `skill_agent` node. Use `agentflow llm models` only for model discovery."
       )),
     },

@@ -1291,12 +1291,9 @@ mod tests {
         printf '{"jsonrpc":"2.0","id":%s,"result":{"echo":%s}}\n' "$id" "$id"
       done
     "#;
-    let mut transport = StdioTransport::new(vec![
-      "sh".to_string(),
-      "-c".to_string(),
-      script.to_string(),
-    ])
-    .with_timeout(Duration::from_secs(5));
+    let mut transport =
+      StdioTransport::new(vec!["sh".to_string(), "-c".to_string(), script.to_string()])
+        .with_timeout(Duration::from_secs(5));
     transport.connect().await.expect("connect");
     let shared = Arc::new(transport);
 

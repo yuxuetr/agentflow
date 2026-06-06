@@ -268,8 +268,8 @@ async fn cli_workflow_logs_follow_streams_and_exits_when_server_closes() {
 /// exit 0.
 #[tokio::test]
 async fn cli_workflow_logs_follow_reconnects_after_mid_stream_drop() {
-  use std::sync::atomic::{AtomicU32, Ordering};
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicU32, Ordering};
 
   let run_id = "00000000-0000-0000-0000-0000000000aa";
   let attempts = Arc::new(AtomicU32::new(0));
@@ -342,14 +342,7 @@ async fn cli_workflow_logs_follow_reconnects_after_mid_stream_drop() {
     tokio::task::spawn_blocking(move || {
       cli_bin()
         .args([
-          "workflow",
-          "logs",
-          run_id,
-          "--server",
-          &url,
-          "--follow",
-          "--format",
-          "json",
+          "workflow", "logs", run_id, "--server", &url, "--follow", "--format", "json",
         ])
         .assert()
         .success()

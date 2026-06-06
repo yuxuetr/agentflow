@@ -26,7 +26,10 @@ impl FixedSizeChunker {
   pub fn new(chunk_size: usize, overlap: usize) -> Self {
     let chunk_size = chunk_size.max(1);
     let overlap = overlap.min(chunk_size.saturating_sub(1));
-    Self { chunk_size, overlap }
+    Self {
+      chunk_size,
+      overlap,
+    }
   }
 
   /// Q3.9.1: fallible constructor that rejects `chunk_size == 0` and
@@ -44,7 +47,10 @@ impl FixedSizeChunker {
         "FixedSizeChunker requires overlap < chunk_size; got overlap={overlap} chunk_size={chunk_size}"
       )));
     }
-    Ok(Self { chunk_size, overlap })
+    Ok(Self {
+      chunk_size,
+      overlap,
+    })
   }
 }
 

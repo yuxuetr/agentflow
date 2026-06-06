@@ -26,9 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentflow_tracing::storage::TraceStorage;
-use agentflow_tracing::types::{
-  ExecutionTrace, NodeStatus, NodeTrace, TraceContext, TraceStatus,
-};
+use agentflow_tracing::types::{ExecutionTrace, NodeStatus, NodeTrace, TraceContext, TraceStatus};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
@@ -80,9 +78,7 @@ pub fn open_tracing_sink(
 /// the same harness session lands in both JSONL (for human replay)
 /// AND the platform's trace store (for UI / dashboards) — they no
 /// longer have to diverge.
-pub fn open_execution_trace_sink(
-  storage: Arc<dyn TraceStorage>,
-) -> Arc<dyn HarnessEventSink> {
+pub fn open_execution_trace_sink(storage: Arc<dyn TraceStorage>) -> Arc<dyn HarnessEventSink> {
   Arc::new(ExecutionTraceSink::new(storage))
 }
 
@@ -198,13 +194,14 @@ impl HarnessEventSink for ExecutionTraceSink {
                 .clone()
                 .unwrap_or_else(|| "harness session cancelled".to_string()),
             },
-            StopReason::Failed
-            | StopReason::LimitReached
-            | StopReason::ApprovalDenied => TraceStatus::Failed {
-              error: payload.error.clone().unwrap_or_else(|| {
-                format!("harness session stopped: {:?}", payload.reason)
-              }),
-            },
+            StopReason::Failed | StopReason::LimitReached | StopReason::ApprovalDenied => {
+              TraceStatus::Failed {
+                error: payload
+                  .error
+                  .clone()
+                  .unwrap_or_else(|| format!("harness session stopped: {:?}", payload.reason)),
+              }
+            }
           };
           drop(traces);
           self
@@ -370,34 +367,46 @@ mod tests {
     let sink = open_execution_trace_sink(storage.clone());
     let session = "sess-completed";
 
-    sink.write(&evt(0, session, session_started())).await.unwrap();
+    sink
+      .write(&evt(0, session, session_started()))
+      .await
+      .unwrap();
     sink.write(&evt(1, session, step_started(0))).await.unwrap();
-    sink.write(&evt(2, session, tool_requested(0, "file_read"))).await.unwrap();
+    sink
+      .write(&evt(2, session, tool_requested(0, "file_read")))
+      .await
+      .unwrap();
     sink
       .write(&evt(3, session, tool_completed(0, "file_read", false)))
       .await
       .unwrap();
-    sink.write(&evt(4, session, tool_requested(1, "http_get"))).await.unwrap();
+    sink
+      .write(&evt(4, session, tool_requested(1, "http_get")))
+      .await
+      .unwrap();
     sink
       .write(&evt(5, session, tool_completed(1, "http_get", false)))
       .await
       .unwrap();
     sink
-      .write(&evt(
-        6,
-        session,
-        stopped(StopReason::Completed, None),
-      ))
+      .write(&evt(6, session, stopped(StopReason::Completed, None)))
       .await
       .unwrap();
 
-    let trace = storage.get_trace(session).await.unwrap().expect("persisted");
+    let trace = storage
+      .get_trace(session)
+      .await
+      .unwrap()
+      .expect("persisted");
     assert!(matches!(trace.status, TraceStatus::Completed));
     assert!(trace.completed_at.is_some());
     // 1 harness_step + 2 tool_call rows.
     assert_eq!(trace.nodes.len(), 3, "expected 3 NodeTrace rows: {trace:?}");
-    let tool_rows: Vec<&NodeTrace> =
-      trace.nodes.iter().filter(|n| n.node_type == "tool_call").collect();
+    let tool_rows: Vec<&NodeTrace> = trace
+      .nodes
+      .iter()
+      .filter(|n| n.node_type == "tool_call")
+      .collect();
     assert_eq!(tool_rows.len(), 2);
     for n in &tool_rows {
       assert_eq!(n.status, NodeStatus::Completed);
@@ -417,8 +426,14 @@ mod tests {
     let sink = open_execution_trace_sink(storage.clone());
     let session = "sess-cancelled";
 
-    sink.write(&evt(0, session, session_started())).await.unwrap();
-    sink.write(&evt(1, session, tool_requested(0, "shell"))).await.unwrap();
+    sink
+      .write(&evt(0, session, session_started()))
+      .await
+      .unwrap();
+    sink
+      .write(&evt(1, session, tool_requested(0, "shell")))
+      .await
+      .unwrap();
     // Intentionally DO NOT send tool_completed → the tool node
     // stays Running until Stopped fires the close-out logic.
     sink
@@ -435,7 +450,11 @@ mod tests {
       trace.status,
       TraceStatus::Cancelled { ref reason } if reason.contains("Ctrl-C")
     ));
-    let tool_row = trace.nodes.iter().find(|n| n.node_type == "tool_call").unwrap();
+    let tool_row = trace
+      .nodes
+      .iter()
+      .find(|n| n.node_type == "tool_call")
+      .unwrap();
     assert_eq!(
       tool_row.status,
       NodeStatus::Failed,
@@ -506,11 +525,7 @@ mod tests {
     let sink = open_execution_trace_sink(storage.clone());
     // Stopped without SessionStarted → no persistence happens.
     sink
-      .write(&evt(
-        0,
-        "orphan",
-        stopped(StopReason::Completed, None),
-      ))
+      .write(&evt(0, "orphan", stopped(StopReason::Completed, None)))
       .await
       .unwrap();
     assert!(storage.get_trace("orphan").await.unwrap().is_none());

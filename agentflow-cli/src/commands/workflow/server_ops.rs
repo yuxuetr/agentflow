@@ -332,7 +332,12 @@ async fn stream_events_with_reconnect(
 fn is_terminal_run_event_kind(kind: &str) -> bool {
   matches!(
     kind,
-    "run_finished" | "run_failed" | "run_cancelled" | "run.cancelled" | "run.completed" | "run.failed"
+    "run_finished"
+      | "run_failed"
+      | "run_cancelled"
+      | "run.cancelled"
+      | "run.completed"
+      | "run.failed"
   )
 }
 

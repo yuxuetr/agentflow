@@ -39,15 +39,15 @@ pub fn create_chunker(
   overlap: usize,
 ) -> Result<Box<dyn ChunkingStrategy>> {
   match strategy {
-    crate::types::ChunkingStrategy::FixedSize => Ok(Box::new(FixedSizeChunker::try_new(
-      chunk_size, overlap,
-    )?)),
-    crate::types::ChunkingStrategy::Sentence => Ok(Box::new(SentenceChunker::try_new(
-      chunk_size, overlap,
-    )?)),
-    crate::types::ChunkingStrategy::Recursive => Ok(Box::new(RecursiveChunker::try_new(
-      chunk_size, overlap,
-    )?)),
+    crate::types::ChunkingStrategy::FixedSize => {
+      Ok(Box::new(FixedSizeChunker::try_new(chunk_size, overlap)?))
+    }
+    crate::types::ChunkingStrategy::Sentence => {
+      Ok(Box::new(SentenceChunker::try_new(chunk_size, overlap)?))
+    }
+    crate::types::ChunkingStrategy::Recursive => {
+      Ok(Box::new(RecursiveChunker::try_new(chunk_size, overlap)?))
+    }
     crate::types::ChunkingStrategy::Semantic => Err(crate::error::RAGError::chunking(
       "Semantic chunking not yet implemented",
     )),
@@ -118,11 +118,7 @@ mod tests {
   fn create_chunker_surfaces_invalid_overlap_as_error() {
     // The factory path used by YAML config — must NOT silently
     // clamp, since the operator likely typo'd the config.
-    let result = create_chunker(
-      crate::types::ChunkingStrategy::FixedSize,
-      100,
-      150,
-    );
+    let result = create_chunker(crate::types::ChunkingStrategy::FixedSize, 100, 150);
     assert!(result.is_err());
   }
 }

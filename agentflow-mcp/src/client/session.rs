@@ -378,8 +378,11 @@ impl MCPClient {
 
     // Apply timeout to notification
     let timeout = self.config.timeout;
-    let result =
-      tokio::time::timeout(timeout, self.transport.send_notification(notification_value)).await;
+    let result = tokio::time::timeout(
+      timeout,
+      self.transport.send_notification(notification_value),
+    )
+    .await;
 
     match result {
       Ok(Ok(())) => Ok(()),

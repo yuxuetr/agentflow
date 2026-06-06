@@ -143,9 +143,7 @@ impl Transport for DelayedMockTransport {
     self.inner.send_notification(notification).await
   }
 
-  async fn receive_message(
-    &self,
-  ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
+  async fn receive_message(&self) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
     self.inner.receive_message().await
   }
 
@@ -232,9 +230,7 @@ async fn test_retry_after_timeout() {
       self.inner.send_notification(notification).await
     }
 
-    async fn receive_message(
-      &self,
-    ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
+    async fn receive_message(&self) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
       self.inner.receive_message().await
     }
 
@@ -309,9 +305,7 @@ async fn test_timeout_exhausts_retries() {
       self.inner.send_notification(notification).await
     }
 
-    async fn receive_message(
-      &self,
-    ) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
+    async fn receive_message(&self) -> agentflow_mcp::error::MCPResult<Option<serde_json::Value>> {
       self.inner.receive_message().await
     }
 

@@ -716,10 +716,14 @@ mod tests {
     let id = trace_id("wf-anything");
     assert_eq!(id.len(), 32, "trace_id must be 16 bytes = 32 hex chars");
     assert!(
-      id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+      id.chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
       "trace_id must be lowercase hex, got {id}"
     );
-    assert!(id.chars().any(|c| c != '0'), "trace_id must not be all zeros");
+    assert!(
+      id.chars().any(|c| c != '0'),
+      "trace_id must not be all zeros"
+    );
   }
 
   #[test]
@@ -727,10 +731,14 @@ mod tests {
     let id = span_id("wf-anything", "workflow");
     assert_eq!(id.len(), 16, "span_id must be 8 bytes = 16 hex chars");
     assert!(
-      id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+      id.chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
       "span_id must be lowercase hex, got {id}"
     );
-    assert!(id.chars().any(|c| c != '0'), "span_id must not be all zeros");
+    assert!(
+      id.chars().any(|c| c != '0'),
+      "span_id must not be all zeros"
+    );
   }
 
   #[test]

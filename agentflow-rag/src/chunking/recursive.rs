@@ -407,20 +407,25 @@ mod tests {
     // boundary lands mid-codepoint without the fix.
     let chunker = RecursiveChunker::new(30, 10);
     let chunks = chunker.chunk(&text).expect("must not panic on CJK");
-    assert!(chunks.len() > 1, "CJK input must split into multiple chunks");
+    assert!(
+      chunks.len() > 1,
+      "CJK input must split into multiple chunks"
+    );
     // Every chunk's content must be valid UTF-8 (this is trivially
     // true if the String constructor succeeded, but we check that
     // no chunk lost CJK chars to mid-codepoint truncation).
     for chunk in &chunks {
       assert!(
-        chunk.content.is_char_boundary(0)
-          && chunk.content.is_char_boundary(chunk.content.len()),
+        chunk.content.is_char_boundary(0) && chunk.content.is_char_boundary(chunk.content.len()),
         "every chunk must start + end on a char boundary"
       );
       // Sanity: chunk content has at least one full Chinese char,
       // not a stream of replacement chars from a panicked decode.
       assert!(
-        chunk.content.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)),
+        chunk
+          .content
+          .chars()
+          .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)),
         "chunk must retain at least one CJK char, got: {:?}",
         chunk.content
       );

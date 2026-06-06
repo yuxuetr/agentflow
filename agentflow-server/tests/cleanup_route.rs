@@ -305,7 +305,9 @@ async fn cleanup_filesystem_sweep_removes_orphaned_dirs() {
   fs::create_dir_all(&active_dir).unwrap();
 
   let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
-  let report = cleanup_expired(&db, Some(tmp.path()), None, &cfg).await.unwrap();
+  let report = cleanup_expired(&db, Some(tmp.path()), None, &cfg)
+    .await
+    .unwrap();
   assert!(report.run_dirs_skipped_active >= 1);
   assert!(!orphan_dir.exists(), "orphan dir must be deleted");
   assert!(active_dir.exists(), "active run's dir must be retained");

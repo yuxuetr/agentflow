@@ -390,11 +390,7 @@ where
         // total permits, so once we can re-acquire all of them
         // every spawned task has finished.
         let total = self.config.free_slots.max(1);
-        let _drain = self
-          .dispatch_slots
-          .acquire_many(total)
-          .await
-          .ok(); // semaphore can be closed; ignore in shutdown path
+        let _drain = self.dispatch_slots.acquire_many(total).await.ok(); // semaphore can be closed; ignore in shutdown path
         return Ok(());
       }
 
@@ -427,7 +423,9 @@ where
               "agentflow-worker: transport error past --max-reconnect-attempts ({cap}); \
                giving up. last error: {message}"
             );
-            return Err(WorkerError::Scheduler(SchedulerError::Transport { message }));
+            return Err(WorkerError::Scheduler(SchedulerError::Transport {
+              message,
+            }));
           }
           let delay = self.config.reconnect_backoff.next_delay(last_backoff);
           eprintln!(
@@ -501,7 +499,10 @@ where
     let cancellation = self.cancellation.clone();
     tokio::spawn(async move {
       let result = execute_stub(&worker_id, &task, &limits, &cancellation).await;
-      if let Err(err) = protocol.report_result(worker_id, task.task_id, result).await {
+      if let Err(err) = protocol
+        .report_result(worker_id, task.task_id, result)
+        .await
+      {
         // Best-effort: log + drop. The scheduler will eventually
         // requeue the task via stale-heartbeat reaping.
         eprintln!(
@@ -1319,10 +1320,7 @@ mod tests {
     async fn submit_task(&self, _task: WorkerTask) -> Result<(), SchedulerError> {
       Ok(())
     }
-    async fn claim_task(
-      &self,
-      _worker_id: WorkerId,
-    ) -> Result<Option<WorkerTask>, SchedulerError> {
+    async fn claim_task(&self, _worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
       Ok(None)
     }
     async fn report_result(
@@ -1333,10 +1331,7 @@ mod tests {
     ) -> Result<(), SchedulerError> {
       Ok(())
     }
-    async fn heartbeat(
-      &self,
-      _heartbeat: WorkerHeartbeat,
-    ) -> Result<(), SchedulerError> {
+    async fn heartbeat(&self, _heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
       *self.heartbeat_count.lock().unwrap() += 1;
       let mut remaining = self.transport_failures_remaining.lock().unwrap();
       if *remaining > 0 {
@@ -1351,10 +1346,8 @@ mod tests {
 
   #[test]
   fn reconnect_backoff_doubles_until_cap() {
-    let backoff = ReconnectBackoff::deterministic(
-      Duration::from_millis(100),
-      Duration::from_secs(1),
-    );
+    let backoff =
+      ReconnectBackoff::deterministic(Duration::from_millis(100), Duration::from_secs(1));
     // First failure → initial.
     assert_eq!(backoff.next_delay(None), Duration::from_millis(100));
     // Subsequent failures double until capped.
@@ -1392,7 +1385,9 @@ mod tests {
       ..Default::default()
     };
     for _ in 0..50 {
-      let d = backoff.next_delay(Some(Duration::from_millis(200))).as_millis() as u64;
+      let d = backoff
+        .next_delay(Some(Duration::from_millis(200)))
+        .as_millis() as u64;
       assert!(
         (150..=250).contains(&d),
         "jittered backoff must stay within ±25% of cap; got {d}ms"
@@ -1409,10 +1404,8 @@ mod tests {
     let worker_id = WorkerId::new("worker-flaky").unwrap();
     let mut config = WorkerConfig::new(worker_id, "memory://local");
     config.poll_interval = Duration::from_millis(5);
-    config.reconnect_backoff = ReconnectBackoff::deterministic(
-      Duration::from_millis(1),
-      Duration::from_millis(5),
-    );
+    config.reconnect_backoff =
+      ReconnectBackoff::deterministic(Duration::from_millis(1), Duration::from_millis(5));
     let runtime = WorkerRuntime::new(ArcProtocol(protocol.clone()), config);
     let cancel = runtime.cancellation_token();
 
@@ -1438,7 +1431,10 @@ mod tests {
       .await
       .expect("runtime must exit within 2s after cancel")
       .expect("join");
-    assert!(result.is_ok(), "run_forever must return Ok after cancel; got {result:?}");
+    assert!(
+      result.is_ok(),
+      "run_forever must return Ok after cancel; got {result:?}"
+    );
   }
 
   #[tokio::test]
@@ -1448,10 +1444,8 @@ mod tests {
     let protocol = Arc::new(FlakyProtocol::new(100));
     let worker_id = WorkerId::new("worker-cap").unwrap();
     let mut config = WorkerConfig::new(worker_id, "memory://local");
-    let mut backoff = ReconnectBackoff::deterministic(
-      Duration::from_millis(1),
-      Duration::from_millis(2),
-    );
+    let mut backoff =
+      ReconnectBackoff::deterministic(Duration::from_millis(1), Duration::from_millis(2));
     backoff.max_attempts = Some(3);
     config.reconnect_backoff = backoff;
     let runtime = WorkerRuntime::new(ArcProtocol(protocol.clone()), config);
@@ -1480,10 +1474,8 @@ mod tests {
     let protocol = Arc::new(FlakyProtocol::new(100));
     let worker_id = WorkerId::new("worker-cancel-during-backoff").unwrap();
     let mut config = WorkerConfig::new(worker_id, "memory://local");
-    config.reconnect_backoff = ReconnectBackoff::deterministic(
-      Duration::from_secs(60),
-      Duration::from_secs(60),
-    );
+    config.reconnect_backoff =
+      ReconnectBackoff::deterministic(Duration::from_secs(60), Duration::from_secs(60));
     let runtime = WorkerRuntime::new(ArcProtocol(protocol), config);
     let cancel = runtime.cancellation_token();
 
@@ -1538,10 +1530,7 @@ mod tests {
     async fn submit_task(&self, _task: WorkerTask) -> Result<(), SchedulerError> {
       Ok(())
     }
-    async fn claim_task(
-      &self,
-      _worker_id: WorkerId,
-    ) -> Result<Option<WorkerTask>, SchedulerError> {
+    async fn claim_task(&self, _worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
       Ok(self.queue.lock().unwrap().pop_front())
     }
     async fn report_result(
@@ -1553,18 +1542,13 @@ mod tests {
       use std::sync::atomic::Ordering;
       // Bump in_flight + record the high water mark atomically.
       let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-      self
-        .max_concurrent
-        .fetch_max(now, Ordering::SeqCst);
+      self.max_concurrent.fetch_max(now, Ordering::SeqCst);
       tokio::time::sleep(self.report_delay).await;
       self.in_flight.fetch_sub(1, Ordering::SeqCst);
       self.reports_observed.fetch_add(1, Ordering::SeqCst);
       Ok(())
     }
-    async fn heartbeat(
-      &self,
-      _heartbeat: WorkerHeartbeat,
-    ) -> Result<(), SchedulerError> {
+    async fn heartbeat(&self, _heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
       Ok(())
     }
   }
@@ -1577,10 +1561,7 @@ mod tests {
     async fn submit_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
       self.0.submit_task(task).await
     }
-    async fn claim_task(
-      &self,
-      worker_id: WorkerId,
-    ) -> Result<Option<WorkerTask>, SchedulerError> {
+    async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
       self.0.claim_task(worker_id).await
     }
     async fn report_result(
@@ -1591,10 +1572,7 @@ mod tests {
     ) -> Result<(), SchedulerError> {
       self.0.report_result(worker_id, task_id, result).await
     }
-    async fn heartbeat(
-      &self,
-      heartbeat: WorkerHeartbeat,
-    ) -> Result<(), SchedulerError> {
+    async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
       self.0.heartbeat(heartbeat).await
     }
   }
@@ -1612,14 +1590,8 @@ mod tests {
     let tasks: Vec<WorkerTask> = (0..4)
       .map(|i| WorkerTask::new(run_id, format!("node-{i}"), serde_json::json!({"n": i})))
       .collect();
-    let slow = Arc::new(SlowReportProtocol::new(
-      tasks,
-      Duration::from_millis(400),
-    ));
-    let mut config = WorkerConfig::new(
-      WorkerId::new("worker-parallel").unwrap(),
-      "memory://local",
-    );
+    let slow = Arc::new(SlowReportProtocol::new(tasks, Duration::from_millis(400)));
+    let mut config = WorkerConfig::new(WorkerId::new("worker-parallel").unwrap(), "memory://local");
     config.free_slots = 4;
     config.poll_interval = Duration::from_millis(10);
     let runtime = WorkerRuntime::new(ArcSlowProtocol(slow.clone()), config);
@@ -1666,14 +1638,8 @@ mod tests {
     let tasks: Vec<WorkerTask> = (0..3)
       .map(|i| WorkerTask::new(run_id, format!("node-{i}"), serde_json::json!({})))
       .collect();
-    let slow = Arc::new(SlowReportProtocol::new(
-      tasks,
-      Duration::from_millis(50),
-    ));
-    let mut config = WorkerConfig::new(
-      WorkerId::new("worker-serial").unwrap(),
-      "memory://local",
-    );
+    let slow = Arc::new(SlowReportProtocol::new(tasks, Duration::from_millis(50)));
+    let mut config = WorkerConfig::new(WorkerId::new("worker-serial").unwrap(), "memory://local");
     config.free_slots = 1;
     config.poll_interval = Duration::from_millis(5);
     let runtime = WorkerRuntime::new(ArcSlowProtocol(slow.clone()), config);
@@ -1741,11 +1707,12 @@ mod tests {
         self.report_seen.fetch_add(1, Ordering::SeqCst);
         Ok(())
       }
-      async fn heartbeat(
-        &self,
-        heartbeat: WorkerHeartbeat,
-      ) -> Result<(), SchedulerError> {
-        self.observed_free.lock().unwrap().push(heartbeat.free_slots);
+      async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
+        self
+          .observed_free
+          .lock()
+          .unwrap()
+          .push(heartbeat.free_slots);
         Ok(())
       }
     }
@@ -1756,10 +1723,7 @@ mod tests {
       async fn submit_task(&self, t: WorkerTask) -> Result<(), SchedulerError> {
         self.0.submit_task(t).await
       }
-      async fn claim_task(
-        &self,
-        w: WorkerId,
-      ) -> Result<Option<WorkerTask>, SchedulerError> {
+      async fn claim_task(&self, w: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
         self.0.claim_task(w).await
       }
       async fn report_result(
@@ -1780,10 +1744,7 @@ mod tests {
       block_report: tokio::sync::Notify::new(),
       report_seen: std::sync::atomic::AtomicU32::new(0),
     });
-    let mut config = WorkerConfig::new(
-      WorkerId::new("worker-hb").unwrap(),
-      "memory://local",
-    );
+    let mut config = WorkerConfig::new(WorkerId::new("worker-hb").unwrap(), "memory://local");
     config.free_slots = 2;
     config.poll_interval = Duration::from_millis(5);
     let runtime = WorkerRuntime::new(ArcRecorder(recorder.clone()), config);
@@ -1832,10 +1793,7 @@ mod tests {
     async fn submit_task(&self, task: WorkerTask) -> Result<(), SchedulerError> {
       self.0.submit_task(task).await
     }
-    async fn claim_task(
-      &self,
-      worker_id: WorkerId,
-    ) -> Result<Option<WorkerTask>, SchedulerError> {
+    async fn claim_task(&self, worker_id: WorkerId) -> Result<Option<WorkerTask>, SchedulerError> {
       self.0.claim_task(worker_id).await
     }
     async fn report_result(
@@ -1846,10 +1804,7 @@ mod tests {
     ) -> Result<(), SchedulerError> {
       self.0.report_result(worker_id, task_id, result).await
     }
-    async fn heartbeat(
-      &self,
-      heartbeat: WorkerHeartbeat,
-    ) -> Result<(), SchedulerError> {
+    async fn heartbeat(&self, heartbeat: WorkerHeartbeat) -> Result<(), SchedulerError> {
       self.0.heartbeat(heartbeat).await
     }
   }

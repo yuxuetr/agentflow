@@ -19,8 +19,8 @@ use agentflow_core::error::AgentFlowError;
 use agentflow_core::flow::{Flow, GraphNode, NodeType};
 use agentflow_core::value::FlowValue;
 use agentflow_core::{FlowCancellationToken, FlowExecutionConfig};
-use agentflow_tracing::storage::file::FileTraceStorage;
 use agentflow_tracing::storage::TraceStorage;
+use agentflow_tracing::storage::file::FileTraceStorage;
 use agentflow_tracing::{TraceCollector, TraceConfig};
 use async_trait::async_trait;
 use tempfile::TempDir;
@@ -44,7 +44,10 @@ impl AsyncNode for FastNode {
 async fn cancel_and_flush_writes_workflow_cancelled_to_trace_file() {
   let dir = TempDir::new().expect("trace tmp");
   let storage = Arc::new(FileTraceStorage::new(dir.path().to_path_buf()).unwrap());
-  let collector = Arc::new(TraceCollector::new(storage.clone(), TraceConfig::development()));
+  let collector = Arc::new(TraceCollector::new(
+    storage.clone(),
+    TraceConfig::development(),
+  ));
 
   let mut flow = Flow::default().with_event_listener(collector.clone());
   flow.add_node(GraphNode {
@@ -120,8 +123,7 @@ async fn ctrl_c_constants_match_posix() {
   // refactor changes them by accident the contract breaks.
   assert_eq!(agentflow_cli::shutdown::SIGINT_EXIT_CODE, 130);
   assert!(
-    agentflow_cli::shutdown::DEFAULT_TRACE_FLUSH_TIMEOUT
-      >= Duration::from_secs(1),
+    agentflow_cli::shutdown::DEFAULT_TRACE_FLUSH_TIMEOUT >= Duration::from_secs(1),
     "flush timeout must be generous enough for a healthy local FS write"
   );
 }

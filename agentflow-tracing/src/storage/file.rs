@@ -320,7 +320,10 @@ mod tests {
     let final_path = dir.path().join("wf-atomic.json");
     let tmp_path = dir.path().join("wf-atomic.json.tmp");
     assert!(final_path.exists(), "final json must exist after save");
-    assert!(!tmp_path.exists(), "tmp file must not survive a successful rename");
+    assert!(
+      !tmp_path.exists(),
+      "tmp file must not survive a successful rename"
+    );
 
     let json = std::fs::read_to_string(&final_path).unwrap();
     let round_trip: ExecutionTrace = serde_json::from_str(&json).unwrap();
