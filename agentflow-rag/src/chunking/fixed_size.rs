@@ -20,6 +20,7 @@ impl FixedSizeChunker {
   ///     chunker is meaningless; pre-Q3.9.1 it would loop forever).
   ///   * `overlap >= chunk_size` is clamped to `chunk_size - 1`
   ///     (any forward stride of at least 1 prevents infinite loops).
+  ///
   /// Callers that want a hard error on bad inputs should use
   /// [`try_new`](Self::try_new) instead.
   pub fn new(chunk_size: usize, overlap: usize) -> Self {

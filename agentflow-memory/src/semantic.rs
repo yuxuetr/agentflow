@@ -707,7 +707,7 @@ mod tests {
 
   #[tokio::test]
   async fn add_and_retrieve_messages() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
     let sid = "session-1";
 
     mem
@@ -729,7 +729,7 @@ mod tests {
   async fn system_messages_are_stored_but_not_embedded() {
     let embedder = Arc::new(FixedEmbedding::new(4));
     let calls_before = embedder.calls();
-    let mut mem = SemanticMemory::in_memory(embedder.clone(), 8_000)
+    let mem = SemanticMemory::in_memory(embedder.clone(), 8_000)
       .await
       .unwrap();
 
@@ -752,7 +752,7 @@ mod tests {
 
   #[tokio::test]
   async fn search_returns_semantically_closest_message() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
     let sid = "search-session";
 
     // The FixedEmbedding varies vectors by first character.
@@ -770,7 +770,7 @@ mod tests {
 
   #[tokio::test]
   async fn search_returns_up_to_limit_messages() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
     let sid = "limit-session";
 
     for i in 0..5 {
@@ -789,7 +789,7 @@ mod tests {
   #[tokio::test]
   async fn search_falls_back_to_keyword_when_embedding_fails() {
     let failing_embedder = Arc::new(FixedEmbedding::always_fail(4, "API unavailable"));
-    let mut mem = SemanticMemory::in_memory(failing_embedder, 8_000)
+    let mem = SemanticMemory::in_memory(failing_embedder, 8_000)
       .await
       .unwrap();
     let sid = "fallback-session";
@@ -814,7 +814,7 @@ mod tests {
   async fn search_falls_back_to_keyword_when_no_embeddings_stored() {
     // Use a failing embedder so no embeddings are written
     let failing = Arc::new(FixedEmbedding::always_fail(4, "offline"));
-    let mut mem = SemanticMemory::in_memory(failing, 8_000).await.unwrap();
+    let mem = SemanticMemory::in_memory(failing, 8_000).await.unwrap();
     let sid = "no-emb-session";
 
     mem
@@ -836,7 +836,7 @@ mod tests {
 
   #[tokio::test]
   async fn clear_session_removes_messages_and_embeddings() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
     let sid = "clear-session";
 
     mem
@@ -862,7 +862,7 @@ mod tests {
   async fn prune_evicts_oldest_non_system_messages() {
     // Very tight window: 10 tokens
     let embedder = Arc::new(FixedEmbedding::new(4));
-    let mut mem = SemanticMemory::in_memory(embedder, 10).await.unwrap();
+    let mem = SemanticMemory::in_memory(embedder, 10).await.unwrap();
     let sid = "prune-session";
 
     mem.add_message(Message::system(sid, "sys")).await.unwrap(); // ~1 token, preserved
@@ -894,7 +894,7 @@ mod tests {
 
   #[tokio::test]
   async fn session_token_count_matches_stored_messages() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
     let sid = "token-count-session";
 
     mem.add_message(Message::user(sid, "hello")).await.unwrap();
@@ -913,7 +913,7 @@ mod tests {
 
   #[tokio::test]
   async fn search_is_isolated_per_session() {
-    let mut mem = in_mem(4).await;
+    let mem = in_mem(4).await;
 
     mem
       .add_message(Message::user("sess-a", "alpha message"))

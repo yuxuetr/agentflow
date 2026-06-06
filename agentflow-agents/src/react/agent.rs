@@ -3243,7 +3243,7 @@ providers:
 
   #[tokio::test]
   async fn query_memory_uses_backing_memory_search_for_current_session() {
-    let mut memory = SessionMemory::default_window();
+    let memory = SessionMemory::default_window();
     memory
       .add_message(Message::user(
         "memory-session",

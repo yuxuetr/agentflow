@@ -247,7 +247,7 @@ pub fn resolve_knowledge_path(pattern: &str, skill_dir: &Path) -> Vec<PathBuf> {
   // Hard reject `..` in the configured pattern — any legitimate
   // knowledge entry should be inside the skill directory.
   if pattern
-    .split(|c| c == '/' || c == '\\')
+    .split(['/', '\\'])
     .any(|component| component == "..")
   {
     return Vec::new();

@@ -110,19 +110,19 @@ impl AsyncNode for FileNode {
       }
       "write" => {
         let content = get_string_input(inputs, "content")?;
-        if let Some(parent) = path.parent() {
-          if !parent.as_os_str().is_empty() {
-            // Parent validation is what stops `..` escapes when the
-            // target file doesn't exist yet — the canonicalization in
-            // `path_denial_reason` walks up to the nearest existing
-            // ancestor.
-            self.validate_path(parent)?;
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-              AgentFlowError::AsyncExecutionError {
-                message: format!("Failed to create directory '{}': {}", parent.display(), e),
-              }
-            })?;
-          }
+        if let Some(parent) = path.parent()
+          && !parent.as_os_str().is_empty()
+        {
+          // Parent validation is what stops `..` escapes when the
+          // target file doesn't exist yet — the canonicalization in
+          // `path_denial_reason` walks up to the nearest existing
+          // ancestor.
+          self.validate_path(parent)?;
+          tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            AgentFlowError::AsyncExecutionError {
+              message: format!("Failed to create directory '{}': {}", parent.display(), e),
+            }
+          })?;
         }
         tokio::fs::write(path, content)
           .await

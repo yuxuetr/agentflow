@@ -3340,7 +3340,7 @@ fn redaction_lint_at(
     collect_redaction_hits(src, &mut hits)?;
   }
 
-  hits.sort_by(|a, b| (a.path.clone(), a.line).cmp(&(b.path.clone(), b.line)));
+  hits.sort_by_key(|a| (a.path.clone(), a.line));
 
   for hit in &hits {
     let _ = writeln!(

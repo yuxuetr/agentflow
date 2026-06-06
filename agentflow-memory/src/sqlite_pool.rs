@@ -1,3 +1,4 @@
+#![allow(clippy::doc_lazy_continuation)]
 //! Shared SQLite pool construction for every memory backend.
 //!
 //! Q2.1.1 + Q2.1.2: all four SQLite backends (`SqliteMemory`,
@@ -6,15 +7,16 @@
 //! without `PRAGMA journal_mode = WAL` / `busy_timeout` /
 //! `foreign_keys`. Two bugs collapsed into one helper:
 //!
-//! 1. Paths containing `?`, `#`, spaces, or backslashes turned the
-//!    `sqlite://...` string into an invalid URI — sqlx silently
-//!    treated the path as relative or failed obscurely. The helper
-//!    constructs the connect string with `SqliteConnectOptions::new()`
-//!    + `.filename(...)` instead, so paths are passed byte-for-byte
-//!    without URI escaping.
-//! 2. Without WAL + a busy timeout, CLI + agent concurrency hit
-//!    `SQLITE_BUSY` under load; foreign-key checks were left disabled,
-//!    so an orphan row never tripped a constraint.
+//! 1.  Paths containing `?`, `#`, spaces, or backslashes turned the
+//!     `sqlite://...` string into an invalid URI — sqlx silently
+//!     treated the path as relative or failed obscurely. The helper
+//!     constructs the connect string with `SqliteConnectOptions::new()`
+//!     + `.filename(...)` instead, so paths are passed byte-for-byte
+//!     without URI escaping.
+//!
+//! 2.  Without WAL + a busy timeout, CLI + agent concurrency hit
+//!     `SQLITE_BUSY` under load; foreign-key checks were left disabled,
+//!     so an orphan row never tripped a constraint.
 
 use std::path::Path;
 use std::time::Duration;

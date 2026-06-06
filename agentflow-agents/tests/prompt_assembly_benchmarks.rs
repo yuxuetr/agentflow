@@ -80,7 +80,7 @@ async fn build_agent(
   memory_budget: Option<u32>,
   strategy: MemorySummaryStrategy,
 ) -> ReActAgent {
-  let mut memory = SessionMemory::default_window();
+  let memory = SessionMemory::default_window();
   for idx in 0..message_count {
     let message = match idx % 3 {
       0 => Message::user(

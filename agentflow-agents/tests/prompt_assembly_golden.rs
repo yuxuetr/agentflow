@@ -98,7 +98,7 @@ async fn build_agent(
   strategy: MemorySummaryStrategy,
   with_tools: bool,
 ) -> ReActAgent {
-  let mut memory = SessionMemory::default_window();
+  let memory = SessionMemory::default_window();
   for msg in history {
     memory.add_message(msg.clone()).await.unwrap();
   }

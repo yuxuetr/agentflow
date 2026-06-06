@@ -261,8 +261,8 @@ fn redact_single_pair(segment: &str, config: &RedactionConfig) -> String {
       let (key, value_with_delimiter) = segment.split_at(index);
       let trimmed_key = key
         .trim_start_matches('-')
-        .trim_start_matches(|ch: char| matches!(ch, '"' | '\'' | '{' | '[' | '?'))
-        .trim_end_matches(|ch: char| matches!(ch, '"' | '\''));
+        .trim_start_matches(['"', '\'', '{', '[', '?'])
+        .trim_end_matches(['"', '\'']);
       if is_sensitive_key(trimmed_key, config) {
         let value = &value_with_delimiter[delimiter.len_utf8()..];
         // Pull off any trailing JSON/closing-bracket characters so they

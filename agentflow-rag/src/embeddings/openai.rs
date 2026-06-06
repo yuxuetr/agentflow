@@ -437,7 +437,7 @@ mod tests {
     // Token budget MUST be larger than the array cap — otherwise we
     // never benefit from the array cap because the token budget
     // always trips first (the pre-fix bug).
-    assert!(
+    const _: () = assert!(
       MAX_TOKENS_PER_BATCH > MAX_INPUTS_PER_BATCH,
       "token budget must dominate the array cap; pre-fix it was 2048 for both"
     );

@@ -515,7 +515,7 @@ impl Ed25519SignatureVerifier {
         err
       ))
     })?;
-    let bytes = base64_decode(&content.trim())?;
+    let bytes = base64_decode(content.trim())?;
     let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
       bytes.as_slice().try_into().map_err(|_| {
         validation_error(format!(

@@ -251,6 +251,7 @@ fn request_id_key(value: &Value) -> Option<String> {
 ///   timed out), drop the message on the floor.
 /// - Notification (no `id`): forward to the `notifications` channel
 ///   so `receive_message` can drain it.
+///
 /// Malformed JSON is logged at `warn` and skipped; EOF terminates
 /// the task and is communicated by closing the writer side (so the
 /// next `send_message` will fail-fast with a connection error

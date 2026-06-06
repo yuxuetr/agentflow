@@ -21,18 +21,13 @@ use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 /// sandbox backend is wired in. Callers MUST `.with_os_sandbox()` (or attach
 /// an enforcing backend manually) before constructing in `Shell` mode; the
 /// tool fails closed at execute time otherwise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShellInterpretation {
   /// argv-only spawn, no shell metacharacters (default).
+  #[default]
   Argv,
   /// `sh -c <command>` spawn; requires an enforcing OS sandbox backend.
   Shell,
-}
-
-impl Default for ShellInterpretation {
-  fn default() -> Self {
-    Self::Argv
-  }
 }
 
 /// Execute a shell command. By default the command is parsed into an argv
@@ -396,10 +391,10 @@ fn extract_shell_segments(command: &str) -> Vec<String> {
         current.push(c);
         if c == '"' {
           state = ParseState::Plain;
-        } else if c == '\\' {
-          if let Some(next) = chars.next() {
-            current.push(next);
-          }
+        } else if c == '\\'
+          && let Some(next) = chars.next()
+        {
+          current.push(next);
         }
       }
     }

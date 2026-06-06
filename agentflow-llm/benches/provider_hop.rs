@@ -31,6 +31,7 @@ fn make_request(message_count: usize) -> ProviderRequest {
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
+    thinking: None,
   }
 }
 

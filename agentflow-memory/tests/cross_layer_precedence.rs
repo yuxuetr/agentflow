@@ -72,7 +72,7 @@ impl EmbeddingProvider for FixedEmbedding {
 #[tokio::test]
 async fn four_layers_coexist_without_aliasing() {
   // ── Session: in-process token window ─────────────────────────────────
-  let mut session: Box<dyn MemoryStore> = Box::new(SessionMemory::default_window());
+  let session: Box<dyn MemoryStore> = Box::new(SessionMemory::default_window());
   session
     .add_message(Message::user(SESSION_ID, "the project deadline is March"))
     .await
@@ -85,7 +85,7 @@ async fn four_layers_coexist_without_aliasing() {
   assert_eq!(history.len(), 2, "session captures both turns");
 
   // ── Semantic: similarity search with scores ──────────────────────────
-  let mut semantic = SemanticMemory::in_memory(Arc::new(FixedEmbedding), 8_000)
+  let semantic = SemanticMemory::in_memory(Arc::new(FixedEmbedding), 8_000)
     .await
     .unwrap();
   // Seed with a few user messages so the search has candidates.

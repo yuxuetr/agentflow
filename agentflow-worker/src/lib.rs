@@ -389,7 +389,7 @@ where
         // before returning. The semaphore caps at `free_slots`
         // total permits, so once we can re-acquire all of them
         // every spawned task has finished.
-        let total = self.config.free_slots.max(1) as u32;
+        let total = self.config.free_slots.max(1);
         let _drain = self
           .dispatch_slots
           .acquire_many(total)
@@ -1385,10 +1385,12 @@ mod tests {
   fn reconnect_backoff_jitter_stays_within_window() {
     // ±25% jitter band; with cap=200ms the value must always land in
     // [150, 250].
-    let mut backoff = ReconnectBackoff::default();
-    backoff.initial = Duration::from_millis(200);
-    backoff.max = Duration::from_millis(200);
-    backoff.jitter = true;
+    let backoff = ReconnectBackoff {
+      initial: Duration::from_millis(200),
+      max: Duration::from_millis(200),
+      jitter: true,
+      ..Default::default()
+    };
     for _ in 0..50 {
       let d = backoff.next_delay(Some(Duration::from_millis(200))).as_millis() as u64;
       assert!(
@@ -1810,7 +1812,7 @@ mod tests {
       "Q3.3.2: heartbeat must observe free_slots < 2 while a permit is held; got {observed:?}"
     );
     assert!(
-      observed.iter().any(|n| *n == 0),
+      observed.contains(&0),
       "Q3.3.2: once both permits are held, heartbeat must report 0; got {observed:?}"
     );
 
