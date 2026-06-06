@@ -50,7 +50,12 @@ test.describe('P-H.5 slice 3 — /ui/harness/sessions', () => {
 
     // Submit redirects to /ui/harness/sessions/<uuid>. We wait for
     // the URL to change and assert the path matches.
-    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+$/i);
+    // The detail-page URL may carry a `?tenant=<name>` query param
+    // (added when the submit form propagates a non-`default` tenant
+    // to the detail view so its scoped GETs / SSE pick up the same
+    // `X-Agentflow-Tenant` header under Q1.4.3). Allow it optionally
+    // so the regex still matches single-tenant deployments too.
+    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+(\?.*)?$/i);
     // Detail page renders the summary block. We don't wait for
     // terminal status here because that depends on the LLM provider —
     // the contract under test is "form → detail page renders".
@@ -68,7 +73,12 @@ test.describe('P-H.5 slice 3 — /ui/harness/sessions', () => {
     await page.getByTestId('harness-new-tenant').fill(tenant);
     await page.getByTestId('harness-new-prompt').fill('list test');
     await page.getByTestId('harness-new-submit').click();
-    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+$/i);
+    // The detail-page URL may carry a `?tenant=<name>` query param
+    // (added when the submit form propagates a non-`default` tenant
+    // to the detail view so its scoped GETs / SSE pick up the same
+    // `X-Agentflow-Tenant` header under Q1.4.3). Allow it optionally
+    // so the regex still matches single-tenant deployments too.
+    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+(\?.*)?$/i);
 
     // Now visit the list scoped to the same tenant and click the row.
     await page.goto(`${baseURL}/ui/harness/sessions`);
@@ -76,7 +86,12 @@ test.describe('P-H.5 slice 3 — /ui/harness/sessions', () => {
     // Wait for the row to appear (refresh runs on tenant change).
     await expect(page.getByTestId('harness-list-row').first()).toBeVisible({ timeout: 8000 });
     await page.getByTestId('harness-list-row').first().click();
-    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+$/i);
+    // The detail-page URL may carry a `?tenant=<name>` query param
+    // (added when the submit form propagates a non-`default` tenant
+    // to the detail view so its scoped GETs / SSE pick up the same
+    // `X-Agentflow-Tenant` header under Q1.4.3). Allow it optionally
+    // so the regex still matches single-tenant deployments too.
+    await page.waitForURL(/\/ui\/harness\/sessions\/[0-9a-f-]+(\?.*)?$/i);
   });
 
   test('persists form inputs except the API token across reloads', async ({ page }) => {

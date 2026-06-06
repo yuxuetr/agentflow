@@ -148,11 +148,21 @@ export function RunCreateForm({
       if (inputsValidation.value && typeof inputsValidation.value === 'object') {
         body.inputs = inputsValidation.value;
       }
-      const response = await apiFetch('/v1/runs', apiToken, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      // The body's `tenant_id` and the `X-Agentflow-Tenant` header
+      // must agree under the gateway's Q1.4.3 strict tenant boundary.
+      // Forward the form's trimmed tenant so non-`default` tenants
+      // don't 403 their own submission.
+      const tenantHeader = (body.tenant_id as string) ?? 'default';
+      const response = await apiFetch(
+        '/v1/runs',
+        apiToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        tenantHeader,
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`run submission failed with HTTP ${response.status}: ${text}`);
