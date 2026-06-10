@@ -390,6 +390,7 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
     }
     AgentEvent::RunStarted { .. }
     | AgentEvent::RunStopped { .. }
+    | AgentEvent::MemorySummaryAdded { .. }
     | AgentEvent::DebateRoundStarted { .. } => {}
   }
 }

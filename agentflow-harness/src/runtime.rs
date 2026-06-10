@@ -11,10 +11,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use agentflow_agents::runtime::{
-  AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentStep, AgentStepKind,
+  AgentContext, AgentEvent, AgentEventSink, AgentRunResult, AgentRuntime, AgentStep, AgentStepKind,
   AgentStopReason, RuntimeLimits,
 };
+use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::context::{
@@ -22,8 +25,9 @@ use crate::context::{
 };
 use crate::error::HarnessError;
 use crate::event::{
-  HarnessEvent, HarnessEventBody, SessionStartedPayload, StepStartedPayload, StopReason,
-  StoppedPayload, ToolCallCompletedPayload, ToolCallRequestedPayload,
+  HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload, SessionStartedPayload,
+  StepStartedPayload, StopReason, StoppedPayload, ToolCallCompletedPayload,
+  ToolCallRequestedPayload,
 };
 use crate::persistence::{HarnessEventSink, SinkChain};
 
@@ -357,13 +361,30 @@ impl HarnessRuntime {
       agent_context = agent_context.with_cancellation_token(token);
     }
 
+    // Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): attach the live event bridge
+    // so a live-aware inner agent (ReActAgent) streams tool + memory
+    // events through the shared sink chain + seq counter as they happen,
+    // interleaved correctly with the hook layer's approval events.
+    let bridge = Arc::new(HarnessAgentEventBridge::new(
+      session_id.clone(),
+      self.sinks.clone(),
+      self.seq_counter.clone(),
+    ));
+    agent_context = agent_context.with_event_sink(bridge.clone());
+
     let inner_result = self
       .inner
       .run(agent_context)
       .await
       .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?;
 
-    let translated = translate_inner_events(&inner_result, &session_id, &self.seq_counter);
+    // If the bridge emitted anything, the inner runtime is live-aware and
+    // already streamed the tool events; the post-hoc pass then emits only
+    // the `step_started` markers. Otherwise (a runtime that ignores
+    // `event_sink`) reconstruct the full set for backward compatibility.
+    let live_emitted = bridge.emitted() > 0;
+    let translated =
+      translate_inner_events(&inner_result, &session_id, &self.seq_counter, live_emitted);
     for event in &translated {
       self.sinks.dispatch(event).await?;
     }
@@ -547,10 +568,145 @@ fn priority_str(priority: ContextPriority) -> &'static str {
   }
 }
 
+/// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP §5): live bridge from an inner
+/// agent's [`AgentEvent`] stream to the Harness [`HarnessEvent`]
+/// envelope. Attached to the inner [`AgentContext`] via
+/// [`AgentContext::with_event_sink`], it maps tool + memory-summary
+/// events the instant the agent produces them and dispatches them
+/// through the shared [`SinkChain`] on the shared `seq_counter` — so a
+/// tool call's `tool_call_requested` / `tool_call_completed` interleave
+/// correctly with the `approval_requested` / `approval_decided` events
+/// the hook layer fires during that same tool execution, instead of
+/// being reconstructed in a post-hoc batch (the pre-Phase-1 "split-brain
+/// seq epoch").
+///
+/// Runtimes that ignore `event_sink` (anything other than a live-aware
+/// `ReActAgent`) simply never call [`emit`](AgentEventSink::emit); the
+/// bridge's [`emitted`](Self::emitted) stays `0` and
+/// [`HarnessRuntime::run`] falls back to full post-hoc translation, so
+/// behavior is unchanged for those runtimes.
+struct HarnessAgentEventBridge {
+  session_id: String,
+  sinks: SinkChain,
+  seq_counter: Arc<AtomicU64>,
+  emitted: AtomicU64,
+}
+
+impl HarnessAgentEventBridge {
+  fn new(session_id: String, sinks: SinkChain, seq_counter: Arc<AtomicU64>) -> Self {
+    Self {
+      session_id,
+      sinks,
+      seq_counter,
+      emitted: AtomicU64::new(0),
+    }
+  }
+
+  /// Number of events this bridge dispatched live. `> 0` means the inner
+  /// runtime is live-aware and the post-hoc translation must skip the
+  /// tool events to avoid duplicating them.
+  fn emitted(&self) -> u64 {
+    self.emitted.load(Ordering::SeqCst)
+  }
+
+  async fn dispatch_body(&self, body: HarnessEventBody, ts: chrono::DateTime<Utc>) {
+    let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
+    let event = HarnessEvent {
+      seq,
+      session_id: self.session_id.clone(),
+      ts,
+      body,
+    };
+    // Observability must never break execution: a sink error is logged
+    // by the sink itself; here we swallow it so the agent loop proceeds.
+    let _ = self.sinks.dispatch(&event).await;
+    self.emitted.fetch_add(1, Ordering::SeqCst);
+  }
+}
+
+#[async_trait]
+impl AgentEventSink for HarnessAgentEventBridge {
+  async fn emit(&self, event: &AgentEvent) {
+    match event {
+      AgentEvent::ToolCallStarted {
+        step_index,
+        tool,
+        params,
+        source,
+        permissions,
+        timestamp,
+        ..
+      } => {
+        let params_summary = crate::params_summary::redact_and_cap(params.clone());
+        self
+          .dispatch_body(
+            HarnessEventBody::ToolCallRequested(ToolCallRequestedPayload {
+              step_index: *step_index,
+              tool: tool.clone(),
+              source: source.clone(),
+              permissions: permissions.clone(),
+              idempotency: None,
+              params_summary,
+            }),
+            *timestamp,
+          )
+          .await;
+      }
+      AgentEvent::ToolCallCompleted {
+        step_index,
+        tool,
+        is_error,
+        duration_ms,
+        source,
+        timestamp,
+        ..
+      } => {
+        self
+          .dispatch_body(
+            HarnessEventBody::ToolCallCompleted(ToolCallCompletedPayload {
+              step_index: *step_index,
+              tool: tool.clone(),
+              is_error: *is_error,
+              duration_ms: *duration_ms,
+              source: source.clone(),
+              output_summary: None,
+            }),
+            *timestamp,
+          )
+          .await;
+      }
+      AgentEvent::MemorySummaryAdded {
+        layer,
+        summary,
+        token_estimate,
+        timestamp,
+        ..
+      } => {
+        self
+          .dispatch_body(
+            HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
+              layer: layer.clone(),
+              summary: summary.clone(),
+              token_estimate: *token_estimate,
+            }),
+            *timestamp,
+          )
+          .await;
+      }
+      // Other events (RunStarted/Stopped, StepStarted, policy/capability
+      // decisions, LLM-call accounting, multi-agent ops) are not part of
+      // the Harness envelope's live tool/approval narrative. `step_started`
+      // is emitted post-hoc from `result.steps` by `translate_inner_events`.
+      _ => {}
+    }
+  }
+}
+
 fn translate_inner_events(
   result: &AgentRunResult,
   session_id: &str,
   seq_counter: &std::sync::atomic::AtomicU64,
+  skip_tool_events: bool,
 ) -> Vec<HarnessEvent> {
   let mut out = Vec::new();
   // Q1.7.1: every event takes its seq from the shared
@@ -571,7 +727,11 @@ fn translate_inner_events(
         step_type: step_kind_name(&step.kind).to_owned(),
       }),
     });
-    if let Some(payload) = tool_call_requested_from_step(step) {
+    // Phase 1: in live mode the bridge already emitted
+    // `tool_call_requested` from `AgentEvent::ToolCallStarted`, so skip
+    // the post-hoc reconstruction to avoid duplicates. `step_started`
+    // always comes from here (the agent does not emit it live).
+    if !skip_tool_events && let Some(payload) = tool_call_requested_from_step(step) {
       out.push(HarnessEvent {
         seq: next_seq(),
         session_id: session_id.to_owned(),
@@ -579,6 +739,10 @@ fn translate_inner_events(
         body: HarnessEventBody::ToolCallRequested(payload),
       });
     }
+  }
+  if skip_tool_events {
+    // `tool_call_completed` was emitted live by the bridge.
+    return out;
   }
   for event in &result.events {
     if let AgentEvent::ToolCallCompleted {
@@ -719,12 +883,22 @@ mod tests {
     extra_steps: Vec<AgentStep>,
     extra_events: Vec<AgentEvent>,
     captured_persona: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// When non-empty, simulate a live-aware runtime (ReActAgent): emit
+    /// each of these to `context.event_sink` as the run executes, in
+    /// addition to returning them in `extra_events`.
+    live_events: Vec<AgentEvent>,
   }
 
   #[async_trait]
   impl AgentRuntime for ScriptedRuntime {
     async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError> {
       *self.captured_persona.lock().await = context.persona.clone();
+      // Simulate live emission like a real ReActAgent would.
+      if let Some(handle) = &context.event_sink {
+        for ev in &self.live_events {
+          handle.0.emit(ev).await;
+        }
+      }
       let mut steps = vec![AgentStep::new(
         0,
         AgentStepKind::Observe {
@@ -762,6 +936,7 @@ mod tests {
       extra_steps: Vec::new(),
       extra_events: Vec::new(),
       captured_persona: captured,
+      live_events: Vec::new(),
     }
   }
 
@@ -874,6 +1049,87 @@ mod tests {
     assert!(kinds.contains(&"tool_call_completed"));
     assert_eq!(kinds.last(), Some(&"stopped"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+  }
+
+  /// Phase 1: a live-aware inner runtime (simulating ReActAgent) streams
+  /// tool events through the bridge during the run; the post-hoc
+  /// translation then skips them, so each tool call appears exactly once
+  /// and on the shared monotonic seq clock — the split-brain epoch is
+  /// gone. `step_started` is still emitted post-hoc from the recorded
+  /// steps.
+  #[tokio::test]
+  async fn runtime_live_runtime_streams_tool_events_without_duplication() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("done", captured.clone());
+    inner.extra_steps.push(AgentStep::new(
+      1,
+      AgentStepKind::ToolCall {
+        tool: "echo".into(),
+        params: json!({ "text": "hi" }),
+      },
+    ));
+    let ts = Utc::now();
+    inner.live_events = vec![
+      AgentEvent::ToolCallStarted {
+        session_id: "ignored".into(),
+        step_index: 1,
+        tool: "echo".into(),
+        params: json!({ "text": "hi" }),
+        source: Some("builtin".into()),
+        permissions: Vec::new(),
+        timestamp: ts,
+      },
+      AgentEvent::ToolCallCompleted {
+        session_id: "ignored".into(),
+        step_index: 1,
+        tool: "echo".into(),
+        is_error: false,
+        duration_ms: 3,
+        source: Some("builtin".into()),
+        permissions: Vec::new(),
+        timestamp: ts,
+      },
+    ];
+
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("go", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    let events = sink.snapshot().await;
+    let requested = events
+      .iter()
+      .filter(|e| matches!(e.body, HarnessEventBody::ToolCallRequested(_)))
+      .count();
+    let completed = events
+      .iter()
+      .filter(|e| matches!(e.body, HarnessEventBody::ToolCallCompleted(_)))
+      .count();
+    assert_eq!(
+      requested, 1,
+      "exactly one tool_call_requested (live; not duplicated by post-hoc translate)"
+    );
+    assert_eq!(completed, 1, "exactly one tool_call_completed");
+    assert!(
+      events
+        .iter()
+        .any(|e| matches!(e.body, HarnessEventBody::StepStarted(_))),
+      "step_started still emitted post-hoc from recorded steps"
+    );
+    // The live tool events precede the post-hoc step_started markers, and
+    // every seq is unique + monotonic across both emission paths.
+    let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
+    let mut sorted = seqs.clone();
+    sorted.sort();
+    assert_eq!(seqs, sorted, "seqs monotonic across live + post-hoc paths");
+    let mut deduped = seqs.clone();
+    deduped.dedup();
+    assert_eq!(deduped.len(), seqs.len(), "no duplicate seqs");
   }
 
   use crate::context::ContextItem;

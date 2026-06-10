@@ -19,6 +19,23 @@ use crate::runtime::{
   RuntimeLimits,
 };
 
+/// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): emit an `AgentEvent` to the
+/// optional live sink (if any), then push it into the run's event
+/// accumulator. The live emission is inline `.await` at the event's
+/// production point so an observer (the Harness bridge) sees it on the
+/// same logical clock as governance side-effects that fire during tool
+/// execution. With `self.live_sink == None` this is exactly
+/// `$events.push(ev)` — byte-identical to the pre-Phase-1 behaviour.
+macro_rules! emit_and_push {
+  ($sink:expr, $events:expr, $event:expr) => {{
+    let ev = $event;
+    if let Some(handle) = ($sink).as_ref() {
+      handle.0.emit(&ev).await;
+    }
+    $events.push(ev);
+  }};
+}
+
 /// Error type for ReAct agent operations
 #[derive(Debug, thiserror::Error)]
 pub enum ReActError {
@@ -274,6 +291,14 @@ pub struct ReActAgent {
   /// budget against the same numbers the LLM will actually bill.
   /// Defaults to the heuristic until the first context arrives.
   message_counter: Box<dyn agentflow_memory::TokenCounter>,
+  /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): optional live event observer
+  /// captured from `AgentContext::event_sink` at the start of
+  /// `run_with_context`. When set, the loop emits each `AgentEvent` to it
+  /// as it is produced (in addition to accumulating it into the result),
+  /// so the Harness bridge sees tool events on the same logical clock as
+  /// the governance events that fire during tool execution. `None` keeps
+  /// behavior byte-identical to a runtime with no observer.
+  live_sink: Option<crate::runtime::EventSinkHandle>,
 }
 
 impl ReActAgent {
@@ -293,6 +318,7 @@ impl ReActAgent {
       memory_summary_backend: None,
       session_id,
       message_counter,
+      live_sink: None,
     }
   }
 
@@ -497,6 +523,9 @@ impl ReActAgent {
     context: AgentContext,
   ) -> Result<AgentRunResult, ReActError> {
     self.apply_context(&context);
+    // Phase 1: capture the optional live event observer for this run so
+    // the `emit_and_push!` sites stream tool events as they happen.
+    self.live_sink = context.event_sink.clone();
     info!(
         session = %self.session_id,
         model = %self.config.model,
@@ -966,15 +995,19 @@ impl ReActAgent {
               timestamp: Utc::now(),
             });
           }
-          events.push(AgentEvent::ToolCallStarted {
-            session_id: self.session_id.clone(),
-            step_index: tool_step_index,
-            tool: tool.clone(),
-            params: trace_params.clone(),
-            source: tool_source.clone(),
-            permissions: tool_permissions.clone(),
-            timestamp: Utc::now(),
-          });
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallStarted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.clone(),
+              params: trace_params.clone(),
+              source: tool_source.clone(),
+              permissions: tool_permissions.clone(),
+              timestamp: Utc::now(),
+            }
+          );
           steps.push(AgentStep::new(
             tool_step_index,
             AgentStepKind::ToolCall {
@@ -1005,7 +1038,7 @@ impl ReActAgent {
                   },
                   Err(_) => {
                     let duration_ms = started_at.elapsed().as_millis() as u64;
-                    events.push(AgentEvent::ToolCallCompleted {
+                    emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
                       session_id: self.session_id.clone(),
                       step_index: tool_step_index,
                       tool: tool.clone(),
@@ -1042,7 +1075,7 @@ impl ReActAgent {
                   }
                 },
                 _ = token.cancelled() => {
-                  events.push(AgentEvent::ToolCallCompleted {
+                  emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
                     session_id: self.session_id.clone(),
                     step_index: tool_step_index,
                     tool: tool.clone(),
@@ -1071,16 +1104,20 @@ impl ReActAgent {
               },
               Err(_) => {
                 let duration_ms = started_at.elapsed().as_millis() as u64;
-                events.push(AgentEvent::ToolCallCompleted {
-                  session_id: self.session_id.clone(),
-                  step_index: tool_step_index,
-                  tool: tool.clone(),
-                  is_error: true,
-                  duration_ms,
-                  source: tool_source.clone(),
-                  permissions: tool_permissions.clone(),
-                  timestamp: Utc::now(),
-                });
+                emit_and_push!(
+                  self.live_sink,
+                  events,
+                  AgentEvent::ToolCallCompleted {
+                    session_id: self.session_id.clone(),
+                    step_index: tool_step_index,
+                    tool: tool.clone(),
+                    is_error: true,
+                    duration_ms,
+                    source: tool_source.clone(),
+                    permissions: tool_permissions.clone(),
+                    timestamp: Utc::now(),
+                  }
+                );
                 self
                   .record_reflection(
                     ReflectionContext::failure(
@@ -1117,7 +1154,7 @@ impl ReActAgent {
                   }
                 },
                 _ = token.cancelled() => {
-                  events.push(AgentEvent::ToolCallCompleted {
+                  emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
                     session_id: self.session_id.clone(),
                     step_index: tool_step_index,
                     tool: tool.clone(),
@@ -1163,16 +1200,20 @@ impl ReActAgent {
               parts: tool_output.parts.clone(),
             },
           ));
-          events.push(AgentEvent::ToolCallCompleted {
-            session_id: self.session_id.clone(),
-            step_index: tool_step_index,
-            tool: tool.clone(),
-            is_error: tool_output.is_error,
-            duration_ms,
-            source: tool_source.clone(),
-            permissions: tool_permissions.clone(),
-            timestamp: Utc::now(),
-          });
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.clone(),
+              is_error: tool_output.is_error,
+              duration_ms,
+              source: tool_source.clone(),
+              permissions: tool_permissions.clone(),
+              timestamp: Utc::now(),
+            }
+          );
           step_index += 1;
           if tool_output.is_error {
             self
@@ -1829,15 +1870,19 @@ impl ReActAgent {
           timestamp: Utc::now(),
         });
       }
-      events.push(AgentEvent::ToolCallStarted {
-        session_id: self.session_id.clone(),
-        step_index: call_step_idx,
-        tool: call.name.clone(),
-        params: trace_params.clone(),
-        source: source.clone(),
-        permissions: permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallStarted {
+          session_id: self.session_id.clone(),
+          step_index: call_step_idx,
+          tool: call.name.clone(),
+          params: trace_params.clone(),
+          source: source.clone(),
+          permissions: permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
       steps.push(AgentStep::new(
         call_step_idx,
         AgentStepKind::ToolCall {
@@ -1894,7 +1939,7 @@ impl ReActAgent {
             done = tokio::time::timeout(remaining, batch_fut) => match done {
               Ok(results) => Some(results),
               Err(_) => {
-                self.emit_batch_timeout(&prepared, &concurrent_idxs, events);
+                self.emit_batch_timeout(&prepared, &concurrent_idxs, events).await;
                 return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
                   &self.session_id,
                   None,
@@ -1905,7 +1950,7 @@ impl ReActAgent {
               }
             },
             _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events);
+              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
               return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
                 &self.session_id,
                 "cancellation token signalled",
@@ -1918,7 +1963,9 @@ impl ReActAgent {
         (Some(remaining), None) => match tokio::time::timeout(remaining, batch_fut).await {
           Ok(results) => Some(results),
           Err(_) => {
-            self.emit_batch_timeout(&prepared, &concurrent_idxs, events);
+            self
+              .emit_batch_timeout(&prepared, &concurrent_idxs, events)
+              .await;
             return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
               &self.session_id,
               None,
@@ -1934,7 +1981,7 @@ impl ReActAgent {
           tokio::select! {
             results = batch_fut => Some(results),
             _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events);
+              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
               return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
                 &self.session_id,
                 "cancellation token signalled",
@@ -1969,16 +2016,20 @@ impl ReActAgent {
         // so the trace stays balanced.
         for &j in serial_idxs.iter().skip_while(|&&j| j != i) {
           if outputs[j].is_none() {
-            events.push(AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: prepared[j].call_step_idx,
-              tool: prepared[j].tool.clone(),
-              is_error: true,
-              duration_ms: 0,
-              source: prepared[j].source.clone(),
-              permissions: prepared[j].permissions.clone(),
-              timestamp: Utc::now(),
-            });
+            emit_and_push!(
+              self.live_sink,
+              events,
+              AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: prepared[j].call_step_idx,
+                tool: prepared[j].tool.clone(),
+                is_error: true,
+                duration_ms: 0,
+                source: prepared[j].source.clone(),
+                permissions: prepared[j].permissions.clone(),
+                timestamp: Utc::now(),
+              }
+            );
           }
         }
         return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
@@ -2001,7 +2052,7 @@ impl ReActAgent {
             done = tokio::time::timeout(remaining, call_fut) => match done {
               Ok(r) => Some(r),
               Err(_) => {
-                events.push(AgentEvent::ToolCallCompleted {
+                emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
                   session_id: self.session_id.clone(),
                   step_index: prepared[i].call_step_idx,
                   tool: prepared[i].tool.clone(),
@@ -2035,16 +2086,20 @@ impl ReActAgent {
         (Some(remaining), None) => match tokio::time::timeout(remaining, call_fut).await {
           Ok(r) => Some(r),
           Err(_) => {
-            events.push(AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: prepared[i].call_step_idx,
-              tool: prepared[i].tool.clone(),
-              is_error: true,
-              duration_ms: started.elapsed().as_millis() as u64,
-              source: prepared[i].source.clone(),
-              permissions: prepared[i].permissions.clone(),
-              timestamp: Utc::now(),
-            });
+            emit_and_push!(
+              self.live_sink,
+              events,
+              AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: prepared[i].call_step_idx,
+                tool: prepared[i].tool.clone(),
+                is_error: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+                source: prepared[i].source.clone(),
+                permissions: prepared[i].permissions.clone(),
+                timestamp: Utc::now(),
+              }
+            );
             return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
               &self.session_id,
               None,
@@ -2133,16 +2188,20 @@ impl ReActAgent {
           parts: output.parts.clone(),
         },
       ));
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prep.call_step_idx,
-        tool: prep.tool.clone(),
-        is_error: output.is_error,
-        duration_ms,
-        source: prep.source.clone(),
-        permissions: prep.permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prep.call_step_idx,
+          tool: prep.tool.clone(),
+          is_error: output.is_error,
+          duration_ms,
+          source: prep.source.clone(),
+          permissions: prep.permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
       if output.is_error {
         if !error_summary.is_empty() {
           error_summary.push_str("; ");
@@ -2173,43 +2232,51 @@ impl ReActAgent {
     Ok(BatchOutcome::Continue)
   }
 
-  fn emit_batch_timeout(
+  async fn emit_batch_timeout(
     &self,
     prepared: &[PreparedToolCall],
     idxs: &[usize],
     events: &mut Vec<AgentEvent>,
   ) {
     for &i in idxs {
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prepared[i].call_step_idx,
-        tool: prepared[i].tool.clone(),
-        is_error: true,
-        duration_ms: 0,
-        source: prepared[i].source.clone(),
-        permissions: prepared[i].permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prepared[i].call_step_idx,
+          tool: prepared[i].tool.clone(),
+          is_error: true,
+          duration_ms: 0,
+          source: prepared[i].source.clone(),
+          permissions: prepared[i].permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
     }
   }
 
-  fn emit_batch_cancelled(
+  async fn emit_batch_cancelled(
     &self,
     prepared: &[PreparedToolCall],
     idxs: &[usize],
     events: &mut Vec<AgentEvent>,
   ) {
     for &i in idxs {
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prepared[i].call_step_idx,
-        tool: prepared[i].tool.clone(),
-        is_error: true,
-        duration_ms: 0,
-        source: prepared[i].source.clone(),
-        permissions: prepared[i].permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prepared[i].call_step_idx,
+          tool: prepared[i].tool.clone(),
+          is_error: true,
+          duration_ms: 0,
+          source: prepared[i].source.clone(),
+          permissions: prepared[i].permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
     }
   }
 }
@@ -2400,6 +2467,7 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       }
       AgentEvent::RunStarted { .. }
       | AgentEvent::RunStopped { .. }
+      | AgentEvent::MemorySummaryAdded { .. }
       | AgentEvent::DebateRoundStarted { .. } => {}
     }
   }
