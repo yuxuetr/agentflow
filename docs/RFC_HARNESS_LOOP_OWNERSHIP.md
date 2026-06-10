@@ -1,6 +1,6 @@
 # RFC: Harness Loop Ownership + Context Engineering
 
-- Status: **Draft** (design only; not promoted to `TODOs.md`)
+- Status: **In progress** — Phase 0 ✅, Phase 1 ✅, Phase 2 context-engineering half ✅ (branch `feat/harness-loop-ownership`); Phase 2 loop-ownership half (ReActAgent → `TurnDrivenRuntime`) still open. See "Implementation status" below.
 - Author: (proposed)
 - Created: 2026-06-11
 - Related: `docs/HARNESS_MODE.md`, `docs/ROADMAP_v2.md` §F, `docs/STABILITY.md`,
@@ -33,6 +33,17 @@ away the "wrap any `AgentRuntime`" composability that is currently a strength:
 
 Phase 1 is the enabling step (observe before you steer). Phase 2 is the
 end-state the title asks for. Each phase ships and delivers value on its own.
+
+## 0. Implementation status (2026-06-11)
+
+| Phase | State | Commit | Notes |
+|---|---|---|---|
+| 0 — context hygiene | ✅ done | `feat(harness): Phase 0 …` | real tokenizer, truncate-not-drop, `params_summary` cap |
+| 1 — live event seam | ✅ done | `feat(harness): Phase 1 …` | `AgentEventSink` + `AgentContext.event_sink` + `AgentEvent::MemorySummaryAdded`; ReActAgent emits tool events live; `HarnessAgentEventBridge` replaces post-hoc tool-event translation; split-brain epoch fixed |
+| 2a — context engineering (compaction) | ✅ done | `feat(harness): Phase 2 (context-engineering half) …` | `compaction` module + `ContextSummarizer`; over-budget context compacted, `MemorySummaryAdded` finally emitted |
+| 2b — loop ownership (turn-driven) | ⏳ open | — | ReActAgent → `TurnDrivenRuntime` / `LoopSession` (§6); enables *between-turn* compaction mid-run. Largest, highest-risk change; deferred to its own pass |
+
+Tests at landing: agentflow-agents 175 lib + integration green; agentflow-harness 90 green; agentflow-server 179 lib green; clippy clean across changed crates.
 
 ## 1. Background: where we are today
 
