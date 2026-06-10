@@ -20,6 +20,7 @@ use agentflow_agents::runtime::{
 use async_trait::async_trait;
 use chrono::Utc;
 
+use crate::compaction::ContextSummarizer;
 use crate::context::{
   ContextItem, ContextPriority, ContextProvider, HarnessContext, HarnessProfile, HarnessRuntimeKind,
 };
@@ -182,6 +183,13 @@ impl HarnessRunResult {
 pub struct HarnessRuntime {
   inner: Box<dyn AgentRuntime>,
   context_providers: Vec<Arc<dyn ContextProvider>>,
+  /// Phase 2 (RFC_HARNESS_LOOP_OWNERSHIP): optional context compactor.
+  /// When set and the assembled context overflows the token budget, the
+  /// items that would be dropped are summarized into a single synthetic
+  /// `context_compaction` item (so continuity is preserved) and a
+  /// `MemorySummaryAdded` event is emitted. `None` keeps the Phase 0
+  /// drop/truncate behaviour.
+  compactor: Option<Arc<dyn ContextSummarizer>>,
   sinks: SinkChain,
   /// Q1.7.1: the runtime and the hook layer (via `HookConfig`) used to
   /// have independent `seq` counters. Mixed runtime + hook events
@@ -200,6 +208,7 @@ impl HarnessRuntime {
     Self {
       inner,
       context_providers: Vec::new(),
+      compactor: None,
       sinks: SinkChain::new(),
       seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     }
@@ -224,6 +233,15 @@ impl HarnessRuntime {
   /// Register an event sink. Sinks are dispatched in registration order.
   pub fn with_event_sink(mut self, sink: Arc<dyn HarnessEventSink>) -> Self {
     self.sinks = std::mem::take(&mut self.sinks).push(sink);
+    self
+  }
+
+  /// Phase 2: attach a [`ContextSummarizer`] so over-budget context is
+  /// compacted into a single summary item (and a `MemorySummaryAdded`
+  /// event) instead of being dropped. Pass
+  /// [`crate::DeterministicContextSummarizer`] for an LLM-free default.
+  pub fn with_context_summarizer(mut self, compactor: Arc<dyn ContextSummarizer>) -> Self {
+    self.compactor = Some(compactor);
     self
   }
 
@@ -308,7 +326,12 @@ impl HarnessRuntime {
       metadata: options.metadata.clone(),
     };
 
-    let (items, dropped, truncated) = self
+    let CollectedContext {
+      items,
+      dropped,
+      truncated,
+      compaction,
+    } = self
       .collect_context(&ctx, options.context_token_budget)
       .await?;
     let persona = assemble_persona(options.persona_prefix.as_deref(), &items);
@@ -340,6 +363,26 @@ impl HarnessRuntime {
       body: HarnessEventBody::SessionStarted(started_payload),
     };
     self.sinks.dispatch(&started_event).await?;
+
+    // Phase 2: if context assembly compacted over-budget items, surface
+    // it as a MemorySummaryAdded event right after session_started so the
+    // operator sees the compaction the agent's persona was built on.
+    if let Some(compaction) = &compaction {
+      let seq = self
+        .seq_counter
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+      let event = HarnessEvent {
+        seq,
+        session_id: session_id.clone(),
+        ts: Utc::now(),
+        body: HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
+          layer: compaction.layer.clone(),
+          summary: compaction.summary.clone(),
+          token_estimate: compaction.token_estimate,
+        }),
+      };
+      self.sinks.dispatch(&event).await?;
+    }
 
     let mut agent_context = AgentContext::new(&session_id, &options.user_input, &options.model)
       .with_limits(options.limits.clone());
@@ -430,7 +473,7 @@ impl HarnessRuntime {
     &self,
     ctx: &HarnessContext,
     budget: Option<usize>,
-  ) -> Result<(Vec<ContextItem>, usize, usize), HarnessError> {
+  ) -> Result<CollectedContext, HarnessError> {
     let mut items = Vec::new();
     for provider in &self.context_providers {
       let name = provider.name().to_string();
@@ -449,12 +492,74 @@ impl HarnessRuntime {
       item.token_estimate = counter.count_tokens(&item.content) as usize;
     }
 
-    let (dropped, truncated) = match budget {
-      None => (0, 0),
-      Some(budget) => trim_to_budget(&mut items, budget, counter.as_ref()),
+    let Some(budget) = budget else {
+      return Ok(CollectedContext {
+        items,
+        dropped: 0,
+        truncated: 0,
+        compaction: None,
+      });
     };
-    Ok((items, dropped, truncated))
+
+    // Phase 2: when a compactor is configured, reserve a slice of the
+    // budget for a compaction summary so the summary itself does not
+    // re-overflow the window.
+    let reserve = if self.compactor.is_some() {
+      (budget / 8).clamp(MIN_ITEM_TOKENS, 256)
+    } else {
+      0
+    };
+    let effective = budget.saturating_sub(reserve);
+    let (dropped_items, truncated) = trim_to_budget(&mut items, effective, counter.as_ref());
+
+    let mut compaction = None;
+    if let Some(compactor) = &self.compactor
+      && !dropped_items.is_empty()
+      && let Some(summary) = compactor.summarize(&dropped_items, reserve).await
+    {
+      let token_estimate = counter.count_tokens(&summary) as usize;
+      // Inject the summary as a Critical synthetic item so it leads the
+      // assembled persona and survives any future trim.
+      items.insert(
+        0,
+        ContextItem {
+          source: "context_compaction".to_owned(),
+          priority: ContextPriority::Critical,
+          token_estimate,
+          content: summary.clone(),
+          metadata: serde_json::json!({ "compacted_items": dropped_items.len() }),
+        },
+      );
+      compaction = Some(CompactionOutcome {
+        layer: compactor.name().to_owned(),
+        summary,
+        token_estimate,
+      });
+    }
+
+    Ok(CollectedContext {
+      items,
+      dropped: dropped_items.len(),
+      truncated,
+      compaction,
+    })
   }
+}
+
+/// Result of [`HarnessRuntime::collect_context`].
+struct CollectedContext {
+  items: Vec<ContextItem>,
+  dropped: usize,
+  truncated: usize,
+  compaction: Option<CompactionOutcome>,
+}
+
+/// A compaction performed during context assembly, surfaced to the run
+/// as a `MemorySummaryAdded` event.
+struct CompactionOutcome {
+  layer: String,
+  summary: String,
+  token_estimate: usize,
 }
 
 /// Per-item floor (in tokens). When the remaining budget is below this,
@@ -472,15 +577,18 @@ const TRUNCATION_MARKER: &str = "\n\n[...truncated to fit context budget]";
 /// [`MIN_ITEM_TOKENS`]) rather than dropped outright — this fixes the
 /// priority inversion where a large high-priority item was silently
 /// dropped while a small low-priority item slipped in
-/// (RFC_HARNESS_LOOP_OWNERSHIP §1.2). Returns `(dropped, truncated)`.
+/// (RFC_HARNESS_LOOP_OWNERSHIP §1.2). Returns `(dropped_items,
+/// truncated_count)` — the dropped items are handed back so a configured
+/// [`ContextSummarizer`] can compact them (Phase 2) rather than losing
+/// them entirely.
 fn trim_to_budget(
   items: &mut Vec<ContextItem>,
   budget: usize,
   counter: &dyn agentflow_llm::tokenizer::TokenCounter,
-) -> (usize, usize) {
+) -> (Vec<ContextItem>, usize) {
   let mut used = 0usize;
   let mut admitted = Vec::with_capacity(items.len());
-  let mut dropped = 0usize;
+  let mut dropped = Vec::new();
   let mut truncated = 0usize;
   for mut item in items.drain(..) {
     let remaining = budget.saturating_sub(used);
@@ -495,7 +603,7 @@ fn trim_to_budget(
       truncated += 1;
       admitted.push(item);
     } else {
-      dropped += 1;
+      dropped.push(item);
     }
   }
   *items = admitted;
@@ -1272,6 +1380,65 @@ mod tests {
     assert!(
       estimate > 0,
       "recount must replace the 0-token provider hint"
+    );
+  }
+
+  /// Phase 2: with a compactor configured, an item that would be dropped
+  /// under budget is instead summarized into a synthetic
+  /// `context_compaction` item that leads the persona, and a
+  /// `MemorySummaryAdded` event is emitted — the envelope the harness has
+  /// advertised since H0 but never produced.
+  #[tokio::test]
+  async fn runtime_compacts_overbudget_context_and_emits_memory_summary() {
+    use crate::compaction::DeterministicContextSummarizer;
+    use crate::persistence::InMemoryEventSink;
+
+    let counter = agentflow_llm::tokenizer::counter_for_model("mock");
+    let body = "alpha beta gamma delta ".repeat(40);
+    let item_tokens = counter.count_tokens(&body) as usize;
+    // Budget admits the first (Critical) item whole and leaves less than
+    // the floor for the second (Low) item → it would be dropped, but the
+    // compactor summarizes it instead.
+    let budget = item_tokens + 40;
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("ok", captured.clone()));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let dir = tempfile::tempdir().unwrap();
+    let mut runtime = HarnessRuntime::new(inner)
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>)
+      .with_context_summarizer(Arc::new(DeterministicContextSummarizer))
+      .with_context_provider(Arc::new(FixedProvider {
+        name: "keep",
+        priority: ContextPriority::Critical,
+        content: body.clone(),
+      }))
+      .with_context_provider(Arc::new(FixedProvider {
+        name: "spill",
+        priority: ContextPriority::Low,
+        content: body.clone(),
+      }));
+    let result = runtime
+      .run(HarnessRunOptions::new("t", dir.path(), "mock").with_context_token_budget(budget))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.context_items_dropped, 1,
+      "the spilled item is compacted out"
+    );
+    let persona = captured.lock().await.clone().unwrap();
+    assert!(
+      persona.contains("context_compaction"),
+      "compaction summary leads the persona"
+    );
+    assert!(persona.contains("Compacted 1 lower-priority context item"));
+    let events = sink.snapshot().await;
+    assert!(
+      events
+        .iter()
+        .any(|e| matches!(e.body, HarnessEventBody::MemorySummaryAdded(_))),
+      "compaction emits the long-advertised MemorySummaryAdded event"
     );
   }
 
