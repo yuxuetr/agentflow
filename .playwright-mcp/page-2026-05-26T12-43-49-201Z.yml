@@ -1,0 +1,39 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - paragraph [ref=e6]: AgentFlow / Harness
+      - heading "Sessions" [level=1] [ref=e7]
+    - navigation [ref=e8]:
+      - link "← Run console" [ref=e9] [cursor=pointer]:
+        - /url: /ui
+      - link "+ New session" [ref=e10] [cursor=pointer]:
+        - /url: /ui/harness/sessions/new
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: Tenant
+      - textbox "Tenant" [ref=e14]:
+        - /placeholder: default
+        - text: default
+    - generic [ref=e15]:
+      - generic [ref=e16]: API token
+      - textbox "API token" [ref=e17]:
+        - /placeholder: Bearer token (not persisted)
+    - button "Refresh" [ref=e18] [cursor=pointer]
+  - paragraph [ref=e19]: "list failed: HTTP 404 The server is configured with a public base URL of /ui/ - did you mean to visit /ui/v1/harness/sessions?tenant_id=default instead?"
+  - table [ref=e21]:
+    - rowgroup [ref=e22]:
+      - row "Started Status Profile Runtime Model Prompt ID" [ref=e23]:
+        - columnheader "Started" [ref=e24]
+        - columnheader "Status" [ref=e25]
+        - columnheader "Profile" [ref=e26]
+        - columnheader "Runtime" [ref=e27]
+        - columnheader "Model" [ref=e28]
+        - columnheader "Prompt" [ref=e29]
+        - columnheader "ID" [ref=e30]
+    - rowgroup [ref=e31]:
+      - row "No sessions yet for tenant \"default\". Use + New session to create one." [ref=e32]:
+        - cell "No sessions yet for tenant \"default\". Use + New session to create one." [ref=e33]:
+          - text: No sessions yet for tenant "default". Use
+          - link "+ New session" [ref=e34] [cursor=pointer]:
+            - /url: /ui/harness/sessions/new
+          - text: to create one.

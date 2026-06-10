@@ -1,0 +1,51 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - paragraph [ref=e6]: AgentFlow / Harness
+      - heading "New session" [level=1] [ref=e7]
+    - navigation [ref=e8]:
+      - link "← Sessions" [ref=e9] [cursor=pointer]:
+        - /url: /ui/harness/sessions
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: Tenant
+        - textbox "Tenant" [ref=e14]:
+          - /placeholder: default
+          - text: default
+      - generic [ref=e15]:
+        - generic [ref=e16]: Profile
+        - combobox "Profile" [ref=e17]:
+          - option "dev"
+          - option "local" [selected]
+          - option "production"
+      - generic [ref=e18]:
+        - generic [ref=e19]: Runtime
+        - combobox "Runtime" [ref=e20]:
+          - option "react" [selected]
+          - option "plan_execute"
+      - generic [ref=e21]:
+        - generic [ref=e22]: API token
+        - textbox "API token" [ref=e23]:
+          - /placeholder: Bearer token (not persisted)
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - generic [ref=e26]: Model
+        - textbox "Model" [ref=e27]:
+          - /placeholder: moonshot-v1-auto
+          - text: moonshot-v1-auto
+      - generic [ref=e28]:
+        - generic [ref=e29]: Skill (optional)
+        - textbox "Skill (optional)" [ref=e30]:
+          - /placeholder: leave blank for no skill
+      - generic [ref=e31]:
+        - generic [ref=e32]: Workspace root
+        - textbox "Workspace root" [ref=e33]:
+          - /placeholder: /path/to/workspace
+          - text: /tmp
+    - region "User prompt editor" [ref=e34]:
+      - generic [ref=e36]: Prompt
+      - textbox [ref=e37]: 请用一句话总结当前工作区。
+    - generic [ref=e38]:
+      - button "Start session" [ref=e39] [cursor=pointer]
+      - generic [ref=e40]: Inputs persist in localStorage (tenant, profile, runtime, model, skill, workspace, prompt). The API token is never saved.

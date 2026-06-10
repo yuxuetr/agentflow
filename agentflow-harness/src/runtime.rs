@@ -151,6 +151,12 @@ pub struct HarnessRunResult {
   pub context_items_admitted: usize,
   /// Number of context items dropped under the token budget.
   pub context_items_dropped: usize,
+  /// Phase 0: number of context items that were truncated (rather than
+  /// dropped) to fit the remaining token budget. An item is truncated
+  /// when it overflows the budget but enough headroom remains to keep a
+  /// useful prefix; it is dropped only when the remaining budget is
+  /// below the per-item floor. See RFC_HARNESS_LOOP_OWNERSHIP §4.
+  pub context_items_truncated: usize,
   /// Original inner agent run result. Kept for trace replay / debug.
   pub inner: AgentRunResult,
 }
@@ -298,7 +304,7 @@ impl HarnessRuntime {
       metadata: options.metadata.clone(),
     };
 
-    let (items, dropped) = self
+    let (items, dropped, truncated) = self
       .collect_context(&ctx, options.context_token_budget)
       .await?;
     let persona = assemble_persona(options.persona_prefix.as_deref(), &items);
@@ -384,15 +390,26 @@ impl HarnessRuntime {
       final_event_seq: stopped_seq,
       context_items_admitted: items.len(),
       context_items_dropped: dropped,
+      context_items_truncated: truncated,
       inner: inner_result,
     })
   }
 
+  /// Collect, token-account, sort, and budget-trim context items.
+  ///
+  /// Returns `(admitted_items, dropped_count, truncated_count)`.
+  ///
+  /// Phase 0 (RFC_HARNESS_LOOP_OWNERSHIP §4): the provider-declared
+  /// `token_estimate` is treated as a hint; budgeting re-counts each
+  /// item's content with the model's real tokenizer
+  /// (`agentflow_llm::tokenizer::counter_for_model`) so the emitted
+  /// `context_token_estimate` and the trim decisions reflect actual
+  /// token cost rather than a `chars / 4` approximation.
   async fn collect_context(
     &self,
     ctx: &HarnessContext,
     budget: Option<usize>,
-  ) -> Result<(Vec<ContextItem>, usize), HarnessError> {
+  ) -> Result<(Vec<ContextItem>, usize, usize), HarnessError> {
     let mut items = Vec::new();
     for provider in &self.context_providers {
       let name = provider.name().to_string();
@@ -404,29 +421,93 @@ impl HarnessRuntime {
     }
     // Stable sort by ascending priority — Critical (0) wins over Low (3).
     items.sort_by_key(|item| item.priority as u8);
-    let dropped = match budget {
-      None => 0,
-      Some(budget) => trim_to_budget(&mut items, budget),
+
+    // Authoritative token accounting overrides the provider hint.
+    let counter = agentflow_llm::tokenizer::counter_for_model(&ctx.model);
+    for item in &mut items {
+      item.token_estimate = counter.count_tokens(&item.content) as usize;
+    }
+
+    let (dropped, truncated) = match budget {
+      None => (0, 0),
+      Some(budget) => trim_to_budget(&mut items, budget, counter.as_ref()),
     };
-    Ok((items, dropped))
+    Ok((items, dropped, truncated))
   }
 }
 
-fn trim_to_budget(items: &mut Vec<ContextItem>, budget: usize) -> usize {
+/// Per-item floor (in tokens). When the remaining budget is below this,
+/// an overflowing item is dropped rather than truncated, because a
+/// shorter-than-floor prefix carries too little signal to be worth the
+/// header overhead it adds to the prompt.
+const MIN_ITEM_TOKENS: usize = 32;
+
+/// Marker appended to a context item whose body was cut to fit the
+/// budget. Kept short so it barely dents the remaining headroom.
+const TRUNCATION_MARKER: &str = "\n\n[...truncated to fit context budget]";
+
+/// Admit items in priority order under `budget`. An item that fits is
+/// admitted whole; one that overflows is **truncated to fit** (down to
+/// [`MIN_ITEM_TOKENS`]) rather than dropped outright — this fixes the
+/// priority inversion where a large high-priority item was silently
+/// dropped while a small low-priority item slipped in
+/// (RFC_HARNESS_LOOP_OWNERSHIP §1.2). Returns `(dropped, truncated)`.
+fn trim_to_budget(
+  items: &mut Vec<ContextItem>,
+  budget: usize,
+  counter: &dyn agentflow_llm::tokenizer::TokenCounter,
+) -> (usize, usize) {
   let mut used = 0usize;
   let mut admitted = Vec::with_capacity(items.len());
   let mut dropped = 0usize;
-  for item in items.drain(..) {
-    let estimate = item.token_estimate;
-    if used.saturating_add(estimate) <= budget {
-      used += estimate;
+  let mut truncated = 0usize;
+  for mut item in items.drain(..) {
+    let remaining = budget.saturating_sub(used);
+    if item.token_estimate <= remaining {
+      used += item.token_estimate;
+      admitted.push(item);
+    } else if remaining >= MIN_ITEM_TOKENS {
+      let (content, tokens) = truncate_to_token_budget(&item.content, counter, remaining);
+      item.content = content;
+      item.token_estimate = tokens;
+      used += tokens;
+      truncated += 1;
       admitted.push(item);
     } else {
       dropped += 1;
     }
   }
   *items = admitted;
-  dropped
+  (dropped, truncated)
+}
+
+/// Cut `content` so that the truncated body plus [`TRUNCATION_MARKER`]
+/// counts at most `budget` tokens. Truncation is char-based (so UTF-8
+/// boundaries stay valid) but calibrated against the real tokenizer:
+/// it seeds a guess from this content's own chars-per-token ratio, then
+/// shrinks until the candidate fits. The loop is bounded — `take_chars`
+/// strictly decreases each iteration and terminates at zero.
+fn truncate_to_token_budget(
+  content: &str,
+  counter: &dyn agentflow_llm::tokenizer::TokenCounter,
+  budget: usize,
+) -> (String, usize) {
+  let total_chars = content.chars().count();
+  let total_tokens = counter.count_tokens(content) as usize;
+  // Seed: assume tokens scale ~linearly with chars for this content.
+  let chars_per_token = (total_chars as f64 / total_tokens.max(1) as f64).max(1.0);
+  let mut take_chars = ((budget as f64) * chars_per_token) as usize;
+  take_chars = take_chars.min(total_chars);
+  loop {
+    let body: String = content.chars().take(take_chars).collect();
+    let candidate = format!("{body}{TRUNCATION_MARKER}");
+    let tokens = counter.count_tokens(&candidate) as usize;
+    if tokens <= budget || take_chars == 0 {
+      return (candidate, tokens);
+    }
+    // Shrink by ~10% (at least one char) and retry.
+    take_chars = take_chars.saturating_sub((take_chars / 10).max(1));
+  }
 }
 
 fn assemble_persona(prefix: Option<&str>, items: &[ContextItem]) -> Option<String> {
@@ -531,16 +612,12 @@ fn translate_inner_events(
 fn tool_call_requested_from_step(step: &AgentStep) -> Option<ToolCallRequestedPayload> {
   match &step.kind {
     AgentStepKind::ToolCall { tool, params } => {
-      // Q1.7.2: same treatment as the hook-side ApprovalRequest —
-      // strip secrets out of `params_summary` before the event flows
-      // into the JSONL / SSE / stdout sinks. The agent inner step
-      // still holds the raw params (it owns them), but the event
-      // envelope only sees the redacted form.
-      let mut params_summary = params.clone();
-      agentflow_tracing::redaction::redact_value(
-        &mut params_summary,
-        &agentflow_tracing::redaction::RedactionConfig::default(),
-      );
+      // Q1.7.2 + Phase 0: strip secrets AND cap the serialized size of
+      // `params_summary` before the event flows into the JSONL / SSE /
+      // stdout sinks (the wire type documents it as redacted/truncated).
+      // The agent inner step still holds the raw params (it owns them);
+      // the event envelope only sees the redacted, size-bounded form.
+      let params_summary = crate::params_summary::redact_and_cap(params.clone());
       Some(ToolCallRequestedPayload {
         step_index: step.index,
         tool: tool.clone(),
@@ -799,33 +876,48 @@ mod tests {
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
   }
 
+  use crate::context::ContextItem;
+
+  /// Test provider that surfaces one item with caller-supplied content.
+  /// `token_estimate` is left at 0 on purpose — the runtime's Phase 0
+  /// recount with the real tokenizer is what budgeting must rely on.
+  struct FixedProvider {
+    name: &'static str,
+    priority: ContextPriority,
+    content: String,
+  }
+
+  #[async_trait]
+  impl ContextProvider for FixedProvider {
+    fn name(&self) -> &str {
+      self.name
+    }
+
+    async fn collect(&self, _ctx: &HarnessContext) -> Result<Vec<ContextItem>, HarnessError> {
+      Ok(vec![ContextItem {
+        source: self.name.to_owned(),
+        priority: self.priority,
+        token_estimate: 0,
+        content: self.content.clone(),
+        metadata: serde_json::Value::Null,
+      }])
+    }
+  }
+
   #[tokio::test]
   async fn runtime_trims_context_under_budget() {
-    use crate::context::ContextItem;
-    use async_trait::async_trait;
-
-    struct FixedProvider {
-      name: &'static str,
-      priority: ContextPriority,
-      tokens: usize,
-    }
-
-    #[async_trait]
-    impl ContextProvider for FixedProvider {
-      fn name(&self) -> &str {
-        self.name
-      }
-
-      async fn collect(&self, _ctx: &HarnessContext) -> Result<Vec<ContextItem>, HarnessError> {
-        Ok(vec![ContextItem {
-          source: self.name.to_owned(),
-          priority: self.priority,
-          token_estimate: self.tokens,
-          content: format!("{}-body", self.name),
-          metadata: serde_json::Value::Null,
-        }])
-      }
-    }
+    // Size each item so the real tokenizer ("mock" → heuristic) reports
+    // a known count, then pick a budget that admits exactly one full
+    // item and leaves less than the per-item floor for the second → the
+    // lower-priority item is dropped.
+    let counter = agentflow_llm::tokenizer::counter_for_model("mock");
+    let body = "alpha beta gamma delta ".repeat(40);
+    let item_tokens = counter.count_tokens(&body) as usize;
+    assert!(
+      item_tokens > MIN_ITEM_TOKENS * 2,
+      "fixture must comfortably exceed the per-item floor"
+    );
+    let budget = item_tokens + MIN_ITEM_TOKENS / 2;
 
     let captured = Arc::new(tokio::sync::Mutex::new(None));
     let inner = Box::new(make_runtime("ok", captured.clone()));
@@ -834,22 +926,97 @@ mod tests {
       .with_context_provider(Arc::new(FixedProvider {
         name: "high",
         priority: ContextPriority::Critical,
-        tokens: 100,
+        content: body.clone(),
       }))
       .with_context_provider(Arc::new(FixedProvider {
         name: "low",
         priority: ContextPriority::Low,
-        tokens: 100,
+        content: body.clone(),
       }));
     let result = runtime
-      .run(HarnessRunOptions::new("test", dir.path(), "mock").with_context_token_budget(120))
+      .run(HarnessRunOptions::new("test", dir.path(), "mock").with_context_token_budget(budget))
       .await
       .unwrap();
     assert_eq!(result.context_items_admitted, 1);
     assert_eq!(result.context_items_dropped, 1);
+    assert_eq!(result.context_items_truncated, 0);
     let persona = captured.lock().await.clone().unwrap();
-    assert!(persona.contains("high-body"));
-    assert!(!persona.contains("low-body"));
+    assert!(persona.contains("### high"));
+    assert!(!persona.contains("### low"));
+  }
+
+  /// Phase 0: an item that overflows the budget but leaves at least the
+  /// per-item floor of headroom is truncated to fit, not dropped — so a
+  /// large high-priority item still contributes its prefix instead of
+  /// vanishing (RFC §1.2 priority-inversion fix).
+  #[tokio::test]
+  async fn runtime_truncates_oversized_item_instead_of_dropping() {
+    let counter = agentflow_llm::tokenizer::counter_for_model("mock");
+    let body = "alpha beta gamma delta ".repeat(60);
+    let item_tokens = counter.count_tokens(&body) as usize;
+    // Budget well below the item but well above the floor.
+    let budget = (item_tokens / 2).max(MIN_ITEM_TOKENS * 2);
+    assert!(budget < item_tokens && budget >= MIN_ITEM_TOKENS);
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("ok", captured.clone()));
+    let dir = tempfile::tempdir().unwrap();
+    let mut runtime = HarnessRuntime::new(inner).with_context_provider(Arc::new(FixedProvider {
+      name: "big",
+      priority: ContextPriority::Critical,
+      content: body,
+    }));
+    let result = runtime
+      .run(HarnessRunOptions::new("test", dir.path(), "mock").with_context_token_budget(budget))
+      .await
+      .unwrap();
+    assert_eq!(result.context_items_admitted, 1);
+    assert_eq!(result.context_items_dropped, 0);
+    assert_eq!(result.context_items_truncated, 1);
+    let persona = captured.lock().await.clone().unwrap();
+    assert!(
+      persona.contains("truncated to fit context budget"),
+      "truncated item must carry the marker"
+    );
+  }
+
+  /// Phase 0: the provider-declared `token_estimate` is only a hint; the
+  /// runtime recounts with the model's real tokenizer so a wildly wrong
+  /// hint cannot distort budgeting.
+  #[tokio::test]
+  async fn runtime_recounts_tokens_ignoring_provider_hint() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("ok", captured.clone()));
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(InMemoryEventSink::new());
+    // Provider declares 0 tokens (FixedProvider hint) for a non-empty
+    // body. The runtime must recount with the real tokenizer, so the
+    // `context_token_estimate` reported on `session_started` is non-zero.
+    let mut runtime = HarnessRuntime::new(inner)
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>)
+      .with_context_provider(Arc::new(FixedProvider {
+        name: "doc",
+        priority: ContextPriority::Normal,
+        content: "the quick brown fox jumps over the lazy dog".to_owned(),
+      }));
+    let result = runtime
+      .run(HarnessRunOptions::new("test", dir.path(), "mock").with_context_token_budget(10_000))
+      .await
+      .unwrap();
+    assert_eq!(result.context_items_admitted, 1);
+    let events = sink.snapshot().await;
+    let estimate = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::SessionStarted(p) => Some(p.context_token_estimate),
+        _ => None,
+      })
+      .expect("session_started present");
+    assert!(
+      estimate > 0,
+      "recount must replace the 0-token provider hint"
+    );
   }
 
   #[tokio::test]

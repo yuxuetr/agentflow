@@ -518,11 +518,7 @@ impl HookedTool {
     let expires_at = now
       + chrono::Duration::from_std(self.config.approval_timeout)
         .unwrap_or_else(|_| chrono::Duration::seconds(60));
-    let mut params_summary = pending.params.clone();
-    agentflow_tracing::redaction::redact_value(
-      &mut params_summary,
-      &agentflow_tracing::redaction::RedactionConfig::default(),
-    );
+    let params_summary = crate::params_summary::redact_and_cap(pending.params.clone());
     let request = ApprovalRequest {
       id: request_id.clone(),
       session_id: pending.session_id.clone(),
@@ -587,11 +583,7 @@ impl HookedTool {
     let now = Utc::now();
     // Same redaction rules as the live request path so the synthetic
     // event cannot leak header values / API keys either.
-    let mut params_summary = pending.params.clone();
-    agentflow_tracing::redaction::redact_value(
-      &mut params_summary,
-      &agentflow_tracing::redaction::RedactionConfig::default(),
-    );
+    let params_summary = crate::params_summary::redact_and_cap(pending.params.clone());
     let request = ApprovalRequest {
       id: request_id.clone(),
       session_id: pending.session_id.clone(),
@@ -646,11 +638,7 @@ impl HookedTool {
     // Same redaction rules as the live request path — synthetic
     // events still flow through the operator's log so we cannot
     // leak unredacted params here either.
-    let mut params_summary = pending.params.clone();
-    agentflow_tracing::redaction::redact_value(
-      &mut params_summary,
-      &agentflow_tracing::redaction::RedactionConfig::default(),
-    );
+    let params_summary = crate::params_summary::redact_and_cap(pending.params.clone());
     let request = ApprovalRequest {
       id: request_id.clone(),
       session_id: pending.session_id.clone(),

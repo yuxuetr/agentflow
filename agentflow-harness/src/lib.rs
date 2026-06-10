@@ -36,6 +36,7 @@ pub mod error;
 pub mod event;
 pub mod hooks;
 pub mod hooks_runtime;
+pub mod params_summary;
 pub mod persistence;
 pub mod providers;
 pub mod runtime;
