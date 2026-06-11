@@ -633,37 +633,12 @@ impl ReActAgent {
         LlmTurnOutcome::Stop(result) => return Ok(result),
       };
 
-      // --- Check stop conditions ---
-      if let Some(condition) = self
-        .config
-        .stop_conditions
-        .iter()
-        .find(|cond| raw_response.contains(cond.as_str()))
-        .cloned()
+      // --- Check stop conditions (RFC §6 step 3: extracted) ---
+      if let Some(result) = self
+        .check_stop_conditions(&mut steps, &mut events, &mut step_index, &raw_response)
+        .await?
       {
-        info!("Stop condition matched: '{}'", condition);
-        self
-          .add_memory_message(Message::assistant_with_counter(
-            &self.session_id,
-            &raw_response,
-            &*self.message_counter,
-          ))
-          .await?;
-        self
-          .record_reflection(
-            ReflectionContext::final_answer(&self.session_id, step_index, &raw_response),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          Some(raw_response),
-          AgentStopReason::StopCondition { condition },
-          steps,
-          events,
-        ));
+        return Ok(result);
       }
 
       // --- Multi-call batch path (P-H.3) ---
@@ -1379,6 +1354,54 @@ impl ReActAgent {
       llm_response,
       raw_response,
     })
+  }
+
+  /// After the LLM call, stop the run if the response contains any
+  /// configured stop string. Returns `Some(result)` to stop, `None` to
+  /// continue to the parse/dispatch phase.
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3): pure relocation; `steps`/`events` are consumed via `mem::take`
+  /// only on the stop path.
+  async fn check_stop_conditions(
+    &mut self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    raw_response: &str,
+  ) -> Result<Option<AgentRunResult>, ReActError> {
+    let Some(condition) = self
+      .config
+      .stop_conditions
+      .iter()
+      .find(|cond| raw_response.contains(cond.as_str()))
+      .cloned()
+    else {
+      return Ok(None);
+    };
+    info!("Stop condition matched: '{}'", condition);
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        raw_response,
+        &*self.message_counter,
+      ))
+      .await?;
+    self
+      .record_reflection(
+        ReflectionContext::final_answer(&self.session_id, *step_index, raw_response),
+        step_index,
+        steps,
+        events,
+      )
+      .await?;
+    Ok(Some(Self::stopped_result(
+      &self.session_id,
+      Some(raw_response.to_string()),
+      AgentStopReason::StopCondition { condition },
+      std::mem::take(steps),
+      std::mem::take(events),
+    )))
   }
 
   /// Top-of-turn limit guards (cancel / timeout / max-steps / token
