@@ -694,225 +694,29 @@ impl ReActAgent {
           tool,
           params,
         } => {
-          info!(iteration, tool = %tool, thought = %thought, "Tool call");
-          // F-A2-13: detect the (tool, params) == previous call
-          // shape BEFORE we touch `params` (it gets moved into
-          // `self.tools.execute` later). `serde_json::Value`
-          // implements semantic equality on Objects, so JSON key
-          // order doesn't trip the comparison.
-          let is_repeat_tool_call = matches!(
-            &last_tool_call,
-            Some((prev_tool, prev_params))
-              if prev_tool == &tool && prev_params == &params
-          );
-          if is_repeat_tool_call {
-            warn!(
-              iteration,
-              tool = %tool,
-              "Repeat tool call detected (identical params as prior iteration); appending steering note (F-A2-13)"
-            );
-          }
-          if let Some(max_tool_calls) = max_tool_calls
-            && tool_calls >= max_tool_calls
-          {
-            self
-              .record_reflection(
-                ReflectionContext::failure(
-                  &self.session_id,
-                  step_index,
-                  format!("max tool calls ({}) reached", max_tool_calls),
-                ),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
-            return Ok(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::MaxToolCalls { max_tool_calls },
-              steps,
-              events,
-            ));
-          }
-
-          if !thought.trim().is_empty() {
-            steps.push(AgentStep::new(
-              step_index,
-              AgentStepKind::Plan {
-                thought: thought.clone(),
-              },
-            ));
-            step_index += 1;
-          }
-
-          if is_cancelled(&cancellation_token) {
-            return Ok(Self::cancelled_result(
-              &self.session_id,
-              "cancellation token signalled",
-              steps,
-              events,
-            ));
-          }
-
-          let tool_step_index = step_index;
-          let metadata = self.tools.tool_metadata(&tool);
-          let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
-          let trace_params = annotate_tool_params_for_resume(
-            params.clone(),
-            self.tools.tool_idempotency(&tool, &params),
-          );
-          if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
-            events.push(AgentEvent::ToolPolicyDecision {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              allowed: decision.allowed,
-              matched_rule: decision.matched_rule,
-              deny_reason: decision.deny_reason,
-              source: decision.source,
-              permissions: decision.permissions,
-              params_summary: decision.params_summary,
-              timestamp: Utc::now(),
-            });
-          }
-          if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
-            events.push(AgentEvent::ToolCapabilityDecision {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              allowed: effective.allowed,
-              required: effective.required,
-              effective: effective.effective,
-              denied: effective.denied,
-              deny_reason: effective.deny_reason,
-              trace: effective.trace,
-              sandbox: effective.sandbox,
-              timestamp: Utc::now(),
-            });
-          }
-          emit_and_push!(
-            self.live_sink,
-            events,
-            AgentEvent::ToolCallStarted {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              params: trace_params.clone(),
-              source: tool_source.clone(),
-              permissions: tool_permissions.clone(),
-              timestamp: Utc::now(),
-            }
-          );
-          steps.push(AgentStep::new(
-            tool_step_index,
-            AgentStepKind::ToolCall {
-              tool: tool.clone(),
-              params: trace_params,
-            },
-          ));
-          step_index += 1;
-
-          let started_at = std::time::Instant::now();
-          // F-A2-13: snapshot now so we can compare on the next
-          // iteration even after `params` moves into `execute`.
-          let params_snapshot = params.clone();
-          let tool_output = match self
-            .execute_tool_with_limits(
-              &tool,
+          match self
+            .dispatch_single_tool_call(
+              thought,
+              tool,
               params,
-              tool_step_index,
-              &tool_source,
-              &tool_permissions,
-              started_at,
               &mut steps,
               &mut events,
               &mut step_index,
+              &mut tool_calls,
+              &mut last_tool_call,
+              iteration,
+              max_tool_calls,
               run_started_at,
               timeout_ms,
               &cancellation_token,
             )
             .await?
           {
-            ToolExecOutcome::Output(output) => output,
-            ToolExecOutcome::Stop(result) => return Ok(result),
-          };
-          tool_calls += 1;
-          let duration_ms = started_at.elapsed().as_millis() as u64;
-
-          let observation = if tool_output.is_error {
-            format!("[ERROR] {}", tool_output.content)
-          } else {
-            tool_output.content.clone()
-          };
-
-          info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::ToolResult {
-              tool: tool.clone(),
-              content: tool_output.content.clone(),
-              is_error: tool_output.is_error,
-              parts: tool_output.parts.clone(),
-            },
-          ));
-          emit_and_push!(
-            self.live_sink,
-            events,
-            AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              is_error: tool_output.is_error,
-              duration_ms,
-              source: tool_source.clone(),
-              permissions: tool_permissions.clone(),
-              timestamp: Utc::now(),
+            TurnStep::Continue => {
+              iteration += 1;
             }
-          );
-          step_index += 1;
-          if tool_output.is_error {
-            self
-              .record_reflection(
-                ReflectionContext::failure(&self.session_id, step_index, &observation),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
+            TurnStep::Stop(result) => return Ok(result),
           }
-
-          // F-A2-13: when this iteration is a repeat of the prior,
-          // append a steering note ONLY to the memory the model
-          // sees on its next turn. The `AgentStepKind::ToolResult`
-          // emitted above already carries the raw observation
-          // (unchanged) so trace consumers / replay see exactly
-          // what the tool produced; the note is purely a nudge for
-          // the LLM's working memory and is namespaced clearly so
-          // operators reading transcripts can tell it apart from
-          // tool output.
-          let observation_for_memory = if is_repeat_tool_call {
-            format!(
-              "{observation}\n\n\
-               [agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `{tool}` with identical parameters. The observation above is unchanged from the prior call — calling `{tool}` again with these params will not yield new information. To make progress, choose one of: (a) draw conclusions from the observation and emit a final answer, (b) call a different tool, or (c) call `{tool}` with materially different parameters.]"
-            )
-          } else {
-            observation.clone()
-          };
-
-          self
-            .add_memory_message(Message::tool_result_with_counter(
-              &self.session_id,
-              &tool,
-              &observation_for_memory,
-              &*self.message_counter,
-            ))
-            .await?;
-
-          // Track the call so the next iteration's check can run.
-          last_tool_call = Some((tool.clone(), params_snapshot));
-
-          iteration += 1;
         }
 
         AgentResponse::Answer { thought, answer } => {
@@ -1452,6 +1256,244 @@ impl ReActAgent {
       },
     };
     Ok(ToolExecOutcome::Output(tool_output))
+  }
+
+  /// Process one `AgentResponse::Action`: the max-tool-call guard, the
+  /// plan step, tool policy/capability events, the tool execution (via
+  /// [`Self::execute_tool_with_limits`]), the result step + observation,
+  /// the F-A2-13 repeat-call steering note, and the memory write.
+  /// Returns `TurnStep::Continue` to advance to the next turn, or
+  /// `TurnStep::Stop` on a terminal condition (max tool calls / cancel /
+  /// timeout).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3c): the `Action` arm body lifted whole out of the loop. Pure
+  /// relocation; `steps`/`events` are consumed via `mem::take` only on
+  /// stop paths, and the loop now owns the `iteration += 1` increment.
+  #[allow(clippy::too_many_arguments)]
+  async fn dispatch_single_tool_call(
+    &mut self,
+    thought: String,
+    tool: String,
+    params: serde_json::Value,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    tool_calls: &mut usize,
+    last_tool_call: &mut Option<(String, serde_json::Value)>,
+    iteration: usize,
+    max_tool_calls: Option<usize>,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<TurnStep, ReActError> {
+    info!(iteration, tool = %tool, thought = %thought, "Tool call");
+    // F-A2-13: detect the (tool, params) == previous call shape BEFORE
+    // we touch `params` (it gets moved into `self.tools.execute` later).
+    let is_repeat_tool_call = matches!(
+      &*last_tool_call,
+      Some((prev_tool, prev_params))
+        if prev_tool == &tool && prev_params == &params
+    );
+    if is_repeat_tool_call {
+      warn!(
+        iteration,
+        tool = %tool,
+        "Repeat tool call detected (identical params as prior iteration); appending steering note (F-A2-13)"
+      );
+    }
+    if let Some(max_tool_calls) = max_tool_calls
+      && *tool_calls >= max_tool_calls
+    {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!("max tool calls ({}) reached", max_tool_calls),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(TurnStep::Stop(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::MaxToolCalls { max_tool_calls },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if !thought.trim().is_empty() {
+      steps.push(AgentStep::new(
+        *step_index,
+        AgentStepKind::Plan {
+          thought: thought.clone(),
+        },
+      ));
+      *step_index += 1;
+    }
+
+    if is_cancelled(cancellation_token) {
+      return Ok(TurnStep::Stop(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    let tool_step_index = *step_index;
+    let metadata = self.tools.tool_metadata(&tool);
+    let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
+    let trace_params =
+      annotate_tool_params_for_resume(params.clone(), self.tools.tool_idempotency(&tool, &params));
+    if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
+      events.push(AgentEvent::ToolPolicyDecision {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        allowed: decision.allowed,
+        matched_rule: decision.matched_rule,
+        deny_reason: decision.deny_reason,
+        source: decision.source,
+        permissions: decision.permissions,
+        params_summary: decision.params_summary,
+        timestamp: Utc::now(),
+      });
+    }
+    if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
+      events.push(AgentEvent::ToolCapabilityDecision {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        allowed: effective.allowed,
+        required: effective.required,
+        effective: effective.effective,
+        denied: effective.denied,
+        deny_reason: effective.deny_reason,
+        trace: effective.trace,
+        sandbox: effective.sandbox,
+        timestamp: Utc::now(),
+      });
+    }
+    emit_and_push!(
+      self.live_sink,
+      events,
+      AgentEvent::ToolCallStarted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        params: trace_params.clone(),
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      }
+    );
+    steps.push(AgentStep::new(
+      tool_step_index,
+      AgentStepKind::ToolCall {
+        tool: tool.clone(),
+        params: trace_params,
+      },
+    ));
+    *step_index += 1;
+
+    let started_at = std::time::Instant::now();
+    // F-A2-13: snapshot now so we can compare on the next iteration even
+    // after `params` moves into `execute`.
+    let params_snapshot = params.clone();
+    let tool_output = match self
+      .execute_tool_with_limits(
+        &tool,
+        params,
+        tool_step_index,
+        &tool_source,
+        &tool_permissions,
+        started_at,
+        steps,
+        events,
+        step_index,
+        run_started_at,
+        timeout_ms,
+        cancellation_token,
+      )
+      .await?
+    {
+      ToolExecOutcome::Output(output) => output,
+      ToolExecOutcome::Stop(result) => return Ok(TurnStep::Stop(result)),
+    };
+    *tool_calls += 1;
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+
+    let observation = if tool_output.is_error {
+      format!("[ERROR] {}", tool_output.content)
+    } else {
+      tool_output.content.clone()
+    };
+
+    info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
+    steps.push(AgentStep::new(
+      *step_index,
+      AgentStepKind::ToolResult {
+        tool: tool.clone(),
+        content: tool_output.content.clone(),
+        is_error: tool_output.is_error,
+        parts: tool_output.parts.clone(),
+      },
+    ));
+    emit_and_push!(
+      self.live_sink,
+      events,
+      AgentEvent::ToolCallCompleted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        is_error: tool_output.is_error,
+        duration_ms,
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      }
+    );
+    *step_index += 1;
+    if tool_output.is_error {
+      self
+        .record_reflection(
+          ReflectionContext::failure(&self.session_id, *step_index, &observation),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+    }
+
+    // F-A2-13: when this iteration is a repeat of the prior, append a
+    // steering note ONLY to the memory the model sees on its next turn.
+    let observation_for_memory = if is_repeat_tool_call {
+      format!(
+        "{observation}\n\n\
+         [agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `{tool}` with identical parameters. The observation above is unchanged from the prior call — calling `{tool}` again with these params will not yield new information. To make progress, choose one of: (a) draw conclusions from the observation and emit a final answer, (b) call a different tool, or (c) call `{tool}` with materially different parameters.]"
+      )
+    } else {
+      observation.clone()
+    };
+
+    self
+      .add_memory_message(Message::tool_result_with_counter(
+        &self.session_id,
+        &tool,
+        &observation_for_memory,
+        &*self.message_counter,
+      ))
+      .await?;
+
+    // Track the call so the next iteration's check can run.
+    *last_tool_call = Some((tool.clone(), params_snapshot));
+
+    Ok(TurnStep::Continue)
   }
 
   /// Top-of-turn limit guards (cancel / timeout / max-steps / token
@@ -2501,6 +2543,15 @@ enum LlmTurnOutcome {
 /// terminal result (timeout / cancellation).
 enum ToolExecOutcome {
   Output(agentflow_tools::ToolOutput),
+  Stop(AgentRunResult),
+}
+
+/// Outcome of processing one turn (RFC_HARNESS_LOOP_OWNERSHIP §6).
+/// `Continue` means advance to the next turn (the loop bumps the
+/// iteration counter); `Stop` carries the terminal result. This is the
+/// shape the eventual `run_one_turn` returns.
+enum TurnStep {
+  Continue,
   Stop(AgentRunResult),
 }
 
