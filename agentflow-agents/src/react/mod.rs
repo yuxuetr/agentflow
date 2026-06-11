@@ -3,6 +3,6 @@ pub mod parser;
 
 pub use agent::{
   CompactMemorySummary, MemorySummaryBackend, MemorySummaryContext, MemorySummaryStrategy,
-  ReActAgent, ReActConfig, ReActError, RecentOnlyMemorySummary,
+  ReActAgent, ReActConfig, ReActError, ReActLoopSession, RecentOnlyMemorySummary, TurnProgress,
 };
 pub use parser::AgentResponse;

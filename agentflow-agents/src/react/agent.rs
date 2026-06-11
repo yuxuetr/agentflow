@@ -59,6 +59,9 @@ pub enum ReActError {
 
   #[error("Memory summary error: {message}")]
   MemorySummary { message: String },
+
+  #[error("turn-driven session already finished")]
+  SessionFinished,
 }
 
 /// Input passed to a pluggable memory summary backend.
@@ -522,9 +525,27 @@ impl ReActAgent {
     &mut self,
     context: AgentContext,
   ) -> Result<AgentRunResult, ReActError> {
-    self.apply_context(&context);
-    // Phase 1: capture the optional live event observer for this run so
-    // the `emit_and_push!` sites stream tool events as they happen.
+    let mut st = self.init_run(&context).await?;
+    loop {
+      match self.run_one_turn(&mut st).await? {
+        TurnStep::Continue => {}
+        TurnStep::Stop(result) => return Ok(result),
+      }
+    }
+  }
+
+  /// Set up a run — apply context, capture the live sink, store the user
+  /// message, build the system prompt — and return the initial
+  /// [`LoopState`]. Shared by [`Self::run_with_context`] (the
+  /// batteries-included driver) and [`Self::begin_turn_driven`] (the
+  /// caller-owned turn-driven driver). RFC_HARNESS_LOOP_OWNERSHIP §6.
+  ///
+  /// F-A2-13 anti-loop steering: `last_tool_call` starts `None`; a repeat
+  /// single-tool call with identical params later gets a steering note
+  /// (see `dispatch_single_tool_call`).
+  async fn init_run(&mut self, context: &AgentContext) -> Result<LoopState, ReActError> {
+    self.apply_context(context);
+    // Phase 1: capture the optional live event observer for this run.
     self.live_sink = context.event_sink.clone();
     info!(
         session = %self.session_id,
@@ -532,7 +553,6 @@ impl ReActAgent {
         "ReActAgent starting"
     );
 
-    // 1. Store user message
     self
       .add_memory_message(Message::user_with_counter(
         &self.session_id,
@@ -541,19 +561,9 @@ impl ReActAgent {
       ))
       .await?;
 
-    // 2. Inject system prompt if this is the first user message
-    // (We prepend it to the conversation each time we call the LLM)
     let system_prompt = self.build_system_prompt();
 
-    // RFC_HARNESS_LOOP_OWNERSHIP §6 steps 4–5: the loop's locals and
-    // per-run config are bundled into `LoopState`; the loop now just
-    // pumps `run_one_turn` until it returns `Stop`.
-    //
-    // F-A2-13 anti-loop steering: `last_tool_call` remembers the most
-    // recent single-tool call so a repeat with identical params gets a
-    // steering note appended to the model's working memory (see
-    // `dispatch_single_tool_call`).
-    let mut st = LoopState {
+    Ok(LoopState {
       steps: vec![AgentStep::new(
         0,
         AgentStepKind::Observe {
@@ -581,14 +591,32 @@ impl ReActAgent {
       system_prompt,
       trace_context: context.trace_context.clone(),
       between_turn_hook: context.between_turn_hook.clone(),
-    };
+    })
+  }
 
-    loop {
-      match self.run_one_turn(&mut st).await? {
-        TurnStep::Continue => {}
-        TurnStep::Stop(result) => return Ok(result),
-      }
-    }
+  /// Begin a **turn-driven** run: set up the session and hand back a
+  /// [`ReActLoopSession`] the caller pumps one turn at a time via
+  /// [`ReActLoopSession::next_turn`], performing its own context
+  /// engineering (e.g. memory compaction) between turns. This is the
+  /// loop-ownership seam of RFC_HARNESS_LOOP_OWNERSHIP §6 — the same per
+  /// turn machinery as [`Self::run_with_context`], but the caller owns
+  /// the loop.
+  pub async fn begin_turn_driven(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<ReActLoopSession<'_>, ReActError> {
+    let state = self.init_run(&context).await?;
+    Ok(ReActLoopSession {
+      agent: self,
+      state,
+      finished: false,
+    })
+  }
+
+  /// Borrow the run's conversation memory (used by a turn-driven driver
+  /// to compact/inspect context between turns).
+  pub fn memory_ref(&self) -> &dyn MemoryStore {
+    &*self.memory
   }
 
   /// Execute exactly one turn of the ReAct loop against `st`, returning
@@ -2582,6 +2610,64 @@ struct LoopState {
   between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
 }
 
+/// Outcome of one driven turn (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
+#[derive(Debug)]
+pub enum TurnProgress {
+  /// The agent advanced; call [`ReActLoopSession::next_turn`] again.
+  Continued,
+  /// The agent reached a terminal state; the run result is attached.
+  Finished(AgentRunResult),
+}
+
+/// A **turn-driven** ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
+///
+/// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a
+/// turn at a time with [`Self::next_turn`] until it returns
+/// [`TurnProgress::Finished`]. Between turns the caller (typically the
+/// Harness) owns the loop: it can inspect or rewrite the conversation
+/// through [`Self::memory`] to compact / refresh context under its own
+/// policy. [`ReActAgent::run_with_context`] is the equivalent
+/// batteries-included driver that pumps every turn itself.
+pub struct ReActLoopSession<'a> {
+  agent: &'a mut ReActAgent,
+  state: LoopState,
+  finished: bool,
+}
+
+impl ReActLoopSession<'_> {
+  /// Advance exactly one turn (one observe → plan → act cycle). Returns
+  /// [`TurnProgress::Finished`] once the agent reaches a terminal state;
+  /// calling again afterwards is a [`ReActError::SessionFinished`].
+  pub async fn next_turn(&mut self) -> Result<TurnProgress, ReActError> {
+    if self.finished {
+      return Err(ReActError::SessionFinished);
+    }
+    match self.agent.run_one_turn(&mut self.state).await? {
+      TurnStep::Continue => Ok(TurnProgress::Continued),
+      TurnStep::Stop(result) => {
+        self.finished = true;
+        Ok(TurnProgress::Finished(result))
+      }
+    }
+  }
+
+  /// The run's conversation memory — read or rewrite it between turns to
+  /// perform caller-owned context engineering.
+  pub fn memory(&self) -> &dyn MemoryStore {
+    self.agent.memory_ref()
+  }
+
+  /// 0-based index of the turn `next_turn` will run next.
+  pub fn turn_index(&self) -> usize {
+    self.state.iteration
+  }
+
+  /// Whether the session has reached a terminal state.
+  pub fn is_finished(&self) -> bool {
+    self.finished
+  }
+}
+
 /// Internal staging record for one tool call in a multi-call batch.
 struct PreparedToolCall {
   tool: String,
@@ -3149,6 +3235,84 @@ providers:
       vec![0, 1],
       "hook must fire before each turn with the 0-based turn index"
     );
+  }
+
+  /// RFC §6 step 6: the turn-driven session pumps one turn at a time —
+  /// `Continued` while the agent works, `Finished(result)` at the end —
+  /// exposes memory between turns, and rejects use after completion.
+  #[tokio::test]
+  async fn turn_driven_session_advances_then_finishes() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-turn-driven-{}", uuid::Uuid::new_v4());
+    // Turn 0: a tool call; turn 1: the final answer.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({"id":"call_0","name":"echo","arguments":{"text":"hi"}})],
+          Vec::<serde_json::Value>::new(),
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          "(unused — native tool call)",
+          r#"{"thought":"done","answer":"final: ok"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let mut session = agent
+      .begin_turn_driven(AgentContext::new("turn-driven-session", "say hi", &model))
+      .await
+      .unwrap();
+    assert_eq!(session.turn_index(), 0);
+
+    // Turn 0: tool call → Continued; memory is observable between turns.
+    assert!(matches!(
+      session.next_turn().await.unwrap(),
+      TurnProgress::Continued
+    ));
+    assert!(!session.is_finished());
+    assert_eq!(session.turn_index(), 1);
+    let history = session
+      .memory()
+      .get_all("turn-driven-session")
+      .await
+      .unwrap();
+    assert!(!history.is_empty(), "memory accessible mid-run");
+
+    // Turn 1: final answer → Finished.
+    let result = match session.next_turn().await.unwrap() {
+      TurnProgress::Finished(r) => r,
+      TurnProgress::Continued => panic!("expected Finished on the second turn"),
+    };
+    assert_eq!(result.answer.as_deref(), Some("final: ok"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert!(session.is_finished());
+
+    // Using the session after it finished is an error.
+    assert!(matches!(
+      session.next_turn().await,
+      Err(ReActError::SessionFinished)
+    ));
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
   }
 
   #[tokio::test]
