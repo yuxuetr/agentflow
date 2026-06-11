@@ -63,6 +63,12 @@ pub struct HarnessRunOptions {
   /// pre-Q3.1.2 behaviour for callers that build the agent context
   /// themselves.
   pub cancellation_token: Option<agentflow_agents::runtime::AgentCancellationToken>,
+  /// Phase 2b: optional between-turn hook forwarded to the inner agent's
+  /// context. The inner agent (ReActAgent) invokes it before each turn's
+  /// LLM call, so the caller can perform between-turn context engineering
+  /// (e.g. memory compaction) mid-run. Stored as the `Debug`-able handle
+  /// so `HarnessRunOptions` keeps deriving `Debug` / `Clone`.
+  pub between_turn_hook: Option<agentflow_agents::runtime::BetweenTurnHookHandle>,
 }
 
 impl HarnessRunOptions {
@@ -84,6 +90,7 @@ impl HarnessRunOptions {
       context_token_budget: None,
       metadata: serde_json::Value::Null,
       cancellation_token: None,
+      between_turn_hook: None,
     }
   }
 
@@ -136,6 +143,17 @@ impl HarnessRunOptions {
     token: agentflow_agents::runtime::AgentCancellationToken,
   ) -> Self {
     self.cancellation_token = Some(token);
+    self
+  }
+
+  /// Phase 2b: attach a between-turn hook forwarded to the inner agent so
+  /// the caller performs context engineering (e.g. compaction) before
+  /// each turn's LLM call.
+  pub fn with_between_turn_hook(
+    mut self,
+    hook: Arc<dyn agentflow_agents::runtime::BetweenTurnHook>,
+  ) -> Self {
+    self.between_turn_hook = Some(agentflow_agents::runtime::BetweenTurnHookHandle(hook));
     self
   }
 }
@@ -402,6 +420,11 @@ impl HarnessRuntime {
     // ReAct / plan-execute loop gracefully.
     if let Some(token) = options.cancellation_token.clone() {
       agent_context = agent_context.with_cancellation_token(token);
+    }
+    // Phase 2b: forward the optional between-turn hook so the inner agent
+    // calls it before each turn for caller-owned context engineering.
+    if let Some(hook) = options.between_turn_hook.clone() {
+      agent_context.between_turn_hook = Some(hook);
     }
 
     // Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): attach the live event bridge

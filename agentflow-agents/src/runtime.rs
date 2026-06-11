@@ -93,6 +93,13 @@ pub struct AgentContext {
   /// (like `cancellation_token`).
   #[serde(skip)]
   pub event_sink: Option<EventSinkHandle>,
+  /// Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): optional between-turn hook.
+  /// When set, the runtime calls [`BetweenTurnHook::before_turn`] at the
+  /// top of each turn so the loop's owner (the Harness) can compact or
+  /// refresh context mid-run. `None` (default) is a no-op. `#[serde(skip)]`
+  /// because a hook is a process-local handle.
+  #[serde(skip)]
+  pub between_turn_hook: Option<BetweenTurnHookHandle>,
 }
 
 /// Cloneable handle wrapping an [`AgentEventSink`] so [`AgentContext`] can
@@ -129,6 +136,51 @@ pub trait AgentEventSink: Send + Sync {
   async fn emit(&self, event: &AgentEvent);
 }
 
+/// Cloneable handle wrapping a [`BetweenTurnHook`] so [`AgentContext`]
+/// keeps deriving `Debug` / `PartialEq`. Mirrors [`EventSinkHandle`].
+#[derive(Clone)]
+pub struct BetweenTurnHookHandle(pub Arc<dyn BetweenTurnHook>);
+
+impl std::fmt::Debug for BetweenTurnHookHandle {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("BetweenTurnHookHandle(<dyn BetweenTurnHook>)")
+  }
+}
+
+impl PartialEq for BetweenTurnHookHandle {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+/// Between-turn control point for an agent loop (RFC_HARNESS_LOOP_OWNERSHIP
+/// Phase 2b — the turn-driven seam).
+///
+/// The runtime invokes [`before_turn`](BetweenTurnHook::before_turn) at
+/// the top of each agent turn, *before* the LLM call, handing the hook
+/// the run's [`MemoryStore`](agentflow_memory::MemoryStore). This is the
+/// point at which an owner of the loop (the Harness) performs
+/// context-window engineering between turns — most importantly memory
+/// compaction — so a long-running loop's prompt stays bounded under a
+/// policy the *caller* controls, rather than only the agent's built-in
+/// `MemorySummaryBackend`.
+///
+/// The hook is best-effort and infallible by contract: it must not break
+/// execution (mirrors [`AgentEventSink`]). `None` (the default) is a
+/// no-op, so runs without a hook are byte-identical.
+#[async_trait]
+pub trait BetweenTurnHook: Send + Sync {
+  /// Called before each turn's LLM call. `turn_index` is the 0-based
+  /// turn. The hook may read and rewrite `memory` (all `&self` async
+  /// methods) to compact or refresh the conversation.
+  async fn before_turn(
+    &self,
+    turn_index: usize,
+    session_id: &str,
+    memory: &dyn agentflow_memory::MemoryStore,
+  );
+}
+
 impl AgentContext {
   /// Build a minimal context with no persona, no skill, no limits, and
   /// `started_at = Utc::now()`.
@@ -149,6 +201,7 @@ impl AgentContext {
       cancellation_token: None,
       trace_context: None,
       event_sink: None,
+      between_turn_hook: None,
     }
   }
 
@@ -192,6 +245,13 @@ impl AgentContext {
   /// by simply not calling this; the default is no observer.
   pub fn with_event_sink(mut self, sink: Arc<dyn AgentEventSink>) -> Self {
     self.event_sink = Some(EventSinkHandle(sink));
+    self
+  }
+
+  /// Phase 2b: attach a [`BetweenTurnHook`] invoked before each turn's
+  /// LLM call, for caller-owned between-turn context engineering.
+  pub fn with_between_turn_hook(mut self, hook: Arc<dyn BetweenTurnHook>) -> Self {
+    self.between_turn_hook = Some(BetweenTurnHookHandle(hook));
     self
   }
 }

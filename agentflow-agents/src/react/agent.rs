@@ -526,6 +526,8 @@ impl ReActAgent {
     // Phase 1: capture the optional live event observer for this run so
     // the `emit_and_push!` sites stream tool events as they happen.
     self.live_sink = context.event_sink.clone();
+    // Phase 2b: capture the optional between-turn hook for this run.
+    let between_turn_hook = context.between_turn_hook.clone();
     info!(
         session = %self.session_id,
         model = %self.config.model,
@@ -673,6 +675,15 @@ impl ReActAgent {
       }
 
       // --- Build LLM messages from memory ---
+      // Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): between-turn control point.
+      // The loop's owner (the Harness) compacts or refreshes context here,
+      // before this turn's LLM call. `None` hook is a no-op.
+      if let Some(hook) = &between_turn_hook {
+        hook
+          .0
+          .before_turn(iteration, &self.session_id, &*self.memory)
+          .await;
+      }
       let messages = self.build_llm_messages(&system_prompt).await?;
 
       if is_cancelled(&cancellation_token) {
@@ -2808,6 +2819,78 @@ providers:
       std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
     }
+  }
+
+  /// Phase 2b: the between-turn hook fires once at the top of every turn,
+  /// before that turn's LLM call, with the 0-based turn index — the
+  /// control point a loop owner uses for between-turn context engineering.
+  #[tokio::test]
+  async fn between_turn_hook_fires_before_each_turn() {
+    use crate::runtime::BetweenTurnHook;
+
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-turn-hook-{}", uuid::Uuid::new_v4());
+    // Two turns: iteration 0 emits a tool call; iteration 1 the answer.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({"id":"call_0","name":"echo","arguments":{"text":"hi"}})],
+          Vec::<serde_json::Value>::new(),
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          "(unused — native tool call)",
+          r#"{"thought":"done","answer":"final"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct CountingHook {
+      seen: Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+    #[async_trait]
+    impl BetweenTurnHook for CountingHook {
+      async fn before_turn(&self, turn_index: usize, _session_id: &str, _memory: &dyn MemoryStore) {
+        self.seen.lock().unwrap().push(turn_index);
+      }
+    }
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+    let hook = Arc::new(CountingHook { seen: seen.clone() });
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let result = agent
+      .run_with_context(
+        AgentContext::new("turn-hook-session", "say hi", &model).with_between_turn_hook(hook),
+      )
+      .await
+      .unwrap();
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+
+    assert_eq!(
+      *seen.lock().unwrap(),
+      vec![0, 1],
+      "hook must fire before each turn with the 0-based turn index"
+    );
   }
 
   #[tokio::test]
