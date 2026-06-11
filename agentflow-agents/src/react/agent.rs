@@ -611,150 +611,27 @@ impl ReActAgent {
       // Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): between-turn control point.
       // The loop's owner (the Harness) compacts or refreshes context here,
       // before this turn's LLM call. `None` hook is a no-op.
-      if let Some(hook) = &between_turn_hook {
-        hook
-          .0
-          .before_turn(iteration, &self.session_id, &*self.memory)
-          .await;
-      }
-      let messages = self.build_llm_messages(&system_prompt).await?;
-
-      if is_cancelled(&cancellation_token) {
-        return Ok(Self::cancelled_result(
-          &self.session_id,
-          "cancellation token signalled",
-          steps,
-          events,
-        ));
-      }
-
-      // --- Call LLM ---
-      debug!(iteration, "Calling LLM");
-      let tool_specs = self.collect_tool_specs();
-      let mut builder = AgentFlow::model(&self.config.model)
-        .multimodal_messages(messages)
-        .trace_context(context.trace_context.clone());
-      if !tool_specs.is_empty() {
-        builder = builder.tools(tool_specs);
-      }
-      let llm_call_started = std::time::Instant::now();
-      let llm_call = builder.execute_full();
-      let llm_response: LLMResponse = match (
-        remaining_timeout(run_started_at, timeout_ms),
-        cancellation_token.clone(),
-      ) {
-        (Some(remaining), Some(token)) => {
-          tokio::select! {
-            result = tokio::time::timeout(remaining, llm_call) => match result {
-              Ok(result) => result?,
-              Err(_) => {
-                self
-                  .record_reflection(
-                    ReflectionContext::failure(
-                      &self.session_id,
-                      step_index,
-                      format!(
-                        "runtime timed out after {}ms",
-                        timeout_ms.unwrap_or_default()
-                      ),
-                    ),
-                    &mut step_index,
-                    &mut steps,
-                    &mut events,
-                  )
-                  .await?;
-                return Ok(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout {
-                    timeout_ms: timeout_ms.unwrap_or_default(),
-                  },
-                  steps,
-                  events,
-                ));
-              }
-            },
-            _ = token.cancelled() => {
-              return Ok(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                steps,
-                events,
-              ));
-            }
-          }
-        }
-        (Some(remaining), None) => match tokio::time::timeout(remaining, llm_call).await {
-          Ok(result) => result?,
-          Err(_) => {
-            self
-              .record_reflection(
-                ReflectionContext::failure(
-                  &self.session_id,
-                  step_index,
-                  format!(
-                    "runtime timed out after {}ms",
-                    timeout_ms.unwrap_or_default()
-                  ),
-                ),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
-            return Ok(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::Timeout {
-                timeout_ms: timeout_ms.unwrap_or_default(),
-              },
-              steps,
-              events,
-            ));
-          }
-        },
-        (None, Some(token)) => {
-          tokio::select! {
-            result = llm_call => result?,
-            _ = token.cancelled() => {
-              return Ok(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                steps,
-                events,
-              ));
-            }
-          }
-        }
-        (None, None) => llm_call.await?,
+      let (llm_response, raw_response) = match self
+        .run_turn_llm_call(
+          &mut steps,
+          &mut events,
+          &mut step_index,
+          iteration,
+          &system_prompt,
+          context.trace_context.clone(),
+          &between_turn_hook,
+          run_started_at,
+          timeout_ms,
+          &cancellation_token,
+        )
+        .await?
+      {
+        LlmTurnOutcome::Proceed {
+          llm_response,
+          raw_response,
+        } => (llm_response, raw_response),
+        LlmTurnOutcome::Stop(result) => return Ok(result),
       };
-
-      // Surface token usage for downstream cost / latency aggregators
-      // (eval harness, tracing dashboards). `None` token fields are
-      // preserved as `None` — aggregators must treat them as unknown.
-      let usage = llm_response.usage.as_ref();
-      events.push(AgentEvent::LlmCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index,
-        model: self.config.model.clone(),
-        prompt_tokens: usage.and_then(|u| u.prompt_tokens),
-        completion_tokens: usage.and_then(|u| u.completion_tokens),
-        total_tokens: usage.and_then(|u| u.total_tokens),
-        duration_ms: llm_call_started.elapsed().as_millis() as u64,
-        timestamp: chrono::Utc::now(),
-      });
-
-      let raw_response = llm_response.content.clone();
-      // Q5.2: LLM responses routinely echo back user PII, customer
-      // data, or tool secrets — DEBUG emits a fingerprint + length
-      // only, the full body lands at TRACE (matches the same
-      // discipline Q3.6.2 wired up in agentflow-llm::log_request_complete).
-      debug!(
-        response_len = raw_response.len(),
-        response_sha = %prompt_fingerprint(&raw_response),
-        "LLM responded"
-      );
-      tracing::trace!(response = %raw_response, "LLM response body");
 
       // --- Check stop conditions ---
       if let Some(condition) = self
@@ -1336,6 +1213,172 @@ impl ReActAgent {
       steps,
       events,
     )
+  }
+
+  /// Run one turn's LLM call: between-turn hook, prompt assembly, the
+  /// model round-trip (with timeout/cancellation racing), and the
+  /// `LlmCallCompleted` event. Returns the parsed-ready response, or a
+  /// terminal result when the turn must stop (cancel / timeout).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 2): pure relocation out of the `run_with_context` loop; `steps` /
+  /// `events` are consumed (via `mem::take`) only on the stop paths.
+  #[allow(clippy::too_many_arguments)]
+  async fn run_turn_llm_call(
+    &self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    iteration: usize,
+    system_prompt: &str,
+    trace_context: Option<agentflow_llm::LlmTraceContext>,
+    between_turn_hook: &Option<crate::runtime::BetweenTurnHookHandle>,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<LlmTurnOutcome, ReActError> {
+    // Phase 2b between-turn control point.
+    if let Some(hook) = between_turn_hook {
+      hook
+        .0
+        .before_turn(iteration, &self.session_id, &*self.memory)
+        .await;
+    }
+    let messages = self.build_llm_messages(system_prompt).await?;
+
+    if is_cancelled(cancellation_token) {
+      return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    debug!(iteration, "Calling LLM");
+    let tool_specs = self.collect_tool_specs();
+    let mut builder = AgentFlow::model(&self.config.model)
+      .multimodal_messages(messages)
+      .trace_context(trace_context);
+    if !tool_specs.is_empty() {
+      builder = builder.tools(tool_specs);
+    }
+    let llm_call_started = std::time::Instant::now();
+    let llm_call = builder.execute_full();
+    let llm_response: LLMResponse = match (
+      remaining_timeout(run_started_at, timeout_ms),
+      cancellation_token.clone(),
+    ) {
+      (Some(remaining), Some(token)) => {
+        tokio::select! {
+          result = tokio::time::timeout(remaining, llm_call) => match result {
+            Ok(result) => result?,
+            Err(_) => {
+              self
+                .record_reflection(
+                  ReflectionContext::failure(
+                    &self.session_id,
+                    *step_index,
+                    format!(
+                      "runtime timed out after {}ms",
+                      timeout_ms.unwrap_or_default()
+                    ),
+                  ),
+                  step_index,
+                  steps,
+                  events,
+                )
+                .await?;
+              return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
+                &self.session_id,
+                None,
+                AgentStopReason::Timeout {
+                  timeout_ms: timeout_ms.unwrap_or_default(),
+                },
+                std::mem::take(steps),
+                std::mem::take(events),
+              )));
+            }
+          },
+          _ = token.cancelled() => {
+            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (Some(remaining), None) => match tokio::time::timeout(remaining, llm_call).await {
+        Ok(result) => result?,
+        Err(_) => {
+          self
+            .record_reflection(
+              ReflectionContext::failure(
+                &self.session_id,
+                *step_index,
+                format!(
+                  "runtime timed out after {}ms",
+                  timeout_ms.unwrap_or_default()
+                ),
+              ),
+              step_index,
+              steps,
+              events,
+            )
+            .await?;
+          return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
+            },
+            std::mem::take(steps),
+            std::mem::take(events),
+          )));
+        }
+      },
+      (None, Some(token)) => {
+        tokio::select! {
+          result = llm_call => result?,
+          _ = token.cancelled() => {
+            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (None, None) => llm_call.await?,
+    };
+
+    let usage = llm_response.usage.as_ref();
+    events.push(AgentEvent::LlmCallCompleted {
+      session_id: self.session_id.clone(),
+      step_index: *step_index,
+      model: self.config.model.clone(),
+      prompt_tokens: usage.and_then(|u| u.prompt_tokens),
+      completion_tokens: usage.and_then(|u| u.completion_tokens),
+      total_tokens: usage.and_then(|u| u.total_tokens),
+      duration_ms: llm_call_started.elapsed().as_millis() as u64,
+      timestamp: chrono::Utc::now(),
+    });
+
+    let raw_response = llm_response.content.clone();
+    debug!(
+      response_len = raw_response.len(),
+      response_sha = %prompt_fingerprint(&raw_response),
+      "LLM responded"
+    );
+    tracing::trace!(response = %raw_response, "LLM response body");
+
+    Ok(LlmTurnOutcome::Proceed {
+      llm_response,
+      raw_response,
+    })
   }
 
   /// Top-of-turn limit guards (cancel / timeout / max-steps / token
@@ -2366,6 +2409,17 @@ impl ReActAgent {
 enum BatchOutcome {
   Continue,
   Stop(Box<AgentRunResult>),
+}
+
+/// Outcome of one turn's LLM call (RFC_HARNESS_LOOP_OWNERSHIP §6, series
+/// step 2). `Proceed` carries the response for the parse + dispatch
+/// phase; `Stop` carries a terminal result (cancel / timeout).
+enum LlmTurnOutcome {
+  Proceed {
+    llm_response: LLMResponse,
+    raw_response: String,
+  },
+  Stop(AgentRunResult),
 }
 
 /// Internal staging record for one tool call in a multi-call batch.
