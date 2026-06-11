@@ -41,7 +41,8 @@ end-state the title asks for. Each phase ships and delivers value on its own.
 | 0 — context hygiene | ✅ done | `feat(harness): Phase 0 …` | real tokenizer, truncate-not-drop, `params_summary` cap |
 | 1 — live event seam | ✅ done | `feat(harness): Phase 1 …` | `AgentEventSink` + `AgentContext.event_sink` + `AgentEvent::MemorySummaryAdded`; ReActAgent emits tool events live; `HarnessAgentEventBridge` replaces post-hoc tool-event translation; split-brain epoch fixed |
 | 2a — context engineering (compaction) | ✅ done | `feat(harness): Phase 2 (context-engineering half) …` | `compaction` module + `ContextSummarizer`; over-budget context compacted, `MemorySummaryAdded` finally emitted |
-| 2b — loop ownership (turn-driven) | ⏳ open | — | ReActAgent → `TurnDrivenRuntime` / `LoopSession` (§6); enables *between-turn* compaction mid-run. Largest, highest-risk change; deferred to its own pass |
+| 2b — mid-run compaction visibility | ✅ done | `feat(harness): Phase 2b (partial) …` | ReActAgent emits `MemorySummaryAdded` live when its per-turn `apply_memory_prompt_budget` compaction fires → bridge surfaces between-turn compaction mid-run |
+| 2b — loop ownership (turn-driven driver) | ⏳ open | — | ReActAgent → `TurnDrivenRuntime` / `LoopSession` (§6): harness *drives* turns and injects its own compaction policy between them. ~750-line, 20-exit-point loop extraction; highest-risk change, warrants its own dedicated series |
 
 Tests at landing: agentflow-agents 175 lib + integration green; agentflow-harness 90 green; agentflow-server 179 lib green; clippy clean across changed crates.
 
