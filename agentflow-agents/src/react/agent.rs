@@ -587,91 +587,24 @@ impl ReActAgent {
     let mut iteration = 0;
 
     loop {
-      if is_cancelled(&cancellation_token) {
-        return Ok(Self::cancelled_result(
-          &self.session_id,
-          "cancellation token signalled",
-          steps,
-          events,
-        ));
-      }
-
-      if timed_out(run_started_at, timeout_ms) {
-        self
-          .record_reflection(
-            ReflectionContext::failure(
-              &self.session_id,
-              step_index,
-              format!(
-                "runtime timed out after {}ms",
-                timeout_ms.unwrap_or_default()
-              ),
-            ),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          None,
-          AgentStopReason::Timeout {
-            timeout_ms: timeout_ms.unwrap_or_default(),
-          },
-          steps,
-          events,
-        ));
-      }
-
-      // --- Guard: max iterations ---
-      if iteration >= max_iterations {
-        self
-          .record_reflection(
-            ReflectionContext::failure(
-              &self.session_id,
-              step_index,
-              format!("max steps ({}) reached", max_iterations),
-            ),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          None,
-          AgentStopReason::MaxSteps {
-            max_steps: max_iterations,
-          },
-          steps,
-          events,
-        ));
-      }
-
-      // --- Guard: token budget ---
-      if let Some(budget) = budget_tokens {
-        let used = self.memory.session_token_count(&self.session_id).await?;
-        if used > budget {
-          self
-            .record_reflection(
-              ReflectionContext::failure(
-                &self.session_id,
-                step_index,
-                format!("token budget exceeded: {} / {}", used, budget),
-              ),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            None,
-            AgentStopReason::TokenBudgetExceeded { used, budget },
-            steps,
-            events,
-          ));
-        }
+      // Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step 1):
+      // the top-of-turn limit guards now live in `check_turn_limits`, which
+      // returns `Some(result)` when the run must stop and `None` to proceed.
+      if let Some(result) = self
+        .check_turn_limits(
+          &mut steps,
+          &mut events,
+          &mut step_index,
+          iteration,
+          run_started_at,
+          timeout_ms,
+          max_iterations,
+          budget_tokens,
+          &cancellation_token,
+        )
+        .await?
+      {
+        return Ok(result);
       }
 
       // --- Build LLM messages from memory ---
@@ -1403,6 +1336,117 @@ impl ReActAgent {
       steps,
       events,
     )
+  }
+
+  /// Top-of-turn limit guards (cancel / timeout / max-steps / token
+  /// budget). Returns `Some(result)` when the run must stop this turn,
+  /// `None` to proceed with the LLM call.
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 1): pulling the guards out of the monolithic `run_with_context`
+  /// loop is the first move toward a resumable `LoopSession`. Behaviour
+  /// is identical — this is a pure relocation; `steps`/`events` are only
+  /// consumed (via `mem::take`) on the stop paths, where the caller
+  /// returns immediately.
+  #[allow(clippy::too_many_arguments)]
+  async fn check_turn_limits(
+    &self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    iteration: usize,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    max_iterations: usize,
+    budget_tokens: Option<u32>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<Option<AgentRunResult>, ReActError> {
+    if is_cancelled(cancellation_token) {
+      return Ok(Some(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if timed_out(run_started_at, timeout_ms) {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!(
+              "runtime timed out after {}ms",
+              timeout_ms.unwrap_or_default()
+            ),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::Timeout {
+          timeout_ms: timeout_ms.unwrap_or_default(),
+        },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if iteration >= max_iterations {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!("max steps ({}) reached", max_iterations),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::MaxSteps {
+          max_steps: max_iterations,
+        },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if let Some(budget) = budget_tokens {
+      let used = self.memory.session_token_count(&self.session_id).await?;
+      if used > budget {
+        self
+          .record_reflection(
+            ReflectionContext::failure(
+              &self.session_id,
+              *step_index,
+              format!("token budget exceeded: {} / {}", used, budget),
+            ),
+            step_index,
+            steps,
+            events,
+          )
+          .await?;
+        return Ok(Some(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::TokenBudgetExceeded { used, budget },
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
+      }
+    }
+
+    Ok(None)
   }
 
   async fn record_reflection(
