@@ -817,165 +817,25 @@ impl ReActAgent {
           // F-A2-13: snapshot now so we can compare on the next
           // iteration even after `params` moves into `execute`.
           let params_snapshot = params.clone();
-          let tool_call = self.tools.execute(&tool, params);
-          let tool_output = match (
-            remaining_timeout(run_started_at, timeout_ms),
-            cancellation_token.clone(),
-          ) {
-            (Some(remaining), Some(token)) => {
-              tokio::select! {
-                result = tokio::time::timeout(remaining, tool_call) => match result {
-                  Ok(result) => match result {
-                    Ok(out) => out,
-                    Err(e) => {
-                      warn!(tool = %tool, error = %e, "Tool execution failed");
-                      agentflow_tools::ToolOutput::error(e.to_string())
-                    }
-                  },
-                  Err(_) => {
-                    let duration_ms = started_at.elapsed().as_millis() as u64;
-                    emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-                      session_id: self.session_id.clone(),
-                      step_index: tool_step_index,
-                      tool: tool.clone(),
-                      is_error: true,
-                      duration_ms,
-                      source: tool_source.clone(),
-                      permissions: tool_permissions.clone(),
-                      timestamp: Utc::now(),
-                    });
-                    self
-                      .record_reflection(
-                        ReflectionContext::failure(
-                          &self.session_id,
-                          step_index,
-                          format!(
-                            "runtime timed out after {}ms",
-                            timeout_ms.unwrap_or_default()
-                          ),
-                        ),
-                        &mut step_index,
-                        &mut steps,
-                        &mut events,
-                      )
-                      .await?;
-                    return Ok(Self::stopped_result(
-                      &self.session_id,
-                      None,
-                      AgentStopReason::Timeout {
-                        timeout_ms: timeout_ms.unwrap_or_default(),
-                      },
-                      steps,
-                      events,
-                    ));
-                  }
-                },
-                _ = token.cancelled() => {
-                  emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-                    session_id: self.session_id.clone(),
-                    step_index: tool_step_index,
-                    tool: tool.clone(),
-                    is_error: true,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    source: tool_source.clone(),
-                    permissions: tool_permissions.clone(),
-                    timestamp: Utc::now(),
-                  });
-                  return Ok(Self::cancelled_result(
-                    &self.session_id,
-                    "cancellation token signalled",
-                    steps,
-                    events,
-                  ));
-                }
-              }
-            }
-            (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
-              Ok(result) => match result {
-                Ok(out) => out,
-                Err(e) => {
-                  warn!(tool = %tool, error = %e, "Tool execution failed");
-                  agentflow_tools::ToolOutput::error(e.to_string())
-                }
-              },
-              Err(_) => {
-                let duration_ms = started_at.elapsed().as_millis() as u64;
-                emit_and_push!(
-                  self.live_sink,
-                  events,
-                  AgentEvent::ToolCallCompleted {
-                    session_id: self.session_id.clone(),
-                    step_index: tool_step_index,
-                    tool: tool.clone(),
-                    is_error: true,
-                    duration_ms,
-                    source: tool_source.clone(),
-                    permissions: tool_permissions.clone(),
-                    timestamp: Utc::now(),
-                  }
-                );
-                self
-                  .record_reflection(
-                    ReflectionContext::failure(
-                      &self.session_id,
-                      step_index,
-                      format!(
-                        "runtime timed out after {}ms",
-                        timeout_ms.unwrap_or_default()
-                      ),
-                    ),
-                    &mut step_index,
-                    &mut steps,
-                    &mut events,
-                  )
-                  .await?;
-                return Ok(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout {
-                    timeout_ms: timeout_ms.unwrap_or_default(),
-                  },
-                  steps,
-                  events,
-                ));
-              }
-            },
-            (None, Some(token)) => {
-              tokio::select! {
-                result = tool_call => match result {
-                  Ok(out) => out,
-                  Err(e) => {
-                    warn!(tool = %tool, error = %e, "Tool execution failed");
-                    agentflow_tools::ToolOutput::error(e.to_string())
-                  }
-                },
-                _ = token.cancelled() => {
-                  emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-                    session_id: self.session_id.clone(),
-                    step_index: tool_step_index,
-                    tool: tool.clone(),
-                    is_error: true,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    source: tool_source.clone(),
-                    permissions: tool_permissions.clone(),
-                    timestamp: Utc::now(),
-                  });
-                  return Ok(Self::cancelled_result(
-                    &self.session_id,
-                    "cancellation token signalled",
-                    steps,
-                    events,
-                  ));
-                }
-              }
-            }
-            (None, None) => match tool_call.await {
-              Ok(out) => out,
-              Err(e) => {
-                warn!(tool = %tool, error = %e, "Tool execution failed");
-                agentflow_tools::ToolOutput::error(e.to_string())
-              }
-            },
+          let tool_output = match self
+            .execute_tool_with_limits(
+              &tool,
+              params,
+              tool_step_index,
+              &tool_source,
+              &tool_permissions,
+              started_at,
+              &mut steps,
+              &mut events,
+              &mut step_index,
+              run_started_at,
+              timeout_ms,
+              &cancellation_token,
+            )
+            .await?
+          {
+            ToolExecOutcome::Output(output) => output,
+            ToolExecOutcome::Stop(result) => return Ok(result),
           };
           tool_calls += 1;
           let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -1402,6 +1262,196 @@ impl ReActAgent {
       std::mem::take(steps),
       std::mem::take(events),
     )))
+  }
+
+  /// Execute one tool call under the run's timeout/cancellation limits,
+  /// racing the tool future against the deadline and the cancellation
+  /// token. Returns `Output(tool_output)` on completion (success or a
+  /// tool-level error, which is surfaced as an error `ToolOutput`), or
+  /// `Stop(result)` when the run must terminate (timeout / cancellation).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3b): the gnarly tool-execute `select!` block lifted out of the
+  /// `Action` arm, mirroring `run_turn_llm_call`. The future is created
+  /// inside so the borrow of `self.tools` does not outlive this call.
+  /// `steps`/`events` are consumed (via `mem::take`) only on stop paths.
+  #[allow(clippy::too_many_arguments)]
+  async fn execute_tool_with_limits(
+    &self,
+    tool: &str,
+    params: serde_json::Value,
+    tool_step_index: usize,
+    tool_source: &Option<String>,
+    tool_permissions: &[String],
+    started_at: Instant,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<ToolExecOutcome, ReActError> {
+    let tool_call = self.tools.execute(tool, params);
+    let tool_output = match (
+      remaining_timeout(run_started_at, timeout_ms),
+      cancellation_token.clone(),
+    ) {
+      (Some(remaining), Some(token)) => {
+        tokio::select! {
+          result = tokio::time::timeout(remaining, tool_call) => match result {
+            Ok(result) => match result {
+              Ok(out) => out,
+              Err(e) => {
+                warn!(tool = %tool, error = %e, "Tool execution failed");
+                agentflow_tools::ToolOutput::error(e.to_string())
+              }
+            },
+            Err(_) => {
+              let duration_ms = started_at.elapsed().as_millis() as u64;
+              emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: tool_step_index,
+                tool: tool.to_string(),
+                is_error: true,
+                duration_ms,
+                source: tool_source.clone(),
+                permissions: tool_permissions.to_vec(),
+                timestamp: Utc::now(),
+              });
+              self
+                .record_reflection(
+                  ReflectionContext::failure(
+                    &self.session_id,
+                    *step_index,
+                    format!(
+                      "runtime timed out after {}ms",
+                      timeout_ms.unwrap_or_default()
+                    ),
+                  ),
+                  step_index,
+                  steps,
+                  events,
+                )
+                .await?;
+              return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+                &self.session_id,
+                None,
+                AgentStopReason::Timeout {
+                  timeout_ms: timeout_ms.unwrap_or_default(),
+                },
+                std::mem::take(steps),
+                std::mem::take(events),
+              )));
+            }
+          },
+          _ = token.cancelled() => {
+            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms: started_at.elapsed().as_millis() as u64,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            });
+            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
+        Ok(result) => match result {
+          Ok(out) => out,
+          Err(e) => {
+            warn!(tool = %tool, error = %e, "Tool execution failed");
+            agentflow_tools::ToolOutput::error(e.to_string())
+          }
+        },
+        Err(_) => {
+          let duration_ms = started_at.elapsed().as_millis() as u64;
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            }
+          );
+          self
+            .record_reflection(
+              ReflectionContext::failure(
+                &self.session_id,
+                *step_index,
+                format!(
+                  "runtime timed out after {}ms",
+                  timeout_ms.unwrap_or_default()
+                ),
+              ),
+              step_index,
+              steps,
+              events,
+            )
+            .await?;
+          return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
+            },
+            std::mem::take(steps),
+            std::mem::take(events),
+          )));
+        }
+      },
+      (None, Some(token)) => {
+        tokio::select! {
+          result = tool_call => match result {
+            Ok(out) => out,
+            Err(e) => {
+              warn!(tool = %tool, error = %e, "Tool execution failed");
+              agentflow_tools::ToolOutput::error(e.to_string())
+            }
+          },
+          _ = token.cancelled() => {
+            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms: started_at.elapsed().as_millis() as u64,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            });
+            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (None, None) => match tool_call.await {
+        Ok(out) => out,
+        Err(e) => {
+          warn!(tool = %tool, error = %e, "Tool execution failed");
+          agentflow_tools::ToolOutput::error(e.to_string())
+        }
+      },
+    };
+    Ok(ToolExecOutcome::Output(tool_output))
   }
 
   /// Top-of-turn limit guards (cancel / timeout / max-steps / token
@@ -2442,6 +2492,15 @@ enum LlmTurnOutcome {
     llm_response: LLMResponse,
     raw_response: String,
   },
+  Stop(AgentRunResult),
+}
+
+/// Outcome of a single-tool execution under timeout/cancellation limits
+/// (RFC_HARNESS_LOOP_OWNERSHIP §6, series step 3b). `Output` carries the
+/// tool result for the rest of the `Action` arm; `Stop` carries a
+/// terminal result (timeout / cancellation).
+enum ToolExecOutcome {
+  Output(agentflow_tools::ToolOutput),
   Stop(AgentRunResult),
 }
 
