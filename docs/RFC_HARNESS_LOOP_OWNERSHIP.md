@@ -1,6 +1,6 @@
 # RFC: Harness Loop Ownership + Context Engineering
 
-- Status: **In progress** — Phase 0 ✅, Phase 1 ✅, Phase 2 context-engineering half ✅ (branch `feat/harness-loop-ownership`); Phase 2 loop-ownership half (ReActAgent → `TurnDrivenRuntime`) still open. See "Implementation status" below.
+- Status: **Implemented** — Phases 0, 1, 2a, and 2b (both context-engineering and loop-ownership halves) all landed on branch `feat/harness-loop-ownership`. The loop-ownership half shipped as a 6-step `LoopSession` extraction series. See "Implementation status" below.
 - Author: (proposed)
 - Created: 2026-06-11
 - Related: `docs/HARNESS_MODE.md`, `docs/ROADMAP_v2.md` §F, `docs/STABILITY.md`,
@@ -43,7 +43,7 @@ end-state the title asks for. Each phase ships and delivers value on its own.
 | 2a — context engineering (compaction) | ✅ done | `feat(harness): Phase 2 (context-engineering half) …` | `compaction` module + `ContextSummarizer`; over-budget context compacted, `MemorySummaryAdded` finally emitted |
 | 2b — mid-run compaction visibility | ✅ done | `feat(harness): Phase 2b (partial) …` | ReActAgent emits `MemorySummaryAdded` live when its per-turn `apply_memory_prompt_budget` compaction fires → bridge surfaces between-turn compaction mid-run |
 | 2b — turn-driven driver (between-turn hook) | ✅ done | `feat(harness): turn-driven driver foundation …` | `BetweenTurnHook` seam: ReActAgent invokes a caller-supplied hook (`&dyn MemoryStore`) at the top of every turn before the LLM call; threaded through `HarnessRunOptions`. The control point for caller-owned mid-run context engineering — the loop-ownership value, via a single safe insertion rather than the full loop extraction |
-| 2b — full loop inversion (harness calls `next_turn`) | ⏳ open | — | ReActAgent → `TurnDrivenRuntime` / `LoopSession` (§6): harness literally *drives* iteration. ~750-line, 20-exit-point extraction; highest-risk, warrants its own dedicated series. The between-turn hook above already delivers the practical value |
+| 2b — full loop inversion (LoopSession extraction) | ✅ done | series steps 1–6 (`refactor/feat(agents): … steps 1–6`) | ReActAgent's ~750-line loop extracted into `init_run` + `run_one_turn(&mut LoopState)` behind phase methods (check_turn_limits / run_turn_llm_call / check_stop_conditions / dispatch_native_tool_calls_batch / dispatch_single_tool_call). `begin_turn_driven` → `ReActLoopSession::next_turn()` lets a caller literally *drive* iteration and compact between turns via `memory()`. Done as 6 behaviour-preserving steps, each green (178 lib tests) |
 
 Tests at landing: agentflow-agents 175 lib + integration green; agentflow-harness 90 green; agentflow-server 179 lib green; clippy clean across changed crates.
 
