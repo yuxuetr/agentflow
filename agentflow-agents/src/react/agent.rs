@@ -526,50 +526,11 @@ impl ReActAgent {
     // Phase 1: capture the optional live event observer for this run so
     // the `emit_and_push!` sites stream tool events as they happen.
     self.live_sink = context.event_sink.clone();
-    // Phase 2b: capture the optional between-turn hook for this run.
-    let between_turn_hook = context.between_turn_hook.clone();
     info!(
         session = %self.session_id,
         model = %self.config.model,
         "ReActAgent starting"
     );
-
-    let mut steps = vec![AgentStep::new(
-      0,
-      AgentStepKind::Observe {
-        input: context.input.clone(),
-      },
-    )];
-    let mut events = vec![AgentEvent::RunStarted {
-      session_id: self.session_id.clone(),
-      model: self.config.model.clone(),
-      timestamp: context.started_at,
-    }];
-    let mut step_index = 1;
-    let max_iterations = context
-      .limits
-      .max_steps
-      .unwrap_or(self.config.max_iterations);
-    let max_tool_calls = context.limits.max_tool_calls;
-    let timeout_ms = context.limits.timeout_ms;
-    let budget_tokens = context.limits.token_budget.or(self.config.budget_tokens);
-    let cancellation_token = context.cancellation_token.clone();
-    let run_started_at = Instant::now();
-    let mut tool_calls = 0usize;
-
-    // F-A2-13 anti-loop steering: remember the most recent
-    // single-tool call so we can detect when the model calls the
-    // exact same tool with identical params on the very next
-    // iteration. moonshot-v1-128k and other instruction-following
-    // lite models loop on `git show <hash>` / read-only tools and
-    // burn budget; instead of letting that play out to
-    // `MaxToolCalls`, we append a steering note to the observation
-    // so the model sees "this is your 2nd identical call, advance
-    // or finish" inside its own working memory. Only the iterative
-    // single-tool path is covered today — the parallel batch
-    // dispatcher (`dispatch_native_tool_calls_batch`) doesn't loop
-    // the same way and is left untouched.
-    let mut last_tool_call: Option<(String, serde_json::Value)> = None;
 
     // 1. Store user message
     self
@@ -584,206 +545,250 @@ impl ReActAgent {
     // (We prepend it to the conversation each time we call the LLM)
     let system_prompt = self.build_system_prompt();
 
-    let mut iteration = 0;
+    // RFC_HARNESS_LOOP_OWNERSHIP §6 steps 4–5: the loop's locals and
+    // per-run config are bundled into `LoopState`; the loop now just
+    // pumps `run_one_turn` until it returns `Stop`.
+    //
+    // F-A2-13 anti-loop steering: `last_tool_call` remembers the most
+    // recent single-tool call so a repeat with identical params gets a
+    // steering note appended to the model's working memory (see
+    // `dispatch_single_tool_call`).
+    let mut st = LoopState {
+      steps: vec![AgentStep::new(
+        0,
+        AgentStepKind::Observe {
+          input: context.input.clone(),
+        },
+      )],
+      events: vec![AgentEvent::RunStarted {
+        session_id: self.session_id.clone(),
+        model: self.config.model.clone(),
+        timestamp: context.started_at,
+      }],
+      step_index: 1,
+      iteration: 0,
+      tool_calls: 0,
+      last_tool_call: None,
+      max_iterations: context
+        .limits
+        .max_steps
+        .unwrap_or(self.config.max_iterations),
+      max_tool_calls: context.limits.max_tool_calls,
+      timeout_ms: context.limits.timeout_ms,
+      budget_tokens: context.limits.token_budget.or(self.config.budget_tokens),
+      cancellation_token: context.cancellation_token.clone(),
+      run_started_at: Instant::now(),
+      system_prompt,
+      trace_context: context.trace_context.clone(),
+      between_turn_hook: context.between_turn_hook.clone(),
+    };
 
     loop {
-      // Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step 1):
-      // the top-of-turn limit guards now live in `check_turn_limits`, which
-      // returns `Some(result)` when the run must stop and `None` to proceed.
-      if let Some(result) = self
-        .check_turn_limits(
-          &mut steps,
-          &mut events,
-          &mut step_index,
-          iteration,
-          run_started_at,
-          timeout_ms,
-          max_iterations,
-          budget_tokens,
-          &cancellation_token,
-        )
-        .await?
-      {
-        return Ok(result);
+      match self.run_one_turn(&mut st).await? {
+        TurnStep::Continue => {}
+        TurnStep::Stop(result) => return Ok(result),
       }
+    }
+  }
 
-      // --- Build LLM messages from memory ---
-      // Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): between-turn control point.
-      // The loop's owner (the Harness) compacts or refreshes context here,
-      // before this turn's LLM call. `None` hook is a no-op.
-      let (llm_response, raw_response) = match self
-        .run_turn_llm_call(
-          &mut steps,
-          &mut events,
-          &mut step_index,
-          iteration,
-          &system_prompt,
-          context.trace_context.clone(),
-          &between_turn_hook,
-          run_started_at,
-          timeout_ms,
-          &cancellation_token,
-        )
-        .await?
-      {
-        LlmTurnOutcome::Proceed {
-          llm_response,
-          raw_response,
-        } => (llm_response, raw_response),
-        LlmTurnOutcome::Stop(result) => return Ok(result),
-      };
+  /// Execute exactly one turn of the ReAct loop against `st`, returning
+  /// `TurnStep::Continue` to advance or `TurnStep::Stop` with the
+  /// terminal result. This is the loop body lifted whole out of
+  /// `run_with_context` (RFC_HARNESS_LOOP_OWNERSHIP §6 step 5); the
+  /// `run_with_context` loop is now just `loop { match run_one_turn … }`.
+  /// Callable in isolation, it is the seam a `LoopSession` (step 6) drives.
+  async fn run_one_turn(&mut self, st: &mut LoopState) -> Result<TurnStep, ReActError> {
+    // Top-of-turn limit guards (cancel / timeout / max-steps / budget).
+    if let Some(result) = self
+      .check_turn_limits(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        st.iteration,
+        st.run_started_at,
+        st.timeout_ms,
+        st.max_iterations,
+        st.budget_tokens,
+        &st.cancellation_token,
+      )
+      .await?
+    {
+      return Ok(TurnStep::Stop(result));
+    }
 
-      // --- Check stop conditions (RFC §6 step 3: extracted) ---
-      if let Some(result) = self
-        .check_stop_conditions(&mut steps, &mut events, &mut step_index, &raw_response)
-        .await?
-      {
-        return Ok(result);
-      }
+    // LLM call (the Phase 2b between-turn hook fires inside).
+    let (llm_response, raw_response) = match self
+      .run_turn_llm_call(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        st.iteration,
+        &st.system_prompt,
+        st.trace_context.clone(),
+        &st.between_turn_hook,
+        st.run_started_at,
+        st.timeout_ms,
+        &st.cancellation_token,
+      )
+      .await?
+    {
+      LlmTurnOutcome::Proceed {
+        llm_response,
+        raw_response,
+      } => (llm_response, raw_response),
+      LlmTurnOutcome::Stop(result) => return Ok(TurnStep::Stop(result)),
+    };
 
-      // --- Multi-call batch path (P-H.3) ---
-      // When the model returns >=2 native tool calls in one response,
-      // dispatch them as a batch: concurrent for `Idempotent` calls,
-      // serial for `NonIdempotent` / `Unknown` calls. `ToolCallStarted`
-      // events are emitted in LLM-returned order; `ToolCallCompleted`
-      // matches the same order so trace replay stays deterministic
-      // regardless of completion order on the wire.
-      if llm_response.tool_calls.len() >= 2 {
-        match self
-          .dispatch_native_tool_calls_batch(
-            &llm_response.tool_calls,
-            &raw_response,
-            &mut steps,
-            &mut events,
-            &mut step_index,
-            &mut tool_calls,
-            max_tool_calls,
-            run_started_at,
-            timeout_ms,
-            cancellation_token.as_ref(),
-          )
-          .await?
-        {
-          BatchOutcome::Continue => {
-            iteration += 1;
-            continue;
-          }
-          BatchOutcome::Stop(result) => return Ok(*result),
-        }
-      }
+    // Stop conditions.
+    if let Some(result) = self
+      .check_stop_conditions(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        &raw_response,
+      )
+      .await?
+    {
+      return Ok(TurnStep::Stop(result));
+    }
 
-      // --- Parse response: prefer native tool_calls when present ---
-      let parsed = if let Some(call) = llm_response.tool_calls.first() {
-        native_tool_call_to_agent_response(call)
-      } else {
-        AgentResponse::parse(&raw_response)
-      };
-
-      // Store the assistant turn
-      self
-        .add_memory_message(Message::assistant_with_counter(
-          &self.session_id,
+    // Multi-call batch path (P-H.3): >=2 native tool calls in one
+    // response dispatch as a batch (concurrent for idempotent, serial
+    // otherwise) in LLM-returned order.
+    if llm_response.tool_calls.len() >= 2 {
+      match self
+        .dispatch_native_tool_calls_batch(
+          &llm_response.tool_calls,
           &raw_response,
-          &*self.message_counter,
-        ))
-        .await?;
+          &mut st.steps,
+          &mut st.events,
+          &mut st.step_index,
+          &mut st.tool_calls,
+          st.max_tool_calls,
+          st.run_started_at,
+          st.timeout_ms,
+          st.cancellation_token.as_ref(),
+        )
+        .await?
+      {
+        BatchOutcome::Continue => {
+          st.iteration += 1;
+          return Ok(TurnStep::Continue);
+        }
+        BatchOutcome::Stop(result) => return Ok(TurnStep::Stop(*result)),
+      }
+    }
 
-      match parsed {
-        AgentResponse::Action {
+    // Parse response: prefer native tool_calls when present.
+    let parsed = if let Some(call) = llm_response.tool_calls.first() {
+      native_tool_call_to_agent_response(call)
+    } else {
+      AgentResponse::parse(&raw_response)
+    };
+
+    // Store the assistant turn.
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &raw_response,
+        &*self.message_counter,
+      ))
+      .await?;
+
+    match parsed {
+      AgentResponse::Action {
+        thought,
+        tool,
+        params,
+      } => match self
+        .dispatch_single_tool_call(
           thought,
           tool,
           params,
-        } => {
-          match self
-            .dispatch_single_tool_call(
-              thought,
-              tool,
-              params,
-              &mut steps,
-              &mut events,
-              &mut step_index,
-              &mut tool_calls,
-              &mut last_tool_call,
-              iteration,
-              max_tool_calls,
-              run_started_at,
-              timeout_ms,
-              &cancellation_token,
-            )
-            .await?
-          {
-            TurnStep::Continue => {
-              iteration += 1;
-            }
-            TurnStep::Stop(result) => return Ok(result),
-          }
+          &mut st.steps,
+          &mut st.events,
+          &mut st.step_index,
+          &mut st.tool_calls,
+          &mut st.last_tool_call,
+          st.iteration,
+          st.max_tool_calls,
+          st.run_started_at,
+          st.timeout_ms,
+          &st.cancellation_token,
+        )
+        .await?
+      {
+        TurnStep::Continue => {
+          st.iteration += 1;
+          Ok(TurnStep::Continue)
         }
+        TurnStep::Stop(result) => Ok(TurnStep::Stop(result)),
+      },
 
-        AgentResponse::Answer { thought, answer } => {
-          // Q5.2: `thought` is the LLM's pre-answer reasoning chain
-          // and routinely contains user input verbatim. INFO logs are
-          // typically shipped to centralized log aggregators —
-          // fingerprint + length only at INFO; full text at TRACE.
-          info!(
-            thought_len = thought.len(),
-            thought_sha = %prompt_fingerprint(&thought),
-            "Final answer reached"
-          );
-          tracing::trace!(thought = %thought, "Final answer thought body");
-          if !thought.trim().is_empty() {
-            steps.push(AgentStep::new(step_index, AgentStepKind::Plan { thought }));
-            step_index += 1;
-          }
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::FinalAnswer {
-              answer: answer.clone(),
-            },
+      AgentResponse::Answer { thought, answer } => {
+        // Q5.2: `thought` routinely contains user input verbatim —
+        // fingerprint + length only at INFO; full text at TRACE.
+        info!(
+          thought_len = thought.len(),
+          thought_sha = %prompt_fingerprint(&thought),
+          "Final answer reached"
+        );
+        tracing::trace!(thought = %thought, "Final answer thought body");
+        if !thought.trim().is_empty() {
+          st.steps.push(AgentStep::new(
+            st.step_index,
+            AgentStepKind::Plan { thought },
           ));
-          step_index += 1;
-          self
-            .record_reflection(
-              ReflectionContext::final_answer(&self.session_id, step_index, &answer),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            Some(answer),
-            AgentStopReason::FinalAnswer,
-            steps,
-            events,
-          ));
+          st.step_index += 1;
         }
+        st.steps.push(AgentStep::new(
+          st.step_index,
+          AgentStepKind::FinalAnswer {
+            answer: answer.clone(),
+          },
+        ));
+        st.step_index += 1;
+        self
+          .record_reflection(
+            ReflectionContext::final_answer(&self.session_id, st.step_index, &answer),
+            &mut st.step_index,
+            &mut st.steps,
+            &mut st.events,
+          )
+          .await?;
+        Ok(TurnStep::Stop(Self::stopped_result(
+          &self.session_id,
+          Some(answer),
+          AgentStopReason::FinalAnswer,
+          std::mem::take(&mut st.steps),
+          std::mem::take(&mut st.events),
+        )))
+      }
 
-        AgentResponse::Malformed(text) => {
-          // Treat unstructured text as a final answer
-          warn!("LLM returned non-JSON text; treating as final answer");
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::FinalAnswer {
-              answer: text.clone(),
-            },
-          ));
-          step_index += 1;
-          self
-            .record_reflection(
-              ReflectionContext::final_answer(&self.session_id, step_index, &text),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            Some(text),
-            AgentStopReason::FinalAnswer,
-            steps,
-            events,
-          ));
-        }
+      AgentResponse::Malformed(text) => {
+        warn!("LLM returned non-JSON text; treating as final answer");
+        st.steps.push(AgentStep::new(
+          st.step_index,
+          AgentStepKind::FinalAnswer {
+            answer: text.clone(),
+          },
+        ));
+        st.step_index += 1;
+        self
+          .record_reflection(
+            ReflectionContext::final_answer(&self.session_id, st.step_index, &text),
+            &mut st.step_index,
+            &mut st.steps,
+            &mut st.events,
+          )
+          .await?;
+        Ok(TurnStep::Stop(Self::stopped_result(
+          &self.session_id,
+          Some(text),
+          AgentStopReason::FinalAnswer,
+          std::mem::take(&mut st.steps),
+          std::mem::take(&mut st.events),
+        )))
       }
     }
   }
@@ -2547,12 +2552,34 @@ enum ToolExecOutcome {
 }
 
 /// Outcome of processing one turn (RFC_HARNESS_LOOP_OWNERSHIP §6).
-/// `Continue` means advance to the next turn (the loop bumps the
-/// iteration counter); `Stop` carries the terminal result. This is the
-/// shape the eventual `run_one_turn` returns.
+/// `Continue` means advance to the next turn; `Stop` carries the terminal
+/// result. This is the shape [`ReActAgent::run_one_turn`] returns.
 enum TurnStep {
   Continue,
   Stop(AgentRunResult),
+}
+
+/// Mutable + per-run state threaded through [`ReActAgent::run_one_turn`]
+/// (RFC_HARNESS_LOOP_OWNERSHIP §6, steps 4–5). Bundling the loop's locals
+/// into one struct is what makes a single turn callable in isolation —
+/// the basis for a future `LoopSession`. The first six fields mutate
+/// across turns; the rest are per-run configuration fixed at start.
+struct LoopState {
+  steps: Vec<AgentStep>,
+  events: Vec<AgentEvent>,
+  step_index: usize,
+  iteration: usize,
+  tool_calls: usize,
+  last_tool_call: Option<(String, serde_json::Value)>,
+  max_iterations: usize,
+  max_tool_calls: Option<usize>,
+  timeout_ms: Option<u64>,
+  budget_tokens: Option<u32>,
+  cancellation_token: Option<AgentCancellationToken>,
+  run_started_at: Instant,
+  system_prompt: String,
+  trace_context: Option<agentflow_llm::LlmTraceContext>,
+  between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
 }
 
 /// Internal staging record for one tool call in a multi-call batch.
