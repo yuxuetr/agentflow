@@ -1442,6 +1442,42 @@ mod tests {
     );
   }
 
+  /// Phase 2b: a live `AgentEvent::MemorySummaryAdded` (the agent's
+  /// mid-run, between-turn compaction) is mapped by the bridge to a
+  /// harness `MemorySummaryAdded` envelope on the shared seq clock.
+  #[tokio::test]
+  async fn runtime_bridges_live_memory_summary_added() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("done", captured.clone());
+    inner.live_events = vec![AgentEvent::MemorySummaryAdded {
+      session_id: "ignored".into(),
+      layer: "session".into(),
+      summary: "compacted 3 older turns".into(),
+      token_estimate: 12,
+      timestamp: Utc::now(),
+    }];
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("go", dir.path(), "mock"))
+      .await
+      .unwrap();
+    let events = sink.snapshot().await;
+    let summary = events
+      .iter()
+      .find_map(|e| match &e.body {
+        HarnessEventBody::MemorySummaryAdded(p) => Some(p),
+        _ => None,
+      })
+      .expect("bridge maps live MemorySummaryAdded to the harness envelope");
+    assert_eq!(summary.layer, "session");
+    assert_eq!(summary.token_estimate, 12);
+    assert!(summary.summary.contains("compacted 3 older turns"));
+  }
+
   #[tokio::test]
   async fn runtime_maps_stop_reasons_to_envelope_reasons() {
     let captured = Arc::new(tokio::sync::Mutex::new(None));

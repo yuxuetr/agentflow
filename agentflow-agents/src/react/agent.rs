@@ -1660,6 +1660,30 @@ impl ReActAgent {
     let history = self.read_memory_history(&self.session_id).await?;
     let (memory_summary, history) = self.apply_memory_prompt_budget(history).await?;
 
+    // Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): the agent compacts prompt
+    // memory every turn when it exceeds budget. Surface that *mid-run*
+    // compaction live so the Harness bridge turns it into a
+    // `MemorySummaryAdded` envelope — previously this between-turn
+    // context engineering was invisible. Live-only (the summary is a
+    // transient prompt artifact, not a recorded step); `None` live_sink
+    // is a no-op, so non-harness runs are unaffected.
+    if let Some(summary) = &memory_summary
+      && let Some(handle) = &self.live_sink
+    {
+      let token_estimate =
+        agentflow_llm::tokenizer::count_tokens_for_model(&self.config.model, summary) as usize;
+      handle
+        .0
+        .emit(&AgentEvent::MemorySummaryAdded {
+          session_id: self.session_id.clone(),
+          layer: "session".to_string(),
+          summary: summary.clone(),
+          token_estimate,
+          timestamp: Utc::now(),
+        })
+        .await;
+    }
+
     let mut messages = Vec::with_capacity(history.len() + 1);
 
     // Always start with the system prompt
@@ -3449,6 +3473,58 @@ providers:
     assert!(summary.contains("older context about project goals"));
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].content, recent.content);
+  }
+
+  /// Phase 2b: when the agent compacts prompt memory mid-run, it emits a
+  /// `MemorySummaryAdded` event to the live sink so the Harness bridge can
+  /// surface the between-turn context engineering. Pre-2b this compaction
+  /// was invisible.
+  #[tokio::test]
+  async fn build_llm_messages_emits_memory_summary_added_when_compacting() {
+    use crate::runtime::{AgentEventSink, EventSinkHandle};
+    use std::sync::Mutex as StdMutex;
+
+    struct RecordingSink {
+      events: Arc<StdMutex<Vec<AgentEvent>>>,
+    }
+    #[async_trait]
+    impl AgentEventSink for RecordingSink {
+      async fn emit(&self, event: &AgentEvent) {
+        self.events.lock().unwrap().push(event.clone());
+      }
+    }
+
+    let recorded = Arc::new(StdMutex::new(Vec::new()));
+    let sink = Arc::new(RecordingSink {
+      events: recorded.clone(),
+    });
+    let mut agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime")
+        .with_memory_prompt_token_budget(8)
+        .with_memory_summary_strategy(MemorySummaryStrategy::Compact),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id("emit-session");
+    agent.live_sink = Some(EventSinkHandle(sink as Arc<dyn AgentEventSink>));
+
+    // Populate memory over the 8-token budget so compaction fires.
+    let mut older = Message::user("emit-session", "older context about project goals");
+    older.token_count = 10;
+    let mut recent = Message::assistant("emit-session", "recent answer");
+    recent.token_count = 4;
+    agent.add_memory_message(older).await.unwrap();
+    agent.add_memory_message(recent).await.unwrap();
+
+    let _ = agent.build_llm_messages("system prompt").await.unwrap();
+
+    let events = recorded.lock().unwrap();
+    assert!(
+      events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::MemorySummaryAdded { .. })),
+      "mid-run compaction must emit MemorySummaryAdded; got {events:?}"
+    );
   }
 
   #[tokio::test]
