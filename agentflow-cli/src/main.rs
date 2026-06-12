@@ -370,6 +370,50 @@ enum HarnessCommands {
     #[arg(long)]
     no_default_context: bool,
   },
+  /// Interactive multi-turn Harness chat (REPL). Each message runs one
+  /// Harness turn against a fixed session id, so the conversation
+  /// continues across turns (and, with --session, across restarts).
+  Chat {
+    /// Path to a skill directory to load (optional)
+    #[arg(long)]
+    skill: Option<String>,
+    /// Model id (required when no --skill is supplied)
+    #[arg(long)]
+    model: Option<String>,
+    /// Resume / continue a specific session id (default: a fresh chat id)
+    #[arg(long)]
+    session: Option<String>,
+    /// Workspace root (default: current working directory)
+    #[arg(long)]
+    workspace: Option<String>,
+    /// Security profile
+    #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+    profile: String,
+    /// Approval-gate provider (see `harness run --help`)
+    #[arg(long, default_value = "none", value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
+    approve: String,
+    /// Underlying agent runtime
+    #[arg(long, default_value = "react", value_parser = ["react", "plan_execute", "plan-execute", "handoff", "blackboard", "debate"])]
+    runtime: String,
+    /// Override the run-dir (session log + memory root)
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Soft cap (tokens) on assembled context; over-budget context is compacted
+    #[arg(long)]
+    context_budget: Option<usize>,
+    /// Agent prompt-memory token budget (compacts older turns mid-run)
+    #[arg(long)]
+    token_budget: Option<u32>,
+    /// Drive turns at the harness layer + refresh workspace context between turns
+    #[arg(long)]
+    context_refresh: bool,
+    /// Maximum agent steps per message
+    #[arg(long)]
+    max_steps: Option<usize>,
+    /// Skip the default workspace context providers
+    #[arg(long)]
+    no_default_context: bool,
+  },
   /// Replay a persisted Harness session log (no LLM is invoked).
   Resume {
     /// Session id to replay
@@ -2122,6 +2166,38 @@ async fn main() {
           context_budget,
           token_budget,
           context_refresh,
+          no_default_context,
+        )
+        .await
+      }
+      HarnessCommands::Chat {
+        skill,
+        model,
+        session,
+        workspace,
+        profile,
+        approve,
+        runtime,
+        run_dir,
+        context_budget,
+        token_budget,
+        context_refresh,
+        max_steps,
+        no_default_context,
+      } => {
+        harness::chat::execute(
+          skill,
+          model,
+          session,
+          workspace,
+          profile,
+          approve,
+          runtime,
+          run_dir,
+          context_budget,
+          token_budget,
+          context_refresh,
+          max_steps,
           no_default_context,
         )
         .await
