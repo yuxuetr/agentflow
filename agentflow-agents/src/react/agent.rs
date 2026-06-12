@@ -357,6 +357,15 @@ impl ReActAgent {
     self
   }
 
+  /// Replace the agent's memory store (builder-style). Useful for
+  /// injecting a persistent store (e.g. `SqliteMemory` keyed by
+  /// session_id) after construction, so a resumed session reads back the
+  /// prior conversation — the long-lived-session resume contract.
+  pub fn with_memory(mut self, memory: Box<dyn MemoryStore>) -> Self {
+    self.memory = memory;
+    self
+  }
+
   /// Attach a reflection strategy to the runtime trace.
   pub fn with_reflection_strategy(mut self, strategy: Arc<dyn ReflectionStrategy>) -> Self {
     self.reflection = Some(strategy);

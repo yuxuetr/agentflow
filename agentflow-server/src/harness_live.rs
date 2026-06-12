@@ -26,7 +26,7 @@ use agentflow_harness::{
   StoppedPayload, default_providers, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
-use agentflow_memory::SessionMemory;
+use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
 use agentflow_tools::ToolRegistry;
 
 use agentflow_db::{
@@ -337,6 +337,49 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
 /// which is acceptable for now and is removed once `HarnessRuntime` is
 /// updated to thread `&mut self` (or `Sync` is added to
 /// `AgentRuntime`).
+/// Build the harness agent's conversation memory.
+///
+/// When `AGENTFLOW_HARNESS_MEMORY_DB` is set to a non-empty path, use a
+/// persistent SQLite store (keyed by session_id, WAL + busy_timeout via
+/// the shared sqlite pool) so a `:resume` reads the prior turns back
+/// across process restarts — long-lived server sessions. Otherwise the
+/// in-process default (unchanged behaviour). Opt-in because a shared
+/// SQLite file is a single-node assumption; multi-node deployments should
+/// front it with their own backend.
+async fn build_harness_memory() -> Result<Box<dyn MemoryStore>, LiveExecutorError> {
+  match std::env::var("AGENTFLOW_HARNESS_MEMORY_DB")
+    .ok()
+    .filter(|p| !p.trim().is_empty())
+  {
+    Some(path) => open_persistent_harness_memory(path.trim()).await,
+    None => Ok(Box::new(SessionMemory::default_window()) as Box<dyn MemoryStore>),
+  }
+}
+
+/// Open a persistent SQLite conversation store at `path`, creating the
+/// parent directory if needed. Keyed by session_id, so a resumed session
+/// reads the prior turns back.
+async fn open_persistent_harness_memory(
+  path: &str,
+) -> Result<Box<dyn MemoryStore>, LiveExecutorError> {
+  let path = std::path::PathBuf::from(path);
+  if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+    std::fs::create_dir_all(parent).map_err(|e| {
+      LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+        "could not create harness memory dir {}: {e}",
+        parent.display()
+      )))
+    })?;
+  }
+  let store = SqliteMemory::open(&path).await.map_err(|e| {
+    LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+      "failed to open harness memory db {}: {e}",
+      path.display()
+    )))
+  })?;
+  Ok(Box::new(store))
+}
+
 async fn run_harness_blocking(
   executor: LiveHarnessExecutor,
   inputs: RunInputs,
@@ -395,11 +438,11 @@ async fn run_harness_inner(
   let registry = wrap_registry(ToolRegistry::new(), hook_config);
 
   let react_config = ReActConfig::new(&inputs.model).with_max_iterations(4);
-  let agent = ReActAgent::new(
-    react_config,
-    Box::new(SessionMemory::default_window()),
-    Arc::new(registry),
-  );
+  // Conversation memory: persistent (keyed by session_id) when the
+  // operator configures it, so `:resume` continues prior turns across
+  // restarts; otherwise the in-process default (back-compat).
+  let memory = build_harness_memory().await?;
+  let agent = ReActAgent::new(react_config, memory, Arc::new(registry));
 
   let mut runtime = HarnessRuntime::new(Box::new(agent))
     .with_event_sink(server_sink.clone())
@@ -525,6 +568,37 @@ enum LiveExecutorError {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Resume contract: a persistent harness store at a path keeps a
+  /// session's turns across re-opens (keyed by session_id), so a `:resume`
+  /// against the same DB reads the prior conversation back. Tested via
+  /// the path helper (no env) to stay race-free.
+  #[tokio::test]
+  async fn persistent_harness_memory_survives_reopen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("harness-memory.sqlite");
+    let path = db.to_string_lossy().into_owned();
+
+    let first = open_persistent_harness_memory(&path).await.unwrap();
+    first
+      .add_message(agentflow_memory::Message::user(
+        "sess-srv",
+        "remember the deploy key",
+      ))
+      .await
+      .unwrap();
+    drop(first);
+
+    let second = open_persistent_harness_memory(&path).await.unwrap();
+    let history = second.get_all("sess-srv").await.unwrap();
+    assert!(
+      history
+        .iter()
+        .any(|m| m.content.contains("remember the deploy key")),
+      "resume must restore the prior conversation from the persistent store"
+    );
+  }
+
   use agentflow_harness::{
     HarnessEvent, HarnessEventBody, SessionStartedPayload, StopReason, StoppedPayload,
   };
