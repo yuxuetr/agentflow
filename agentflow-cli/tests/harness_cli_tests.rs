@@ -116,6 +116,45 @@ fn harness_chat_repl_runs_multi_turn_with_mock() {
     .stdout(predicate::str::contains("reply two"));
 }
 
+/// The chat REPL recognises `/`-prefixed commands (`/help`, `/session`)
+/// and bare `exit` (no command reaches the agent, so no mock response is
+/// needed).
+#[test]
+fn harness_chat_supports_slash_commands() {
+  let tmp = tempfile::tempdir().unwrap();
+  let cfg = tmp.path().join("models.yml");
+  std::fs::write(
+    &cfg,
+    "models:\n  mock-chat: { vendor: mock, type: text, model_id: mock-chat }\n\
+     providers:\n  mock: { api_key_env: MOCK_API_KEY }\n",
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "harness",
+      "chat",
+      "--model",
+      "mock-chat",
+      "--approve",
+      "none",
+      "--no-default-context",
+      "--run-dir",
+    ])
+    .arg(tmp.path().join("runs"))
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .write_stdin("/help\n/session\nexit\n");
+
+  cmd
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("/model <name>"))
+    .stderr(predicate::str::contains("/skill <dir>"))
+    .stderr(predicate::str::contains("session:"));
+}
+
 #[test]
 fn harness_run_rejects_unknown_approve_mode() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();

@@ -1,13 +1,17 @@
 //! `agentflow harness chat` — interactive multi-turn Harness REPL.
 //!
-//! Builds the agent + `HarnessRuntime` once, then loops: read a line from
+//! Builds the agent + `HarnessRuntime`, then loops: read a line from
 //! stdin, run one Harness turn against a **fixed session id** (so the
 //! conversation memory accumulates across turns), print the answer. Every
 //! turn goes through the full harness layer — context assembly, the
 //! approval gate, the event bridge, persistence — unlike `skill chat`
 //! which drives the skill's agent directly.
+//!
+//! Lines beginning with `/` are REPL **commands** (`/help`, `/session`,
+//! `/new`, `/model <name>`, `/skill <dir>`); everything else is a message
+//! to the agent.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -16,15 +20,34 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
-  AgentsMdProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessRunOptions,
-  HarnessRuntime, HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain, TodosMdProvider,
-  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
+  AgentsMdProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessProfile,
+  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
+  RoadmapMdProvider, SinkChain, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir,
+  wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_tools::ToolRegistry;
 
 use super::run::{ApproveMode, build_agent, parse_runtime_kind};
 use super::{parse_profile, resolve_run_dir};
+
+/// Per-chat configuration that does not change across REPL commands.
+/// Bundled so [`build_chat_runtime`] can be called again to rebuild the
+/// runtime when the user switches model / skill, while keeping the same
+/// session (so the conversation carries over via persistent memory),
+/// event sink, and seq counter.
+struct ChatConfig {
+  profile: HarnessProfile,
+  approve_mode: ApproveMode,
+  runtime_kind: HarnessRuntimeKind,
+  context_budget: Option<usize>,
+  context_refresh: bool,
+  no_default_context: bool,
+  jsonl: Arc<dyn HarnessEventSink>,
+  seq_counter: Arc<AtomicU64>,
+  memory_db: PathBuf,
+  session_id: String,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -56,8 +79,6 @@ pub async fn execute(
     .context("could not determine workspace root (pass --workspace or run from a real dir)")?;
   let run_root = resolve_run_dir(run_dir_override)?;
   let session_dir = default_session_dir(&run_root);
-  // Persistent memory keyed by session_id — the chat continues across
-  // turns and (with --session) across restarts.
   let memory_db = run_root.join("harness").join("memory.sqlite");
   if let Some(parent) = memory_db.parent() {
     std::fs::create_dir_all(parent)
@@ -68,64 +89,31 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
-  let (mut agent, model, skill_name) =
-    build_agent(skill_dir.as_deref(), model_override.as_deref(), &memory_db)
-      .await
-      .context("failed to construct the inner Harness agent")?;
-
-  let session_id = session.unwrap_or_else(|| format!("chat-{}", uuid::Uuid::new_v4().simple()));
-
-  let jsonl: Arc<dyn HarnessEventSink> = Arc::new(JsonlEventSink::new(session_dir.clone()));
-  // One shared seq counter for the hook layer and the runtime so events
-  // stay monotonic across the whole chat (Q1.7.1).
-  let seq_counter = Arc::new(AtomicU64::new(0));
-
-  if let Some(provider) = approve_mode.provider() {
-    let hook_config = HookConfig::new(
-      session_id.clone(),
-      provider,
-      SinkChain::new().push(jsonl.clone()),
-    )
-    .with_profile(profile)
-    .with_seq_counter(seq_counter.clone());
-    let mut snapshot = ToolRegistry::new();
-    for tool in agent.tools().list() {
-      snapshot.register(tool);
-    }
-    agent = agent.with_tools(Arc::new(wrap_registry(snapshot, hook_config)));
-  }
-
-  let mut runtime = if context_refresh {
-    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
-  } else {
-    HarnessRuntime::new(Box::new(agent))
+  let mut cfg = ChatConfig {
+    profile,
+    approve_mode,
+    runtime_kind,
+    context_budget,
+    context_refresh,
+    no_default_context,
+    jsonl: Arc::new(JsonlEventSink::new(session_dir.clone())),
+    // One shared seq counter for the hook layer and the runtime so events
+    // stay monotonic across the whole chat (Q1.7.1) and across rebuilds.
+    seq_counter: Arc::new(AtomicU64::new(0)),
+    memory_db,
+    session_id: session.unwrap_or_else(|| format!("chat-{}", uuid::Uuid::new_v4().simple())),
   };
-  runtime = runtime
-    .with_event_sink(jsonl.clone())
-    .with_seq_counter(seq_counter.clone());
-  if !no_default_context {
-    runtime = runtime
-      .with_context_provider(Arc::new(AgentsMdProvider::new()))
-      .with_context_provider(Arc::new(TodosMdProvider::new()))
-      .with_context_provider(Arc::new(RoadmapMdProvider::new()))
-      .with_context_provider(Arc::new(WorkspaceLayoutProvider::new()));
-  }
-  if context_budget.is_some() {
-    runtime = runtime.with_context_summarizer(Arc::new(DeterministicContextSummarizer));
-  }
 
-  eprintln!(
-    "💬 Harness chat — model: {model}{}",
-    skill_name
-      .as_ref()
-      .map(|s| format!(", skill: {s}"))
-      .unwrap_or_default()
-  );
-  eprintln!(
-    "   session: {session_id}  (memory persists; resume later with --session {session_id})"
-  );
-  eprintln!("   profile: {}  ·  approve: {approve}", profile.as_str());
-  eprintln!("   type a message; 'exit' / 'quit' / Ctrl-D to leave.\n");
+  // Current agent source — switched at runtime by /model and /skill.
+  let mut cur_skill: Option<String> = skill_dir;
+  let mut cur_model: Option<String> = model_override;
+
+  let (mut runtime, mut model, mut skill_name) =
+    build_chat_runtime(&cfg, cur_skill.as_deref(), cur_model.as_deref())
+      .await
+      .context("failed to construct the Harness runtime")?;
+
+  print_banner(&model, skill_name.as_deref(), &cfg, &approve);
 
   let mut lines = BufReader::new(tokio::io::stdin()).lines();
   loop {
@@ -133,7 +121,6 @@ pub async fn execute(
     use std::io::Write;
     std::io::stderr().flush().ok();
 
-    // Read the next line, but let Ctrl-C / SIGTERM break the REPL.
     let next = tokio::select! {
       biased;
       line = lines.next_line() => line,
@@ -147,16 +134,83 @@ pub async fn execute(
     if input.is_empty() {
       continue;
     }
-    if matches!(input, "exit" | "quit" | "/exit" | "/quit") {
+    if matches!(input, "exit" | "quit") {
       eprintln!("👋 bye");
       break;
     }
 
+    // ── REPL commands (lines starting with `/`) ──
+    if let Some(cmd) = input.strip_prefix('/') {
+      let (name, arg) = cmd.split_once(char::is_whitespace).unwrap_or((cmd, ""));
+      let arg = arg.trim();
+      match name {
+        "exit" | "quit" | "q" => {
+          eprintln!("👋 bye");
+          break;
+        }
+        "help" | "h" | "?" => print_help(),
+        "session" => eprintln!("   session: {}", cfg.session_id),
+        "model" if !arg.is_empty() => {
+          cur_skill = None;
+          cur_model = Some(arg.to_string());
+          match build_chat_runtime(&cfg, None, Some(arg)).await {
+            Ok((r, m, s)) => {
+              runtime = r;
+              model = m;
+              skill_name = s;
+              eprintln!("   ✅ switched to model: {model} (conversation continues)");
+            }
+            Err(e) => eprintln!("   ⚠️  could not switch model: {e:#}"),
+          }
+        }
+        "skill" if !arg.is_empty() => {
+          if !Path::new(arg).join("SKILL.md").exists()
+            && !Path::new(arg).join("skill.toml").exists()
+          {
+            eprintln!("   ⚠️  no SKILL.md / skill.toml under '{arg}'");
+            continue;
+          }
+          cur_skill = Some(arg.to_string());
+          match build_chat_runtime(&cfg, Some(arg), cur_model.as_deref()).await {
+            Ok((r, m, s)) => {
+              runtime = r;
+              model = m;
+              skill_name = s;
+              eprintln!(
+                "   ✅ switched to skill: {} (model: {model})",
+                skill_name.as_deref().unwrap_or(arg)
+              );
+            }
+            Err(e) => eprintln!("   ⚠️  could not load skill: {e:#}"),
+          }
+        }
+        "new" | "reset" => {
+          // Fresh session id → start a clean conversation. Rebuild so the
+          // agent's memory is keyed by the new id; subsequent turns read
+          // `cfg.session_id`, which we mutate here.
+          cfg.session_id = format!("chat-{}", uuid::Uuid::new_v4().simple());
+          match build_chat_runtime(&cfg, cur_skill.as_deref(), cur_model.as_deref()).await {
+            Ok((r, m, s)) => {
+              runtime = r;
+              model = m;
+              skill_name = s;
+              eprintln!("   ✅ new session: {}", cfg.session_id);
+            }
+            Err(e) => eprintln!("   ⚠️  could not start new session: {e:#}"),
+          }
+        }
+        "model" | "skill" => eprintln!("   usage: /{name} <value>"),
+        other => eprintln!("   unknown command '/{other}' — try /help"),
+      }
+      continue;
+    }
+
+    // ── Otherwise: a message to the agent ──
     let cancel = AgentCancellationToken::new();
     let mut options = HarnessRunOptions::new(input, workspace.clone(), &model)
-      .with_runtime_kind(runtime_kind)
-      .with_profile(profile)
-      .with_session_id(session_id.clone())
+      .with_runtime_kind(cfg.runtime_kind)
+      .with_profile(cfg.profile)
+      .with_session_id(cfg.session_id.clone())
       .with_cancellation_token(cancel.clone());
     if let Some(name) = skill_name.as_ref() {
       options = options.with_skill_name(name.clone());
@@ -167,12 +221,10 @@ pub async fn execute(
       timeout_ms: None,
       token_budget,
     });
-    if let Some(budget) = context_budget {
+    if let Some(budget) = cfg.context_budget {
       options = options.with_context_token_budget(budget);
     }
 
-    // Race this turn against Ctrl-C: a long turn can be interrupted
-    // without killing the whole REPL.
     let run_future = runtime.run(options);
     tokio::pin!(run_future);
     let result = tokio::select! {
@@ -198,4 +250,79 @@ pub async fn execute(
   }
 
   Ok(())
+}
+
+/// Build (or rebuild) the chat's `HarnessRuntime` for the given agent
+/// source. Reuses the chat's sink + seq counter + session id so the
+/// conversation continues across model/skill switches (the agent reads
+/// the same persistent memory keyed by `session_id`).
+async fn build_chat_runtime(
+  cfg: &ChatConfig,
+  skill_dir: Option<&str>,
+  model_override: Option<&str>,
+) -> Result<(HarnessRuntime, String, Option<String>)> {
+  let (mut agent, model, skill_name) = build_agent(skill_dir, model_override, &cfg.memory_db)
+    .await
+    .context("failed to construct the inner Harness agent")?;
+
+  if let Some(provider) = cfg.approve_mode.provider() {
+    let hook_config = HookConfig::new(
+      cfg.session_id.clone(),
+      provider,
+      SinkChain::new().push(cfg.jsonl.clone()),
+    )
+    .with_profile(cfg.profile)
+    .with_seq_counter(cfg.seq_counter.clone());
+    let mut snapshot = ToolRegistry::new();
+    for tool in agent.tools().list() {
+      snapshot.register(tool);
+    }
+    agent = agent.with_tools(Arc::new(wrap_registry(snapshot, hook_config)));
+  }
+
+  let mut runtime = if cfg.context_refresh {
+    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
+  } else {
+    HarnessRuntime::new(Box::new(agent))
+  };
+  runtime = runtime
+    .with_event_sink(cfg.jsonl.clone())
+    .with_seq_counter(cfg.seq_counter.clone());
+  if !cfg.no_default_context {
+    runtime = runtime
+      .with_context_provider(Arc::new(AgentsMdProvider::new()))
+      .with_context_provider(Arc::new(TodosMdProvider::new()))
+      .with_context_provider(Arc::new(RoadmapMdProvider::new()))
+      .with_context_provider(Arc::new(WorkspaceLayoutProvider::new()));
+  }
+  if cfg.context_budget.is_some() {
+    runtime = runtime.with_context_summarizer(Arc::new(DeterministicContextSummarizer));
+  }
+  Ok((runtime, model, skill_name))
+}
+
+fn print_banner(model: &str, skill: Option<&str>, cfg: &ChatConfig, approve: &str) {
+  eprintln!(
+    "💬 Harness chat — model: {model}{}",
+    skill.map(|s| format!(", skill: {s}")).unwrap_or_default()
+  );
+  eprintln!(
+    "   session: {}  (memory persists; resume later with --session {})",
+    cfg.session_id, cfg.session_id
+  );
+  eprintln!(
+    "   profile: {}  ·  approve: {approve}",
+    cfg.profile.as_str()
+  );
+  eprintln!("   type a message, or /help for commands; 'exit' / Ctrl-D to leave.\n");
+}
+
+fn print_help() {
+  eprintln!("   commands:");
+  eprintln!("     /help              show this");
+  eprintln!("     /session           show the current session id");
+  eprintln!("     /new  (/reset)     start a fresh session (clears continuity)");
+  eprintln!("     /model <name>      switch model (conversation continues)");
+  eprintln!("     /skill <dir>       switch to a skill (conversation continues)");
+  eprintln!("     /exit (/quit)      leave");
 }
