@@ -404,7 +404,7 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_memory::{MemoryStore, Message};
+  use agentflow_memory::Message;
 
   /// Resume contract: `build_agent` (the `--model` path) backs the agent
   /// with a persistent SQLite store at the run-dir path, keyed by
