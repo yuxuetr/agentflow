@@ -84,6 +84,101 @@ pub struct AgentContext {
   /// requires a 16-byte trace id and 8-byte span id.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub trace_context: Option<agentflow_llm::LlmTraceContext>,
+  /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): optional live event observer.
+  /// When set, the runtime calls [`AgentEventSink::emit`] for each
+  /// [`AgentEvent`] at the moment it is produced, in addition to
+  /// accumulating it into [`AgentRunResult::events`]. `None` (the
+  /// default) keeps behavior byte-identical to a runtime with no
+  /// observer. `#[serde(skip)]` because a sink is a process-local handle
+  /// (like `cancellation_token`).
+  #[serde(skip)]
+  pub event_sink: Option<EventSinkHandle>,
+  /// Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): optional between-turn hook.
+  /// When set, the runtime calls [`BetweenTurnHook::before_turn`] at the
+  /// top of each turn so the loop's owner (the Harness) can compact or
+  /// refresh context mid-run. `None` (default) is a no-op. `#[serde(skip)]`
+  /// because a hook is a process-local handle.
+  #[serde(skip)]
+  pub between_turn_hook: Option<BetweenTurnHookHandle>,
+}
+
+/// Cloneable handle wrapping an [`AgentEventSink`] so [`AgentContext`] can
+/// keep deriving `Debug` / `PartialEq` (a bare `Arc<dyn AgentEventSink>`
+/// implements neither). Two handles compare equal iff they point at the
+/// same sink (`Arc::ptr_eq`), mirroring how [`AgentCancellationToken`]
+/// carries a manual `PartialEq`.
+#[derive(Clone)]
+pub struct EventSinkHandle(pub Arc<dyn AgentEventSink>);
+
+impl std::fmt::Debug for EventSinkHandle {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("EventSinkHandle(<dyn AgentEventSink>)")
+  }
+}
+
+impl PartialEq for EventSinkHandle {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+/// Live observer of an agent run's [`AgentEvent`] stream.
+///
+/// The runtime invokes [`emit`](AgentEventSink::emit) inline at each
+/// event's production point — *before* the loop proceeds — so an
+/// observer (e.g. the Harness event bridge) sees events on the same
+/// logical clock as any governance side-effects that fire during tool
+/// execution. Implementations must be cheap and must not panic;
+/// observability must never alter or break execution.
+#[async_trait]
+pub trait AgentEventSink: Send + Sync {
+  /// Called for every [`AgentEvent`] at the instant it is produced.
+  async fn emit(&self, event: &AgentEvent);
+}
+
+/// Cloneable handle wrapping a [`BetweenTurnHook`] so [`AgentContext`]
+/// keeps deriving `Debug` / `PartialEq`. Mirrors [`EventSinkHandle`].
+#[derive(Clone)]
+pub struct BetweenTurnHookHandle(pub Arc<dyn BetweenTurnHook>);
+
+impl std::fmt::Debug for BetweenTurnHookHandle {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("BetweenTurnHookHandle(<dyn BetweenTurnHook>)")
+  }
+}
+
+impl PartialEq for BetweenTurnHookHandle {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+/// Between-turn control point for an agent loop (RFC_HARNESS_LOOP_OWNERSHIP
+/// Phase 2b — the turn-driven seam).
+///
+/// The runtime invokes [`before_turn`](BetweenTurnHook::before_turn) at
+/// the top of each agent turn, *before* the LLM call, handing the hook
+/// the run's [`MemoryStore`](agentflow_memory::MemoryStore). This is the
+/// point at which an owner of the loop (the Harness) performs
+/// context-window engineering between turns — most importantly memory
+/// compaction — so a long-running loop's prompt stays bounded under a
+/// policy the *caller* controls, rather than only the agent's built-in
+/// `MemorySummaryBackend`.
+///
+/// The hook is best-effort and infallible by contract: it must not break
+/// execution (mirrors [`AgentEventSink`]). `None` (the default) is a
+/// no-op, so runs without a hook are byte-identical.
+#[async_trait]
+pub trait BetweenTurnHook: Send + Sync {
+  /// Called before each turn's LLM call. `turn_index` is the 0-based
+  /// turn. The hook may read and rewrite `memory` (all `&self` async
+  /// methods) to compact or refresh the conversation.
+  async fn before_turn(
+    &self,
+    turn_index: usize,
+    session_id: &str,
+    memory: &dyn agentflow_memory::MemoryStore,
+  );
 }
 
 impl AgentContext {
@@ -105,6 +200,8 @@ impl AgentContext {
       started_at: Utc::now(),
       cancellation_token: None,
       trace_context: None,
+      event_sink: None,
+      between_turn_hook: None,
     }
   }
 
@@ -140,6 +237,21 @@ impl AgentContext {
     context: impl Into<Option<agentflow_llm::LlmTraceContext>>,
   ) -> Self {
     self.trace_context = context.into();
+    self
+  }
+
+  /// Phase 1: attach a live [`AgentEventSink`]. The runtime emits each
+  /// [`AgentEvent`] to it as the event is produced. Pass `None`-equivalent
+  /// by simply not calling this; the default is no observer.
+  pub fn with_event_sink(mut self, sink: Arc<dyn AgentEventSink>) -> Self {
+    self.event_sink = Some(EventSinkHandle(sink));
+    self
+  }
+
+  /// Phase 2b: attach a [`BetweenTurnHook`] invoked before each turn's
+  /// LLM call, for caller-owned between-turn context engineering.
+  pub fn with_between_turn_hook(mut self, hook: Arc<dyn BetweenTurnHook>) -> Self {
+    self.between_turn_hook = Some(BetweenTurnHookHandle(hook));
     self
   }
 }
@@ -512,6 +624,22 @@ pub enum AgentEvent {
   RunStopped {
     session_id: String,
     reason: AgentStopReason,
+    timestamp: DateTime<Utc>,
+  },
+  /// Memory was compacted: an older slice of conversation was replaced by
+  /// a generated summary injected as a synthetic system message. Emitted
+  /// by runtimes that run a [`crate::react::MemorySummaryBackend`] when the
+  /// prompt-memory budget is exceeded, so observers (the Harness
+  /// `MemorySummaryAdded` envelope) can surface context compaction that
+  /// would otherwise be invisible.
+  MemorySummaryAdded {
+    session_id: String,
+    /// Memory layer that produced the summary (`session`, `semantic`, …).
+    layer: String,
+    /// The injected summary text.
+    summary: String,
+    /// Approximate token cost of the summary.
+    token_estimate: usize,
     timestamp: DateTime<Utc>,
   },
 

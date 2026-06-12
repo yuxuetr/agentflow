@@ -31,11 +31,13 @@
 
 pub mod approval;
 pub mod approval_providers;
+pub mod compaction;
 pub mod context;
 pub mod error;
 pub mod event;
 pub mod hooks;
 pub mod hooks_runtime;
+pub mod params_summary;
 pub mod persistence;
 pub mod providers;
 pub mod runtime;
@@ -48,6 +50,7 @@ pub use approval::{
 pub use approval_providers::{
   AutoAllowApprovalProvider, AutoDenyApprovalProvider, CliApprovalProvider,
 };
+pub use compaction::{ContextSummarizer, DeterministicContextSummarizer};
 pub use context::{
   ContextItem, ContextPriority, ContextProvider, HarnessContext, HarnessProfile, HarnessRuntimeKind,
 };

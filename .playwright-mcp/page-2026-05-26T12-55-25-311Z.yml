@@ -1,0 +1,19 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "Diagnostics" [level=1] [ref=e5]
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - text: "API token (last 4 shown):"
+        - code [ref=e8]: (none)
+      - textbox "paste bearer token" [ref=e9]
+      - button "Refresh" [ref=e10] [cursor=pointer]
+  - generic [ref=e11]:
+    - strong [ref=e12]: "Error:"
+    - text: HTTP 404
+  - table [ref=e13]:
+    - rowgroup [ref=e14]:
+      - row "Component Status Detail" [ref=e15]:
+        - columnheader "Component" [ref=e16]
+        - columnheader "Status" [ref=e17]
+        - columnheader "Detail" [ref=e18]
+    - rowgroup

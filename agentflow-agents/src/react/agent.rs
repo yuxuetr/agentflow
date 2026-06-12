@@ -19,6 +19,23 @@ use crate::runtime::{
   RuntimeLimits,
 };
 
+/// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): emit an `AgentEvent` to the
+/// optional live sink (if any), then push it into the run's event
+/// accumulator. The live emission is inline `.await` at the event's
+/// production point so an observer (the Harness bridge) sees it on the
+/// same logical clock as governance side-effects that fire during tool
+/// execution. With `self.live_sink == None` this is exactly
+/// `$events.push(ev)` — byte-identical to the pre-Phase-1 behaviour.
+macro_rules! emit_and_push {
+  ($sink:expr, $events:expr, $event:expr) => {{
+    let ev = $event;
+    if let Some(handle) = ($sink).as_ref() {
+      handle.0.emit(&ev).await;
+    }
+    $events.push(ev);
+  }};
+}
+
 /// Error type for ReAct agent operations
 #[derive(Debug, thiserror::Error)]
 pub enum ReActError {
@@ -42,6 +59,9 @@ pub enum ReActError {
 
   #[error("Memory summary error: {message}")]
   MemorySummary { message: String },
+
+  #[error("turn-driven session already finished")]
+  SessionFinished,
 }
 
 /// Input passed to a pluggable memory summary backend.
@@ -274,6 +294,14 @@ pub struct ReActAgent {
   /// budget against the same numbers the LLM will actually bill.
   /// Defaults to the heuristic until the first context arrives.
   message_counter: Box<dyn agentflow_memory::TokenCounter>,
+  /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): optional live event observer
+  /// captured from `AgentContext::event_sink` at the start of
+  /// `run_with_context`. When set, the loop emits each `AgentEvent` to it
+  /// as it is produced (in addition to accumulating it into the result),
+  /// so the Harness bridge sees tool events on the same logical clock as
+  /// the governance events that fire during tool execution. `None` keeps
+  /// behavior byte-identical to a runtime with no observer.
+  live_sink: Option<crate::runtime::EventSinkHandle>,
 }
 
 impl ReActAgent {
@@ -293,6 +321,7 @@ impl ReActAgent {
       memory_summary_backend: None,
       session_id,
       message_counter,
+      live_sink: None,
     }
   }
 
@@ -325,6 +354,15 @@ impl ReActAgent {
   /// `Arc`.
   pub fn with_tools(mut self, tools: Arc<ToolRegistry>) -> Self {
     self.tools = tools;
+    self
+  }
+
+  /// Replace the agent's memory store (builder-style). Useful for
+  /// injecting a persistent store (e.g. `SqliteMemory` keyed by
+  /// session_id) after construction, so a resumed session reads back the
+  /// prior conversation — the long-lived-session resume contract.
+  pub fn with_memory(mut self, memory: Box<dyn MemoryStore>) -> Self {
+    self.memory = memory;
     self
   }
 
@@ -496,51 +534,34 @@ impl ReActAgent {
     &mut self,
     context: AgentContext,
   ) -> Result<AgentRunResult, ReActError> {
-    self.apply_context(&context);
+    let mut st = self.init_run(&context).await?;
+    loop {
+      match self.run_one_turn(&mut st).await? {
+        TurnStep::Continue => {}
+        TurnStep::Stop(result) => return Ok(result),
+      }
+    }
+  }
+
+  /// Set up a run — apply context, capture the live sink, store the user
+  /// message, build the system prompt — and return the initial
+  /// [`LoopState`]. Shared by [`Self::run_with_context`] (the
+  /// batteries-included driver) and [`Self::begin_turn_driven`] (the
+  /// caller-owned turn-driven driver). RFC_HARNESS_LOOP_OWNERSHIP §6.
+  ///
+  /// F-A2-13 anti-loop steering: `last_tool_call` starts `None`; a repeat
+  /// single-tool call with identical params later gets a steering note
+  /// (see `dispatch_single_tool_call`).
+  async fn init_run(&mut self, context: &AgentContext) -> Result<LoopState, ReActError> {
+    self.apply_context(context);
+    // Phase 1: capture the optional live event observer for this run.
+    self.live_sink = context.event_sink.clone();
     info!(
         session = %self.session_id,
         model = %self.config.model,
         "ReActAgent starting"
     );
 
-    let mut steps = vec![AgentStep::new(
-      0,
-      AgentStepKind::Observe {
-        input: context.input.clone(),
-      },
-    )];
-    let mut events = vec![AgentEvent::RunStarted {
-      session_id: self.session_id.clone(),
-      model: self.config.model.clone(),
-      timestamp: context.started_at,
-    }];
-    let mut step_index = 1;
-    let max_iterations = context
-      .limits
-      .max_steps
-      .unwrap_or(self.config.max_iterations);
-    let max_tool_calls = context.limits.max_tool_calls;
-    let timeout_ms = context.limits.timeout_ms;
-    let budget_tokens = context.limits.token_budget.or(self.config.budget_tokens);
-    let cancellation_token = context.cancellation_token.clone();
-    let run_started_at = Instant::now();
-    let mut tool_calls = 0usize;
-
-    // F-A2-13 anti-loop steering: remember the most recent
-    // single-tool call so we can detect when the model calls the
-    // exact same tool with identical params on the very next
-    // iteration. moonshot-v1-128k and other instruction-following
-    // lite models loop on `git show <hash>` / read-only tools and
-    // burn budget; instead of letting that play out to
-    // `MaxToolCalls`, we append a steering note to the observation
-    // so the model sees "this is your 2nd identical call, advance
-    // or finish" inside its own working memory. Only the iterative
-    // single-tool path is covered today — the parallel batch
-    // dispatcher (`dispatch_native_tool_calls_batch`) doesn't loop
-    // the same way and is left untouched.
-    let mut last_tool_call: Option<(String, serde_json::Value)> = None;
-
-    // 1. Store user message
     self
       .add_memory_message(Message::user_with_counter(
         &self.session_id,
@@ -549,740 +570,262 @@ impl ReActAgent {
       ))
       .await?;
 
-    // 2. Inject system prompt if this is the first user message
-    // (We prepend it to the conversation each time we call the LLM)
     let system_prompt = self.build_system_prompt();
 
-    let mut iteration = 0;
-
-    loop {
-      if is_cancelled(&cancellation_token) {
-        return Ok(Self::cancelled_result(
-          &self.session_id,
-          "cancellation token signalled",
-          steps,
-          events,
-        ));
-      }
-
-      if timed_out(run_started_at, timeout_ms) {
-        self
-          .record_reflection(
-            ReflectionContext::failure(
-              &self.session_id,
-              step_index,
-              format!(
-                "runtime timed out after {}ms",
-                timeout_ms.unwrap_or_default()
-              ),
-            ),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          None,
-          AgentStopReason::Timeout {
-            timeout_ms: timeout_ms.unwrap_or_default(),
-          },
-          steps,
-          events,
-        ));
-      }
-
-      // --- Guard: max iterations ---
-      if iteration >= max_iterations {
-        self
-          .record_reflection(
-            ReflectionContext::failure(
-              &self.session_id,
-              step_index,
-              format!("max steps ({}) reached", max_iterations),
-            ),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          None,
-          AgentStopReason::MaxSteps {
-            max_steps: max_iterations,
-          },
-          steps,
-          events,
-        ));
-      }
-
-      // --- Guard: token budget ---
-      if let Some(budget) = budget_tokens {
-        let used = self.memory.session_token_count(&self.session_id).await?;
-        if used > budget {
-          self
-            .record_reflection(
-              ReflectionContext::failure(
-                &self.session_id,
-                step_index,
-                format!("token budget exceeded: {} / {}", used, budget),
-              ),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            None,
-            AgentStopReason::TokenBudgetExceeded { used, budget },
-            steps,
-            events,
-          ));
-        }
-      }
-
-      // --- Build LLM messages from memory ---
-      let messages = self.build_llm_messages(&system_prompt).await?;
-
-      if is_cancelled(&cancellation_token) {
-        return Ok(Self::cancelled_result(
-          &self.session_id,
-          "cancellation token signalled",
-          steps,
-          events,
-        ));
-      }
-
-      // --- Call LLM ---
-      debug!(iteration, "Calling LLM");
-      let tool_specs = self.collect_tool_specs();
-      let mut builder = AgentFlow::model(&self.config.model)
-        .multimodal_messages(messages)
-        .trace_context(context.trace_context.clone());
-      if !tool_specs.is_empty() {
-        builder = builder.tools(tool_specs);
-      }
-      let llm_call_started = std::time::Instant::now();
-      let llm_call = builder.execute_full();
-      let llm_response: LLMResponse = match (
-        remaining_timeout(run_started_at, timeout_ms),
-        cancellation_token.clone(),
-      ) {
-        (Some(remaining), Some(token)) => {
-          tokio::select! {
-            result = tokio::time::timeout(remaining, llm_call) => match result {
-              Ok(result) => result?,
-              Err(_) => {
-                self
-                  .record_reflection(
-                    ReflectionContext::failure(
-                      &self.session_id,
-                      step_index,
-                      format!(
-                        "runtime timed out after {}ms",
-                        timeout_ms.unwrap_or_default()
-                      ),
-                    ),
-                    &mut step_index,
-                    &mut steps,
-                    &mut events,
-                  )
-                  .await?;
-                return Ok(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout {
-                    timeout_ms: timeout_ms.unwrap_or_default(),
-                  },
-                  steps,
-                  events,
-                ));
-              }
-            },
-            _ = token.cancelled() => {
-              return Ok(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                steps,
-                events,
-              ));
-            }
-          }
-        }
-        (Some(remaining), None) => match tokio::time::timeout(remaining, llm_call).await {
-          Ok(result) => result?,
-          Err(_) => {
-            self
-              .record_reflection(
-                ReflectionContext::failure(
-                  &self.session_id,
-                  step_index,
-                  format!(
-                    "runtime timed out after {}ms",
-                    timeout_ms.unwrap_or_default()
-                  ),
-                ),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
-            return Ok(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::Timeout {
-                timeout_ms: timeout_ms.unwrap_or_default(),
-              },
-              steps,
-              events,
-            ));
-          }
+    Ok(LoopState {
+      steps: vec![AgentStep::new(
+        0,
+        AgentStepKind::Observe {
+          input: context.input.clone(),
         },
-        (None, Some(token)) => {
-          tokio::select! {
-            result = llm_call => result?,
-            _ = token.cancelled() => {
-              return Ok(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                steps,
-                events,
-              ));
-            }
-          }
-        }
-        (None, None) => llm_call.await?,
-      };
-
-      // Surface token usage for downstream cost / latency aggregators
-      // (eval harness, tracing dashboards). `None` token fields are
-      // preserved as `None` — aggregators must treat them as unknown.
-      let usage = llm_response.usage.as_ref();
-      events.push(AgentEvent::LlmCallCompleted {
+      )],
+      events: vec![AgentEvent::RunStarted {
         session_id: self.session_id.clone(),
-        step_index,
         model: self.config.model.clone(),
-        prompt_tokens: usage.and_then(|u| u.prompt_tokens),
-        completion_tokens: usage.and_then(|u| u.completion_tokens),
-        total_tokens: usage.and_then(|u| u.total_tokens),
-        duration_ms: llm_call_started.elapsed().as_millis() as u64,
-        timestamp: chrono::Utc::now(),
-      });
+        timestamp: context.started_at,
+      }],
+      step_index: 1,
+      iteration: 0,
+      tool_calls: 0,
+      last_tool_call: None,
+      max_iterations: context
+        .limits
+        .max_steps
+        .unwrap_or(self.config.max_iterations),
+      max_tool_calls: context.limits.max_tool_calls,
+      timeout_ms: context.limits.timeout_ms,
+      budget_tokens: context.limits.token_budget.or(self.config.budget_tokens),
+      cancellation_token: context.cancellation_token.clone(),
+      run_started_at: Instant::now(),
+      system_prompt,
+      trace_context: context.trace_context.clone(),
+      between_turn_hook: context.between_turn_hook.clone(),
+    })
+  }
 
-      let raw_response = llm_response.content.clone();
-      // Q5.2: LLM responses routinely echo back user PII, customer
-      // data, or tool secrets — DEBUG emits a fingerprint + length
-      // only, the full body lands at TRACE (matches the same
-      // discipline Q3.6.2 wired up in agentflow-llm::log_request_complete).
-      debug!(
-        response_len = raw_response.len(),
-        response_sha = %prompt_fingerprint(&raw_response),
-        "LLM responded"
-      );
-      tracing::trace!(response = %raw_response, "LLM response body");
+  /// Begin a **turn-driven** run: set up the session and hand back a
+  /// [`ReActLoopSession`] the caller pumps one turn at a time via
+  /// [`ReActLoopSession::next_turn`], performing its own context
+  /// engineering (e.g. memory compaction) between turns. This is the
+  /// loop-ownership seam of RFC_HARNESS_LOOP_OWNERSHIP §6 — the same per
+  /// turn machinery as [`Self::run_with_context`], but the caller owns
+  /// the loop.
+  pub async fn begin_turn_driven(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<ReActLoopSession<'_>, ReActError> {
+    let state = self.init_run(&context).await?;
+    Ok(ReActLoopSession {
+      agent: self,
+      state,
+      finished: false,
+    })
+  }
 
-      // --- Check stop conditions ---
-      if let Some(condition) = self
-        .config
-        .stop_conditions
-        .iter()
-        .find(|cond| raw_response.contains(cond.as_str()))
-        .cloned()
-      {
-        info!("Stop condition matched: '{}'", condition);
-        self
-          .add_memory_message(Message::assistant_with_counter(
-            &self.session_id,
-            &raw_response,
-            &*self.message_counter,
-          ))
-          .await?;
-        self
-          .record_reflection(
-            ReflectionContext::final_answer(&self.session_id, step_index, &raw_response),
-            &mut step_index,
-            &mut steps,
-            &mut events,
-          )
-          .await?;
-        return Ok(Self::stopped_result(
-          &self.session_id,
-          Some(raw_response),
-          AgentStopReason::StopCondition { condition },
-          steps,
-          events,
-        ));
-      }
+  /// Borrow the run's conversation memory (used by a turn-driven driver
+  /// to compact/inspect context between turns).
+  pub fn memory_ref(&self) -> &dyn MemoryStore {
+    &*self.memory
+  }
 
-      // --- Multi-call batch path (P-H.3) ---
-      // When the model returns >=2 native tool calls in one response,
-      // dispatch them as a batch: concurrent for `Idempotent` calls,
-      // serial for `NonIdempotent` / `Unknown` calls. `ToolCallStarted`
-      // events are emitted in LLM-returned order; `ToolCallCompleted`
-      // matches the same order so trace replay stays deterministic
-      // regardless of completion order on the wire.
-      if llm_response.tool_calls.len() >= 2 {
-        match self
-          .dispatch_native_tool_calls_batch(
-            &llm_response.tool_calls,
-            &raw_response,
-            &mut steps,
-            &mut events,
-            &mut step_index,
-            &mut tool_calls,
-            max_tool_calls,
-            run_started_at,
-            timeout_ms,
-            cancellation_token.as_ref(),
-          )
-          .await?
-        {
-          BatchOutcome::Continue => {
-            iteration += 1;
-            continue;
-          }
-          BatchOutcome::Stop(result) => return Ok(*result),
-        }
-      }
+  /// Execute exactly one turn of the ReAct loop against `st`, returning
+  /// `TurnStep::Continue` to advance or `TurnStep::Stop` with the
+  /// terminal result. This is the loop body lifted whole out of
+  /// `run_with_context` (RFC_HARNESS_LOOP_OWNERSHIP §6 step 5); the
+  /// `run_with_context` loop is now just `loop { match run_one_turn … }`.
+  /// Callable in isolation, it is the seam a `LoopSession` (step 6) drives.
+  async fn run_one_turn(&mut self, st: &mut LoopState) -> Result<TurnStep, ReActError> {
+    // Top-of-turn limit guards (cancel / timeout / max-steps / budget).
+    if let Some(result) = self
+      .check_turn_limits(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        st.iteration,
+        st.run_started_at,
+        st.timeout_ms,
+        st.max_iterations,
+        st.budget_tokens,
+        &st.cancellation_token,
+      )
+      .await?
+    {
+      return Ok(TurnStep::Stop(result));
+    }
 
-      // --- Parse response: prefer native tool_calls when present ---
-      let parsed = if let Some(call) = llm_response.tool_calls.first() {
-        native_tool_call_to_agent_response(call)
-      } else {
-        AgentResponse::parse(&raw_response)
-      };
+    // LLM call (the Phase 2b between-turn hook fires inside).
+    let (llm_response, raw_response) = match self
+      .run_turn_llm_call(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        st.iteration,
+        &st.system_prompt,
+        st.trace_context.clone(),
+        &st.between_turn_hook,
+        st.run_started_at,
+        st.timeout_ms,
+        &st.cancellation_token,
+      )
+      .await?
+    {
+      LlmTurnOutcome::Proceed {
+        llm_response,
+        raw_response,
+      } => (llm_response, raw_response),
+      LlmTurnOutcome::Stop(result) => return Ok(TurnStep::Stop(result)),
+    };
 
-      // Store the assistant turn
-      self
-        .add_memory_message(Message::assistant_with_counter(
-          &self.session_id,
+    // Stop conditions.
+    if let Some(result) = self
+      .check_stop_conditions(
+        &mut st.steps,
+        &mut st.events,
+        &mut st.step_index,
+        &raw_response,
+      )
+      .await?
+    {
+      return Ok(TurnStep::Stop(result));
+    }
+
+    // Multi-call batch path (P-H.3): >=2 native tool calls in one
+    // response dispatch as a batch (concurrent for idempotent, serial
+    // otherwise) in LLM-returned order.
+    if llm_response.tool_calls.len() >= 2 {
+      match self
+        .dispatch_native_tool_calls_batch(
+          &llm_response.tool_calls,
           &raw_response,
-          &*self.message_counter,
-        ))
-        .await?;
+          &mut st.steps,
+          &mut st.events,
+          &mut st.step_index,
+          &mut st.tool_calls,
+          st.max_tool_calls,
+          st.run_started_at,
+          st.timeout_ms,
+          st.cancellation_token.as_ref(),
+        )
+        .await?
+      {
+        BatchOutcome::Continue => {
+          st.iteration += 1;
+          return Ok(TurnStep::Continue);
+        }
+        BatchOutcome::Stop(result) => return Ok(TurnStep::Stop(*result)),
+      }
+    }
 
-      match parsed {
-        AgentResponse::Action {
+    // Parse response: prefer native tool_calls when present.
+    let parsed = if let Some(call) = llm_response.tool_calls.first() {
+      native_tool_call_to_agent_response(call)
+    } else {
+      AgentResponse::parse(&raw_response)
+    };
+
+    // Store the assistant turn.
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &raw_response,
+        &*self.message_counter,
+      ))
+      .await?;
+
+    match parsed {
+      AgentResponse::Action {
+        thought,
+        tool,
+        params,
+      } => match self
+        .dispatch_single_tool_call(
           thought,
           tool,
           params,
-        } => {
-          info!(iteration, tool = %tool, thought = %thought, "Tool call");
-          // F-A2-13: detect the (tool, params) == previous call
-          // shape BEFORE we touch `params` (it gets moved into
-          // `self.tools.execute` later). `serde_json::Value`
-          // implements semantic equality on Objects, so JSON key
-          // order doesn't trip the comparison.
-          let is_repeat_tool_call = matches!(
-            &last_tool_call,
-            Some((prev_tool, prev_params))
-              if prev_tool == &tool && prev_params == &params
-          );
-          if is_repeat_tool_call {
-            warn!(
-              iteration,
-              tool = %tool,
-              "Repeat tool call detected (identical params as prior iteration); appending steering note (F-A2-13)"
-            );
-          }
-          if let Some(max_tool_calls) = max_tool_calls
-            && tool_calls >= max_tool_calls
-          {
-            self
-              .record_reflection(
-                ReflectionContext::failure(
-                  &self.session_id,
-                  step_index,
-                  format!("max tool calls ({}) reached", max_tool_calls),
-                ),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
-            return Ok(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::MaxToolCalls { max_tool_calls },
-              steps,
-              events,
-            ));
-          }
-
-          if !thought.trim().is_empty() {
-            steps.push(AgentStep::new(
-              step_index,
-              AgentStepKind::Plan {
-                thought: thought.clone(),
-              },
-            ));
-            step_index += 1;
-          }
-
-          if is_cancelled(&cancellation_token) {
-            return Ok(Self::cancelled_result(
-              &self.session_id,
-              "cancellation token signalled",
-              steps,
-              events,
-            ));
-          }
-
-          let tool_step_index = step_index;
-          let metadata = self.tools.tool_metadata(&tool);
-          let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
-          let trace_params = annotate_tool_params_for_resume(
-            params.clone(),
-            self.tools.tool_idempotency(&tool, &params),
-          );
-          if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
-            events.push(AgentEvent::ToolPolicyDecision {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              allowed: decision.allowed,
-              matched_rule: decision.matched_rule,
-              deny_reason: decision.deny_reason,
-              source: decision.source,
-              permissions: decision.permissions,
-              params_summary: decision.params_summary,
-              timestamp: Utc::now(),
-            });
-          }
-          if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
-            events.push(AgentEvent::ToolCapabilityDecision {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.clone(),
-              allowed: effective.allowed,
-              required: effective.required,
-              effective: effective.effective,
-              denied: effective.denied,
-              deny_reason: effective.deny_reason,
-              trace: effective.trace,
-              sandbox: effective.sandbox,
-              timestamp: Utc::now(),
-            });
-          }
-          events.push(AgentEvent::ToolCallStarted {
-            session_id: self.session_id.clone(),
-            step_index: tool_step_index,
-            tool: tool.clone(),
-            params: trace_params.clone(),
-            source: tool_source.clone(),
-            permissions: tool_permissions.clone(),
-            timestamp: Utc::now(),
-          });
-          steps.push(AgentStep::new(
-            tool_step_index,
-            AgentStepKind::ToolCall {
-              tool: tool.clone(),
-              params: trace_params,
-            },
-          ));
-          step_index += 1;
-
-          let started_at = std::time::Instant::now();
-          // F-A2-13: snapshot now so we can compare on the next
-          // iteration even after `params` moves into `execute`.
-          let params_snapshot = params.clone();
-          let tool_call = self.tools.execute(&tool, params);
-          let tool_output = match (
-            remaining_timeout(run_started_at, timeout_ms),
-            cancellation_token.clone(),
-          ) {
-            (Some(remaining), Some(token)) => {
-              tokio::select! {
-                result = tokio::time::timeout(remaining, tool_call) => match result {
-                  Ok(result) => match result {
-                    Ok(out) => out,
-                    Err(e) => {
-                      warn!(tool = %tool, error = %e, "Tool execution failed");
-                      agentflow_tools::ToolOutput::error(e.to_string())
-                    }
-                  },
-                  Err(_) => {
-                    let duration_ms = started_at.elapsed().as_millis() as u64;
-                    events.push(AgentEvent::ToolCallCompleted {
-                      session_id: self.session_id.clone(),
-                      step_index: tool_step_index,
-                      tool: tool.clone(),
-                      is_error: true,
-                      duration_ms,
-                      source: tool_source.clone(),
-                      permissions: tool_permissions.clone(),
-                      timestamp: Utc::now(),
-                    });
-                    self
-                      .record_reflection(
-                        ReflectionContext::failure(
-                          &self.session_id,
-                          step_index,
-                          format!(
-                            "runtime timed out after {}ms",
-                            timeout_ms.unwrap_or_default()
-                          ),
-                        ),
-                        &mut step_index,
-                        &mut steps,
-                        &mut events,
-                      )
-                      .await?;
-                    return Ok(Self::stopped_result(
-                      &self.session_id,
-                      None,
-                      AgentStopReason::Timeout {
-                        timeout_ms: timeout_ms.unwrap_or_default(),
-                      },
-                      steps,
-                      events,
-                    ));
-                  }
-                },
-                _ = token.cancelled() => {
-                  events.push(AgentEvent::ToolCallCompleted {
-                    session_id: self.session_id.clone(),
-                    step_index: tool_step_index,
-                    tool: tool.clone(),
-                    is_error: true,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    source: tool_source.clone(),
-                    permissions: tool_permissions.clone(),
-                    timestamp: Utc::now(),
-                  });
-                  return Ok(Self::cancelled_result(
-                    &self.session_id,
-                    "cancellation token signalled",
-                    steps,
-                    events,
-                  ));
-                }
-              }
-            }
-            (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
-              Ok(result) => match result {
-                Ok(out) => out,
-                Err(e) => {
-                  warn!(tool = %tool, error = %e, "Tool execution failed");
-                  agentflow_tools::ToolOutput::error(e.to_string())
-                }
-              },
-              Err(_) => {
-                let duration_ms = started_at.elapsed().as_millis() as u64;
-                events.push(AgentEvent::ToolCallCompleted {
-                  session_id: self.session_id.clone(),
-                  step_index: tool_step_index,
-                  tool: tool.clone(),
-                  is_error: true,
-                  duration_ms,
-                  source: tool_source.clone(),
-                  permissions: tool_permissions.clone(),
-                  timestamp: Utc::now(),
-                });
-                self
-                  .record_reflection(
-                    ReflectionContext::failure(
-                      &self.session_id,
-                      step_index,
-                      format!(
-                        "runtime timed out after {}ms",
-                        timeout_ms.unwrap_or_default()
-                      ),
-                    ),
-                    &mut step_index,
-                    &mut steps,
-                    &mut events,
-                  )
-                  .await?;
-                return Ok(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout {
-                    timeout_ms: timeout_ms.unwrap_or_default(),
-                  },
-                  steps,
-                  events,
-                ));
-              }
-            },
-            (None, Some(token)) => {
-              tokio::select! {
-                result = tool_call => match result {
-                  Ok(out) => out,
-                  Err(e) => {
-                    warn!(tool = %tool, error = %e, "Tool execution failed");
-                    agentflow_tools::ToolOutput::error(e.to_string())
-                  }
-                },
-                _ = token.cancelled() => {
-                  events.push(AgentEvent::ToolCallCompleted {
-                    session_id: self.session_id.clone(),
-                    step_index: tool_step_index,
-                    tool: tool.clone(),
-                    is_error: true,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    source: tool_source.clone(),
-                    permissions: tool_permissions.clone(),
-                    timestamp: Utc::now(),
-                  });
-                  return Ok(Self::cancelled_result(
-                    &self.session_id,
-                    "cancellation token signalled",
-                    steps,
-                    events,
-                  ));
-                }
-              }
-            }
-            (None, None) => match tool_call.await {
-              Ok(out) => out,
-              Err(e) => {
-                warn!(tool = %tool, error = %e, "Tool execution failed");
-                agentflow_tools::ToolOutput::error(e.to_string())
-              }
-            },
-          };
-          tool_calls += 1;
-          let duration_ms = started_at.elapsed().as_millis() as u64;
-
-          let observation = if tool_output.is_error {
-            format!("[ERROR] {}", tool_output.content)
-          } else {
-            tool_output.content.clone()
-          };
-
-          info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::ToolResult {
-              tool: tool.clone(),
-              content: tool_output.content.clone(),
-              is_error: tool_output.is_error,
-              parts: tool_output.parts.clone(),
-            },
-          ));
-          events.push(AgentEvent::ToolCallCompleted {
-            session_id: self.session_id.clone(),
-            step_index: tool_step_index,
-            tool: tool.clone(),
-            is_error: tool_output.is_error,
-            duration_ms,
-            source: tool_source.clone(),
-            permissions: tool_permissions.clone(),
-            timestamp: Utc::now(),
-          });
-          step_index += 1;
-          if tool_output.is_error {
-            self
-              .record_reflection(
-                ReflectionContext::failure(&self.session_id, step_index, &observation),
-                &mut step_index,
-                &mut steps,
-                &mut events,
-              )
-              .await?;
-          }
-
-          // F-A2-13: when this iteration is a repeat of the prior,
-          // append a steering note ONLY to the memory the model
-          // sees on its next turn. The `AgentStepKind::ToolResult`
-          // emitted above already carries the raw observation
-          // (unchanged) so trace consumers / replay see exactly
-          // what the tool produced; the note is purely a nudge for
-          // the LLM's working memory and is namespaced clearly so
-          // operators reading transcripts can tell it apart from
-          // tool output.
-          let observation_for_memory = if is_repeat_tool_call {
-            format!(
-              "{observation}\n\n\
-               [agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `{tool}` with identical parameters. The observation above is unchanged from the prior call — calling `{tool}` again with these params will not yield new information. To make progress, choose one of: (a) draw conclusions from the observation and emit a final answer, (b) call a different tool, or (c) call `{tool}` with materially different parameters.]"
-            )
-          } else {
-            observation.clone()
-          };
-
-          self
-            .add_memory_message(Message::tool_result_with_counter(
-              &self.session_id,
-              &tool,
-              &observation_for_memory,
-              &*self.message_counter,
-            ))
-            .await?;
-
-          // Track the call so the next iteration's check can run.
-          last_tool_call = Some((tool.clone(), params_snapshot));
-
-          iteration += 1;
+          &mut st.steps,
+          &mut st.events,
+          &mut st.step_index,
+          &mut st.tool_calls,
+          &mut st.last_tool_call,
+          st.iteration,
+          st.max_tool_calls,
+          st.run_started_at,
+          st.timeout_ms,
+          &st.cancellation_token,
+        )
+        .await?
+      {
+        TurnStep::Continue => {
+          st.iteration += 1;
+          Ok(TurnStep::Continue)
         }
+        TurnStep::Stop(result) => Ok(TurnStep::Stop(result)),
+      },
 
-        AgentResponse::Answer { thought, answer } => {
-          // Q5.2: `thought` is the LLM's pre-answer reasoning chain
-          // and routinely contains user input verbatim. INFO logs are
-          // typically shipped to centralized log aggregators —
-          // fingerprint + length only at INFO; full text at TRACE.
-          info!(
-            thought_len = thought.len(),
-            thought_sha = %prompt_fingerprint(&thought),
-            "Final answer reached"
-          );
-          tracing::trace!(thought = %thought, "Final answer thought body");
-          if !thought.trim().is_empty() {
-            steps.push(AgentStep::new(step_index, AgentStepKind::Plan { thought }));
-            step_index += 1;
-          }
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::FinalAnswer {
-              answer: answer.clone(),
-            },
+      AgentResponse::Answer { thought, answer } => {
+        // Q5.2: `thought` routinely contains user input verbatim —
+        // fingerprint + length only at INFO; full text at TRACE.
+        info!(
+          thought_len = thought.len(),
+          thought_sha = %prompt_fingerprint(&thought),
+          "Final answer reached"
+        );
+        tracing::trace!(thought = %thought, "Final answer thought body");
+        if !thought.trim().is_empty() {
+          st.steps.push(AgentStep::new(
+            st.step_index,
+            AgentStepKind::Plan { thought },
           ));
-          step_index += 1;
-          self
-            .record_reflection(
-              ReflectionContext::final_answer(&self.session_id, step_index, &answer),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            Some(answer),
-            AgentStopReason::FinalAnswer,
-            steps,
-            events,
-          ));
+          st.step_index += 1;
         }
+        st.steps.push(AgentStep::new(
+          st.step_index,
+          AgentStepKind::FinalAnswer {
+            answer: answer.clone(),
+          },
+        ));
+        st.step_index += 1;
+        self
+          .record_reflection(
+            ReflectionContext::final_answer(&self.session_id, st.step_index, &answer),
+            &mut st.step_index,
+            &mut st.steps,
+            &mut st.events,
+          )
+          .await?;
+        Ok(TurnStep::Stop(Self::stopped_result(
+          &self.session_id,
+          Some(answer),
+          AgentStopReason::FinalAnswer,
+          std::mem::take(&mut st.steps),
+          std::mem::take(&mut st.events),
+        )))
+      }
 
-        AgentResponse::Malformed(text) => {
-          // Treat unstructured text as a final answer
-          warn!("LLM returned non-JSON text; treating as final answer");
-          steps.push(AgentStep::new(
-            step_index,
-            AgentStepKind::FinalAnswer {
-              answer: text.clone(),
-            },
-          ));
-          step_index += 1;
-          self
-            .record_reflection(
-              ReflectionContext::final_answer(&self.session_id, step_index, &text),
-              &mut step_index,
-              &mut steps,
-              &mut events,
-            )
-            .await?;
-          return Ok(Self::stopped_result(
-            &self.session_id,
-            Some(text),
-            AgentStopReason::FinalAnswer,
-            steps,
-            events,
-          ));
-        }
+      AgentResponse::Malformed(text) => {
+        warn!("LLM returned non-JSON text; treating as final answer");
+        st.steps.push(AgentStep::new(
+          st.step_index,
+          AgentStepKind::FinalAnswer {
+            answer: text.clone(),
+          },
+        ));
+        st.step_index += 1;
+        self
+          .record_reflection(
+            ReflectionContext::final_answer(&self.session_id, st.step_index, &text),
+            &mut st.step_index,
+            &mut st.steps,
+            &mut st.events,
+          )
+          .await?;
+        Ok(TurnStep::Stop(Self::stopped_result(
+          &self.session_id,
+          Some(text),
+          AgentStopReason::FinalAnswer,
+          std::mem::take(&mut st.steps),
+          std::mem::take(&mut st.events),
+        )))
       }
     }
   }
@@ -1351,6 +894,759 @@ impl ReActAgent {
       steps,
       events,
     )
+  }
+
+  /// Run one turn's LLM call: between-turn hook, prompt assembly, the
+  /// model round-trip (with timeout/cancellation racing), and the
+  /// `LlmCallCompleted` event. Returns the parsed-ready response, or a
+  /// terminal result when the turn must stop (cancel / timeout).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 2): pure relocation out of the `run_with_context` loop; `steps` /
+  /// `events` are consumed (via `mem::take`) only on the stop paths.
+  #[allow(clippy::too_many_arguments)]
+  async fn run_turn_llm_call(
+    &self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    iteration: usize,
+    system_prompt: &str,
+    trace_context: Option<agentflow_llm::LlmTraceContext>,
+    between_turn_hook: &Option<crate::runtime::BetweenTurnHookHandle>,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<LlmTurnOutcome, ReActError> {
+    // Phase 2b between-turn control point.
+    if let Some(hook) = between_turn_hook {
+      hook
+        .0
+        .before_turn(iteration, &self.session_id, &*self.memory)
+        .await;
+    }
+    let messages = self.build_llm_messages(system_prompt).await?;
+
+    if is_cancelled(cancellation_token) {
+      return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    debug!(iteration, "Calling LLM");
+    let tool_specs = self.collect_tool_specs();
+    let mut builder = AgentFlow::model(&self.config.model)
+      .multimodal_messages(messages)
+      .trace_context(trace_context);
+    if !tool_specs.is_empty() {
+      builder = builder.tools(tool_specs);
+    }
+    let llm_call_started = std::time::Instant::now();
+    let llm_call = builder.execute_full();
+    let llm_response: LLMResponse = match (
+      remaining_timeout(run_started_at, timeout_ms),
+      cancellation_token.clone(),
+    ) {
+      (Some(remaining), Some(token)) => {
+        tokio::select! {
+          result = tokio::time::timeout(remaining, llm_call) => match result {
+            Ok(result) => result?,
+            Err(_) => {
+              self
+                .record_reflection(
+                  ReflectionContext::failure(
+                    &self.session_id,
+                    *step_index,
+                    format!(
+                      "runtime timed out after {}ms",
+                      timeout_ms.unwrap_or_default()
+                    ),
+                  ),
+                  step_index,
+                  steps,
+                  events,
+                )
+                .await?;
+              return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
+                &self.session_id,
+                None,
+                AgentStopReason::Timeout {
+                  timeout_ms: timeout_ms.unwrap_or_default(),
+                },
+                std::mem::take(steps),
+                std::mem::take(events),
+              )));
+            }
+          },
+          _ = token.cancelled() => {
+            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (Some(remaining), None) => match tokio::time::timeout(remaining, llm_call).await {
+        Ok(result) => result?,
+        Err(_) => {
+          self
+            .record_reflection(
+              ReflectionContext::failure(
+                &self.session_id,
+                *step_index,
+                format!(
+                  "runtime timed out after {}ms",
+                  timeout_ms.unwrap_or_default()
+                ),
+              ),
+              step_index,
+              steps,
+              events,
+            )
+            .await?;
+          return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
+            },
+            std::mem::take(steps),
+            std::mem::take(events),
+          )));
+        }
+      },
+      (None, Some(token)) => {
+        tokio::select! {
+          result = llm_call => result?,
+          _ = token.cancelled() => {
+            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (None, None) => llm_call.await?,
+    };
+
+    let usage = llm_response.usage.as_ref();
+    events.push(AgentEvent::LlmCallCompleted {
+      session_id: self.session_id.clone(),
+      step_index: *step_index,
+      model: self.config.model.clone(),
+      prompt_tokens: usage.and_then(|u| u.prompt_tokens),
+      completion_tokens: usage.and_then(|u| u.completion_tokens),
+      total_tokens: usage.and_then(|u| u.total_tokens),
+      duration_ms: llm_call_started.elapsed().as_millis() as u64,
+      timestamp: chrono::Utc::now(),
+    });
+
+    let raw_response = llm_response.content.clone();
+    debug!(
+      response_len = raw_response.len(),
+      response_sha = %prompt_fingerprint(&raw_response),
+      "LLM responded"
+    );
+    tracing::trace!(response = %raw_response, "LLM response body");
+
+    Ok(LlmTurnOutcome::Proceed {
+      llm_response,
+      raw_response,
+    })
+  }
+
+  /// After the LLM call, stop the run if the response contains any
+  /// configured stop string. Returns `Some(result)` to stop, `None` to
+  /// continue to the parse/dispatch phase.
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3): pure relocation; `steps`/`events` are consumed via `mem::take`
+  /// only on the stop path.
+  async fn check_stop_conditions(
+    &mut self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    raw_response: &str,
+  ) -> Result<Option<AgentRunResult>, ReActError> {
+    let Some(condition) = self
+      .config
+      .stop_conditions
+      .iter()
+      .find(|cond| raw_response.contains(cond.as_str()))
+      .cloned()
+    else {
+      return Ok(None);
+    };
+    info!("Stop condition matched: '{}'", condition);
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        raw_response,
+        &*self.message_counter,
+      ))
+      .await?;
+    self
+      .record_reflection(
+        ReflectionContext::final_answer(&self.session_id, *step_index, raw_response),
+        step_index,
+        steps,
+        events,
+      )
+      .await?;
+    Ok(Some(Self::stopped_result(
+      &self.session_id,
+      Some(raw_response.to_string()),
+      AgentStopReason::StopCondition { condition },
+      std::mem::take(steps),
+      std::mem::take(events),
+    )))
+  }
+
+  /// Execute one tool call under the run's timeout/cancellation limits,
+  /// racing the tool future against the deadline and the cancellation
+  /// token. Returns `Output(tool_output)` on completion (success or a
+  /// tool-level error, which is surfaced as an error `ToolOutput`), or
+  /// `Stop(result)` when the run must terminate (timeout / cancellation).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3b): the gnarly tool-execute `select!` block lifted out of the
+  /// `Action` arm, mirroring `run_turn_llm_call`. The future is created
+  /// inside so the borrow of `self.tools` does not outlive this call.
+  /// `steps`/`events` are consumed (via `mem::take`) only on stop paths.
+  #[allow(clippy::too_many_arguments)]
+  async fn execute_tool_with_limits(
+    &self,
+    tool: &str,
+    params: serde_json::Value,
+    tool_step_index: usize,
+    tool_source: &Option<String>,
+    tool_permissions: &[String],
+    started_at: Instant,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<ToolExecOutcome, ReActError> {
+    let tool_call = self.tools.execute(tool, params);
+    let tool_output = match (
+      remaining_timeout(run_started_at, timeout_ms),
+      cancellation_token.clone(),
+    ) {
+      (Some(remaining), Some(token)) => {
+        tokio::select! {
+          result = tokio::time::timeout(remaining, tool_call) => match result {
+            Ok(result) => match result {
+              Ok(out) => out,
+              Err(e) => {
+                warn!(tool = %tool, error = %e, "Tool execution failed");
+                agentflow_tools::ToolOutput::error(e.to_string())
+              }
+            },
+            Err(_) => {
+              let duration_ms = started_at.elapsed().as_millis() as u64;
+              emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: tool_step_index,
+                tool: tool.to_string(),
+                is_error: true,
+                duration_ms,
+                source: tool_source.clone(),
+                permissions: tool_permissions.to_vec(),
+                timestamp: Utc::now(),
+              });
+              self
+                .record_reflection(
+                  ReflectionContext::failure(
+                    &self.session_id,
+                    *step_index,
+                    format!(
+                      "runtime timed out after {}ms",
+                      timeout_ms.unwrap_or_default()
+                    ),
+                  ),
+                  step_index,
+                  steps,
+                  events,
+                )
+                .await?;
+              return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+                &self.session_id,
+                None,
+                AgentStopReason::Timeout {
+                  timeout_ms: timeout_ms.unwrap_or_default(),
+                },
+                std::mem::take(steps),
+                std::mem::take(events),
+              )));
+            }
+          },
+          _ = token.cancelled() => {
+            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms: started_at.elapsed().as_millis() as u64,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            });
+            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
+        Ok(result) => match result {
+          Ok(out) => out,
+          Err(e) => {
+            warn!(tool = %tool, error = %e, "Tool execution failed");
+            agentflow_tools::ToolOutput::error(e.to_string())
+          }
+        },
+        Err(_) => {
+          let duration_ms = started_at.elapsed().as_millis() as u64;
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            }
+          );
+          self
+            .record_reflection(
+              ReflectionContext::failure(
+                &self.session_id,
+                *step_index,
+                format!(
+                  "runtime timed out after {}ms",
+                  timeout_ms.unwrap_or_default()
+                ),
+              ),
+              step_index,
+              steps,
+              events,
+            )
+            .await?;
+          return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
+            },
+            std::mem::take(steps),
+            std::mem::take(events),
+          )));
+        }
+      },
+      (None, Some(token)) => {
+        tokio::select! {
+          result = tool_call => match result {
+            Ok(out) => out,
+            Err(e) => {
+              warn!(tool = %tool, error = %e, "Tool execution failed");
+              agentflow_tools::ToolOutput::error(e.to_string())
+            }
+          },
+          _ = token.cancelled() => {
+            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: tool_step_index,
+              tool: tool.to_string(),
+              is_error: true,
+              duration_ms: started_at.elapsed().as_millis() as u64,
+              source: tool_source.clone(),
+              permissions: tool_permissions.to_vec(),
+              timestamp: Utc::now(),
+            });
+            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
+              &self.session_id,
+              "cancellation token signalled",
+              std::mem::take(steps),
+              std::mem::take(events),
+            )));
+          }
+        }
+      }
+      (None, None) => match tool_call.await {
+        Ok(out) => out,
+        Err(e) => {
+          warn!(tool = %tool, error = %e, "Tool execution failed");
+          agentflow_tools::ToolOutput::error(e.to_string())
+        }
+      },
+    };
+    Ok(ToolExecOutcome::Output(tool_output))
+  }
+
+  /// Process one `AgentResponse::Action`: the max-tool-call guard, the
+  /// plan step, tool policy/capability events, the tool execution (via
+  /// [`Self::execute_tool_with_limits`]), the result step + observation,
+  /// the F-A2-13 repeat-call steering note, and the memory write.
+  /// Returns `TurnStep::Continue` to advance to the next turn, or
+  /// `TurnStep::Stop` on a terminal condition (max tool calls / cancel /
+  /// timeout).
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 3c): the `Action` arm body lifted whole out of the loop. Pure
+  /// relocation; `steps`/`events` are consumed via `mem::take` only on
+  /// stop paths, and the loop now owns the `iteration += 1` increment.
+  #[allow(clippy::too_many_arguments)]
+  async fn dispatch_single_tool_call(
+    &mut self,
+    thought: String,
+    tool: String,
+    params: serde_json::Value,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    tool_calls: &mut usize,
+    last_tool_call: &mut Option<(String, serde_json::Value)>,
+    iteration: usize,
+    max_tool_calls: Option<usize>,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<TurnStep, ReActError> {
+    info!(iteration, tool = %tool, thought = %thought, "Tool call");
+    // F-A2-13: detect the (tool, params) == previous call shape BEFORE
+    // we touch `params` (it gets moved into `self.tools.execute` later).
+    let is_repeat_tool_call = matches!(
+      &*last_tool_call,
+      Some((prev_tool, prev_params))
+        if prev_tool == &tool && prev_params == &params
+    );
+    if is_repeat_tool_call {
+      warn!(
+        iteration,
+        tool = %tool,
+        "Repeat tool call detected (identical params as prior iteration); appending steering note (F-A2-13)"
+      );
+    }
+    if let Some(max_tool_calls) = max_tool_calls
+      && *tool_calls >= max_tool_calls
+    {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!("max tool calls ({}) reached", max_tool_calls),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(TurnStep::Stop(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::MaxToolCalls { max_tool_calls },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if !thought.trim().is_empty() {
+      steps.push(AgentStep::new(
+        *step_index,
+        AgentStepKind::Plan {
+          thought: thought.clone(),
+        },
+      ));
+      *step_index += 1;
+    }
+
+    if is_cancelled(cancellation_token) {
+      return Ok(TurnStep::Stop(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    let tool_step_index = *step_index;
+    let metadata = self.tools.tool_metadata(&tool);
+    let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
+    let trace_params =
+      annotate_tool_params_for_resume(params.clone(), self.tools.tool_idempotency(&tool, &params));
+    if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
+      events.push(AgentEvent::ToolPolicyDecision {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        allowed: decision.allowed,
+        matched_rule: decision.matched_rule,
+        deny_reason: decision.deny_reason,
+        source: decision.source,
+        permissions: decision.permissions,
+        params_summary: decision.params_summary,
+        timestamp: Utc::now(),
+      });
+    }
+    if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
+      events.push(AgentEvent::ToolCapabilityDecision {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        allowed: effective.allowed,
+        required: effective.required,
+        effective: effective.effective,
+        denied: effective.denied,
+        deny_reason: effective.deny_reason,
+        trace: effective.trace,
+        sandbox: effective.sandbox,
+        timestamp: Utc::now(),
+      });
+    }
+    emit_and_push!(
+      self.live_sink,
+      events,
+      AgentEvent::ToolCallStarted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        params: trace_params.clone(),
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      }
+    );
+    steps.push(AgentStep::new(
+      tool_step_index,
+      AgentStepKind::ToolCall {
+        tool: tool.clone(),
+        params: trace_params,
+      },
+    ));
+    *step_index += 1;
+
+    let started_at = std::time::Instant::now();
+    // F-A2-13: snapshot now so we can compare on the next iteration even
+    // after `params` moves into `execute`.
+    let params_snapshot = params.clone();
+    let tool_output = match self
+      .execute_tool_with_limits(
+        &tool,
+        params,
+        tool_step_index,
+        &tool_source,
+        &tool_permissions,
+        started_at,
+        steps,
+        events,
+        step_index,
+        run_started_at,
+        timeout_ms,
+        cancellation_token,
+      )
+      .await?
+    {
+      ToolExecOutcome::Output(output) => output,
+      ToolExecOutcome::Stop(result) => return Ok(TurnStep::Stop(result)),
+    };
+    *tool_calls += 1;
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+
+    let observation = if tool_output.is_error {
+      format!("[ERROR] {}", tool_output.content)
+    } else {
+      tool_output.content.clone()
+    };
+
+    info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
+    steps.push(AgentStep::new(
+      *step_index,
+      AgentStepKind::ToolResult {
+        tool: tool.clone(),
+        content: tool_output.content.clone(),
+        is_error: tool_output.is_error,
+        parts: tool_output.parts.clone(),
+      },
+    ));
+    emit_and_push!(
+      self.live_sink,
+      events,
+      AgentEvent::ToolCallCompleted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        is_error: tool_output.is_error,
+        duration_ms,
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      }
+    );
+    *step_index += 1;
+    if tool_output.is_error {
+      self
+        .record_reflection(
+          ReflectionContext::failure(&self.session_id, *step_index, &observation),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+    }
+
+    // F-A2-13: when this iteration is a repeat of the prior, append a
+    // steering note ONLY to the memory the model sees on its next turn.
+    let observation_for_memory = if is_repeat_tool_call {
+      format!(
+        "{observation}\n\n\
+         [agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `{tool}` with identical parameters. The observation above is unchanged from the prior call — calling `{tool}` again with these params will not yield new information. To make progress, choose one of: (a) draw conclusions from the observation and emit a final answer, (b) call a different tool, or (c) call `{tool}` with materially different parameters.]"
+      )
+    } else {
+      observation.clone()
+    };
+
+    self
+      .add_memory_message(Message::tool_result_with_counter(
+        &self.session_id,
+        &tool,
+        &observation_for_memory,
+        &*self.message_counter,
+      ))
+      .await?;
+
+    // Track the call so the next iteration's check can run.
+    *last_tool_call = Some((tool.clone(), params_snapshot));
+
+    Ok(TurnStep::Continue)
+  }
+
+  /// Top-of-turn limit guards (cancel / timeout / max-steps / token
+  /// budget). Returns `Some(result)` when the run must stop this turn,
+  /// `None` to proceed with the LLM call.
+  ///
+  /// Turn-driven extraction (RFC_HARNESS_LOOP_OWNERSHIP §6, series step
+  /// 1): pulling the guards out of the monolithic `run_with_context`
+  /// loop is the first move toward a resumable `LoopSession`. Behaviour
+  /// is identical — this is a pure relocation; `steps`/`events` are only
+  /// consumed (via `mem::take`) on the stop paths, where the caller
+  /// returns immediately.
+  #[allow(clippy::too_many_arguments)]
+  async fn check_turn_limits(
+    &self,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+    step_index: &mut usize,
+    iteration: usize,
+    run_started_at: Instant,
+    timeout_ms: Option<u64>,
+    max_iterations: usize,
+    budget_tokens: Option<u32>,
+    cancellation_token: &Option<AgentCancellationToken>,
+  ) -> Result<Option<AgentRunResult>, ReActError> {
+    if is_cancelled(cancellation_token) {
+      return Ok(Some(Self::cancelled_result(
+        &self.session_id,
+        "cancellation token signalled",
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if timed_out(run_started_at, timeout_ms) {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!(
+              "runtime timed out after {}ms",
+              timeout_ms.unwrap_or_default()
+            ),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::Timeout {
+          timeout_ms: timeout_ms.unwrap_or_default(),
+        },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if iteration >= max_iterations {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!("max steps ({}) reached", max_iterations),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::MaxSteps {
+          max_steps: max_iterations,
+        },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
+    }
+
+    if let Some(budget) = budget_tokens {
+      let used = self.memory.session_token_count(&self.session_id).await?;
+      if used > budget {
+        self
+          .record_reflection(
+            ReflectionContext::failure(
+              &self.session_id,
+              *step_index,
+              format!("token budget exceeded: {} / {}", used, budget),
+            ),
+            step_index,
+            steps,
+            events,
+          )
+          .await?;
+        return Ok(Some(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::TokenBudgetExceeded { used, budget },
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
+      }
+    }
+
+    Ok(None)
   }
 
   async fn record_reflection(
@@ -1619,6 +1915,30 @@ impl ReActAgent {
     let history = self.read_memory_history(&self.session_id).await?;
     let (memory_summary, history) = self.apply_memory_prompt_budget(history).await?;
 
+    // Phase 2b (RFC_HARNESS_LOOP_OWNERSHIP): the agent compacts prompt
+    // memory every turn when it exceeds budget. Surface that *mid-run*
+    // compaction live so the Harness bridge turns it into a
+    // `MemorySummaryAdded` envelope — previously this between-turn
+    // context engineering was invisible. Live-only (the summary is a
+    // transient prompt artifact, not a recorded step); `None` live_sink
+    // is a no-op, so non-harness runs are unaffected.
+    if let Some(summary) = &memory_summary
+      && let Some(handle) = &self.live_sink
+    {
+      let token_estimate =
+        agentflow_llm::tokenizer::count_tokens_for_model(&self.config.model, summary) as usize;
+      handle
+        .0
+        .emit(&AgentEvent::MemorySummaryAdded {
+          session_id: self.session_id.clone(),
+          layer: "session".to_string(),
+          summary: summary.clone(),
+          token_estimate,
+          timestamp: Utc::now(),
+        })
+        .await;
+    }
+
     let mut messages = Vec::with_capacity(history.len() + 1);
 
     // Always start with the system prompt
@@ -1829,15 +2149,19 @@ impl ReActAgent {
           timestamp: Utc::now(),
         });
       }
-      events.push(AgentEvent::ToolCallStarted {
-        session_id: self.session_id.clone(),
-        step_index: call_step_idx,
-        tool: call.name.clone(),
-        params: trace_params.clone(),
-        source: source.clone(),
-        permissions: permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallStarted {
+          session_id: self.session_id.clone(),
+          step_index: call_step_idx,
+          tool: call.name.clone(),
+          params: trace_params.clone(),
+          source: source.clone(),
+          permissions: permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
       steps.push(AgentStep::new(
         call_step_idx,
         AgentStepKind::ToolCall {
@@ -1894,7 +2218,7 @@ impl ReActAgent {
             done = tokio::time::timeout(remaining, batch_fut) => match done {
               Ok(results) => Some(results),
               Err(_) => {
-                self.emit_batch_timeout(&prepared, &concurrent_idxs, events);
+                self.emit_batch_timeout(&prepared, &concurrent_idxs, events).await;
                 return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
                   &self.session_id,
                   None,
@@ -1905,7 +2229,7 @@ impl ReActAgent {
               }
             },
             _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events);
+              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
               return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
                 &self.session_id,
                 "cancellation token signalled",
@@ -1918,7 +2242,9 @@ impl ReActAgent {
         (Some(remaining), None) => match tokio::time::timeout(remaining, batch_fut).await {
           Ok(results) => Some(results),
           Err(_) => {
-            self.emit_batch_timeout(&prepared, &concurrent_idxs, events);
+            self
+              .emit_batch_timeout(&prepared, &concurrent_idxs, events)
+              .await;
             return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
               &self.session_id,
               None,
@@ -1934,7 +2260,7 @@ impl ReActAgent {
           tokio::select! {
             results = batch_fut => Some(results),
             _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events);
+              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
               return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
                 &self.session_id,
                 "cancellation token signalled",
@@ -1969,16 +2295,20 @@ impl ReActAgent {
         // so the trace stays balanced.
         for &j in serial_idxs.iter().skip_while(|&&j| j != i) {
           if outputs[j].is_none() {
-            events.push(AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: prepared[j].call_step_idx,
-              tool: prepared[j].tool.clone(),
-              is_error: true,
-              duration_ms: 0,
-              source: prepared[j].source.clone(),
-              permissions: prepared[j].permissions.clone(),
-              timestamp: Utc::now(),
-            });
+            emit_and_push!(
+              self.live_sink,
+              events,
+              AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: prepared[j].call_step_idx,
+                tool: prepared[j].tool.clone(),
+                is_error: true,
+                duration_ms: 0,
+                source: prepared[j].source.clone(),
+                permissions: prepared[j].permissions.clone(),
+                timestamp: Utc::now(),
+              }
+            );
           }
         }
         return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
@@ -2001,7 +2331,7 @@ impl ReActAgent {
             done = tokio::time::timeout(remaining, call_fut) => match done {
               Ok(r) => Some(r),
               Err(_) => {
-                events.push(AgentEvent::ToolCallCompleted {
+                emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
                   session_id: self.session_id.clone(),
                   step_index: prepared[i].call_step_idx,
                   tool: prepared[i].tool.clone(),
@@ -2035,16 +2365,20 @@ impl ReActAgent {
         (Some(remaining), None) => match tokio::time::timeout(remaining, call_fut).await {
           Ok(r) => Some(r),
           Err(_) => {
-            events.push(AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: prepared[i].call_step_idx,
-              tool: prepared[i].tool.clone(),
-              is_error: true,
-              duration_ms: started.elapsed().as_millis() as u64,
-              source: prepared[i].source.clone(),
-              permissions: prepared[i].permissions.clone(),
-              timestamp: Utc::now(),
-            });
+            emit_and_push!(
+              self.live_sink,
+              events,
+              AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: prepared[i].call_step_idx,
+                tool: prepared[i].tool.clone(),
+                is_error: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+                source: prepared[i].source.clone(),
+                permissions: prepared[i].permissions.clone(),
+                timestamp: Utc::now(),
+              }
+            );
             return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
               &self.session_id,
               None,
@@ -2133,16 +2467,20 @@ impl ReActAgent {
           parts: output.parts.clone(),
         },
       ));
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prep.call_step_idx,
-        tool: prep.tool.clone(),
-        is_error: output.is_error,
-        duration_ms,
-        source: prep.source.clone(),
-        permissions: prep.permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prep.call_step_idx,
+          tool: prep.tool.clone(),
+          is_error: output.is_error,
+          duration_ms,
+          source: prep.source.clone(),
+          permissions: prep.permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
       if output.is_error {
         if !error_summary.is_empty() {
           error_summary.push_str("; ");
@@ -2173,43 +2511,51 @@ impl ReActAgent {
     Ok(BatchOutcome::Continue)
   }
 
-  fn emit_batch_timeout(
+  async fn emit_batch_timeout(
     &self,
     prepared: &[PreparedToolCall],
     idxs: &[usize],
     events: &mut Vec<AgentEvent>,
   ) {
     for &i in idxs {
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prepared[i].call_step_idx,
-        tool: prepared[i].tool.clone(),
-        is_error: true,
-        duration_ms: 0,
-        source: prepared[i].source.clone(),
-        permissions: prepared[i].permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prepared[i].call_step_idx,
+          tool: prepared[i].tool.clone(),
+          is_error: true,
+          duration_ms: 0,
+          source: prepared[i].source.clone(),
+          permissions: prepared[i].permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
     }
   }
 
-  fn emit_batch_cancelled(
+  async fn emit_batch_cancelled(
     &self,
     prepared: &[PreparedToolCall],
     idxs: &[usize],
     events: &mut Vec<AgentEvent>,
   ) {
     for &i in idxs {
-      events.push(AgentEvent::ToolCallCompleted {
-        session_id: self.session_id.clone(),
-        step_index: prepared[i].call_step_idx,
-        tool: prepared[i].tool.clone(),
-        is_error: true,
-        duration_ms: 0,
-        source: prepared[i].source.clone(),
-        permissions: prepared[i].permissions.clone(),
-        timestamp: Utc::now(),
-      });
+      emit_and_push!(
+        self.live_sink,
+        events,
+        AgentEvent::ToolCallCompleted {
+          session_id: self.session_id.clone(),
+          step_index: prepared[i].call_step_idx,
+          tool: prepared[i].tool.clone(),
+          is_error: true,
+          duration_ms: 0,
+          source: prepared[i].source.clone(),
+          permissions: prepared[i].permissions.clone(),
+          timestamp: Utc::now(),
+        }
+      );
     }
   }
 }
@@ -2220,6 +2566,189 @@ impl ReActAgent {
 enum BatchOutcome {
   Continue,
   Stop(Box<AgentRunResult>),
+}
+
+/// Outcome of one turn's LLM call (RFC_HARNESS_LOOP_OWNERSHIP §6, series
+/// step 2). `Proceed` carries the response for the parse + dispatch
+/// phase; `Stop` carries a terminal result (cancel / timeout).
+enum LlmTurnOutcome {
+  Proceed {
+    llm_response: LLMResponse,
+    raw_response: String,
+  },
+  Stop(AgentRunResult),
+}
+
+/// Outcome of a single-tool execution under timeout/cancellation limits
+/// (RFC_HARNESS_LOOP_OWNERSHIP §6, series step 3b). `Output` carries the
+/// tool result for the rest of the `Action` arm; `Stop` carries a
+/// terminal result (timeout / cancellation).
+enum ToolExecOutcome {
+  Output(agentflow_tools::ToolOutput),
+  Stop(AgentRunResult),
+}
+
+/// Outcome of processing one turn (RFC_HARNESS_LOOP_OWNERSHIP §6).
+/// `Continue` means advance to the next turn; `Stop` carries the terminal
+/// result. This is the shape [`ReActAgent::run_one_turn`] returns.
+enum TurnStep {
+  Continue,
+  Stop(AgentRunResult),
+}
+
+/// Mutable + per-run state threaded through [`ReActAgent::run_one_turn`]
+/// (RFC_HARNESS_LOOP_OWNERSHIP §6, steps 4–5). Bundling the loop's locals
+/// into one struct is what makes a single turn callable in isolation —
+/// the basis for a future `LoopSession`. The first six fields mutate
+/// across turns; the rest are per-run configuration fixed at start.
+struct LoopState {
+  steps: Vec<AgentStep>,
+  events: Vec<AgentEvent>,
+  step_index: usize,
+  iteration: usize,
+  tool_calls: usize,
+  last_tool_call: Option<(String, serde_json::Value)>,
+  max_iterations: usize,
+  max_tool_calls: Option<usize>,
+  timeout_ms: Option<u64>,
+  budget_tokens: Option<u32>,
+  cancellation_token: Option<AgentCancellationToken>,
+  run_started_at: Instant,
+  system_prompt: String,
+  trace_context: Option<agentflow_llm::LlmTraceContext>,
+  between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
+}
+
+/// Outcome of one driven turn (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
+#[derive(Debug)]
+pub enum TurnProgress {
+  /// The agent advanced; call [`ReActLoopSession::next_turn`] again.
+  Continued,
+  /// The agent reached a terminal state; the run result is attached.
+  Finished(AgentRunResult),
+}
+
+/// A **turn-driven** ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
+///
+/// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a
+/// turn at a time with [`Self::next_turn`] until it returns
+/// [`TurnProgress::Finished`]. Between turns the caller (typically the
+/// Harness) owns the loop: it can inspect or rewrite the conversation
+/// through [`Self::memory`] to compact / refresh context under its own
+/// policy. [`ReActAgent::run_with_context`] is the equivalent
+/// batteries-included driver that pumps every turn itself.
+pub struct ReActLoopSession<'a> {
+  agent: &'a mut ReActAgent,
+  state: LoopState,
+  finished: bool,
+}
+
+impl ReActLoopSession<'_> {
+  /// Advance exactly one turn (one observe → plan → act cycle). Returns
+  /// [`TurnProgress::Finished`] once the agent reaches a terminal state;
+  /// calling again afterwards is a [`ReActError::SessionFinished`].
+  pub async fn next_turn(&mut self) -> Result<TurnProgress, ReActError> {
+    if self.finished {
+      return Err(ReActError::SessionFinished);
+    }
+    match self.agent.run_one_turn(&mut self.state).await? {
+      TurnStep::Continue => Ok(TurnProgress::Continued),
+      TurnStep::Stop(result) => {
+        self.finished = true;
+        Ok(TurnProgress::Finished(result))
+      }
+    }
+  }
+
+  /// The run's conversation memory — read or rewrite it between turns to
+  /// perform caller-owned context engineering.
+  pub fn memory(&self) -> &dyn MemoryStore {
+    self.agent.memory_ref()
+  }
+
+  /// 0-based index of the turn `next_turn` will run next.
+  pub fn turn_index(&self) -> usize {
+    self.state.iteration
+  }
+
+  /// Whether the session has reached a terminal state.
+  pub fn is_finished(&self) -> bool {
+    self.finished
+  }
+}
+
+/// A runtime that can be **driven one turn at a time** by an external
+/// owner (RFC_HARNESS_LOOP_OWNERSHIP §6 — harness integration). The owner
+/// calls [`begin`](TurnDrivenRuntime::begin) and pumps the returned
+/// [`LoopSession`], performing its own context engineering between turns.
+/// This is the object-safe, runtime-agnostic façade over
+/// [`ReActAgent::begin_turn_driven`] so the Harness can drive any
+/// turn-driven runtime through `Box<dyn TurnDrivenRuntime>`.
+#[async_trait]
+pub trait TurnDrivenRuntime: Send {
+  /// Begin a turn-driven run and return the session to pump.
+  async fn begin(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<Box<dyn LoopSession + Send + '_>, AgentRuntimeError>;
+
+  /// Stable, machine-readable runtime identifier (e.g. `"react"`).
+  fn runtime_name(&self) -> &'static str;
+}
+
+/// One turn-driven session: pump [`next_turn`](LoopSession::next_turn)
+/// until it returns [`TurnProgress::Finished`]. Between turns the owner
+/// may inspect or rewrite [`memory`](LoopSession::memory).
+#[async_trait]
+pub trait LoopSession: Send {
+  /// Advance exactly one turn.
+  async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError>;
+  /// The run's conversation memory (for caller-owned context engineering).
+  fn memory(&self) -> &dyn MemoryStore;
+  /// 0-based index of the turn `next_turn` will run next.
+  fn turn_index(&self) -> usize;
+}
+
+#[async_trait]
+impl TurnDrivenRuntime for ReActAgent {
+  async fn begin(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<Box<dyn LoopSession + Send + '_>, AgentRuntimeError> {
+    let session =
+      self
+        .begin_turn_driven(context)
+        .await
+        .map_err(|e| AgentRuntimeError::ExecutionFailed {
+          message: e.to_string(),
+        })?;
+    Ok(Box::new(session))
+  }
+
+  fn runtime_name(&self) -> &'static str {
+    "react"
+  }
+}
+
+#[async_trait]
+impl LoopSession for ReActLoopSession<'_> {
+  async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError> {
+    // Fully-qualified call to the inherent method (returns ReActError);
+    // map it onto the runtime-agnostic error for the trait surface.
+    ReActLoopSession::next_turn(self)
+      .await
+      .map_err(|e| AgentRuntimeError::ExecutionFailed {
+        message: e.to_string(),
+      })
+  }
+
+  fn memory(&self) -> &dyn MemoryStore {
+    ReActLoopSession::memory(self)
+  }
+
+  fn turn_index(&self) -> usize {
+    ReActLoopSession::turn_index(self)
+  }
 }
 
 /// Internal staging record for one tool call in a multi-call batch.
@@ -2400,6 +2929,7 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       }
       AgentEvent::RunStarted { .. }
       | AgentEvent::RunStopped { .. }
+      | AgentEvent::MemorySummaryAdded { .. }
       | AgentEvent::DebateRoundStarted { .. } => {}
     }
   }
@@ -2712,6 +3242,156 @@ providers:
     assert_eq!(tool_call_count, 1, "expected exactly one ToolCall step");
 
     // SAFETY: cleanup of the dedicated mock env vars after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// Phase 2b: the between-turn hook fires once at the top of every turn,
+  /// before that turn's LLM call, with the 0-based turn index — the
+  /// control point a loop owner uses for between-turn context engineering.
+  #[tokio::test]
+  async fn between_turn_hook_fires_before_each_turn() {
+    use crate::runtime::BetweenTurnHook;
+
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-turn-hook-{}", uuid::Uuid::new_v4());
+    // Two turns: iteration 0 emits a tool call; iteration 1 the answer.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({"id":"call_0","name":"echo","arguments":{"text":"hi"}})],
+          Vec::<serde_json::Value>::new(),
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          "(unused — native tool call)",
+          r#"{"thought":"done","answer":"final"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct CountingHook {
+      seen: Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+    #[async_trait]
+    impl BetweenTurnHook for CountingHook {
+      async fn before_turn(&self, turn_index: usize, _session_id: &str, _memory: &dyn MemoryStore) {
+        self.seen.lock().unwrap().push(turn_index);
+      }
+    }
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+    let hook = Arc::new(CountingHook { seen: seen.clone() });
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let result = agent
+      .run_with_context(
+        AgentContext::new("turn-hook-session", "say hi", &model).with_between_turn_hook(hook),
+      )
+      .await
+      .unwrap();
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+
+    assert_eq!(
+      *seen.lock().unwrap(),
+      vec![0, 1],
+      "hook must fire before each turn with the 0-based turn index"
+    );
+  }
+
+  /// RFC §6 step 6: the turn-driven session pumps one turn at a time —
+  /// `Continued` while the agent works, `Finished(result)` at the end —
+  /// exposes memory between turns, and rejects use after completion.
+  #[tokio::test]
+  async fn turn_driven_session_advances_then_finishes() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-turn-driven-{}", uuid::Uuid::new_v4());
+    // Turn 0: a tool call; turn 1: the final answer.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({"id":"call_0","name":"echo","arguments":{"text":"hi"}})],
+          Vec::<serde_json::Value>::new(),
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          "(unused — native tool call)",
+          r#"{"thought":"done","answer":"final: ok"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
+
+    let mut session = agent
+      .begin_turn_driven(AgentContext::new("turn-driven-session", "say hi", &model))
+      .await
+      .unwrap();
+    assert_eq!(session.turn_index(), 0);
+
+    // Turn 0: tool call → Continued; memory is observable between turns.
+    assert!(matches!(
+      session.next_turn().await.unwrap(),
+      TurnProgress::Continued
+    ));
+    assert!(!session.is_finished());
+    assert_eq!(session.turn_index(), 1);
+    let history = session
+      .memory()
+      .get_all("turn-driven-session")
+      .await
+      .unwrap();
+    assert!(!history.is_empty(), "memory accessible mid-run");
+
+    // Turn 1: final answer → Finished.
+    let result = match session.next_turn().await.unwrap() {
+      TurnProgress::Finished(r) => r,
+      TurnProgress::Continued => panic!("expected Finished on the second turn"),
+    };
+    assert_eq!(result.answer.as_deref(), Some("final: ok"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert!(session.is_finished());
+
+    // Using the session after it finished is an error.
+    assert!(matches!(
+      session.next_turn().await,
+      Err(ReActError::SessionFinished)
+    ));
+
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
@@ -3381,6 +4061,58 @@ providers:
     assert!(summary.contains("older context about project goals"));
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].content, recent.content);
+  }
+
+  /// Phase 2b: when the agent compacts prompt memory mid-run, it emits a
+  /// `MemorySummaryAdded` event to the live sink so the Harness bridge can
+  /// surface the between-turn context engineering. Pre-2b this compaction
+  /// was invisible.
+  #[tokio::test]
+  async fn build_llm_messages_emits_memory_summary_added_when_compacting() {
+    use crate::runtime::{AgentEventSink, EventSinkHandle};
+    use std::sync::Mutex as StdMutex;
+
+    struct RecordingSink {
+      events: Arc<StdMutex<Vec<AgentEvent>>>,
+    }
+    #[async_trait]
+    impl AgentEventSink for RecordingSink {
+      async fn emit(&self, event: &AgentEvent) {
+        self.events.lock().unwrap().push(event.clone());
+      }
+    }
+
+    let recorded = Arc::new(StdMutex::new(Vec::new()));
+    let sink = Arc::new(RecordingSink {
+      events: recorded.clone(),
+    });
+    let mut agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime")
+        .with_memory_prompt_token_budget(8)
+        .with_memory_summary_strategy(MemorySummaryStrategy::Compact),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id("emit-session");
+    agent.live_sink = Some(EventSinkHandle(sink as Arc<dyn AgentEventSink>));
+
+    // Populate memory over the 8-token budget so compaction fires.
+    let mut older = Message::user("emit-session", "older context about project goals");
+    older.token_count = 10;
+    let mut recent = Message::assistant("emit-session", "recent answer");
+    recent.token_count = 4;
+    agent.add_memory_message(older).await.unwrap();
+    agent.add_memory_message(recent).await.unwrap();
+
+    let _ = agent.build_llm_messages("system prompt").await.unwrap();
+
+    let events = recorded.lock().unwrap();
+    assert!(
+      events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::MemorySummaryAdded { .. })),
+      "mid-run compaction must emit MemorySummaryAdded; got {events:?}"
+    );
   }
 
   #[tokio::test]

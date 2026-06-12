@@ -22,6 +22,13 @@ agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 # `ToolCallRequestedPayload.params_summary` before they hit JSONL /
 # SSE / stdout sinks.
 agentflow-tracing = { path = "../agentflow-tracing", version = "0.1" }
+# Phase 0 (RFC_HARNESS_LOOP_OWNERSHIP): real token accounting for context
+# budgeting via `agentflow_llm::tokenizer::counter_for_model`, replacing the
+# crate-local `chars / 4` heuristic.
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+# Phase 2b / §6: between-turn context-provider refresh injects a refreshed
+# workspace-context message into the session memory (`Message` / `MemoryStore`).
+agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

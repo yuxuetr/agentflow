@@ -307,7 +307,11 @@ enum HarnessCommands {
     /// Model id (required when no --skill is supplied)
     #[arg(long)]
     model: Option<String>,
-    /// Resume an existing session id rather than generating a fresh one
+    /// Resume an existing session id rather than generating a fresh one.
+    /// Conversation memory is persisted (SQLite under the run-dir, keyed
+    /// by session id), so reusing an id continues the prior turns across
+    /// processes — a long-lived session. (Applies to the `--model` path;
+    /// the `--skill` path's memory is configured by the skill manifest.)
     #[arg(long)]
     session: Option<String>,
     /// Workspace root (default: current working directory)
@@ -344,6 +348,24 @@ enum HarnessCommands {
     /// Wall-clock timeout in milliseconds
     #[arg(long)]
     timeout_ms: Option<u64>,
+    /// Soft cap (tokens) on the assembled workspace context. When set, the
+    /// budget is enforced with the model's real tokenizer and over-budget
+    /// items are compacted into a summary (emitting `memory_summary_added`)
+    /// rather than dropped.
+    #[arg(long)]
+    context_budget: Option<usize>,
+    /// Agent prompt-memory token budget. When the conversation exceeds it
+    /// the agent compacts older turns mid-run (surfaced as
+    /// `memory_summary_added`).
+    #[arg(long)]
+    token_budget: Option<u32>,
+    /// Drive the agent loop turn-by-turn at the harness layer and re-run
+    /// the context providers between turns, injecting refreshed workspace
+    /// context when it changed (so a long-running agent perceives edits to
+    /// AGENTS.md / TODOs.md / the workspace mid-run). Emits
+    /// `memory_summary_added` with `layer = "context_refresh"`.
+    #[arg(long)]
+    context_refresh: bool,
     /// Skip the default workspace context providers (AGENTS.md / TODOs.md / ...)
     #[arg(long)]
     no_default_context: bool,
@@ -2078,6 +2100,9 @@ async fn main() {
         max_steps,
         max_tool_calls,
         timeout_ms,
+        context_budget,
+        token_budget,
+        context_refresh,
         no_default_context,
       } => {
         harness::run::execute(
@@ -2094,6 +2119,9 @@ async fn main() {
           max_steps,
           max_tool_calls,
           timeout_ms,
+          context_budget,
+          token_budget,
+          context_refresh,
           no_default_context,
         )
         .await

@@ -10,12 +10,12 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
-  CliApprovalProvider, HarnessEventSink, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
-  HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain, StdoutEventSink, TodosMdProvider,
-  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
+  CliApprovalProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessRunOptions,
+  HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain,
+  StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
-use agentflow_memory::SessionMemory;
+use agentflow_memory::SqliteMemory;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
 
@@ -36,6 +36,9 @@ pub async fn execute(
   max_steps: Option<usize>,
   max_tool_calls: Option<usize>,
   timeout_ms: Option<u64>,
+  context_budget: Option<usize>,
+  token_budget: Option<u32>,
+  context_refresh: bool,
   no_default_context: bool,
 ) -> Result<()> {
   let profile = parse_profile(&profile)?;
@@ -53,14 +56,24 @@ pub async fn execute(
     .context("could not determine workspace root (pass --workspace or run from a real dir)")?;
   let run_root = resolve_run_dir(run_dir_override)?;
   let session_dir = default_session_dir(&run_root);
+  // Persist conversation memory under the run-dir so `--session <id>`
+  // resumes the prior turns (long-lived sessions). One DB keyed by
+  // session_id; only the `--model` path uses it (the `--skill` path's
+  // memory is configured by the skill manifest).
+  let memory_db = run_root.join("harness").join("memory.sqlite");
+  if let Some(parent) = memory_db.parent() {
+    std::fs::create_dir_all(parent)
+      .with_context(|| format!("could not create harness memory dir {}", parent.display()))?;
+  }
 
   AgentFlow::init()
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
-  let (mut agent, model, skill_name) = build_agent(skill_dir.as_deref(), model_override.as_deref())
-    .await
-    .context("failed to construct the inner Harness agent")?;
+  let (mut agent, model, skill_name) =
+    build_agent(skill_dir.as_deref(), model_override.as_deref(), &memory_db)
+      .await
+      .context("failed to construct the inner Harness agent")?;
 
   // Persist every session as JSONL. Stream-json mode additionally fans
   // out the same envelope to stdout.
@@ -101,7 +114,15 @@ pub async fn execute(
     agent = agent.with_tools(Arc::new(wrapped));
   }
 
-  let mut runtime = HarnessRuntime::new(Box::new(agent)).with_event_sink(jsonl_sink.clone());
+  // §6: `--context-refresh` drives the agent turn-by-turn at the harness
+  // layer (ReActAgent implements `TurnDrivenRuntime`) and re-runs the
+  // context providers between turns; otherwise the agent owns iteration.
+  let mut runtime = if context_refresh {
+    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
+  } else {
+    HarnessRuntime::new(Box::new(agent))
+  };
+  runtime = runtime.with_event_sink(jsonl_sink.clone());
   if !no_default_context {
     runtime = runtime
       .with_context_provider(Arc::new(AgentsMdProvider::new()))
@@ -111,6 +132,11 @@ pub async fn execute(
   }
   if let Some(sink) = stdout_sink.as_ref() {
     runtime = runtime.with_event_sink(sink.clone());
+  }
+  // Phase 2a: when a context budget is set, compact over-budget context
+  // into a summary (deterministic, replay-safe) instead of dropping it.
+  if context_budget.is_some() {
+    runtime = runtime.with_context_summarizer(Arc::new(DeterministicContextSummarizer));
   }
 
   // Q3.1.2: shared cancellation token so the Ctrl-C / SIGTERM future
@@ -129,8 +155,11 @@ pub async fn execute(
     max_steps,
     max_tool_calls,
     timeout_ms,
-    token_budget: None,
+    token_budget,
   });
+  if let Some(budget) = context_budget {
+    options = options.with_context_token_budget(budget);
+  }
 
   let started = std::time::Instant::now();
   if matches!(output, OutputFormat::Text) {
@@ -170,10 +199,12 @@ pub async fn execute(
       println!();
       println!("Session: {}", result.session_id);
       println!(
-        "Stop reason: {} — {} events, {} context items (admitted), elapsed {:.2?}",
+        "Stop reason: {} — {} events, {} context items (admitted, {} truncated, {} dropped), elapsed {:.2?}",
         format_stop_reason(&result.stop_reason),
         result.final_event_seq + 1,
         result.context_items_admitted,
+        result.context_items_truncated,
+        result.context_items_dropped,
         elapsed
       );
     }
@@ -184,6 +215,7 @@ pub async fn execute(
         "stop_reason": result.stop_reason,
         "final_event_seq": result.final_event_seq,
         "context_items_admitted": result.context_items_admitted,
+        "context_items_truncated": result.context_items_truncated,
         "context_items_dropped": result.context_items_dropped,
         "model": model,
         "skill": skill_name,
@@ -219,6 +251,7 @@ pub async fn execute(
         "stop_reason": result.stop_reason,
         "final_event_seq": result.final_event_seq,
         "context_items_admitted": result.context_items_admitted,
+        "context_items_truncated": result.context_items_truncated,
         "context_items_dropped": result.context_items_dropped,
         "model": model,
         "skill": skill_name,
@@ -255,6 +288,7 @@ pub async fn execute(
 async fn build_agent(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
+  memory_db: &std::path::Path,
 ) -> Result<(ReActAgent, String, Option<String>)> {
   if let Some(dir) = skill_dir {
     let dir_path = std::path::Path::new(dir);
@@ -275,9 +309,18 @@ async fn build_agent(
     let model = model_override
       .context("--model is required when no --skill is provided")?
       .to_owned();
+    // Persistent conversation memory keyed by session_id: a `harness run
+    // --session <id>` that reuses an id reads the prior turns back, so
+    // long-lived sessions continue across processes.
+    let memory = SqliteMemory::open(memory_db).await.with_context(|| {
+      format!(
+        "failed to open harness memory db at {}",
+        memory_db.display()
+      )
+    })?;
     let agent = ReActAgent::new(
       ReActConfig::new(&model),
-      Box::new(SessionMemory::default_window()),
+      Box::new(memory),
       Arc::new(ToolRegistry::new()),
     );
     Ok((agent, model, None))
@@ -355,5 +398,42 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
       budget_usd,
     } => format!("cost_limit(${used_usd:.4}/${budget_usd:.4})"),
     Error { message } => format!("error({message})"),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use agentflow_memory::Message;
+
+  /// Resume contract: `build_agent` (the `--model` path) backs the agent
+  /// with a persistent SQLite store at the run-dir path, keyed by
+  /// session_id. A second `build_agent` against the same DB therefore
+  /// reads the prior conversation back — which is what makes
+  /// `harness run --session <id>` continue a long-lived session across
+  /// processes.
+  #[tokio::test]
+  async fn build_agent_persists_memory_for_resume() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("memory.sqlite");
+
+    // First "run": construct the agent and record a turn for a session.
+    let (agent1, _model, _skill) = build_agent(None, Some("mock"), &db).await.unwrap();
+    agent1
+      .memory_ref()
+      .add_message(Message::user("sess-resume", "remember the secret token"))
+      .await
+      .unwrap();
+    drop(agent1);
+
+    // Second "run" (resume): same DB + same session id sees the message.
+    let (agent2, _model, _skill) = build_agent(None, Some("mock"), &db).await.unwrap();
+    let history = agent2.memory_ref().get_all("sess-resume").await.unwrap();
+    assert!(
+      history
+        .iter()
+        .any(|m| m.content.contains("remember the secret token")),
+      "resume must restore the prior conversation from the persistent store"
+    );
   }
 }

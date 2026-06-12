@@ -1,0 +1,80 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - paragraph [ref=e6]: AgentFlow
+      - heading "Run Console" [level=1] [ref=e7]
+    - generic [ref=e8]:
+      - textbox "Run ID" [ref=e9]
+      - button "Connect" [ref=e10] [cursor=pointer]
+      - button "Cancel" [disabled] [ref=e11]
+      - link "New run →" [ref=e12] [cursor=pointer]:
+        - /url: /ui/runs/new
+  - region "Run status" [ref=e13]:
+    - generic [ref=e14]:
+      - generic [ref=e15]: Stream
+      - strong [ref=e16]: idle
+    - generic [ref=e17]:
+      - generic [ref=e18]: Status
+      - strong [ref=e19]: none
+    - generic [ref=e20]:
+      - generic [ref=e21]: Tenant
+      - strong [ref=e22]: default
+    - generic [ref=e23]:
+      - generic [ref=e24]: Events
+      - strong [ref=e25]: "0"
+    - generic [ref=e26]:
+      - generic [ref=e27]: Reconnect
+      - strong [ref=e28]: none
+  - generic [ref=e29]:
+    - complementary [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: Runs
+        - button "Refresh" [ref=e33] [cursor=pointer]
+      - list [ref=e34]
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]: Tenant
+          - textbox "Tenant" [ref=e38]: default
+        - generic [ref=e39]:
+          - generic [ref=e40]: API token
+          - textbox "API token" [ref=e41]:
+            - /placeholder: Bearer token
+        - generic [ref=e42]:
+          - generic [ref=e43]: Workflow YAML
+          - textbox "Workflow YAML" [ref=e44]: "name: web-ui-console-smoke nodes: - id: hello type: template parameters: template: \"hello from the run console\""
+        - button "Submit run" [ref=e45] [cursor=pointer]
+    - region "DAG status" [ref=e46]:
+      - generic [ref=e47]:
+        - generic [ref=e48]: DAG
+        - strong [ref=e49]: 0 nodes
+      - generic [ref=e51]: Waiting for events
+    - complementary "Agent timeline" [ref=e52]:
+      - generic [ref=e53]:
+        - generic [ref=e54]: Timeline
+        - strong [ref=e55]: "-"
+      - generic [ref=e56]:
+        - generic [ref=e57]: Filter
+        - textbox "Filter" [ref=e58]:
+          - /placeholder: kind=tool_call_completed AND step>5
+      - list [ref=e59]
+  - region "Run details" [ref=e60]:
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]: Provider / config
+        - strong [ref=e64]: open / unset
+      - generic [ref=e65]: "{ \"tenant_id\": \"default\", \"run_dir\": null, \"auth\": \"no browser token configured\", \"latest_provider_event\": null }"
+    - generic [ref=e66]:
+      - generic [ref=e67]:
+        - generic [ref=e68]: DAG node
+        - strong [ref=e69]: none
+      - generic [ref=e70]: Select a node event.
+    - generic [ref=e71]:
+      - generic [ref=e72]:
+        - generic [ref=e73]: Agent / tool policy
+        - strong [ref=e74]: none
+      - generic [ref=e75]: No agent or tool events.
+    - generic [ref=e76]:
+      - generic [ref=e77]:
+        - generic [ref=e78]: Event payload
+        - strong [ref=e79]: none
+      - generic [ref=e80]: Select an event.

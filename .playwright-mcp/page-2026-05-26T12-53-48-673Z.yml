@@ -1,0 +1,44 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - paragraph [ref=e6]: AgentFlow
+      - heading "Submit a run" [level=1] [ref=e7]
+    - navigation [ref=e8]:
+      - link "← Run console" [ref=e9] [cursor=pointer]:
+        - /url: /ui
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: Tenant
+        - textbox "Tenant" [ref=e14]:
+          - /placeholder: default
+          - text: default
+      - generic [ref=e15]:
+        - generic [ref=e16]: Profile
+        - combobox "Profile" [ref=e17]:
+          - option "dev"
+          - option "local" [selected]
+          - option "production"
+      - generic [ref=e18]:
+        - generic [ref=e19]: API token
+        - textbox "API token" [ref=e20]:
+          - /placeholder: Bearer token (not persisted)
+    - region "Workflow YAML editor" [ref=e21]:
+      - generic [ref=e22]:
+        - generic [ref=e23]: Workflow YAML
+        - generic [ref=e24]: looks like a workflow YAML (basic checks)
+      - generic [ref=e25]:
+        - generic [ref=e26] [cursor=pointer]: Load from file…
+        - generic [ref=e27]: "lines: 6"
+      - textbox [ref=e28]: "name: my-new-run nodes: - id: greet type: template parameters: template: \"hello {{ name }}\""
+    - region "Inputs JSON editor" [ref=e29]:
+      - generic [ref=e30]:
+        - generic [ref=e31]: Inputs (JSON, optional)
+        - generic [ref=e32]: valid JSON or empty
+      - generic [ref=e33]:
+        - generic [ref=e34] [cursor=pointer]: Load from file…
+        - generic [ref=e35]: "lines: 3"
+      - textbox [ref=e36]: "{ \"name\": \"world\" }"
+    - generic [ref=e37]:
+      - button "Submit run" [ref=e38] [cursor=pointer]
+      - generic [ref=e39]: Inputs persist in localStorage (tenant, profile, workflow, inputs). The API token is never saved.
