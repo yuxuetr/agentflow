@@ -307,7 +307,11 @@ enum HarnessCommands {
     /// Model id (required when no --skill is supplied)
     #[arg(long)]
     model: Option<String>,
-    /// Resume an existing session id rather than generating a fresh one
+    /// Resume an existing session id rather than generating a fresh one.
+    /// Conversation memory is persisted (SQLite under the run-dir, keyed
+    /// by session id), so reusing an id continues the prior turns across
+    /// processes — a long-lived session. (Applies to the `--model` path;
+    /// the `--skill` path's memory is configured by the skill manifest.)
     #[arg(long)]
     session: Option<String>,
     /// Workspace root (default: current working directory)
