@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use agentflow_agents::react::{TurnDrivenRuntime, TurnProgress};
 use agentflow_agents::runtime::{
   AgentContext, AgentEvent, AgentEventSink, AgentRunResult, AgentRuntime, AgentStep, AgentStepKind,
   AgentStopReason, RuntimeLimits,
@@ -198,8 +199,20 @@ impl HarnessRunResult {
 /// list of context providers, and a sink chain. Hooks, approval
 /// providers, and parallel tool calls arrive in Phase H2+ without
 /// breaking the existing `run` signature.
+/// How the harness executes the inner agent.
+///
+/// `Opaque` runs the whole agent loop in one `AgentRuntime::run` call (the
+/// agent owns iteration; the harness observes via the event bridge).
+/// `TurnDriven` (RFC_HARNESS_LOOP_OWNERSHIP §6) lets the **harness own the
+/// loop** — it pumps `next_turn` itself, the seam at which caller-owned
+/// context engineering between turns will plug in.
+enum InnerRuntime {
+  Opaque(Box<dyn AgentRuntime>),
+  TurnDriven(Box<dyn TurnDrivenRuntime>),
+}
+
 pub struct HarnessRuntime {
-  inner: Box<dyn AgentRuntime>,
+  inner: InnerRuntime,
   context_providers: Vec<Arc<dyn ContextProvider>>,
   /// Phase 2 (RFC_HARNESS_LOOP_OWNERSHIP): optional context compactor.
   /// When set and the assembled context overflows the token budget, the
@@ -223,6 +236,19 @@ impl HarnessRuntime {
   /// Most callers pass `Box::new(ReActAgent::new(...))` or use
   /// `agentflow_skills::SkillBuilder` to assemble one.
   pub fn new(inner: Box<dyn AgentRuntime>) -> Self {
+    Self::with_inner(InnerRuntime::Opaque(inner))
+  }
+
+  /// Build a runtime that **drives the inner agent turn-by-turn** (RFC §6).
+  /// The harness pumps [`TurnDrivenRuntime`] one turn at a time, owning the
+  /// loop. Live events still stream through the event bridge exactly as in
+  /// the opaque path; the difference is the harness controls iteration and
+  /// gets a between-turn seam for its own context engineering.
+  pub fn new_turn_driven(inner: Box<dyn TurnDrivenRuntime>) -> Self {
+    Self::with_inner(InnerRuntime::TurnDriven(inner))
+  }
+
+  fn with_inner(inner: InnerRuntime) -> Self {
     Self {
       inner,
       context_providers: Vec::new(),
@@ -438,11 +464,33 @@ impl HarnessRuntime {
     ));
     agent_context = agent_context.with_event_sink(bridge.clone());
 
-    let inner_result = self
-      .inner
-      .run(agent_context)
-      .await
-      .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?;
+    let inner_result = match &mut self.inner {
+      // Agent owns iteration; the harness observes via the event bridge.
+      InnerRuntime::Opaque(agent) => agent
+        .run(agent_context)
+        .await
+        .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?,
+      // RFC §6: the harness owns the loop — pump one turn at a time.
+      // Live events still flow through the bridge (the inner agent emits
+      // to `event_sink`); the between-turn point is where caller-owned
+      // context engineering (refresh / compaction) plugs in next.
+      InnerRuntime::TurnDriven(td) => {
+        let mut session = td
+          .begin(agent_context)
+          .await
+          .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?;
+        loop {
+          match session
+            .next_turn()
+            .await
+            .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?
+          {
+            TurnProgress::Continued => {}
+            TurnProgress::Finished(result) => break result,
+          }
+        }
+      }
+    };
 
     // If the bridge emitted anything, the inner runtime is live-aware and
     // already streamed the tool events; the post-hoc pass then emits only
@@ -1499,6 +1547,94 @@ mod tests {
     assert_eq!(summary.layer, "session");
     assert_eq!(summary.token_estimate, 12);
     assert!(summary.summary.contains("compacted 3 older turns"));
+  }
+
+  /// RFC §6: `HarnessRuntime::new_turn_driven` makes the harness *own the
+  /// loop* — it pumps `next_turn` (Continued × N then Finished) itself,
+  /// producing the result and the session_started/stopped bookends.
+  #[tokio::test]
+  async fn harness_drives_turn_driven_runtime() {
+    use crate::persistence::InMemoryEventSink;
+    use agentflow_agents::react::{LoopSession, TurnDrivenRuntime, TurnProgress};
+    use agentflow_agents::runtime::AgentRuntimeError;
+    use agentflow_memory::{MemoryStore, SessionMemory};
+
+    struct ScriptedSession {
+      remaining: usize,
+      answer: String,
+      session_id: String,
+      memory: SessionMemory,
+    }
+    #[async_trait]
+    impl LoopSession for ScriptedSession {
+      async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError> {
+        if self.remaining > 0 {
+          self.remaining -= 1;
+          Ok(TurnProgress::Continued)
+        } else {
+          Ok(TurnProgress::Finished(AgentRunResult {
+            session_id: self.session_id.clone(),
+            answer: Some(self.answer.clone()),
+            stop_reason: AgentStopReason::FinalAnswer,
+            steps: Vec::new(),
+            events: Vec::new(),
+          }))
+        }
+      }
+      fn memory(&self) -> &dyn MemoryStore {
+        &self.memory
+      }
+      fn turn_index(&self) -> usize {
+        0
+      }
+    }
+
+    struct ScriptedTd {
+      turns: usize,
+      answer: String,
+    }
+    #[async_trait]
+    impl TurnDrivenRuntime for ScriptedTd {
+      async fn begin(
+        &mut self,
+        ctx: AgentContext,
+      ) -> Result<Box<dyn LoopSession + Send + '_>, AgentRuntimeError> {
+        Ok(Box::new(ScriptedSession {
+          remaining: self.turns,
+          answer: self.answer.clone(),
+          session_id: ctx.session_id.clone(),
+          memory: SessionMemory::default_window(),
+        }))
+      }
+      fn runtime_name(&self) -> &'static str {
+        "scripted-td"
+      }
+    }
+
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new_turn_driven(Box::new(ScriptedTd {
+      turns: 2,
+      answer: "driven answer".into(),
+    }))
+    .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = runtime
+      .run(HarnessRunOptions::new("go", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("driven answer"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    let events = sink.snapshot().await;
+    assert!(matches!(
+      events.first().unwrap().body,
+      HarnessEventBody::SessionStarted(_)
+    ));
+    assert!(matches!(
+      events.last().unwrap().body,
+      HarnessEventBody::Stopped(_)
+    ));
   }
 
   #[tokio::test]
