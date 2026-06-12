@@ -427,3 +427,60 @@ From the harness-engineering rubric used in the evaluation:
    (Recommendation: stay opaque until a concrete need; they are coarser-grained.)
 3. Does context refresh re-run *all* providers each turn (simple, costs IO) or
    only those declaring a cheap `changed()` probe (faster, more trait surface)?
+
+## 12. Follow-ups / backlog (post-landing, 2026-06-12)
+
+The loop-ownership + context-engineering work (§0) and the interactive
+`agentflow harness chat` REPL (multi-turn, slash-commands `/help` `/session`
+`/new` `/model` `/skill`, persistent `--session` resume) both landed and
+merged. The items below are **non-blocking** polish + deferred work that fell
+out of that effort. Short-term execution is mirrored in the local `TODOs.md`
+**H segment** (gitignored working queue); this section is the durable record.
+
+`TODO` = a concrete, doable enhancement. `DEFERRED` = needs design or is a
+RoadMap non-goal.
+
+1. **TODO — `step_started` live ordering (Phase 1 residual).** Tool/approval
+   events already interleave live on a shared `seq` clock, but `step_started`
+   is still emitted post-hoc by `translate_inner_events` (informational; does
+   not affect tool/approval pairing). Since the harness now drives each turn,
+   `ReActAgent` could emit `AgentEvent::StepStarted` live at turn boundaries
+   and the bridge map it in real time. Requires adding an emission point in the
+   react loop (the agent records steps but does not currently emit `StepStarted`).
+2. **TODO — `harness chat --approve cli` REPL-integrated approval.** Today the
+   REPL owns stdin, so `CliApprovalProvider` (blocking `std::io::stdin`) would
+   contend with it; `harness chat --approve cli` is therefore rejected by a
+   startup guard. Replace the guard with a custom `ApprovalProvider` that reads
+   approval responses from the REPL's shared line reader (one stdin owner, via
+   a channel), so interactive approval works inside chat.
+3. **TODO — `harness chat` streaming output.** The answer prints once per turn
+   after completion (only a TTY "⏳ thinking…" indicator today). Drive
+   incremental output off the harness live event stream / LLM streaming. Most
+   valuable in the tool-using / multi-step path (a tool-less `--model` turn is
+   a single LLM call).
+4. **TODO — `harness chat` readline / history.** Bare stdin line reads today
+   (consistent with `skill chat`; no `rustyline` anywhere in the workspace).
+   Adding readline (history + line editing + completion) is a **workspace-wide
+   consistency decision** — wire `skill chat` at the same time — and must
+   reconcile a blocking readline with the Tokio runtime.
+5. **TODO — `harness chat /clear` command.** In-place clear of the current
+   session's conversation memory (complements `/new`, which opens a fresh
+   session). The `--model` path clears the run-dir `memory.sqlite`; the
+   `--skill` path's memory is manifest-configured, so `/clear` must first
+   locate the real backend to avoid surprising the user.
+6. **DEFERRED — multi-node server shared conversation-memory backend.** The
+   `AGENTFLOW_HARNESS_MEMORY_DB` opt-in uses a shared SQLite file (single-node
+   assumption, documented in `docs/DEPLOYMENT.md`). Multi-node deployments need
+   a Postgres-backed or external `MemoryStore` — an architecture decision to
+   make when a real multi-node need appears (see `docs/ROADMAP_v2.md` Theme B/C).
+7. **DEFERRED — skill-path resume unification.** The `--model` path persists by
+   default (`SqliteMemory`); the `--skill` path's memory is owned by the skill
+   manifest (persistent only when `memory.type = sqlite`) — intentionally, so
+   we do not override the skill author's choice. A `--persist-memory` override
+   flag (injecting via the existing `ReActAgent::with_memory()`) is a candidate
+   if demand appears.
+8. **DEFERRED — H6 advanced compatibility.** Slash-command ecosystem
+   extension, a TUI product shell, OpenHarness config import, third-party
+   agent-framework adapters. Promote per-item with its own RFC; the TUI shell
+   and provider-subscription bridge are explicit `RoadMap.md` non-goals. See
+   `docs/H6_PROMOTION_CRITERIA.md` and `docs/ROADMAP_v2.md` §F.
