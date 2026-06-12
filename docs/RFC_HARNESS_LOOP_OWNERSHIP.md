@@ -45,7 +45,9 @@ end-state the title asks for. Each phase ships and delivers value on its own.
 | 2b — turn-driven driver (between-turn hook) | ✅ done | `feat(harness): turn-driven driver foundation …` | `BetweenTurnHook` seam: ReActAgent invokes a caller-supplied hook (`&dyn MemoryStore`) at the top of every turn before the LLM call; threaded through `HarnessRunOptions`. The control point for caller-owned mid-run context engineering — the loop-ownership value, via a single safe insertion rather than the full loop extraction |
 | 2b — full loop inversion (LoopSession extraction) | ✅ done | series steps 1–6 (`refactor/feat(agents): … steps 1–6`) | ReActAgent's ~750-line loop extracted into `init_run` + `run_one_turn(&mut LoopState)` behind phase methods (check_turn_limits / run_turn_llm_call / check_stop_conditions / dispatch_native_tool_calls_batch / dispatch_single_tool_call). `begin_turn_driven` → `ReActLoopSession::next_turn()` lets a caller literally *drive* iteration and compact between turns via `memory()`. Done as 6 behaviour-preserving steps, each green (178 lib tests) |
 
-Tests at landing: agentflow-agents 175 lib + integration green; agentflow-harness 90 green; agentflow-server 179 lib green; clippy clean across changed crates.
+| §6 — harness drives the loop + context refresh + CLI | ✅ done | `feat(agents): … TurnDrivenRuntime`, `feat(harness): … drive turn-driven runtimes`, `feat(harness,cli): … context-provider refresh` | Object-safe `TurnDrivenRuntime` / `LoopSession` traits (ReActAgent impls them); `HarnessRuntime::new_turn_driven` pumps `next_turn` itself; `with_context_refresh()` re-runs the context providers between turns and injects refreshed workspace context (as a user message) + emits `memory_summary_added(layer="context_refresh")`. Exposed as `agentflow harness run --context-refresh`. Also: CLI `--context-budget` / `--token-budget` expose Phase 0/2a context engineering. |
+
+Tests at landing: agentflow-agents 178 lib + integration green; agentflow-harness 93 green; agentflow-cli 12 harness CLI tests green; agentflow-server 179 lib green; clippy clean; workspace builds.
 
 ## 1. Background: where we are today
 
