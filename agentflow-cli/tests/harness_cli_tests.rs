@@ -97,6 +97,21 @@ fn harness_run_help_lists_approve_flag() {
 }
 
 #[test]
+fn harness_run_help_lists_context_engineering_flags() {
+  // The Phase 0/2a context-engineering knobs must be reachable from the
+  // production CLI: a real-tokenizer context budget that compacts
+  // (not drops) over-budget context, and an agent prompt-memory budget.
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "run", "--help"]);
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("--context-budget"))
+    .stdout(predicate::str::contains("compacted"))
+    .stdout(predicate::str::contains("--token-budget"));
+}
+
+#[test]
 fn harness_list_text_output_lists_sessions_under_run_dir() {
   let run_dir = TempDir::new().unwrap();
   write_session(run_dir.path(), "sess-list-a");

@@ -344,6 +344,17 @@ enum HarnessCommands {
     /// Wall-clock timeout in milliseconds
     #[arg(long)]
     timeout_ms: Option<u64>,
+    /// Soft cap (tokens) on the assembled workspace context. When set, the
+    /// budget is enforced with the model's real tokenizer and over-budget
+    /// items are compacted into a summary (emitting `memory_summary_added`)
+    /// rather than dropped.
+    #[arg(long)]
+    context_budget: Option<usize>,
+    /// Agent prompt-memory token budget. When the conversation exceeds it
+    /// the agent compacts older turns mid-run (surfaced as
+    /// `memory_summary_added`).
+    #[arg(long)]
+    token_budget: Option<u32>,
     /// Skip the default workspace context providers (AGENTS.md / TODOs.md / ...)
     #[arg(long)]
     no_default_context: bool,
@@ -2078,6 +2089,8 @@ async fn main() {
         max_steps,
         max_tool_calls,
         timeout_ms,
+        context_budget,
+        token_budget,
         no_default_context,
       } => {
         harness::run::execute(
@@ -2094,6 +2107,8 @@ async fn main() {
           max_steps,
           max_tool_calls,
           timeout_ms,
+          context_budget,
+          token_budget,
           no_default_context,
         )
         .await

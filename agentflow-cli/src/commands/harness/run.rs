@@ -10,9 +10,9 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
-  CliApprovalProvider, HarnessEventSink, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
-  HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain, StdoutEventSink, TodosMdProvider,
-  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
+  CliApprovalProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessRunOptions,
+  HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain,
+  StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SessionMemory;
@@ -36,6 +36,8 @@ pub async fn execute(
   max_steps: Option<usize>,
   max_tool_calls: Option<usize>,
   timeout_ms: Option<u64>,
+  context_budget: Option<usize>,
+  token_budget: Option<u32>,
   no_default_context: bool,
 ) -> Result<()> {
   let profile = parse_profile(&profile)?;
@@ -112,6 +114,11 @@ pub async fn execute(
   if let Some(sink) = stdout_sink.as_ref() {
     runtime = runtime.with_event_sink(sink.clone());
   }
+  // Phase 2a: when a context budget is set, compact over-budget context
+  // into a summary (deterministic, replay-safe) instead of dropping it.
+  if context_budget.is_some() {
+    runtime = runtime.with_context_summarizer(Arc::new(DeterministicContextSummarizer));
+  }
 
   // Q3.1.2: shared cancellation token so the Ctrl-C / SIGTERM future
   // below can ask the inner agent to stop the loop after the current
@@ -129,8 +136,11 @@ pub async fn execute(
     max_steps,
     max_tool_calls,
     timeout_ms,
-    token_budget: None,
+    token_budget,
   });
+  if let Some(budget) = context_budget {
+    options = options.with_context_token_budget(budget);
+  }
 
   let started = std::time::Instant::now();
   if matches!(output, OutputFormat::Text) {
@@ -170,10 +180,12 @@ pub async fn execute(
       println!();
       println!("Session: {}", result.session_id);
       println!(
-        "Stop reason: {} — {} events, {} context items (admitted), elapsed {:.2?}",
+        "Stop reason: {} — {} events, {} context items (admitted, {} truncated, {} dropped), elapsed {:.2?}",
         format_stop_reason(&result.stop_reason),
         result.final_event_seq + 1,
         result.context_items_admitted,
+        result.context_items_truncated,
+        result.context_items_dropped,
         elapsed
       );
     }
@@ -184,6 +196,7 @@ pub async fn execute(
         "stop_reason": result.stop_reason,
         "final_event_seq": result.final_event_seq,
         "context_items_admitted": result.context_items_admitted,
+        "context_items_truncated": result.context_items_truncated,
         "context_items_dropped": result.context_items_dropped,
         "model": model,
         "skill": skill_name,
@@ -219,6 +232,7 @@ pub async fn execute(
         "stop_reason": result.stop_reason,
         "final_event_seq": result.final_event_seq,
         "context_items_admitted": result.context_items_admitted,
+        "context_items_truncated": result.context_items_truncated,
         "context_items_dropped": result.context_items_dropped,
         "model": model,
         "skill": skill_name,
