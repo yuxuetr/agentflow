@@ -91,6 +91,19 @@ Setting `AGENTFLOW_TRACE_DIR=<path>` opts the gateway in to writing one
 inspect via `agentflow trace tui <run_id> --dir <path>`). The Postgres
 event log remains the source of truth either way.
 
+### Persistent harness conversation memory (resume)
+
+By default the live harness executor runs each session on an in-process
+conversation memory, so `POST /v1/harness/sessions/{id}:resume` restores the
+**event log** but not the agent's prior conversation. Set
+`AGENTFLOW_HARNESS_MEMORY_DB=<path>` to back the harness agent with a
+persistent SQLite store keyed by `session_id` — then a resumed session reads
+its prior turns back across restarts (long-lived sessions). It is opt-in
+because a shared SQLite file assumes a single gateway node; multi-node
+deployments should front conversation memory with their own backend. The CLI
+(`agentflow harness run --session <id>`, `--model` path) persists under the
+run-dir automatically.
+
 The cleanup sweep documented under "Per-run retention overrides" deletes
 expired `runs` / `events` / `artifacts` rows but **does not touch the
 trace JSON directory**. If you enable this on a long-running deployment,
