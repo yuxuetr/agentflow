@@ -72,6 +72,15 @@ pub async fn execute(
   if skill_dir.is_none() && model_override.is_none() {
     anyhow::bail!("either --skill or --model is required");
   }
+  // The REPL owns stdin, so a stdin-based approval prompt can't read it
+  // (the two readers race). Reject the broken combo up front.
+  if matches!(approve_mode, ApproveMode::Cli) {
+    anyhow::bail!(
+      "`--approve cli` is not supported in `harness chat` (the REPL owns stdin). \
+       Use `--approve auto-allow` or `--approve auto-deny` here, or use \
+       `agentflow harness run` for interactive per-call approval."
+    );
+  }
 
   let workspace = workspace
     .map(PathBuf::from)
@@ -225,6 +234,15 @@ pub async fn execute(
       options = options.with_context_token_budget(budget);
     }
 
+    // Real-model turns take seconds; show activity (cleared before the
+    // answer is printed). Skipped when stderr isn't a TTY (piped/tests).
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    if tty {
+      use std::io::Write;
+      eprint!("⏳ thinking…");
+      std::io::stderr().flush().ok();
+    }
+
     let run_future = runtime.run(options);
     tokio::pin!(run_future);
     let result = tokio::select! {
@@ -237,6 +255,12 @@ pub async fn execute(
         continue;
       }
     };
+    if tty {
+      // Clear the "thinking…" line (CR + erase-to-EOL).
+      eprint!("\r\x1b[K");
+      use std::io::Write;
+      std::io::stderr().flush().ok();
+    }
     match result {
       Ok(res) => {
         println!("{}", res.answer.as_deref().unwrap_or("(no answer)"));
