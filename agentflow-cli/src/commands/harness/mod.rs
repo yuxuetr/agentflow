@@ -6,6 +6,7 @@
 //! - `list` — enumerate session logs on disk.
 //! - `inspect` — summarise a single session log.
 
+pub mod chat;
 pub mod inspect;
 pub mod list;
 pub mod replay;

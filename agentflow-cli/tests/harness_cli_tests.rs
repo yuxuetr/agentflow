@@ -65,6 +65,58 @@ fn harness_run_requires_model_or_skill() {
 }
 
 #[test]
+fn harness_chat_requires_model_or_skill() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "chat"]);
+  cmd.write_stdin("exit\n");
+  cmd.assert().failure().stderr(predicate::str::contains(
+    "either --skill or --model is required",
+  ));
+}
+
+/// End-to-end: the chat REPL reads multiple lines from stdin and runs one
+/// Harness turn per line against a single session — proving interactive
+/// multi-turn. Uses the offline mock provider (own process → race-free).
+#[test]
+fn harness_chat_repl_runs_multi_turn_with_mock() {
+  let tmp = tempfile::tempdir().unwrap();
+  let cfg = tmp.path().join("models.yml");
+  std::fs::write(
+    &cfg,
+    "models:\n  mock-chat: { vendor: mock, type: text, model_id: mock-chat }\n\
+     providers:\n  mock: { api_key_env: MOCK_API_KEY }\n",
+  )
+  .unwrap();
+  let run_dir = tmp.path().join("runs");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args([
+    "harness",
+    "chat",
+    "--model",
+    "mock-chat",
+    "--approve",
+    "none",
+    "--no-default-context",
+    "--run-dir",
+  ])
+  .arg(&run_dir)
+  .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+  .env("MOCK_API_KEY", "x")
+  .env(
+    "AGENTFLOW_MOCK_RESPONSES",
+    r#"["{\"thought\":\"t1\",\"answer\":\"reply one\"}","{\"thought\":\"t2\",\"answer\":\"reply two\"}"]"#,
+  )
+  .write_stdin("first message\nsecond message\nexit\n");
+
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("reply one"))
+    .stdout(predicate::str::contains("reply two"));
+}
+
+#[test]
 fn harness_run_rejects_unknown_approve_mode() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd.args([

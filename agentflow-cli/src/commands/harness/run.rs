@@ -285,7 +285,7 @@ pub async fn execute(
   Ok(())
 }
 
-async fn build_agent(
+pub(super) async fn build_agent(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
   memory_db: &std::path::Path,
@@ -336,7 +336,7 @@ async fn build_agent(
 /// NonIdempotent tool call passes through the approval gate (and is
 /// auto-escalated to `RequireApproval` under `--profile production`).
 #[derive(Debug, Clone, Copy)]
-enum ApproveMode {
+pub(super) enum ApproveMode {
   None,
   Cli,
   AutoAllow,
@@ -344,7 +344,7 @@ enum ApproveMode {
 }
 
 impl ApproveMode {
-  fn parse(value: &str) -> Result<Self> {
+  pub(super) fn parse(value: &str) -> Result<Self> {
     match value {
       "none" => Ok(Self::None),
       "cli" => Ok(Self::Cli),
@@ -356,7 +356,7 @@ impl ApproveMode {
     }
   }
 
-  fn provider(self) -> Option<Arc<dyn ApprovalProvider>> {
+  pub(super) fn provider(self) -> Option<Arc<dyn ApprovalProvider>> {
     match self {
       Self::None => None,
       Self::Cli => Some(Arc::new(CliApprovalProvider::stdin())),
@@ -368,7 +368,7 @@ impl ApproveMode {
   }
 }
 
-fn parse_runtime_kind(value: &str) -> Result<HarnessRuntimeKind> {
+pub(super) fn parse_runtime_kind(value: &str) -> Result<HarnessRuntimeKind> {
   match value {
     "react" => Ok(HarnessRuntimeKind::React),
     "plan_execute" | "plan-execute" => Ok(HarnessRuntimeKind::PlanExecute),
