@@ -355,6 +355,13 @@ enum HarnessCommands {
     /// `memory_summary_added`).
     #[arg(long)]
     token_budget: Option<u32>,
+    /// Drive the agent loop turn-by-turn at the harness layer and re-run
+    /// the context providers between turns, injecting refreshed workspace
+    /// context when it changed (so a long-running agent perceives edits to
+    /// AGENTS.md / TODOs.md / the workspace mid-run). Emits
+    /// `memory_summary_added` with `layer = "context_refresh"`.
+    #[arg(long)]
+    context_refresh: bool,
     /// Skip the default workspace context providers (AGENTS.md / TODOs.md / ...)
     #[arg(long)]
     no_default_context: bool,
@@ -2091,6 +2098,7 @@ async fn main() {
         timeout_ms,
         context_budget,
         token_budget,
+        context_refresh,
         no_default_context,
       } => {
         harness::run::execute(
@@ -2109,6 +2117,7 @@ async fn main() {
           timeout_ms,
           context_budget,
           token_budget,
+          context_refresh,
           no_default_context,
         )
         .await

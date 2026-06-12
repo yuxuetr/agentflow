@@ -229,6 +229,11 @@ pub struct HarnessRuntime {
   /// envelope. Now both paths share this single `Arc<AtomicU64>`.
   /// Surface it to callers via [`Self::seq_counter`].
   seq_counter: Arc<std::sync::atomic::AtomicU64>,
+  /// §6: when `true` and the runtime is turn-driven, re-run the context
+  /// providers before each turn and inject refreshed workspace context
+  /// into the session when it changed. Off by default (re-running
+  /// providers has IO cost); opt in with [`Self::with_context_refresh`].
+  refresh_context: bool,
 }
 
 impl HarnessRuntime {
@@ -255,7 +260,19 @@ impl HarnessRuntime {
       compactor: None,
       sinks: SinkChain::new(),
       seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+      refresh_context: false,
     }
+  }
+
+  /// §6: in turn-driven mode, re-run the context providers before each
+  /// turn and inject refreshed workspace context (as a clearly-prefixed
+  /// user message, since the agent skips `Role::System` history) when it
+  /// changed — so a long-running agent perceives workspace edits mid-run.
+  /// Emits a `memory_summary_added` event (`layer = "context_refresh"`).
+  /// No-op in opaque mode (the harness can't get between turns there).
+  pub fn with_context_refresh(mut self) -> Self {
+    self.refresh_context = true;
+    self
   }
 
   /// Append a single context provider. Ordering is preserved; the
@@ -464,22 +481,46 @@ impl HarnessRuntime {
     ));
     agent_context = agent_context.with_event_sink(bridge.clone());
 
+    // §6: between-turn context refresh setup (turn-driven mode). Cloned
+    // here because the driving loop borrows `self.inner` and so cannot
+    // touch other `self` fields. The initial block seeds `last_context`
+    // so the first refresh only fires if the workspace actually changed.
+    let refresh_enabled = self.refresh_context;
+    let refresh_providers = self.context_providers.clone();
+    let refresh_sinks = self.sinks.clone();
+    let refresh_seq = self.seq_counter.clone();
+    let refresh_ctx = ctx.clone();
+    let mut last_context = if refresh_enabled {
+      assemble_persona(None, &items)
+    } else {
+      None
+    };
+
     let inner_result = match &mut self.inner {
       // Agent owns iteration; the harness observes via the event bridge.
       InnerRuntime::Opaque(agent) => agent
         .run(agent_context)
         .await
         .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?,
-      // RFC §6: the harness owns the loop — pump one turn at a time.
-      // Live events still flow through the bridge (the inner agent emits
-      // to `event_sink`); the between-turn point is where caller-owned
-      // context engineering (refresh / compaction) plugs in next.
+      // RFC §6: the harness owns the loop — pump one turn at a time, and
+      // (when enabled) refresh workspace context between turns.
       InnerRuntime::TurnDriven(td) => {
         let mut session = td
           .begin(agent_context)
           .await
           .map_err(|err| HarnessError::Other(format!("inner agent failed: {err}")))?;
         loop {
+          if refresh_enabled {
+            refresh_context_between_turns(
+              &refresh_providers,
+              &refresh_ctx,
+              &mut last_context,
+              session.memory(),
+              &refresh_sinks,
+              &refresh_seq,
+            )
+            .await?;
+          }
           match session
             .next_turn()
             .await
@@ -745,6 +786,65 @@ fn priority_str(priority: ContextPriority) -> &'static str {
     ContextPriority::Normal => "normal",
     ContextPriority::Low => "low",
   }
+}
+
+/// §6: re-run the context providers between turns and, when the
+/// assembled workspace context changed since the previous turn, inject it
+/// into the session memory as a clearly-prefixed **user** message (the
+/// agent skips `Role::System` history, so a user message is how refreshed
+/// context reaches the next prompt) and emit a `memory_summary_added`
+/// event (`layer = "context_refresh"`). A provider error aborts the turn
+/// (fail-loud); a sink error is swallowed (observability must not break
+/// execution).
+async fn refresh_context_between_turns(
+  providers: &[Arc<dyn ContextProvider>],
+  ctx: &HarnessContext,
+  last_context: &mut Option<String>,
+  memory: &dyn agentflow_memory::MemoryStore,
+  sinks: &SinkChain,
+  seq_counter: &AtomicU64,
+) -> Result<(), HarnessError> {
+  let mut items = Vec::new();
+  for provider in providers {
+    let name = provider.name().to_string();
+    let part = provider.collect(ctx).await.map_err(|err| match err {
+      HarnessError::ContextProviderFailed { .. } => err,
+      other => HarnessError::context(name, other.to_string()),
+    })?;
+    items.extend(part);
+  }
+  items.sort_by_key(|item| item.priority as u8);
+  let block = assemble_persona(None, &items);
+
+  if *last_context == block {
+    return Ok(());
+  }
+  if let Some(block_str) = block.as_deref() {
+    let message = agentflow_memory::Message::user(
+      &ctx.session_id,
+      format!("[workspace context refresh]\n{block_str}"),
+    );
+    memory
+      .add_message(message)
+      .await
+      .map_err(|err| HarnessError::Other(format!("context refresh memory write failed: {err}")))?;
+    let token_estimate =
+      agentflow_llm::tokenizer::count_tokens_for_model(&ctx.model, block_str) as usize;
+    let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
+    let event = HarnessEvent {
+      seq,
+      session_id: ctx.session_id.clone(),
+      ts: Utc::now(),
+      body: HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
+        layer: "context_refresh".to_owned(),
+        summary: format!("workspace context refreshed ({} items)", items.len()),
+        token_estimate,
+      }),
+    };
+    let _ = sinks.dispatch(&event).await;
+  }
+  *last_context = block;
+  Ok(())
 }
 
 /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP §5): live bridge from an inner
@@ -1635,6 +1735,113 @@ mod tests {
       events.last().unwrap().body,
       HarnessEventBody::Stopped(_)
     ));
+  }
+
+  /// §6: with `with_context_refresh`, a turn-driven run re-collects the
+  /// context providers between turns and, when the workspace context
+  /// changed, injects it into session memory and emits a
+  /// `memory_summary_added` (`layer = "context_refresh"`) event.
+  #[tokio::test]
+  async fn turn_driven_context_refresh_injects_on_change() {
+    use crate::persistence::InMemoryEventSink;
+    use agentflow_agents::react::{LoopSession, TurnDrivenRuntime, TurnProgress};
+    use agentflow_agents::runtime::AgentRuntimeError;
+    use agentflow_memory::{MemoryStore, SessionMemory};
+    use std::sync::atomic::AtomicUsize;
+
+    // Provider whose content changes on every `collect`.
+    struct ChangingProvider {
+      n: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl ContextProvider for ChangingProvider {
+      fn name(&self) -> &str {
+        "changing"
+      }
+      async fn collect(&self, _ctx: &HarnessContext) -> Result<Vec<ContextItem>, HarnessError> {
+        let v = self.n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec![ContextItem {
+          source: "changing".to_owned(),
+          priority: ContextPriority::Normal,
+          token_estimate: 0,
+          content: format!("workspace state v{v}"),
+          metadata: serde_json::Value::Null,
+        }])
+      }
+    }
+
+    struct ScriptedSession {
+      remaining: usize,
+      session_id: String,
+      memory: SessionMemory,
+    }
+    #[async_trait]
+    impl LoopSession for ScriptedSession {
+      async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError> {
+        if self.remaining > 0 {
+          self.remaining -= 1;
+          Ok(TurnProgress::Continued)
+        } else {
+          Ok(TurnProgress::Finished(AgentRunResult {
+            session_id: self.session_id.clone(),
+            answer: Some("ok".to_owned()),
+            stop_reason: AgentStopReason::FinalAnswer,
+            steps: Vec::new(),
+            events: Vec::new(),
+          }))
+        }
+      }
+      fn memory(&self) -> &dyn MemoryStore {
+        &self.memory
+      }
+      fn turn_index(&self) -> usize {
+        0
+      }
+    }
+    struct ScriptedTd {
+      turns: usize,
+    }
+    #[async_trait]
+    impl TurnDrivenRuntime for ScriptedTd {
+      async fn begin(
+        &mut self,
+        ctx: AgentContext,
+      ) -> Result<Box<dyn LoopSession + Send + '_>, AgentRuntimeError> {
+        Ok(Box::new(ScriptedSession {
+          remaining: self.turns,
+          session_id: ctx.session_id.clone(),
+          memory: SessionMemory::default_window(),
+        }))
+      }
+      fn runtime_name(&self) -> &'static str {
+        "scripted-td"
+      }
+    }
+
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new_turn_driven(Box::new(ScriptedTd { turns: 2 }))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>)
+      .with_context_provider(Arc::new(ChangingProvider {
+        n: Arc::new(AtomicUsize::new(0)),
+      }))
+      .with_context_refresh();
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("go", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    let events = sink.snapshot().await;
+    let refreshes = events
+      .iter()
+      .filter(|e| {
+        matches!(&e.body, HarnessEventBody::MemorySummaryAdded(p) if p.layer == "context_refresh")
+      })
+      .count();
+    assert!(
+      refreshes >= 2,
+      "expected context_refresh events from the changing provider, got {refreshes}"
+    );
   }
 
   #[tokio::test]

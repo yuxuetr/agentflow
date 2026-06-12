@@ -38,6 +38,7 @@ pub async fn execute(
   timeout_ms: Option<u64>,
   context_budget: Option<usize>,
   token_budget: Option<u32>,
+  context_refresh: bool,
   no_default_context: bool,
 ) -> Result<()> {
   let profile = parse_profile(&profile)?;
@@ -103,7 +104,15 @@ pub async fn execute(
     agent = agent.with_tools(Arc::new(wrapped));
   }
 
-  let mut runtime = HarnessRuntime::new(Box::new(agent)).with_event_sink(jsonl_sink.clone());
+  // §6: `--context-refresh` drives the agent turn-by-turn at the harness
+  // layer (ReActAgent implements `TurnDrivenRuntime`) and re-runs the
+  // context providers between turns; otherwise the agent owns iteration.
+  let mut runtime = if context_refresh {
+    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
+  } else {
+    HarnessRuntime::new(Box::new(agent))
+  };
+  runtime = runtime.with_event_sink(jsonl_sink.clone());
   if !no_default_context {
     runtime = runtime
       .with_context_provider(Arc::new(AgentsMdProvider::new()))

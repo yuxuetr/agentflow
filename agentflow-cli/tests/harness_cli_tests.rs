@@ -108,7 +108,10 @@ fn harness_run_help_lists_context_engineering_flags() {
     .success()
     .stdout(predicate::str::contains("--context-budget"))
     .stdout(predicate::str::contains("compacted"))
-    .stdout(predicate::str::contains("--token-budget"));
+    .stdout(predicate::str::contains("--token-budget"))
+    // §6: harness-driven turn loop with between-turn context refresh.
+    .stdout(predicate::str::contains("--context-refresh"))
+    .stdout(predicate::str::contains("context_refresh"));
 }
 
 #[test]
