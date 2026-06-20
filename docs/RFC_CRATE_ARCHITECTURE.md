@@ -246,3 +246,32 @@ internal dependency re-arrangement.
   `xtask check-arch` regression-proofing.
 - **Kernel over-fragmentation** — capped at six single-responsibility crates by
   the distinct-dependent-set rule; no further splitting without that test.
+
+## 13. Refinements (2026-06-20 architecture-lens evaluation)
+
+`docs/ARCHITECTURE_EVALUATION_2026-06-20.md` validated this RFC against the
+src-confirmed dependency graph (per-edge symbol analysis, not just crate-level
+deps). Verdict: **direction confirmed, adopt as-is**, with these deltas folded in:
+
+- **R1 — `value` is promoted, not deferred.** §4 marked `agentflow-value` "defer
+  (re-export)"; it is in fact a hard prerequisite of `graph` (which depends on
+  `FlowValue`) and the most widely-imported leaf. Extract it **first** in P-A1.
+- **R2 — the `agents→core` split is risk-free.** Symbol analysis shows `agents`
+  imports only IR symbols from `core` (`AsyncNode` / `Flow` / `FlowValue` /
+  `AsyncNodeInputs` / `AgentFlowError`) and **zero executor symbols** — so the §5
+  `graph` split resolves the edge with no residual coupling.
+- **R3 — `agentflow-nodes` needs an explicit decomposition decision** (the one
+  genuine crate-division gap, tracked as P-A0.5). `nodes` straddles tool /
+  capability / runtime tiers; split tool-tier nodes
+  (`template`/`file`/`http`/`batch`/`conditional`/`while` → `graph`+`tool` only)
+  away from capability-backed nodes (`llm`/`asr`/`tts`/`image*`/`rag`/`mcp`).
+- **R4 — `llm→core` is already gone** (removed Q3.6.1); §1 seam #2 and the §4
+  `llm` row overstate `llm`'s coupling. `llm` has no internal deps.
+- **R5 — track the full target-state edge map**, not just the 4 gate-enforced
+  runtime/surface edges. Seven latent capability/tool violations (evaluation §2
+  rows 5–11) must be repointed as the kernel lands; notably `harness` carries
+  **5** impl edges, of which the allowlist tracks only `harness→agents`.
+- **R6 — fold three "thin reason, fat dep" edges into existing kernel crates**
+  rather than minting micro-crates: `harness→llm` (tokenizer only) and
+  `memory→rag` (`EmbeddingProvider` only) → `store-spi`/`value`; `mcp→tracing`
+  (traceparent ambient only) → `agent-spi`/`value`. Keeps the kernel at six.
