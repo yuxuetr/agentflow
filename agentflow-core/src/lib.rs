@@ -9,7 +9,12 @@ pub mod error_context;
 pub mod expr;
 pub mod flow;
 pub mod node;
-pub mod value;
+
+// `FlowValue` moved to the `agentflow-value` leaf crate (P-A1.5). Re-export it
+// under the original `agentflow_core::value` module path + crate root so every
+// existing `agentflow_core::value::FlowValue` / `agentflow_core::FlowValue`
+// consumer keeps compiling unchanged.
+pub use agentflow_value as value;
 
 // Execution engine
 pub mod concurrency;

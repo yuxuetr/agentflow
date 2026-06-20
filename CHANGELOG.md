@@ -24,6 +24,13 @@ _New entries go here. Will roll into the next tag (likely
   it cannot rot (P-A0.4). No shipped-crate behavior change; this is internal
   architecture tooling + docs.
 
+- **`agentflow-value` contract leaf crate** (P-A1.5, first kernel extraction).
+  `FlowValue` + its serde conversions moved out of `agentflow-core` into a new
+  zero-internal-dependency `agentflow-value` crate. `agentflow-core` re-exports
+  it as `agentflow_core::value` / `agentflow_core::FlowValue`, so every existing
+  consumer compiles unchanged. This is the universal kernel leaf and a
+  prerequisite of the upcoming `agentflow-graph` split (evaluation R1).
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native

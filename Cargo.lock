@@ -166,6 +166,7 @@ dependencies = [
 name = "agentflow-core"
 version = "0.2.0"
 dependencies = [
+ "agentflow-value",
  "anyhow",
  "async-trait",
  "chrono",
@@ -478,6 +479,15 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+]
+
+[[package]]
+name = "agentflow-value"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

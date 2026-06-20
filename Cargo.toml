@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "agentflow-value",
   "agentflow-core",
   "agentflow-nodes",
 #  "agentflow-config",

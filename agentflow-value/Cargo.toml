@@ -1,0 +1,18 @@
+[package]
+name = "agentflow-value"
+version = "0.1.0"
+description = "FlowValue — the universal data contract passed between AgentFlow nodes"
+keywords = ["ai", "agents", "workflow", "dataflow"]
+categories = ["data-structures"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+proptest = "1.5"
