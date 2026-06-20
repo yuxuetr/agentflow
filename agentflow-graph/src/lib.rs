@@ -21,6 +21,7 @@ pub mod checkpoint;
 pub mod error;
 pub mod events;
 pub mod expr;
+pub mod flow;
 pub mod node;
 pub mod state_size;
 
