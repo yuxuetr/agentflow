@@ -17,6 +17,7 @@
 pub use agentflow_value::{self as value, FlowValue};
 
 pub mod async_node;
+pub mod checkpoint;
 pub mod error;
 pub mod events;
 pub mod expr;
