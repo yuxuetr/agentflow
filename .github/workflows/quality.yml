@@ -40,6 +40,15 @@ jobs:
       - name: Run cargo xtask check-agent-sdk-doc
         run: cargo xtask check-agent-sdk-doc
 
+  check-arch:
+    name: check crate-dependency architecture laws
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run cargo xtask check-arch
+        run: cargo xtask check-arch
+
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
@@ -379,6 +388,7 @@ jobs:
       - fmt
       - verify-edition
       - check-agent-sdk-doc
+      - check-arch
       - clippy
       - clippy-lib-deny
       - redaction-lint
@@ -396,6 +406,7 @@ jobs:
           echo "fmt: ${{ needs.fmt.result }}"
           echo "verify-edition: ${{ needs.verify-edition.result }}"
           echo "check-agent-sdk-doc: ${{ needs.check-agent-sdk-doc.result }}"
+          echo "check-arch: ${{ needs.check-arch.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
           echo "clippy-lib-deny: ${{ needs.clippy-lib-deny.result }}"
           echo "redaction-lint: ${{ needs.redaction-lint.result }}"
@@ -409,6 +420,7 @@ jobs:
           test "${{ needs.fmt.result }}" = "success"
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
+          test "${{ needs.check-arch.result }}" = "success"
           test "${{ needs.clippy.result }}" = "success"
           test "${{ needs.clippy-lib-deny.result }}" = "success"
           test "${{ needs.redaction-lint.result }}" = "success"
