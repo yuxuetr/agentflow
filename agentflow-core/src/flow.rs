@@ -98,8 +98,7 @@ impl Flow {
   /// cannot be built (already validated eagerly in `with_checkpointing`).
   fn checkpoint_manager(&self) -> Option<CheckpointManager> {
     self
-      .checkpoint_config
-      .as_ref()
+      .checkpoint_config()
       .and_then(|config| CheckpointManager::new(config.clone()).ok())
   }
 
@@ -135,8 +134,33 @@ impl Flow {
     self
   }
 
+  // Read accessors for the execution engine (P-A1.3 step 2d). Once the `Flow`
+  // type moves to `agentflow-graph`, the executor (in `agentflow-core`) reads
+  // its state through these instead of the now-cross-crate private fields. The
+  // builders above keep direct field access (they move to graph with the struct).
+  /// The workflow's nodes, keyed by node id.
+  pub fn nodes(&self) -> &HashMap<String, GraphNode> {
+    &self.nodes
+  }
+  /// Whether checkpointing was enabled via [`Flow::with_checkpointing`].
+  pub fn is_checkpoint_enabled(&self) -> bool {
+    self.checkpoint_enabled
+  }
+  /// The checkpoint configuration, if checkpointing is enabled.
+  pub fn checkpoint_config(&self) -> Option<&CheckpointConfig> {
+    self.checkpoint_config.as_ref()
+  }
+  /// The attached workflow event listener, if any.
+  pub fn event_listener(&self) -> Option<&Arc<dyn EventListener>> {
+    self.event_listener.as_ref()
+  }
+  /// The attached state-size observer, if any.
+  pub fn state_size_observer(&self) -> Option<&Arc<dyn StateSizeObserver>> {
+    self.state_size_observer.as_ref()
+  }
+
   fn notify_state_size(&self, state_pool: &HashMap<String, AsyncNodeResult>) {
-    if let Some(observer) = &self.state_size_observer {
+    if let Some(observer) = self.state_size_observer() {
       observer.observe(estimated_state_pool_bytes(state_pool));
     }
   }
@@ -173,7 +197,7 @@ impl Flow {
     workflow_id: &str,
     options: &ResumePlanOptions,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
-    if !self.checkpoint_enabled {
+    if !self.is_checkpoint_enabled() {
       return Err(AgentFlowError::ConfigurationError {
         message: "Checkpointing is not enabled. Call with_checkpointing() first.".to_string(),
       });
@@ -514,7 +538,7 @@ impl Flow {
       self.notify_state_size(&state_pool);
 
       // Save checkpoint if enabled
-      if self.checkpoint_enabled
+      if self.is_checkpoint_enabled()
         && state_pool
           .get(node_id)
           .map(|result| result.is_ok())
@@ -557,7 +581,7 @@ impl Flow {
     }
 
     // Mark workflow as completed or failed
-    if self.checkpoint_enabled
+    if self.is_checkpoint_enabled()
       && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
@@ -661,7 +685,7 @@ impl Flow {
   }
 
   fn emit_event(&self, event: WorkflowEvent) {
-    if let Some(listener) = &self.event_listener {
+    if let Some(listener) = self.event_listener() {
       listener.on_event(&event);
     }
   }
@@ -894,7 +918,7 @@ impl Flow {
         state_pool.insert(node_id.clone(), result);
         self.notify_state_size(&state_pool);
 
-        if self.checkpoint_enabled
+        if self.is_checkpoint_enabled()
           && state_pool
             .get(&node_id)
             .map(|result| result.is_ok())
@@ -935,7 +959,7 @@ impl Flow {
       });
     }
 
-    if self.checkpoint_enabled
+    if self.is_checkpoint_enabled()
       && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
@@ -1364,7 +1388,7 @@ impl Flow {
 
   fn find_exit_nodes(&self) -> Vec<String> {
     let mut all_deps = HashSet::new();
-    for node in self.nodes.values() {
+    for node in self.nodes().values() {
       for dep in &node.dependencies {
         all_deps.insert(dep.as_str());
       }
@@ -1385,18 +1409,22 @@ impl Flow {
     // made trace replay non-reproducible across runs even when the
     // workflow graph was identical.
     let mut in_degree: std::collections::BTreeMap<String, usize> =
-      self.nodes.keys().cloned().map(|id| (id, 0)).collect();
-    let mut adj: std::collections::BTreeMap<String, Vec<String>> =
-      self.nodes.keys().cloned().map(|id| (id, vec![])).collect();
+      self.nodes().keys().cloned().map(|id| (id, 0)).collect();
+    let mut adj: std::collections::BTreeMap<String, Vec<String>> = self
+      .nodes()
+      .keys()
+      .cloned()
+      .map(|id| (id, vec![]))
+      .collect();
 
     // Iterate the nodes deterministically too — sorted by node id —
     // so the adjacency-list construction is reproducible.
-    let mut node_ids: Vec<&String> = self.nodes.keys().collect();
+    let mut node_ids: Vec<&String> = self.nodes().keys().collect();
     node_ids.sort();
     for id in node_ids {
-      let node = &self.nodes[id];
+      let node = &self.nodes()[id];
       for dep_id in &node.dependencies {
-        if !self.nodes.contains_key(dep_id) {
+        if !self.nodes().contains_key(dep_id) {
           return Err(AgentFlowError::FlowDefinitionError {
             message: format!("Node '{}' has an invalid dependency: '{}'", id, dep_id),
           });
@@ -1430,7 +1458,7 @@ impl Flow {
       }
     }
 
-    if sorted_order.len() != self.nodes.len() {
+    if sorted_order.len() != self.nodes().len() {
       Err(AgentFlowError::CircularFlow)
     } else {
       Ok(sorted_order)
