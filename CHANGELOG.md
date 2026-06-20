@@ -11,6 +11,25 @@ file's first entry).
 _New entries go here. Will roll into the next tag (likely
 `v1.0.0-rc.2` or `v1.0.0`)._
 
+### Added
+
+- **Contract-kernel architecture track (`P-A`) — guardrails landed.** The
+  contract-kernel design (`docs/RFC_CRATE_ARCHITECTURE.md`) is validated by a
+  dependency-graph-grounded, per-edge architecture-lens evaluation
+  (`docs/ARCHITECTURE_EVALUATION_2026-06-20.md`; verdict: direction confirmed,
+  six refinements R1–R6). `cargo xtask check-arch` now runs in the Quality CI
+  workflow as a required `release-gate` job (P-A0.3), and additionally reports
+  the full **latent target-state edge map** — the 16-edge repoint checklist for
+  the kernel migration, code-tracked with a self-maintaining staleness guard so
+  it cannot rot (P-A0.4). No shipped-crate behavior change; this is internal
+  architecture tooling + docs.
+
+### Changed
+
+- `RoadMap.md` reframed around the four execution paradigms (static DAG / native
+  loop / harness / dynamic workflow) converging on the contract kernel, replacing
+  the pre-kernel "two first-class paths" framing.
+
 ## [v1.0.0-rc.1] — 2026-05-21
 
 The R1 → R4 reflection arc (see `docs/L1_L3_REFLECTION_R*.md`) drove
