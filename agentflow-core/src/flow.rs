@@ -57,7 +57,12 @@ pub struct GraphNode {
 pub struct Flow {
   nodes: HashMap<String, GraphNode>,
   checkpoint_enabled: bool,
-  checkpoint_manager: Option<Arc<CheckpointManager>>,
+  // P-A1.3 step 2d-i: store the checkpoint *config* (IR data) rather than a live
+  // `Arc<CheckpointManager>`. The manager is stateless (`{ config }`), so the
+  // executor rebuilds it on demand via `checkpoint_manager()`. This lets the
+  // `Flow` struct hold only `agentflow-graph` data ahead of moving the type
+  // into that crate.
+  checkpoint_config: Option<CheckpointConfig>,
   event_listener: Option<Arc<dyn EventListener>>,
   state_size_observer: Option<Arc<dyn StateSizeObserver>>,
 }
@@ -68,7 +73,7 @@ impl Flow {
     Self {
       nodes: nodes_map,
       checkpoint_enabled: false,
-      checkpoint_manager: None,
+      checkpoint_config: None,
       event_listener: None,
       state_size_observer: None,
     }
@@ -76,10 +81,26 @@ impl Flow {
 
   /// Enable checkpointing with custom configuration
   pub fn with_checkpointing(mut self, config: CheckpointConfig) -> Result<Self, AgentFlowError> {
-    let manager = CheckpointManager::new(config)?;
+    // Validate eagerly (preserves the prior fail-fast behavior — checkpoint dir
+    // creation / config validation happens here, not at run time), then store
+    // the config; the manager is rebuilt on demand from it.
+    let _ = CheckpointManager::new(config.clone())?;
     self.checkpoint_enabled = true;
-    self.checkpoint_manager = Some(Arc::new(manager));
+    self.checkpoint_config = Some(config);
     Ok(self)
+  }
+
+  /// Build a fresh checkpoint manager from the stored config, if any.
+  ///
+  /// `CheckpointManager` is stateless (it just wraps a `CheckpointConfig`), so
+  /// constructing one per use is free and lets the `Flow` struct carry only IR
+  /// data. Returns `None` when checkpointing is not configured or the manager
+  /// cannot be built (already validated eagerly in `with_checkpointing`).
+  fn checkpoint_manager(&self) -> Option<CheckpointManager> {
+    self
+      .checkpoint_config
+      .as_ref()
+      .and_then(|config| CheckpointManager::new(config.clone()).ok())
   }
 
   /// Enable checkpointing with default configuration
@@ -158,14 +179,12 @@ impl Flow {
       });
     }
 
-    let manager =
-      self
-        .checkpoint_manager
-        .as_ref()
-        .ok_or_else(|| AgentFlowError::ConfigurationError {
-          message: "Checkpoint manager not initialized despite checkpointing being enabled"
-            .to_string(),
-        })?;
+    let manager = self
+      .checkpoint_manager()
+      .ok_or_else(|| AgentFlowError::ConfigurationError {
+        message: "Checkpoint manager not initialized despite checkpointing being enabled"
+          .to_string(),
+      })?;
     let checkpoint = manager
       .load_latest_checkpoint(workflow_id)
       .await?
@@ -200,13 +219,11 @@ impl Flow {
     workflow_id: &str,
     options: &ResumePlanOptions,
   ) -> Result<ResumePlan, AgentFlowError> {
-    let manager =
-      self
-        .checkpoint_manager
-        .as_ref()
-        .ok_or_else(|| AgentFlowError::ConfigurationError {
-          message: "Checkpointing is not enabled on this Flow.".to_string(),
-        })?;
+    let manager = self
+      .checkpoint_manager()
+      .ok_or_else(|| AgentFlowError::ConfigurationError {
+        message: "Checkpointing is not enabled on this Flow.".to_string(),
+      })?;
     let checkpoint = manager
       .load_latest_checkpoint(workflow_id)
       .await?
@@ -502,7 +519,7 @@ impl Flow {
           .get(node_id)
           .map(|result| result.is_ok())
           .unwrap_or(false)
-        && let Some(ref manager) = self.checkpoint_manager
+        && let Some(ref manager) = self.checkpoint_manager()
       {
         let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
         if let Err(e) = manager
@@ -541,7 +558,7 @@ impl Flow {
 
     // Mark workflow as completed or failed
     if self.checkpoint_enabled
-      && let Some(ref manager) = self.checkpoint_manager
+      && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
       let status = if state_pool.values().all(|r| r.is_ok()) {
@@ -882,7 +899,7 @@ impl Flow {
             .get(&node_id)
             .map(|result| result.is_ok())
             .unwrap_or(false)
-          && let Some(ref manager) = self.checkpoint_manager
+          && let Some(ref manager) = self.checkpoint_manager()
         {
           let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
           if let Err(e) = manager
@@ -919,7 +936,7 @@ impl Flow {
     }
 
     if self.checkpoint_enabled
-      && let Some(ref manager) = self.checkpoint_manager
+      && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
       let status = if !workflow_failed {
