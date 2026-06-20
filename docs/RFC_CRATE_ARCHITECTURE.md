@@ -263,8 +263,11 @@ deps). Verdict: **direction confirmed, adopt as-is**, with these deltas folded i
 - **R3 — `agentflow-nodes` needs an explicit decomposition decision** (the one
   genuine crate-division gap, tracked as P-A0.5). `nodes` straddles tool /
   capability / runtime tiers; split tool-tier nodes
-  (`template`/`file`/`http`/`batch`/`conditional`/`while` → `graph`+`tool` only)
-  away from capability-backed nodes (`llm`/`asr`/`tts`/`image*`/`rag`/`mcp`).
+  (`template`/`file`/`http`/`batch`/`conditional`/`arxiv`/`markmap` →
+  `graph`+`tool` only) away from capability-backed nodes
+  (`llm`/`asr`/`tts`/`image*`/`rag`/`mcp`). **Decided** in
+  `docs/RFC_NODES_DECOMPOSITION.md`: split into `agentflow-nodes` (tool-tier) +
+  a new `agentflow-nodes-ai` adapter crate; lands in P-A4 after the `graph` split.
 - **R4 — `llm→core` is already gone** (removed Q3.6.1); §1 seam #2 and the §4
   `llm` row overstate `llm`'s coupling. `llm` has no internal deps.
 - **R5 — track the full target-state edge map**, not just the 4 gate-enforced
