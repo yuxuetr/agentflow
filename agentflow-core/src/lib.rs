@@ -33,10 +33,13 @@ pub mod resource_manager;
 pub mod resume;
 pub mod scheduler;
 pub mod state_monitor;
-pub mod state_size;
 
-// Observability (lightweight events only)
-pub mod events;
+// `state_size` (StateSizeObserver) and `events` (EventListener / WorkflowEvent)
+// moved to `agentflow-graph` (P-A1.3 step 2): they are the observability
+// *contracts* a `Flow` holds, so the IR crate must own them. Re-exported here
+// under their original `agentflow_core::*` paths. The event drain/dispatch
+// *logic* (where it exists) stays in core.
+pub use agentflow_graph::{events, state_size};
 
 // Q5.3: shared SIGINT/SIGTERM shutdown handling used by the CLI,
 // server, and worker binaries.
