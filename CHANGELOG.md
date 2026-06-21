@@ -90,6 +90,14 @@ _New entries go here. Will roll into the next tag (likely
   carry dynamic workflows; P-A4 productionizes it (`PlanExecuteAgent` emits a
   real `Flow`).
 
+- **`harness` no longer depends on the `agents` impl crate** (P-A2.1, first
+  architecture violation burned down). The turn-driven contracts (`TurnDrivenRuntime`
+  / `LoopSession` / `TurnProgress`) moved from `agentflow-agents` into
+  `agentflow-agent-spi`; `agentflow-harness` now depends on the `agent-spi`
+  contract and the concrete runtime (`ReActAgent`) is injected (the smoke test
+  keeps `agents` as a dev-dependency). `check-arch`'s tracked-violation allowlist
+  shrank 4 -> 3.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native

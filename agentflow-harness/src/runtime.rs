@@ -1,7 +1,7 @@
 //! Harness runtime — Phase H1 MVP.
 //!
 //! [`HarnessRuntime`] is a thin wrapper that composes existing
-//! `agentflow_agents::AgentRuntime` implementations with Harness-level
+//! `agentflow_agent_spi::AgentRuntime` implementations with Harness-level
 //! plumbing: context provider collection, persona assembly, event
 //! envelope translation, and JSONL/in-memory persistence. The crate
 //! does not own LLM, tool, or memory primitives; the caller hands the
@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use agentflow_agents::react::{TurnDrivenRuntime, TurnProgress};
-use agentflow_agents::runtime::{
+use agentflow_agent_spi::runtime::{
   AgentContext, AgentEvent, AgentEventSink, AgentRunResult, AgentRuntime, AgentStep, AgentStepKind,
   AgentStopReason, RuntimeLimits,
 };
+use agentflow_agent_spi::{TurnDrivenRuntime, TurnProgress};
 use async_trait::async_trait;
 use chrono::Utc;
 
@@ -63,13 +63,13 @@ pub struct HarnessRunOptions {
   /// dropping the future mid-`await`. Default `None` keeps the
   /// pre-Q3.1.2 behaviour for callers that build the agent context
   /// themselves.
-  pub cancellation_token: Option<agentflow_agents::runtime::AgentCancellationToken>,
+  pub cancellation_token: Option<agentflow_agent_spi::runtime::AgentCancellationToken>,
   /// Phase 2b: optional between-turn hook forwarded to the inner agent's
   /// context. The inner agent (ReActAgent) invokes it before each turn's
   /// LLM call, so the caller can perform between-turn context engineering
   /// (e.g. memory compaction) mid-run. Stored as the `Debug`-able handle
   /// so `HarnessRunOptions` keeps deriving `Debug` / `Clone`.
-  pub between_turn_hook: Option<agentflow_agents::runtime::BetweenTurnHookHandle>,
+  pub between_turn_hook: Option<agentflow_agent_spi::runtime::BetweenTurnHookHandle>,
 }
 
 impl HarnessRunOptions {
@@ -141,7 +141,7 @@ impl HarnessRunOptions {
   /// the signal future.
   pub fn with_cancellation_token(
     mut self,
-    token: agentflow_agents::runtime::AgentCancellationToken,
+    token: agentflow_agent_spi::runtime::AgentCancellationToken,
   ) -> Self {
     self.cancellation_token = Some(token);
     self
@@ -152,9 +152,9 @@ impl HarnessRunOptions {
   /// each turn's LLM call.
   pub fn with_between_turn_hook(
     mut self,
-    hook: Arc<dyn agentflow_agents::runtime::BetweenTurnHook>,
+    hook: Arc<dyn agentflow_agent_spi::runtime::BetweenTurnHook>,
   ) -> Self {
-    self.between_turn_hook = Some(agentflow_agents::runtime::BetweenTurnHookHandle(hook));
+    self.between_turn_hook = Some(agentflow_agent_spi::runtime::BetweenTurnHookHandle(hook));
     self
   }
 }
@@ -1148,7 +1148,7 @@ fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> Stopp
 mod tests {
   use super::*;
   use crate::context::HarnessRuntimeKind;
-  use agentflow_agents::runtime::{
+  use agentflow_agent_spi::runtime::{
     AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
     AgentStepKind, AgentStopReason,
   };
@@ -1655,8 +1655,8 @@ mod tests {
   #[tokio::test]
   async fn harness_drives_turn_driven_runtime() {
     use crate::persistence::InMemoryEventSink;
-    use agentflow_agents::react::{LoopSession, TurnDrivenRuntime, TurnProgress};
-    use agentflow_agents::runtime::AgentRuntimeError;
+    use agentflow_agent_spi::runtime::AgentRuntimeError;
+    use agentflow_agent_spi::{LoopSession, TurnDrivenRuntime, TurnProgress};
     use agentflow_memory::{MemoryStore, SessionMemory};
 
     struct ScriptedSession {
@@ -1744,8 +1744,8 @@ mod tests {
   #[tokio::test]
   async fn turn_driven_context_refresh_injects_on_change() {
     use crate::persistence::InMemoryEventSink;
-    use agentflow_agents::react::{LoopSession, TurnDrivenRuntime, TurnProgress};
-    use agentflow_agents::runtime::AgentRuntimeError;
+    use agentflow_agent_spi::runtime::AgentRuntimeError;
+    use agentflow_agent_spi::{LoopSession, TurnDrivenRuntime, TurnProgress};
     use agentflow_memory::{MemoryStore, SessionMemory};
     use std::sync::atomic::AtomicUsize;
 

@@ -18,6 +18,10 @@ use crate::runtime::{
   AgentRuntimeError, AgentStep, AgentStepKind, AgentStopReason, MemoryHookContext, MemoryHookKind,
   RuntimeLimits,
 };
+// Turn-driven contracts moved to agentflow-agent-spi (P-A2.1); ReActAgent /
+// ReActLoopSession impl them below. `pub use` so `agentflow_agents::react`
+// keeps re-exporting them for back-compat.
+pub use agentflow_agent_spi::{LoopSession, TurnDrivenRuntime, TurnProgress};
 
 /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): emit an `AgentEvent` to the
 /// optional live sink (if any), then push it into the run's event
@@ -2619,15 +2623,6 @@ struct LoopState {
   between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
 }
 
-/// Outcome of one driven turn (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
-#[derive(Debug)]
-pub enum TurnProgress {
-  /// The agent advanced; call [`ReActLoopSession::next_turn`] again.
-  Continued,
-  /// The agent reached a terminal state; the run result is attached.
-  Finished(AgentRunResult),
-}
-
 /// A **turn-driven** ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
 ///
 /// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a
@@ -2675,38 +2670,6 @@ impl ReActLoopSession<'_> {
   pub fn is_finished(&self) -> bool {
     self.finished
   }
-}
-
-/// A runtime that can be **driven one turn at a time** by an external
-/// owner (RFC_HARNESS_LOOP_OWNERSHIP §6 — harness integration). The owner
-/// calls [`begin`](TurnDrivenRuntime::begin) and pumps the returned
-/// [`LoopSession`], performing its own context engineering between turns.
-/// This is the object-safe, runtime-agnostic façade over
-/// [`ReActAgent::begin_turn_driven`] so the Harness can drive any
-/// turn-driven runtime through `Box<dyn TurnDrivenRuntime>`.
-#[async_trait]
-pub trait TurnDrivenRuntime: Send {
-  /// Begin a turn-driven run and return the session to pump.
-  async fn begin(
-    &mut self,
-    context: AgentContext,
-  ) -> Result<Box<dyn LoopSession + Send + '_>, AgentRuntimeError>;
-
-  /// Stable, machine-readable runtime identifier (e.g. `"react"`).
-  fn runtime_name(&self) -> &'static str;
-}
-
-/// One turn-driven session: pump [`next_turn`](LoopSession::next_turn)
-/// until it returns [`TurnProgress::Finished`]. Between turns the owner
-/// may inspect or rewrite [`memory`](LoopSession::memory).
-#[async_trait]
-pub trait LoopSession: Send {
-  /// Advance exactly one turn.
-  async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError>;
-  /// The run's conversation memory (for caller-owned context engineering).
-  fn memory(&self) -> &dyn MemoryStore;
-  /// 0-based index of the turn `next_turn` will run next.
-  fn turn_index(&self) -> usize;
 }
 
 #[async_trait]

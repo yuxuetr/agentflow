@@ -37,7 +37,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use agentflow_agents::runtime::{
+use agentflow_agent_spi::runtime::{
   AgentCancellationToken, AgentContext, AgentRuntime, AgentStopReason,
 };
 use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
@@ -835,7 +835,7 @@ pub fn task_tools(runtime: Arc<TaskRuntime>) -> Vec<Arc<dyn Tool>> {
 mod tests {
   use super::*;
   use crate::persistence::{HarnessEventSink, InMemoryEventSink};
-  use agentflow_agents::runtime::{
+  use agentflow_agent_spi::runtime::{
     AgentEvent, AgentRunResult, AgentRuntimeError, AgentStep, AgentStepKind,
   };
 

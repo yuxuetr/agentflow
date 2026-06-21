@@ -16,7 +16,7 @@ homepage.workspace = true
 # providers, JSONL persistence, and event bridging.
 
 [dependencies]
-agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 # Q1.7.2: redact secrets in `ApprovalRequest.params_summary` /
 # `ToolCallRequestedPayload.params_summary` before they hit JSONL /
@@ -40,6 +40,7 @@ tracing = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
+agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 tempfile = "3"
