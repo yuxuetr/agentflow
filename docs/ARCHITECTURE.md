@@ -93,7 +93,7 @@ be honest about which parts are production vs aspirational:
 | Model element | Status in code |
 |---|---|
 | Static DAG · native loop · capability substrate · `AgentNode`/`WorkflowTool` | ✅ production |
-| **Dynamic workflow** | ⚠️ **proven by a spike only, no product path.** `PlanExecuteAgent` emits a `PlanExecutePlan` + runs tools sequentially — it does **not** emit a `Flow`. The runtime-generates-`Flow`→executor slice is shown by `agentflow-agents/examples/dynamic_workflow_spike.rs` |
+| **Dynamic workflow** | ⚠️ **real library path (P-A4.4), not yet a CLI surface.** `agentflow_agents::dynamic::compile_plan_to_flow` compiles a declarative `WorkflowPlan` (the LLM-shaped JSON `{id, tool, params, depends_on}`) into a `Flow` of real tool calls with dependency-driven parallelism; `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes (both tested). Not yet wired into the CLI, and the legacy `PlanExecuteAgent` still runs its plan sequentially. |
 | **Harness as an orthogonal shell** | ⚠️ **wraps an `AgentRuntime` only**, not a raw `Flow` run (`HarnessRuntimeKind` = `Opaque(Box<dyn AgentRuntime>)` / `TurnDriven(...)`) |
 | "Paradigms meet only at the contract layer" | ⚠️ **becoming true via the contract kernel (P-A1, in PRs)**; pre-kernel the runtimes depended on each other's impl crates |
 
@@ -102,15 +102,17 @@ be honest about which parts are production vs aspirational:
 | Model gap | Closing task | Status |
 |---|---|---|
 | Contractualize the four paradigms (so they compose orthogonally) | P-A1 contract kernel | ✅ this session (PRs pending merge) |
-| Dynamic workflow as a product | P-A4.4 (`PlanExecuteAgent` emits a real `Flow`) + P-A4.5 (productionize the spike) | ⏳ |
+| Dynamic workflow as a product | P-A4.4 plan→`Flow` compiler + `DynamicWorkflowAgent` (LLM plans → execute) | ✅ library; ⏳ CLI surface / `AgentNode` steps (P-A4.5) |
 | Harness governs a `Flow`, not only an agent loop | P-A2.2 | ⏳ |
 | Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ⏳ |
 
 In short: the three-axis model is sound and self-consistent; three paradigms +
-the capability substrate + the composition adapters are production-grade; and
-**dynamic workflow + orthogonal governance — the parts that make the model close
-the loop — have their foundation (the contract kernel) laid this session but are
-not yet productized.** See `docs/RFC_CRATE_ARCHITECTURE.md` for the kernel design.
+the capability substrate + the composition adapters are production-grade;
+**dynamic workflow now has a real, tested library path (P-A4.4) — a plan→`Flow`
+compiler and an LLM-planning agent — though not yet a CLI surface; and orthogonal
+governance (harness over a `Flow`) is still aspirational**, with its foundation
+(the contract kernel) laid this session. See `docs/RFC_CRATE_ARCHITECTURE.md` for
+the kernel design.
 
 ## Layered Mental Model
 
