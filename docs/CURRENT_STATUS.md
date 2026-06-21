@@ -36,10 +36,14 @@ shared contracts (enforced by `cargo xtask check-arch`; see
 - Config-first workflow validation and execution through `agentflow-cli`.
 - Agent-native runtimes through `AgentRuntime`, ReAct, Plan-Execute,
   reflection, memory, and supervisor patterns.
-- Dynamic workflow (library): `agentflow_agents::dynamic::compile_plan_to_flow`
-  compiles a declarative `WorkflowPlan` into a parallel `Flow` of tool calls, and
+- Dynamic workflow: `agentflow_agents::dynamic::compile_plan_to_flow` compiles a
+  declarative `WorkflowPlan` into a parallel `Flow` of tool calls, and
   `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes.
-  (Not yet a CLI surface — see `TODOs.md` §P-A4.5.)
+  Exposed on the CLI as `agentflow workflow dynamic --goal ... --model ...`, where
+  the LLM-authored plan runs against a restrictive built-in tool sandbox
+  (`--allow-path` / `--allow-domain` grant access; shell is never registered),
+  `--dry-run` prints the plan without executing, and `--approve` routes every tool
+  call through the Harness approval pipeline.
 - Harness governance shell (`agentflow-harness`): hooks, interactive approval,
   sandbox, audit, run limits, background tasks, and the `HarnessEvent` envelope.
 - Skills through `SKILL.md` and `skill.toml`.
