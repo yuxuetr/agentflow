@@ -42,7 +42,14 @@ impl MockProvider {
     Ok(Self {
       response_text: std::env::var("AGENTFLOW_MOCK_RESPONSE").ok(),
       response_queue: Arc::new(Mutex::new(load_response_queue_from_env())),
-      delay_ms: 0,
+      // `AGENTFLOW_MOCK_DELAY_MS` lets env-driven tests (which build the mock
+      // through the model registry, not the `with_delay` builder) simulate a
+      // slow round-trip — used to characterize the runtime's timeout /
+      // cancellation racing paths deterministically.
+      delay_ms: std::env::var("AGENTFLOW_MOCK_DELAY_MS")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(0),
       simulate_error: false,
       tool_call_queue: Arc::new(Mutex::new(load_tool_call_queue_from_env())),
     })

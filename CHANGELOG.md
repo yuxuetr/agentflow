@@ -13,6 +13,17 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **ReAct loop timeout/cancellation racing-path characterization tests**
+  (P-A3.1). Pins the runtime behaviour when a wall-clock deadline or a
+  cancellation token wins a race against an *in-flight* call — the four
+  `select!` arms in `run_turn_llm_call` / `run_turn_tool_call` that P-A3.2 will
+  consolidate into `async-util::race_with_limits`. Four deterministic tests
+  (LLM-call timeout, LLM-call cancellation, tool-call timeout, tool-call
+  cancellation) using a never-completing slow operation so outcomes don't depend
+  on scheduler timing. Supporting change: the Mock LLM provider now honours an
+  `AGENTFLOW_MOCK_DELAY_MS` env var, so env-driven tests (which build the mock
+  through the model registry rather than the `with_delay` builder) can simulate
+  a slow round-trip.
 - **Harness governance contracts moved into the kernel** (P-A1.1 step 2/2). The
   Harness wire/protocol surface — `HarnessEvent` (+ all payload types),
   `ApprovalRequest` / `ApprovalDecision` / `ApprovalProvider` (+ risk / scope /
