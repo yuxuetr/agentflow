@@ -108,6 +108,13 @@ _New entries go here. Will roll into the next tag (likely
   `dynamic_workflow_plan` example (JSON plan -> parallel execution), wired into the
   examples-smoke CI gate; unit tests cover the diamond DAG + validation.
 
+- **`DynamicWorkflowAgent` — LLM plans, the engine executes** (P-A4.4). An agent
+  that makes one up-front LLM call to generate a `WorkflowPlan` (given a goal +
+  the available tools), then compiles it to a `Flow` and runs it concurrently —
+  closing the dynamic-workflow loop end to end. `plan()` returns the LLM-produced
+  plan; `run()` plans + compiles + executes. Tested against a mock model that
+  emits a parallel plan.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native
