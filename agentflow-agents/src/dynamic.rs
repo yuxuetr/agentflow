@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
 use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::{AgentFlowError, FlowValue};
+use agentflow_core::{AgentFlowError, FlowExecutionConfig, FlowExt, FlowValue};
+use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_tools::ToolRegistry;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -196,6 +197,95 @@ pub fn compile_plan_to_flow(
   Ok(Flow::new(nodes))
 }
 
+/// Errors from the LLM-driven [`DynamicWorkflowAgent`].
+#[derive(Debug, thiserror::Error)]
+pub enum DynamicWorkflowError {
+  /// The LLM planning call failed.
+  #[error("LLM planning call failed: {0}")]
+  Llm(String),
+  /// The LLM's reply could not be parsed as a `WorkflowPlan`.
+  #[error("could not parse the LLM plan as JSON: {0}")]
+  PlanParse(String),
+  /// Compiling or executing the plan failed.
+  #[error(transparent)]
+  Flow(#[from] AgentFlowError),
+}
+
+/// An agent that **generates** a workflow plan with an LLM, compiles it to a
+/// `Flow`, and executes it — the full dynamic-workflow paradigm (P-A4.4).
+///
+/// This is the binding-time inversion the four-paradigm model describes: instead
+/// of an agent deciding every step in a loop, it makes *one* up-front planning
+/// call, then the engine runs the resulting DAG deterministically (and in
+/// parallel where the plan allows).
+pub struct DynamicWorkflowAgent {
+  model: String,
+  tools: Arc<ToolRegistry>,
+}
+
+/// Pull the JSON object out of an LLM reply (it may wrap it in prose or a
+/// ```json fence): take the span from the first `{` to the last `}`.
+fn extract_json(text: &str) -> &str {
+  match (text.find('{'), text.rfind('}')) {
+    (Some(start), Some(end)) if end >= start => &text[start..=end],
+    _ => text,
+  }
+}
+
+impl DynamicWorkflowAgent {
+  /// Build an agent that plans with `model` and executes against `tools`.
+  pub fn new(model: impl Into<String>, tools: Arc<ToolRegistry>) -> Self {
+    Self {
+      model: model.into(),
+      tools,
+    }
+  }
+
+  /// Ask the LLM for a [`WorkflowPlan`] for `goal`, given the available tools.
+  pub async fn plan(&self, goal: &str) -> Result<WorkflowPlan, DynamicWorkflowError> {
+    let tools_desc: String = self
+      .tools
+      .list()
+      .iter()
+      .map(|tool| format!("- {}: {}", tool.name(), tool.description()))
+      .collect::<Vec<_>>()
+      .join("\n");
+    let system = "You are a workflow planner. Given a goal and a list of tools, \
+      respond with ONLY a JSON object of the form \
+      {\"steps\":[{\"id\":\"...\",\"tool\":\"...\",\"params\":{...},\"depends_on\":[\"...\"]}]}. \
+      Steps with no dependency between them run in parallel; use depends_on to \
+      order dependent steps. Use only the listed tools.";
+    let user = format!("Goal: {goal}\n\nAvailable tools:\n{tools_desc}");
+
+    let response = AgentFlow::model(&self.model)
+      .multimodal_messages(vec![
+        MultimodalMessage::text("system", system),
+        MultimodalMessage::text("user", user),
+      ])
+      .execute_full()
+      .await
+      .map_err(|err| DynamicWorkflowError::Llm(err.to_string()))?;
+
+    serde_json::from_str(extract_json(&response.content))
+      .map_err(|err| DynamicWorkflowError::PlanParse(err.to_string()))
+  }
+
+  /// Plan with the LLM, compile to a `Flow`, and execute it concurrently.
+  /// Returns the executed state pool (node id → result).
+  pub async fn run(
+    &self,
+    goal: &str,
+  ) -> Result<HashMap<String, AsyncNodeResult>, DynamicWorkflowError> {
+    let plan = self.plan(goal).await?;
+    let flow = compile_plan_to_flow(&plan, Arc::clone(&self.tools))?;
+    Ok(
+      flow
+        .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(8))
+        .await?,
+    )
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -322,5 +412,53 @@ mod tests {
       result,
       Err(AgentFlowError::FlowDefinitionError { .. })
     ));
+  }
+
+  /// Point a mock text model at `response` and load it as the active config.
+  /// Serialized by `crate::LLM_TEST_LOCK` (mutates process-wide LLM config/env).
+  async fn init_mock_model(model: &str, response: &str) {
+    // SAFETY: callers hold LLM_TEST_LOCK while mutating these process-wide vars.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_RESPONSE", response);
+    }
+    let config_path =
+      std::env::temp_dir().join(format!("agentflow-dyn-wf-{}.yml", uuid::Uuid::new_v4()));
+    std::fs::write(
+      &config_path,
+      format!(
+        "models:\n  {model}:\n    vendor: mock\n    type: text\n    model_id: {model}\n\
+         providers:\n  mock:\n    api_key_env: MOCK_API_KEY\n"
+      ),
+    )
+    .expect("write mock config");
+    agentflow_llm::AgentFlow::init_with_config(config_path.to_str().expect("utf8 path"))
+      .await
+      .expect("init mock model");
+  }
+
+  #[tokio::test]
+  async fn llm_plans_then_engine_executes_in_parallel() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    // The "LLM" returns a parallel plan: a and b are independent, c joins them.
+    init_mock_model(
+      "mock-dyn-wf",
+      r#"{"steps":[
+        {"id":"a","tool":"echo","params":{"v":"A"}},
+        {"id":"b","tool":"echo","params":{"v":"B"}},
+        {"id":"c","tool":"echo","depends_on":["a","b"]}
+      ]}"#,
+    )
+    .await;
+
+    let agent = DynamicWorkflowAgent::new("mock-dyn-wf", registry_with_echo());
+    let state = agent.run("combine A and B").await.expect("run");
+
+    assert!(result_text(&state, "a").contains('A'));
+    assert!(result_text(&state, "b").contains('B'));
+    let c = result_text(&state, "c");
+    assert!(
+      c.contains("\"a\":") && c.contains("\"b\":"),
+      "c should receive both planned dependencies: {c}"
+    );
   }
 }
