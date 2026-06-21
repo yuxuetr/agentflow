@@ -2095,66 +2095,34 @@ impl ReActAgent {
       let batch_fut = futures::future::join_all(futs);
 
       let timeout = remaining_timeout(run_started_at, timeout_ms);
-      let cancel = cancellation_token.cloned();
-      let result_set = match (timeout, cancel) {
-        (Some(remaining), Some(token)) => {
-          tokio::select! {
-            done = tokio::time::timeout(remaining, batch_fut) => match done {
-              Ok(results) => Some(results),
-              Err(_) => {
-                self.emit_batch_timeout(&prepared, &concurrent_idxs, events).await;
-                return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout { timeout_ms: timeout_ms.unwrap_or_default() },
-                  std::mem::take(steps),
-                  std::mem::take(events),
-                ))));
-              }
+      let cancel = cancellation_token.as_ref().map(|token| token.cancelled());
+      let result_set = match race_with_limits(batch_fut, timeout, cancel).await {
+        RaceOutcome::Completed(results) => Some(results),
+        RaceOutcome::TimedOut => {
+          self
+            .emit_batch_timeout(&prepared, &concurrent_idxs, events)
+            .await;
+          return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
             },
-            _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
-              return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                std::mem::take(steps),
-                std::mem::take(events),
-              ))));
-            }
-          }
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
         }
-        (Some(remaining), None) => match tokio::time::timeout(remaining, batch_fut).await {
-          Ok(results) => Some(results),
-          Err(_) => {
-            self
-              .emit_batch_timeout(&prepared, &concurrent_idxs, events)
-              .await;
-            return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::Timeout {
-                timeout_ms: timeout_ms.unwrap_or_default(),
-              },
-              std::mem::take(steps),
-              std::mem::take(events),
-            ))));
-          }
-        },
-        (None, Some(token)) => {
-          tokio::select! {
-            results = batch_fut => Some(results),
-            _ = token.cancelled() => {
-              self.emit_batch_cancelled(&prepared, &concurrent_idxs, events).await;
-              return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                std::mem::take(steps),
-                std::mem::take(events),
-              ))));
-            }
-          }
+        RaceOutcome::Cancelled => {
+          self
+            .emit_batch_cancelled(&prepared, &concurrent_idxs, events)
+            .await;
+          return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
+            &self.session_id,
+            "cancellation token signalled",
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
         }
-        (None, None) => Some(batch_fut.await),
       };
 
       if let Some(results) = result_set {
@@ -2208,94 +2176,46 @@ impl ReActAgent {
       let params = prepared[i].params.clone();
       let call_fut = async move { tools.execute(&tool, params).await };
       let timeout = remaining_timeout(run_started_at, timeout_ms);
-      let cancel = cancellation_token.cloned();
-      let result = match (timeout, cancel) {
-        (Some(remaining), Some(token)) => {
-          tokio::select! {
-            done = tokio::time::timeout(remaining, call_fut) => match done {
-              Ok(r) => Some(r),
-              Err(_) => {
-                emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-                  session_id: self.session_id.clone(),
-                  step_index: prepared[i].call_step_idx,
-                  tool: prepared[i].tool.clone(),
-                  is_error: true,
-                  duration_ms: started.elapsed().as_millis() as u64,
-                  source: prepared[i].source.clone(),
-                  permissions: prepared[i].permissions.clone(),
-                  timestamp: Utc::now(),
-                });
-                return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
-                  &self.session_id,
-                  None,
-                  AgentStopReason::Timeout {
-                    timeout_ms: timeout_ms.unwrap_or_default(),
-                  },
-                  std::mem::take(steps),
-                  std::mem::take(events),
-                ))));
-              }
-            },
-            _ = token.cancelled() => {
-              return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                std::mem::take(steps),
-                std::mem::take(events),
-              ))));
-            }
-          }
-        }
-        (Some(remaining), None) => match tokio::time::timeout(remaining, call_fut).await {
-          Ok(r) => Some(r),
-          Err(_) => {
-            emit_and_push!(
-              self.live_sink,
-              events,
-              AgentEvent::ToolCallCompleted {
-                session_id: self.session_id.clone(),
-                step_index: prepared[i].call_step_idx,
-                tool: prepared[i].tool.clone(),
-                is_error: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-                source: prepared[i].source.clone(),
-                permissions: prepared[i].permissions.clone(),
-                timestamp: Utc::now(),
-              }
-            );
-            return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
-              &self.session_id,
-              None,
-              AgentStopReason::Timeout {
-                timeout_ms: timeout_ms.unwrap_or_default(),
-              },
-              std::mem::take(steps),
-              std::mem::take(events),
-            ))));
-          }
-        },
-        (None, Some(token)) => {
-          tokio::select! {
-            r = call_fut => Some(r),
-            _ = token.cancelled() => {
-              return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
-                &self.session_id,
-                "cancellation token signalled",
-                std::mem::take(steps),
-                std::mem::take(events),
-              ))));
-            }
-          }
-        }
-        (None, None) => Some(call_fut.await),
-      };
-      let output = match result {
-        Some(Ok(out)) => out,
-        Some(Err(e)) => {
+      let cancel = cancellation_token.as_ref().map(|token| token.cancelled());
+      let output = match race_with_limits(call_fut, timeout, cancel).await {
+        RaceOutcome::Completed(Ok(out)) => out,
+        RaceOutcome::Completed(Err(e)) => {
           warn!(tool = %prepared[i].tool, error = %e, "tool execution failed");
           agentflow_tools::ToolOutput::error(e.to_string())
         }
-        None => unreachable!("result must be Some when we did not early-return"),
+        RaceOutcome::TimedOut => {
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: prepared[i].call_step_idx,
+              tool: prepared[i].tool.clone(),
+              is_error: true,
+              duration_ms: started.elapsed().as_millis() as u64,
+              source: prepared[i].source.clone(),
+              permissions: prepared[i].permissions.clone(),
+              timestamp: Utc::now(),
+            }
+          );
+          return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::Timeout {
+              timeout_ms: timeout_ms.unwrap_or_default(),
+            },
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
+        }
+        RaceOutcome::Cancelled => {
+          return Ok(BatchOutcome::Stop(Box::new(Self::cancelled_result(
+            &self.session_id,
+            "cancellation token signalled",
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
+        }
       };
       outputs[i] = Some((output, started.elapsed().as_millis() as u64));
     }
@@ -3894,9 +3814,29 @@ providers:
   }
 
   /// A tool that signals it has started, then blocks far longer than any test
-  /// deadline, so a racing timeout or cancellation deterministically wins.
+  /// deadline, so a racing timeout or cancellation deterministically wins. Its
+  /// idempotency selects the batch path: `Idempotent` calls run concurrently
+  /// (the `join_all` matrix), `NonIdempotent` calls run serially.
   struct SleepingTool {
     started: Arc<std::sync::atomic::AtomicBool>,
+    idempotent: bool,
+  }
+
+  impl SleepingTool {
+    /// Idempotent — drives the concurrent batch path.
+    fn concurrent(started: Arc<std::sync::atomic::AtomicBool>) -> Self {
+      Self {
+        started,
+        idempotent: true,
+      }
+    }
+    /// NonIdempotent — drives the serial batch path.
+    fn serial(started: Arc<std::sync::atomic::AtomicBool>) -> Self {
+      Self {
+        started,
+        idempotent: false,
+      }
+    }
   }
 
   #[async_trait]
@@ -3911,7 +3851,11 @@ providers:
       json!({ "type": "object" })
     }
     fn idempotency(&self, _params: &Value) -> ToolIdempotency {
-      ToolIdempotency::Idempotent
+      if self.idempotent {
+        ToolIdempotency::Idempotent
+      } else {
+        ToolIdempotency::NonIdempotent
+      }
     }
     async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
       self.started.store(true, Ordering::SeqCst);
@@ -4023,9 +3967,7 @@ providers:
 
     let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(SleepingTool {
-      started: started.clone(),
-    }));
+    registry.register(Arc::new(SleepingTool::concurrent(started.clone())));
 
     // Generous enough for the instant LLM call to return its tool call; the 10s
     // tool then overruns the wall-clock budget.
@@ -4075,9 +4017,7 @@ providers:
 
     let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(SleepingTool {
-      started: started.clone(),
-    }));
+    registry.register(Arc::new(SleepingTool::concurrent(started.clone())));
 
     let token = AgentCancellationToken::new();
     // Cancel only once the tool is actually in flight, so the *tool-call*
@@ -4106,6 +4046,208 @@ providers:
     assert!(
       matches!(result.stop_reason, AgentStopReason::Cancelled { .. }),
       "cancellation should win against the in-flight tool call; got {:?}",
+      result.stop_reason
+    );
+    assert!(started.load(Ordering::SeqCst));
+  }
+
+  // ── P-A3.2b: characterize the *batch-dispatch* racing paths ────────────────
+  //
+  // When the LLM returns >= 2 tool calls, the batch dispatcher races the
+  // concurrent (`join_all`) group and each serial call against the same
+  // timeout / cancellation limits, via two more `select!` matrices. These pin
+  // those arms so the matrices can be repointed onto `race_with_limits` without
+  // behaviour drift. Idempotency selects the path: `concurrent` → `join_all`,
+  // `serial` → the per-call loop.
+
+  /// Two tool calls in one LLM turn → the batch dispatcher.
+  fn two_sleeper_calls() -> String {
+    serde_json::to_string(&vec![vec![
+      json!({"id":"c1","name":"sleeper","arguments":{}}),
+      json!({"id":"c2","name":"sleeper","arguments":{}}),
+    ]])
+    .unwrap()
+  }
+
+  #[tokio::test]
+  async fn concurrent_batch_times_out_stops_with_timeout() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-cbatch-timeout-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_TOOL_CALLS", two_sleeper_calls());
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool::concurrent(started.clone())));
+
+    let mut limits = RuntimeLimits::react_defaults();
+    limits.timeout_ms = Some(300);
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(AgentContext::new("cbatch-timeout", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::Timeout { timeout_ms: 300 }
+    );
+    assert!(
+      started.load(Ordering::SeqCst),
+      "the concurrent batch must have begun executing"
+    );
+  }
+
+  #[tokio::test]
+  async fn concurrent_batch_cancelled_mid_flight_stops_with_cancelled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-cbatch-cancel-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_TOOL_CALLS", two_sleeper_calls());
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool::concurrent(started.clone())));
+
+    let token = AgentCancellationToken::new();
+    let cancel_token = token.clone();
+    let started_probe = started.clone();
+    tokio::spawn(async move {
+      while !started_probe.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+      }
+      cancel_token.cancel();
+    });
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(
+        AgentContext::new("cbatch-cancel", "go", &model).with_cancellation_token(token),
+      )
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(result.stop_reason, AgentStopReason::Cancelled { .. }),
+      "cancellation should win against the in-flight concurrent batch; got {:?}",
+      result.stop_reason
+    );
+    assert!(started.load(Ordering::SeqCst));
+  }
+
+  #[tokio::test]
+  async fn serial_batch_times_out_stops_with_timeout() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-sbatch-timeout-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_TOOL_CALLS", two_sleeper_calls());
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool::serial(started.clone())));
+
+    let mut limits = RuntimeLimits::react_defaults();
+    limits.timeout_ms = Some(300);
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(AgentContext::new("sbatch-timeout", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::Timeout { timeout_ms: 300 }
+    );
+    assert!(
+      started.load(Ordering::SeqCst),
+      "the first serial call must have begun executing"
+    );
+  }
+
+  #[tokio::test]
+  async fn serial_batch_cancelled_mid_flight_stops_with_cancelled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-sbatch-cancel-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_TOOL_CALLS", two_sleeper_calls());
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool::serial(started.clone())));
+
+    let token = AgentCancellationToken::new();
+    let cancel_token = token.clone();
+    let started_probe = started.clone();
+    tokio::spawn(async move {
+      while !started_probe.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+      }
+      cancel_token.cancel();
+    });
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(
+        AgentContext::new("sbatch-cancel", "go", &model).with_cancellation_token(token),
+      )
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(result.stop_reason, AgentStopReason::Cancelled { .. }),
+      "cancellation should win against the in-flight serial call; got {:?}",
       result.stop_reason
     );
     assert!(started.load(Ordering::SeqCst));
