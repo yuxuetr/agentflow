@@ -3857,11 +3857,9 @@ const ARCH_ALLOWLIST: &[ArchAllow] = &[
     to: "agentflow-server",
     burndown: "P-A2.3 — extract agentflow-worker-proto as the shared control-plane contract",
   },
-  ArchAllow {
-    from: "agentflow-server",
-    to: "agentflow-cli",
-    burndown: "P-A2.4 — extract the shared config-workflow assembly crate",
-  },
+  // P-A2.4 BURNED DOWN (was server -> cli): the shared workflow assembly (config
+  // schema + executor) and the diagnostics report builder moved to the new
+  // `agentflow-config` crate, so the server no longer depends on the CLI.
 ];
 
 /// A latent target-state violation: an edge that does NOT break either of the
@@ -4417,9 +4415,9 @@ mod arch_tests {
     let stdout = String::from_utf8(out).expect("utf8 stdout");
     assert!(stdout.contains("check-arch: OK"), "stdout:\n{stdout}");
     assert!(
-      stdout.contains("3 tracked"),
-      "expected the 3 remaining allowlisted violations to be tracked \
-       (harness->agents burned down in P-A2.1); got:\n{stdout}"
+      stdout.contains("2 tracked"),
+      "expected the 2 remaining allowlisted violations to be tracked \
+       (harness->agents burned down in P-A2.1; server->cli in P-A2.4); got:\n{stdout}"
     );
     assert!(
       stdout.contains("latent target-state edge(s)"),

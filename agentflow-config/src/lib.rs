@@ -9,4 +9,5 @@
 //! original `agentflow_cli::{config, executor}` paths.
 
 pub mod config;
+pub mod diagnostics;
 pub mod executor;

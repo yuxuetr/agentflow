@@ -13,6 +13,21 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`server → cli` dependency edge burned** (P-A2.4, step 2 — complete). The
+  doctor diagnostics report builder (`build_report`, `DoctorProfile`,
+  `DoctorReport` + the report model, `print_text_report`) moved from
+  `agentflow-cli` into `agentflow_config::diagnostics`, so `agentflow-server`'s
+  `/v1/diagnostics` route depends on the shared crate. The doctor command's
+  `execute` (which couples to the CLI's JSON envelope) and the top-level
+  `mcp.toml` probe (which reads the CLI's `McpConfigFile`) stay in the CLI;
+  `build_report` now *receives* the top-level MCP probe result as a parameter
+  (the server passes an empty one). With the last usage repointed,
+  **`agentflow-server` no longer depends on `agentflow-cli` at all** — the
+  `agentflow xtask check-arch` allowlist drops the `server → cli` entry (now 2
+  tracked edges: `agents → core`, `worker → server`). The CLI re-exports the
+  diagnostics surface under the original `doctor::*` paths, so the `doctor`
+  command is unchanged.
+
 - **`agentflow-config` — shared workflow-assembly crate** (P-A2.4, step 1). The
   YAML workflow config schema (`config::v2::{FlowDefinitionV2, NodeDefinitionV2}`,
   `config::schema`) and the executor that compiles it into an `agentflow-core`
