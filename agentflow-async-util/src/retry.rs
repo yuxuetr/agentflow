@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust
-//! use agentflow_core::retry::{RetryPolicy, RetryStrategy};
+//! use agentflow_async_util::retry::{RetryPolicy, RetryStrategy};
 //! use std::time::Duration;
 //!
 //! let policy = RetryPolicy::builder()

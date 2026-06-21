@@ -71,6 +71,16 @@ _New entries go here. Will roll into the next tag (likely
   follow-up sub-step; `agent-spi → llm` for `LlmTraceContext` is transitional,
   pending a trace-context contract per evaluation R6.)
 
+- **`agentflow-async-util` reliability crate** (P-A1.4, completes the kernel
+  crates). The retry (`RetryPolicy`/`RetryContext`/`RetryStrategy`) and timeout
+  combinators moved out of `agentflow-core` into a new `agentflow-async-util`
+  crate, so the executor and the agent loop can share one implementation instead
+  of duplicating it (the de-dup against `agentflow-agents` is P-A3.2).
+  `agentflow-core` re-exports both under their original `agentflow_core::{retry,
+  timeout}` paths — no consumer changes; `retry_executor` stays in core. With
+  this, all five new kernel crates exist (`value`, `graph`, `store-spi`,
+  `agent-spi`, `async-util`).
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native

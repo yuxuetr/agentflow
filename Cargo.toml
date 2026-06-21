@@ -4,6 +4,7 @@ members = [
   "agentflow-graph",
   "agentflow-store-spi",
   "agentflow-agent-spi",
+  "agentflow-async-util",
   "agentflow-core",
   "agentflow-nodes",
 #  "agentflow-config",

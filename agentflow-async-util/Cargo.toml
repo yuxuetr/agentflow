@@ -1,0 +1,27 @@
+[package]
+name = "agentflow-async-util"
+version = "0.1.0"
+description = "Reliability combinators for AgentFlow — retry policies and timeout wrappers"
+keywords = ["ai", "agents", "retry", "timeout"]
+categories = ["asynchronous"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+observability = ["dep:tracing"]
+
+[dependencies]
+# Combinators surface AgentFlowError today; the error type pins this dep until a
+# future generic-error refactor (RFC §4 envisioned tokio/futures only).
+agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["time"] }
+humantime-serde = "1.1"
+rand = "0.8"
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
