@@ -13,6 +13,25 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **P-A3 type-hardening (partial: 3.5–3.7).** Three of the five P-A3 items
+  delivered:
+  - **P-A3.6** — `agentflow harness chat`'s `/model` and `/skill` switch now
+    commit on success: a failed switch (bad model id, unloadable skill) keeps
+    the prior model + skill instead of leaving a dirty half-switched state.
+  - **P-A3.5** — the duplicated char-bounded `truncate` in the trace `tui` /
+    `replay` views is consolidated into one audited `format::truncate_chars`
+    (the single UTF-8-safe truncation path; counts/slices by `char`, never
+    panics on a multi-byte boundary).
+  - **P-A3.7** — the contract error enums (`AgentFlowError`,
+    `AgentRuntimeError`, `HarnessError`, `SchedulerError`) are now
+    `#[non_exhaustive]` so error variants can be added without a breaking change
+    for external consumers (one `_` arm added). Deliberately *not* applied to
+    the event / stop-reason enums (would force ~600 in-workspace matches to add
+    `_`, trading away internal exhaustiveness checking). P-A3.4 (seq write-order)
+    and P-A3.3 (session type-state) are deferred — the seq value is already
+    atomic/correct, and the `LoopSession` trait object can't carry compile-time
+    state.
+
 - **`agentflow-worker-proto` — shared worker control-plane contract; `worker →
   server` edge burned** (P-A2.3). The worker protocol surface moved out of
   `agentflow-server` into a new `agentflow-worker-proto` crate: the
