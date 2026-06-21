@@ -3843,21 +3843,17 @@ struct ArchAllow {
 }
 
 const ARCH_ALLOWLIST: &[ArchAllow] = &[
-  ArchAllow {
-    from: "agentflow-agents",
-    to: "agentflow-core",
-    burndown: "P-A1.3/P-A1.4 — agents builds on the graph IR + async-util, not the core executor",
-  },
-  // P-A2.1 BURNED DOWN (was harness -> agents): harness now depends on the
-  // agentflow-agent-spi contract (AgentRuntime / TurnDrivenRuntime), not the
-  // agents impl crate. `agents` stays a harness dev-dependency for the
-  // end-to-end ReActAgent smoke test, which check-arch ignores.
-  // P-A2.3 BURNED DOWN (was worker -> server): the worker protocol contract,
-  // wire types, and gRPC client moved to `agentflow-worker-proto`; the worker
-  // depends on that shared crate (server stays a dev-dependency for tests).
-  // P-A2.4 BURNED DOWN (was server -> cli): the shared workflow assembly (config
-  // schema + executor) and the diagnostics report builder moved to the new
-  // `agentflow-config` crate, so the server no longer depends on the CLI.
+  // EMPTY — every tracked runtime/surface-isolation violation has been burned
+  // down by the P-A track:
+  // - P-A1.3/1.4 + P-A (this): agents -> core. agents builds on the graph IR +
+  //   the FlowRunner contract + async-util; the executor (`CoreFlowRunner`) is
+  //   injected by the surface, and core is only a dev-dependency.
+  // - P-A2.1: harness -> agents. harness depends on the agentflow-agent-spi
+  //   contract; agents stays a harness dev-dependency for the smoke test.
+  // - P-A2.3: worker -> server. the worker protocol + gRPC client moved to
+  //   `agentflow-worker-proto`; server stays a worker dev-dependency for tests.
+  // - P-A2.4: server -> cli. the config/executor assembly + the diagnostics
+  //   report builder moved to `agentflow-config`.
 ];
 
 /// A latent target-state violation: an edge that does NOT break either of the
@@ -4413,10 +4409,10 @@ mod arch_tests {
     let stdout = String::from_utf8(out).expect("utf8 stdout");
     assert!(stdout.contains("check-arch: OK"), "stdout:\n{stdout}");
     assert!(
-      stdout.contains("1 tracked"),
-      "expected the 1 remaining allowlisted violation to be tracked \
-       (harness->agents P-A2.1; server->cli P-A2.4; worker->server P-A2.3 all burned); \
-       got:\n{stdout}"
+      stdout.contains("0 tracked"),
+      "expected ZERO tracked violations — the entire P-A runtime/surface-isolation \
+       allowlist is burned down (agents->core, harness->agents, server->cli, \
+       worker->server); got:\n{stdout}"
     );
     assert!(
       stdout.contains("latent target-state edge(s)"),

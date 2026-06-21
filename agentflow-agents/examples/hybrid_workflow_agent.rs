@@ -123,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
     "format_summary_workflow",
     "Run a deterministic child workflow that formats a summary.",
     child_workflow(),
+    std::sync::Arc::new(agentflow_core::CoreFlowRunner::serial()),
   );
 
   let mut registry = ToolRegistry::new();

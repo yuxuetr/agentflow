@@ -11,7 +11,13 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-agentflow-core = { path = "../agentflow-core", version = "0.2" }
+# P-A: agents builds on the graph IR + the FlowRunner contract + the async-util
+# combinators, NOT the core executor runtime (the `agents -> core` edge is
+# burned). The concrete `CoreFlowRunner` is injected by the surface; core stays
+# a dev-dependency for the in-crate execution tests.
+agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
+agentflow-value = { path = "../agentflow-value", version = "0.1" }
+agentflow-async-util = { path = "../agentflow-async-util", version = "0.1" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-mcp = { path = "../agentflow-mcp", version = "0.2" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
@@ -34,6 +40,8 @@ regex = "1"
 toml = "0.8"
 
 [dev-dependencies]
+# Execution-side tests build real Flows + run them via `CoreFlowRunner`.
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
 tokio-test = "0.4"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agentflow_core::{
+use agentflow_graph::{
   AsyncNode,
   async_node::{AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
