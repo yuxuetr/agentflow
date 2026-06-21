@@ -10,10 +10,6 @@ pub mod nodes;
 // Re-export core types for convenience
 pub use agentflow_core::{AgentFlowError, AsyncNode, Result};
 
-// Text-based AI model nodes
-#[cfg(feature = "llm")]
-pub use nodes::llm::LlmNode;
-
 // Q3.8.3: the previously-exported `factory_traits` module
 // (`NodeFactory` / `NodeRegistry` / `NodeConfig` / `ResolvedNodeConfig`)
 // was an unused parallel API — `agentflow-cli` builds workflows via

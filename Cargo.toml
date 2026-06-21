@@ -7,6 +7,7 @@ members = [
   "agentflow-async-util",
   "agentflow-core",
   "agentflow-nodes",
+  "agentflow-nodes-ai",
   "agentflow-config",
   "agentflow-llm",
   "agentflow-cli",
