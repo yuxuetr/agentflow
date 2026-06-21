@@ -19,7 +19,7 @@ homepage.workspace = true
 
 [features]
 default = []
-observability = ["tracing"]
+observability = ["tracing", "agentflow-async-util/observability"]
 # Enables the subprocess plugin runtime (PluginHost, PluginNode, manifest loading).
 plugin = ["dep:toml"]
 
@@ -29,6 +29,7 @@ plugin = ["dep:toml"]
 # their original `agentflow_core::*` paths for backward compatibility.
 agentflow-value = { path = "../agentflow-value", version = "0.1" }
 agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
+agentflow-async-util = { path = "../agentflow-async-util", version = "0.1" }
 # Core serialization and JSON support (for SharedState and node communication)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

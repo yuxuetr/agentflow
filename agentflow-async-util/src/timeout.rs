@@ -6,16 +6,16 @@
 //! # Examples
 //!
 //! ```rust
-//! use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+//! use agentflow_async_util::timeout::{with_timeout, TimeoutConfig};
 //! use std::time::Duration;
 //!
-//! async fn my_operation() -> agentflow_core::Result<String> {
+//! async fn my_operation() -> agentflow_async_util::error::Result<String> {
 //!     // Simulate work
 //!     tokio::time::sleep(Duration::from_millis(100)).await;
 //!     Ok("done".to_string())
 //! }
 //!
-//! # async fn example() -> agentflow_core::Result<()> {
+//! # async fn example() -> agentflow_async_util::error::Result<()> {
 //! let config = TimeoutConfig::default();
 //! let result = with_timeout(my_operation(), config.default_timeout).await?;
 //! assert_eq!(result, "done");
@@ -178,7 +178,7 @@ impl TimeoutConfigBuilder {
 /// # Examples
 ///
 /// ```rust
-/// use agentflow_core::timeout::with_timeout;
+/// use agentflow_async_util::timeout::with_timeout;
 /// use std::time::Duration;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -248,7 +248,7 @@ where
     Err(_) => {
       #[cfg(feature = "observability")]
       tracing::warn!(
-        target = "agentflow_core::timeout",
+        target = "agentflow_async_util::timeout",
         operation,
         node_id,
         workflow_id,

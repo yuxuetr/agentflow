@@ -22,9 +22,11 @@ pub use agentflow_value as value;
 // Execution engine
 pub mod concurrency;
 pub mod health;
-pub mod retry;
+// `retry` + `timeout` combinators moved to `agentflow-async-util` (P-A1.4);
+// re-export under their original `agentflow_core::{retry,timeout}` paths.
+// `retry_executor` stays here (it builds on `crate::error_context`).
+pub use agentflow_async_util::{retry, timeout};
 pub mod retry_executor;
-pub mod timeout;
 
 // Reliability
 pub mod checkpoint;

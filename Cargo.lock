@@ -124,6 +124,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentflow-async-util"
+version = "0.1.0"
+dependencies = [
+ "agentflow-graph",
+ "humantime-serde",
+ "rand 0.8.5",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "agentflow-cli"
 version = "0.2.0"
 dependencies = [
@@ -182,6 +194,7 @@ dependencies = [
 name = "agentflow-core"
 version = "0.2.0"
 dependencies = [
+ "agentflow-async-util",
  "agentflow-graph",
  "agentflow-value",
  "anyhow",
