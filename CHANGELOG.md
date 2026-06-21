@@ -13,6 +13,16 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`race_with_limits` consolidation completed for the ReAct hot path**
+  (P-A3.2 follow-up). The batch-dispatch racing sites — the concurrent
+  `join_all` group and the serial per-call loop — now also delegate to
+  `race_with_limits`, so the `ReActAgent` no longer hand-writes any
+  timeout/cancellation `select!` matrix (all four sites: LLM call, single tool
+  call, concurrent batch, serial batch). Four batch racing characterization
+  tests (concurrent/serial × timeout/cancel) were added first and pass both
+  before and after the repoint, proving it behaviour-preserving; the test
+  `SleepingTool` gained an idempotency switch to drive both batch paths.
+
 - **`async-util::race_with_limits` — shared timeout/cancellation racing
   combinator** (P-A3.2). A single `race_with_limits(fut, remaining, cancel) ->
   RaceOutcome::{Completed, TimedOut, Cancelled}` replaces the hand-written
