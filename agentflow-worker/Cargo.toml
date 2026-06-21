@@ -18,7 +18,10 @@ agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
-agentflow-server = { path = "../agentflow-server", version = "0.1" }
+# P-A2.3: the worker depends on the shared control-plane contract, not the
+# gateway crate. (`agentflow-server` stays a dev-dependency for the gRPC
+# round-trip + DistributedDagScheduler integration tests.)
+agentflow-worker-proto = { path = "../agentflow-worker-proto", version = "0.1" }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -31,6 +34,8 @@ rand = "0.8"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+# Integration tests drive the real gRPC server + the distributed scheduler.
+agentflow-server = { path = "../agentflow-server", version = "0.1" }
 anyhow = "1"
 serde_yaml = "0.9"
 tonic = "0.12"

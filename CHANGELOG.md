@@ -13,6 +13,28 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow-worker-proto` — shared worker control-plane contract; `worker →
+  server` edge burned** (P-A2.3). The worker protocol surface moved out of
+  `agentflow-server` into a new `agentflow-worker-proto` crate: the
+  `WorkerProtocol` trait + wire types (`WorkerTask` / `WorkerTaskResult` /
+  `WorkerHeartbeat` / `WorkerId` / `WorkerCapabilities` / `ClaimHints` /
+  `WorkerTraceEvent` / `WorkerTransport`), `SchedulerError`,
+  `InMemoryWorkerProtocol`, `NodeExecutionPayload`, the gRPC client
+  (`GrpcWorkerProtocol`) + the proto↔domain conversions + traceparent helpers,
+  and the `worker.proto` codegen (`build.rs` + `tonic-build`, generating the
+  `pb` messages). `agentflow-worker` now depends on this shared contract instead
+  of the gateway crate; `agentflow-server` keeps the control plane
+  (`WorkerControlPlane`, the distributed scheduler) and the gRPC *server*
+  (`WorkerControlServer` + the `WorkerControl` trait), importing the contract +
+  `pb` + conversions from `agentflow-worker-proto` and re-exporting them under
+  the original `scheduler::*` paths (so the control plane, the server-side
+  service, and all the gRPC round-trip tests are unchanged). `agentflow-server`
+  stays a worker dev-dependency for the integration tests. With the last
+  surface-isolation edge gone, `cargo xtask check-arch` now reports **1 tracked
+  edge** — only `agents → core` (runtime-isolation, the final P-A repoint)
+  remains. Also fixes a stale `build_report` doc comment flagged by
+  `clippy::empty_line_after_doc_comments`.
+
 - **`server → cli` dependency edge burned** (P-A2.4, step 2 — complete). The
   doctor diagnostics report builder (`build_report`, `DoctorProfile`,
   `DoctorReport` + the report model, `print_text_report`) moved from
