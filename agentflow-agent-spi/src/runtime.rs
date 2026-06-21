@@ -798,6 +798,7 @@ pub trait AgentRuntime: Send {
 
 /// Errors raised before a runtime can return a structured stop reason.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AgentRuntimeError {
   /// The supplied [`AgentContext`] failed pre-flight validation.
   #[error("Invalid agent runtime context: {message}")]
