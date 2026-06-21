@@ -37,11 +37,11 @@ use agentflow_memory::SessionMemory;
 use agentflow_nodes::nodes::{
   file::FileNode, http::HttpNode, llm::LlmNode, mcp::MCPNode, template::TemplateNode,
 };
-use agentflow_server::{
+use agentflow_tools::ToolRegistry;
+use agentflow_worker_proto::{
   ClaimHints, NodeExecutionPayload, SchedulerError, WorkerCapabilities, WorkerHeartbeat, WorkerId,
   WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent,
 };
-use agentflow_tools::ToolRegistry;
 use thiserror::Error;
 use tokio::time::sleep;
 

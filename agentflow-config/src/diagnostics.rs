@@ -378,10 +378,10 @@ impl DoctorProfile {
   }
 }
 
-/// Execute the doctor command. The CLI passes through `--profile` and
-/// optional `--server` URL; both default to None so legacy invocations
-/// keep working.
-
+/// Build the structured doctor report. The caller selects the `profile`, an
+/// optional `--server` URL to probe, and whether to run the backup /
+/// installation checks; `top_level_mcp` is the CLI-injected `mcp.toml` probe
+/// result (empty for the server).
 pub async fn build_report(
   profile: DoctorProfile,
   server: Option<&str>,

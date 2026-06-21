@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use agentflow_server::{GrpcWorkerProtocol, InMemoryWorkerProtocol, WorkerId};
 use agentflow_worker::{WorkerConfig, WorkerRuntime};
+use agentflow_worker_proto::{GrpcWorkerProtocol, InMemoryWorkerProtocol, WorkerId};
 
 #[tokio::main]
 async fn main() {
@@ -73,7 +73,7 @@ where
   // `P: Clone + Send + 'static` to share the protocol handle across
   // spawned tasks. Both `InMemoryWorkerProtocol` and
   // `GrpcWorkerProtocol` already derive `Clone`.
-  P: agentflow_server::WorkerProtocol + Clone + Send + 'static,
+  P: agentflow_worker_proto::WorkerProtocol + Clone + Send + 'static,
 {
   if once {
     let _ = runtime.run_once().await.map_err(|e| e.to_string())?;

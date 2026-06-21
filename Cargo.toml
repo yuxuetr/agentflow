@@ -20,6 +20,7 @@ members = [
   "agentflow-db",
   "agentflow-server",
   "agentflow-worker",
+  "agentflow-worker-proto",
   "agentflow-harness",
   "xtask",
 #   "agentflow-agents/agents/paper_assistant",

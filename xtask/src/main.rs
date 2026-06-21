@@ -3852,11 +3852,9 @@ const ARCH_ALLOWLIST: &[ArchAllow] = &[
   // agentflow-agent-spi contract (AgentRuntime / TurnDrivenRuntime), not the
   // agents impl crate. `agents` stays a harness dev-dependency for the
   // end-to-end ReActAgent smoke test, which check-arch ignores.
-  ArchAllow {
-    from: "agentflow-worker",
-    to: "agentflow-server",
-    burndown: "P-A2.3 — extract agentflow-worker-proto as the shared control-plane contract",
-  },
+  // P-A2.3 BURNED DOWN (was worker -> server): the worker protocol contract,
+  // wire types, and gRPC client moved to `agentflow-worker-proto`; the worker
+  // depends on that shared crate (server stays a dev-dependency for tests).
   // P-A2.4 BURNED DOWN (was server -> cli): the shared workflow assembly (config
   // schema + executor) and the diagnostics report builder moved to the new
   // `agentflow-config` crate, so the server no longer depends on the CLI.
@@ -4415,9 +4413,10 @@ mod arch_tests {
     let stdout = String::from_utf8(out).expect("utf8 stdout");
     assert!(stdout.contains("check-arch: OK"), "stdout:\n{stdout}");
     assert!(
-      stdout.contains("2 tracked"),
-      "expected the 2 remaining allowlisted violations to be tracked \
-       (harness->agents burned down in P-A2.1; server->cli in P-A2.4); got:\n{stdout}"
+      stdout.contains("1 tracked"),
+      "expected the 1 remaining allowlisted violation to be tracked \
+       (harness->agents P-A2.1; server->cli P-A2.4; worker->server P-A2.3 all burned); \
+       got:\n{stdout}"
     );
     assert!(
       stdout.contains("latent target-state edge(s)"),

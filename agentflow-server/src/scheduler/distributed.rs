@@ -13,34 +13,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{SchedulerError, WorkerControlPlane, WorkerProtocol, WorkerTask};
-
-/// Portable node execution payload consumed by `agentflow-worker`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NodeExecutionPayload {
-  pub node_id: String,
-  pub node_type: String,
-  #[serde(default)]
-  pub parameters: HashMap<String, serde_json::Value>,
-  #[serde(default)]
-  pub inputs: HashMap<String, FlowValue>,
-}
-
-impl NodeExecutionPayload {
-  pub fn new(
-    node_id: impl Into<String>,
-    node_type: impl Into<String>,
-    parameters: HashMap<String, serde_json::Value>,
-    inputs: HashMap<String, FlowValue>,
-  ) -> Self {
-    Self {
-      node_id: node_id.into(),
-      node_type: node_type.into(),
-      parameters,
-      inputs,
-    }
-  }
-}
+// `NodeExecutionPayload` moved to `agentflow-worker-proto` (P-A2.3); it reaches
+// this module via the `scheduler` re-export.
+use super::{NodeExecutionPayload, SchedulerError, WorkerControlPlane, WorkerProtocol, WorkerTask};
 
 /// Terminal status for one distributed DAG node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

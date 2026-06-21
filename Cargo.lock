@@ -450,6 +450,7 @@ dependencies = [
  "agentflow-skills",
  "agentflow-tools",
  "agentflow-tracing",
+ "agentflow-worker-proto",
  "anyhow",
  "async-trait",
  "axum",
@@ -471,7 +472,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
- "tonic-build",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
@@ -584,6 +584,7 @@ dependencies = [
  "agentflow-nodes",
  "agentflow-server",
  "agentflow-tools",
+ "agentflow-worker-proto",
  "anyhow",
  "async-trait",
  "chrono",
@@ -594,6 +595,25 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tonic",
+ "uuid",
+]
+
+[[package]]
+name = "agentflow-worker-proto"
+version = "0.1.0"
+dependencies = [
+ "agentflow-tracing",
+ "agentflow-value",
+ "async-trait",
+ "chrono",
+ "prost",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tracing",
  "uuid",
 ]
 
