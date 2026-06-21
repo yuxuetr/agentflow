@@ -2,6 +2,19 @@
 
 use crate::{RedactionConfig, redact_trace, types::*};
 
+/// Truncate `value` to at most `max_chars` **characters** (not bytes), adding a
+/// `...` ellipsis when shortened. This is the single audited UTF-8-safe
+/// truncation for the trace text views (`replay`, `tui`): it counts and slices
+/// by `char`, so it can never panic on a multi-byte boundary the way `&s[..n]`
+/// byte-slicing would (P-A3.5).
+pub fn truncate_chars(value: &str, max_chars: usize) -> String {
+  if value.chars().count() <= max_chars {
+    return value.to_string();
+  }
+  let take = max_chars.saturating_sub(3);
+  format!("{}...", value.chars().take(take).collect::<String>())
+}
+
 /// Format a trace as human-readable text
 pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
   let mut trace = trace.clone();

@@ -338,13 +338,7 @@ fn node_status_label(status: &NodeStatus) -> &'static str {
   }
 }
 
-fn truncate(value: &str, max_chars: usize) -> String {
-  if value.chars().count() <= max_chars {
-    return value.to_string();
-  }
-  let take = max_chars.saturating_sub(3);
-  format!("{}...", value.chars().take(take).collect::<String>())
-}
+use crate::format::truncate_chars as truncate;
 
 #[cfg(test)]
 mod tests {

@@ -267,13 +267,7 @@ fn compact_json(value: &serde_json::Value) -> String {
   serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn truncate(value: &str, max_chars: usize) -> String {
-  if value.chars().count() <= max_chars {
-    return value.to_string();
-  }
-  let take = max_chars.saturating_sub(3);
-  format!("{}...", value.chars().take(take).collect::<String>())
-}
+use crate::format::truncate_chars as truncate;
 
 #[cfg(test)]
 mod tests {
