@@ -11,6 +11,9 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+# Storage contracts (P-A1.2): MemoryError / Message / MemoryStore, re-exported
+# under their original agentflow_memory::* paths for backward compatibility.
+agentflow-store-spi = { path = "../agentflow-store-spi", version = "0.1" }
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

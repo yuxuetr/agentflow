@@ -48,6 +48,16 @@ _New entries go here. Will roll into the next tag (likely
   `Flow` by depending on `agentflow-graph` alone — the dynamic-workflow
   prerequisite.
 
+- **`agentflow-store-spi` storage-contract crate** (P-A1.2). The storage
+  *contracts* — `MemoryStore`, `Message` / `Role` / `TokenCounter`, and the shared
+  `MemoryError` — moved out of `agentflow-memory` into a new `agentflow-store-spi`
+  crate. The concrete stores (`SessionMemory`, `SqliteMemory`, `SemanticMemory`, …)
+  stay in `agentflow-memory`, which re-exports everything under its original
+  `agentflow_memory::*` paths — no consumer changes. This gives `Message` a
+  contract home so the upcoming `agentflow-agent-spi` can depend on it without
+  depending on the `memory` implementation crate. (The `EmbeddingProvider`
+  contract — evaluation R6 — is a follow-up pending error-surface unification.)
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native

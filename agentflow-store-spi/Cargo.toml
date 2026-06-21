@@ -1,0 +1,23 @@
+[package]
+name = "agentflow-store-spi"
+version = "0.1.0"
+description = "Storage contracts for AgentFlow — MemoryStore + the Message/Role/TokenCounter data types"
+keywords = ["ai", "agents", "memory", "storage"]
+categories = ["data-structures"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+# `MemoryError` owns `From<sqlx::Error>` / `From<serde_json::Error>`, so the
+# orphan rule pins these deps here with the error type. Slimming `MemoryError`
+# to decouple `sqlx` from the contract crate is a future cleanup.
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }

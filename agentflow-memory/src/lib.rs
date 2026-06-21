@@ -18,7 +18,6 @@
 //! `docs/STABILITY.md` and the design doc for the promotion path.
 
 pub mod entity_facts;
-pub mod error;
 pub mod layer;
 pub mod preference;
 pub mod preference_encrypted;
@@ -26,8 +25,12 @@ pub mod semantic;
 pub mod session;
 pub mod sqlite;
 mod sqlite_pool;
-pub mod store;
-pub mod types;
+
+// The storage *contracts* (`MemoryError`, `Message`/`Role`/`TokenCounter`,
+// `MemoryStore`) moved to `agentflow-store-spi` (P-A1.2). Re-export them under
+// their original `agentflow_memory::{error,store,types}` module paths + crate
+// root so every consumer — and this crate's own impls — keep compiling.
+pub use agentflow_store_spi::{error, store, types};
 
 pub use entity_facts::SqliteEntityFactStore;
 pub use error::MemoryError;
