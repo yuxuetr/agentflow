@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 20 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 21 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
 
 A narrow-waist **contract kernel** (L0) was extracted by the P-A track (`docs/RFC_CRATE_ARCHITECTURE.md`; validated by `docs/ARCHITECTURE_EVALUATION_2026-06-20.md`): the runtimes never depend on each other, only on shared contracts, enforced by `cargo xtask check-arch` (eight dependency laws). The four execution paradigms (static DAG / native loop / harness / dynamic workflow) and their three-axis mental model live in `docs/ARCHITECTURE.md` § Four Execution Paradigms.
 
 Recommended five-layer mental model:
 
-- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade), `agentflow-async-util` (retry/timeout), plus `agentflow-tools` (the `Tool` contract)
+- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tools` (the `Tool` contract)
 - **L1 Execution Core** (the executor): `agentflow-core` runs the L0 `Flow` IR — scheduler, checkpoint, retry-executor, resource manager, health, events — exposed via the `FlowExt` trait (`flow.run()`). IR ≠ executor; the L0 types are re-exported under `agentflow_core::*` for compatibility.
 - **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
-- **L3 Agent / Orchestration**: `agentflow-agents` (incl. the `dynamic` module: `compile_plan_to_flow` + `DynamicWorkflowAgent`), `agentflow-skills`, `agentflow-harness`, `agentflow-cli`
+- **L3 Agent / Orchestration**: `agentflow-agents` (incl. the `dynamic` module: `compile_plan_to_flow` + `DynamicWorkflowAgent`), `agentflow-skills`, `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly: YAML schema + `executor` + `diagnostics`, consumed by both `cli` and `server`), `agentflow-cli`
 - **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`
 
 Two complementary execution styles:
@@ -93,9 +93,17 @@ Harness Agent Mode crate (Phase H0 contract freeze + H1 runtime MVP + H2 hooks/a
 - **CLI surface:** `agentflow harness run|resume|list|inspect` with `--output text|json|stream-json` and the full flag set documented in `docs/HARNESS_MODE.md`.
 - Stability tier **beta** as of P-H.5 closure: `HarnessEvent` envelope, `ApprovalRequest`, and `ApprovalDecision` are plumbed through both the in-process hook runtime and the HTTP surface (`/v1/harness/sessions/{id}/events`, `/approvals`). See `docs/HARNESS_MODE.md` for the implementation spec and `docs/STABILITY.md` for the wire-shape promise. `tracing_bridge` now ships **two** sink tiers: (a) JSONL-only via `open_tracing_sink(...)` (per-session `<base>/harness/sessions/<id>.jsonl` for raw replay), and (b) `ExecutionTrace` via `open_execution_trace_sink(storage)` which translates each `HarnessEvent` stream into an `agentflow_tracing::ExecutionTrace` and persists it through any `TraceStorage` backend (Q3.10.4). One related item remains **open**: first-party OTLP exporter transport (HTTP/gRPC + TLS + auth) is deferred (Q2.3.3) — operators bring their own `OtelSpanSink` impl.
 
+#### L3 — agentflow-config
+Shared config-first workflow assembly extracted from the CLI (P-A2.4) so the server can assemble/diagnose workflows without depending on the CLI binary crate:
+- `config` — YAML workflow schema (`config::v2::{FlowDefinitionV2, NodeDefinitionV2}`, `config::schema`).
+- `executor` — compiles a config into an `agentflow-core` `Flow` (`build_flow_from_yaml` + node factories); feature flags `plugin` / `rag` / `mcp` gate capability nodes.
+- `diagnostics` — the `agentflow doctor` report builder (`build_report`, `DoctorReport`, `print_text_report`); the CLI's `doctor` command + the server's `/v1/diagnostics` both consume it.
+- `agentflow-cli` re-exports `config` / `executor` under their original `agentflow_cli::{config, executor}` paths, and `commands::doctor` re-exports the diagnostics surface — consumers unchanged.
+
 #### L3 — agentflow-cli
 Unified user interface:
 - `workflow run|validate|debug` (with `--input`, `--dry-run`, `--output`, `--timeout`, `--max-retries`, `--model`, `--run-dir`, `--max-concurrency`)
+- `workflow dynamic --goal ... --model ...` — LLM authors a `WorkflowPlan`, compiled + executed under a restrictive built-in tool sandbox (`--allow-path` / `--allow-domain`); `--dry-run` prints the plan; `--approve` routes tool calls through the Harness approval pipeline
 - `config init|show|validate`, `llm models`
 - `skill *`, `mcp list-tools|call-tool|list-resources`, `trace replay|tui`
 - `audio asr|tts`, `image generate|understand`
@@ -267,7 +275,7 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 
 ---
 
-**Last Updated**: 2026-05-26 (Q4 doc-drift sweep)
+**Last Updated**: 2026-06-21 (P-A track sync: `agentflow-config` crate, dynamic-workflow CLI, `race_with_limits`, burned `server→cli` edge)
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
 **Composite Maturity Rating**: A (per `docs/archive/PROJECT_EVALUATION_2026-05-19.md`)

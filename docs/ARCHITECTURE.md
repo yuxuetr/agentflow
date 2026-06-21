@@ -126,7 +126,7 @@ contract crates everyone depends on and that depend on no implementation.
 |   tracing · server · db · worker · ui                   |
 +----------------------------------------------------------+
 | L3 Agent / Orchestration / Governance                    |
-|   agents · skills · harness · cli                        |
+|   agents · skills · harness · config · cli               |
 +----------------------------------------------------------+
 | L2 Capability Adapters                                   |
 |   nodes · llm · tools · mcp · rag · memory               |
@@ -138,7 +138,7 @@ contract crates everyone depends on and that depend on no implementation.
 | L0 Contract Kernel (narrow waist)                        |
 |   value (FlowValue) · graph (Flow IR / AsyncNode)        |
 |   store-spi (MemoryStore) · agent-spi (AgentRuntime)     |
-|   async-util (retry/timeout) · tools (Tool contract)     |
+|   async-util (retry/timeout/race) · tools (Tool contract)|
 +----------------------------------------------------------+
 ```
 
@@ -200,7 +200,8 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-core` | **L1 executor.** The DAG executor for the `agentflow-graph` IR: the topological/concurrent scheduler exposed via the `FlowExt` trait (`flow.run()`), checkpoint recovery, retry-executor, resource controls, health checks, and execution events. Re-exports the L0 IR types under their original `agentflow_core::*` paths. |
 | `agentflow-nodes` | Config-first node implementations such as `llm`, `template`, `http`, `file`, `arxiv`, audio, image, MCP, RAG, `map`, and `while`. |
 | `agentflow-llm` | Model configuration, provider clients, streaming, multimodal helpers, discovery, and model registry support. |
-| `agentflow-cli` | User-facing commands for workflow run/validate/debug, config, LLM model discovery, MCP, Skills, tracing, audio, image, and optional RAG operations. |
+| `agentflow-cli` | User-facing commands for workflow run/validate/debug, dynamic workflow (`workflow dynamic`), config, LLM model discovery, MCP, Skills, tracing, audio, image, and optional RAG operations. |
+| `agentflow-config` | Shared config-first workflow assembly: YAML workflow schema (`config::v2`), the `executor` that builds an `agentflow-core` `Flow`, and the `diagnostics` report builder. Consumed by both `agentflow-cli` and `agentflow-server` (P-A2.4). |
 | `agentflow-agents` | ReAct / plan-execute / supervisor runtimes, `AgentNode`, `WorkflowTool`, and the `dynamic` module (`compile_plan_to_flow` + `DynamicWorkflowAgent`) for dynamic workflows. The runtime *contracts* live in `agentflow-agent-spi`. |
 | `agentflow-tools` | Built-in tool interfaces, registry, sandbox and permission policy, file/http/shell/script tools. |
 | `agentflow-skills` | Skill loading, `SKILL.md` parsing, manifests, registry indexes, marketplace files, MCP tool discovery, and Skill builder integration. |
@@ -214,8 +215,14 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-harness` | **Governance shell.** Wraps a runtime (`AgentRuntime`/`TurnDrivenRuntime` via `agentflow-agent-spi`) with hooks, interactive approval, sandboxing, audit, run limits, and background tasks; emits the `HarnessEvent` envelope. |
 | `agentflow-ui` | React + Vite + TypeScript SPA embedded by the server at `/ui` (run list, DAG status, event replay, SSE). |
 
-`agentflow-config` is not an active workspace crate. Current config-first workflow
-support lives in `agentflow-cli/src/config` and `agentflow-cli/src/executor`.
+`agentflow-config` is the shared config-first workflow-assembly crate (extracted
+from `agentflow-cli` by P-A2.4): the YAML workflow schema (`config::v2`), the
+`executor` that compiles it into an `agentflow-core` `Flow`
+(`build_flow_from_yaml`), and the `diagnostics` report builder behind
+`agentflow doctor` / the server's `/v1/diagnostics`. Both `agentflow-cli` (which
+re-exports `config` / `executor` under their original paths) and
+`agentflow-server` depend on it, so the gateway no longer depends on the CLI
+binary crate.
 
 ## CLI Surface
 
@@ -223,6 +230,7 @@ Current top-level commands are:
 
 ```bash
 agentflow workflow run|validate|debug
+agentflow workflow dynamic --goal ... --model ...   # LLM authors a plan, governed execution
 agentflow config init|show|validate
 agentflow llm models
 agentflow mcp list-tools|call-tool|list-resources
