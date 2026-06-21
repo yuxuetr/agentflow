@@ -2,6 +2,7 @@
 members = [
   "agentflow-value",
   "agentflow-graph",
+  "agentflow-store-spi",
   "agentflow-core",
   "agentflow-nodes",
 #  "agentflow-config",

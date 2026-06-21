@@ -300,6 +300,7 @@ version = "0.1.0"
 dependencies = [
  "age",
  "agentflow-rag",
+ "agentflow-store-spi",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -454,6 +455,19 @@ dependencies = [
  "tokio-test",
  "toml 0.8.23",
  "tracing",
+]
+
+[[package]]
+name = "agentflow-store-spi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
