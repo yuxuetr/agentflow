@@ -26,21 +26,34 @@ AgentFlow is built on five core principles:
 
 ## 🤖 Agent Framework Positioning
 
-AgentFlow now treats workflows and agents as complementary execution strategies:
+AgentFlow supports **four execution paradigms** on one shared runtime — points on a
+single *planning / binding-time* spectrum, from fully-fixed to decided-every-step:
 
-- Use `agentflow-core::Flow` for deterministic production pipelines, batch jobs, RAG flows, and business processes.
-- Use `agentflow-agents::AgentRuntime` / `ReActAgent` for autonomous loops with planning, tool use, reflection, memory, and runtime guards.
-- Use `AgentNode` when a DAG needs an agent for a non-deterministic step.
-- Use `WorkflowTool` when an agent should call a stable DAG workflow as a normal tool.
-- Use Skills to package instructions, manifests, script tools, MCP server declarations, and runtime constraints.
-- Use MCP integration to expose external tool servers through the same tool interface as local tools.
-- Use Skill registry and marketplace files as local-first catalogs, and use the subprocess JSON-RPC plugin runtime for custom workflow nodes.
+- **Static DAG** — `agentflow-core::Flow` for deterministic production pipelines,
+  batch jobs, RAG flows, and business processes (the plan is authored up front).
+- **Native agent loop** — `agentflow-agents::ReActAgent` for autonomous
+  observe/plan/act loops with tool use, reflection, memory, and runtime guards
+  (the plan is decided every step).
+- **Dynamic workflow** — an agent *generates* a plan at runtime that compiles to a
+  `Flow` and executes deterministically: `agentflow_agents::dynamic::{compile_plan_to_flow,
+  DynamicWorkflowAgent}`. One up-front planning decision, then a replayable,
+  parallel DAG — the flexibility of an agent with the reliability of a workflow.
+- **Harness governance** — `agentflow-harness` wraps a runtime with approval,
+  hooks, sandbox, audit, limits, and background tasks.
 
-The intended dependency direction is:
+Two orthogonal axes round it out: a shared **capability substrate** (Tools, MCP,
+RAG, Memory, Skills — all paradigms call the same `ToolRegistry`) and the
+**governance shell** (harness). The paradigms compose recursively:
 
-```text
-Flow -> AgentNode -> AgentRuntime -> ToolRegistry -> Tool / MCP / WorkflowTool
-```
+- Use **`AgentNode`** to embed an agent *in* a DAG (a Flow step that is an agent).
+- Use **`WorkflowTool`** to expose a DAG *as* a tool to an agent.
+
+These unify at a narrow **contract kernel** (`agentflow-value` / `-graph` /
+`-store-spi` / `-agent-spi` / `-async-util`): the runtimes never depend on each
+other, only on shared contracts. See
+[`docs/ARCHITECTURE.md` § Four Execution Paradigms](docs/ARCHITECTURE.md#four-execution-paradigms--mental-model)
+for the full three-axis mental model (with an honest model-vs-code status), and
+[`docs/RFC_CRATE_ARCHITECTURE.md`](docs/RFC_CRATE_ARCHITECTURE.md) for the kernel design.
 
 ## 🎯 Two Ways to Build
 
@@ -49,6 +62,7 @@ For developers who need maximum power and type-safety.
 
 ```rust
 use agentflow_core::{
+    FlowExt, // brings `flow.run()` into scope (the executor for the graph IR)
     flow::{Flow, GraphNode, NodeType},
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     value::FlowValue,
@@ -313,7 +327,8 @@ cargo check --workspace
 ### Core Documentation
 - **[Docs Index](docs/README.md)**: Current documentation entry point.
 - **[RoadMap](RoadMap.md)**: Current direction for evolving AgentFlow into a DAG + agent framework.
-- **[Architecture](docs/ARCHITECTURE.md)**: Current workspace layout, runtime model, CLI surface, and persistence model.
+- **[Architecture](docs/ARCHITECTURE.md)**: The four-paradigm mental model (with an honest model-vs-code status), workspace layout, runtime model, CLI surface, and persistence.
+- **[Crate Architecture RFC](docs/RFC_CRATE_ARCHITECTURE.md)** + **[Evaluation](docs/ARCHITECTURE_EVALUATION_2026-06-20.md)**: The contract-kernel design (narrow-waist `value`/`graph`/`store-spi`/`agent-spi`/`async-util` + eight dependency laws, enforced by `cargo xtask check-arch`) and its dependency-graph validation.
 - **[Configuration](docs/CONFIGURATION.md)**: CLI config, secrets, workflow YAML, and run directories.
 - **[Workflow Schema](docs/WORKFLOW_SCHEMA.md)**: Implemented config-first workflow validation contract.
 - **[Agent Runtime](docs/AGENT_RUNTIME.md)**: Runtime boundary, core types, ReAct trace contract, and DAG interop.
@@ -338,6 +353,8 @@ cargo check --workspace
 - `agentflow-agents/examples/agent_native_react.rs`: Self-contained ReAct agent-native runtime example
 - `agentflow-agents/examples/react_agent.rs`: ReAct agent runtime example
 - `agentflow-agents/examples/hybrid_workflow_agent.rs`: DAG + Agent hybrid example
+- `agentflow-agents/examples/dynamic_workflow_spike.rs`: Dynamic workflow — a runtime generates a `Flow` and the engine executes it
+- `agentflow-agents/examples/dynamic_workflow_plan.rs`: Dynamic workflow from a declarative JSON plan, compiled to a parallel `Flow` of tool calls
 - `agentflow-skills/examples/skill_calls_mcp_tool.rs`: Skill-to-MCP tool call example
 - `examples/skills/mcp-basic`: Minimal Skill with MCP server configuration
 - `agentflow-cli/examples/workflows/`: Complete workflow examples including AI research assistant

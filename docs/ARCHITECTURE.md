@@ -116,35 +116,52 @@ the kernel design.
 
 ## Layered Mental Model
 
-The workspace crates fall into four layers:
+The workspace crates fall into five layers. **L0**, the **contract kernel**, was
+extracted by the P-A track (`docs/RFC_CRATE_ARCHITECTURE.md`): a narrow waist of
+contract crates everyone depends on and that depend on no implementation.
 
 ```text
 +----------------------------------------------------------+
 | L4 Operations / Productization                          |
-|   tracing · viz · server · db · worker                  |
+|   tracing · server · db · worker · ui                   |
 +----------------------------------------------------------+
-| L3 Agent / Orchestration                                 |
-|   agents · skills · cli                                  |
+| L3 Agent / Orchestration / Governance                    |
+|   agents · skills · harness · cli                        |
 +----------------------------------------------------------+
 | L2 Capability Adapters                                   |
 |   nodes · llm · tools · mcp · rag · memory               |
 +----------------------------------------------------------+
-| L1 Execution Core                                        |
-|   core (Flow / GraphNode / FlowValue / scheduler)        |
+| L1 Execution Core (the executor)                         |
+|   core (FlowExt / FlowExecutor / scheduler / checkpoint  |
+|         / retry-executor / resource & health primitives) |
++----------------------------------------------------------+
+| L0 Contract Kernel (narrow waist)                        |
+|   value (FlowValue) · graph (Flow IR / AsyncNode)        |
+|   store-spi (MemoryStore) · agent-spi (AgentRuntime)     |
+|   async-util (retry/timeout) · tools (Tool contract)     |
 +----------------------------------------------------------+
 ```
 
-L1 is the only execution kernel. L2 capabilities reach L3 either as
-`AsyncNode` implementations (DAG path) or as tools/clients consumed by
-`AgentRuntime` (agent-native path). L4 is observation/operation cross-cutting.
+L0 holds the **types and traits** (the `Flow` IR, `FlowValue`, `AgentRuntime`,
+`MemoryStore`, the reliability combinators). L1 `core` is the **executor** of the
+L0 graph IR — the topological/concurrent scheduler, exposed as the `FlowExt`
+trait (`flow.run()`). The split (IR ≠ executor) is what lets a runtime *construct*
+a `Flow` by depending on `graph` alone — the dynamic-workflow prerequisite. L2
+capabilities reach L3 as `AsyncNode` impls (DAG path) or as tools/clients consumed
+by an `AgentRuntime` (agent-native path); L3 `harness` governs a runtime; L4 is
+observation/operation cross-cutting. The eight dependency laws between these
+layers are enforced by `cargo xtask check-arch`.
 
 ## Runtime Model
 
-AgentFlow supports two complementary execution styles:
+AgentFlow supports the four execution paradigms above (see § Four Execution
+Paradigms). The two foundational runtimes they build on:
 
-- **DAG workflows**: `agentflow-core::Flow` runs explicit graph nodes with declared
-  dependencies, input mappings, optional conditions, checkpoints, retry, timeout,
-  resource limits, and health primitives. Two execution modes are available:
+- **DAG workflows**: a `Flow` (the `agentflow-graph` IR) is run by the executor in
+  `agentflow-core` via the `FlowExt` trait (`use agentflow_core::FlowExt; flow.run().await`).
+  Nodes carry declared dependencies, input mappings, optional conditions,
+  checkpoints, retry, timeout, resource limits, and health primitives. Two
+  execution modes are available:
   - `FlowExecutionMode::Serial` (default): topological order, one node at a time.
   - `FlowExecutionMode::Concurrent`: dependency-ready dispatch via
     `FuturesUnordered` with a configurable `max_concurrency` window. Nodes whose
@@ -175,11 +192,16 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 
 | Crate | Role |
 | --- | --- |
-| `agentflow-core` | Pure workflow engine, node abstractions, `FlowValue`, scheduling, retry, timeout, checkpoint recovery, resource controls, health checks, and execution events. |
+| `agentflow-value` | **L0 kernel.** `FlowValue` — the universal data contract passed between nodes. Zero internal dependencies. |
+| `agentflow-graph` | **L0 kernel.** The execution IR: `Flow`, `GraphNode`, `NodeType`, `AsyncNode`, the `expr` mini-language, and `AgentFlowError`. A runtime can construct a `Flow` by depending on this alone. |
+| `agentflow-store-spi` | **L0 kernel.** Storage contracts: `MemoryStore`, `Message`/`Role`/`TokenCounter`, `MemoryError`. |
+| `agentflow-agent-spi` | **L0 kernel.** Agent-runtime contracts: `AgentRuntime`, `AgentEvent`/`AgentStep`/`AgentContext`, and the turn-driven (`TurnDrivenRuntime`/`LoopSession`) façade the harness governs. |
+| `agentflow-async-util` | **L0 kernel.** Reliability combinators (retry policies, timeout) shared by the executor and the agent loop. |
+| `agentflow-core` | **L1 executor.** The DAG executor for the `agentflow-graph` IR: the topological/concurrent scheduler exposed via the `FlowExt` trait (`flow.run()`), checkpoint recovery, retry-executor, resource controls, health checks, and execution events. Re-exports the L0 IR types under their original `agentflow_core::*` paths. |
 | `agentflow-nodes` | Config-first node implementations such as `llm`, `template`, `http`, `file`, `arxiv`, audio, image, MCP, RAG, `map`, and `while`. |
 | `agentflow-llm` | Model configuration, provider clients, streaming, multimodal helpers, discovery, and model registry support. |
 | `agentflow-cli` | User-facing commands for workflow run/validate/debug, config, LLM model discovery, MCP, Skills, tracing, audio, image, and optional RAG operations. |
-| `agentflow-agents` | Agent runtime plus ReAct, plan/execute, supervisor, `AgentNode`, workflow tool integration, and shared agent utilities. |
+| `agentflow-agents` | ReAct / plan-execute / supervisor runtimes, `AgentNode`, `WorkflowTool`, and the `dynamic` module (`compile_plan_to_flow` + `DynamicWorkflowAgent`) for dynamic workflows. The runtime *contracts* live in `agentflow-agent-spi`. |
 | `agentflow-tools` | Built-in tool interfaces, registry, sandbox and permission policy, file/http/shell/script tools. |
 | `agentflow-skills` | Skill loading, `SKILL.md` parsing, manifests, registry indexes, marketplace files, MCP tool discovery, and Skill builder integration. |
 | `agentflow-mcp` | MCP stdio transport, client sessions, tools, resources, prompts, retry, and builder APIs. |
@@ -189,6 +211,8 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-db` | SQLx database layer with migrations, models, and repository traits for runs, steps, events, artifacts, Skill installs, and MCP sessions. |
 | `agentflow-server` | Axum gateway with health endpoints, run submission/query routes, SSE event streams, Skill routes, bearer auth, Web UI embedding, and distributed scheduler control-plane primitives. |
 | `agentflow-worker` | Distributed worker runtime and binary built around the `WorkerProtocol` abstraction. |
+| `agentflow-harness` | **Governance shell.** Wraps a runtime (`AgentRuntime`/`TurnDrivenRuntime` via `agentflow-agent-spi`) with hooks, interactive approval, sandboxing, audit, run limits, and background tasks; emits the `HarnessEvent` envelope. |
+| `agentflow-ui` | React + Vite + TypeScript SPA embedded by the server at `/ui` (run list, DAG status, event replay, SSE). |
 
 `agentflow-config` is not an active workspace crate. Current config-first workflow
 support lives in `agentflow-cli/src/config` and `agentflow-cli/src/executor`.
