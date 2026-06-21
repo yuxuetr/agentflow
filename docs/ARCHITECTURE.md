@@ -2,6 +2,15 @@
 
 Last updated: 2026-05-09
 
+> **Direction note (2026-06-20):** this document describes the *current* L1–L4
+> layered structure. The workspace is migrating (in place, no rewrite) to a
+> narrow-waist **contract kernel** that converges the four execution paradigms
+> (static DAG / native loop / harness / dynamic workflow). See
+> `docs/RFC_CRATE_ARCHITECTURE.md` for the target design,
+> `docs/ARCHITECTURE_EVALUATION_2026-06-20.md` for the dependency-graph
+> validation, and `TODOs.md` §P-A for execution. Until that track lands, the
+> model below is accurate.
+
 AgentFlow is a Rust workspace for deterministic workflow execution and agent-native
 runtime loops. The project is organized around a small core engine and separate
 crates for nodes, LLM access, tools, Skills, MCP, memory, tracing, visualization,
