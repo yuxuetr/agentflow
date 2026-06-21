@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentflow_core::{RaceOutcome, race_with_limits};
+use agentflow_async_util::{RaceOutcome, race_with_limits};
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };

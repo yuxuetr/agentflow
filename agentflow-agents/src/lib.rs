@@ -27,7 +27,7 @@ pub use common::*;
 pub use traits::*;
 
 // Re-export core AgentFlow types for convenience
-pub use agentflow_core::{AgentFlowError, AsyncNode};
+pub use agentflow_graph::{AgentFlowError, AsyncNode};
 pub use agentflow_llm::AgentFlow;
 
 // Re-export MCP utilities

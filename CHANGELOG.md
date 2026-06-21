@@ -13,6 +13,22 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agents → core` edge burned — the P-A contract-kernel allowlist is now EMPTY
+  (0 tracked architectural violations).** The last tracked runtime-isolation
+  edge is gone: `agentflow-agents` no longer depends on the `agentflow-core`
+  executor. A new `FlowRunner` trait in `agentflow-graph` abstracts "execute a
+  `Flow`, return the state pool"; `agentflow-core::CoreFlowRunner` is the
+  executor-backed implementation. The agents that run embedded flows
+  (`WorkflowTool`, `DynamicWorkflowAgent`) now take an injected
+  `Arc<dyn FlowRunner>` and depend on the graph IR + the runner contract +
+  `agentflow-async-util` instead of the core executor; the surface (CLI /
+  examples) injects a `CoreFlowRunner`. `agentflow-core` stays an `agents`
+  dev-dependency for the in-crate execution tests. With this, every
+  runtime/surface-isolation edge the P-A track set out to burn —
+  `agents → core`, `harness → agents` (P-A2.1), `server → cli` (P-A2.4),
+  `worker → server` (P-A2.3) — is paid down, and `cargo xtask check-arch`
+  reports **0 tracked** with an empty `ARCH_ALLOWLIST`.
+
 - **P-A3 type-hardening (partial: 3.5–3.7).** Three of the five P-A3 items
   delivered:
   - **P-A3.6** — `agentflow harness chat`'s `/model` and `/skill` switch now

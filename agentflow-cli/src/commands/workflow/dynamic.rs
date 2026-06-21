@@ -90,8 +90,14 @@ pub async fn execute(
   };
   let registry = Arc::new(registry);
 
-  // One up-front planning call against the (governed) tool table.
-  let agent = DynamicWorkflowAgent::new(&model, Arc::clone(&registry));
+  // One up-front planning call against the (governed) tool table. The agent
+  // requires a `FlowRunner` for its own `run()`, though this command compiles +
+  // executes the plan itself below (to support `--dry-run`).
+  let agent = DynamicWorkflowAgent::new(
+    &model,
+    Arc::clone(&registry),
+    Arc::new(agentflow_core::CoreFlowRunner::concurrent(max_concurrency)),
+  );
   let plan = agent
     .plan(&goal)
     .await

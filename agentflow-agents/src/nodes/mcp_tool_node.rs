@@ -5,7 +5,7 @@
 //! This node allows workflow integration with Model Context Protocol (MCP) servers
 //! to execute external tools and access resources.
 
-use agentflow_core::{AsyncNode, AsyncNodeInputs, AsyncNodeResult, AgentFlowError, FlowValue};
+use agentflow_graph::{AgentFlowError, AsyncNode, AsyncNodeInputs, AsyncNodeResult, FlowValue};
 use agentflow_mcp::{MCPClient, ToolCall};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

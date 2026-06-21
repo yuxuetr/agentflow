@@ -99,11 +99,14 @@ name = "agentflow-agents"
 version = "0.2.0"
 dependencies = [
  "agentflow-agent-spi",
+ "agentflow-async-util",
  "agentflow-core",
+ "agentflow-graph",
  "agentflow-llm",
  "agentflow-mcp",
  "agentflow-memory",
  "agentflow-tools",
+ "agentflow-value",
  "anyhow",
  "async-trait",
  "chrono",

@@ -1,30 +1,40 @@
 //! Wrap a DAG [`Flow`] as an agent-callable tool.
 
-use agentflow_core::FlowExt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentflow_core::{Flow, FlowValue, async_node::AsyncNodeInputs};
+use agentflow_graph::{Flow, FlowRunner, FlowValue, async_node::AsyncNodeInputs};
 use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 
 /// Tool adapter that lets an agent call a workflow as a normal tool.
+///
+/// The wrapped `Flow` is executed via an injected [`FlowRunner`] (the surface
+/// passes `agentflow_core::CoreFlowRunner`), so this crate depends on the IR +
+/// the runner contract, not the executor runtime.
 pub struct WorkflowTool {
   name: String,
   description: String,
   parameters_schema: Value,
   flow: Arc<Flow>,
+  runner: Arc<dyn FlowRunner>,
   timeout: Option<Duration>,
 }
 
 impl WorkflowTool {
-  pub fn new(name: impl Into<String>, description: impl Into<String>, flow: Flow) -> Self {
+  pub fn new(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    flow: Flow,
+    runner: Arc<dyn FlowRunner>,
+  ) -> Self {
     Self::with_schema(
       name,
       description,
       default_workflow_parameters_schema(),
       flow,
+      runner,
     )
   }
 
@@ -33,12 +43,14 @@ impl WorkflowTool {
     description: impl Into<String>,
     parameters_schema: Value,
     flow: Flow,
+    runner: Arc<dyn FlowRunner>,
   ) -> Self {
     Self {
       name: name.into(),
       description: description.into(),
       parameters_schema,
       flow: Arc::new(flow),
+      runner,
       timeout: None,
     }
   }
@@ -48,12 +60,14 @@ impl WorkflowTool {
     description: impl Into<String>,
     parameters_schema: Value,
     flow: Arc<Flow>,
+    runner: Arc<dyn FlowRunner>,
   ) -> Self {
     Self {
       name: name.into(),
       description: description.into(),
       parameters_schema,
       flow,
+      runner,
       timeout: None,
     }
   }
@@ -96,7 +110,7 @@ impl Tool for WorkflowTool {
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
     let inputs = params_to_inputs(params)?;
-    let execution = self.flow.execute_from_inputs(inputs);
+    let execution = self.runner.run(&self.flow, inputs);
     let results = match self.timeout {
       Some(timeout) => tokio::time::timeout(timeout, execution)
         .await
@@ -235,6 +249,7 @@ mod tests {
       "echo_workflow",
       "Run echo workflow",
       single_node_flow("echo", Arc::new(EchoNode)),
+      Arc::new(agentflow_core::CoreFlowRunner::serial()),
     );
 
     let output = tool.execute(json!({"text": "hello"})).await.unwrap();
@@ -259,6 +274,7 @@ mod tests {
       "failing_workflow",
       "Run failing workflow",
       single_node_flow("fail", Arc::new(FailingNode)),
+      Arc::new(agentflow_core::CoreFlowRunner::serial()),
     );
 
     let output = tool.execute(json!({})).await.unwrap();
@@ -273,6 +289,7 @@ mod tests {
       "echo_workflow",
       "Run echo workflow",
       single_node_flow("echo", Arc::new(EchoNode)),
+      Arc::new(agentflow_core::CoreFlowRunner::serial()),
     );
 
     let err = tool.execute(json!("bad")).await.unwrap_err();
@@ -287,6 +304,7 @@ mod tests {
       "slow_workflow",
       "Run slow workflow",
       single_node_flow("slow", Arc::new(SlowNode)),
+      Arc::new(agentflow_core::CoreFlowRunner::serial()),
     )
     .with_timeout_ms(10);
 

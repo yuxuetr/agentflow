@@ -23,7 +23,13 @@ pub mod events;
 pub mod expr;
 pub mod flow;
 pub mod node;
+pub mod runner;
 pub mod state_size;
 
-// Root convenience re-export: several IR modules refer to `crate::AgentFlowError`.
+// Root convenience re-exports of the common IR surface, so consumers can write
+// `agentflow_graph::{AsyncNode, Flow, ...}` (mirroring the `agentflow_core::*`
+// re-export they may be migrating from).
+pub use async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
 pub use error::AgentFlowError;
+pub use flow::{Flow, GraphNode, NodeType};
+pub use runner::FlowRunner;

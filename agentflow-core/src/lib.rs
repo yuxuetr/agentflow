@@ -29,6 +29,13 @@ pub mod health;
 pub use agentflow_async_util::{RaceOutcome, race, race_with_limits, retry, timeout};
 pub mod retry_executor;
 
+// The `FlowRunner` contract lives in the `graph` IR crate; `CoreFlowRunner` is
+// the executor-backed impl. Re-export both so surfaces inject one without an
+// extra `agentflow-graph` import.
+pub mod runner;
+pub use agentflow_graph::FlowRunner;
+pub use runner::CoreFlowRunner;
+
 // Reliability
 pub mod checkpoint;
 pub mod resource_limits;

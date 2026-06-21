@@ -16,9 +16,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
-use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::{AgentFlowError, FlowExecutionConfig, FlowExt, FlowValue};
+use agentflow_graph::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use agentflow_graph::flow::{Flow, GraphNode, NodeType};
+use agentflow_graph::{AgentFlowError, FlowRunner, FlowValue};
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_tools::ToolRegistry;
 use serde::Deserialize;
@@ -221,6 +221,7 @@ pub enum DynamicWorkflowError {
 pub struct DynamicWorkflowAgent {
   model: String,
   tools: Arc<ToolRegistry>,
+  runner: Arc<dyn FlowRunner>,
 }
 
 /// Pull the JSON object out of an LLM reply (it may wrap it in prose or a
@@ -233,11 +234,18 @@ fn extract_json(text: &str) -> &str {
 }
 
 impl DynamicWorkflowAgent {
-  /// Build an agent that plans with `model` and executes against `tools`.
-  pub fn new(model: impl Into<String>, tools: Arc<ToolRegistry>) -> Self {
+  /// Build an agent that plans with `model`, executes against `tools`, and
+  /// runs the compiled `Flow` via the injected `runner` (the surface passes
+  /// `agentflow_core::CoreFlowRunner::concurrent(...)`).
+  pub fn new(
+    model: impl Into<String>,
+    tools: Arc<ToolRegistry>,
+    runner: Arc<dyn FlowRunner>,
+  ) -> Self {
     Self {
       model: model.into(),
       tools,
+      runner,
     }
   }
 
@@ -278,18 +286,14 @@ impl DynamicWorkflowAgent {
   ) -> Result<HashMap<String, AsyncNodeResult>, DynamicWorkflowError> {
     let plan = self.plan(goal).await?;
     let flow = compile_plan_to_flow(&plan, Arc::clone(&self.tools))?;
-    Ok(
-      flow
-        .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(8))
-        .await?,
-    )
+    Ok(self.runner.run(&flow, HashMap::new()).await?)
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_core::{FlowExecutionConfig, FlowExt};
+  use agentflow_core::CoreFlowRunner;
   use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput};
   use serde_json::json;
 
@@ -361,8 +365,8 @@ mod tests {
     };
     let flow = compile_plan_to_flow(&plan, registry_with_echo()).expect("compile");
 
-    let state = flow
-      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(8))
+    let state = CoreFlowRunner::concurrent(8)
+      .run(&flow, HashMap::new())
       .await
       .expect("run");
 
@@ -450,7 +454,11 @@ mod tests {
     )
     .await;
 
-    let agent = DynamicWorkflowAgent::new("mock-dyn-wf", registry_with_echo());
+    let agent = DynamicWorkflowAgent::new(
+      "mock-dyn-wf",
+      registry_with_echo(),
+      Arc::new(CoreFlowRunner::concurrent(8)),
+    );
     let state = agent.run("combine A and B").await.expect("run");
 
     assert!(result_text(&state, "a").contains('A'));
