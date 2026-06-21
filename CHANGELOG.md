@@ -13,6 +13,25 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Harness governance contracts moved into the kernel** (P-A1.1 step 2/2). The
+  Harness wire/protocol surface — `HarnessEvent` (+ all payload types),
+  `ApprovalRequest` / `ApprovalDecision` / `ApprovalProvider` (+ risk / scope /
+  outcome enums), `PreToolHook` / `PostToolHook`, the `HarnessEventSink` trait,
+  `ContextProvider` (+ `HarnessContext` / `HarnessProfile` / `HarnessRuntimeKind`
+  / `ContextItem` / `ContextPriority`), and the shared `HarnessError` — moved out
+  of `agentflow-harness` into a new `agentflow-agent-spi::harness` module, so the
+  operations crates can depend on the contract in the kernel (L0) rather than the
+  `agentflow-harness` runtime (L3). Faithful strangler-fig: the harness `error` /
+  `approval` / `context` / `hooks` / `event` modules became `pub use` re-export
+  shims and `persistence` keeps the concrete sinks (`JsonlEventSink` /
+  `StdoutEventSink` / `InMemoryEventSink` / `SinkChain`) while re-exporting the
+  trait — so every consumer (server / cli) compiles unchanged. `agentflow-agent-spi`
+  gained **no new dependencies**. Redaction (`params_summary` →
+  `agentflow-tracing`) intentionally stays in `agentflow-harness` (the contract
+  types hold already-redacted strings), so this step does not yet burn the
+  `harness → tracing` edge. The `Capability` / `Lowered` traits (RFC §2) are split
+  out to land with their consumer in P-A4.3.
+
 - **Contract-kernel architecture track (`P-A`) — guardrails landed.** The
   contract-kernel design (`docs/RFC_CRATE_ARCHITECTURE.md`) is validated by a
   dependency-graph-grounded, per-edge architecture-lens evaluation
