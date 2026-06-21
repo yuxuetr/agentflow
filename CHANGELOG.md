@@ -13,6 +13,21 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`async-util::race_with_limits` — shared timeout/cancellation racing
+  combinator** (P-A3.2). A single `race_with_limits(fut, remaining, cancel) ->
+  RaceOutcome::{Completed, TimedOut, Cancelled}` replaces the hand-written
+  four-arm `(Option<Duration>, Option<CancelSignal>)` match + nested
+  `tokio::select!` blocks that every call site copied. The `ReActAgent`'s
+  LLM-call and tool-call sites now delegate to it, so the timeout- and
+  cancel-handling branches (which the old matrix duplicated across the
+  both/timeout-only/cancel-only arms) are written once per call site. Behaviour
+  is unchanged — proven by the P-A3.1 racing characterization tests, which pass
+  against the refactored code — plus six combinator unit tests. Re-exported as
+  `agentflow_core::race_with_limits` / `RaceOutcome`. Scope note: the two
+  single-call sites are repointed here; the batch-dispatch sites and the
+  `agentflow-core` shutdown paths still carry their own `select!` blocks and are
+  a follow-up (they need their own racing-path coverage first).
+
 - **ReAct loop timeout/cancellation racing-path characterization tests**
   (P-A3.1). Pins the runtime behaviour when a wall-clock deadline or a
   cancellation token wins a race against an *in-flight* call — the four
