@@ -140,6 +140,7 @@ name = "agentflow-cli"
 version = "0.2.0"
 dependencies = [
  "agentflow-agents",
+ "agentflow-config",
  "agentflow-core",
  "agentflow-db",
  "agentflow-harness",
@@ -188,6 +189,26 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+]
+
+[[package]]
+name = "agentflow-config"
+version = "0.1.0"
+dependencies = [
+ "agentflow-agents",
+ "agentflow-core",
+ "agentflow-llm",
+ "agentflow-nodes",
+ "agentflow-rag",
+ "agentflow-skills",
+ "agentflow-tools",
+ "agentflow-tracing",
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
 ]
 
 [[package]]
@@ -418,6 +439,7 @@ version = "0.1.0"
 dependencies = [
  "agentflow-agents",
  "agentflow-cli",
+ "agentflow-config",
  "agentflow-core",
  "agentflow-db",
  "agentflow-harness",
