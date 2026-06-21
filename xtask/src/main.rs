@@ -593,7 +593,15 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
     package: "agentflow-agents",
     example: "dynamic_workflow_spike",
     features: &[],
-    timeout: Duration::from_secs(20),
+    timeout: Duration::from_secs(10),
+  },
+  // Dynamic workflow from a declarative JSON plan (P-A4.4): plan -> Flow of real
+  // tool calls, executed in parallel. Pure offline, no LLM.
+  SmokeExample {
+    package: "agentflow-agents",
+    example: "dynamic_workflow_plan",
+    features: &[],
+    timeout: Duration::from_secs(10),
   },
   // SkillBuilder direct API (P3.1 row #8). Spawns a real MCP demo
   // subprocess so it's a touch slower than the mock-only examples.

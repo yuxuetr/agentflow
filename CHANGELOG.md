@@ -98,6 +98,16 @@ _New entries go here. Will roll into the next tag (likely
   keeps `agents` as a dev-dependency). `check-arch`'s tracked-violation allowlist
   shrank 4 -> 3.
 
+- **Dynamic workflow productized — declarative plan -> `Flow` compiler** (P-A4.4).
+  New `agentflow_agents::dynamic::compile_plan_to_flow` turns a `WorkflowPlan`
+  (the JSON an LLM emits: steps of `{id, tool, params, depends_on}`) into an
+  executable `Flow` of real tool calls — `depends_on` becomes graph dependencies,
+  so independent steps run concurrently and dependents receive their inputs. This
+  is the productized form of the P-A1.6 spike: the agent collapses its intent into
+  one deterministic, replayable artifact instead of looping step-by-step. New
+  `dynamic_workflow_plan` example (JSON plan -> parallel execution), wired into the
+  examples-smoke CI gate; unit tests cover the diamond DAG + validation.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native
