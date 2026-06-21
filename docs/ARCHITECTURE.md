@@ -1,15 +1,15 @@
 # AgentFlow Architecture
 
-Last updated: 2026-05-09
+Last updated: 2026-06-21
 
-> **Direction note (2026-06-20):** this document describes the *current* L1–L4
-> layered structure. The workspace is migrating (in place, no rewrite) to a
-> narrow-waist **contract kernel** that converges the four execution paradigms
-> (static DAG / native loop / harness / dynamic workflow). See
-> `docs/RFC_CRATE_ARCHITECTURE.md` for the target design,
+> **Direction note:** the workspace is migrating (in place, no rewrite) to a
+> narrow-waist **contract kernel** that converges the four execution paradigms.
+> Two complementary mental models below: **Four Execution Paradigms** (the
+> conceptual, three-axis model — the *target*, with an honest model-vs-code
+> reality check) and the **Layered Mental Model** (the *current* L1–L4 crate
+> structure). See `docs/RFC_CRATE_ARCHITECTURE.md` for the target design,
 > `docs/ARCHITECTURE_EVALUATION_2026-06-20.md` for the dependency-graph
-> validation, and `TODOs.md` §P-A for execution. Until that track lands, the
-> model below is accurate.
+> validation, and `TODOs.md` §P-A for execution.
 
 AgentFlow is a Rust workspace for deterministic workflow execution and agent-native
 runtime loops. The project is organized around a small core engine and separate
@@ -17,6 +17,100 @@ crates for nodes, LLM access, tools, Skills, MCP, memory, tracing, visualization
 and the CLI/server surfaces.
 
 All workspace crates use Rust 2024 edition.
+
+## Four Execution Paradigms — Mental Model
+
+AgentFlow supports four execution paradigms (static DAG, native agent loop,
+harness governance, dynamic workflow). They are **not** four boxes at one level;
+they sit on **three orthogonal axes**. Confusing the axes is the usual source of
+"where does X belong?" questions.
+
+### Axis 1 — Planning / binding-time (the execution paradigm)
+
+*Who decides the plan, and when.* This is a single spectrum from "fully fixed at
+author time" to "decided every step at runtime":
+
+| Paradigm | Who plans | When | Execution | Use when… |
+|---|---|---|---|---|
+| **Static DAG** | human | author time | fully deterministic, replayable | the steps are known and stable |
+| **Dynamic workflow** | agent | runtime, **once** (emits a `Flow`/code) | deterministic after emission | the task is plannable up front but varies per request |
+| **Native agent loop** (ReAct) | agent | runtime, **every step** | non-deterministic | the task needs mid-course correction / exploration |
+
+**Why dynamic workflow can raise reliability:** it collapses many scattered
+runtime LLM decisions into **one up-front artifact** (a `Flow`, or sandboxed
+code), then executes it deterministically — inheriting retry / checkpoint /
+timeout / tracing / replay for free. You pay one LLM "compile" and get a
+reproducible, governable run.
+
+> **Caveat — this is not an absolute reliability ordering.** Later binding is not
+> "always worse". Dynamic workflow wins *only when the task is plannable up front*;
+> tasks that need replanning mid-flight are genuinely better served by the loop.
+> The real rule is **match the binding-time to how predictable the task is**.
+
+Dynamic workflow has two flavors, a deliberate trade-off:
+- **structured `Flow`** (our first-class form): typed, inspectable, auto-governed
+  and traced — but expressiveness is bounded by nodes + dependencies;
+- **sandboxed code** (LLM writes code, executes in a sandbox): maximal
+  expressiveness, but opaque to governance/observability.
+They compose — "execute code" can be a node/tool inside a `Flow`.
+
+### Axis 2 — Capability substrate (orthogonal)
+
+*What can be invoked.* `Tool` (atomic callable), MCP (external tools), RAG /
+Memory (knowledge / state), `Skill` (a packaged bundle — persona + tools +
+knowledge + config — that **lowers** to tools + context at the runtime boundary).
+**All four paradigms share this layer**: a DAG node, a dynamic-workflow node, and
+one step of an agent loop all call the same `Tool`s.
+
+### Axis 3 — Governance shell (orthogonal)
+
+*What rules are enforced.* The **harness** — approval, pre/post hooks, sandbox,
+audit, run limits, background tasks. It is **a shell wrapped around an execution,
+not an execution mode itself.** It is not perfectly free-floating: governance
+must hook into the execution at well-defined seams (step boundaries, tool calls),
+which is exactly why the event/approval contracts (`HarnessEvent` / `Approval*`)
+exist.
+
+### Composition
+
+The paradigms are **recursively composable**, not a strict hierarchy. An agent is
+usually the flexible *entry/coordinator* that "slides down" the binding-time axis
+toward determinism as a task crystallizes (loop → emit a Flow → call a prebuilt
+DAG → call one tool). Two adapters make this bidirectional:
+- **`AgentNode`** — an agent embedded *in* a DAG (a Flow step that is an agent);
+- **`WorkflowTool`** — a DAG exposed *as* a tool to an agent.
+
+So agent-in-workflow-in-agent nesting is expressible. (Today the choice of *where*
+on the binding-time axis to run is a **developer build-time** decision —
+`ReActAgent` vs `PlanExecuteAgent` vs a fixed DAG — not a runtime decision the
+agent makes for itself.)
+
+### Reality check — model vs current code
+
+This model is the **target**. As of 2026-06-21 the code implements it partially —
+be honest about which parts are production vs aspirational:
+
+| Model element | Status in code |
+|---|---|
+| Static DAG · native loop · capability substrate · `AgentNode`/`WorkflowTool` | ✅ production |
+| **Dynamic workflow** | ⚠️ **proven by a spike only, no product path.** `PlanExecuteAgent` emits a `PlanExecutePlan` + runs tools sequentially — it does **not** emit a `Flow`. The runtime-generates-`Flow`→executor slice is shown by `agentflow-agents/examples/dynamic_workflow_spike.rs` |
+| **Harness as an orthogonal shell** | ⚠️ **wraps an `AgentRuntime` only**, not a raw `Flow` run (`HarnessRuntimeKind` = `Opaque(Box<dyn AgentRuntime>)` / `TurnDriven(...)`) |
+| "Paradigms meet only at the contract layer" | ⚠️ **becoming true via the contract kernel (P-A1, in PRs)**; pre-kernel the runtimes depended on each other's impl crates |
+
+### Gaps map directly onto the `P-A` roadmap
+
+| Model gap | Closing task | Status |
+|---|---|---|
+| Contractualize the four paradigms (so they compose orthogonally) | P-A1 contract kernel | ✅ this session (PRs pending merge) |
+| Dynamic workflow as a product | P-A4.4 (`PlanExecuteAgent` emits a real `Flow`) + P-A4.5 (productionize the spike) | ⏳ |
+| Harness governs a `Flow`, not only an agent loop | P-A2.2 | ⏳ |
+| Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ⏳ |
+
+In short: the three-axis model is sound and self-consistent; three paradigms +
+the capability substrate + the composition adapters are production-grade; and
+**dynamic workflow + orthogonal governance — the parts that make the model close
+the loop — have their foundation (the contract kernel) laid this session but are
+not yet productized.** See `docs/RFC_CRATE_ARCHITECTURE.md` for the kernel design.
 
 ## Layered Mental Model
 
