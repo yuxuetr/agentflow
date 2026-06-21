@@ -1,4 +1,5 @@
 pub mod debug;
+pub mod dynamic;
 pub mod resume_plan;
 pub mod run;
 pub mod server_ops;

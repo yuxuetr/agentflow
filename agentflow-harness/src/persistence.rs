@@ -16,28 +16,10 @@ use tokio::sync::Mutex;
 use crate::error::HarnessError;
 use crate::event::HarnessEvent;
 
-/// Async trait implemented by every Harness event sink.
-///
-/// Implementations MUST be safe to share across tasks. The runtime
-/// fans the event stream out to all registered sinks in registration
-/// order; a single failing sink does not stop the others, but the
-/// runtime records the first error and surfaces it on the run result.
-#[async_trait]
-pub trait HarnessEventSink: Send + Sync {
-  /// Stable identifier (`jsonl`, `memory`, `sqlite`, ...).
-  fn name(&self) -> &str;
-
-  /// Persist a single envelope. The implementation owns its own
-  /// synchronization; the runtime calls `write` serially per session
-  /// but several sessions may share a sink concurrently.
-  async fn write(&self, event: &HarnessEvent) -> Result<(), HarnessError>;
-
-  /// Flush any buffered writes. Called when a session terminates so
-  /// no events are lost on shutdown.
-  async fn flush(&self) -> Result<(), HarnessError> {
-    Ok(())
-  }
-}
+// The `HarnessEventSink` trait moved to `agentflow-agent-spi` in P-A1.1 step
+// 2/2 (the contract); the concrete sinks below stay here. Re-exported under
+// the original path for compatibility.
+pub use agentflow_agent_spi::harness::sink::HarnessEventSink;
 
 /// Append-only JSONL sink keyed by `<dir>/<session_id>.jsonl`.
 ///

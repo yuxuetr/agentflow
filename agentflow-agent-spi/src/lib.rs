@@ -11,9 +11,17 @@
 //! `agentflow-agents`, which re-exports everything here under its original
 //! paths. This lets `agentflow-harness` govern a runtime by depending on the
 //! contract rather than the `agents` impl crate (the P-A2.1 target).
+//!
+//! The [`harness`] module holds the Harness governance contracts
+//! (`HarnessEvent`, `ApprovalRequest` / `ApprovalDecision`, the hook / approval
+//! / context-provider / sink traits), moved here in P-A1.1 step 2/2 so the
+//! operations crates depend on the contract rather than the `agentflow-harness`
+//! runtime. `agentflow-harness` re-exports them under their original paths.
 
+pub mod harness;
 pub mod runtime;
 pub mod turn;
 
+pub use harness::*;
 pub use runtime::*;
 pub use turn::*;

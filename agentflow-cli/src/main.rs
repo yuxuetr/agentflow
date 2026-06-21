@@ -683,6 +683,43 @@ enum WorkflowCommands {
     #[arg(short, long)]
     verbose: bool,
   },
+  /// Run a dynamic workflow: an LLM authors a declarative plan for the goal,
+  /// which is compiled to a Flow and executed (in parallel where the plan
+  /// allows). The plan is LLM-authored then executed, so tool access is
+  /// governed: built-in tools are sandboxed (file paths / HTTP domains must
+  /// be granted via --allow-path / --allow-domain; shell is never available),
+  /// --dry-run prints the plan without running it, and --approve routes every
+  /// call through the Harness approval pipeline.
+  Dynamic {
+    /// Natural-language goal the LLM plans a workflow for.
+    #[arg(long)]
+    goal: String,
+    /// Model the LLM planner uses to author the plan. Required.
+    #[arg(short = 'm', long)]
+    model: Option<String>,
+    /// Grant the built-in file tool access to a path (repeatable).
+    #[arg(long = "allow-path")]
+    allow_path: Vec<String>,
+    /// Grant the built-in HTTP tool access to a domain (repeatable).
+    #[arg(long = "allow-domain")]
+    allow_domain: Vec<String>,
+    /// Approval pipeline for tool calls: none (default; tools still sandboxed),
+    /// cli (interactive), auto-allow, or auto-deny.
+    #[arg(long, default_value = "none", value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
+    approve: String,
+    /// Security profile driving approval escalation (dev | production).
+    #[arg(long, default_value = "dev")]
+    profile: String,
+    /// Print the authored plan and exit without executing any tool.
+    #[arg(long)]
+    dry_run: bool,
+    /// Maximum concurrently running steps.
+    #[arg(long, default_value_t = 8)]
+    max_concurrency: usize,
+    /// Output format: text (default) or json.
+    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    output: String,
+  },
 }
 
 #[derive(Subcommand)]
@@ -1721,6 +1758,30 @@ async fn main() {
           validate,
           plan,
           verbose,
+        )
+        .await
+      }
+      WorkflowCommands::Dynamic {
+        goal,
+        model,
+        allow_path,
+        allow_domain,
+        approve,
+        profile,
+        dry_run,
+        max_concurrency,
+        output,
+      } => {
+        workflow::dynamic::execute(
+          goal,
+          model,
+          allow_path,
+          allow_domain,
+          approve,
+          profile,
+          dry_run,
+          max_concurrency,
+          output,
         )
         .await
       }
