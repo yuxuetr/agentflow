@@ -1,6 +1,6 @@
 # Current Project Status
 
-Last updated: 2026-05-10
+Last updated: 2026-06-21
 
 This is the current authoritative status entrypoint for AgentFlow. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
@@ -13,22 +13,35 @@ AgentFlow is a Rust workspace for deterministic DAG workflows, agent-native
 runtime loops, Skills, MCP tools, RAG, memory, tracing, plugins, distributed
 worker foundations, and a Web UI run console.
 
-The current architecture is organized into four layers:
+The current architecture is organized into five layers, with a narrow-waist
+**contract kernel** (L0) extracted by the P-A track so the runtimes depend only on
+shared contracts (enforced by `cargo xtask check-arch`; see
+`docs/RFC_CRATE_ARCHITECTURE.md` and `docs/ARCHITECTURE.md`):
 
-- L1 execution core: `agentflow-core`.
+- L0 contract kernel: `agentflow-value` (`FlowValue`), `agentflow-graph`
+  (the `Flow` IR), `agentflow-store-spi`, `agentflow-agent-spi`,
+  `agentflow-async-util` (+ `agentflow-tools` as the `Tool` contract).
+- L1 execution core (the executor): `agentflow-core` runs the L0 `Flow` IR via
+  the `FlowExt` trait (`flow.run()`).
 - L2 capability adapters: `agentflow-nodes`, `agentflow-llm`,
   `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
 - L3 agent and orchestration: `agentflow-agents`, `agentflow-skills`,
-  `agentflow-cli`.
+  `agentflow-harness`, `agentflow-cli`.
 - L4 operations and productization: `agentflow-tracing`,
   `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`.
 
 ## Implemented Surfaces
 
-- DAG workflow execution through `agentflow-core::Flow`.
+- DAG workflow execution through `agentflow-core::Flow` (run via the `FlowExt` trait).
 - Config-first workflow validation and execution through `agentflow-cli`.
 - Agent-native runtimes through `AgentRuntime`, ReAct, Plan-Execute,
   reflection, memory, and supervisor patterns.
+- Dynamic workflow (library): `agentflow_agents::dynamic::compile_plan_to_flow`
+  compiles a declarative `WorkflowPlan` into a parallel `Flow` of tool calls, and
+  `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes.
+  (Not yet a CLI surface — see `TODOs.md` §P-A4.5.)
+- Harness governance shell (`agentflow-harness`): hooks, interactive approval,
+  sandbox, audit, run limits, background tasks, and the `HarnessEvent` envelope.
 - Skills through `SKILL.md` and `skill.toml`.
 - Tool abstraction through `Tool`, `ToolRegistry`, policy, permissions, and
   typed output parts.
