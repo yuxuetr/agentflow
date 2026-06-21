@@ -8,6 +8,7 @@
 //! cargo run -p agentflow-agents --example hybrid_workflow_agent
 //! ```
 
+use agentflow_core::FlowExt;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;

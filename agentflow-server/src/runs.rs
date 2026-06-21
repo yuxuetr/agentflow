@@ -9,6 +9,7 @@
 //! in-process. Tests can still inject [`StubExecutor`] when they only need
 //! route / persistence plumbing.
 
+use agentflow_core::FlowExt;
 use async_trait::async_trait;
 use axum::{
   Extension, Json,

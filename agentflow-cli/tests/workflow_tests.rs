@@ -1,3 +1,4 @@
+use agentflow_core::FlowExt;
 use agentflow_core::{
   error::AgentFlowError,
   flow::{Flow, GraphNode, NodeType},

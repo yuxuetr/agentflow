@@ -4,6 +4,7 @@ use crate::{
   commands::workflow::validate::print_schema_report, config::schema::validate_flow_definition,
   config::v2::FlowDefinitionV2, executor::build_flow_from_definition,
 };
+use agentflow_core::FlowExt;
 use agentflow_core::{
   FlowCancellationToken, FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow,
   value::FlowValue,

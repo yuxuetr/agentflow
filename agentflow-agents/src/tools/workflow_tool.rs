@@ -1,5 +1,6 @@
 //! Wrap a DAG [`Flow`] as an agent-callable tool.
 
+use agentflow_core::FlowExt;
 use std::sync::Arc;
 use std::time::Duration;
 

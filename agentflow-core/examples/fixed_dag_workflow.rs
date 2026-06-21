@@ -8,6 +8,7 @@
 //! cargo run -p agentflow-core --example fixed_dag_workflow
 //! ```
 
+use agentflow_core::FlowExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 

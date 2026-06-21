@@ -6,6 +6,7 @@
 //! cargo test -p agentflow-core --test large_dag_benchmarks --target-dir /tmp/agentflow-target -- --nocapture
 //! ```
 
+use agentflow_core::FlowExt;
 use agentflow_core::{
   Flow,
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},

@@ -4,6 +4,7 @@
 //! serial and concurrent execution paths, and that the sample value
 //! monotonically grows as more node outputs land in the state pool.
 
+use agentflow_core::FlowExt;
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   flow::{Flow, GraphNode, NodeType},

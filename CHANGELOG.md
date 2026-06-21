@@ -35,8 +35,18 @@ _New entries go here. Will roll into the next tag (likely
   `node`, `expr` — moved out of `agentflow-core` into the new `agentflow-graph`
   crate (depends only on `agentflow-value`), beginning the IR ≠ executor split
   (RFC §5). `agentflow-core` re-exports them under their original paths; all
-  consumers compile unchanged. The `Flow` type itself stays in `agentflow-core`
-  pending the step-2 `FlowExt` redesign.
+  consumers compile unchanged.
+- **`Flow` IR moved to `agentflow-graph`; executor is now `FlowExt`** (P-A1.3
+  step 2/2, completes the IR ≠ executor split). `Flow` / `GraphNode` / `NodeType`
+  (+ pure builders and accessors) now live in `agentflow-graph`; the run / resume
+  / scheduling logic stays in `agentflow-core` behind a new **`FlowExt`** trait
+  (`use agentflow_core::FlowExt;` to run a flow) backed by an internal
+  `FlowExecutor`. The `Flow` struct holds checkpoint *config* (data) rather than
+  a live manager. `agentflow_core::{Flow, GraphNode, NodeType, FlowExt}` are
+  re-exported, so the only caller-visible change is needing `FlowExt` in scope to
+  call `flow.run()` / `with_checkpointing()` / etc. A runtime can now construct a
+  `Flow` by depending on `agentflow-graph` alone — the dynamic-workflow
+  prerequisite.
 
 ### Changed
 
