@@ -8,6 +8,7 @@ use thiserror::Error;
 
 /// Errors surfaced by Harness Mode contract types.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum HarnessError {
   /// An [`crate::ApprovalProvider`] explicitly denied a request.
   #[error("approval denied: {0}")]

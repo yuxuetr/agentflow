@@ -548,6 +548,7 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
 
 /// Scheduler/protocol errors. These are intentionally transport-neutral.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SchedulerError {
   #[error("worker id must not be empty")]
   InvalidWorkerId,

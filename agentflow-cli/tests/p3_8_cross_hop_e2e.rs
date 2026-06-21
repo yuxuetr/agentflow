@@ -28,7 +28,7 @@ use agentflow_llm::{LlmTraceContext, trace_context as llm_trace};
 use agentflow_mcp::protocol::{
   JsonRpcRequest, RequestId, extract_traceparent_from_request, inject_traceparent_into_request,
 };
-use agentflow_server::scheduler::grpc::{
+use agentflow_server::scheduler::{
   extract_traceparent_from_grpc_request, inject_traceparent_into_grpc_request,
 };
 use reqwest::header::HeaderMap;

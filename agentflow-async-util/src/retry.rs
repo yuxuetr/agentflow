@@ -287,6 +287,10 @@ impl ErrorPattern {
           AgentFlowError::MonitoringError { .. } => "MonitoringError",
           AgentFlowError::LockPoisoned { .. } => "LockPoisoned",
           AgentFlowError::Generic(_) => "Generic",
+          // `AgentFlowError` is `#[non_exhaustive]`; a future variant has no
+          // stable type name to match against, so it never matches a configured
+          // `ErrorType` pattern (callers can still target it by message text).
+          _ => "",
         };
         error_type.contains(name)
       }

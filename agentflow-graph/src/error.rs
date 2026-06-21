@@ -110,6 +110,7 @@ impl fmt::Display for InlineErrorContext {
 }
 
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AgentFlowError {
   // ===== Node Errors =====
   #[error("Node execution failed: {message}")]
