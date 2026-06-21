@@ -115,6 +115,20 @@ _New entries go here. Will roll into the next tag (likely
   plan; `run()` plans + compiles + executes. Tested against a mock model that
   emits a parallel plan.
 
+- **`agentflow workflow dynamic` — governed dynamic-workflow CLI surface**
+  (P-A4.5). Exposes the dynamic-workflow paradigm on the CLI: an LLM authors a
+  plan for `--goal`, which compiles to a `Flow` and executes concurrently. Because
+  the plan is LLM-authored then executed, tool access is governed — the built-in
+  tools (`FileTool` + `HttpTool`; shell is never registered) carry a restrictive
+  `SandboxPolicy`, so file paths and HTTP domains must be granted explicitly via
+  `--allow-path` / `--allow-domain`; `--dry-run` prints the plan without running
+  any tool; and `--approve cli|auto-allow|auto-deny` routes every call through the
+  Harness `wrap_registry` approval pipeline (the planner and compiler share the
+  same wrapped `Arc<ToolRegistry>`, so governance is not bypassed). Unit tests
+  cover the policy/approval/render helpers; integration tests assert dry-run does
+  not execute, an ungranted path is sandbox-denied (non-zero exit), and a granted
+  path writes successfully.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native
