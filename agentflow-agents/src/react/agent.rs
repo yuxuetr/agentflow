@@ -3989,6 +3989,248 @@ providers:
     ));
   }
 
+  // ── P-A3.1: characterize the timeout / cancellation *racing* paths ─────────
+  //
+  // The existing tests above cover *pre-signalled* cancellation and the batch
+  // max-tool-calls gate. These pin the behaviour when a deadline or a
+  // cancellation wins a race against an *in-flight* call — the four `select!`
+  // arms in `run_turn_llm_call` / `run_turn_tool_call` that P-A3.2 consolidates
+  // into `async-util::race_with_limits`. They are deterministic because the
+  // racing operation never completes within the test window (a 10 s sleep
+  // dwarfs the ~50 ms deadline), so the outcome does not depend on scheduler
+  // timing.
+
+  /// Removes a process-global env var on drop so a panicking test can't leak it
+  /// into the next test in the (lock-serialized) suite — `AGENTFLOW_MOCK_DELAY_MS`
+  /// in particular would otherwise make unrelated LLM tests hang.
+  struct EnvVarGuard(&'static str);
+  impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+      // SAFETY: the LLM_TEST_LOCK guard serializes these process-wide mutations.
+      unsafe {
+        std::env::remove_var(self.0);
+      }
+    }
+  }
+
+  /// A tool that signals it has started, then blocks far longer than any test
+  /// deadline, so a racing timeout or cancellation deterministically wins.
+  struct SleepingTool {
+    started: Arc<std::sync::atomic::AtomicBool>,
+  }
+
+  #[async_trait]
+  impl Tool for SleepingTool {
+    fn name(&self) -> &str {
+      "sleeper"
+    }
+    fn description(&self) -> &str {
+      "signals start, then blocks so a racing timeout/cancellation wins"
+    }
+    fn parameters_schema(&self) -> Value {
+      json!({ "type": "object" })
+    }
+    fn idempotency(&self, _params: &Value) -> ToolIdempotency {
+      ToolIdempotency::Idempotent
+    }
+    async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+      self.started.store(true, Ordering::SeqCst);
+      tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+      Ok(ToolOutput::success("done"))
+    }
+  }
+
+  #[tokio::test]
+  async fn llm_call_times_out_mid_flight_stops_with_timeout() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-llm-timeout-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_DELAY_MS", "10000");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![r#"{"answer":"done"}"#]).unwrap(),
+      );
+    }
+    let _delay = EnvVarGuard("AGENTFLOW_MOCK_DELAY_MS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let mut limits = RuntimeLimits::react_defaults();
+    limits.timeout_ms = Some(50);
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let result = agent
+      .run_with_context(AgentContext::new("llm-timeout", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::Timeout { timeout_ms: 50 },
+      "the deadline should win against the 10s-delayed LLM call"
+    );
+  }
+
+  #[tokio::test]
+  async fn llm_call_cancelled_mid_flight_stops_with_cancelled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-llm-cancel-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_DELAY_MS", "10000");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![r#"{"answer":"done"}"#]).unwrap(),
+      );
+    }
+    let _delay = EnvVarGuard("AGENTFLOW_MOCK_DELAY_MS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let token = AgentCancellationToken::new();
+    // The LLM call blocks 10s, so cancelling shortly after the run starts
+    // deterministically lands while the call is in flight.
+    let cancel_token = token.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+      cancel_token.cancel();
+    });
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let result = agent
+      .run_with_context(
+        AgentContext::new("llm-cancel", "go", &model).with_cancellation_token(token),
+      )
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(result.stop_reason, AgentStopReason::Cancelled { .. }),
+      "cancellation should win against the in-flight LLM call; got {:?}",
+      result.stop_reason
+    );
+  }
+
+  #[tokio::test]
+  async fn tool_call_times_out_mid_flight_stops_with_timeout() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-tool-timeout-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![vec![
+          json!({"id":"t1","name":"sleeper","arguments":{}}),
+        ]])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool {
+      started: started.clone(),
+    }));
+
+    // Generous enough for the instant LLM call to return its tool call; the 10s
+    // tool then overruns the wall-clock budget.
+    let mut limits = RuntimeLimits::react_defaults();
+    limits.timeout_ms = Some(300);
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(AgentContext::new("tool-timeout", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::Timeout { timeout_ms: 300 }
+    );
+    assert!(
+      started.load(Ordering::SeqCst),
+      "the tool must have entered execution — confirms the tool-call timeout arm"
+    );
+  }
+
+  #[tokio::test]
+  async fn tool_call_cancelled_mid_flight_stops_with_cancelled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-tool-cancel-{}", uuid::Uuid::new_v4());
+    // SAFETY: serialized by LLM_TEST_LOCK; both vars are removed by the guards.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![vec![
+          json!({"id":"t1","name":"sleeper","arguments":{}}),
+        ]])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    let _calls = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(SleepingTool {
+      started: started.clone(),
+    }));
+
+    let token = AgentCancellationToken::new();
+    // Cancel only once the tool is actually in flight, so the *tool-call*
+    // cancellation arm fires (not the LLM one).
+    let cancel_token = token.clone();
+    let started_probe = started.clone();
+    tokio::spawn(async move {
+      while !started_probe.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+      }
+      cancel_token.cancel();
+    });
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let result = agent
+      .run_with_context(
+        AgentContext::new("tool-cancel", "go", &model).with_cancellation_token(token),
+      )
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(result.stop_reason, AgentStopReason::Cancelled { .. }),
+      "cancellation should win against the in-flight tool call; got {:?}",
+      result.stop_reason
+    );
+    assert!(started.load(Ordering::SeqCst));
+  }
+
   #[test]
   fn compact_memory_summary_formats_older_messages() {
     let mut older = Message::user("budget-session", "older context about project goals");
