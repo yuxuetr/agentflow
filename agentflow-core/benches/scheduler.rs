@@ -14,6 +14,7 @@
 //! them as signals, not gates — host differences (CPU, OS scheduling,
 //! noise) are expected to shift absolute numbers.
 
+use agentflow_core::FlowExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use agentflow_core::{

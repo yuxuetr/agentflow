@@ -1,5 +1,6 @@
 //! Integration tests for checkpoint recovery
 
+use agentflow_core::FlowExt;
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   checkpoint::{CheckpointConfig, CheckpointManager},

@@ -1,12 +1,12 @@
 use crate::{
-  async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+  async_node::{AsyncNodeInputs, AsyncNodeResult},
   checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus},
   error::AgentFlowError,
-  events::{EventListener, WorkflowEvent},
+  events::WorkflowEvent,
   expr,
   resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
-  state_size::{StateSizeObserver, estimated_state_pool_bytes},
+  state_size::estimated_state_pool_bytes,
   value::FlowValue,
 };
 use dirs;
@@ -22,75 +22,26 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
-#[derive(Clone)]
-pub enum NodeType {
-  Standard(Arc<dyn AsyncNode>),
-  Map {
-    template: Vec<GraphNode>,
-    parallel: bool,
-    /// Upper bound on concurrently-running sub-flows when
-    /// `parallel == true`. `None` means unbounded (legacy
-    /// behaviour). F-A6-1: unbounded `tokio::spawn` per item
-    /// shreds provider rate limits at N>~3, so production
-    /// callers should always set this. Ignored when
-    /// `parallel == false`.
-    max_concurrent: Option<usize>,
-  },
-  While {
-    condition: String,
-    max_iterations: u32,
-    template: Vec<GraphNode>,
-  },
+// The IR types (`Flow` / `GraphNode` / `NodeType`) moved to `agentflow-graph`
+// (P-A1.3 step 2d-iv). The executor for them lives here: the engine is
+// `FlowExecutor` (a borrow of the IR) and the public `flow.run()` API is the
+// `FlowExt` trait at the bottom of this module.
+pub use agentflow_graph::flow::{Flow, GraphNode, NodeType};
+
+/// Executor over a borrowed [`Flow`]. Holds all run/resume/scheduling logic as
+/// inherent methods so it can read the graph IR through the IR's accessors
+/// across the crate boundary, while the orphan rule keeps inherent methods off
+/// the foreign `Flow` type.
+struct FlowExecutor<'a> {
+  flow: &'a Flow,
 }
 
-#[derive(Clone)]
-pub struct GraphNode {
-  pub id: String,
-  pub node_type: NodeType,
-  pub dependencies: Vec<String>,
-  pub input_mapping: Option<HashMap<String, (String, String)>>,
-  pub run_if: Option<String>,
-  pub initial_inputs: HashMap<String, FlowValue>,
-}
-
-#[derive(Default, Clone)]
-pub struct Flow {
-  nodes: HashMap<String, GraphNode>,
-  checkpoint_enabled: bool,
-  // P-A1.3 step 2d-i: store the checkpoint *config* (IR data) rather than a live
-  // `Arc<CheckpointManager>`. The manager is stateless (`{ config }`), so the
-  // executor rebuilds it on demand via `checkpoint_manager()`. This lets the
-  // `Flow` struct hold only `agentflow-graph` data ahead of moving the type
-  // into that crate.
-  checkpoint_config: Option<CheckpointConfig>,
-  event_listener: Option<Arc<dyn EventListener>>,
-  state_size_observer: Option<Arc<dyn StateSizeObserver>>,
-}
-
-impl Flow {
-  pub fn new(nodes: Vec<GraphNode>) -> Self {
-    let nodes_map = nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
-    Self {
-      nodes: nodes_map,
-      checkpoint_enabled: false,
-      checkpoint_config: None,
-      event_listener: None,
-      state_size_observer: None,
-    }
+impl<'f> FlowExecutor<'f> {
+  fn new(flow: &'f Flow) -> Self {
+    Self { flow }
   }
 
-  /// Enable checkpointing with custom configuration
-  pub fn with_checkpointing(mut self, config: CheckpointConfig) -> Result<Self, AgentFlowError> {
-    // Validate eagerly (preserves the prior fail-fast behavior — checkpoint dir
-    // creation / config validation happens here, not at run time), then store
-    // the config; the manager is rebuilt on demand from it.
-    let _ = CheckpointManager::new(config.clone())?;
-    self.checkpoint_enabled = true;
-    self.checkpoint_config = Some(config);
-    Ok(self)
-  }
-
-  /// Build a fresh checkpoint manager from the stored config, if any.
+  /// Build a fresh checkpoint manager from the flow's config, if any.
   ///
   /// `CheckpointManager` is stateless (it just wraps a `CheckpointConfig`), so
   /// constructing one per use is free and lets the `Flow` struct carry only IR
@@ -98,69 +49,21 @@ impl Flow {
   /// cannot be built (already validated eagerly in `with_checkpointing`).
   fn checkpoint_manager(&self) -> Option<CheckpointManager> {
     self
+      .flow
       .checkpoint_config()
       .and_then(|config| CheckpointManager::new(config.clone()).ok())
-  }
-
-  /// Enable checkpointing with default configuration
-  pub fn with_default_checkpointing(self) -> Result<Self, AgentFlowError> {
-    self.with_checkpointing(CheckpointConfig::default())
-  }
-
-  pub fn add_node(&mut self, node: GraphNode) {
-    self.nodes.insert(node.id.clone(), node);
   }
 
   /// Return the workflow execution order after dependency validation.
   ///
   /// This is useful for dry-run planning, debugging, and scheduler benchmarks.
   /// It does not execute nodes or create run artifacts.
-  pub fn execution_order(&self) -> Result<Vec<String>, AgentFlowError> {
+  fn execution_order(&self) -> Result<Vec<String>, AgentFlowError> {
     self.topological_sort()
   }
 
-  /// Attach a workflow event listener for tracing, metrics, or logs.
-  pub fn with_event_listener(mut self, listener: Arc<dyn EventListener>) -> Self {
-    self.event_listener = Some(listener);
-    self
-  }
-
-  /// Attach a [`StateSizeObserver`] (P10.14.2-FU6) that receives the
-  /// estimated state-pool byte count after every node completes. Used by
-  /// `agentflow-server`'s `/metrics` handler to render the per-run live
-  /// state-size gauge.
-  pub fn with_state_size_observer(mut self, observer: Arc<dyn StateSizeObserver>) -> Self {
-    self.state_size_observer = Some(observer);
-    self
-  }
-
-  // Read accessors for the execution engine (P-A1.3 step 2d). Once the `Flow`
-  // type moves to `agentflow-graph`, the executor (in `agentflow-core`) reads
-  // its state through these instead of the now-cross-crate private fields. The
-  // builders above keep direct field access (they move to graph with the struct).
-  /// The workflow's nodes, keyed by node id.
-  pub fn nodes(&self) -> &HashMap<String, GraphNode> {
-    &self.nodes
-  }
-  /// Whether checkpointing was enabled via [`Flow::with_checkpointing`].
-  pub fn is_checkpoint_enabled(&self) -> bool {
-    self.checkpoint_enabled
-  }
-  /// The checkpoint configuration, if checkpointing is enabled.
-  pub fn checkpoint_config(&self) -> Option<&CheckpointConfig> {
-    self.checkpoint_config.as_ref()
-  }
-  /// The attached workflow event listener, if any.
-  pub fn event_listener(&self) -> Option<&Arc<dyn EventListener>> {
-    self.event_listener.as_ref()
-  }
-  /// The attached state-size observer, if any.
-  pub fn state_size_observer(&self) -> Option<&Arc<dyn StateSizeObserver>> {
-    self.state_size_observer.as_ref()
-  }
-
   fn notify_state_size(&self, state_pool: &HashMap<String, AsyncNodeResult>) {
-    if let Some(observer) = self.state_size_observer() {
+    if let Some(observer) = self.flow.state_size_observer() {
       observer.observe(estimated_state_pool_bytes(state_pool));
     }
   }
@@ -197,7 +100,7 @@ impl Flow {
     workflow_id: &str,
     options: &ResumePlanOptions,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
-    if !self.is_checkpoint_enabled() {
+    if !self.flow.is_checkpoint_enabled() {
       return Err(AgentFlowError::ConfigurationError {
         message: "Checkpointing is not enabled. Call with_checkpointing() first.".to_string(),
       });
@@ -429,7 +332,8 @@ impl Flow {
 
       let graph_node =
         self
-          .nodes
+          .flow
+          .nodes()
           .get(node_id)
           .ok_or_else(|| AgentFlowError::FlowDefinitionError {
             message: format!("Node '{}' not found in flow definition", node_id),
@@ -538,7 +442,7 @@ impl Flow {
       self.notify_state_size(&state_pool);
 
       // Save checkpoint if enabled
-      if self.is_checkpoint_enabled()
+      if self.flow.is_checkpoint_enabled()
         && state_pool
           .get(node_id)
           .map(|result| result.is_ok())
@@ -581,7 +485,7 @@ impl Flow {
     }
 
     // Mark workflow as completed or failed
-    if self.is_checkpoint_enabled()
+    if self.flow.is_checkpoint_enabled()
       && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
@@ -685,7 +589,7 @@ impl Flow {
   }
 
   fn emit_event(&self, event: WorkflowEvent) {
-    if let Some(listener) = self.event_listener() {
+    if let Some(listener) = self.flow.event_listener() {
       listener.on_event(&event);
     }
   }
@@ -760,7 +664,7 @@ fn decode_checkpoint_flow_value(node_id: &str, key: &str, value: &serde_json::Va
   }
 }
 
-impl Flow {
+impl<'f> FlowExecutor<'f> {
   async fn execute_concurrently(
     &self,
     run_id: String,
@@ -798,7 +702,8 @@ impl Flow {
           .find(|node_id| {
             pending.contains(*node_id)
               && self
-                .nodes
+                .flow
+                .nodes()
                 .get(*node_id)
                 .map(|node| {
                   node.dependencies.iter().all(|dep| {
@@ -817,7 +722,8 @@ impl Flow {
 
         pending.remove(&node_id);
         let graph_node = self
-          .nodes
+          .flow
+          .nodes()
           .get(&node_id)
           .ok_or_else(|| AgentFlowError::FlowDefinitionError {
             message: format!("Node '{}' not found in flow definition", node_id),
@@ -918,7 +824,7 @@ impl Flow {
         state_pool.insert(node_id.clone(), result);
         self.notify_state_size(&state_pool);
 
-        if self.is_checkpoint_enabled()
+        if self.flow.is_checkpoint_enabled()
           && state_pool
             .get(&node_id)
             .map(|result| result.is_ok())
@@ -959,7 +865,7 @@ impl Flow {
       });
     }
 
-    if self.is_checkpoint_enabled()
+    if self.flow.is_checkpoint_enabled()
       && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
@@ -1084,9 +990,11 @@ impl Flow {
         }
 
         let sub_flow = Flow::new(template.to_vec());
-        let sub_flow_state_pool = sub_flow.execute_from_inputs(loop_inputs.clone()).await?;
+        let sub_flow_state_pool = FlowExecutor::new(&sub_flow)
+          .execute_from_inputs(loop_inputs.clone())
+          .await?;
 
-        let exit_nodes = sub_flow.find_exit_nodes();
+        let exit_nodes = FlowExecutor::new(&sub_flow).find_exit_nodes();
         println!(
           "--- While Loop: Found {} exit nodes: {:?} ---",
           exit_nodes.len(),
@@ -1157,7 +1065,9 @@ impl Flow {
         let mut initial_inputs = HashMap::new();
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
-        let sub_flow_result = sub_flow.execute_from_inputs(initial_inputs).await?;
+        let sub_flow_result = FlowExecutor::new(&sub_flow)
+          .execute_from_inputs(initial_inputs)
+          .await?;
         // F-A6-3: track per-sub-flow node-level failures (see the
         // parallel branch for the design rationale).
         if sub_flow_result.values().any(|r| r.is_err()) {
@@ -1228,7 +1138,9 @@ impl Flow {
             },
             None => None,
           };
-          sub_flow.execute_from_inputs(initial_inputs).await
+          FlowExecutor::new(&sub_flow)
+            .execute_from_inputs(initial_inputs)
+            .await
         });
         handles.push(handle);
       }
@@ -1316,7 +1228,8 @@ impl Flow {
       // Check if source node is in dependencies (required) or not (optional)
       let graph_node =
         self
-          .nodes
+          .flow
+          .nodes()
           .get(node_id)
           .ok_or_else(|| AgentFlowError::FlowExecutionFailed {
             message: format!("Node '{}' not found in graph", node_id),
@@ -1388,13 +1301,14 @@ impl Flow {
 
   fn find_exit_nodes(&self) -> Vec<String> {
     let mut all_deps = HashSet::new();
-    for node in self.nodes().values() {
+    for node in self.flow.nodes().values() {
       for dep in &node.dependencies {
         all_deps.insert(dep.as_str());
       }
     }
     self
-      .nodes
+      .flow
+      .nodes()
       .keys()
       .filter(|id| !all_deps.contains(id.as_str()))
       .cloned()
@@ -1408,9 +1322,15 @@ impl Flow {
     // the queue depended on HashMap's hashing/resizing state. That
     // made trace replay non-reproducible across runs even when the
     // workflow graph was identical.
-    let mut in_degree: std::collections::BTreeMap<String, usize> =
-      self.nodes().keys().cloned().map(|id| (id, 0)).collect();
+    let mut in_degree: std::collections::BTreeMap<String, usize> = self
+      .flow
+      .nodes()
+      .keys()
+      .cloned()
+      .map(|id| (id, 0))
+      .collect();
     let mut adj: std::collections::BTreeMap<String, Vec<String>> = self
+      .flow
       .nodes()
       .keys()
       .cloned()
@@ -1419,12 +1339,12 @@ impl Flow {
 
     // Iterate the nodes deterministically too — sorted by node id —
     // so the adjacency-list construction is reproducible.
-    let mut node_ids: Vec<&String> = self.nodes().keys().collect();
+    let mut node_ids: Vec<&String> = self.flow.nodes().keys().collect();
     node_ids.sort();
     for id in node_ids {
-      let node = &self.nodes()[id];
+      let node = &self.flow.nodes()[id];
       for dep_id in &node.dependencies {
-        if !self.nodes().contains_key(dep_id) {
+        if !self.flow.nodes().contains_key(dep_id) {
           return Err(AgentFlowError::FlowDefinitionError {
             message: format!("Node '{}' has an invalid dependency: '{}'", id, dep_id),
           });
@@ -1458,7 +1378,7 @@ impl Flow {
       }
     }
 
-    if sorted_order.len() != self.nodes().len() {
+    if sorted_order.len() != self.flow.nodes().len() {
       Err(AgentFlowError::CircularFlow)
     } else {
       Ok(sorted_order)
@@ -1532,9 +1452,146 @@ fn map_outputs_with_summary(
   outputs
 }
 
+/// The execution surface for a [`Flow`]: run / resume / execute, plus the
+/// checkpoint builders that need the (core-side) checkpoint manager.
+///
+/// The `Flow` IR lives in `agentflow-graph`; this trait is the executor half of
+/// the IR ≠ executor split (P-A1.3, RFC §5). Bring it into scope
+/// (`use agentflow_core::FlowExt`) to run a flow. Every method delegates to the
+/// internal [`FlowExecutor`].
+pub trait FlowExt: Sized {
+  /// Enable checkpointing with a custom configuration (validated eagerly).
+  fn with_checkpointing(self, config: CheckpointConfig) -> Result<Self, AgentFlowError>;
+  /// Enable checkpointing with the default configuration.
+  fn with_default_checkpointing(self) -> Result<Self, AgentFlowError>;
+  /// The workflow execution order after dependency validation (no execution).
+  fn execution_order(&self) -> Result<Vec<String>, AgentFlowError>;
+  /// Run the workflow from empty inputs.
+  fn run(
+    &self,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+  /// Resume from the latest checkpoint (default options).
+  fn resume(
+    &self,
+    workflow_id: &str,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+  /// Resume from the latest checkpoint with explicit options.
+  fn resume_with_options(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+  /// Load the resume plan without executing.
+  fn load_resume_plan(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+  ) -> impl std::future::Future<Output = Result<ResumePlan, AgentFlowError>> + Send;
+  /// Execute from explicit initial inputs.
+  fn execute_from_inputs(
+    &self,
+    initial_inputs: AsyncNodeInputs,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+  /// Execute from initial inputs with an execution config.
+  fn execute_from_inputs_with_config(
+    &self,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+  /// Execute with an explicit workflow id + execution config.
+  fn execute_from_inputs_with_id_and_config(
+    &self,
+    workflow_id: String,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, AgentFlowError>> + Send;
+}
+
+impl FlowExt for Flow {
+  fn with_checkpointing(self, config: CheckpointConfig) -> Result<Self, AgentFlowError> {
+    // Validate eagerly (build a manager to fail fast on a bad checkpoint dir),
+    // then store the config on the IR via the graph-side setter.
+    let _ = CheckpointManager::new(config.clone())?;
+    Ok(self.with_checkpoint_config(config))
+  }
+
+  fn with_default_checkpointing(self) -> Result<Self, AgentFlowError> {
+    FlowExt::with_checkpointing(self, CheckpointConfig::default())
+  }
+
+  fn execution_order(&self) -> Result<Vec<String>, AgentFlowError> {
+    FlowExecutor::new(self).execution_order()
+  }
+
+  async fn run(&self) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self).run().await
+  }
+
+  async fn resume(
+    &self,
+    workflow_id: &str,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self).resume(workflow_id).await
+  }
+
+  async fn resume_with_options(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self)
+      .resume_with_options(workflow_id, options)
+      .await
+  }
+
+  async fn load_resume_plan(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+  ) -> Result<ResumePlan, AgentFlowError> {
+    FlowExecutor::new(self)
+      .load_resume_plan(workflow_id, options)
+      .await
+  }
+
+  async fn execute_from_inputs(
+    &self,
+    initial_inputs: AsyncNodeInputs,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self)
+      .execute_from_inputs(initial_inputs)
+      .await
+  }
+
+  async fn execute_from_inputs_with_config(
+    &self,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self)
+      .execute_from_inputs_with_config(initial_inputs, config)
+      .await
+  }
+
+  async fn execute_from_inputs_with_id_and_config(
+    &self,
+    workflow_id: String,
+    initial_inputs: AsyncNodeInputs,
+    config: FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
+    FlowExecutor::new(self)
+      .execute_from_inputs_with_id_and_config(workflow_id, initial_inputs, config)
+      .await
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  // The IR types moved to agentflow-graph, so these traits are no longer
+  // imported at module top (only the tests construct nodes / listeners).
+  use crate::async_node::AsyncNode;
+  use crate::events::EventListener;
   use async_trait::async_trait;
   use serde_json::json;
   use std::sync::Mutex;
@@ -1603,7 +1660,8 @@ mod tests {
     let mut state_pool = HashMap::new();
     state_pool.insert("node".to_string(), Ok(outputs.clone()));
 
-    let checkpoint_state = Flow::default().state_pool_to_checkpoint_state(&state_pool);
+    let checkpoint_state =
+      FlowExecutor::new(&Flow::default()).state_pool_to_checkpoint_state(&state_pool);
     let raw_node = checkpoint_state
       .get("node")
       .and_then(serde_json::Value::as_object)
@@ -1614,7 +1672,7 @@ mod tests {
     assert_eq!(raw_node["file"]["type"], json!("file"));
     assert_eq!(raw_node["url"]["type"], json!("url"));
 
-    let restored = Flow::checkpoint_state_to_state_pool(&checkpoint_state);
+    let restored = FlowExecutor::checkpoint_state_to_state_pool(&checkpoint_state);
     let restored_outputs = restored.get("node").unwrap().as_ref().unwrap();
 
     assert_eq!(restored_outputs.get("json"), outputs.get("json"));
@@ -1637,7 +1695,7 @@ mod tests {
     let mut checkpoint_state = HashMap::new();
     checkpoint_state.insert("legacy_node".to_string(), Value::Object(node));
 
-    let restored = Flow::checkpoint_state_to_state_pool(&checkpoint_state);
+    let restored = FlowExecutor::checkpoint_state_to_state_pool(&checkpoint_state);
     let outputs = restored.get("legacy_node").unwrap().as_ref().unwrap();
 
     assert_eq!(
@@ -3278,7 +3336,7 @@ mod tests {
     let mut seen_orders: std::collections::HashSet<Vec<String>> = std::collections::HashSet::new();
     for _ in 0..50 {
       let flow = Flow::new(make_graph());
-      let order = flow.topological_sort().unwrap();
+      let order = FlowExecutor::new(&flow).topological_sort().unwrap();
       seen_orders.insert(order);
     }
     assert_eq!(

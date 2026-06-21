@@ -56,7 +56,7 @@ pub use concurrency::{ConcurrencyConfig, ConcurrencyLimiter, ConcurrencyStats};
 pub use error::{AgentFlowError, Result};
 pub use error_context::{ErrorContext, ErrorInfo};
 pub use events::{ConsoleListener, EventListener, MultiListener, NoOpListener, WorkflowEvent};
-pub use flow::Flow;
+pub use flow::{Flow, FlowExt, GraphNode, NodeType};
 pub use health::{HealthChecker, HealthReport, HealthStatus};
 pub use node::Node;
 pub use resource_limits::ResourceLimits;

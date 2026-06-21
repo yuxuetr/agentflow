@@ -13,7 +13,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use agentflow_core::events::{WorkflowEvent, EventListener};
+//! use agentflow_graph::events::{WorkflowEvent, EventListener};
 //!
 //! struct MyListener;
 //!
@@ -397,7 +397,7 @@ impl fmt::Display for WorkflowEvent {
 /// ## Example
 ///
 /// ```rust
-/// use agentflow_core::events::{WorkflowEvent, EventListener};
+/// use agentflow_graph::events::{WorkflowEvent, EventListener};
 ///
 /// struct ConsoleLogger;
 ///
@@ -443,7 +443,7 @@ impl EventListener for NoOpListener {
 /// ## Example
 ///
 /// ```rust
-/// use agentflow_core::events::{ConsoleListener, EventListener, WorkflowEvent};
+/// use agentflow_graph::events::{ConsoleListener, EventListener, WorkflowEvent};
 /// use std::time::Instant;
 ///
 /// let listener = ConsoleListener;
@@ -467,7 +467,7 @@ impl EventListener for ConsoleListener {
 /// ## Example
 ///
 /// ```rust
-/// use agentflow_core::events::{ConsoleListener, MultiListener};
+/// use agentflow_graph::events::{ConsoleListener, MultiListener};
 ///
 /// let listener = MultiListener::new(vec![
 ///     Box::new(ConsoleListener),

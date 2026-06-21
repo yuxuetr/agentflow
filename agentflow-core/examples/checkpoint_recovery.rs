@@ -12,6 +12,7 @@
 //! cargo run --example checkpoint_recovery
 //! ```
 
+use agentflow_core::FlowExt;
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   checkpoint::CheckpointConfig,

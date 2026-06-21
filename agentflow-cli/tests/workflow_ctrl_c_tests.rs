@@ -10,6 +10,7 @@
 //! around exactly this pattern — when the primitives behave, the
 //! handler behaves; the build also verifies the wiring compiles.
 
+use agentflow_core::FlowExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
