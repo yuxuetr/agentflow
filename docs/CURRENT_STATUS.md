@@ -26,7 +26,8 @@ shared contracts (enforced by `cargo xtask check-arch`; see
 - L2 capability adapters: `agentflow-nodes`, `agentflow-llm`,
   `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
 - L3 agent and orchestration: `agentflow-agents`, `agentflow-skills`,
-  `agentflow-harness`, `agentflow-cli`.
+  `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly
+  + diagnostics, consumed by both the CLI and server), `agentflow-cli`.
 - L4 operations and productization: `agentflow-tracing`,
   `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`.
 
