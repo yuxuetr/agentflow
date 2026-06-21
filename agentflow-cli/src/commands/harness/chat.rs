@@ -160,16 +160,19 @@ pub async fn execute(
         "help" | "h" | "?" => print_help(),
         "session" => eprintln!("   session: {}", cfg.session_id),
         "model" if !arg.is_empty() => {
-          cur_skill = None;
-          cur_model = Some(arg.to_string());
+          // Commit-on-success (P-A3.6): only mutate `cur_model` / `cur_skill`
+          // after the new runtime builds, so a failed switch leaves the prior
+          // model + skill intact instead of a dirty half-switched state.
           match build_chat_runtime(&cfg, None, Some(arg)).await {
             Ok((r, m, s)) => {
+              cur_skill = None;
+              cur_model = Some(arg.to_string());
               runtime = r;
               model = m;
               skill_name = s;
               eprintln!("   ✅ switched to model: {model} (conversation continues)");
             }
-            Err(e) => eprintln!("   ⚠️  could not switch model: {e:#}"),
+            Err(e) => eprintln!("   ⚠️  could not switch model: {e:#} (keeping {model})"),
           }
         }
         "skill" if !arg.is_empty() => {
@@ -179,9 +182,10 @@ pub async fn execute(
             eprintln!("   ⚠️  no SKILL.md / skill.toml under '{arg}'");
             continue;
           }
-          cur_skill = Some(arg.to_string());
+          // Commit-on-success (P-A3.6): mutate `cur_skill` only after the build.
           match build_chat_runtime(&cfg, Some(arg), cur_model.as_deref()).await {
             Ok((r, m, s)) => {
+              cur_skill = Some(arg.to_string());
               runtime = r;
               model = m;
               skill_name = s;
