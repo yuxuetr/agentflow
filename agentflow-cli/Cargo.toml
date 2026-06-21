@@ -26,14 +26,17 @@ path = "src/main.rs"
 # already depends on `agentflow-mcp` directly); the gate only
 # matters when a workflow uses `type: mcp`.
 default = ["plugin", "rag"]
-mcp = ["agentflow-nodes/mcp"]
-rag = ["agentflow-nodes/rag", "agentflow-rag"]
+# Features forward to `agentflow-config` so the moved `executor` compiles the
+# matching capability nodes, while still gating the CLI's own feature commands.
+mcp = ["agentflow-nodes/mcp", "agentflow-config/mcp"]
+rag = ["agentflow-nodes/rag", "agentflow-rag", "agentflow-config/rag"]
 # Enables the subprocess plugin runtime for `type: plugin` workflow nodes.
 # See docs/PLUGIN_DESIGN.md.
-plugin = ["agentflow-core/plugin"]
+plugin = ["agentflow-core/plugin", "agentflow-config/plugin"]
 
 [dependencies]
 # Core dependencies
+agentflow-config = { path = "../agentflow-config", version = "0.1" }
 agentflow-core = { path = "../agentflow-core", version = "0.2" }
 agentflow-nodes = { path = "../agentflow-nodes", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }

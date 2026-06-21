@@ -1,0 +1,32 @@
+[package]
+name = "agentflow-config"
+version = "0.1.0"
+description = "Shared config schema + config-driven workflow assembly (YAML -> Flow) for the AgentFlow CLI and server"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+mcp = ["agentflow-nodes/mcp"]
+rag = ["agentflow-nodes/rag", "dep:agentflow-rag"]
+plugin = ["agentflow-core/plugin", "dep:agentflow-tracing"]
+
+[dependencies]
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
+agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+agentflow-nodes = { path = "../agentflow-nodes", version = "0.2" }
+agentflow-skills = { path = "../agentflow-skills", version = "0.1" }
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
+agentflow-tracing = { path = "../agentflow-tracing", version = "0.1", optional = true }
+
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+async-trait = "0.1"
+tokio = { version = "1.35", features = ["process", "sync", "rt", "macros", "time"] }

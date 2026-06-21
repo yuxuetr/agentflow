@@ -249,6 +249,11 @@ jobs:
             command: cargo check -p agentflow-cli --no-default-features --features mcp,rag,plugin
           - name: cli-all-features
             command: cargo check -p agentflow-cli --all-features
+          # P-A2.4 — the extracted workflow-assembly crate's own feature gating.
+          - name: config-default
+            command: cargo check -p agentflow-config --all-targets
+          - name: config-all-features
+            command: cargo check -p agentflow-config --features mcp,rag,plugin --all-targets
           - name: tracing-postgres
             command: cargo check -p agentflow-tracing --features postgres
           - name: mcp-all-transports

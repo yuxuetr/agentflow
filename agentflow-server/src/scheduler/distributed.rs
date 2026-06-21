@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use agentflow_cli::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
+use agentflow_config::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
 use agentflow_core::{AgentFlowError, FlowValue};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

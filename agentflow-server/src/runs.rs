@@ -292,7 +292,7 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     .await?;
 
   let run_id = ctx.run_id.to_string();
-  let mut flow = agentflow_cli::executor::build_flow_from_yaml(&ctx.workflow, None)?;
+  let mut flow = agentflow_config::executor::build_flow_from_yaml(&ctx.workflow, None)?;
   // The gateway always streams workflow events into Postgres + the SSE
   // broker. `AGENTFLOW_TRACE_DIR` opts in to *additionally* writing a
   // file-backed `ExecutionTrace` JSON so operators can run `agentflow

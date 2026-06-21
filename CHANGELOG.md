@@ -13,6 +13,22 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow-config` — shared workflow-assembly crate** (P-A2.4, step 1). The
+  YAML workflow config schema (`config::v2::{FlowDefinitionV2, NodeDefinitionV2}`,
+  `config::schema`) and the executor that compiles it into an `agentflow-core`
+  `Flow` (`executor::build_flow_from_yaml` + the node factories) moved out of
+  `agentflow-cli` into a new shared crate, so `agentflow-server` assembles and
+  schedules workflows by depending on the shared crate instead of the CLI binary
+  crate. `agentflow-cli` re-exports both modules under their original
+  `agentflow_cli::{config, executor}` paths (consumers unchanged); the server's
+  `runs.rs` (`build_flow_from_yaml`) and `scheduler::distributed` (the V2 schema
+  types) now import from `agentflow-config`. The crate mirrors the CLI's
+  `plugin` / `rag` / `mcp` feature flags. This is the first of two steps toward
+  burning the `server → cli` dependency edge; the remaining usage is the doctor
+  diagnostics `build_report`, which moves in a follow-up (it needs a careful
+  split because the doctor command's `execute` couples to the CLI's JSON
+  envelope).
+
 - **`race_with_limits` consolidation completed for the ReAct hot path**
   (P-A3.2 follow-up). The batch-dispatch racing sites — the concurrent
   `join_all` group and the serial per-call loop — now also delegate to
