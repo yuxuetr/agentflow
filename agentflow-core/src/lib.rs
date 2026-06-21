@@ -2,14 +2,22 @@
 //!
 //! This crate provides the fundamental building blocks for the V2 AgentFlow architecture.
 
-// Core abstractions
-pub mod async_node;
-pub mod error;
+// Core abstractions.
+//
+// The execution IR (`async_node` / `node` / `expr` / `error`) moved to the
+// `agentflow-graph` crate (P-A1.3, IR ≠ executor per RFC §5). Re-export each
+// under its original `agentflow_core::<module>` path so every existing
+// `crate::async_node::AsyncNode` / `agentflow_core::AgentFlowError` consumer —
+// inside core and downstream — keeps compiling unchanged. The `Flow` orchestrator
+// + scheduler stay here for now (sub-step 2 moves the `Flow` *type* to graph).
+pub use agentflow_graph::{async_node, error, expr, node};
 pub mod error_context;
-pub mod expr;
 pub mod flow;
-pub mod node;
-pub mod value;
+
+// `FlowValue` lives in the `agentflow-value` leaf crate (P-A1.5); also re-exported
+// transitively by `agentflow-graph`. Surface it under the original
+// `agentflow_core::value` module path + crate root for backward compatibility.
+pub use agentflow_value as value;
 
 // Execution engine
 pub mod concurrency;

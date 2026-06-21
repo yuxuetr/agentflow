@@ -24,6 +24,11 @@ observability = ["tracing"]
 plugin = ["dep:toml"]
 
 [dependencies]
+# Contract-kernel leaves (P-A1): the FlowValue leaf (P-A1.5) and the execution
+# IR (P-A1.3 — async_node / node / expr / error). Re-exported from `lib.rs` under
+# their original `agentflow_core::*` paths for backward compatibility.
+agentflow-value = { path = "../agentflow-value", version = "0.1" }
+agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
 # Core serialization and JSON support (for SharedState and node communication)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

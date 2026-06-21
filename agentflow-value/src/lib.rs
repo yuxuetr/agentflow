@@ -1,3 +1,11 @@
+//! `agentflow-value` — the universal data contract for AgentFlow.
+//!
+//! [`FlowValue`] is the single value type passed between nodes in a workflow
+//! and through the agent runtime. It is the lowest leaf of the contract kernel
+//! (`docs/RFC_CRATE_ARCHITECTURE.md` §4): it depends on nothing but `serde` and
+//! is depended on by almost everything. Extracted from `agentflow-core` in
+//! P-A1.5; `agentflow_core::FlowValue` re-exports it for backward compatibility.
+
 use serde::{
   Deserialize, Deserializer, Serialize, Serializer,
   de::{self, MapAccess, Visitor},

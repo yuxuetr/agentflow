@@ -166,6 +166,8 @@ dependencies = [
 name = "agentflow-core"
 version = "0.2.0"
 dependencies = [
+ "agentflow-graph",
+ "agentflow-value",
  "anyhow",
  "async-trait",
  "chrono",
@@ -205,6 +207,19 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "agentflow-graph"
+version = "0.1.0"
+dependencies = [
+ "agentflow-value",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -478,6 +493,15 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+]
+
+[[package]]
+name = "agentflow-value"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

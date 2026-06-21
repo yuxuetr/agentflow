@@ -24,6 +24,20 @@ _New entries go here. Will roll into the next tag (likely
   it cannot rot (P-A0.4). No shipped-crate behavior change; this is internal
   architecture tooling + docs.
 
+- **`agentflow-value` contract leaf crate** (P-A1.5, first kernel extraction).
+  `FlowValue` + its serde conversions moved out of `agentflow-core` into a new
+  zero-internal-dependency `agentflow-value` crate. `agentflow-core` re-exports
+  it as `agentflow_core::value` / `agentflow_core::FlowValue`, so every existing
+  consumer compiles unchanged. This is the universal kernel leaf and a
+  prerequisite of the upcoming `agentflow-graph` split (evaluation R1).
+- **`agentflow-graph` IR crate — leaf extraction** (P-A1.3 step 1/2). The pure
+  IR leaf modules — `error` (`AgentFlowError`), `async_node` (`AsyncNode`),
+  `node`, `expr` — moved out of `agentflow-core` into the new `agentflow-graph`
+  crate (depends only on `agentflow-value`), beginning the IR ≠ executor split
+  (RFC §5). `agentflow-core` re-exports them under their original paths; all
+  consumers compile unchanged. The `Flow` type itself stays in `agentflow-core`
+  pending the step-2 `FlowExt` redesign.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native
