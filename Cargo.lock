@@ -80,9 +80,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentflow-agent-spi"
+version = "0.1.0"
+dependencies = [
+ "agentflow-llm",
+ "agentflow-store-spi",
+ "agentflow-tools",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "agentflow-agents"
 version = "0.2.0"
 dependencies = [
+ "agentflow-agent-spi",
  "agentflow-core",
  "agentflow-llm",
  "agentflow-mcp",

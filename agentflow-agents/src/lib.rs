@@ -12,7 +12,10 @@ pub mod nodes;
 pub mod plan_execute;
 pub mod react;
 pub mod reflection;
-pub mod runtime;
+// The agent-runtime contracts moved to `agentflow-agent-spi` (P-A1.1).
+// Re-export under the original `agentflow_agents::runtime` path so every
+// consumer — and this crate's own runtimes — keep compiling unchanged.
+pub use agentflow_agent_spi::runtime;
 pub mod supervisor;
 pub mod token_counter_adapter;
 pub mod tools;

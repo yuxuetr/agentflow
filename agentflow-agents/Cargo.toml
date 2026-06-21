@@ -15,6 +15,7 @@ agentflow-core = { path = "../agentflow-core", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-mcp = { path = "../agentflow-mcp", version = "0.2" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 
 # Common dependencies for agents
