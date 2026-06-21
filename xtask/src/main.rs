@@ -587,6 +587,14 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
     features: &[],
     timeout: Duration::from_secs(60),
   },
+  // Dynamic-workflow vertical-slice spike (P-A1.6): an agent generates a Flow
+  // at runtime and core executes it. Pure offline, no LLM.
+  SmokeExample {
+    package: "agentflow-agents",
+    example: "dynamic_workflow_spike",
+    features: &[],
+    timeout: Duration::from_secs(20),
+  },
   // SkillBuilder direct API (P3.1 row #8). Spawns a real MCP demo
   // subprocess so it's a touch slower than the mock-only examples.
   SmokeExample {
