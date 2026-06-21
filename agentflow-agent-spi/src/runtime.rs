@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Notify;
 
-use agentflow_memory::Message;
+use agentflow_store_spi::Message;
 use agentflow_tools::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOutputPart};
 
 /// Runtime limits shared by agent-native execution loops.
@@ -158,7 +158,7 @@ impl PartialEq for BetweenTurnHookHandle {
 ///
 /// The runtime invokes [`before_turn`](BetweenTurnHook::before_turn) at
 /// the top of each agent turn, *before* the LLM call, handing the hook
-/// the run's [`MemoryStore`](agentflow_memory::MemoryStore). This is the
+/// the run's [`MemoryStore`](agentflow_store_spi::MemoryStore). This is the
 /// point at which an owner of the loop (the Harness) performs
 /// context-window engineering between turns — most importantly memory
 /// compaction — so a long-running loop's prompt stays bounded under a
@@ -177,7 +177,7 @@ pub trait BetweenTurnHook: Send + Sync {
     &self,
     turn_index: usize,
     session_id: &str,
-    memory: &dyn agentflow_memory::MemoryStore,
+    memory: &dyn agentflow_store_spi::MemoryStore,
   );
 }
 
@@ -468,7 +468,7 @@ pub enum AgentStepKind {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parts: Vec<ToolOutputPart>,
   },
-  /// A reflection produced by a [`crate::reflection::ReflectionStrategy`].
+  /// A reflection produced by a `ReflectionStrategy` (agentflow-agents).
   Reflect {
     /// The reflection text.
     content: String,
@@ -628,7 +628,7 @@ pub enum AgentEvent {
   },
   /// Memory was compacted: an older slice of conversation was replaced by
   /// a generated summary injected as a synthetic system message. Emitted
-  /// by runtimes that run a [`crate::react::MemorySummaryBackend`] when the
+  /// by runtimes that run a `MemorySummaryBackend` (agentflow-agents) when the
   /// prompt-memory budget is exceeded, so observers (the Harness
   /// `MemorySummaryAdded` envelope) can surface context compaction that
   /// would otherwise be invisible.

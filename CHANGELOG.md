@@ -58,6 +58,19 @@ _New entries go here. Will roll into the next tag (likely
   depending on the `memory` implementation crate. (The `EmbeddingProvider`
   contract — evaluation R6 — is a follow-up pending error-surface unification.)
 
+- **`agentflow-agent-spi` agent-runtime contract crate** (P-A1.1, runtime
+  contracts). The `AgentRuntime` trait + the structured `AgentEvent` / `AgentStep`
+  / `AgentContext` / `RuntimeLimits` / cancellation + event/memory hook contracts
+  moved out of `agentflow-agents` into a new `agentflow-agent-spi` crate (depends
+  on `store-spi` for `Message` + `tools`). The concrete runtimes (`ReActAgent`,
+  `PlanExecuteAgent`, supervisors) stay in `agentflow-agents`, which re-exports
+  everything under its original `agentflow_agents::runtime` path — no consumer
+  changes. This lets `agentflow-harness` later govern a runtime via the contract
+  instead of the `agents` impl crate (the P-A2.1 target). (The harness-side event
+  / approval / hook contracts and the `Capability` / `Lowered` traits are a
+  follow-up sub-step; `agent-spi → llm` for `LlmTraceContext` is transitional,
+  pending a trace-context contract per evaluation R6.)
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native
