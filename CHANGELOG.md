@@ -81,6 +81,23 @@ _New entries go here. Will roll into the next tag (likely
   this, all five new kernel crates exist (`value`, `graph`, `store-spi`,
   `agent-spi`, `async-util`).
 
+- **Dynamic-workflow vertical-slice spike** (P-A1.6) — the payoff of the
+  contract-kernel migration. New `agentflow-agents/examples/dynamic_workflow_spike.rs`
+  demonstrates a runtime *generating* a `Flow` from the `agentflow-graph` IR
+  (shape decided at runtime, not compile time) and `agentflow-core` executing it
+  via `FlowExt` — the two meeting only through the `graph` contract. Wired into
+  the `examples-smoke` CI gate so it stays green. This proves the kernel can
+  carry dynamic workflows; P-A4 productionizes it (`PlanExecuteAgent` emits a
+  real `Flow`).
+
+- **`harness` no longer depends on the `agents` impl crate** (P-A2.1, first
+  architecture violation burned down). The turn-driven contracts (`TurnDrivenRuntime`
+  / `LoopSession` / `TurnProgress`) moved from `agentflow-agents` into
+  `agentflow-agent-spi`; `agentflow-harness` now depends on the `agent-spi`
+  contract and the concrete runtime (`ReActAgent`) is injected (the smoke test
+  keeps `agents` as a dev-dependency). `check-arch`'s tracked-violation allowlist
+  shrank 4 -> 3.
+
 ### Changed
 
 - `RoadMap.md` reframed around the four execution paradigms (static DAG / native

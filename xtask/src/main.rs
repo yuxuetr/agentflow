@@ -587,6 +587,14 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
     features: &[],
     timeout: Duration::from_secs(60),
   },
+  // Dynamic-workflow vertical-slice spike (P-A1.6): an agent generates a Flow
+  // at runtime and core executes it. Pure offline, no LLM.
+  SmokeExample {
+    package: "agentflow-agents",
+    example: "dynamic_workflow_spike",
+    features: &[],
+    timeout: Duration::from_secs(20),
+  },
   // SkillBuilder direct API (P3.1 row #8). Spawns a real MCP demo
   // subprocess so it's a touch slower than the mock-only examples.
   SmokeExample {
@@ -3832,11 +3840,10 @@ const ARCH_ALLOWLIST: &[ArchAllow] = &[
     to: "agentflow-core",
     burndown: "P-A1.3/P-A1.4 — agents builds on the graph IR + async-util, not the core executor",
   },
-  ArchAllow {
-    from: "agentflow-harness",
-    to: "agentflow-agents",
-    burndown: "P-A2.1 — harness depends on the agent-spi contract; the runtime is injected by surfaces",
-  },
+  // P-A2.1 BURNED DOWN (was harness -> agents): harness now depends on the
+  // agentflow-agent-spi contract (AgentRuntime / TurnDrivenRuntime), not the
+  // agents impl crate. `agents` stays a harness dev-dependency for the
+  // end-to-end ReActAgent smoke test, which check-arch ignores.
   ArchAllow {
     from: "agentflow-worker",
     to: "agentflow-server",
@@ -4402,8 +4409,9 @@ mod arch_tests {
     let stdout = String::from_utf8(out).expect("utf8 stdout");
     assert!(stdout.contains("check-arch: OK"), "stdout:\n{stdout}");
     assert!(
-      stdout.contains("4 tracked"),
-      "expected the 4 seeded violations to be tracked; got:\n{stdout}"
+      stdout.contains("3 tracked"),
+      "expected the 3 remaining allowlisted violations to be tracked \
+       (harness->agents burned down in P-A2.1); got:\n{stdout}"
     );
     assert!(
       stdout.contains("latent target-state edge(s)"),
