@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use agentflow_core::{RaceOutcome, race_with_limits};
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
@@ -950,94 +951,52 @@ impl ReActAgent {
     }
     let llm_call_started = std::time::Instant::now();
     let llm_call = builder.execute_full();
-    let llm_response: LLMResponse = match (
+    // Race the model round-trip against the wall-clock budget and the
+    // cancellation token (the per-outcome handling — reflection on timeout,
+    // cancelled-result on cancel — is what differs per call site).
+    let cancel = cancellation_token.as_ref().map(|token| token.cancelled());
+    let llm_response: LLMResponse = match race_with_limits(
+      llm_call,
       remaining_timeout(run_started_at, timeout_ms),
-      cancellation_token.clone(),
-    ) {
-      (Some(remaining), Some(token)) => {
-        tokio::select! {
-          result = tokio::time::timeout(remaining, llm_call) => match result {
-            Ok(result) => result?,
-            Err(_) => {
-              self
-                .record_reflection(
-                  ReflectionContext::failure(
-                    &self.session_id,
-                    *step_index,
-                    format!(
-                      "runtime timed out after {}ms",
-                      timeout_ms.unwrap_or_default()
-                    ),
-                  ),
-                  step_index,
-                  steps,
-                  events,
-                )
-                .await?;
-              return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
-                &self.session_id,
-                None,
-                AgentStopReason::Timeout {
-                  timeout_ms: timeout_ms.unwrap_or_default(),
-                },
-                std::mem::take(steps),
-                std::mem::take(events),
-              )));
-            }
-          },
-          _ = token.cancelled() => {
-            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+      cancel,
+    )
+    .await
+    {
+      RaceOutcome::Completed(result) => result?,
+      RaceOutcome::TimedOut => {
+        self
+          .record_reflection(
+            ReflectionContext::failure(
               &self.session_id,
-              "cancellation token signalled",
-              std::mem::take(steps),
-              std::mem::take(events),
-            )));
-          }
-        }
-      }
-      (Some(remaining), None) => match tokio::time::timeout(remaining, llm_call).await {
-        Ok(result) => result?,
-        Err(_) => {
-          self
-            .record_reflection(
-              ReflectionContext::failure(
-                &self.session_id,
-                *step_index,
-                format!(
-                  "runtime timed out after {}ms",
-                  timeout_ms.unwrap_or_default()
-                ),
+              *step_index,
+              format!(
+                "runtime timed out after {}ms",
+                timeout_ms.unwrap_or_default()
               ),
-              step_index,
-              steps,
-              events,
-            )
-            .await?;
-          return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
-            &self.session_id,
-            None,
-            AgentStopReason::Timeout {
-              timeout_ms: timeout_ms.unwrap_or_default(),
-            },
-            std::mem::take(steps),
-            std::mem::take(events),
-          )));
-        }
-      },
-      (None, Some(token)) => {
-        tokio::select! {
-          result = llm_call => result?,
-          _ = token.cancelled() => {
-            return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
-              &self.session_id,
-              "cancellation token signalled",
-              std::mem::take(steps),
-              std::mem::take(events),
-            )));
-          }
-        }
+            ),
+            step_index,
+            steps,
+            events,
+          )
+          .await?;
+        return Ok(LlmTurnOutcome::Stop(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::Timeout {
+            timeout_ms: timeout_ms.unwrap_or_default(),
+          },
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
       }
-      (None, None) => llm_call.await?,
+      RaceOutcome::Cancelled => {
+        return Ok(LlmTurnOutcome::Stop(Self::cancelled_result(
+          &self.session_id,
+          "cancellation token signalled",
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
+      }
     };
 
     let usage = llm_response.usage.as_ref();
@@ -1142,164 +1101,85 @@ impl ReActAgent {
     cancellation_token: &Option<AgentCancellationToken>,
   ) -> Result<ToolExecOutcome, ReActError> {
     let tool_call = self.tools.execute(tool, params);
-    let tool_output = match (
+    // Race the tool execution against the wall-clock budget and the
+    // cancellation token. On a limit, both the timeout and cancel paths emit a
+    // failed `ToolCallCompleted` event before stopping the run.
+    let cancel = cancellation_token.as_ref().map(|token| token.cancelled());
+    let tool_output = match race_with_limits(
+      tool_call,
       remaining_timeout(run_started_at, timeout_ms),
-      cancellation_token.clone(),
-    ) {
-      (Some(remaining), Some(token)) => {
-        tokio::select! {
-          result = tokio::time::timeout(remaining, tool_call) => match result {
-            Ok(result) => match result {
-              Ok(out) => out,
-              Err(e) => {
-                warn!(tool = %tool, error = %e, "Tool execution failed");
-                agentflow_tools::ToolOutput::error(e.to_string())
-              }
-            },
-            Err(_) => {
-              let duration_ms = started_at.elapsed().as_millis() as u64;
-              emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-                session_id: self.session_id.clone(),
-                step_index: tool_step_index,
-                tool: tool.to_string(),
-                is_error: true,
-                duration_ms,
-                source: tool_source.clone(),
-                permissions: tool_permissions.to_vec(),
-                timestamp: Utc::now(),
-              });
-              self
-                .record_reflection(
-                  ReflectionContext::failure(
-                    &self.session_id,
-                    *step_index,
-                    format!(
-                      "runtime timed out after {}ms",
-                      timeout_ms.unwrap_or_default()
-                    ),
-                  ),
-                  step_index,
-                  steps,
-                  events,
-                )
-                .await?;
-              return Ok(ToolExecOutcome::Stop(Self::stopped_result(
-                &self.session_id,
-                None,
-                AgentStopReason::Timeout {
-                  timeout_ms: timeout_ms.unwrap_or_default(),
-                },
-                std::mem::take(steps),
-                std::mem::take(events),
-              )));
-            }
-          },
-          _ = token.cancelled() => {
-            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.to_string(),
-              is_error: true,
-              duration_ms: started_at.elapsed().as_millis() as u64,
-              source: tool_source.clone(),
-              permissions: tool_permissions.to_vec(),
-              timestamp: Utc::now(),
-            });
-            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
-              &self.session_id,
-              "cancellation token signalled",
-              std::mem::take(steps),
-              std::mem::take(events),
-            )));
-          }
-        }
+      cancel,
+    )
+    .await
+    {
+      RaceOutcome::Completed(Ok(out)) => out,
+      RaceOutcome::Completed(Err(e)) => {
+        warn!(tool = %tool, error = %e, "Tool execution failed");
+        agentflow_tools::ToolOutput::error(e.to_string())
       }
-      (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
-        Ok(result) => match result {
-          Ok(out) => out,
-          Err(e) => {
-            warn!(tool = %tool, error = %e, "Tool execution failed");
-            agentflow_tools::ToolOutput::error(e.to_string())
+      RaceOutcome::TimedOut => {
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        emit_and_push!(
+          self.live_sink,
+          events,
+          AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.to_string(),
+            is_error: true,
+            duration_ms,
+            source: tool_source.clone(),
+            permissions: tool_permissions.to_vec(),
+            timestamp: Utc::now(),
           }
-        },
-        Err(_) => {
-          let duration_ms = started_at.elapsed().as_millis() as u64;
-          emit_and_push!(
-            self.live_sink,
-            events,
-            AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.to_string(),
-              is_error: true,
-              duration_ms,
-              source: tool_source.clone(),
-              permissions: tool_permissions.to_vec(),
-              timestamp: Utc::now(),
-            }
-          );
-          self
-            .record_reflection(
-              ReflectionContext::failure(
-                &self.session_id,
-                *step_index,
-                format!(
-                  "runtime timed out after {}ms",
-                  timeout_ms.unwrap_or_default()
-                ),
+        );
+        self
+          .record_reflection(
+            ReflectionContext::failure(
+              &self.session_id,
+              *step_index,
+              format!(
+                "runtime timed out after {}ms",
+                timeout_ms.unwrap_or_default()
               ),
-              step_index,
-              steps,
-              events,
-            )
-            .await?;
-          return Ok(ToolExecOutcome::Stop(Self::stopped_result(
-            &self.session_id,
-            None,
-            AgentStopReason::Timeout {
-              timeout_ms: timeout_ms.unwrap_or_default(),
-            },
-            std::mem::take(steps),
-            std::mem::take(events),
-          )));
-        }
-      },
-      (None, Some(token)) => {
-        tokio::select! {
-          result = tool_call => match result {
-            Ok(out) => out,
-            Err(e) => {
-              warn!(tool = %tool, error = %e, "Tool execution failed");
-              agentflow_tools::ToolOutput::error(e.to_string())
-            }
+            ),
+            step_index,
+            steps,
+            events,
+          )
+          .await?;
+        return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::Timeout {
+            timeout_ms: timeout_ms.unwrap_or_default(),
           },
-          _ = token.cancelled() => {
-            emit_and_push!(self.live_sink, events, AgentEvent::ToolCallCompleted {
-              session_id: self.session_id.clone(),
-              step_index: tool_step_index,
-              tool: tool.to_string(),
-              is_error: true,
-              duration_ms: started_at.elapsed().as_millis() as u64,
-              source: tool_source.clone(),
-              permissions: tool_permissions.to_vec(),
-              timestamp: Utc::now(),
-            });
-            return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
-              &self.session_id,
-              "cancellation token signalled",
-              std::mem::take(steps),
-              std::mem::take(events),
-            )));
-          }
-        }
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
       }
-      (None, None) => match tool_call.await {
-        Ok(out) => out,
-        Err(e) => {
-          warn!(tool = %tool, error = %e, "Tool execution failed");
-          agentflow_tools::ToolOutput::error(e.to_string())
-        }
-      },
+      RaceOutcome::Cancelled => {
+        emit_and_push!(
+          self.live_sink,
+          events,
+          AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.to_string(),
+            is_error: true,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.to_vec(),
+            timestamp: Utc::now(),
+          }
+        );
+        return Ok(ToolExecOutcome::Stop(Self::cancelled_result(
+          &self.session_id,
+          "cancellation token signalled",
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
+      }
     };
     Ok(ToolExecOutcome::Output(tool_output))
   }

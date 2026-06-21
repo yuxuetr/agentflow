@@ -23,9 +23,10 @@ pub use agentflow_value as value;
 pub mod concurrency;
 pub mod health;
 // `retry` + `timeout` combinators moved to `agentflow-async-util` (P-A1.4);
-// re-export under their original `agentflow_core::{retry,timeout}` paths.
+// `race_with_limits` added there (P-A3.2). Re-export under their original
+// `agentflow_core::{retry,timeout}` paths (+ `race`).
 // `retry_executor` stays here (it builds on `crate::error_context`).
-pub use agentflow_async_util::{retry, timeout};
+pub use agentflow_async_util::{RaceOutcome, race, race_with_limits, retry, timeout};
 pub mod retry_executor;
 
 // Reliability
