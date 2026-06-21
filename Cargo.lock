@@ -205,10 +205,13 @@ dependencies = [
  "agentflow-tracing",
  "anyhow",
  "async-trait",
+ "dirs",
+ "reqwest 0.12.24",
  "serde",
  "serde_json",
  "serde_yaml",
  "tokio",
+ "which",
 ]
 
 [[package]]
@@ -438,7 +441,6 @@ name = "agentflow-server"
 version = "0.1.0"
 dependencies = [
  "agentflow-agents",
- "agentflow-cli",
  "agentflow-config",
  "agentflow-core",
  "agentflow-db",

@@ -2,10 +2,10 @@
 //! --output json`, but in-process so the Web UI can render a
 //! per-component pass/warn/fail table without shelling out.
 //!
-//! The handler delegates to `agentflow_cli::commands::doctor::build_report`,
-//! which is the canonical source of truth for the doctor schema.
-//! Keeping the schema in `agentflow-cli` ensures the CLI and the UI
-//! never drift; the server is a thin pass-through.
+//! The handler delegates to `agentflow_config::diagnostics::build_report`,
+//! the shared source of truth for the doctor schema (used by both the CLI
+//! `doctor` command and this route), so the CLI and the UI never drift; the
+//! server is a thin pass-through.
 //!
 //! Security note: the doctor report never includes API key values
 //! (only env-var *names* in `config.missing_env_vars` and a boolean
@@ -14,7 +14,7 @@
 
 use axum::Json;
 
-use agentflow_cli::commands::doctor::{DoctorProfile, build_report};
+use agentflow_config::diagnostics::{DoctorProfile, build_report};
 
 use crate::error::ApiError;
 
@@ -28,7 +28,9 @@ pub async fn get_diagnostics() -> Result<Json<serde_json::Value>, ApiError> {
   // Server-side diagnostics intentionally skip the heavier opt-in
   // probes (backup_check, check_installations) — they're filesystem-
   // bound and only useful to a human invoking the CLI.
-  let report = build_report(DoctorProfile::Local, None, false, false).await;
+  // The server skips installation probes, so the top-level MCP registry
+  // (a CLI-side `mcp.toml` concern) is empty here.
+  let report = build_report(DoctorProfile::Local, None, false, false, (None, Vec::new())).await;
   let value = serde_json::to_value(&report).map_err(|err| ApiError::Internal(err.to_string()))?;
   Ok(Json(value))
 }

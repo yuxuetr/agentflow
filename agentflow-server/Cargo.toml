@@ -61,11 +61,12 @@ metrics-exporter-prometheus = { version = "0.15", default-features = false }
 # Workspace dependencies
 agentflow-db = { path = "../agentflow-db", version = "0.1" }
 agentflow-core = { path = "../agentflow-core", version = "0.2" }
-# Workflow assembly (config schema + YAML -> Flow) shared with the CLI. Mirrors
-# the CLI's default capability features so server-assembled workflows support
-# the same node types. (`agentflow-cli` itself is still used for `doctor`.)
+# Workflow assembly (config schema + YAML -> Flow) + diagnostics report builder,
+# shared with the CLI. Mirrors the CLI's default capability features so
+# server-assembled workflows support the same node types. P-A2.4 moved the last
+# server->cli usage (the doctor `build_report`) here, so the server no longer
+# depends on the CLI binary crate at all.
 agentflow-config = { path = "../agentflow-config", version = "0.1", features = ["plugin", "rag"] }
-agentflow-cli = { path = "../agentflow-cli", version = "0.2" }
 agentflow-skills = { path = "../agentflow-skills", version = "0.1" }
 agentflow-tracing = { path = "../agentflow-tracing", version = "0.1" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
