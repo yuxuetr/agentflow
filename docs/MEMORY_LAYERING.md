@@ -80,7 +80,7 @@ different questions:
 | Use case | Layer | Why |
 | --- | --- | --- |
 | "Did the user tell me their middle name in a prior conversation?" | Semantic memory | The data is conversational, ephemeral, user-scoped, and not part of any authored knowledge base. |
-| "What does the company policy say about refunds?" | RAG | The data is an authored corpus, chunked at ingestion, shared across users / tenants, and updated by a deliberate `agentflow rag index` invocation. |
+| "What does the company policy say about refunds?" | RAG | The data is an authored corpus, chunked at ingestion, shared across users / tenants, and updated by a deliberate `agentflow rag ops index` invocation. |
 | "What's the last error message this agent saw for this customer?" | Semantic memory | Same as the first row — generated as a side-effect of the agent loop, not authored. |
 | "Give me the API reference page for the `flow.resume` method." | RAG | Authored doc corpus. |
 

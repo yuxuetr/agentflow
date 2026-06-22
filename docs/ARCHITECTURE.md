@@ -240,7 +240,8 @@ agentflow plugin install|list|inspect|uninstall   # when built with the plugin f
 agentflow trace replay|tui
 agentflow audio asr|tts
 agentflow image generate|understand
-agentflow rag search|index|collections|eval        # when built with the rag feature
+agentflow rag ops search|index|collections         # operator vector-store ops (rag feature)
+agentflow rag eval                                  # retriever eval harness (rag feature)
 ```
 
 The old bare prompt/chat command is not part of the public CLI. Interactive model
