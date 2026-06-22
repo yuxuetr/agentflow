@@ -4,8 +4,8 @@ use agentflow_core::{
   flow::{Flow, GraphNode, NodeType},
   value::FlowValue,
 };
-use agentflow_nodes::nodes::llm::LlmNode;
 use agentflow_nodes::nodes::template::TemplateNode;
+use agentflow_nodes_ai::nodes::llm::LlmNode;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::{Value, json};

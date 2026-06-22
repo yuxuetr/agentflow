@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 21 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 22 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
 
 A narrow-waist **contract kernel** (L0) was extracted by the P-A track (`docs/RFC_CRATE_ARCHITECTURE.md`; validated by `docs/ARCHITECTURE_EVALUATION_2026-06-20.md`): the runtimes never depend on each other, only on shared contracts, enforced by `cargo xtask check-arch` (eight dependency laws). The four execution paradigms (static DAG / native loop / harness / dynamic workflow) and their three-axis mental model live in `docs/ARCHITECTURE.md` § Four Execution Paradigms.
 
@@ -10,7 +10,7 @@ Recommended five-layer mental model:
 
 - **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade / `Capability` lowering), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tools` (the `Tool` contract)
 - **L1 Execution Core** (the executor): `agentflow-core` runs the L0 `Flow` IR — scheduler, checkpoint, retry-executor, resource manager, health, events — exposed via the `FlowExt` trait (`flow.run()`). IR ≠ executor; the L0 types are re-exported under `agentflow_core::*` for compatibility.
-- **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
+- **L2 Capability Adapters**: `agentflow-nodes` (tool-tier nodes), `agentflow-nodes-ai` (capability-backed nodes), `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
 - **L3 Agent / Orchestration**: `agentflow-agents` (incl. the `dynamic` module: `compile_plan_to_flow` + `DynamicWorkflowAgent`), `agentflow-skills`, `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly: YAML schema + `executor` + `diagnostics`, consumed by both `cli` and `server`), `agentflow-cli`
 - **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`
 
@@ -38,8 +38,12 @@ DAG execution engine and core abstractions:
 - `FlowValue::{Json, File, Url}` for explicit, namespaced state pool
 - Production primitives: retry/retry_executor, timeout, checkpoint, resource_manager, resource_limits, health, state_monitor, events
 
-#### L2 — agentflow-nodes
-Built-in `AsyncNode` library: 16+ node types (`llm`, `template`, `http`, `file`, `arxiv`, `markmap`, `batch`, `conditional`, `while`, `mcp`, `rag`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_edit`, `image_understand`). Crate feature flags: defaults are `["llm", "http", "file", "template"]`; `mcp`, `rag`, `batch`, `conditional` are opt-in via Cargo features. Per-modality flags for `asr` / `tts` / `text_to_image` / `image_*` are NOT individually gated today — those nodes ship in the base crate regardless of features. Factory pattern in `factory_traits.rs`.
+#### L2 — agentflow-nodes (tool tier) + agentflow-nodes-ai (capability tier)
+Split by the P-A nodes decomposition (`docs/RFC_NODES_DECOMPOSITION.md`) so the tool-tier crate carries no capability dependencies:
+- **`agentflow-nodes`** — tool-tier `AsyncNode`s (`template`, `file`, `http`, `batch`, `conditional`, `arxiv`, `markmap`). Depends only on the IR (`agentflow-core`/graph) + `agentflow-tools`. Feature flags: defaults `["http", "file", "template"]`; `batch` / `conditional` opt-in.
+- **`agentflow-nodes-ai`** — capability-backed adapters (`llm`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_understand`, `image_edit`, `mcp`, `rag`). Depends on `agentflow-nodes` (shared `common`/`error`) + the capabilities (`agentflow-llm` always; `agentflow-mcp` / `agentflow-rag` behind the `mcp` / `rag` features). The AI-modality nodes ship without per-modality gates.
+
+The workflow YAML `type:` → node dispatch lives in `agentflow-config::executor::factory` (it imports tool nodes from `agentflow-nodes` and capability nodes from `agentflow-nodes-ai`); the `type:` strings are unchanged by the split. `agentflow-worker` keeps the tool tier and pulls `agentflow-nodes-ai` only for the `llm` / `mcp` payloads it dispatches.
 
 #### L2 — agentflow-llm
 LLM provider abstraction:
@@ -225,7 +229,7 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 ### Adding New Node Type
 1. Create node module in `agentflow-nodes/src/nodes/`
 2. Implement `AsyncNode` trait from `agentflow-core`
-3. Add to factory in `agentflow-nodes/src/factories/`
+3. Register the `type:` string in `agentflow-config/src/executor/factory.rs` (capability-backed nodes live in `agentflow-nodes-ai`)
 4. Add configuration parsing and validation
 5. Create examples and tests; update documentation
 

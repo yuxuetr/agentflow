@@ -10,8 +10,10 @@ homepage.workspace = true
 
 [features]
 default = []
-mcp = ["agentflow-nodes/mcp"]
-rag = ["agentflow-nodes/rag", "dep:agentflow-rag"]
+# The capability nodes (and their mcp/rag features) moved to
+# `agentflow-nodes-ai` (P-A nodes split); forward to it.
+mcp = ["agentflow-nodes-ai/mcp"]
+rag = ["agentflow-nodes-ai/rag"]
 plugin = ["agentflow-core/plugin", "dep:agentflow-tracing"]
 
 [dependencies]
@@ -19,9 +21,9 @@ agentflow-core = { path = "../agentflow-core", version = "0.2" }
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-nodes = { path = "../agentflow-nodes", version = "0.2" }
+agentflow-nodes-ai = { path = "../agentflow-nodes-ai", version = "0.2" }
 agentflow-skills = { path = "../agentflow-skills", version = "0.1" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
-agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
 agentflow-tracing = { path = "../agentflow-tracing", version = "0.1", optional = true }
 
 anyhow = "1.0"
