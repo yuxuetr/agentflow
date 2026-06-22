@@ -13,6 +13,18 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Dynamic-workflow plans can include agent steps (P-A2.2 follow-up).**
+  `WorkflowPlanStep` gains a `kind` field (`tool` default | `agent`).
+  `compile_plan_to_flow` compiles a `kind = "agent"` step to an `AgentNode`
+  wrapping a `ReActAgent` built from the step's `params` (`model` required,
+  `persona` optional, `prompt` → the agent's `message`); the agent shares the
+  plan's tool registry, so it inherits the same sandbox / approval governance.
+  Dependency wiring now uses each step's real output key — `result` for a tool
+  step, `response` for an agent step — so a step depending on an agent receives
+  its answer. The `DynamicWorkflowAgent` planner prompt teaches the LLM the agent
+  step shape, so `agentflow workflow dynamic` can author them. Validation
+  rejects an agent step missing `model`/`prompt` and a tool step with no `tool`.
+
 - **`agentflow harness run-flow <workflow.yaml>` CLI (P-A2.2 follow-up).** Runs a
   config workflow (DAG) under harness governance: builds the `Flow` from YAML,
   runs it via `HarnessRuntime::run_flow` + `CoreFlowRunner`, and persists the
