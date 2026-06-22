@@ -389,3 +389,65 @@ fn harness_command_help_is_listed() {
   // so we never accidentally rename the constant without picking it up.
   assert_eq!(RUNTIME_VERSION, "harness/1");
 }
+
+// ── P-A2.2: `harness run-flow` (no LLM — a pure template DAG) ────────────────
+
+/// A two-node template workflow runs under harness governance: the command
+/// succeeds, reports completion, and persists a JSONL session log with the
+/// `session_started` → `step_started`(×2) → `stopped` envelope.
+#[test]
+fn harness_run_flow_governs_a_template_dag() {
+  let tmp = TempDir::new().unwrap();
+  let wf = tmp.path().join("flow.yml");
+  fs::write(
+    &wf,
+    r#"
+name: "demo"
+description: "two template nodes"
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Topic: {{ topic | default(value='AgentFlow') }}"
+  - id: summarize
+    type: template
+    dependencies: ["prepare"]
+    parameters:
+      template: "done"
+"#,
+  )
+  .unwrap();
+
+  let run_dir = tmp.path().join("run");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "harness",
+      "run-flow",
+      wf.to_str().unwrap(),
+      "--run-dir",
+      run_dir.to_str().unwrap(),
+      "--output",
+      "text",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("flow completed"));
+
+  // The governed event stream was persisted as JSONL.
+  let sessions = run_dir.join("harness").join("sessions");
+  let log = fs::read_dir(&sessions)
+    .unwrap()
+    .filter_map(|e| e.ok())
+    .map(|e| e.path())
+    .find(|p| p.extension().is_some_and(|x| x == "jsonl"))
+    .expect("a session jsonl log");
+  let body = fs::read_to_string(log).unwrap();
+  assert!(body.contains("session_started"));
+  assert!(body.contains("stopped"));
+  assert_eq!(
+    body.matches("step_started").count(),
+    2,
+    "one step_started per node"
+  );
+}

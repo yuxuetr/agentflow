@@ -370,6 +370,40 @@ enum HarnessCommands {
     #[arg(long)]
     no_default_context: bool,
   },
+  /// Run a config workflow (DAG) under harness governance (P-A2.2), streaming
+  /// the Harness envelope (`session_started` runtime=flow → per-node
+  /// `step_started` → `stopped`) to disk + optional stdout.
+  RunFlow {
+    /// Path to the workflow YAML file.
+    workflow_file: String,
+    /// Optional model override applied to the workflow's LLM nodes.
+    #[arg(long)]
+    model: Option<String>,
+    /// Initial input as key=value (repeatable); values parse as JSON when possible.
+    #[arg(long = "input")]
+    input: Vec<String>,
+    /// Security profile recorded on the session.
+    #[arg(long, default_value = "local", value_parser = ["dev", "local", "production"])]
+    profile: String,
+    /// Output format.
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
+    output: String,
+    /// Workspace root (default: current working directory).
+    #[arg(long)]
+    workspace: Option<String>,
+    /// Override the run-dir (session log root). Defaults to AGENTFLOW_RUN_DIR or ~/.agentflow/runs.
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Wall-clock timeout in milliseconds for the whole flow run.
+    #[arg(long)]
+    timeout_ms: Option<u64>,
+    /// Resume / correlate a specific session id (default: a fresh one).
+    #[arg(long)]
+    session: Option<String>,
+    /// Maximum concurrently running nodes.
+    #[arg(long, default_value_t = 8)]
+    max_concurrency: usize,
+  },
   /// Interactive multi-turn Harness chat (REPL). Each message runs one
   /// Harness turn against a fixed session id, so the conversation
   /// continues across turns (and, with --session, across restarts).
@@ -2244,6 +2278,32 @@ async fn main() {
           token_budget,
           context_refresh,
           no_default_context,
+        )
+        .await
+      }
+      HarnessCommands::RunFlow {
+        workflow_file,
+        model,
+        input,
+        profile,
+        output,
+        workspace,
+        run_dir,
+        timeout_ms,
+        session,
+        max_concurrency,
+      } => {
+        harness::run_flow::execute(
+          workflow_file,
+          model,
+          input,
+          profile,
+          output,
+          workspace,
+          run_dir,
+          timeout_ms,
+          session,
+          max_concurrency,
         )
         .await
       }

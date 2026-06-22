@@ -13,6 +13,19 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow harness run-flow <workflow.yaml>` CLI (P-A2.2 follow-up).** Runs a
+  config workflow (DAG) under harness governance: builds the `Flow` from YAML,
+  runs it via `HarnessRuntime::run_flow` + `CoreFlowRunner`, and persists the
+  Harness envelope (`session_started` runtime=`flow` → per-node `step_started` →
+  `stopped`) as JSONL like an agent session — so a deterministic workflow gets
+  the same observable / replayable governance stream. Flags: `--input key=value`
+  (repeatable), `--model`, `--profile`, `--output text|json|stream-json|json-envelope`,
+  `--workspace`, `--run-dir`, `--timeout-ms`, `--session`, `--max-concurrency`.
+  A non-completed run exits non-zero. `--runtime flow` now parses for
+  `HarnessRuntimeKind::Flow`. (Config-built nodes embed their own tools, so the
+  CLI delivers the envelope + node events; tool-call approval governance is the
+  programmatic `run_flow` + wrapped-registry path. A server route is a follow-up.)
+
 - **Node-level `step_started` events in a governed Flow run (P-A2.2 follow-up).**
   `HarnessRuntime::run_flow` now instruments the flow with an
   `agentflow-graph::EventListener` that forwards each node's start (by id) onto a
