@@ -13,6 +13,29 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`Capability` contract + Skill lowering (P-A4.3; RFC §2).** The second
+  load-bearing kernel trait lands: a *capability* is a packaged ability (persona
+  + tools + knowledge + config) that `lower()`s to *tools + context* at the
+  runtime boundary.
+  - **`agentflow-agent-spi`** gains the `Capability` trait + `Lowered { tools,
+    context }` + `CapabilityError` (`#[non_exhaustive]`). `Lowered.context`
+    reuses the existing `ContextItem` (priority + token estimate) so a lowered
+    capability slots straight into the harness/runtime prompt-budgeting
+    machinery; `Lowered::merge` is how capabilities compose by flatten. Distinct
+    from the OS-sandbox `agentflow_tools::Capability` enum (a process permission)
+    — the two never share a position.
+  - **`agentflow-skills`** implements it: `SkillCapability` bundles a manifest +
+    skill dir and `lower()`s to the Skill's tools (built-in + MCP + the P-A4.2
+    `rag_search` tool, via `build_registry`) plus its persona as one `Critical`
+    context fragment. New direct L0 dep `agentflow-skills → agentflow-agent-spi`
+    (capability → contract); `check-arch` stays OK.
+
+  A surface can now hold a heterogeneous `Vec<Box<dyn Capability>>`, lower each,
+  and merge the results into one registry + context bundle before handing a
+  runtime its inputs — the runtime never knows a Skill was involved. Full
+  surface adoption (replacing the direct `SkillBuilder::build` path) is a future
+  step; the contract + impl + composition primitive land here.
+
 - **Tiered Skill knowledge — `[[knowledge]]` gains a `backend` field (P-A4.2;
   RFC §9).** A skill's knowledge entries now choose how their content reaches
   the agent:

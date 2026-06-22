@@ -131,7 +131,10 @@ impl SkillBuilder {
 
 // ── Persona builder ──────────────────────────────────────────────────────────
 
-fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, SkillError> {
+pub(crate) fn build_persona(
+  manifest: &SkillManifest,
+  skill_dir: &Path,
+) -> Result<String, SkillError> {
   let mut parts: Vec<String> = Vec::new();
 
   // Base role

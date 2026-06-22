@@ -38,6 +38,7 @@
 //! ```
 
 pub mod builder;
+pub mod capability;
 pub mod error;
 pub mod index;
 pub mod loader;
@@ -50,6 +51,7 @@ pub mod skill_md;
 pub mod validator;
 
 pub use builder::SkillBuilder;
+pub use capability::SkillCapability;
 pub use error::SkillError;
 pub use index::{
   DEFAULT_INDEX_FILE, ResolvedSkillRegistryEntry, SkillRegistryEntry, SkillRegistryIndex,
