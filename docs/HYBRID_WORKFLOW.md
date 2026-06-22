@@ -5,12 +5,15 @@ AgentFlow supports two complementary execution modes:
 - Deterministic DAG workflows through `agentflow_core::Flow`.
 - Agent-native loops through `agentflow_agents::AgentRuntime` and `ReActAgent`.
 
-Hybrid workflow support connects those modes in both directions:
+Hybrid workflow support connects those modes in both directions, plus a third
+bridge where an agent *authors* a DAG up front:
 
 - `AgentNode` embeds an agent inside a DAG.
 - `WorkflowTool` exposes a DAG workflow as an agent-callable tool.
+- **Dynamic workflow** — an LLM plans a whole DAG once, which is then compiled to
+  a `Flow` and executed deterministically (see [Dynamic Workflow](#dynamic-workflow)).
 
-Use this pattern when most of a process should remain deterministic, recoverable, and inspectable, but one step needs agent reasoning or tool selection.
+Use the first two when most of a process should remain deterministic, recoverable, and inspectable, but one step needs agent reasoning or tool selection. Use dynamic workflow when the task is *plannable up front* but its shape varies per request — you pay one LLM "compile" and get a reproducible, governed run.
 
 ## Architecture
 
@@ -141,6 +144,71 @@ The tool output is a JSON serialization of the child workflow results. It is ret
 
 If any child workflow node returns an error, `WorkflowTool` returns an error `ToolOutput`. If the workflow exceeds its timeout, the tool call fails with a tool execution error.
 
+## Dynamic Workflow
+
+`AgentNode` and `WorkflowTool` compose a *fixed* DAG with an agent. Dynamic
+workflow is the third bridge: the agent **authors the DAG itself**, once, then
+hands it back to the deterministic executor. This slides the run down the
+binding-time axis — many scattered runtime LLM decisions collapse into one
+up-front artifact (a `Flow`) that inherits retry / checkpoint / timeout / tracing
+/ replay for free.
+
+The flow:
+
+```text
+goal (natural language)
+  -> DynamicWorkflowAgent::plan        # one LLM call -> WorkflowPlan (JSON)
+       WorkflowPlan { steps: [ WorkflowPlanStep { id, tool, params, depends_on } ] }
+  -> compile_plan_to_flow              # plan -> agentflow_graph::Flow
+       depends_on -> graph edges (independent steps run in parallel,
+                     dependent steps receive their deps' outputs)
+  -> FlowRunner::run                   # execute the Flow deterministically
+```
+
+The pieces live in `agentflow_agents::dynamic`:
+
+- **`WorkflowPlan` / `WorkflowPlanStep`** — the declarative, LLM-shaped plan
+  (`{ id, tool, params, depends_on }`). Validated for duplicate ids + dangling
+  dependencies; cycles are caught by the executor's topological sort.
+- **`compile_plan_to_flow(plan, registry)`** — compiles the plan into a real
+  `Flow` of tool calls. `depends_on` becomes graph dependencies, so the same
+  dependency-ready scheduler that runs hand-written DAGs runs the authored one.
+- **`DynamicWorkflowAgent`** — wires an LLM planner to an injected
+  `Arc<dyn FlowRunner>`. `plan(goal)` makes the planning call; `run(goal)` does
+  plan -> compile -> execute. The `FlowRunner` injection (rather than a direct
+  dependency on the executor) is what keeps `agentflow-agents` off
+  `agentflow-core`; surfaces inject `agentflow_core::CoreFlowRunner::concurrent(n)`.
+
+### CLI surface
+
+```bash
+agentflow workflow dynamic \
+  --goal "Fetch the changelog and summarize the last release" \
+  --model gpt-4o \
+  --allow-domain raw.githubusercontent.com \
+  --allow-path ./out \
+  --max-concurrency 8 \
+  [--dry-run] [--approve none|cli|auto-allow|auto-deny] [--profile dev|production] \
+  [--output text|json]
+```
+
+One LLM planning call authors a `WorkflowPlan`, which is compiled to a `Flow` and
+executed concurrently via `FlowExt`.
+
+### Governance
+
+Dynamic workflow is governed at exactly the seams the harness defines, so an
+agent-authored plan is not a security hole:
+
+- The built-in tool registry is **restrictive by default** — only `FileTool` +
+  `HttpTool` are registered (no shell), behind a `SandboxPolicy` that denies every
+  path / domain unless granted via `--allow-path` / `--allow-domain`.
+- `--dry-run` prints the authored plan and exits **without executing any tool**,
+  so you can inspect what the LLM proposed before letting it run.
+- `--approve != none` routes every tool call through the Harness approval pipeline
+  (`wrap_registry`): the planner and compiler share one `Arc<ToolRegistry>`, so the
+  approved/audited registry is exactly the one the compiled `Flow` executes against.
+
 ## Runnable Example
 
 Run the self-contained mock example:
@@ -250,6 +318,9 @@ Current support includes:
 - Agent result serialization into DAG output state.
 - Checkpoint resume that skips completed agent outputs.
 - Trace extraction from nested `agent_result`.
+- Dynamic workflow: `WorkflowPlan` -> `compile_plan_to_flow` -> `FlowRunner`, the
+  `DynamicWorkflowAgent` LLM planner, and the `agentflow workflow dynamic` CLI
+  with sandbox + approval governance.
 
 Known follow-up work:
 
@@ -257,3 +328,6 @@ Known follow-up work:
 - A fixed DAG workflow example independent of agents.
 - More examples showing Skill-backed agents inside DAGs.
 - Richer tool metadata source classification across built-in, script, MCP, and workflow tools.
+- Dynamic-workflow plans that include `AgentNode` steps (an authored DAG with a
+  non-deterministic node), and a `PlanExecuteAgent` that emits a `Flow` instead of
+  running its plan sequentially.

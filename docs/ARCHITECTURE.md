@@ -60,7 +60,11 @@ They compose — "execute code" can be a node/tool inside a `Flow`.
 Memory (knowledge / state), `Skill` (a packaged bundle — persona + tools +
 knowledge + config — that **lowers** to tools + context at the runtime boundary).
 **All four paradigms share this layer**: a DAG node, a dynamic-workflow node, and
-one step of an agent loop all call the same `Tool`s.
+one step of an agent loop all call the same `Tool`s. The lowering is now a real
+contract — `agentflow_agent_spi::Capability::lower() -> Lowered { tools, context }`,
+implemented by `SkillCapability` (P-A4.3); RAG sits on this axis too, as a
+`KnowledgeBackend` behind a Skill's `knowledge: backend = "rag"` plus the
+`rag_search` tool (P-A4.1 / P-A4.2), not a top-level mode.
 
 ### Axis 3 — Governance shell (orthogonal)
 
@@ -87,32 +91,36 @@ agent makes for itself.)
 
 ### Reality check — model vs current code
 
-This model is the **target**. As of 2026-06-21 the code implements it partially —
-be honest about which parts are production vs aspirational:
+This model is the **target**. As of 2026-06-22 the P-A track has landed the
+contract kernel and the dynamic-workflow / RAG-repositioning product work — be
+honest about which parts are production vs aspirational:
 
 | Model element | Status in code |
 |---|---|
 | Static DAG · native loop · capability substrate · `AgentNode`/`WorkflowTool` | ✅ production |
-| **Dynamic workflow** | ⚠️ **real library path (P-A4.4), not yet a CLI surface.** `agentflow_agents::dynamic::compile_plan_to_flow` compiles a declarative `WorkflowPlan` (the LLM-shaped JSON `{id, tool, params, depends_on}`) into a `Flow` of real tool calls with dependency-driven parallelism; `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes (both tested). Not yet wired into the CLI, and the legacy `PlanExecuteAgent` still runs its plan sequentially. |
-| **Harness as an orthogonal shell** | ⚠️ **wraps an `AgentRuntime` only**, not a raw `Flow` run (`HarnessRuntimeKind` = `Opaque(Box<dyn AgentRuntime>)` / `TurnDriven(...)`) |
-| "Paradigms meet only at the contract layer" | ⚠️ **becoming true via the contract kernel (P-A1, in PRs)**; pre-kernel the runtimes depended on each other's impl crates |
+| **Dynamic workflow** | ✅ **library + CLI.** `agentflow_agents::dynamic::compile_plan_to_flow` compiles a declarative `WorkflowPlan` (the LLM-shaped JSON `{id, tool, params, depends_on}`) into a `Flow` of real tool calls with dependency-driven parallelism; `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes via an injected `FlowRunner` (both tested). Surfaced as `agentflow workflow dynamic` with sandbox + approval governance (P-A4.4 / P-A4.5). Remaining: plans that include `AgentNode` steps, and a `PlanExecuteAgent` that emits a `Flow` rather than running sequentially. |
+| **Harness as an orthogonal shell** | ⚠️ **wraps an `AgentRuntime` only**, not a raw `Flow` run (`HarnessRuntimeKind` = `Opaque(Box<dyn AgentRuntime>)` / `TurnDriven(...)`); governing a `Flow` directly is P-A2.2 |
+| "Paradigms meet only at the contract layer" | ✅ **true.** The P-A contract kernel is extracted and every tracked runtime/surface dependency edge is burned — `cargo xtask check-arch` reports 0 tracked violations with an empty allowlist. The runtimes (`core` / `agents` / `harness`) depend only on contracts, never on each other's impl crates. |
 
 ### Gaps map directly onto the `P-A` roadmap
 
 | Model gap | Closing task | Status |
 |---|---|---|
-| Contractualize the four paradigms (so they compose orthogonally) | P-A1 contract kernel | ✅ this session (PRs pending merge) |
-| Dynamic workflow as a product | P-A4.4 plan→`Flow` compiler + `DynamicWorkflowAgent` (LLM plans → execute) | ✅ library; ⏳ CLI surface / `AgentNode` steps (P-A4.5) |
+| Contractualize the four paradigms (so they compose orthogonally) | P-A1 contract kernel + edge burn-down | ✅ kernel extracted, 0 tracked edges (empty allowlist) |
+| Dynamic workflow as a product | P-A4.4 plan→`Flow` compiler + `DynamicWorkflowAgent`; P-A4.5 CLI surface | ✅ library + `agentflow workflow dynamic`; ⏳ `AgentNode` steps in a plan |
+| RAG on the capability axis (`KnowledgeBackend` + `rag_search`, Skill `knowledge: backend`) | P-A4.1 / P-A4.2 / P-A4.3 | ✅ |
 | Harness governs a `Flow`, not only an agent loop | P-A2.2 | ⏳ |
-| Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ⏳ |
+| Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ✅ |
 
 In short: the three-axis model is sound and self-consistent; three paradigms +
 the capability substrate + the composition adapters are production-grade;
-**dynamic workflow now has a real, tested library path (P-A4.4) — a plan→`Flow`
-compiler and an LLM-planning agent — though not yet a CLI surface; and orthogonal
-governance (harness over a `Flow`) is still aspirational**, with its foundation
-(the contract kernel) laid this session. See `docs/RFC_CRATE_ARCHITECTURE.md` for
-the kernel design.
+**dynamic workflow now has a real, tested library path (P-A4.4) plus a CLI surface
+(P-A4.5, `agentflow workflow dynamic`), and the capability axis is contractualized
+— `Capability` lowering (P-A4.3) and RAG as a `KnowledgeBackend` behind a Skill's
+`knowledge: backend = "rag"` (P-A4.1 / P-A4.2)**. The one remaining aspirational
+piece is orthogonal governance — the harness governing a raw `Flow` run (P-A2.2).
+The contract-kernel foundation that makes the rest compose is complete (0 tracked
+dependency violations). See `docs/RFC_CRATE_ARCHITECTURE.md` for the kernel design.
 
 ## Layered Mental Model
 
@@ -129,7 +137,7 @@ contract crates everyone depends on and that depend on no implementation.
 |   agents · skills · harness · config · cli               |
 +----------------------------------------------------------+
 | L2 Capability Adapters                                   |
-|   nodes · llm · tools · mcp · rag · memory               |
+|   nodes · nodes-ai · llm · tools · mcp · rag · memory    |
 +----------------------------------------------------------+
 | L1 Execution Core (the executor)                         |
 |   core (FlowExt / FlowExecutor / scheduler / checkpoint  |
@@ -137,7 +145,8 @@ contract crates everyone depends on and that depend on no implementation.
 +----------------------------------------------------------+
 | L0 Contract Kernel (narrow waist)                        |
 |   value (FlowValue) · graph (Flow IR / AsyncNode)        |
-|   store-spi (MemoryStore) · agent-spi (AgentRuntime)     |
+|   store-spi (MemoryStore + KnowledgeBackend)             |
+|   agent-spi (AgentRuntime + Capability)                  |
 |   async-util (retry/timeout/race) · tools (Tool contract)|
 +----------------------------------------------------------+
 ```
