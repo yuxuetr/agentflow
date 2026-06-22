@@ -92,6 +92,15 @@ compose by flatten and are trivially testable. The surface merges all `Lowered`
 into one `ToolRegistry` + `ContextBuilder` and hands it to a runtime. The runtime
 forever sees only **Tool + Context + AgentRuntime**.
 
+**Status (P-A4.3):** `Capability` + `Lowered { tools, context }` +
+`CapabilityError` live in `agentflow-agent-spi::capability`; `Lowered.context`
+reuses the kernel's existing `ContextItem` (so the RFC's "ContextFragment" is
+that type), and `Lowered::merge` is the flatten primitive. `agentflow-skills`
+ships `SkillCapability`, which lowers a Skill to its tool registry contents + the
+persona as a `Critical` context fragment. Full surface adoption (merging a
+`Vec<Box<dyn Capability>>` in place of the direct `SkillBuilder::build` path) is
+the remaining follow-up.
+
 **Modeling rule:** open behavior extension points are `trait`s
 (`Tool`/`Capability`/`AgentRuntime`/`KnowledgeBackend`); closed data sets we own
 are `enum`s with `#[non_exhaustive]` (`FlowValue`, `HarnessEvent` kind,

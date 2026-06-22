@@ -489,6 +489,7 @@ dependencies = [
 name = "agentflow-skills"
 version = "0.1.0"
 dependencies = [
+ "agentflow-agent-spi",
  "agentflow-agents",
  "agentflow-mcp",
  "agentflow-memory",

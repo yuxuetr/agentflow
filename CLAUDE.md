@@ -8,7 +8,7 @@ A narrow-waist **contract kernel** (L0) was extracted by the P-A track (`docs/RF
 
 Recommended five-layer mental model:
 
-- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tools` (the `Tool` contract)
+- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade / `Capability` lowering), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tools` (the `Tool` contract)
 - **L1 Execution Core** (the executor): `agentflow-core` runs the L0 `Flow` IR — scheduler, checkpoint, retry-executor, resource manager, health, events — exposed via the `FlowExt` trait (`flow.run()`). IR ≠ executor; the L0 types are re-exported under `agentflow_core::*` for compatibility.
 - **L2 Capability Adapters**: `agentflow-nodes`, `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
 - **L3 Agent / Orchestration**: `agentflow-agents` (incl. the `dynamic` module: `compile_plan_to_flow` + `DynamicWorkflowAgent`), `agentflow-skills`, `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly: YAML schema + `executor` + `diagnostics`, consumed by both `cli` and `server`), `agentflow-cli`
@@ -80,6 +80,7 @@ Agent-native runtime and patterns:
 Declarative agent capability packages:
 - `SKILL.md` (recommended) + `skill.toml` (compatibility) parsing
 - `SkillBuilder` wires persona / model / tools / knowledge / memory / mcp_servers / security into a runnable agent. Tiered knowledge (P-A4.2): each `[[knowledge]]` entry's `backend` is `files` (default — inlined into the persona) or `rag` (indexed into a `Bm25KnowledgeBackend` + exposed as a shared `rag_search` tool, so large corpora retrieve on demand instead of bloating the prompt)
+- `SkillCapability` implements the L0 `Capability` contract (P-A4.3): `lower()` produces the Skill's tool registry contents (built-in + MCP + `rag_search`) + its persona as a `Critical` `ContextItem`, so a surface can merge it with other capabilities into one registry + context bundle for a runtime
 - Local registry (`skills.index.toml`) + marketplace catalog
 - CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
 
