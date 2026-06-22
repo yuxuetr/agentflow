@@ -78,6 +78,28 @@ impl AsyncNode for CallToolNode {
   }
 }
 
+/// A no-op node that just succeeds — used to observe `step_started` events
+/// without involving the tool/approval path.
+struct NoopNode;
+
+#[async_trait]
+impl AsyncNode for NoopNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    Ok(HashMap::new())
+  }
+}
+
+fn standard_node(id: &str, node: Arc<dyn AsyncNode>, deps: Vec<String>) -> GraphNode {
+  GraphNode {
+    id: id.to_string(),
+    node_type: NodeType::Standard(node),
+    dependencies: deps,
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }
+}
+
 /// Build a one-node Flow whose node calls `writer` through `registry`.
 fn single_tool_flow(registry: Arc<ToolRegistry>) -> Flow {
   Flow::new(vec![GraphNode {
@@ -147,6 +169,57 @@ async fn run_flow_emits_session_started_flow_runtime_and_stopped_completed() {
     result.outcome,
     agentflow_harness::FlowRunOutcome::Completed(_)
   ));
+}
+
+#[tokio::test]
+async fn run_flow_emits_step_started_per_node() {
+  let sink = Arc::new(InMemoryEventSink::new());
+  let mut harness = HarnessRuntime::for_flow().with_event_sink(sink.clone());
+
+  // Two nodes: "first" then "second" (depends on first), so order is fixed.
+  let flow = Flow::new(vec![
+    standard_node("first", Arc::new(NoopNode), Vec::new()),
+    standard_node("second", Arc::new(NoopNode), vec!["first".to_string()]),
+  ]);
+
+  harness
+    .run_flow(
+      &flow,
+      Arc::new(CoreFlowRunner::serial()),
+      HashMap::new(),
+      HarnessFlowRunOptions::default(),
+    )
+    .await
+    .expect("run_flow ok");
+
+  let events = sink.snapshot().await;
+  let step_types: Vec<String> = events
+    .iter()
+    .filter_map(|e| match &e.body {
+      HarnessEventBody::StepStarted(p) => Some(p.step_type.clone()),
+      _ => None,
+    })
+    .collect();
+  assert!(
+    step_types.contains(&"node:first".to_string()),
+    "expected a step_started for node 'first', got {step_types:?}"
+  );
+  assert!(
+    step_types.contains(&"node:second".to_string()),
+    "expected a step_started for node 'second', got {step_types:?}"
+  );
+  // Still bracketed correctly + gap-free monotonic.
+  assert!(matches!(
+    events.first().unwrap().body,
+    HarnessEventBody::SessionStarted(_)
+  ));
+  assert!(matches!(
+    events.last().unwrap().body,
+    HarnessEventBody::Stopped(_)
+  ));
+  for (i, ev) in events.iter().enumerate() {
+    assert_eq!(ev.seq, i as u64, "seq must be gap-free monotonic");
+  }
 }
 
 #[tokio::test]
