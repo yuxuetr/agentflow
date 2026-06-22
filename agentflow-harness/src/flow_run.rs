@@ -23,13 +23,42 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use agentflow_graph::events::{EventListener, WorkflowEvent};
 use agentflow_graph::{AsyncNodeInputs, AsyncNodeResult, Flow, FlowRunner};
 use chrono::Utc;
 
 use crate::context::{HarnessProfile, HarnessRuntimeKind};
 use crate::error::HarnessError;
-use crate::event::{HarnessEvent, HarnessEventBody, SessionStartedPayload, StopReason, StoppedPayload};
+use crate::event::{
+  HarnessEvent, HarnessEventBody, SessionStartedPayload, StepStartedPayload, StopReason,
+  StoppedPayload,
+};
 use crate::runtime::HarnessRuntime;
+
+/// `EventListener` that forwards each node's start (by id) onto a channel so
+/// the harness can emit a `step_started` event for it. `on_event` is sync, so
+/// it uses a non-blocking unbounded send; the harness drains the receiver.
+struct HarnessFlowListener {
+  tx: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl EventListener for HarnessFlowListener {
+  fn on_event(&self, event: &WorkflowEvent) {
+    if let WorkflowEvent::NodeStarted { node_id, .. } = event {
+      // Best-effort: a closed receiver (run already finished) just drops it.
+      let _ = self.tx.send(node_id.clone());
+    }
+  }
+}
+
+/// Sleep until `deadline`, or never (for the no-timeout case) so the `select!`
+/// timeout arm is inert when `options.timeout` is `None`.
+async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
+  match deadline {
+    Some(d) => tokio::time::sleep_until(d).await,
+    None => std::future::pending::<()>().await,
+  }
+}
 
 /// Options for a single [`HarnessRuntime::run_flow`] invocation.
 #[derive(Debug, Clone)]
@@ -96,6 +125,28 @@ pub struct HarnessFlowRunResult {
 }
 
 impl HarnessRuntime {
+  /// Emit a `step_started` event for one Flow node, taking the next seq from
+  /// the shared counter. `step_type` carries the node id (`node:<id>`) so the
+  /// frozen payload still identifies which node began.
+  async fn emit_step_started(
+    &self,
+    session_id: &str,
+    step_index: usize,
+    node_id: &str,
+  ) -> Result<(), HarnessError> {
+    let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
+    let event = HarnessEvent {
+      seq,
+      session_id: session_id.to_string(),
+      ts: Utc::now(),
+      body: HarnessEventBody::StepStarted(StepStartedPayload {
+        step_index,
+        step_type: format!("node:{node_id}"),
+      }),
+    };
+    self.sinks.dispatch(&event).await
+  }
+
   /// Govern a deterministic [`Flow`] run (P-A2.2).
   ///
   /// Emits `session_started` (runtime = [`HarnessRuntimeKind::Flow`]), executes
@@ -138,16 +189,45 @@ impl HarnessRuntime {
     self.sinks.dispatch(&started).await?;
 
     // ── execute (governance happens inside via the wrapped registry) ────────
-    let outcome = match options.timeout {
-      Some(timeout) => match tokio::time::timeout(timeout, runner.run(flow, inputs)).await {
-        Ok(Ok(state)) => classify_state(state),
-        Ok(Err(err)) => FlowRunOutcome::Failed(err.to_string()),
-        Err(_elapsed) => FlowRunOutcome::TimedOut,
-      },
-      None => match runner.run(flow, inputs).await {
-        Ok(state) => classify_state(state),
-        Err(err) => FlowRunOutcome::Failed(err.to_string()),
-      },
+    //
+    // Instrument the flow with a listener that forwards each node's start onto
+    // a channel; drain it concurrently with the run so `step_started` events
+    // interleave in real time with the tool-call / approval events the wrapped
+    // registry emits between `session_started` and `stopped`. Replaces any
+    // listener the caller had attached (the harness owns the slot here).
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let instrumented = flow.clone().with_event_listener(Arc::new(HarnessFlowListener { tx }));
+
+    let mut step_index: usize = 0;
+    let deadline = options.timeout.map(|t| tokio::time::Instant::now() + t);
+    let run_fut = runner.run(&instrumented, inputs);
+    tokio::pin!(run_fut);
+
+    let run_result: Option<Result<HashMap<String, AsyncNodeResult>, _>> = loop {
+      tokio::select! {
+        // Prefer draining node-start events so their seq precedes the run's
+        // terminal handling.
+        biased;
+        Some(node_id) = rx.recv() => {
+          self.emit_step_started(&session_id, step_index, &node_id).await?;
+          step_index += 1;
+        }
+        res = &mut run_fut => {
+          // The run finished; drain any node-starts still queued, then stop.
+          while let Ok(node_id) = rx.try_recv() {
+            self.emit_step_started(&session_id, step_index, &node_id).await?;
+            step_index += 1;
+          }
+          break Some(res);
+        }
+        _ = sleep_until_opt(deadline) => break None,
+      }
+    };
+
+    let outcome = match run_result {
+      Some(Ok(state)) => classify_state(state),
+      Some(Err(err)) => FlowRunOutcome::Failed(err.to_string()),
+      None => FlowRunOutcome::TimedOut,
     };
 
     // ── stopped ─────────────────────────────────────────────────────────────

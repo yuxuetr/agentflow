@@ -13,6 +13,15 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Node-level `step_started` events in a governed Flow run (P-A2.2 follow-up).**
+  `HarnessRuntime::run_flow` now instruments the flow with an
+  `agentflow-graph::EventListener` that forwards each node's start (by id) onto a
+  channel, drained concurrently with the run (biased `select!`) so a
+  `step_started` event (`step_type = "node:<id>"`) interleaves in real time with
+  the tool-call / approval events between `session_started` and `stopped`. The
+  Flow's execution is observed through the existing `Flow::with_event_listener`
+  seam — no executor coupling.
+
 - **Harness governs a `Flow` run — orthogonal governance MVP (P-A2.2).** The
   harness governance shell now wraps a deterministic `agentflow-graph::Flow`
   run, not just an agent loop. New `HarnessRuntime::for_flow()` +
