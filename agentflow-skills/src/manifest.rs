@@ -337,16 +337,40 @@ pub struct ToolConfig {
   pub os_sandbox: Option<bool>,
 }
 
-/// A knowledge file (markdown, txt, …) loaded into the agent's context.
+/// How a knowledge entry's content reaches the agent (P-A4.2 — tiered
+/// knowledge resolution, RFC §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeBackendKind {
+  /// Inline the file content directly into the agent's system prompt (the
+  /// persona's "Knowledge Context"). Best for small, always-relevant material.
+  /// This is the default — it preserves the pre-P-A4.2 behaviour, so existing
+  /// `[[knowledge]]` entries keep working unchanged.
+  #[default]
+  Files,
+  /// Index the file content into an in-memory keyword retrieval backend and
+  /// expose a `rag_search` tool over it; the agent retrieves only the relevant
+  /// passages on demand instead of carrying the whole corpus in its prompt.
+  /// Best for large reference material that would otherwise blow the token
+  /// budget. Backed by [`agentflow_rag::Bm25KnowledgeBackend`] — no vector DB
+  /// or network required, the skill's bundled files are indexed locally.
+  Rag,
+}
+
+/// A knowledge file (markdown, txt, …) made available to the agent.
 ///
-/// For Phase 2 the content is injected directly into the system prompt.
-/// In Phase 3 it will be indexed into a vector store for semantic retrieval.
+/// `backend` chooses how the content is surfaced: [`KnowledgeBackendKind::Files`]
+/// (default) inlines it into the system prompt; [`KnowledgeBackendKind::Rag`]
+/// indexes it and exposes a `rag_search` tool for on-demand retrieval.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeConfig {
   /// Path to the file, relative to the skill directory. Glob patterns supported.
   pub path: String,
   /// Human-readable label shown in the system prompt header.
   pub description: Option<String>,
+  /// Retrieval tier for this entry. Defaults to [`KnowledgeBackendKind::Files`].
+  #[serde(default)]
+  pub backend: KnowledgeBackendKind,
 }
 
 /// Configures the memory backend for the agent.

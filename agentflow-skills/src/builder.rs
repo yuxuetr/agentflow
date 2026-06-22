@@ -4,6 +4,7 @@ use std::sync::Arc;
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
 use agentflow_rag::embeddings::OpenAIEmbedding;
+use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
 use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
 use agentflow_tools::{Capability, SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
 use tracing::info;
@@ -11,7 +12,10 @@ use tracing::info;
 use crate::{
   error::SkillError,
   loader::resolve_knowledge_path,
-  manifest::{McpServerConfig, MemoryConfig, SecurityConfig, SkillManifest, ToolConfig},
+  manifest::{
+    KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig, SecurityConfig,
+    SkillManifest, ToolConfig,
+  },
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
 
@@ -78,6 +82,7 @@ impl SkillBuilder {
   ) -> Result<ToolRegistry, SkillError> {
     let mut registry = build_tool_registry(&manifest.tools, &manifest.security, skill_dir)?;
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
+    register_knowledge_backends(&mut registry, manifest, skill_dir)?;
     Ok(registry)
   }
 
@@ -138,9 +143,17 @@ fn build_persona(manifest: &SkillManifest, skill_dir: &Path) -> Result<String, S
   }
 
   // Knowledge files injected into context (`skill.toml` `[[knowledge]]` entries).
-  if !manifest.knowledge.is_empty() {
+  // Only the `files` tier is inlined here; `rag`-tier entries are indexed and
+  // exposed as a `rag_search` tool by `register_knowledge_backends` instead, so
+  // their (potentially large) content never lands in the system prompt.
+  let files_entries: Vec<&KnowledgeConfig> = manifest
+    .knowledge
+    .iter()
+    .filter(|kc| kc.backend == KnowledgeBackendKind::Files)
+    .collect();
+  if !files_entries.is_empty() {
     parts.push("\n\n## Knowledge Context".to_string());
-    for kc in &manifest.knowledge {
+    for kc in files_entries {
       let paths = resolve_knowledge_path(&kc.path, skill_dir);
       for path in &paths {
         let label = kc.description.clone().unwrap_or_else(|| {
@@ -463,6 +476,56 @@ fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String 
   } else {
     value.to_string()
   }
+}
+
+/// Index the `backend = "rag"` knowledge entries into an in-memory BM25 backend
+/// and register a single `rag_search` tool over them (P-A4.2). The `files`-tier
+/// entries are left for [`build_persona`] to inline; this is a no-op (and
+/// registers no tool) when the skill declares no rag-tier knowledge.
+///
+/// All rag-tier files share one backend / one `rag_search` tool so the LLM sees
+/// a single "search the knowledge base" affordance regardless of how many files
+/// back it. Each file is indexed as one document (id = path relative to the
+/// skill dir); finer chunking is a future refinement that can swap in the rag
+/// crate's chunker without changing this wiring.
+fn register_knowledge_backends(
+  registry: &mut ToolRegistry,
+  manifest: &SkillManifest,
+  skill_dir: &Path,
+) -> Result<(), SkillError> {
+  let mut documents: Vec<(String, String)> = Vec::new();
+  for kc in &manifest.knowledge {
+    if kc.backend != KnowledgeBackendKind::Rag {
+      continue;
+    }
+    for path in resolve_knowledge_path(&kc.path, skill_dir) {
+      let content = std::fs::read_to_string(&path).map_err(|e| {
+        SkillError::IoError(format!(
+          "Cannot read knowledge file {}: {}",
+          path.display(),
+          e
+        ))
+      })?;
+      let id = path
+        .strip_prefix(skill_dir)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned();
+      documents.push((id, content));
+    }
+  }
+
+  if documents.is_empty() {
+    return Ok(());
+  }
+
+  info!(
+    rag_document_count = documents.len(),
+    "Indexing rag-tier knowledge into a rag_search tool"
+  );
+  let backend = Bm25KnowledgeBackend::from_documents(documents);
+  registry.register(Arc::new(RagSearchTool::new(Arc::new(backend))));
+  Ok(())
 }
 
 /// Merge all tool constraints into a unified `SandboxPolicy`.
@@ -875,6 +938,171 @@ description = "Coding rules"
     // build() should not fail even though knowledge list is empty;
     // references/ is picked up automatically by build_persona()
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+  }
+
+  // ── P-A4.2: tiered knowledge resolution (files vs rag backend) ──────────────
+
+  /// An omitted `backend` defaults to the files tier (preserves pre-P-A4.2
+  /// behaviour so existing skills keep inlining their knowledge).
+  #[test]
+  fn knowledge_backend_defaults_to_files_when_omitted() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("k.md"), "x");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "defaulting"
+version = "0.1"
+description = "d"
+
+[persona]
+role = "r"
+
+[[knowledge]]
+path = "./k.md"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+    assert_eq!(manifest.knowledge[0].backend, KnowledgeBackendKind::Files);
+  }
+
+  /// A `backend = "rag"` entry is indexed into a `rag_search` tool and is NOT
+  /// inlined into the persona — the whole point of the rag tier.
+  #[tokio::test]
+  async fn rag_tier_knowledge_registers_tool_and_skips_persona() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("knowledge").join("manual.md"),
+      "The deployment runbook lives in the ops wiki under section seven.",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "rag-skill"
+version = "0.1"
+description = "rag-tier knowledge"
+
+[persona]
+role = "You are an ops assistant."
+
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+
+    // Persona must NOT inline rag-tier content, and with no files-tier entries
+    // there is no "Knowledge Context" header at all.
+    let persona = build_persona(&manifest, dir.path()).unwrap();
+    assert!(
+      !persona.contains("deployment runbook"),
+      "rag-tier content must not be inlined into the persona: {persona}"
+    );
+    assert!(
+      !persona.contains("## Knowledge Context"),
+      "no files-tier entries → no Knowledge Context header: {persona}"
+    );
+
+    // The registry must expose exactly one rag_search tool over the indexed file.
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert!(
+      registry.get("rag_search").is_some(),
+      "rag-tier knowledge must register a rag_search tool"
+    );
+  }
+
+  /// A files-tier entry (default) inlines into the persona and registers no
+  /// `rag_search` tool.
+  #[tokio::test]
+  async fn files_tier_knowledge_inlines_and_registers_no_rag_tool() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("knowledge").join("rules.md"),
+      "Always write idempotent tools.",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "files-skill"
+version = "0.1"
+description = "files-tier knowledge"
+
+[persona]
+role = "You are an expert."
+
+[[knowledge]]
+path = "./knowledge/rules.md"
+description = "Rules"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+
+    let persona = build_persona(&manifest, dir.path()).unwrap();
+    assert!(
+      persona.contains("Always write idempotent tools."),
+      "files-tier knowledge must be inlined into the persona: {persona}"
+    );
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert!(
+      registry.get("rag_search").is_none(),
+      "files-tier knowledge must not register a rag_search tool"
+    );
+  }
+
+  /// A skill mixing both tiers: files content inlines, rag content becomes a
+  /// tool, and the two paths don't interfere.
+  #[tokio::test]
+  async fn mixed_tier_knowledge_routes_each_entry_independently() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("k").join("inline.md"),
+      "Inline house style guide.",
+    );
+    write_file(
+      &dir.path().join("k").join("corpus.md"),
+      "Large searchable reference corpus about widgets.",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "mixed-skill"
+version = "0.1"
+description = "both tiers"
+
+[persona]
+role = "You are a helper."
+
+[[knowledge]]
+path = "./k/inline.md"
+
+[[knowledge]]
+path = "./k/corpus.md"
+backend = "rag"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+
+    let persona = build_persona(&manifest, dir.path()).unwrap();
+    assert!(persona.contains("Inline house style guide."));
+    assert!(
+      !persona.contains("searchable reference corpus"),
+      "rag-tier entry must stay out of the persona even when a files entry exists"
+    );
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    assert!(registry.get("rag_search").is_some());
   }
 
   // ── P10.4.1: per-tool os_sandbox override ──────────────────────────────────

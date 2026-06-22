@@ -186,7 +186,37 @@ path = "./knowledge/*.md"
 description = "Project operating notes"
 ```
 
-Today this context is injected directly into the agent prompt. Semantic retrieval and memory budget summarization are tracked separately in the runtime roadmap.
+### Knowledge tiers — `backend` (P-A4.2)
+
+Each `[[knowledge]]` entry chooses *how* its content reaches the agent via an
+optional `backend` field:
+
+- `backend = "files"` (default) — the file content is inlined directly into the
+  agent's system prompt (the persona's "Knowledge Context"). Best for small,
+  always-relevant material. Omitting `backend` keeps this behaviour, so existing
+  skills are unaffected.
+- `backend = "rag"` — the file content is indexed into an in-memory keyword
+  (BM25) index and exposed to the agent as a single `rag_search` tool; the agent
+  retrieves only the relevant passages on demand instead of carrying the whole
+  corpus in its prompt. Best for large reference material that would otherwise
+  blow the token budget. No vector database or network is required — the skill's
+  bundled files are indexed locally.
+
+```toml
+# Small, always-needed → inlined into the prompt.
+[[knowledge]]
+path = "./knowledge/house-style.md"
+
+# Large reference corpus → searchable via the rag_search tool.
+[[knowledge]]
+path = "./knowledge/api-reference/*.md"
+backend = "rag"
+```
+
+All `backend = "rag"` entries across a skill share one `rag_search` tool, so the
+model sees a single "search the knowledge base" affordance. `references/`
+documents are always files-tier (inlined). Each rag-tier file is currently
+indexed as one document; finer chunking is a planned refinement.
 
 ## Memory
 

@@ -209,9 +209,13 @@ for. The user-facing `rag search/index` CLI demotes to ops subcommands.
 **Status (P-A4.1):** the `KnowledgeBackend` SPI lives in `agentflow-store-spi`
 (alongside `MemoryStore`); `agentflow-rag` implements it as `Bm25KnowledgeBackend`
 (bundled-files tier) + `VectorStoreKnowledgeBackend` (vector tier) and exposes
-the `rag_search` `Tool` (`RagSearchTool`). The Skill `knowledge:` `backend:`
-wiring (P-A4.2) and the `rag search/index` → ops-subcommand demotion (P-A4.1b)
-are the remaining follow-ups.
+the `rag_search` `Tool` (`RagSearchTool`).
+
+**Status (P-A4.2):** a Skill's `[[knowledge]]` entries carry a `backend` field
+(`files` default — inline into the persona; `rag` — index the bundled files and
+expose the `rag_search` tool). `SkillBuilder` routes each entry independently.
+The `rag search/index` → ops-subcommand demotion (P-A4.1b) is the remaining
+follow-up on this axis.
 
 ## 10. Migration — strangler fig (no rewrite)
 

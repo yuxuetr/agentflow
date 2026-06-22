@@ -83,7 +83,7 @@ Agent-native runtime and patterns:
 #### L3 — agentflow-skills
 Declarative agent capability packages:
 - `SKILL.md` (recommended) + `skill.toml` (compatibility) parsing
-- `SkillBuilder` wires persona / model / tools / knowledge / memory / mcp_servers / security into a runnable agent
+- `SkillBuilder` wires persona / model / tools / knowledge / memory / mcp_servers / security into a runnable agent. Tiered knowledge (P-A4.2): each `[[knowledge]]` entry's `backend` is `files` (default — inlined into the persona) or `rag` (indexed into a `Bm25KnowledgeBackend` + exposed as a shared `rag_search` tool, so large corpora retrieve on demand instead of bloating the prompt)
 - Local registry (`skills.index.toml`) + marketplace catalog
 - CLI: `init`, `install`, `list`, `inspect`, `list-tools`, `run`, `chat`, `test`, `validate`, `index`, `marketplace`
 

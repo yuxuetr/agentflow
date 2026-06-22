@@ -13,6 +13,23 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Tiered Skill knowledge — `[[knowledge]]` gains a `backend` field (P-A4.2;
+  RFC §9).** A skill's knowledge entries now choose how their content reaches
+  the agent:
+  - `backend = "files"` (default) — inline the file into the system prompt, as
+    before. Omitting `backend` preserves the pre-P-A4.2 behaviour, so existing
+    skills are unaffected.
+  - `backend = "rag"` — index the file into an in-memory BM25 index and expose a
+    single `rag_search` tool over it (built on the P-A4.1 `KnowledgeBackend` /
+    `RagSearchTool`); the agent retrieves relevant passages on demand instead of
+    carrying the whole corpus in its prompt. No vector DB / network — the skill's
+    bundled files are indexed locally.
+
+  `SkillBuilder` routes each entry independently: `build_persona` inlines only
+  the files-tier entries, while a new `register_knowledge_backends` step indexes
+  the rag-tier entries and registers the shared `rag_search` tool. `references/`
+  documents remain files-tier. Documented in `docs/SKILLS.md`.
+
 - **RAG repositioned onto the capability axis — `KnowledgeBackend` SPI +
   `rag_search` tool (P-A4.1; RFC §9).** RAG is no longer a top-level mode; it is
   a knowledge-retrieval *capability* behind a Skill's `knowledge:` declaration.
