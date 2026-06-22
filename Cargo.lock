@@ -423,6 +423,8 @@ dependencies = [
 name = "agentflow-rag"
 version = "0.3.0-alpha"
 dependencies = [
+ "agentflow-store-spi",
+ "agentflow-tools",
  "anyhow",
  "async-trait",
  "chrono",

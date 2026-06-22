@@ -206,6 +206,13 @@ navigation is insufficient (large / dynamic / multi-tenant corpora). The eval
 harness is retained — it is the only quality gate for the cases RAG is still
 for. The user-facing `rag search/index` CLI demotes to ops subcommands.
 
+**Status (P-A4.1):** the `KnowledgeBackend` SPI lives in `agentflow-store-spi`
+(alongside `MemoryStore`); `agentflow-rag` implements it as `Bm25KnowledgeBackend`
+(bundled-files tier) + `VectorStoreKnowledgeBackend` (vector tier) and exposes
+the `rag_search` `Tool` (`RagSearchTool`). The Skill `knowledge:` `backend:`
+wiring (P-A4.2) and the `rag search/index` → ops-subcommand demotion (P-A4.1b)
+are the remaining follow-ups.
+
 ## 10. Migration — strangler fig (no rewrite)
 
 Grow the new kernel inside the existing workspace; re-point crates one at a time
