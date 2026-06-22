@@ -99,7 +99,7 @@ honest about which parts are production vs aspirational:
 |---|---|
 | Static DAG · native loop · capability substrate · `AgentNode`/`WorkflowTool` | ✅ production |
 | **Dynamic workflow** | ✅ **library + CLI.** `agentflow_agents::dynamic::compile_plan_to_flow` compiles a declarative `WorkflowPlan` (the LLM-shaped JSON `{id, tool, params, depends_on}`) into a `Flow` of real tool calls with dependency-driven parallelism; `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes via an injected `FlowRunner` (both tested). Surfaced as `agentflow workflow dynamic` with sandbox + approval governance (P-A4.4 / P-A4.5). Remaining: plans that include `AgentNode` steps, and a `PlanExecuteAgent` that emits a `Flow` rather than running sequentially. |
-| **Harness as an orthogonal shell** | ⚠️ **wraps an `AgentRuntime` only**, not a raw `Flow` run (`HarnessRuntimeKind` = `Opaque(Box<dyn AgentRuntime>)` / `TurnDriven(...)`); governing a `Flow` directly is P-A2.2 |
+| **Harness as an orthogonal shell** | ✅ **MVP (P-A2.2).** `HarnessRuntime::run_flow` governs a deterministic `Flow` run: it brackets a `FlowRunner`-driven execution with the Harness envelope (`session_started` runtime=`flow` … `stopped`), and tool calls inside the Flow's nodes are governed (approval / hooks / audit) via a `wrap_registry`-wrapped node registry sharing the harness seq counter + sinks. Follow-ups: node-level step events + a CLI/server surface. |
 | "Paradigms meet only at the contract layer" | ✅ **true.** The P-A contract kernel is extracted and every tracked runtime/surface dependency edge is burned — `cargo xtask check-arch` reports 0 tracked violations with an empty allowlist. The runtimes (`core` / `agents` / `harness`) depend only on contracts, never on each other's impl crates. |
 
 ### Gaps map directly onto the `P-A` roadmap
@@ -109,7 +109,7 @@ honest about which parts are production vs aspirational:
 | Contractualize the four paradigms (so they compose orthogonally) | P-A1 contract kernel + edge burn-down | ✅ kernel extracted, 0 tracked edges (empty allowlist) |
 | Dynamic workflow as a product | P-A4.4 plan→`Flow` compiler + `DynamicWorkflowAgent`; P-A4.5 CLI surface | ✅ library + `agentflow workflow dynamic`; ⏳ `AgentNode` steps in a plan |
 | RAG on the capability axis (`KnowledgeBackend` + `rag_search`, Skill `knowledge: backend`) | P-A4.1 / P-A4.2 / P-A4.3 | ✅ |
-| Harness governs a `Flow`, not only an agent loop | P-A2.2 | ⏳ |
+| Harness governs a `Flow`, not only an agent loop | P-A2.2 | ✅ MVP (`run_flow`); ⏳ node-level events + CLI/server surface |
 | Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ✅ |
 
 In short: the three-axis model is sound and self-consistent; three paradigms +
@@ -117,10 +117,12 @@ the capability substrate + the composition adapters are production-grade;
 **dynamic workflow now has a real, tested library path (P-A4.4) plus a CLI surface
 (P-A4.5, `agentflow workflow dynamic`), and the capability axis is contractualized
 — `Capability` lowering (P-A4.3) and RAG as a `KnowledgeBackend` behind a Skill's
-`knowledge: backend = "rag"` (P-A4.1 / P-A4.2)**. The one remaining aspirational
-piece is orthogonal governance — the harness governing a raw `Flow` run (P-A2.2).
-The contract-kernel foundation that makes the rest compose is complete (0 tracked
-dependency violations). See `docs/RFC_CRATE_ARCHITECTURE.md` for the kernel design.
+`knowledge: backend = "rag"` (P-A4.1 / P-A4.2)**. Orthogonal governance now has
+its MVP too — the harness governs a deterministic `Flow` run via
+`HarnessRuntime::run_flow` (P-A2.2), with node-level step events + a CLI/server
+surface as the remaining polish. The contract-kernel foundation that makes the
+rest compose is complete (0 tracked dependency violations). See
+`docs/RFC_CRATE_ARCHITECTURE.md` for the kernel design.
 
 ## Layered Mental Model
 

@@ -35,6 +35,7 @@ pub mod compaction;
 pub mod context;
 pub mod error;
 pub mod event;
+pub mod flow_run;
 pub mod hooks;
 pub mod hooks_runtime;
 pub mod params_summary;
@@ -55,6 +56,7 @@ pub use context::{
   ContextItem, ContextPriority, ContextProvider, HarnessContext, HarnessProfile, HarnessRuntimeKind,
 };
 pub use error::HarnessError;
+pub use flow_run::{FlowRunOutcome, HarnessFlowRunOptions, HarnessFlowRunResult};
 pub use event::{
   ApprovalDecidedPayload, ApprovalRequestedPayload, BackgroundTaskStatus,
   BackgroundTaskUpdatedPayload, HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload,
