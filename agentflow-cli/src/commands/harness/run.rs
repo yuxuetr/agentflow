@@ -375,9 +375,10 @@ pub(super) fn parse_runtime_kind(value: &str) -> Result<HarnessRuntimeKind> {
     "handoff" => Ok(HarnessRuntimeKind::Handoff),
     "blackboard" => Ok(HarnessRuntimeKind::Blackboard),
     "debate" => Ok(HarnessRuntimeKind::Debate),
+    "flow" => Ok(HarnessRuntimeKind::Flow),
     other => {
       anyhow::bail!(
-        "unsupported --runtime '{other}', expected react | plan_execute | handoff | blackboard | debate"
+        "unsupported --runtime '{other}', expected react | plan_execute | handoff | blackboard | debate | flow"
       )
     }
   }
