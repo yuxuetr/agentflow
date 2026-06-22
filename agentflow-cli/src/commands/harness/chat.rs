@@ -8,8 +8,8 @@
 //! which drives the skill's agent directly.
 //!
 //! Lines beginning with `/` are REPL **commands** (`/help`, `/session`,
-//! `/new`, `/model <name>`, `/skill <dir>`); everything else is a message
-//! to the agent.
+//! `/new`, `/clear`, `/model <name>`, `/skill <dir>`); everything else is a
+//! message to the agent.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
+use agentflow_memory::{MemoryStore, SqliteMemory};
 use agentflow_harness::{
   AgentsMdProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
@@ -212,6 +213,36 @@ pub async fn execute(
             Err(e) => eprintln!("   ⚠️  could not start new session: {e:#}"),
           }
         }
+        "clear" => {
+          // Clear the current session's conversation memory *in place* (keep
+          // the id), then rebuild so the agent re-reads the now-empty memory.
+          // The `--model` path persists to `cfg.memory_db` (SqliteMemory); that
+          // is what we clear.
+          match clear_session_memory(&cfg.memory_db, &cfg.session_id).await {
+            Ok(()) => {
+              match build_chat_runtime(&cfg, cur_skill.as_deref(), cur_model.as_deref()).await {
+                Ok((r, m, s)) => {
+                  runtime = r;
+                  model = m;
+                  skill_name = s;
+                }
+                Err(e) => eprintln!("   ⚠️  cleared, but could not rebuild runtime: {e:#}"),
+              }
+              eprintln!(
+                "   ✅ cleared conversation memory for session {} (id kept)",
+                cfg.session_id
+              );
+              if cur_skill.is_some() {
+                eprintln!(
+                  "   ℹ️  note: a skill that configures its own persistent memory \
+                   (memory.type = sqlite) keeps it separately — use /new for a \
+                   guaranteed fresh conversation."
+                );
+              }
+            }
+            Err(e) => eprintln!("   ⚠️  could not clear memory: {e:#}"),
+          }
+        }
         "model" | "skill" => eprintln!("   usage: /{name} <value>"),
         other => eprintln!("   unknown command '/{other}' — try /help"),
       }
@@ -329,6 +360,23 @@ async fn build_chat_runtime(
   Ok((runtime, model, skill_name))
 }
 
+/// Clear the conversation memory for `session_id` in the harness chat SQLite
+/// store (the `--model` path's persistent memory), keeping the session id so
+/// `/clear` resets continuity in place. A not-yet-created DB is already empty.
+async fn clear_session_memory(memory_db: &Path, session_id: &str) -> Result<()> {
+  if !memory_db.exists() {
+    return Ok(());
+  }
+  let memory = SqliteMemory::open(memory_db)
+    .await
+    .with_context(|| format!("could not open chat memory db {}", memory_db.display()))?;
+  memory
+    .clear_session(session_id)
+    .await
+    .with_context(|| format!("could not clear session '{session_id}'"))?;
+  Ok(())
+}
+
 fn print_banner(model: &str, skill: Option<&str>, cfg: &ChatConfig, approve: &str) {
   eprintln!(
     "💬 Harness chat — model: {model}{}",
@@ -350,7 +398,45 @@ fn print_help() {
   eprintln!("     /help              show this");
   eprintln!("     /session           show the current session id");
   eprintln!("     /new  (/reset)     start a fresh session (clears continuity)");
+  eprintln!("     /clear             clear this session's memory (keep the id)");
   eprintln!("     /model <name>      switch model (conversation continues)");
   eprintln!("     /skill <dir>       switch to a skill (conversation continues)");
   eprintln!("     /exit (/quit)      leave");
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use agentflow_memory::Message;
+  use tempfile::TempDir;
+
+  #[tokio::test]
+  async fn clear_session_memory_empties_the_session_but_keeps_others() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("memory.sqlite");
+    let memory = SqliteMemory::open(&db).await.unwrap();
+    memory.add_message(Message::user("s1", "hi")).await.unwrap();
+    memory.add_message(Message::user("s2", "keep me")).await.unwrap();
+
+    clear_session_memory(&db, "s1").await.unwrap();
+
+    let reopened = SqliteMemory::open(&db).await.unwrap();
+    assert!(
+      reopened.get_all("s1").await.unwrap().is_empty(),
+      "cleared session must be empty"
+    );
+    assert!(
+      !reopened.get_all("s2").await.unwrap().is_empty(),
+      "other sessions must be untouched"
+    );
+  }
+
+  #[tokio::test]
+  async fn clear_session_memory_is_ok_when_db_missing() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("does-not-exist.sqlite");
+    // A not-yet-created store is already empty — no error.
+    clear_session_memory(&db, "s1").await.unwrap();
+    assert!(!db.exists(), "must not create the db just to clear it");
+  }
 }

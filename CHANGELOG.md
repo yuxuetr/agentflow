@@ -13,6 +13,14 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow harness chat` gains a `/clear` command (H.5.1).** Clears the
+  current session's conversation memory **in place** — keeping the session id —
+  and rebuilds the runtime so the next turn starts fresh (vs. `/new`, which
+  rotates to a new id). It clears the `--model` path's persistent
+  `SqliteMemory` for the session; in `--skill` mode it prints a note that a
+  skill configuring its own persistent memory keeps it separately (use `/new`
+  for a guaranteed reset). A not-yet-created store is treated as already empty.
+
 - **`PlanExecuteAgent::run_as_flow` — plan + run on the graph engine end-to-end
   (P-A2.2 follow-up).** Building on `compile_plan_to_flow`, the new
   `run_as_flow(context, runner)` plans with the LLM, compiles the plan to a
