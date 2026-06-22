@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agentflow_graph::flow::Flow;
-use agentflow_graph::AgentFlowError;
+use agentflow_graph::{AgentFlowError, FlowRunner, FlowValue};
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
@@ -36,6 +37,10 @@ pub enum PlanExecuteError {
 
   #[error("Agent run timed out after {timeout_ms}ms")]
   Timeout { timeout_ms: u64 },
+
+  /// Compiling or executing the plan as a `Flow` failed (P-A2.2 `run_as_flow`).
+  #[error("Flow execution error: {0}")]
+  Flow(#[from] AgentFlowError),
 }
 
 /// Configuration for a [`PlanExecuteAgent`].
@@ -191,6 +196,218 @@ impl PlanExecuteAgent {
     }
     let plan = crate::dynamic::WorkflowPlan { steps: wf_steps };
     crate::dynamic::compile_plan_to_flow(&plan, Arc::clone(&self.tools))
+  }
+
+  /// Plan with the LLM, compile the plan to a [`Flow`], and execute it via the
+  /// injected `runner` (P-A2.2) — the end-to-end "emit a `Flow`" path.
+  ///
+  /// Shares the planner / memory / limit handling with [`Self::run_with_context`]
+  /// (cancellation, timeout, token + step + tool-call budgets all honoured), but
+  /// runs the plan on the deterministic graph engine — inheriting retry /
+  /// checkpoint / timeout / tracing / replay and the plan's parallelism — instead
+  /// of the hand-rolled sequential loop. The returned [`AgentRunResult`] carries
+  /// an `Observe` → `Plan` → per-node `ToolCall`/`ToolResult` → `FinalAnswer`
+  /// trace built from the flow's state pool; a failed node stops with
+  /// [`AgentStopReason::Error`].
+  ///
+  /// Surfaces inject `agentflow_core::CoreFlowRunner` (typically `concurrent(n)`).
+  pub async fn run_as_flow(
+    &mut self,
+    context: AgentContext,
+    runner: Arc<dyn FlowRunner>,
+  ) -> Result<AgentRunResult, PlanExecuteError> {
+    self.apply_context(&context);
+    info!(
+      session = %self.session_id,
+      model = %self.config.model,
+      "PlanExecuteAgent (flow mode) starting"
+    );
+
+    let mut steps = vec![AgentStep::new(
+      0,
+      AgentStepKind::Observe {
+        input: context.input.clone(),
+      },
+    )];
+    let events = vec![AgentEvent::RunStarted {
+      session_id: self.session_id.clone(),
+      model: self.config.model.clone(),
+      timestamp: context.started_at,
+    }];
+    let mut step_index = 1usize;
+    let max_steps = context.limits.max_steps.unwrap_or(self.config.max_steps);
+    let max_tool_calls = context.limits.max_tool_calls;
+    let timeout_ms = context.limits.timeout_ms;
+    let token_budget = context.limits.token_budget;
+    let cancellation_token = context.cancellation_token.clone();
+    let run_started_at = Instant::now();
+
+    self
+      .add_memory_message(Message::user_with_counter(
+        &self.session_id,
+        &context.input,
+        &*self.message_counter,
+      ))
+      .await?;
+    if is_cancelled(&cancellation_token) {
+      return Ok(self.cancelled_result("cancellation token signalled", steps, events));
+    }
+
+    let history = self.read_memory_history(20).await?;
+    let planner_response = match self
+      .call_planner(
+        &context.input,
+        &history,
+        run_started_at,
+        timeout_ms,
+        cancellation_token.clone(),
+        context.trace_context.clone(),
+      )
+      .await
+    {
+      Ok(response) => response,
+      Err(PlanExecuteError::Timeout { timeout_ms }) => {
+        return Ok(self.timeout_result(Some(timeout_ms), steps, events));
+      }
+      Err(PlanExecuteError::Cancelled { reason }) => {
+        return Ok(self.cancelled_result(reason, steps, events));
+      }
+      Err(err) => return Err(err),
+    };
+    let planner_text = planner_response.content.clone();
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &planner_text,
+        &*self.message_counter,
+      ))
+      .await?;
+
+    if let Some(budget) = token_budget {
+      let used = self.memory.session_token_count(&self.session_id).await?;
+      if used > budget {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::TokenBudgetExceeded { used, budget },
+          steps,
+          events,
+        ));
+      }
+    }
+
+    let plan = if !planner_response.tool_calls.is_empty() {
+      plan_from_tool_calls(&planner_response.tool_calls)
+    } else {
+      parse_plan(&planner_text)?
+    };
+    if plan.plan.len() > max_steps {
+      return Ok(self.stopped_result(None, AgentStopReason::MaxSteps { max_steps }, steps, events));
+    }
+    let tool_count = plan.plan.iter().filter(|s| s.tool.is_some()).count();
+    if let Some(max) = max_tool_calls
+      && tool_count > max
+    {
+      return Ok(self.stopped_result(
+        None,
+        AgentStopReason::MaxToolCalls {
+          max_tool_calls: max,
+        },
+        steps,
+        events,
+      ));
+    }
+
+    if !plan.plan.is_empty() {
+      let thought = plan
+        .plan
+        .iter()
+        .map(|step| format!("{}. {}", step.id, step.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+      steps.push(AgentStep::new(step_index, AgentStepKind::Plan { thought }));
+      step_index += 1;
+    }
+
+    // Compile + execute the plan on the deterministic engine.
+    let flow = self.compile_plan_to_flow(&plan.plan)?;
+    let state = match timeout_ms {
+      Some(ms) => {
+        match tokio::time::timeout(Duration::from_millis(ms), runner.run(&flow, HashMap::new()))
+          .await
+        {
+          Ok(result) => result?,
+          Err(_elapsed) => return Ok(self.timeout_result(Some(ms), steps, events)),
+        }
+      }
+      None => runner.run(&flow, HashMap::new()).await?,
+    };
+
+    // Translate node outputs into the step trace, in plan order.
+    let mut failure: Option<String> = None;
+    let mut last_result: Option<String> = None;
+    for planned in &plan.plan {
+      let Some(tool) = &planned.tool else {
+        continue;
+      };
+      steps.push(AgentStep::new(
+        step_index,
+        AgentStepKind::ToolCall {
+          tool: tool.clone(),
+          params: planned.params.clone(),
+        },
+      ));
+      step_index += 1;
+      match state.get(&planned.id) {
+        Some(Ok(outputs)) => {
+          let content = outputs
+            .get("result")
+            .map(flow_value_to_string)
+            .unwrap_or_default();
+          last_result = Some(content.clone());
+          steps.push(AgentStep::new(
+            step_index,
+            AgentStepKind::ToolResult {
+              tool: tool.clone(),
+              content,
+              is_error: false,
+              parts: Vec::new(),
+            },
+          ));
+          step_index += 1;
+        }
+        Some(Err(err)) => {
+          let message = err.to_string();
+          if failure.is_none() {
+            failure = Some(message.clone());
+          }
+          steps.push(AgentStep::new(
+            step_index,
+            AgentStepKind::ToolResult {
+              tool: tool.clone(),
+              content: message,
+              is_error: true,
+              parts: Vec::new(),
+            },
+          ));
+          step_index += 1;
+        }
+        None => {}
+      }
+    }
+
+    if let Some(message) = failure {
+      return Ok(self.stopped_result(None, AgentStopReason::Error { message }, steps, events));
+    }
+    let answer = plan.final_answer.clone().or(last_result);
+    if let Some(answer) = &answer {
+      steps.push(AgentStep::new(
+        step_index,
+        AgentStepKind::FinalAnswer {
+          answer: answer.clone(),
+        },
+      ));
+    }
+    Ok(self.stopped_result(answer, AgentStopReason::FinalAnswer, steps, events))
   }
 
   pub async fn run_with_context(
@@ -778,6 +995,18 @@ fn plan_from_tool_calls(calls: &[ToolCallRequest]) -> PlanExecutePlan {
   }
 }
 
+/// Read a node output `FlowValue` as its display string. `ToolCallNode` emits
+/// its result as `FlowValue::Json(Value::String(...))`; other shapes fall back
+/// to their JSON / path / url text.
+fn flow_value_to_string(value: &FlowValue) -> String {
+  match value {
+    FlowValue::Json(Value::String(s)) => s.clone(),
+    FlowValue::Json(other) => other.to_string(),
+    FlowValue::File { path, .. } => path.display().to_string(),
+    FlowValue::Url { url, .. } => url.clone(),
+  }
+}
+
 fn parse_plan(raw: &str) -> Result<PlanExecutePlan, PlanExecuteError> {
   serde_json::from_str(raw).map_err(|err| PlanExecuteError::PlanParse {
     message: err.to_string(),
@@ -904,6 +1133,53 @@ mod tests {
         .events
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
+    );
+  }
+
+  #[tokio::test]
+  async fn run_as_flow_plans_compiles_and_executes() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model(
+      "mock-pe-flow",
+      r#"{"plan":[{"id":"1","description":"echo input","tool":"echo","params":{"text":"hi"}}]}"#,
+    )
+    .await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-pe-flow"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_as_flow(
+        AgentContext::new("pe-flow-session", "say hi", "mock-pe-flow"),
+        Arc::new(agentflow_core::CoreFlowRunner::concurrent(4)),
+      )
+      .await
+      .unwrap();
+
+    // The plan ran on the Flow engine and produced the tool's output as answer.
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(result.answer.as_deref(), Some("echo: hi"));
+    // The trace carries the planned tool call + its (non-error) result + answer.
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+    );
+    assert!(result.steps.iter().any(|step| matches!(
+      &step.kind,
+      AgentStepKind::ToolResult { is_error: false, .. }
+    )));
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::FinalAnswer { .. }))
     );
   }
 
