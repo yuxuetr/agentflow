@@ -90,7 +90,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: agentflow-ui/package-lock.json
 
-      # Q3.3.3: agentflow-server's build.rs needs protoc to compile
+      # Q3.3.3: agentflow-worker-proto's build.rs needs protoc to compile
       # worker.proto. The release binary build that follows would
       # fail with "Could not find `PROTOC`" without this step.
       - name: Install protoc

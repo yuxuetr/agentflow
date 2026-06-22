@@ -57,10 +57,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # Q3.3.3: agentflow-server's build.rs invokes tonic-build, which
-      # shells out to protoc to compile worker.proto. ubuntu-latest
-      # does not preinstall protoc, so install it before clippy
-      # compiles the workspace.
+      # Q3.3.3: agentflow-worker-proto's build.rs invokes tonic-build,
+      # which shells out to protoc to compile worker.proto (transitively
+      # pulled in by the workspace). ubuntu-latest does not preinstall
+      # protoc, so install it before clippy compiles the workspace.
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -114,8 +114,11 @@ jobs:
             -D clippy::expect_used
 
   proto-validate:
-    # Q3.3.3: the `agentflow-server` build script generates prost
-    # message structs from `agentflow-server/proto/agentflow/scheduler/v1/worker.proto`.
+    # Q3.3.3: the `agentflow-worker-proto` build script generates prost
+    # message structs from
+    # `agentflow-worker-proto/proto/agentflow/scheduler/v1/worker.proto`
+    # (the proto + tonic-build moved out of `agentflow-server` in P-A2.3
+    # so the gateway crate is no longer the source of truth).
     # This standalone job validates the .proto file syntax with
     # `protoc` so a malformed .proto fails CI with a precise error
     # ("`message X` redeclared at L42") instead of letting the
@@ -133,19 +136,19 @@ jobs:
       - name: Validate worker.proto syntax
         run: |
           protoc \
-            --proto_path=agentflow-server/proto \
-            agentflow-server/proto/agentflow/scheduler/v1/worker.proto \
+            --proto_path=agentflow-worker-proto/proto \
+            agentflow-worker-proto/proto/agentflow/scheduler/v1/worker.proto \
             --descriptor_set_out=/dev/null
       - name: Reject hand-written prost drift
         # Belt-and-braces: the Rust path consumes the .proto via
-        # `tonic-build` in `agentflow-server/build.rs`. If a future
-        # PR replaces `tonic::include_proto!` with a hand-written
+        # `tonic::include_proto!` in `agentflow-worker-proto/src/lib.rs`.
+        # If a future PR replaces it with a hand-written
         # `pub mod pb { ... }` block again, fail loudly here so the
         # audit-found drift cannot silently reappear.
         run: |
           if ! grep -q 'tonic::include_proto!("agentflow.scheduler.v1")' \
-               agentflow-server/src/scheduler/grpc.rs; then
-            echo "::error::Q3.3.3: agentflow-server/src/scheduler/grpc.rs must use" \
+               agentflow-worker-proto/src/lib.rs; then
+            echo "::error::Q3.3.3: agentflow-worker-proto/src/lib.rs must use" \
                  "tonic::include_proto! so worker.proto stays the source of truth"
             exit 1
           fi
@@ -184,12 +187,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Q3.3.3: agentflow-server's build.rs needs protoc to compile
+      # Q3.3.3: agentflow-worker-proto's build.rs needs protoc to compile
       # worker.proto. Only `agentflow-cli` in this matrix transitively
-      # pulls in agentflow-server (the cargo build step below), but we
-      # install protoc unconditionally because the conditional `if:`
-      # below would skip the setup for any future package that depends
-      # on agentflow-server, leading to a surprising failure.
+      # pulls it in (the cargo build step below), but we install protoc
+      # unconditionally because the conditional `if:` below would skip
+      # the setup for any future package that depends on the proto crate,
+      # leading to a surprising failure.
       - name: Install protoc
         if: matrix.package == 'agentflow-cli'
         uses: arduino/setup-protoc@v3
@@ -307,8 +310,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       # Q3.3.3 follow-up: `agentflow-cli --features rag` transitively
-      # depends on `agentflow-server`, whose `build.rs` shells out to
-      # protoc to compile `worker.proto`. ubuntu-latest does not
+      # depends on `agentflow-worker-proto`, whose `build.rs` shells out
+      # to protoc to compile `worker.proto`. ubuntu-latest does not
       # preinstall protoc, so install it before any `cargo` invocation
       # below tries to build the workspace.
       - name: Install protoc
