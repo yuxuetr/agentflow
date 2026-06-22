@@ -13,6 +13,29 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **RAG repositioned onto the capability axis — `KnowledgeBackend` SPI +
+  `rag_search` tool (P-A4.1; RFC §9).** RAG is no longer a top-level mode; it is
+  a knowledge-retrieval *capability* behind a Skill's `knowledge:` declaration.
+  - **`agentflow-store-spi`** gains the `KnowledgeBackend` trait + `KnowledgeChunk`
+    / `KnowledgeError` (`#[non_exhaustive]`) — the kernel contract for "given a
+    query, return relevant passages", living alongside `MemoryStore` so
+    `agentflow-skills` and `agentflow-rag` agree on the shape without `skills`
+    depending on the `rag` implementation crate.
+  - **`agentflow-rag`** implements the SPI two ways: `Bm25KnowledgeBackend` (an
+    in-memory BM25 keyword index — no network/embeddings, for the bundled-files
+    tier) and `VectorStoreKnowledgeBackend` (semantic retrieval over any
+    `VectorStore` via a `RetrievalStrategy`, for large/dynamic corpora). It also
+    exposes `RagSearchTool` — a registry-installable `rag_search` `Tool`
+    (idempotent, read-only) wrapping any `Arc<dyn KnowledgeBackend>`, so an agent
+    retrieves on demand instead of having the whole corpus inlined into its
+    prompt. `agentflow-rag` now depends downward on `agentflow-store-spi` +
+    `agentflow-tools` (both L0); `check-arch` stays OK.
+
+  Deferred to a P-A4.1b follow-up: demoting the user-facing `rag search` /
+  `rag index` CLI to ops subcommands (pure UX regrouping, separable from the
+  architectural repositioning). Skill `knowledge:` `backend:` wiring is P-A4.2,
+  which sits on this contract.
+
 - **`agents → core` edge burned — the P-A contract-kernel allowlist is now EMPTY
   (0 tracked architectural violations).** The last tracked runtime-isolation
   edge is gone: `agentflow-agents` no longer depends on the `agentflow-core`

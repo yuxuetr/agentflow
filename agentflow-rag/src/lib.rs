@@ -54,18 +54,25 @@ pub mod embeddings;
 pub mod error;
 pub mod eval;
 pub mod indexing;
+pub mod knowledge;
 pub mod reranking;
 pub mod retrieval;
 pub mod sources;
+pub mod tool;
 pub mod types;
 pub mod vectorstore;
 
 // Re-exports for convenience
 pub use error::{RAGError, Result};
+pub use knowledge::{Bm25KnowledgeBackend, VectorStoreKnowledgeBackend};
+pub use tool::RagSearchTool;
 pub use types::{
   ChunkingConfig, ChunkingStrategy, CollectionConfig, Condition, DistanceMetric, Document,
   EmbeddingConfig, Filter, IndexingStats, MetadataValue, SearchResult, TextChunk,
 };
+// The kernel knowledge contract is implemented here; re-export it so callers
+// can name the SPI types without a direct `agentflow-store-spi` dependency.
+pub use agentflow_store_spi::{KnowledgeBackend, KnowledgeChunk, KnowledgeError};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

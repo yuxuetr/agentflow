@@ -18,6 +18,12 @@ pdf = ["dep:pdf-extract"]
 html = ["dep:scraper"]
 
 [dependencies]
+# Kernel contracts (P-A4.1): `KnowledgeBackend` SPI implemented here, `Tool`
+# contract for the `rag_search` tool. Both are L0 — capability/tool tier
+# crates depend downward onto the contract kernel (RFC §3 layering).
+agentflow-store-spi = { path = "../agentflow-store-spi", version = "0.1" }
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
