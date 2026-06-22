@@ -13,6 +13,19 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`PlanExecuteAgent` can emit a `Flow` (P-A2.2 follow-up).**
+  `PlanExecuteAgent::compile_plan_to_flow(steps)` compiles a Plan-and-Execute
+  plan's tool steps into an executable `agentflow-graph::Flow` (reusing the
+  dynamic-workflow compiler), so a plan can run on the deterministic graph
+  engine — inheriting retry / checkpoint / timeout / tracing / replay, and
+  parallelism where the plan allows — instead of the hand-rolled sequential
+  loop. `PlanExecuteStep` gains an optional `depends_on`: an empty list chains
+  the step after the previous tool step (preserving sequential semantics by
+  default), while a non-empty list opts into a parallel DAG. Pure-reasoning
+  steps (`tool = None`) carry no node and are dropped. (The legacy sequential
+  `run_with_context` path is unchanged; wiring an end-to-end LLM-planning
+  `run_as_flow` is a follow-up.)
+
 - **Dynamic-workflow plans can include agent steps (P-A2.2 follow-up).**
   `WorkflowPlanStep` gains a `kind` field (`tool` default | `agent`).
   `compile_plan_to_flow` compiles a `kind = "agent"` step to an `AgentNode`

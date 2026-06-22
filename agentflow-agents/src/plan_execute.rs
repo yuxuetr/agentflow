@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use agentflow_graph::flow::Flow;
+use agentflow_graph::AgentFlowError;
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
@@ -82,6 +84,12 @@ pub struct PlanExecuteStep {
   pub tool: Option<String>,
   #[serde(default)]
   pub params: Value,
+  /// Optional explicit dependencies (P-A2.2). When emitting a `Flow`
+  /// ([`PlanExecuteAgent::compile_plan_to_flow`]), an empty `depends_on` chains
+  /// the step after the previous tool step (preserving sequential semantics);
+  /// a non-empty list lets the planner express a parallel DAG instead.
+  #[serde(default)]
+  pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +149,48 @@ impl PlanExecuteAgent {
   pub fn with_memory_hook(mut self, hook: Arc<dyn AgentMemoryHook>) -> Self {
     self.memory_hook = Some(hook);
     self
+  }
+
+  /// Compile a plan's tool steps into an executable [`Flow`] (P-A2.2) — the
+  /// "emit a `Flow`" path that lets a Plan-and-Execute plan run on the
+  /// deterministic graph engine (inheriting retry / checkpoint / timeout /
+  /// tracing / replay, and parallelism where the plan allows) instead of the
+  /// hand-rolled sequential loop in [`Self::run_with_context`].
+  ///
+  /// Reuses [`crate::dynamic::compile_plan_to_flow`]. Pure-reasoning steps
+  /// (`tool = None`) carry no executable node and are dropped. Ordering is
+  /// preserved by default: a step with an empty `depends_on` is chained after
+  /// the previous tool step, so a plan that didn't ask for parallelism still
+  /// runs in order; a step that declares `depends_on` opts into a parallel DAG.
+  ///
+  /// A reasoning step cannot be a dependency target (it produces no output); a
+  /// dependent referencing one is rejected by the underlying compiler as a
+  /// dangling dependency.
+  pub fn compile_plan_to_flow(&self, steps: &[PlanExecuteStep]) -> Result<Flow, AgentFlowError> {
+    let mut wf_steps = Vec::new();
+    let mut prev_tool_id: Option<String> = None;
+    for step in steps {
+      let Some(tool) = &step.tool else {
+        continue; // reasoning-only step: nothing to execute.
+      };
+      let depends_on = if !step.depends_on.is_empty() {
+        step.depends_on.clone()
+      } else if let Some(prev) = &prev_tool_id {
+        vec![prev.clone()]
+      } else {
+        Vec::new()
+      };
+      wf_steps.push(crate::dynamic::WorkflowPlanStep {
+        id: step.id.clone(),
+        kind: crate::dynamic::PlanStepKind::Tool,
+        tool: tool.clone(),
+        params: step.params.clone(),
+        depends_on,
+      });
+      prev_tool_id = Some(step.id.clone());
+    }
+    let plan = crate::dynamic::WorkflowPlan { steps: wf_steps };
+    crate::dynamic::compile_plan_to_flow(&plan, Arc::clone(&self.tools))
   }
 
   pub async fn run_with_context(
@@ -719,6 +769,7 @@ fn plan_from_tool_calls(calls: &[ToolCallRequest]) -> PlanExecutePlan {
       description: String::new(),
       tool: Some(call.name.clone()),
       params: call.arguments.clone(),
+      depends_on: Vec::new(),
     })
     .collect();
   PlanExecutePlan {
@@ -991,5 +1042,77 @@ providers:
     AgentFlow::init_with_config(config_path.to_str().unwrap())
       .await
       .unwrap();
+  }
+
+  // ── P-A2.2: emit a Flow (compile_plan_to_flow bridge) ──────────────────────
+
+  fn agent_with_echo() -> PlanExecuteAgent {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    PlanExecuteAgent::new(
+      PlanExecuteConfig::new("m"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+  }
+
+  fn tool_step(id: &str, deps: Vec<&str>) -> PlanExecuteStep {
+    PlanExecuteStep {
+      id: id.into(),
+      description: "d".into(),
+      tool: Some("echo".into()),
+      params: json!({}),
+      depends_on: deps.into_iter().map(String::from).collect(),
+    }
+  }
+
+  #[test]
+  fn compile_plan_to_flow_chains_steps_sequentially_by_default() {
+    let agent = agent_with_echo();
+    let steps = vec![tool_step("s1", vec![]), tool_step("s2", vec![]), tool_step("s3", vec![])];
+    let flow = agent.compile_plan_to_flow(&steps).expect("compiles");
+    assert_eq!(flow.nodes().len(), 3);
+    // Empty depends_on chains each step after the previous one.
+    assert!(flow.nodes().get("s1").unwrap().dependencies.is_empty());
+    assert_eq!(flow.nodes().get("s2").unwrap().dependencies, vec!["s1".to_string()]);
+    assert_eq!(flow.nodes().get("s3").unwrap().dependencies, vec!["s2".to_string()]);
+  }
+
+  #[test]
+  fn compile_plan_to_flow_honors_explicit_depends_on() {
+    let agent = agent_with_echo();
+    // s3 explicitly depends on s1 (not the previous s2) — a parallel branch.
+    let steps = vec![
+      tool_step("s1", vec![]),
+      tool_step("s2", vec![]),
+      tool_step("s3", vec!["s1"]),
+    ];
+    let flow = agent.compile_plan_to_flow(&steps).expect("compiles");
+    assert_eq!(
+      flow.nodes().get("s3").unwrap().dependencies,
+      vec!["s1".to_string()]
+    );
+  }
+
+  #[test]
+  fn compile_plan_to_flow_skips_reasoning_steps() {
+    let agent = agent_with_echo();
+    let steps = vec![
+      tool_step("s1", vec![]),
+      PlanExecuteStep {
+        id: "think".into(),
+        description: "reason".into(),
+        tool: None,
+        params: json!({}),
+        depends_on: vec![],
+      },
+      tool_step("s2", vec![]),
+    ];
+    let flow = agent.compile_plan_to_flow(&steps).expect("compiles");
+    // The reasoning step has no node; s2 chains after the previous *tool* step.
+    assert_eq!(flow.nodes().len(), 2);
+    assert!(flow.nodes().contains_key("s1"));
+    assert!(flow.nodes().contains_key("s2"));
+    assert_eq!(flow.nodes().get("s2").unwrap().dependencies, vec!["s1".to_string()]);
   }
 }
