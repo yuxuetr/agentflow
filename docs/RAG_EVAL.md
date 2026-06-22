@@ -365,5 +365,6 @@ conversion utility for BEIR is on the roadmap.
 
 - [`docs/PHASE3_CHANGELOG.md`](../agentflow-rag/PHASE3_CHANGELOG.md) — RAG
   pipeline history.
-- `agentflow rag search|index|collections` — operational CLI on top of the
-  same retrieval stack.
+- `agentflow rag ops search|index|collections` — operator CLI for managing the
+  vector store directly, on top of the same retrieval stack (P-A4.1b). The
+  agent-facing retrieval path is the `rag_search` tool a Skill exposes.

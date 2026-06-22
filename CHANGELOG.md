@@ -11,6 +11,16 @@ file's first entry).
 _New entries go here. Will roll into the next tag (likely
 `v1.0.0-rc.2` or `v1.0.0`)._
 
+### Changed
+
+- **`rag search` / `index` / `collections` CLI demoted under an `ops` group
+  (P-A4.1b; RFC §9).** RAG's agent-facing retrieval path is now the `rag_search`
+  tool a Skill exposes (P-A4.1/P-A4.2), so the direct vector-store commands move
+  to `agentflow rag ops {search,index,collections}` — operator affordances for
+  inspecting/populating the store out-of-band. `agentflow rag eval` stays
+  top-level (it is the retriever quality gate). **Breaking** for scripts calling
+  the old `agentflow rag search|index|collections` paths; flags are unchanged.
+
 ### Added
 
 - **`Capability` contract + Skill lowering (P-A4.3; RFC §2).** The second

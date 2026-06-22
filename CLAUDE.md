@@ -112,7 +112,7 @@ Unified user interface:
 - `config init|show|validate`, `llm models`
 - `skill *`, `mcp list-tools|call-tool|list-resources`, `trace replay|tui`
 - `audio asr|tts`, `image generate|understand`
-- `rag search|index|collections` (feature-gated)
+- `rag ops search|index|collections` (operator vector-store ops) + `rag eval` (feature-gated)
 
 #### L4 — agentflow-tracing
 Observability:
@@ -168,7 +168,7 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - **MCP integration** — client, MCPNode, CLI commands (`list-tools`, `call-tool`, `list-resources`), workflow examples
 - **Agent-native runtime** — ReAct, Plan-Execute, Reflection, memory summary backends, hybrid composition (`AgentNode` / `WorkflowTool`)
 - **Multi-agent collaboration** — Handoff, Blackboard, Debate supervisors; `multi_agent` YAML node
-- **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag search|index|collections|eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
+- **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag ops search|index|collections` (operator vector-store ops) + `rag eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
 - **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks, checkpoint recovery, retry, resource management, structured logging, Prometheus metrics
 - **Tracing** — `EventListener`, JSONL/SQLite/Postgres persistence, `trace replay` TUI, OTel span model + W3C `traceparent` propagation (inbound on workflow start + outbound through LLM HTTP calls). First-party OTLP transport (HTTP/gRPC + TLS + auth) is **deferred** (Q2.3.3) — operators wire their own `OtelSpanSink`.
 - **OS-level sandbox** — macOS sandbox-exec / Linux seccomp backends for shell/script tools (opt-in via `security.os_sandbox`); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output

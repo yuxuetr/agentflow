@@ -1269,7 +1269,7 @@ fn rag_eval_rejects_unknown_format() {
 fn rag_search_help_lists_json_envelope_format() {
   Command::cargo_bin("agentflow")
     .unwrap()
-    .args(["rag", "search", "--help"])
+    .args(["rag", "ops", "search", "--help"])
     .assert()
     .success()
     .stdout(predicate::str::contains("json-envelope"));

@@ -223,8 +223,11 @@ the `rag_search` `Tool` (`RagSearchTool`).
 **Status (P-A4.2):** a Skill's `[[knowledge]]` entries carry a `backend` field
 (`files` default — inline into the persona; `rag` — index the bundled files and
 expose the `rag_search` tool). `SkillBuilder` routes each entry independently.
-The `rag search/index` → ops-subcommand demotion (P-A4.1b) is the remaining
-follow-up on this axis.
+
+**Status (P-A4.1b):** the user-facing `rag search` / `rag index` /
+`rag collections` CLI is demoted under an `ops` group (`agentflow rag ops
+<cmd>`); `rag eval` stays top-level (it is the quality gate). The agent-facing
+retrieval path is the `rag_search` tool a Skill exposes.
 
 ## 10. Migration — strangler fig (no rewrite)
 
