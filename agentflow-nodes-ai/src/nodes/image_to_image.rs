@@ -1,6 +1,5 @@
 //! ImageToImage Node - Transforms an image based on a text prompt.
 
-use crate::common::utils::{flow_value_to_string, load_data_uri_from_source};
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
@@ -9,6 +8,7 @@ use agentflow_core::{
 use agentflow_llm::{
   AgentFlow, providers::modality::Image2ImageRequest as ModalityImage2ImageRequest,
 };
+use agentflow_nodes::common::utils::{flow_value_to_string, load_data_uri_from_source};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
