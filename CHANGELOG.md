@@ -36,6 +36,30 @@ _New entries go here. Will roll into the next tag (likely
   architectural repositioning). Skill `knowledge:` `backend:` wiring is P-A4.2,
   which sits on this contract.
 
+- **`agentflow-nodes` split into a tool tier + `agentflow-nodes-ai` capability
+  tier (P-A0.5 / P-A4 nodes decomposition; `docs/RFC_NODES_DECOMPOSITION.md`).**
+  The monolithic node library is divided so the tool-tier crate carries zero
+  capability dependencies:
+  - **`agentflow-nodes`** now ships only the tool-tier `AsyncNode`s
+    (`template`, `file`, `http`, `batch`, `conditional`, `arxiv`, `markmap`)
+    and depends on just the IR + `agentflow-tools`. Its `agentflow-llm` /
+    `agentflow-mcp` / `agentflow-rag` deps (and the `llm` / `mcp` / `rag`
+    features) are gone; defaults stay `["http", "file", "template"]`.
+  - **`agentflow-nodes-ai`** (new) carries the capability-backed adapters
+    (`llm`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_understand`,
+    `image_edit`, plus `mcp` / `rag` behind matching features) and depends on
+    `agentflow-nodes` for the shared `common` / `error` modules.
+
+  The workflow YAML `type:` strings are unchanged: the dispatch table in
+  `agentflow-config::executor::factory` now imports tool nodes from
+  `agentflow-nodes` and capability nodes from `agentflow-nodes-ai`. Consumers
+  updated accordingly — `agentflow-cli` forwards `mcp` / `rag` to
+  `agentflow-config`, and `agentflow-worker` keeps the tool tier while pulling
+  `agentflow-nodes-ai` (with `mcp`) only for the `llm` / `mcp` payloads it
+  dispatches. With the capability deps removed from the tool tier, the
+  `nodes → llm`, `nodes → mcp`, and `nodes → rag` latent edges in
+  `cargo xtask check-arch` are resolved and pruned from `ARCH_LATENT_EDGES`.
+
 - **`agents → core` edge burned — the P-A contract-kernel allowlist is now EMPTY
   (0 tracked architectural violations).** The last tracked runtime-isolation
   edge is gone: `agentflow-agents` no longer depends on the `agentflow-core`

@@ -26,10 +26,10 @@ path = "src/main.rs"
 # already depends on `agentflow-mcp` directly); the gate only
 # matters when a workflow uses `type: mcp`.
 default = ["plugin", "rag"]
-# Features forward to `agentflow-config` so the moved `executor` compiles the
-# matching capability nodes, while still gating the CLI's own feature commands.
-mcp = ["agentflow-nodes/mcp", "agentflow-config/mcp"]
-rag = ["agentflow-nodes/rag", "agentflow-rag", "agentflow-config/rag"]
+# Features forward to `agentflow-config` (which owns the executor + the
+# capability-node deps), while still gating the CLI's own feature commands.
+mcp = ["agentflow-config/mcp"]
+rag = ["agentflow-rag", "agentflow-config/rag"]
 # Enables the subprocess plugin runtime for `type: plugin` workflow nodes.
 # See docs/PLUGIN_DESIGN.md.
 plugin = ["agentflow-core/plugin", "agentflow-config/plugin"]
@@ -38,7 +38,6 @@ plugin = ["agentflow-core/plugin", "agentflow-config/plugin"]
 # Core dependencies
 agentflow-config = { path = "../agentflow-config", version = "0.1" }
 agentflow-core = { path = "../agentflow-core", version = "0.2" }
-agentflow-nodes = { path = "../agentflow-nodes", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-mcp = { path = "../agentflow-mcp", version = "0.2" }
 agentflow-rag    = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
@@ -120,6 +119,9 @@ sha2 = "0.10"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"
+# `workflow_tests` builds Flows directly with tool + capability nodes.
+agentflow-nodes = { path = "../agentflow-nodes" }
+agentflow-nodes-ai = { path = "../agentflow-nodes-ai" }
 # Used by the P2.5 server-mode integration tests to spin up the
 # `agentflow-server` HTTP gateway against the test Postgres so the
 # CLI client can drive it end-to-end. Self-skips without
