@@ -21,11 +21,13 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_memory::{MemoryStore, SqliteMemory};
 use agentflow_harness::{
-  AgentsMdProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessProfile,
+  AgentsMdProvider, ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
+  ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
   RoadmapMdProvider, SinkChain, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir,
   wrap_registry,
 };
+use tokio::sync::{mpsc, oneshot};
 use agentflow_llm::AgentFlow;
 use agentflow_tools::ToolRegistry;
 
@@ -40,6 +42,9 @@ use super::{parse_profile, resolve_run_dir};
 struct ChatConfig {
   profile: HarnessProfile,
   approve_mode: ApproveMode,
+  /// H.2.1: when set (interactive `--approve cli` in chat), used in place of
+  /// `approve_mode.provider()` so approvals route through the REPL's stdin.
+  approval_override: Option<Arc<dyn ApprovalProvider>>,
   runtime_kind: HarnessRuntimeKind,
   context_budget: Option<usize>,
   context_refresh: bool,
@@ -48,6 +53,107 @@ struct ChatConfig {
   seq_counter: Arc<AtomicU64>,
   memory_db: PathBuf,
   session_id: String,
+}
+
+/// A pending approval handed to the REPL: the request + a one-shot channel to
+/// return the user's decision on.
+type ApprovalAsk = (ApprovalRequest, oneshot::Sender<ApprovalDecision>);
+
+/// Interactive `--approve cli` provider for `harness chat` (H.2.1). The blocking
+/// [`agentflow_harness::CliApprovalProvider`] can't be used here because it reads
+/// `std::io::stdin` while the REPL owns the async tokio stdin reader — the two
+/// race. Instead this forwards each approval request to the REPL loop over a
+/// channel and awaits the decision the loop reads from the *same* shared stdin.
+struct ChatApprovalProvider {
+  tx: mpsc::UnboundedSender<ApprovalAsk>,
+}
+
+#[async_trait::async_trait]
+impl ApprovalProvider for ChatApprovalProvider {
+  fn name(&self) -> &str {
+    "chat-cli"
+  }
+
+  async fn request(&self, request: ApprovalRequest) -> Result<ApprovalDecision, HarnessError> {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    self
+      .tx
+      .send((request, resp_tx))
+      .map_err(|_| HarnessError::Other("chat approval channel closed".into()))?;
+    resp_rx
+      .await
+      .map_err(|_| HarnessError::Other("chat approval response dropped".into()))
+  }
+}
+
+/// Parse a one-line approval response into an outcome + scope. Mirrors the
+/// `CliApprovalProvider` keys (`y`/`s`/`r`/`n`/`q`); anything else (incl. EOF)
+/// is a fail-closed deny.
+fn parse_approval_response(input: &str) -> (ApprovalOutcome, ApprovalScope, Option<String>) {
+  match input.trim().to_ascii_lowercase().as_str() {
+    "y" | "yes" | "allow" => (
+      ApprovalOutcome::Allow,
+      ApprovalScope::Once,
+      Some("user allowed once".into()),
+    ),
+    "s" | "session" => (
+      ApprovalOutcome::Allow,
+      ApprovalScope::Session,
+      Some("user allowed for session".into()),
+    ),
+    "r" | "run" => (
+      ApprovalOutcome::Allow,
+      ApprovalScope::Run,
+      Some("user allowed for run".into()),
+    ),
+    "q" | "quit" => (
+      ApprovalOutcome::DenyAndStop,
+      ApprovalScope::Once,
+      Some("user denied and requested stop".into()),
+    ),
+    other => (
+      ApprovalOutcome::Deny,
+      ApprovalScope::Once,
+      Some(if other.is_empty() || matches!(other, "n" | "no") {
+        "user denied".into()
+      } else {
+        format!("unrecognised input '{other}' — defaulting to deny")
+      }),
+    ),
+  }
+}
+
+/// Print the approval prompt to stderr and read one decision line from the
+/// REPL's shared stdin reader. EOF / read error → fail-closed deny.
+async fn prompt_and_read_decision(
+  request: &ApprovalRequest,
+  lines: &mut tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+) -> ApprovalDecision {
+  use std::io::Write;
+  eprintln!("\n── Harness approval request ──");
+  eprintln!("  tool: {} (step={})", request.tool, request.step_index);
+  eprintln!(
+    "  risk: {:?}   idempotency: {:?}",
+    request.risk, request.idempotency
+  );
+  eprintln!("  reason: {}", request.reason);
+  eprintln!("  params: {}", request.params_summary);
+  eprint!("Allow this call? [y]es / [s]ession / [r]un / [n]o / [q]uit: ");
+  std::io::stderr().flush().ok();
+
+  let line = match lines.next_line().await {
+    Ok(Some(line)) => line,
+    _ => String::new(), // EOF / error → deny
+  };
+  let (decision, scope, reason) = parse_approval_response(&line);
+  ApprovalDecision {
+    request_id: request.id.clone(),
+    decision,
+    scope,
+    decided_by: "user".into(),
+    decided_at: chrono::Utc::now(),
+    reason,
+  }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -73,15 +179,14 @@ pub async fn execute(
   if skill_dir.is_none() && model_override.is_none() {
     anyhow::bail!("either --skill or --model is required");
   }
-  // The REPL owns stdin, so a stdin-based approval prompt can't read it
-  // (the two readers race). Reject the broken combo up front.
-  if matches!(approve_mode, ApproveMode::Cli) {
-    anyhow::bail!(
-      "`--approve cli` is not supported in `harness chat` (the REPL owns stdin). \
-       Use `--approve auto-allow` or `--approve auto-deny` here, or use \
-       `agentflow harness run` for interactive per-call approval."
-    );
-  }
+
+  // H.2.1: interactive `--approve cli` in chat. The REPL owns the async stdin
+  // reader, so instead of the blocking `CliApprovalProvider` we install a
+  // channel-based `ChatApprovalProvider`; approval requests are answered by the
+  // turn loop below, which reads the decision from the same shared reader.
+  let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalAsk>();
+  let approval_override: Option<Arc<dyn ApprovalProvider>> = matches!(approve_mode, ApproveMode::Cli)
+    .then(|| Arc::new(ChatApprovalProvider { tx: approval_tx.clone() }) as Arc<dyn ApprovalProvider>);
 
   let workspace = workspace
     .map(PathBuf::from)
@@ -102,6 +207,7 @@ pub async fn execute(
   let mut cfg = ChatConfig {
     profile,
     approve_mode,
+    approval_override,
     runtime_kind,
     context_budget,
     context_refresh,
@@ -126,7 +232,7 @@ pub async fn execute(
   print_banner(&model, skill_name.as_deref(), &cfg, &approve);
 
   let mut lines = BufReader::new(tokio::io::stdin()).lines();
-  loop {
+  'repl: loop {
     eprint!("› ");
     use std::io::Write;
     std::io::stderr().flush().ok();
@@ -280,14 +386,29 @@ pub async fn execute(
 
     let run_future = runtime.run(options);
     tokio::pin!(run_future);
-    let result = tokio::select! {
-      biased;
-      r = &mut run_future => r,
-      _ = crate::shutdown::shutdown_signal() => {
-        cancel.cancel();
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut run_future).await;
-        eprintln!("\n🛑 turn cancelled");
-        continue;
+    // Drive the turn, servicing interactive approval requests (H.2.1) as they
+    // arrive — the approval provider blocks the tool call until we answer here,
+    // reading the decision from the same stdin reader.
+    let result = loop {
+      tokio::select! {
+        biased;
+        r = &mut run_future => break r,
+        Some((req, resp_tx)) = approval_rx.recv() => {
+          if tty {
+            // Clear the "thinking…" line before the prompt.
+            use std::io::Write;
+            eprint!("\r\x1b[K");
+            std::io::stderr().flush().ok();
+          }
+          let decision = prompt_and_read_decision(&req, &mut lines).await;
+          let _ = resp_tx.send(decision);
+        }
+        _ = crate::shutdown::shutdown_signal() => {
+          cancel.cancel();
+          let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut run_future).await;
+          eprintln!("\n🛑 turn cancelled");
+          continue 'repl;
+        }
       }
     };
     if tty {
@@ -324,7 +445,13 @@ async fn build_chat_runtime(
     .await
     .context("failed to construct the inner Harness agent")?;
 
-  if let Some(provider) = cfg.approve_mode.provider() {
+  // H.2.1: prefer the REPL-routed approval provider when present (interactive
+  // `--approve cli` in chat); otherwise fall back to the mode's default.
+  if let Some(provider) = cfg
+    .approval_override
+    .clone()
+    .or_else(|| cfg.approve_mode.provider())
+  {
     let hook_config = HookConfig::new(
       cfg.session_id.clone(),
       provider,
@@ -407,8 +534,78 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use agentflow_harness::ApprovalRisk;
   use agentflow_memory::Message;
+  use agentflow_tools::ToolIdempotency;
   use tempfile::TempDir;
+
+  fn sample_request(id: &str) -> ApprovalRequest {
+    ApprovalRequest {
+      id: id.into(),
+      session_id: "s".into(),
+      step_index: 0,
+      tool: "shell".into(),
+      source: None,
+      permissions: vec![],
+      idempotency: ToolIdempotency::NonIdempotent,
+      params_summary: serde_json::Value::Null,
+      risk: ApprovalRisk::High,
+      reason: "test".into(),
+      requested_at: chrono::Utc::now(),
+      expires_at: None,
+    }
+  }
+
+  #[test]
+  fn parse_approval_response_maps_each_key() {
+    use ApprovalOutcome::*;
+    use ApprovalScope::*;
+    assert!(matches!(parse_approval_response("y"), (Allow, Once, _)));
+    assert!(matches!(parse_approval_response("yes"), (Allow, Once, _)));
+    assert!(matches!(parse_approval_response("s"), (Allow, Session, _)));
+    assert!(matches!(parse_approval_response("r"), (Allow, Run, _)));
+    assert!(matches!(parse_approval_response("n"), (Deny, Once, _)));
+    assert!(matches!(parse_approval_response(""), (Deny, Once, _)));
+    assert!(matches!(parse_approval_response("q"), (DenyAndStop, Once, _)));
+    // Unknown input is a fail-closed deny.
+    assert!(matches!(parse_approval_response("garbage"), (Deny, Once, _)));
+  }
+
+  /// The provider forwards a request to the REPL channel and returns whatever
+  /// decision the REPL sends back.
+  #[tokio::test]
+  async fn chat_approval_provider_round_trips_a_decision() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<ApprovalAsk>();
+    let provider = ChatApprovalProvider { tx };
+    let responder = tokio::spawn(async move {
+      let (req, resp_tx) = rx.recv().await.unwrap();
+      let (decision, scope, reason) = parse_approval_response("y");
+      resp_tx
+        .send(ApprovalDecision {
+          request_id: req.id,
+          decision,
+          scope,
+          decided_by: "user".into(),
+          decided_at: chrono::Utc::now(),
+          reason,
+        })
+        .unwrap();
+    });
+    let decided = provider.request(sample_request("req-1")).await.unwrap();
+    assert_eq!(decided.request_id, "req-1");
+    assert!(matches!(decided.decision, ApprovalOutcome::Allow));
+    responder.await.unwrap();
+  }
+
+  /// If the REPL is gone (receiver dropped), `request` errors — the hook layer
+  /// treats a provider error as a fail-closed deny.
+  #[tokio::test]
+  async fn chat_approval_provider_errors_when_repl_gone() {
+    let (tx, rx) = mpsc::unbounded_channel::<ApprovalAsk>();
+    drop(rx);
+    let provider = ChatApprovalProvider { tx };
+    assert!(provider.request(sample_request("req-2")).await.is_err());
+  }
 
   #[tokio::test]
   async fn clear_session_memory_empties_the_session_but_keeps_others() {

@@ -13,6 +13,16 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow harness chat --approve cli` now works interactively (H.2.1).**
+  Previously rejected at startup because the blocking `CliApprovalProvider` reads
+  `std::io::stdin` while the REPL owns the async tokio stdin reader (the two
+  race). A new channel-based `ChatApprovalProvider` forwards each approval
+  request to the REPL loop, which prompts (`[y]es / [s]ession / [r]un / [n]o /
+  [q]uit`) and reads the decision from the **same** shared stdin between
+  servicing the turn — so interactive per-tool-call approval works in chat. The
+  agent turn is driven in a `select!` that services approval requests until the
+  turn finishes; a provider/channel error is a fail-closed deny.
+
 - **`agentflow harness chat` gains a `/clear` command (H.5.1).** Clears the
   current session's conversation memory **in place** — keeping the session id —
   and rebuilds the runtime so the next turn starts fresh (vs. `/new`, which
