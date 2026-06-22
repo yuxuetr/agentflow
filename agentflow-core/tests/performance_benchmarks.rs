@@ -4,6 +4,20 @@
 //! - Retry overhead < 5ms per retry
 //! - Resource limit enforcement < 100μs per operation
 //! - Error context creation < 1ms
+//!
+//! Every benchmark here asserts a hard wall-clock threshold (`avg < Xms/μs`).
+//! Those assertions are meaningful on stable local hardware but **flake on
+//! shared CI runners** — a loaded runner blows a 50ms disk-checkpoint budget or
+//! a 1μs stats-read budget through no fault of the code. CI gates must be
+//! deterministic, so every benchmark is marked `#[ignore]`: `cargo test` (the
+//! gate) skips them, and they stay runnable on demand for local perf checks:
+//!
+//! ```bash
+//! cargo test -p agentflow-core --test performance_benchmarks -- --ignored
+//! ```
+//!
+//! The code paths they exercise are also covered by deterministic unit tests
+//! elsewhere; only the timing measurement is opt-in.
 
 use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use agentflow_core::health::{HealthChecker, HealthStatus};
@@ -62,6 +76,7 @@ where
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_retry_overhead() {
   println!("\n🔄 Retry Mechanism Benchmarks");
   println!("{}", "=".repeat(80));
@@ -132,6 +147,7 @@ async fn benchmark_retry_overhead() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_retry_with_error_context() {
   println!("\n📊 Retry + Error Context Benchmarks");
   println!("{}", "=".repeat(80));
@@ -164,6 +180,7 @@ async fn benchmark_retry_with_error_context() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_error_context_creation() {
   println!("\n📝 Error Context Creation Benchmarks");
   println!("{}", "=".repeat(80));
@@ -209,6 +226,7 @@ async fn benchmark_error_context_creation() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_resource_limits() {
   println!("\n💾 Resource Management Benchmarks");
   println!("{}", "=".repeat(80));
@@ -245,6 +263,7 @@ async fn benchmark_resource_limits() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_state_monitor_basic() {
   println!("\n📈 State Monitor (Basic Operations) Benchmarks");
   println!("{}", "=".repeat(80));
@@ -300,6 +319,7 @@ async fn benchmark_state_monitor_basic() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_state_monitor_fast_mode() {
   println!("\n⚡ State Monitor (Fast Mode) Benchmarks");
   println!("{}", "=".repeat(80));
@@ -335,6 +355,7 @@ async fn benchmark_state_monitor_fast_mode() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_cleanup_operation() {
   println!("\n🧹 Cleanup Operation Benchmarks");
   println!("{}", "=".repeat(80));
@@ -381,6 +402,7 @@ async fn benchmark_cleanup_operation() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_combined_overhead() {
   println!("\n🎯 Combined Feature Overhead Benchmarks");
   println!("{}", "=".repeat(80));
@@ -432,6 +454,7 @@ async fn benchmark_combined_overhead() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_timeout_control() {
   println!("\n⏱️  Timeout Control Benchmarks");
   println!("{}", "=".repeat(80));
@@ -486,6 +509,7 @@ async fn benchmark_timeout_control() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_health_checks() {
   println!("\n🏥 Health Check Benchmarks");
   println!("{}", "=".repeat(80));
@@ -540,6 +564,7 @@ async fn benchmark_health_checks() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_checkpoint_operations() {
   println!("\n💾 Checkpoint Operations Benchmarks");
   println!("{}", "=".repeat(80));
@@ -651,6 +676,7 @@ async fn benchmark_checkpoint_operations() {
 }
 
 #[tokio::test]
+#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_summary() {
   println!("\n{}", "=".repeat(80));
   println!("📊 Performance Benchmark Summary");
