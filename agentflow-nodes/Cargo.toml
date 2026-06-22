@@ -38,22 +38,20 @@ homepage.workspace = true
 # module take the second path. If a future contributor *does*
 # decide to gate one of these modalities, they must update
 # CLAUDE.md, this comment, and the pin test in lockstep.
-default = ["llm", "http", "file", "template"]
-llm = []
+# P-A (RFC_NODES_DECOMPOSITION): the capability-backed nodes (and their
+# `mcp` / `rag` / `llm` features + deps) moved to `agentflow-nodes-ai`. This
+# tool-tier crate keeps only `http` / `file` / `template` / `batch` /
+# `conditional` / `arxiv` / `markmap`, with no capability dependencies.
+default = ["http", "file", "template"]
 http = ["reqwest"]
 file = []
 template = ["handlebars"]
 batch = []
 conditional = []
-mcp = ["agentflow-mcp"]
-rag = ["agentflow-rag"]
 
 [dependencies]
 # Core dependency - all nodes build on top of agentflow-core
 agentflow-core = { path = "../agentflow-core", version = "0.2" }
-
-# LLM integration - required for real model execution
-agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 
 # Tool integration - FileNode and HttpNode delegate to agentflow-tools'
 # sandbox-aware FileTool / HttpTool so the workflow node surface inherits
@@ -61,12 +59,6 @@ agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 # Added under Q1.3.1 / Q1.3.2 to close the policy-bypass found in the
 # 2026-05-24 audit (agentflow-nodes.md C2 + C3).
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
-
-# MCP integration - optional for MCP tool calling
-agentflow-mcp = { path = "../agentflow-mcp", version = "0.2", optional = true }
-
-# RAG integration - optional for RAG operations
-agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
 
 # Removed: agentflow-config dependency to break circular dependency
 

@@ -1,12 +1,12 @@
 //! ASR Node - Transcribes audio to text using a specified model.
 
-use crate::common::utils::{flow_value_to_string, load_bytes_from_source};
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
   value::FlowValue,
 };
 use agentflow_llm::{AgentFlow, AsrRequest};
+use agentflow_nodes::common::utils::{flow_value_to_string, load_bytes_from_source};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
