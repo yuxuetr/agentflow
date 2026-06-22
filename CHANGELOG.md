@@ -11,6 +11,24 @@ file's first entry).
 _New entries go here. Will roll into the next tag (likely
 `v1.0.0-rc.2` or `v1.0.0`)._
 
+### Added
+
+- **Harness governs a `Flow` run — orthogonal governance MVP (P-A2.2).** The
+  harness governance shell now wraps a deterministic `agentflow-graph::Flow`
+  run, not just an agent loop. New `HarnessRuntime::for_flow()` +
+  `HarnessRuntime::run_flow(flow, runner, inputs, options)` brackets a
+  `FlowRunner`-driven execution with the Harness envelope (`session_started`
+  with the new `HarnessRuntimeKind::Flow` … `stopped`, classifying
+  completed / failed / timed-out). Governance reaches the Flow's tool calls at
+  the registry seam: when the Flow's node registry is wrapped via
+  `wrap_registry` with a `HookConfig` sharing the runtime's seq counter + sinks,
+  every `tool_call_requested` / `approval_requested` / `tool_call_completed`
+  interleaves on the same monotonic event stream — an `AutoDeny` provider blocks
+  a mutating tool inside a node and fails the run. `agentflow-harness` gains a
+  downward dep on `agentflow-graph` (runtime→contract; the executor stays out
+  via the injected `FlowRunner`). MVP scope: node-level step events, a CLI/server
+  surface, and a `HarnessRuntimeKind::Flow` parser are follow-ups.
+
 ### Changed
 
 - **`rag search` / `index` / `collections` CLI demoted under an `ops` group

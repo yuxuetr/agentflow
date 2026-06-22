@@ -242,8 +242,11 @@ PR. Execution is tracked as track **P-A** in `TODOs.md`:
   design with a `dynamic_workflow` vertical-slice spike (`value → graph →
   agent-spi → toy runtime → agent emits Flow → core executes`).
 - **P-A2 — Runtime decoupling.** Re-point `harness` from `agents` to
-  `agent-spi` (injection at surfaces); let harness govern a `Flow` run; extract
-  `worker-proto` so `worker ⊥ server`; extract shared assembly so `server ⊥ cli`.
+  `agent-spi` (injection at surfaces); let harness govern a `Flow` run
+  (P-A2.2 — `HarnessRuntime::run_flow` MVP landed: envelope + tool-call
+  governance via a wrapped node registry; node-level events + CLI/server surface
+  are follow-ups); extract `worker-proto` so `worker ⊥ server`; extract shared
+  assembly so `server ⊥ cli`.
 - **P-A3 — Reliability + type hardening.** Consolidate retry/timeout/cancel into
   `async-util`; introduce `Session<S>` type-state, `Seq` newtype, `ByteSafeStr`,
   `Validated<ModelId>` (closes the known bug classes).

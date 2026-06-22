@@ -209,6 +209,9 @@ impl HarnessRunResult {
 enum InnerRuntime {
   Opaque(Box<dyn AgentRuntime>),
   TurnDriven(Box<dyn TurnDrivenRuntime>),
+  /// No inner agent — the harness governs a deterministic `Flow` run instead
+  /// (P-A2.2). `run()` rejects this kind; use `run_flow()` (see `flow_run`).
+  None,
 }
 
 pub struct HarnessRuntime {
@@ -221,14 +224,17 @@ pub struct HarnessRuntime {
   /// `MemorySummaryAdded` event is emitted. `None` keeps the Phase 0
   /// drop/truncate behaviour.
   compactor: Option<Arc<dyn ContextSummarizer>>,
-  sinks: SinkChain,
+  // pub(crate) so the P-A2.2 `flow_run` module can dispatch the
+  // session_started / stopped envelope through the same sink chain.
+  pub(crate) sinks: SinkChain,
   /// Q1.7.1: the runtime and the hook layer (via `HookConfig`) used to
   /// have independent `seq` counters. Mixed runtime + hook events
   /// could collide on the same `(session_id, seq)` PK, breaking the
   /// "monotonic, never gap" promise of the Beta-frozen `HarnessEvent`
   /// envelope. Now both paths share this single `Arc<AtomicU64>`.
-  /// Surface it to callers via [`Self::seq_counter`].
-  seq_counter: Arc<std::sync::atomic::AtomicU64>,
+  /// Surface it to callers via [`Self::seq_counter`]. `pub(crate)` so the
+  /// P-A2.2 `flow_run` module shares the same monotonic series.
+  pub(crate) seq_counter: Arc<std::sync::atomic::AtomicU64>,
   /// §6: when `true` and the runtime is turn-driven, re-run the context
   /// providers before each turn and inject refreshed workspace context
   /// into the session when it changed. Off by default (re-running
@@ -251,6 +257,13 @@ impl HarnessRuntime {
   /// gets a between-turn seam for its own context engineering.
   pub fn new_turn_driven(inner: Box<dyn TurnDrivenRuntime>) -> Self {
     Self::with_inner(InnerRuntime::TurnDriven(inner))
+  }
+
+  /// Build a runtime with **no inner agent**, to govern a deterministic
+  /// `Flow` run via [`Self::run_flow`] (P-A2.2). Calling [`Self::run`] on a
+  /// runtime built this way returns an error — there is no agent loop to drive.
+  pub fn for_flow() -> Self {
+    Self::with_inner(InnerRuntime::None)
   }
 
   fn with_inner(inner: InnerRuntime) -> Self {
@@ -497,6 +510,12 @@ impl HarnessRuntime {
     };
 
     let inner_result = match &mut self.inner {
+      // P-A2.2: a Flow-governance runtime has no agent loop to drive here.
+      InnerRuntime::None => {
+        return Err(HarnessError::Other(
+          "HarnessRuntime::run called on a Flow-governance runtime; use run_flow()".to_string(),
+        ));
+      }
       // Agent owns iteration; the harness observes via the event bridge.
       InnerRuntime::Opaque(agent) => agent
         .run(agent_context)

@@ -286,6 +286,8 @@ version = "0.1.0"
 dependencies = [
  "agentflow-agent-spi",
  "agentflow-agents",
+ "agentflow-core",
+ "agentflow-graph",
  "agentflow-llm",
  "agentflow-memory",
  "agentflow-tools",

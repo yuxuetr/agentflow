@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::HarnessError;
 
-/// Which underlying agent runtime drives a Harness session.
+/// What a Harness session governs.
 ///
-/// Maps 1:1 onto `agentflow-agents` runtime kinds. Serialized as
-/// snake_case strings so CLI flags (`--runtime react`) and JSON
-/// envelopes share spelling.
+/// The agent variants map 1:1 onto `agentflow-agents` runtime kinds; `Flow`
+/// (P-A2.2) is the orthogonal case where the harness governs a deterministic
+/// `agentflow-graph::Flow` run rather than an agent loop. Serialized as
+/// snake_case strings so CLI flags (`--runtime react`) and JSON envelopes share
+/// spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessRuntimeKind {
@@ -25,6 +27,11 @@ pub enum HarnessRuntimeKind {
   Blackboard,
   /// `DebateSupervisor` multi-agent collaboration.
   Debate,
+  /// A deterministic `agentflow-graph::Flow` run governed by the harness
+  /// (P-A2.2): the harness brackets the run with `session_started` / `stopped`
+  /// and tool calls inside the Flow's nodes flow through the harness
+  /// hook / approval pipeline via a wrapped tool registry.
+  Flow,
 }
 
 impl HarnessRuntimeKind {
@@ -36,6 +43,7 @@ impl HarnessRuntimeKind {
       Self::Handoff => "handoff",
       Self::Blackboard => "blackboard",
       Self::Debate => "debate",
+      Self::Flow => "flow",
     }
   }
 }
