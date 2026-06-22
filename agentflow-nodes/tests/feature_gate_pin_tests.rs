@@ -22,38 +22,21 @@
 // and they pin the module-path contract — which is exactly the
 // audit invariant we care about.
 
-use agentflow_nodes::nodes::{
-  arxiv::ArxivNode, asr::ASRNode, image_edit::ImageEditNode, image_to_image::ImageToImageNode,
-  image_understand::ImageUnderstandNode, markmap::MarkMapNode, text_to_image::TextToImageNode,
-  tts::TTSNode,
-};
+use agentflow_nodes::nodes::{arxiv::ArxivNode, markmap::MarkMapNode};
 
-/// Q3.8.5: per-modality nodes must remain reachable under the
-/// default feature set. If this fails to compile, a contributor
-/// has added a `#[cfg(feature = "…")]` to `nodes/mod.rs` without
-/// updating CLAUDE.md + `Cargo.toml`'s feature comment block to
-/// match. The fix is to update both docs, not to feature-flag the
-/// test — feature-flagging would defeat the whole point of the
-/// regression pin.
+/// The tool-tier specialized content nodes (`arxiv` / `markmap`) ship
+/// unconditionally under the default feature set. (The per-modality AI nodes —
+/// `asr` / `tts` / `text_to_image` / `image_*` — moved to `agentflow-nodes-ai`
+/// in the P-A nodes split; their analogous pin lives there.)
 #[test]
-fn per_modality_nodes_are_unconditional_under_default_features() {
-  // `size_of::<T>()` resolves T's type, which means the module
-  // path + struct name must exist at compile time. The runtime
-  // assertion is just a placeholder; if compilation succeeds, the
-  // contract held.
+fn tool_tier_content_nodes_are_unconditional_under_default_features() {
   let sizes = [
-    std::mem::size_of::<ASRNode>(),
-    std::mem::size_of::<TTSNode>(),
-    std::mem::size_of::<TextToImageNode>(),
-    std::mem::size_of::<ImageToImageNode>(),
-    std::mem::size_of::<ImageEditNode>(),
-    std::mem::size_of::<ImageUnderstandNode>(),
     std::mem::size_of::<ArxivNode>(),
     std::mem::size_of::<MarkMapNode>(),
   ];
   assert!(
     sizes.iter().all(|s| *s > 0),
-    "every Q3.8.5-pinned node type must be a real (non-ZST) struct"
+    "every pinned tool-tier node type must be a real (non-ZST) struct"
   );
 }
 
@@ -77,15 +60,12 @@ fn cargo_toml_feature_matrix_matches_audit_pinned_shape() {
   // [\"llm\", \"http\", \"file\", \"template\"]; mcp, rag,
   // batch, conditional are opt-in") in the same PR.
   for required in [
-    "llm = []",
     "http = [\"reqwest\"]",
     "file = []",
     "template = [\"handlebars\"]",
     "batch = []",
     "conditional = []",
-    "mcp = [\"agentflow-mcp\"]",
-    "rag = [\"agentflow-rag\"]",
-    "default = [\"llm\", \"http\", \"file\", \"template\"]",
+    "default = [\"http\", \"file\", \"template\"]",
   ] {
     assert!(
       MANIFEST.contains(required),
@@ -100,6 +80,11 @@ fn cargo_toml_feature_matrix_matches_audit_pinned_shape() {
   // today. If any of these strings appears in [features], the
   // doc claim is now a lie — fail loudly.
   for forbidden in [
+    // Capability features moved to `agentflow-nodes-ai` — they must NOT
+    // reappear in the tool-tier crate.
+    "\nllm = [",
+    "\nmcp = [",
+    "\nrag = [",
     "\nasr = [",
     "\ntts = [",
     "\ntext_to_image = [",

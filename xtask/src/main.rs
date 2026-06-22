@@ -3931,25 +3931,10 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.1 — redaction/trace-context via agent-spi (R6)",
   },
-  // Rows 7–8 — `nodes` fat straddler (law 2: tool crate on capabilities + runtime).
-  ArchLatent {
-    from: "agentflow-nodes",
-    to: "agentflow-llm",
-    becomes: "law 2 tool→capability",
-    burndown: "P-A0.5 — split capability-backed nodes out (R3)",
-  },
-  ArchLatent {
-    from: "agentflow-nodes",
-    to: "agentflow-rag",
-    becomes: "law 2 tool→capability",
-    burndown: "P-A0.5 — split capability-backed nodes out (R3)",
-  },
-  ArchLatent {
-    from: "agentflow-nodes",
-    to: "agentflow-mcp",
-    becomes: "law 2 tool→tool",
-    burndown: "P-A0.5 — MCPNode moves with the decomposition (R3)",
-  },
+  // Row 7–8 — `nodes` straddler. P-A0.5 BURNED DOWN the capability edges
+  // (nodes→{llm,rag,mcp}): the capability-backed nodes moved to the new
+  // `agentflow-nodes-ai` adapter crate, so the tool-tier `agentflow-nodes`
+  // crate carries no capability deps. The IR edge below remains.
   ArchLatent {
     from: "agentflow-nodes",
     to: "agentflow-core",

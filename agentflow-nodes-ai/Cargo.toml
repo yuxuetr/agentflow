@@ -1,0 +1,28 @@
+[package]
+name = "agentflow-nodes-ai"
+version = "0.2.0"
+description = "Capability-backed AsyncNode adapters (LLM / audio / image / RAG / MCP) for AgentFlow workflows"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+mcp = ["agentflow-mcp"]
+rag = ["agentflow-rag"]
+
+[dependencies]
+# Shared node infra (common utils, error types) + the IR.
+agentflow-nodes = { path = "../agentflow-nodes", version = "0.2" }
+agentflow-core = { path = "../agentflow-core", version = "0.2" }
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+agentflow-mcp = { path = "../agentflow-mcp", version = "0.2", optional = true }
+agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", optional = true }
+
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+tokio = { version = "1.0", features = ["full"] }

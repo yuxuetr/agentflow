@@ -7,10 +7,15 @@ use agentflow_core::{
   value::FlowValue,
 };
 use agentflow_llm::AgentFlow;
+// Tool-tier nodes (no capability deps) stay in `agentflow-nodes`; the
+// capability-backed nodes moved to `agentflow-nodes-ai` (P-A nodes split).
 use agentflow_nodes::nodes::{
-  arxiv::ArxivNode, asr::ASRNode, file::FileNode, http::HttpNode, image_edit::ImageEditNode,
-  image_to_image::ImageToImageNode, image_understand::ImageUnderstandNode, llm::LlmNode,
-  markmap::MarkMapNode, template::TemplateNode, text_to_image::TextToImageNode, tts::TTSNode,
+  arxiv::ArxivNode, file::FileNode, http::HttpNode, markmap::MarkMapNode, template::TemplateNode,
+};
+use agentflow_nodes_ai::nodes::{
+  asr::ASRNode, image_edit::ImageEditNode, image_to_image::ImageToImageNode,
+  image_understand::ImageUnderstandNode, llm::LlmNode, text_to_image::TextToImageNode,
+  tts::TTSNode,
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
@@ -18,10 +23,10 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 #[cfg(feature = "mcp")]
-use agentflow_nodes::nodes::mcp::MCPNode;
+use agentflow_nodes_ai::nodes::mcp::MCPNode;
 
 #[cfg(feature = "rag")]
-use agentflow_nodes::nodes::rag::RAGNode;
+use agentflow_nodes_ai::nodes::rag::RAGNode;
 
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
