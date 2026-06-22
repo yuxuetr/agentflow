@@ -13,18 +13,18 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
-- **`PlanExecuteAgent` can emit a `Flow` (P-A2.2 follow-up).**
-  `PlanExecuteAgent::compile_plan_to_flow(steps)` compiles a Plan-and-Execute
-  plan's tool steps into an executable `agentflow-graph::Flow` (reusing the
-  dynamic-workflow compiler), so a plan can run on the deterministic graph
-  engine — inheriting retry / checkpoint / timeout / tracing / replay, and
-  parallelism where the plan allows — instead of the hand-rolled sequential
-  loop. `PlanExecuteStep` gains an optional `depends_on`: an empty list chains
-  the step after the previous tool step (preserving sequential semantics by
-  default), while a non-empty list opts into a parallel DAG. Pure-reasoning
-  steps (`tool = None`) carry no node and are dropped. (The legacy sequential
-  `run_with_context` path is unchanged; wiring an end-to-end LLM-planning
-  `run_as_flow` is a follow-up.)
+- **`PlanExecuteAgent::run_as_flow` — plan + run on the graph engine end-to-end
+  (P-A2.2 follow-up).** Building on `compile_plan_to_flow`, the new
+  `run_as_flow(context, runner)` plans with the LLM, compiles the plan to a
+  `Flow`, and executes it on the deterministic graph engine via an injected
+  `FlowRunner` — inheriting retry / checkpoint / timeout / tracing / replay and
+  the plan's parallelism — instead of the hand-rolled sequential loop. It returns
+  an `AgentRunResult` with an `Observe → Plan → per-node ToolCall/ToolResult →
+  FinalAnswer` trace built from the flow's state pool (a failed node stops with
+  `AgentStopReason::Error`), and honours the same cancellation / timeout /
+  token + step + tool-call budgets as the sequential path. `PlanExecuteError`
+  gains a `Flow(#[from] AgentFlowError)` variant. The legacy sequential
+  `run_with_context` path is unchanged.
 
 - **Dynamic-workflow plans can include agent steps (P-A2.2 follow-up).**
   `WorkflowPlanStep` gains a `kind` field (`tool` default | `agent`).
