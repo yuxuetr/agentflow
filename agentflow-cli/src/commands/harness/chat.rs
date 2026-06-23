@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
@@ -32,6 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::run::{ApproveMode, build_agent, parse_runtime_kind};
 use super::{parse_profile, resolve_run_dir};
+use crate::commands::repl::{LineReader, ReadLine};
 
 /// Per-chat configuration that does not change across REPL commands.
 /// Bundled so [`build_chat_runtime`] can be called again to rebuild the
@@ -183,10 +183,10 @@ fn parse_approval_response(input: &str) -> (ApprovalOutcome, ApprovalScope, Opti
 }
 
 /// Print the approval prompt to stderr and read one decision line from the
-/// REPL's shared stdin reader. EOF / read error → fail-closed deny.
+/// REPL's shared line reader (H.4.1). EOF / Ctrl-C / read error → fail-closed deny.
 async fn prompt_and_read_decision(
   request: &ApprovalRequest,
-  lines: &mut tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+  reader: &mut LineReader,
 ) -> ApprovalDecision {
   use std::io::Write;
   eprintln!("\n── Harness approval request ──");
@@ -197,12 +197,15 @@ async fn prompt_and_read_decision(
   );
   eprintln!("  reason: {}", request.reason);
   eprintln!("  params: {}", request.params_summary);
-  eprint!("Allow this call? [y]es / [s]ession / [r]un / [n]o / [q]uit: ");
   std::io::stderr().flush().ok();
 
-  let line = match lines.next_line().await {
-    Ok(Some(line)) => line,
-    _ => String::new(), // EOF / error → deny
+  let line = match reader
+    .read_line("Allow this call? [y]es / [s]ession / [r]un / [n]o / [q]uit: ")
+    .await
+  {
+    Ok(ReadLine::Line(line)) => line,
+    // EOF / Ctrl-C / error → fail-closed deny.
+    _ => String::new(),
   };
   let (decision, scope, reason) = parse_approval_response(&line);
   ApprovalDecision {
@@ -295,20 +298,23 @@ pub async fn execute(
 
   print_banner(&model, skill_name.as_deref(), &cfg, &approve);
 
-  let mut lines = BufReader::new(tokio::io::stdin()).lines();
+  // H.4.1: line editing + up/down history on a TTY; transparent plain-reader
+  // fallback when piped (tests). The same reader feeds the H.2.1 approval prompt
+  // so input stays consistent.
+  let mut reader = LineReader::new();
   'repl: loop {
-    eprint!("› ");
-    use std::io::Write;
-    std::io::stderr().flush().ok();
-
-    let next = tokio::select! {
-      biased;
-      line = lines.next_line() => line,
-      _ = crate::shutdown::shutdown_signal() => { eprintln!("\n🛑 bye"); break; }
-    };
-    let Some(input) = next.context("failed to read stdin")? else {
-      eprintln!("\n👋 bye (EOF)");
-      break;
+    let input = match reader.read_line("› ").await? {
+      ReadLine::Line(line) => line,
+      // Ctrl-C at the prompt abandons the current line and re-prompts; `exit` /
+      // quit / Ctrl-D leave (matches the banner's "Ctrl-D to leave").
+      ReadLine::Interrupted => {
+        eprintln!();
+        continue;
+      }
+      ReadLine::Eof => {
+        eprintln!("\n👋 bye (EOF)");
+        break;
+      }
     };
     let input = input.trim();
     if input.is_empty() {
@@ -464,7 +470,7 @@ pub async fn execute(
             eprint!("\r\x1b[K");
             std::io::stderr().flush().ok();
           }
-          let decision = prompt_and_read_decision(&req, &mut lines).await;
+          let decision = prompt_and_read_decision(&req, &mut reader).await;
           let _ = resp_tx.send(decision);
         }
         _ = crate::shutdown::shutdown_signal() => {

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::Path;
+
+use crate::commands::repl::{LineReader, ReadLine};
 
 use super::error_context::mcp_context;
 use super::runtime_options::{apply_memory_override, memory_label};
@@ -66,11 +68,21 @@ pub async fn execute(
   println!("Type a message or /help for commands. Ctrl-C to exit.\n");
 
   // ── REPL ──────────────────────────────────────────────────────────────────
-  let stdin = io::stdin();
   let mut stdout = io::stdout();
+  // H.4.1: shared line editor — up/down history + line editing on a TTY, with a
+  // transparent plain-reader fallback when stdin is piped (tests).
+  let mut reader = LineReader::new();
 
-  for line in stdin.lock().lines() {
-    let line = line.context("Failed to read from stdin")?;
+  loop {
+    let line = match reader.read_line("› ").await? {
+      ReadLine::Line(line) => line,
+      // Ctrl-C abandons the current line; Ctrl-D / `/exit` leave.
+      ReadLine::Interrupted => continue,
+      ReadLine::Eof => {
+        println!("👋 Bye!");
+        break;
+      }
+    };
     let trimmed = line.trim();
 
     if trimmed.is_empty() {
