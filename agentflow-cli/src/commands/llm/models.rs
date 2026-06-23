@@ -284,10 +284,14 @@ fn print_diff(provider: &str, local: &BTreeSet<String>, remote: &BTreeSet<String
 }
 
 fn truncate(s: &str, max: usize) -> String {
-  if s.len() <= max {
+  // Char-safe (P-A3.5): the byte slice `&s[..max]` panics when `max` lands in
+  // the middle of a multi-byte UTF-8 codepoint. `s` here is an arbitrary remote
+  // HTTP response body (see the `truncate(&body, 200)` error path), so that is
+  // a reachable panic. Counting / taking `chars` never splits a codepoint.
+  if s.chars().count() <= max {
     s.to_string()
   } else {
-    format!("{}…", &s[..max])
+    format!("{}…", s.chars().take(max).collect::<String>())
   }
 }
 
@@ -358,6 +362,18 @@ mod tests {
     let t = truncate(&long, 50);
     assert_eq!(t.len(), 50 + "…".len());
     assert!(t.ends_with("…"));
+  }
+
+  #[test]
+  fn truncate_multibyte_does_not_panic_on_codepoint_boundary() {
+    // Each '世' is 3 bytes: a byte slice `&s[..max]` would panic when `max`
+    // splits one. Char-safe truncation keeps `max` whole codepoints.
+    let s = "世".repeat(300);
+    let t = truncate(&s, 50);
+    assert_eq!(t.chars().count(), 50 + 1); // 50 kept chars + '…'
+    assert!(t.ends_with("…"));
+    // A boundary that lands mid-codepoint in bytes must still be fine.
+    assert_eq!(truncate("a世b", 2), "a世…");
   }
 }
 
