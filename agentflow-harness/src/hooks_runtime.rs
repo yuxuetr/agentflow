@@ -50,13 +50,12 @@ use crate::approval::{
 };
 use crate::context::HarnessProfile;
 use crate::error::HarnessError;
-use crate::event::{
-  ApprovalDecidedPayload, ApprovalRequestedPayload, HarnessEvent, HarnessEventBody,
-};
+use crate::event::{ApprovalDecidedPayload, ApprovalRequestedPayload, HarnessEventBody};
 use crate::hooks::{
   CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook,
 };
 use crate::persistence::SinkChain;
+use crate::seq::SeqAllocator;
 
 /// Default timeout applied to each [`PreToolHook`] / [`PostToolHook`].
 /// Operators can tighten or loosen this through
@@ -78,10 +77,11 @@ pub struct HookConfig {
   sinks: SinkChain,
   hook_timeout: Duration,
   approval_timeout: Duration,
-  /// Shared with the parent [`HarnessRuntime`] so hook-emitted events
-  /// share the same monotonic `seq` namespace as the run lifecycle
-  /// events (`session_started` / `stopped` / etc).
-  seq_counter: Arc<AtomicU64>,
+  /// Shared with the parent [`HarnessRuntime`] so hook-emitted events share the
+  /// same monotonic `seq` namespace *and emit lock* as the run lifecycle events
+  /// (`session_started` / `stopped` / etc). P-A3.4: the shared lock is what
+  /// keeps concurrent parallel-tool approval/tool events in wire order.
+  seq_allocator: SeqAllocator,
   /// Q3.10.1: monotonic step index handed to each `PendingToolCall`
   /// the hooked registry emits. Pre-Q3.10.1 `build_pending` hardcoded
   /// `step_index: 0`, so every approval / hook event the operator
@@ -139,7 +139,7 @@ impl HookConfig {
       sinks,
       hook_timeout: DEFAULT_HOOK_TIMEOUT,
       approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
-      seq_counter: Arc::new(AtomicU64::new(0)),
+      seq_allocator: SeqAllocator::new(),
       step_index_counter: Arc::new(AtomicU64::new(0)),
     }
   }
@@ -182,8 +182,21 @@ impl HookConfig {
     self
   }
 
+  /// P-A3.4: share the parent runtime's [`SeqAllocator`] (counter **and** emit
+  /// lock) so this hook layer's events stay in wire order with the runtime's
+  /// bridge events even under concurrent emission. Prefer this over
+  /// [`Self::with_seq_counter`].
+  pub fn with_seq_allocator(mut self, allocator: SeqAllocator) -> Self {
+    self.seq_allocator = allocator;
+    self
+  }
+
+  /// Q1.7.1 compatibility: share only the raw seq counter (wrapped in a fresh
+  /// emit lock). The parallel-tool race is still fixed among this config's own
+  /// writers; for full lock-sharing with the runtime, use
+  /// [`Self::with_seq_allocator`].
   pub fn with_seq_counter(mut self, counter: Arc<AtomicU64>) -> Self {
-    self.seq_counter = counter;
+    self.seq_allocator = SeqAllocator::from_counter(counter);
     self
   }
 
@@ -213,7 +226,7 @@ pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegi
     sinks: config.sinks,
     hook_timeout: config.hook_timeout,
     approval_timeout: config.approval_timeout,
-    seq_counter: config.seq_counter,
+    seq_allocator: config.seq_allocator,
     step_index_counter: config.step_index_counter,
     approval_cache: Arc::new(Mutex::new(ApprovalCache::default())),
   });
@@ -237,7 +250,7 @@ struct SharedHookConfig {
   sinks: SinkChain,
   hook_timeout: Duration,
   approval_timeout: Duration,
-  seq_counter: Arc<AtomicU64>,
+  seq_allocator: SeqAllocator,
   /// Q3.10.1: per-call monotonic step index source. See
   /// [`HookConfig::step_index_counter`] for the rationale.
   step_index_counter: Arc<AtomicU64>,
@@ -674,14 +687,21 @@ impl HookedTool {
   }
 
   async fn emit_event(&self, body: HarnessEventBody) -> Result<(), HarnessError> {
-    let seq = self.config.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let event = HarnessEvent {
-      seq,
-      session_id: self.config.session_id.clone(),
-      ts: Utc::now(),
-      body,
-    };
-    self.config.sinks.dispatch(&event).await
+    // P-A3.4: stamp under the shared emit lock. Parallel tool calls reach this
+    // path concurrently (each HookedTool shares this allocator), so without the
+    // lock a later-allocated approval/tool event could win the dispatch race
+    // and land on the wire before an earlier one.
+    self
+      .config
+      .seq_allocator
+      .stamp(
+        &self.config.sinks,
+        &self.config.session_id,
+        Utc::now(),
+        body,
+      )
+      .await
+      .map(|_| ())
   }
 }
 

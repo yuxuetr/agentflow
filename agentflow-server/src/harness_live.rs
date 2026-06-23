@@ -11,7 +11,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -22,8 +21,8 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentStopReason;
 use agentflow_harness::{
   ApprovalProvider, HarnessEvent, HarnessEventBody, HarnessEventSink, HarnessProfile,
-  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SinkChain, StopReason,
-  StoppedPayload, default_providers, wrap_registry,
+  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SeqAllocator, SinkChain,
+  StopReason, StoppedPayload, default_providers, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
@@ -417,13 +416,13 @@ async fn run_harness_inner(
   ));
   let sinks = SinkChain::new().push(server_sink.clone());
 
-  // Q1.7.1: one shared `Arc<AtomicU64>` for both the hook layer and
-  // the runtime. Pre-fix they each owned an independent counter and
-  // mixed events would collide on the JSON-Lines sink's
-  // `(session_id, seq)` PK. The hook config and the runtime both
-  // accept this counter via builder, then increment it atomically
-  // each time they emit.
-  let seq_counter = Arc::new(AtomicU64::new(inputs.initial_seq));
+  // Q1.7.1 + P-A3.4: one shared `SeqAllocator` for both the hook layer and the
+  // runtime. Pre-Q1.7.1 they each owned an independent counter and mixed events
+  // would collide on the JSON-Lines sink's `(session_id, seq)` PK. P-A3.4 adds
+  // the emit lock to the shared unit so the hook layer's concurrent tool /
+  // approval events and the runtime's live bridge events also reach the sink in
+  // seq order, not just carry monotonic seq numbers.
+  let seq_allocator = SeqAllocator::with_initial(inputs.initial_seq);
 
   let approval_provider: Arc<dyn ApprovalProvider> = Arc::new(ServerApprovalProvider::new(
     executor.approval_registry.clone(),
@@ -432,7 +431,7 @@ async fn run_harness_inner(
 
   let hook_config = HookConfig::new(session_id_string.clone(), approval_provider, sinks.clone())
     .with_profile(profile)
-    .with_seq_counter(seq_counter.clone())
+    .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
   let registry = wrap_registry(ToolRegistry::new(), hook_config);
@@ -447,7 +446,7 @@ async fn run_harness_inner(
   let mut runtime = HarnessRuntime::new(Box::new(agent))
     .with_event_sink(server_sink.clone())
     .with_context_providers(default_providers())
-    .with_seq_counter(seq_counter.clone());
+    .with_seq_allocator(seq_allocator.clone());
 
   let options = HarnessRunOptions::new(
     inputs.user_input,

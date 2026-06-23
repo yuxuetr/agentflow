@@ -32,6 +32,7 @@ use crate::event::{
   ToolCallRequestedPayload,
 };
 use crate::persistence::{HarnessEventSink, SinkChain};
+use crate::seq::SeqAllocator;
 
 /// Inputs handed to a single [`HarnessRuntime::run`] invocation.
 ///
@@ -227,14 +228,16 @@ pub struct HarnessRuntime {
   // pub(crate) so the P-A2.2 `flow_run` module can dispatch the
   // session_started / stopped envelope through the same sink chain.
   pub(crate) sinks: SinkChain,
-  /// Q1.7.1: the runtime and the hook layer (via `HookConfig`) used to
-  /// have independent `seq` counters. Mixed runtime + hook events
-  /// could collide on the same `(session_id, seq)` PK, breaking the
-  /// "monotonic, never gap" promise of the Beta-frozen `HarnessEvent`
-  /// envelope. Now both paths share this single `Arc<AtomicU64>`.
-  /// Surface it to callers via [`Self::seq_counter`]. `pub(crate)` so the
-  /// P-A2.2 `flow_run` module shares the same monotonic series.
-  pub(crate) seq_counter: Arc<std::sync::atomic::AtomicU64>,
+  /// Q1.7.1 + P-A3.4: the runtime and the hook layer (via `HookConfig`) used
+  /// to have independent `seq` counters. Mixed runtime + hook events could
+  /// collide on the same `(session_id, seq)` PK, breaking the "monotonic,
+  /// never gap" promise of the Beta-frozen `HarnessEvent` envelope. Now both
+  /// paths share this single [`SeqAllocator`], whose [`SeqAllocator::stamp`]
+  /// holds an emit lock across (allocate, dispatch) so wire order also matches
+  /// seq order under concurrent emitters (parallel tool calls + the live
+  /// bridge). Surface it via [`Self::seq_allocator`] / [`Self::seq_counter`].
+  /// `pub(crate)` so the P-A2.2 `flow_run` module shares the same series.
+  pub(crate) seq_allocator: SeqAllocator,
   /// §6: when `true` and the runtime is turn-driven, re-run the context
   /// providers before each turn and inject refreshed workspace context
   /// into the session when it changed. Off by default (re-running
@@ -272,7 +275,7 @@ impl HarnessRuntime {
       context_providers: Vec::new(),
       compactor: None,
       sinks: SinkChain::new(),
-      seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+      seq_allocator: SeqAllocator::new(),
       refresh_context: false,
     }
   }
@@ -337,28 +340,41 @@ impl HarnessRuntime {
   /// there, so `final_event_seq` in the result still equals the last
   /// emitted event's `seq`.
   pub fn with_initial_seq(self, initial_seq: u64) -> Self {
-    self
-      .seq_counter
-      .store(initial_seq, std::sync::atomic::Ordering::SeqCst);
+    self.seq_allocator.reset_to(initial_seq);
     self
   }
 
-  /// Q1.7.1: shared seq counter handle. Pass this `Arc<AtomicU64>` to
-  /// [`HookConfig::with_seq_counter`](crate::HookConfig::with_seq_counter)
-  /// so the hook-layer `tool_call_requested` / `approval_*` events use
-  /// the same monotonic series as the runtime's `session_started` /
-  /// `step_started` / `stopped` events. Clones are cheap (Arc bump).
+  /// P-A3.4: shared [`SeqAllocator`] handle (counter **and** emit lock). Pass
+  /// this to [`HookConfig::with_seq_allocator`](crate::HookConfig::with_seq_allocator)
+  /// so the hook-layer `tool_call_requested` / `approval_*` events share the
+  /// runtime's monotonic series *and* its emit lock — guaranteeing wire order
+  /// matches seq order even when the hook layer and the live bridge emit
+  /// concurrently. Prefer this over [`Self::seq_counter`]. Clones are cheap.
+  pub fn seq_allocator(&self) -> SeqAllocator {
+    self.seq_allocator.clone()
+  }
+
+  /// P-A3.4: inject a pre-existing [`SeqAllocator`] so the runtime and the
+  /// hook layer share one counter + one emit lock. Use this from `harness_live`
+  /// where the registry (and therefore the `HookConfig`) is built before the
+  /// agent + runtime that owns it.
+  pub fn with_seq_allocator(mut self, allocator: SeqAllocator) -> Self {
+    self.seq_allocator = allocator;
+    self
+  }
+
+  /// Q1.7.1 compatibility: the raw shared seq counter. Prefer
+  /// [`Self::seq_allocator`], which also shares the emit lock. A `HookConfig`
+  /// wired only with this counter still has the parallel-tool race fixed among
+  /// its own writers, but is not lock-shared with the runtime's bridge events.
   pub fn seq_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
-    self.seq_counter.clone()
+    self.seq_allocator.counter()
   }
 
-  /// Q1.7.1: inject a pre-existing seq counter so the runtime and the
-  /// hook layer share the same atomic. Use this from `harness_live`
-  /// where the registry (and therefore the `HookConfig`) is built
-  /// before the agent + runtime that owns it — both ends accept the
-  /// same `Arc` to keep the series monotonic.
+  /// Q1.7.1 compatibility: inject a raw shared counter (wrapped in a fresh emit
+  /// lock). Prefer [`Self::with_seq_allocator`] for the full ordering guarantee.
   pub fn with_seq_counter(mut self, counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
-    self.seq_counter = counter;
+    self.seq_allocator = SeqAllocator::from_counter(counter);
     self
   }
 
@@ -424,38 +440,36 @@ impl HarnessRuntime {
       context_item_count: items.len(),
       context_token_estimate,
     };
-    // Q1.7.1: take seq from the shared counter so any HookConfig wired
-    // with `with_seq_counter(runtime.seq_counter())` shares the same
-    // monotonic series.
-    let started_seq = self
-      .seq_counter
-      .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let started_event = HarnessEvent {
-      seq: started_seq,
-      session_id: session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::SessionStarted(started_payload),
-    };
-    self.sinks.dispatch(&started_event).await?;
+    // Q1.7.1 + P-A3.4: stamp from the shared allocator so any HookConfig wired
+    // with `with_seq_allocator(runtime.seq_allocator())` shares the same
+    // monotonic series and emit lock.
+    self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &session_id,
+        Utc::now(),
+        HarnessEventBody::SessionStarted(started_payload),
+      )
+      .await?;
 
     // Phase 2: if context assembly compacted over-budget items, surface
     // it as a MemorySummaryAdded event right after session_started so the
     // operator sees the compaction the agent's persona was built on.
     if let Some(compaction) = &compaction {
-      let seq = self
-        .seq_counter
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-      let event = HarnessEvent {
-        seq,
-        session_id: session_id.clone(),
-        ts: Utc::now(),
-        body: HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
-          layer: compaction.layer.clone(),
-          summary: compaction.summary.clone(),
-          token_estimate: compaction.token_estimate,
-        }),
-      };
-      self.sinks.dispatch(&event).await?;
+      self
+        .seq_allocator
+        .stamp(
+          &self.sinks,
+          &session_id,
+          Utc::now(),
+          HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
+            layer: compaction.layer.clone(),
+            summary: compaction.summary.clone(),
+            token_estimate: compaction.token_estimate,
+          }),
+        )
+        .await?;
     }
 
     let mut agent_context = AgentContext::new(&session_id, &options.user_input, &options.model)
@@ -490,7 +504,7 @@ impl HarnessRuntime {
     let bridge = Arc::new(HarnessAgentEventBridge::new(
       session_id.clone(),
       self.sinks.clone(),
-      self.seq_counter.clone(),
+      self.seq_allocator.clone(),
     ));
     agent_context = agent_context.with_event_sink(bridge.clone());
 
@@ -501,7 +515,7 @@ impl HarnessRuntime {
     let refresh_enabled = self.refresh_context;
     let refresh_providers = self.context_providers.clone();
     let refresh_sinks = self.sinks.clone();
-    let refresh_seq = self.seq_counter.clone();
+    let refresh_seq = self.seq_allocator.clone();
     let refresh_ctx = ctx.clone();
     let mut last_context = if refresh_enabled {
       assemble_persona(None, &items)
@@ -557,8 +571,15 @@ impl HarnessRuntime {
     // the `step_started` markers. Otherwise (a runtime that ignores
     // `event_sink`) reconstruct the full set for backward compatibility.
     let live_emitted = bridge.emitted() > 0;
-    let translated =
-      translate_inner_events(&inner_result, &session_id, &self.seq_counter, live_emitted);
+    // Post-loop, single-threaded: these are allocated and dispatched in the
+    // same order, so they cannot race the live emitters (which are done) — the
+    // raw counter is sufficient here, no emit lock needed.
+    let translated = translate_inner_events(
+      &inner_result,
+      &session_id,
+      &self.seq_allocator,
+      live_emitted,
+    );
     for event in &translated {
       self.sinks.dispatch(event).await?;
     }
@@ -567,22 +588,21 @@ impl HarnessRuntime {
     let answer_clone = inner_result.answer.clone();
     let stopped_payload = stopped_payload_from(&stop_reason_clone, answer_clone.as_deref());
     let stopped_seq = self
-      .seq_counter
-      .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let stopped_event = HarnessEvent {
-      seq: stopped_seq,
-      session_id: session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::Stopped(stopped_payload),
-    };
-    self.sinks.dispatch(&stopped_event).await?;
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &session_id,
+        Utc::now(),
+        HarnessEventBody::Stopped(stopped_payload),
+      )
+      .await?;
     self.sinks.flush_all().await?;
 
     Ok(HarnessRunResult {
       session_id,
       answer: inner_result.answer.clone(),
       stop_reason: stop_reason_clone,
-      final_event_seq: stopped_seq,
+      final_event_seq: stopped_seq.get(),
       context_items_admitted: items.len(),
       context_items_dropped: dropped,
       context_items_truncated: truncated,
@@ -821,7 +841,7 @@ async fn refresh_context_between_turns(
   last_context: &mut Option<String>,
   memory: &dyn agentflow_memory::MemoryStore,
   sinks: &SinkChain,
-  seq_counter: &AtomicU64,
+  seq_allocator: &SeqAllocator,
 ) -> Result<(), HarnessError> {
   let mut items = Vec::new();
   for provider in providers {
@@ -849,18 +869,18 @@ async fn refresh_context_between_turns(
       .map_err(|err| HarnessError::Other(format!("context refresh memory write failed: {err}")))?;
     let token_estimate =
       agentflow_llm::tokenizer::count_tokens_for_model(&ctx.model, block_str) as usize;
-    let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
-    let event = HarnessEvent {
-      seq,
-      session_id: ctx.session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
-        layer: "context_refresh".to_owned(),
-        summary: format!("workspace context refreshed ({} items)", items.len()),
-        token_estimate,
-      }),
-    };
-    let _ = sinks.dispatch(&event).await;
+    seq_allocator
+      .stamp_lossy(
+        sinks,
+        &ctx.session_id,
+        Utc::now(),
+        HarnessEventBody::MemorySummaryAdded(MemorySummaryAddedPayload {
+          layer: "context_refresh".to_owned(),
+          summary: format!("workspace context refreshed ({} items)", items.len()),
+          token_estimate,
+        }),
+      )
+      .await;
   }
   *last_context = block;
   Ok(())
@@ -886,16 +906,16 @@ async fn refresh_context_between_turns(
 struct HarnessAgentEventBridge {
   session_id: String,
   sinks: SinkChain,
-  seq_counter: Arc<AtomicU64>,
+  seq_allocator: SeqAllocator,
   emitted: AtomicU64,
 }
 
 impl HarnessAgentEventBridge {
-  fn new(session_id: String, sinks: SinkChain, seq_counter: Arc<AtomicU64>) -> Self {
+  fn new(session_id: String, sinks: SinkChain, seq_allocator: SeqAllocator) -> Self {
     Self {
       session_id,
       sinks,
-      seq_counter,
+      seq_allocator,
       emitted: AtomicU64::new(0),
     }
   }
@@ -908,16 +928,13 @@ impl HarnessAgentEventBridge {
   }
 
   async fn dispatch_body(&self, body: HarnessEventBody, ts: chrono::DateTime<Utc>) {
-    let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let event = HarnessEvent {
-      seq,
-      session_id: self.session_id.clone(),
-      ts,
-      body,
-    };
-    // Observability must never break execution: a sink error is logged
-    // by the sink itself; here we swallow it so the agent loop proceeds.
-    let _ = self.sinks.dispatch(&event).await;
+    // P-A3.4: stamp under the shared emit lock so this live event and the hook
+    // layer's concurrent approval/tool events reach the sink in seq order.
+    // Observability must never break execution, so sink errors are swallowed.
+    self
+      .seq_allocator
+      .stamp_lossy(&self.sinks, &self.session_id, ts, body)
+      .await;
     self.emitted.fetch_add(1, Ordering::SeqCst);
   }
 }
@@ -1003,15 +1020,15 @@ impl AgentEventSink for HarnessAgentEventBridge {
 fn translate_inner_events(
   result: &AgentRunResult,
   session_id: &str,
-  seq_counter: &std::sync::atomic::AtomicU64,
+  seq_allocator: &SeqAllocator,
   skip_tool_events: bool,
 ) -> Vec<HarnessEvent> {
   let mut out = Vec::new();
-  // Q1.7.1: every event takes its seq from the shared
-  // `Arc<AtomicU64>`. `fetch_add` is monotonic across the runtime +
-  // hook-layer writers — no more `&mut u64` racing with the hook's
-  // own counter.
-  let next_seq = || seq_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+  // Q1.7.1 + P-A3.4: every event takes its seq from the shared allocator's
+  // counter. This is a sequential builder (runs post-loop, dispatched in the
+  // same order it allocates), so it cannot reorder relative to itself — the
+  // raw counter is enough, no emit lock.
+  let next_seq = || seq_allocator.next_raw().get();
   // Step boundaries from the recorded steps give us deterministic
   // ordering for `step_started` events that doesn't depend on the
   // inner runtime's choice of when to fire `AgentEvent::StepStarted`.
