@@ -686,6 +686,9 @@ fn workflow_event_payload(event: &agentflow_core::events::WorkflowEvent) -> serd
         "force_replay": force_replay,
       },
     }),
+    // `WorkflowEvent` is `#[non_exhaustive]`: a future variant we don't yet
+    // render falls back to an empty payload rather than failing to compile.
+    _ => serde_json::json!({}),
   }
 }
 

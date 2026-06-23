@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 /// Users can listen to these events to implement their own logging,
 /// metrics, or tracing.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum WorkflowEvent {
   /// Workflow execution started
   WorkflowStarted {

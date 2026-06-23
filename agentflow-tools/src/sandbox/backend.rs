@@ -57,6 +57,7 @@ impl SandboxScope {
 
 /// Errors returned by sandbox backends when they cannot enforce a request.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SandboxError {
   /// The current platform has no enforcing backend available.
   #[error("sandbox backend '{platform}' is not available: {message}")]

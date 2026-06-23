@@ -193,6 +193,7 @@ impl FromStr for SecurityProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SecurityProfileError {
   #[error("unknown security profile '{0}' (expected dev, local, or production)")]
   Unknown(String),

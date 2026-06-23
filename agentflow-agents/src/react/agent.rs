@@ -2690,10 +2690,10 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       AgentEvent::StepCompleted { step, .. } => {
         step.index += event_offset;
       }
-      AgentEvent::RunStarted { .. }
-      | AgentEvent::RunStopped { .. }
-      | AgentEvent::MemorySummaryAdded { .. }
-      | AgentEvent::DebateRoundStarted { .. } => {}
+      // Events without a `step_index` (RunStarted / RunStopped /
+      // MemorySummaryAdded / DebateRoundStarted) need no offset — and neither
+      // does any future variant, since `AgentEvent` is `#[non_exhaustive]`.
+      _ => {}
     }
   }
   prior.events.extend(resumed.events);

@@ -409,10 +409,9 @@ fn rewrite_event_step_index(event: &mut AgentEvent, map: &HashMap<usize, usize>)
         step.index = *remapped;
       }
     }
-    AgentEvent::RunStarted { .. }
-    | AgentEvent::RunStopped { .. }
-    | AgentEvent::MemorySummaryAdded { .. }
-    | AgentEvent::DebateRoundStarted { .. } => {}
+    // Events without a `step_index` need no remap — and neither does any
+    // future variant, since `AgentEvent` is `#[non_exhaustive]`.
+    _ => {}
   }
 }
 
