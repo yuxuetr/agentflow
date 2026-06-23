@@ -20,10 +20,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
-  ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEventSink, HarnessProfile,
-  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
-  RoadmapMdProvider, SeqAllocator, SinkChain, TodosMdProvider, WorkspaceLayoutProvider,
-  default_session_dir, wrap_registry,
+  ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEvent, HarnessEventBody,
+  HarnessEventSink, HarnessProfile, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
+  HookConfig, JsonlEventSink, RoadmapMdProvider, SeqAllocator, SinkChain, TodosMdProvider,
+  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::{MemoryStore, SqliteMemory};
@@ -57,6 +57,66 @@ struct ChatConfig {
 /// A pending approval handed to the REPL: the request + a one-shot channel to
 /// return the user's decision on.
 type ApprovalAsk = (ApprovalRequest, oneshot::Sender<ApprovalDecision>);
+
+/// H.3.1: streams concise live progress lines to stderr as the Harness emits
+/// tool / memory events *during* a turn, so the user sees activity step-by-step
+/// instead of only the final answer appearing after the whole turn completes.
+///
+/// Gated on a TTY: when stderr is piped (tests, `… | cat`) it stays silent so
+/// captured output is just the answer on stdout. Each line first clears the
+/// `⏳ thinking…` spinner (or the prior progress line) with CR + erase-to-EOL,
+/// so progress lines stack cleanly above the eventual answer.
+struct ChatProgressSink {
+  enabled: bool,
+}
+
+impl ChatProgressSink {
+  fn new() -> Self {
+    Self {
+      enabled: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    }
+  }
+
+  fn line(&self, text: &str) {
+    use std::io::Write;
+    eprint!("\r\x1b[K{text}\n");
+    std::io::stderr().flush().ok();
+  }
+}
+
+#[async_trait::async_trait]
+impl HarnessEventSink for ChatProgressSink {
+  fn name(&self) -> &str {
+    "chat-progress"
+  }
+
+  async fn write(&self, event: &HarnessEvent) -> Result<(), HarnessError> {
+    if !self.enabled {
+      return Ok(());
+    }
+    if let Some(text) = progress_line(&event.body) {
+      self.line(&text);
+    }
+    Ok(())
+  }
+}
+
+/// Map a Harness event body to the concise progress line the REPL streams, or
+/// `None` for events that are not part of the live activity narrative (session
+/// lifecycle, approvals, post-hoc `step_started`). Pure so it is unit-testable.
+fn progress_line(body: &HarnessEventBody) -> Option<String> {
+  match body {
+    HarnessEventBody::ToolCallRequested(p) => Some(format!("   🔧 {}…", p.tool)),
+    HarnessEventBody::ToolCallCompleted(p) => {
+      let mark = if p.is_error { "✗" } else { "✓" };
+      Some(format!("   {mark} {} ({} ms)", p.tool, p.duration_ms))
+    }
+    HarnessEventBody::MemorySummaryAdded(p) => {
+      Some(format!("   📝 context compacted ({})", p.layer))
+    }
+    _ => None,
+  }
+}
 
 /// Interactive `--approve cli` provider for `harness chat` (H.2.1). The blocking
 /// [`agentflow_harness::CliApprovalProvider`] can't be used here because it reads
@@ -477,6 +537,8 @@ async fn build_chat_runtime(
   };
   runtime = runtime
     .with_event_sink(cfg.jsonl.clone())
+    // H.3.1: stream live tool/memory progress to stderr (self-gates on a TTY).
+    .with_event_sink(Arc::new(ChatProgressSink::new()))
     .with_seq_allocator(cfg.seq_allocator.clone());
   if !cfg.no_default_context {
     runtime = runtime
@@ -538,10 +600,79 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_harness::ApprovalRisk;
+  use agentflow_harness::{
+    ApprovalRisk, MemorySummaryAddedPayload, SessionStartedPayload, ToolCallCompletedPayload,
+    ToolCallRequestedPayload,
+  };
   use agentflow_memory::Message;
   use agentflow_tools::ToolIdempotency;
   use tempfile::TempDir;
+
+  #[test]
+  fn progress_line_renders_tool_and_memory_events() {
+    let req = progress_line(&HarnessEventBody::ToolCallRequested(
+      ToolCallRequestedPayload {
+        step_index: 1,
+        tool: "search".into(),
+        source: None,
+        permissions: vec![],
+        idempotency: None,
+        params_summary: serde_json::Value::Null,
+      },
+    ));
+    assert_eq!(req.as_deref(), Some("   🔧 search…"));
+
+    let ok = progress_line(&HarnessEventBody::ToolCallCompleted(
+      ToolCallCompletedPayload {
+        step_index: 1,
+        tool: "search".into(),
+        is_error: false,
+        duration_ms: 12,
+        source: None,
+        output_summary: None,
+      },
+    ));
+    assert_eq!(ok.as_deref(), Some("   ✓ search (12 ms)"));
+
+    let err = progress_line(&HarnessEventBody::ToolCallCompleted(
+      ToolCallCompletedPayload {
+        step_index: 2,
+        tool: "shell".into(),
+        is_error: true,
+        duration_ms: 3,
+        source: None,
+        output_summary: None,
+      },
+    ));
+    assert_eq!(err.as_deref(), Some("   ✗ shell (3 ms)"));
+
+    let mem = progress_line(&HarnessEventBody::MemorySummaryAdded(
+      MemorySummaryAddedPayload {
+        layer: "context_refresh".into(),
+        summary: "x".into(),
+        token_estimate: 1,
+      },
+    ));
+    assert_eq!(
+      mem.as_deref(),
+      Some("   📝 context compacted (context_refresh)")
+    );
+  }
+
+  #[test]
+  fn progress_line_ignores_non_activity_events() {
+    // Session lifecycle is not part of the live activity narrative.
+    let started = progress_line(&HarnessEventBody::SessionStarted(SessionStartedPayload {
+      workspace_root: "/tmp".into(),
+      runtime: HarnessRuntimeKind::React,
+      profile: HarnessProfile::Local,
+      model: "mock".into(),
+      skills: vec![],
+      context_item_count: 0,
+      context_token_estimate: 0,
+    }));
+    assert_eq!(started, None);
+  }
 
   fn sample_request(id: &str) -> ApprovalRequest {
     ApprovalRequest {
