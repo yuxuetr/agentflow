@@ -13,23 +13,22 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
-use agentflow_memory::{MemoryStore, SqliteMemory};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
   ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
-  RoadmapMdProvider, SinkChain, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir,
-  wrap_registry,
+  RoadmapMdProvider, SeqAllocator, SinkChain, TodosMdProvider, WorkspaceLayoutProvider,
+  default_session_dir, wrap_registry,
 };
-use tokio::sync::{mpsc, oneshot};
 use agentflow_llm::AgentFlow;
+use agentflow_memory::{MemoryStore, SqliteMemory};
 use agentflow_tools::ToolRegistry;
+use tokio::sync::{mpsc, oneshot};
 
 use super::run::{ApproveMode, build_agent, parse_runtime_kind};
 use super::{parse_profile, resolve_run_dir};
@@ -50,7 +49,7 @@ struct ChatConfig {
   context_refresh: bool,
   no_default_context: bool,
   jsonl: Arc<dyn HarnessEventSink>,
-  seq_counter: Arc<AtomicU64>,
+  seq_allocator: SeqAllocator,
   memory_db: PathBuf,
   session_id: String,
 }
@@ -185,8 +184,12 @@ pub async fn execute(
   // channel-based `ChatApprovalProvider`; approval requests are answered by the
   // turn loop below, which reads the decision from the same shared reader.
   let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalAsk>();
-  let approval_override: Option<Arc<dyn ApprovalProvider>> = matches!(approve_mode, ApproveMode::Cli)
-    .then(|| Arc::new(ChatApprovalProvider { tx: approval_tx.clone() }) as Arc<dyn ApprovalProvider>);
+  let approval_override: Option<Arc<dyn ApprovalProvider>> =
+    matches!(approve_mode, ApproveMode::Cli).then(|| {
+      Arc::new(ChatApprovalProvider {
+        tx: approval_tx.clone(),
+      }) as Arc<dyn ApprovalProvider>
+    });
 
   let workspace = workspace
     .map(PathBuf::from)
@@ -213,9 +216,10 @@ pub async fn execute(
     context_refresh,
     no_default_context,
     jsonl: Arc::new(JsonlEventSink::new(session_dir.clone())),
-    // One shared seq counter for the hook layer and the runtime so events
-    // stay monotonic across the whole chat (Q1.7.1) and across rebuilds.
-    seq_counter: Arc::new(AtomicU64::new(0)),
+    // One shared seq allocator (counter + emit lock) for the hook layer and the
+    // runtime so events stay monotonic *and in wire order* across the whole chat
+    // (Q1.7.1 + P-A3.4) and across rebuilds.
+    seq_allocator: SeqAllocator::new(),
     memory_db,
     session_id: session.unwrap_or_else(|| format!("chat-{}", uuid::Uuid::new_v4().simple())),
   };
@@ -458,7 +462,7 @@ async fn build_chat_runtime(
       SinkChain::new().push(cfg.jsonl.clone()),
     )
     .with_profile(cfg.profile)
-    .with_seq_counter(cfg.seq_counter.clone());
+    .with_seq_allocator(cfg.seq_allocator.clone());
     let mut snapshot = ToolRegistry::new();
     for tool in agent.tools().list() {
       snapshot.register(tool);
@@ -473,7 +477,7 @@ async fn build_chat_runtime(
   };
   runtime = runtime
     .with_event_sink(cfg.jsonl.clone())
-    .with_seq_counter(cfg.seq_counter.clone());
+    .with_seq_allocator(cfg.seq_allocator.clone());
   if !cfg.no_default_context {
     runtime = runtime
       .with_context_provider(Arc::new(AgentsMdProvider::new()))
@@ -566,9 +570,15 @@ mod tests {
     assert!(matches!(parse_approval_response("r"), (Allow, Run, _)));
     assert!(matches!(parse_approval_response("n"), (Deny, Once, _)));
     assert!(matches!(parse_approval_response(""), (Deny, Once, _)));
-    assert!(matches!(parse_approval_response("q"), (DenyAndStop, Once, _)));
+    assert!(matches!(
+      parse_approval_response("q"),
+      (DenyAndStop, Once, _)
+    ));
     // Unknown input is a fail-closed deny.
-    assert!(matches!(parse_approval_response("garbage"), (Deny, Once, _)));
+    assert!(matches!(
+      parse_approval_response("garbage"),
+      (Deny, Once, _)
+    ));
   }
 
   /// The provider forwards a request to the REPL channel and returns whatever
@@ -613,7 +623,10 @@ mod tests {
     let db = dir.path().join("memory.sqlite");
     let memory = SqliteMemory::open(&db).await.unwrap();
     memory.add_message(Message::user("s1", "hi")).await.unwrap();
-    memory.add_message(Message::user("s2", "keep me")).await.unwrap();
+    memory
+      .add_message(Message::user("s2", "keep me"))
+      .await
+      .unwrap();
 
     clear_session_memory(&db, "s1").await.unwrap();
 

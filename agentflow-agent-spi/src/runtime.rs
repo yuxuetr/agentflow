@@ -511,6 +511,7 @@ pub enum AgentStepKind {
 /// Runtime events emitted while an agent-native loop is executing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AgentEvent {
   RunStarted {
     session_id: String,

@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -43,10 +43,9 @@ use agentflow_agent_spi::runtime::{
 use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
 
 use crate::error::HarnessError;
-use crate::event::{
-  BackgroundTaskStatus, BackgroundTaskUpdatedPayload, HarnessEvent, HarnessEventBody,
-};
+use crate::event::{BackgroundTaskStatus, BackgroundTaskUpdatedPayload, HarnessEventBody};
 use crate::persistence::SinkChain;
+use crate::seq::SeqAllocator;
 
 tokio::task_local! {
   /// Set inside the spawned `tokio::task` that runs a background
@@ -199,7 +198,7 @@ struct TaskRuntimeInner {
 pub struct TaskRuntime {
   session_id: String,
   sinks: SinkChain,
-  seq_counter: Arc<AtomicU64>,
+  seq_allocator: SeqAllocator,
   max_output_bytes: usize,
   agent_factory: Arc<dyn TaskAgentFactory>,
   inner: Arc<Mutex<TaskRuntimeInner>>,
@@ -224,7 +223,10 @@ impl TaskRuntime {
     Self {
       session_id: session_id.into(),
       sinks,
-      seq_counter,
+      // P-A3.4: wrap the shared counter so background-task lifecycle events
+      // serialize their (allocate, dispatch) against each other. Concurrent
+      // tasks emit `BackgroundTaskUpdated` through this one runtime.
+      seq_allocator: SeqAllocator::from_counter(seq_counter),
       max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
       agent_factory,
       inner: Arc::new(Mutex::new(TaskRuntimeInner {
@@ -470,19 +472,23 @@ impl TaskRuntime {
     summary: Option<String>,
     error: Option<String>,
   ) -> Result<(), HarnessError> {
-    let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let event = HarnessEvent {
-      seq,
-      session_id: self.session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::BackgroundTaskUpdated(BackgroundTaskUpdatedPayload {
-        task_id: task_id.to_owned(),
-        status: status.envelope(),
-        summary,
-        error,
-      }),
-    };
-    self.sinks.dispatch(&event).await
+    // P-A3.4: stamp under the shared emit lock so concurrent background tasks'
+    // lifecycle events reach the sink in seq order.
+    self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &self.session_id,
+        Utc::now(),
+        HarnessEventBody::BackgroundTaskUpdated(BackgroundTaskUpdatedPayload {
+          task_id: task_id.to_owned(),
+          status: status.envelope(),
+          summary,
+          error,
+        }),
+      )
+      .await
+      .map(|_| ())
   }
 
   /// Build a [`TaskWriter`] for the caller's factory to stream output

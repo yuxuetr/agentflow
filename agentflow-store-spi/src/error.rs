@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum MemoryError {
   #[error("Storage error: {0}")]
   StorageError(String),

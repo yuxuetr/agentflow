@@ -64,9 +64,6 @@ pub enum ReActError {
 
   #[error("Memory summary error: {message}")]
   MemorySummary { message: String },
-
-  #[error("turn-driven session already finished")]
-  SessionFinished,
 }
 
 /// Input passed to a pluggable memory summary backend.
@@ -620,11 +617,7 @@ impl ReActAgent {
     context: AgentContext,
   ) -> Result<ReActLoopSession<'_>, ReActError> {
     let state = self.init_run(&context).await?;
-    Ok(ReActLoopSession {
-      agent: self,
-      state,
-      finished: false,
-    })
+    Ok(ReActLoopSession { agent: self, state })
   }
 
   /// Borrow the run's conversation memory (used by a turn-driven driver
@@ -2423,35 +2416,62 @@ struct LoopState {
   between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
 }
 
-/// A **turn-driven** ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
+/// A **live** turn-driven ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
 ///
-/// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a
-/// turn at a time with [`Self::next_turn`] until it returns
-/// [`TurnProgress::Finished`]. Between turns the caller (typically the
-/// Harness) owns the loop: it can inspect or rewrite the conversation
-/// through [`Self::memory`] to compact / refresh context under its own
-/// policy. [`ReActAgent::run_with_context`] is the equivalent
-/// batteries-included driver that pumps every turn itself.
+/// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a turn at a
+/// time with [`Self::next_turn`] until it returns [`ReActTurn::Finished`].
+/// Between turns the caller (typically the Harness) owns the loop: it can
+/// inspect or rewrite the conversation through [`Self::memory`] to compact /
+/// refresh context under its own policy. [`ReActAgent::run_with_context`] is the
+/// equivalent batteries-included driver that pumps every turn itself.
+///
+/// ## Compile-time "no use after finish" (P-A3.3)
+///
+/// This is a **typestate**: the value only ever represents a *live* session.
+/// [`next_turn`](Self::next_turn) consumes `self`, returning either a fresh live
+/// session ([`ReActTurn::Continued`]) or the run result with no session
+/// ([`ReActTurn::Finished`]). There is therefore no way to call `next_turn` on a
+/// finished session — that is a compile error (the value was moved), not a
+/// runtime `SessionFinished` error. The object-safe [`LoopSession`] trait (which
+/// the Harness drives through `Box<dyn LoopSession>`) cannot express this — a
+/// `&mut self` method cannot consume the typestate — so that path keeps an
+/// internal runtime guard in [`ReActTurnDriver`].
 pub struct ReActLoopSession<'a> {
   agent: &'a mut ReActAgent,
   state: LoopState,
-  finished: bool,
 }
 
-impl ReActLoopSession<'_> {
-  /// Advance exactly one turn (one observe → plan → act cycle). Returns
-  /// [`TurnProgress::Finished`] once the agent reaches a terminal state;
-  /// calling again afterwards is a [`ReActError::SessionFinished`].
-  pub async fn next_turn(&mut self) -> Result<TurnProgress, ReActError> {
-    if self.finished {
-      return Err(ReActError::SessionFinished);
-    }
-    match self.agent.run_one_turn(&mut self.state).await? {
-      TurnStep::Continue => Ok(TurnProgress::Continued),
-      TurnStep::Stop(result) => {
-        self.finished = true;
-        Ok(TurnProgress::Finished(result))
-      }
+/// Outcome of advancing a [`ReActLoopSession`] by one turn.
+///
+/// Consuming `next_turn` makes "no use after finish" a compile-time guarantee
+/// (P-A3.3): a `Continued` turn hands back a live session to drive again, while
+/// `Finished` hands back the result (and the agent borrow, so the caller can
+/// still inspect memory) and **no session** — nothing is left to drive.
+pub enum ReActTurn<'a> {
+  /// The agent advanced; drive `session` again.
+  Continued(ReActLoopSession<'a>),
+  /// The agent reached a terminal state.
+  Finished {
+    /// The completed run.
+    result: AgentRunResult,
+    /// The agent borrow the live session held, returned so the caller can keep
+    /// reading conversation memory after the run.
+    agent: &'a mut ReActAgent,
+  },
+}
+
+impl<'a> ReActLoopSession<'a> {
+  /// Advance exactly one turn (one observe → plan → act cycle), consuming the
+  /// session. Returns [`ReActTurn::Continued`] with a fresh live session to
+  /// drive, or [`ReActTurn::Finished`] once the agent reaches a terminal state.
+  pub async fn next_turn(mut self) -> Result<ReActTurn<'a>, ReActError> {
+    match self.agent.run_one_turn(&mut self.state).await {
+      Ok(TurnStep::Continue) => Ok(ReActTurn::Continued(self)),
+      Ok(TurnStep::Stop(result)) => Ok(ReActTurn::Finished {
+        result,
+        agent: self.agent,
+      }),
+      Err(e) => Err(e),
     }
   }
 
@@ -2464,11 +2484,6 @@ impl ReActLoopSession<'_> {
   /// 0-based index of the turn `next_turn` will run next.
   pub fn turn_index(&self) -> usize {
     self.state.iteration
-  }
-
-  /// Whether the session has reached a terminal state.
-  pub fn is_finished(&self) -> bool {
-    self.finished
   }
 }
 
@@ -2485,7 +2500,7 @@ impl TurnDrivenRuntime for ReActAgent {
         .map_err(|e| AgentRuntimeError::ExecutionFailed {
           message: e.to_string(),
         })?;
-    Ok(Box::new(session))
+    Ok(Box::new(ReActTurnDriver::new(session)))
   }
 
   fn runtime_name(&self) -> &'static str {
@@ -2493,24 +2508,78 @@ impl TurnDrivenRuntime for ReActAgent {
   }
 }
 
+/// Object-safe adapter that drives a [`ReActLoopSession`] through the `&mut self`
+/// [`LoopSession`] trait the Harness governs via `Box<dyn LoopSession>`.
+///
+/// The consuming typestate cannot cross the `dyn` boundary (a `&mut self` method
+/// cannot move the session out), so this adapter keeps the runtime "already
+/// finished" guard the concrete [`ReActLoopSession`] no longer needs: it holds
+/// the live session in an `Option` that becomes `None` once a turn finishes.
+/// `memory()` / `turn_index()` keep answering after the run finishes by
+/// retaining the agent borrow the finished turn handed back.
+struct ReActTurnDriver<'a> {
+  /// `Some` while the session is live; `None` once a turn returned `Finished`
+  /// — or after a turn errored (the consuming turn took the session with it).
+  session: Option<ReActLoopSession<'a>>,
+  /// Retained on `Finished` so `memory()` / `turn_index()` still answer once the
+  /// live session that owned the agent borrow is gone. `(agent, next_turn_index)`.
+  finished: Option<(&'a mut ReActAgent, usize)>,
+}
+
+impl<'a> ReActTurnDriver<'a> {
+  fn new(session: ReActLoopSession<'a>) -> Self {
+    Self {
+      session: Some(session),
+      finished: None,
+    }
+  }
+}
+
 #[async_trait]
-impl LoopSession for ReActLoopSession<'_> {
+impl LoopSession for ReActTurnDriver<'_> {
   async fn next_turn(&mut self) -> Result<TurnProgress, AgentRuntimeError> {
-    // Fully-qualified call to the inherent method (returns ReActError);
-    // map it onto the runtime-agnostic error for the trait surface.
-    ReActLoopSession::next_turn(self)
+    // `None` means a prior turn already finished (or errored). On the object-safe
+    // path this is the runtime guard the concrete typestate makes a compile error.
+    let Some(session) = self.session.take() else {
+      return Err(AgentRuntimeError::ExecutionFailed {
+        message: "turn-driven session already finished".to_string(),
+      });
+    };
+    let next_index = session.turn_index();
+    match session
+      .next_turn()
       .await
       .map_err(|e| AgentRuntimeError::ExecutionFailed {
         message: e.to_string(),
-      })
+      })? {
+      ReActTurn::Continued(active) => {
+        self.session = Some(active);
+        Ok(TurnProgress::Continued)
+      }
+      ReActTurn::Finished { result, agent } => {
+        self.finished = Some((agent, next_index));
+        Ok(TurnProgress::Finished(result))
+      }
+    }
   }
 
   fn memory(&self) -> &dyn MemoryStore {
-    ReActLoopSession::memory(self)
+    match (&self.session, &self.finished) {
+      (Some(session), _) => session.memory(),
+      (None, Some((agent, _))) => agent.memory_ref(),
+      // Both `None` only after a turn *errored* (the session was consumed with
+      // no agent to hand back). The Harness propagates that error and never
+      // calls `memory()` afterwards, so this is unreachable in practice.
+      (None, None) => unreachable!("turn-driven session errored; memory() not callable after"),
+    }
   }
 
   fn turn_index(&self) -> usize {
-    ReActLoopSession::turn_index(self)
+    match (&self.session, &self.finished) {
+      (Some(session), _) => session.turn_index(),
+      (None, Some((_, index))) => *index,
+      (None, None) => 0,
+    }
   }
 }
 
@@ -2690,10 +2759,10 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
       AgentEvent::StepCompleted { step, .. } => {
         step.index += event_offset;
       }
-      AgentEvent::RunStarted { .. }
-      | AgentEvent::RunStopped { .. }
-      | AgentEvent::MemorySummaryAdded { .. }
-      | AgentEvent::DebateRoundStarted { .. } => {}
+      // Events without a `step_index` (RunStarted / RunStopped /
+      // MemorySummaryAdded / DebateRoundStarted) need no offset — and neither
+      // does any future variant, since `AgentEvent` is `#[non_exhaustive]`.
+      _ => {}
     }
   }
   prior.events.extend(resumed.events);
@@ -3120,18 +3189,18 @@ providers:
     )
     .with_reflection_strategy(Arc::new(crate::reflection::FinalReflection));
 
-    let mut session = agent
+    let session = agent
       .begin_turn_driven(AgentContext::new("turn-driven-session", "say hi", &model))
       .await
       .unwrap();
     assert_eq!(session.turn_index(), 0);
 
-    // Turn 0: tool call → Continued; memory is observable between turns.
-    assert!(matches!(
-      session.next_turn().await.unwrap(),
-      TurnProgress::Continued
-    ));
-    assert!(!session.is_finished());
+    // Turn 0: tool call → Continued; the consuming `next_turn` hands back a
+    // fresh live session, and memory is observable between turns.
+    let session = match session.next_turn().await.unwrap() {
+      ReActTurn::Continued(active) => active,
+      ReActTurn::Finished { .. } => panic!("expected Continued on the first turn"),
+    };
     assert_eq!(session.turn_index(), 1);
     let history = session
       .memory()
@@ -3140,20 +3209,23 @@ providers:
       .unwrap();
     assert!(!history.is_empty(), "memory accessible mid-run");
 
-    // Turn 1: final answer → Finished.
+    // Turn 1: final answer → Finished. `next_turn` consumes the session and
+    // returns the result + the agent borrow — there is no session value left.
     let result = match session.next_turn().await.unwrap() {
-      TurnProgress::Finished(r) => r,
-      TurnProgress::Continued => panic!("expected Finished on the second turn"),
+      ReActTurn::Finished { result, .. } => result,
+      ReActTurn::Continued(_) => panic!("expected Finished on the second turn"),
     };
     assert_eq!(result.answer.as_deref(), Some("final: ok"));
     assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
-    assert!(session.is_finished());
 
-    // Using the session after it finished is an error.
-    assert!(matches!(
-      session.next_turn().await,
-      Err(ReActError::SessionFinished)
-    ));
+    // P-A3.3: "use after finish" is now a *compile* error, not a runtime
+    // `SessionFinished`. The line below does not compile — `session` was moved
+    // into the consuming `next_turn` above, so there is nothing left to drive:
+    //
+    //   let _ = session.next_turn().await; // error[E0382]: use of moved value
+    //
+    // The object-safe `LoopSession` path keeps a runtime guard
+    // (`ReActTurnDriver`); that is covered by the harness runtime tests.
 
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");

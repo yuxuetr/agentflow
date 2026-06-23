@@ -42,6 +42,7 @@ pub mod params_summary;
 pub mod persistence;
 pub mod providers;
 pub mod runtime;
+pub mod seq;
 pub mod tasks;
 pub mod tracing_bridge;
 
@@ -56,13 +57,13 @@ pub use context::{
   ContextItem, ContextPriority, ContextProvider, HarnessContext, HarnessProfile, HarnessRuntimeKind,
 };
 pub use error::HarnessError;
-pub use flow_run::{FlowRunOutcome, HarnessFlowRunOptions, HarnessFlowRunResult};
 pub use event::{
   ApprovalDecidedPayload, ApprovalRequestedPayload, BackgroundTaskStatus,
   BackgroundTaskUpdatedPayload, HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload,
   SessionStartedPayload, StepStartedPayload, StopReason, StoppedPayload, ToolCallCompletedPayload,
   ToolCallRequestedPayload,
 };
+pub use flow_run::{FlowRunOutcome, HarnessFlowRunOptions, HarnessFlowRunResult};
 pub use hooks::{CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook};
 pub use hooks_runtime::{
   DEFAULT_APPROVAL_TIMEOUT, DEFAULT_HOOK_TIMEOUT, HookConfig, HookedTool, wrap_registry,
@@ -76,6 +77,7 @@ pub use providers::{
   WorkspaceLayoutProvider, default_providers,
 };
 pub use runtime::{HarnessRunOptions, HarnessRunResult, HarnessRuntime};
+pub use seq::{Seq, SeqAllocator};
 pub use tasks::{
   DEFAULT_MAX_OUTPUT_BYTES, TaskAgentBundle, TaskAgentFactory, TaskCreateTool, TaskGetTool,
   TaskHandle, TaskListTool, TaskOutputSnapshot, TaskOutputTool, TaskRuntime, TaskSpec, TaskStatus,

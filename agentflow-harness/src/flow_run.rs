@@ -20,7 +20,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agentflow_graph::events::{EventListener, WorkflowEvent};
@@ -30,8 +29,7 @@ use chrono::Utc;
 use crate::context::{HarnessProfile, HarnessRuntimeKind};
 use crate::error::HarnessError;
 use crate::event::{
-  HarnessEvent, HarnessEventBody, SessionStartedPayload, StepStartedPayload, StopReason,
-  StoppedPayload,
+  HarnessEventBody, SessionStartedPayload, StepStartedPayload, StopReason, StoppedPayload,
 };
 use crate::runtime::HarnessRuntime;
 
@@ -134,17 +132,19 @@ impl HarnessRuntime {
     step_index: usize,
     node_id: &str,
   ) -> Result<(), HarnessError> {
-    let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let event = HarnessEvent {
-      seq,
-      session_id: session_id.to_string(),
-      ts: Utc::now(),
-      body: HarnessEventBody::StepStarted(StepStartedPayload {
-        step_index,
-        step_type: format!("node:{node_id}"),
-      }),
-    };
-    self.sinks.dispatch(&event).await
+    self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        session_id,
+        Utc::now(),
+        HarnessEventBody::StepStarted(StepStartedPayload {
+          step_index,
+          step_type: format!("node:{node_id}"),
+        }),
+      )
+      .await
+      .map(|_| ())
   }
 
   /// Govern a deterministic [`Flow`] run (P-A2.2).
@@ -171,22 +171,23 @@ impl HarnessRuntime {
       .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // ── session_started ────────────────────────────────────────────────────
-    let started_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let started = HarnessEvent {
-      seq: started_seq,
-      session_id: session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::SessionStarted(SessionStartedPayload {
-        workspace_root: options.workspace_root.to_string_lossy().into_owned(),
-        runtime: HarnessRuntimeKind::Flow,
-        profile: options.profile,
-        model: String::new(),
-        skills: Vec::new(),
-        context_item_count: 0,
-        context_token_estimate: 0,
-      }),
-    };
-    self.sinks.dispatch(&started).await?;
+    self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &session_id,
+        Utc::now(),
+        HarnessEventBody::SessionStarted(SessionStartedPayload {
+          workspace_root: options.workspace_root.to_string_lossy().into_owned(),
+          runtime: HarnessRuntimeKind::Flow,
+          profile: options.profile,
+          model: String::new(),
+          skills: Vec::new(),
+          context_item_count: 0,
+          context_token_estimate: 0,
+        }),
+      )
+      .await?;
 
     // ── execute (governance happens inside via the wrapped registry) ────────
     //
@@ -196,7 +197,9 @@ impl HarnessRuntime {
     // registry emits between `session_started` and `stopped`. Replaces any
     // listener the caller had attached (the harness owns the slot here).
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let instrumented = flow.clone().with_event_listener(Arc::new(HarnessFlowListener { tx }));
+    let instrumented = flow
+      .clone()
+      .with_event_listener(Arc::new(HarnessFlowListener { tx }));
 
     let mut step_index: usize = 0;
     let deadline = options.timeout.map(|t| tokio::time::Instant::now() + t);
@@ -248,18 +251,19 @@ impl HarnessRuntime {
         error: Some("flow run exceeded the harness timeout".to_string()),
       },
     };
-    let stopped_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-    let stopped = HarnessEvent {
-      seq: stopped_seq,
-      session_id: session_id.clone(),
-      ts: Utc::now(),
-      body: HarnessEventBody::Stopped(stopped_payload),
-    };
-    self.sinks.dispatch(&stopped).await?;
+    let stopped_seq = self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &session_id,
+        Utc::now(),
+        HarnessEventBody::Stopped(stopped_payload),
+      )
+      .await?;
 
     Ok(HarnessFlowRunResult {
       session_id,
-      final_event_seq: stopped_seq,
+      final_event_seq: stopped_seq.get(),
       outcome,
     })
   }
