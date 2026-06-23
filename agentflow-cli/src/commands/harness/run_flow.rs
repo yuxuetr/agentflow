@@ -85,7 +85,10 @@ pub async fn execute(
   let (status, error): (&str, Option<String>) = match &result.outcome {
     FlowRunOutcome::Completed(_) => ("completed", None),
     FlowRunOutcome::Failed(err) => ("failed", Some(err.clone())),
-    FlowRunOutcome::TimedOut => ("timed_out", Some("flow run exceeded the timeout".to_string())),
+    FlowRunOutcome::TimedOut => (
+      "timed_out",
+      Some("flow run exceeded the timeout".to_string()),
+    ),
   };
   let node_count = match &result.outcome {
     FlowRunOutcome::Completed(state) => state.len(),

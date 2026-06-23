@@ -20,9 +20,7 @@ use agentflow_harness::{
   HarnessProfile, HarnessRuntime, HookConfig, InMemoryEventSink, SinkChain, StopReason,
   wrap_registry,
 };
-use agentflow_tools::{
-  Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolRegistry,
-};
+use agentflow_tools::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolRegistry};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
