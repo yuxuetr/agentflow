@@ -567,10 +567,13 @@ impl HarnessRuntime {
     };
 
     // If the bridge emitted anything, the inner runtime is live-aware and
-    // already streamed the tool events; the post-hoc pass then emits only
-    // the `step_started` markers. Otherwise (a runtime that ignores
+    // already streamed the tool events; otherwise (a runtime that ignores
     // `event_sink`) reconstruct the full set for backward compatibility.
+    // H.1.1: `step_started` is tracked separately — a runtime can stream tool
+    // events live yet not emit `StepStarted`, in which case the post-hoc path
+    // must still reconstruct the step boundaries.
     let live_emitted = bridge.emitted() > 0;
+    let live_step_started = bridge.emitted_step_started() > 0;
     // Post-loop, single-threaded: these are allocated and dispatched in the
     // same order, so they cannot race the live emitters (which are done) — the
     // raw counter is sufficient here, no emit lock needed.
@@ -579,6 +582,7 @@ impl HarnessRuntime {
       &session_id,
       &self.seq_allocator,
       live_emitted,
+      live_step_started,
     );
     for event in &translated {
       self.sinks.dispatch(event).await?;
@@ -908,6 +912,11 @@ struct HarnessAgentEventBridge {
   sinks: SinkChain,
   seq_allocator: SeqAllocator,
   emitted: AtomicU64,
+  /// H.1.1: `step_started` emissions specifically. Tracked apart from `emitted`
+  /// because a runtime can stream tool events live yet not emit `StepStarted`
+  /// (e.g. a test double) — only when this is `> 0` may the post-hoc translation
+  /// skip reconstructing `step_started`, so non-emitting runtimes still get it.
+  emitted_step_started: AtomicU64,
 }
 
 impl HarnessAgentEventBridge {
@@ -917,6 +926,7 @@ impl HarnessAgentEventBridge {
       sinks,
       seq_allocator,
       emitted: AtomicU64::new(0),
+      emitted_step_started: AtomicU64::new(0),
     }
   }
 
@@ -925,6 +935,11 @@ impl HarnessAgentEventBridge {
   /// tool events to avoid duplicating them.
   fn emitted(&self) -> u64 {
     self.emitted.load(Ordering::SeqCst)
+  }
+
+  /// Number of `step_started` events this bridge dispatched live (H.1.1).
+  fn emitted_step_started(&self) -> u64 {
+    self.emitted_step_started.load(Ordering::SeqCst)
   }
 
   async fn dispatch_body(&self, body: HarnessEventBody, ts: chrono::DateTime<Utc>) {
@@ -1008,10 +1023,32 @@ impl AgentEventSink for HarnessAgentEventBridge {
           )
           .await;
       }
-      // Other events (RunStarted/Stopped, StepStarted, policy/capability
-      // decisions, LLM-call accounting, multi-agent ops) are not part of
-      // the Harness envelope's live tool/approval narrative. `step_started`
-      // is emitted post-hoc from `result.steps` by `translate_inner_events`.
+      // H.1.1: a live-aware runtime now emits `StepStarted` as each step begins,
+      // so the bridge maps it straight through — interleaving step boundaries
+      // with the tool / approval events of that step instead of batching them
+      // post-hoc. The separate counter tells `translate_inner_events` it may
+      // skip reconstruction (a runtime that never emits this keeps the post-hoc
+      // path).
+      AgentEvent::StepStarted {
+        step_index,
+        step_type,
+        timestamp,
+        ..
+      } => {
+        self
+          .dispatch_body(
+            HarnessEventBody::StepStarted(StepStartedPayload {
+              step_index: *step_index,
+              step_type: step_type.clone(),
+            }),
+            *timestamp,
+          )
+          .await;
+        self.emitted_step_started.fetch_add(1, Ordering::SeqCst);
+      }
+      // Other events (RunStarted/Stopped, policy/capability decisions, LLM-call
+      // accounting, multi-agent ops) are not part of the Harness envelope's
+      // live tool/approval narrative.
       _ => {}
     }
   }
@@ -1022,6 +1059,7 @@ fn translate_inner_events(
   session_id: &str,
   seq_allocator: &SeqAllocator,
   skip_tool_events: bool,
+  skip_step_started: bool,
 ) -> Vec<HarnessEvent> {
   let mut out = Vec::new();
   // Q1.7.1 + P-A3.4: every event takes its seq from the shared allocator's
@@ -1033,15 +1071,20 @@ fn translate_inner_events(
   // ordering for `step_started` events that doesn't depend on the
   // inner runtime's choice of when to fire `AgentEvent::StepStarted`.
   for step in &result.steps {
-    out.push(HarnessEvent {
-      seq: next_seq(),
-      session_id: session_id.to_owned(),
-      ts: step.timestamp,
-      body: HarnessEventBody::StepStarted(StepStartedPayload {
-        step_index: step.index,
-        step_type: step_kind_name(&step.kind).to_owned(),
-      }),
-    });
+    // H.1.1: a live-aware runtime emits `step_started` itself (the bridge
+    // mapped it), so skip the post-hoc reconstruction to avoid duplicates. A
+    // runtime that does not emit it keeps this path.
+    if !skip_step_started {
+      out.push(HarnessEvent {
+        seq: next_seq(),
+        session_id: session_id.to_owned(),
+        ts: step.timestamp,
+        body: HarnessEventBody::StepStarted(StepStartedPayload {
+          step_index: step.index,
+          step_type: step_kind_name(&step.kind).to_owned(),
+        }),
+      });
+    }
     // Phase 1: in live mode the bridge already emitted
     // `tool_call_requested` from `AgentEvent::ToolCallStarted`, so skip
     // the post-hoc reconstruction to avoid duplicates. `step_started`
@@ -1111,18 +1154,9 @@ fn tool_call_requested_from_step(step: &AgentStep) -> Option<ToolCallRequestedPa
 }
 
 fn step_kind_name(kind: &AgentStepKind) -> &'static str {
-  match kind {
-    AgentStepKind::Observe { .. } => "observe",
-    AgentStepKind::Plan { .. } => "plan",
-    AgentStepKind::ToolCall { .. } => "tool_call",
-    AgentStepKind::ToolResult { .. } => "tool_result",
-    AgentStepKind::Reflect { .. } => "reflect",
-    AgentStepKind::FinalAnswer { .. } => "final_answer",
-    AgentStepKind::Handoff { .. } => "handoff",
-    AgentStepKind::BlackboardOp { .. } => "blackboard_op",
-    AgentStepKind::DebateProposal { .. } => "debate_proposal",
-    AgentStepKind::DebateVerdict { .. } => "debate_verdict",
-  }
+  // Delegate to the shared contract method so the live `AgentEvent::StepStarted`
+  // (H.1.1) and this post-hoc reconstruction can never drift apart.
+  kind.kind_name()
 }
 
 fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> StoppedPayload {
@@ -1445,6 +1479,57 @@ mod tests {
     let mut deduped = seqs.clone();
     deduped.dedup();
     assert_eq!(deduped.len(), seqs.len(), "no duplicate seqs");
+  }
+
+  /// H.1.1: a runtime that emits `StepStarted` live (as `ReActAgent` now does)
+  /// has its step boundaries streamed by the bridge; the post-hoc translate must
+  /// NOT also reconstruct them. Each `step_started` appears exactly once.
+  #[tokio::test]
+  async fn runtime_live_step_started_not_duplicated_posthoc() {
+    use crate::persistence::InMemoryEventSink;
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("done", captured.clone());
+    // One extra recorded step → the run records Observe(0), Plan(1),
+    // FinalAnswer(2).
+    inner.extra_steps.push(AgentStep::new(
+      1,
+      AgentStepKind::Plan {
+        thought: "t".into(),
+      },
+    ));
+    // A live-aware runtime emits `step_started` for *every* step.
+    for (idx, ty) in [(0usize, "observe"), (1, "plan"), (2, "final_answer")] {
+      inner.live_events.push(AgentEvent::StepStarted {
+        session_id: "scripted".into(),
+        step_index: idx,
+        step_type: ty.into(),
+        timestamp: Utc::now(),
+      });
+    }
+
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    runtime
+      .run(HarnessRunOptions::new("go", dir.path(), "mock"))
+      .await
+      .unwrap();
+
+    let started: Vec<String> = sink
+      .snapshot()
+      .await
+      .iter()
+      .filter_map(|e| match &e.body {
+        HarnessEventBody::StepStarted(p) => Some(p.step_type.clone()),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(
+      started,
+      vec!["observe", "plan", "final_answer"],
+      "each live step_started appears exactly once; the post-hoc translate is skipped"
+    );
   }
 
   use crate::context::ContextItem;

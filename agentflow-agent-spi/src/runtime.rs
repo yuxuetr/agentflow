@@ -508,6 +508,27 @@ pub enum AgentStepKind {
   },
 }
 
+impl AgentStepKind {
+  /// Stable, machine-readable name of this step kind (`observe`, `plan`,
+  /// `tool_call`, ...). Shared so a live `AgentEvent::StepStarted` and any
+  /// post-hoc reconstruction from recorded steps agree on the `step_type`
+  /// string (H.1.1).
+  pub fn kind_name(&self) -> &'static str {
+    match self {
+      AgentStepKind::Observe { .. } => "observe",
+      AgentStepKind::Plan { .. } => "plan",
+      AgentStepKind::ToolCall { .. } => "tool_call",
+      AgentStepKind::ToolResult { .. } => "tool_result",
+      AgentStepKind::Reflect { .. } => "reflect",
+      AgentStepKind::FinalAnswer { .. } => "final_answer",
+      AgentStepKind::Handoff { .. } => "handoff",
+      AgentStepKind::BlackboardOp { .. } => "blackboard_op",
+      AgentStepKind::DebateProposal { .. } => "debate_proposal",
+      AgentStepKind::DebateVerdict { .. } => "debate_verdict",
+    }
+  }
+}
+
 /// Runtime events emitted while an agent-native loop is executing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]

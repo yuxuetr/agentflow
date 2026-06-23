@@ -41,6 +41,33 @@ macro_rules! emit_and_push {
   }};
 }
 
+/// Record a step *and* emit its `AgentEvent::StepStarted` live (H.1.1).
+///
+/// Every recorded `AgentStep` gets a matching `step_started`. Pre-H.1.1 those
+/// were reconstructed post-hoc by the Harness after the whole run; emitting them
+/// live here lets the bridge interleave them with the tool / approval events
+/// that fire during the same step, instead of batching them at the end. The
+/// `step_type` comes from the shared [`AgentStepKind::kind_name`] so it always
+/// matches the post-hoc path used for non-live runtimes. With `$sink == None`
+/// the live emit is a no-op and this is just the step + event push.
+macro_rules! push_step {
+  ($sink:expr, $steps:expr, $events:expr, $session:expr, $index:expr, $kind:expr) => {{
+    let index = $index;
+    let kind = $kind;
+    let started = AgentEvent::StepStarted {
+      session_id: $session.clone(),
+      step_index: index,
+      step_type: kind.kind_name().to_string(),
+      timestamp: Utc::now(),
+    };
+    if let Some(handle) = ($sink).as_ref() {
+      handle.0.emit(&started).await;
+    }
+    $events.push(started);
+    $steps.push(AgentStep::new(index, kind));
+  }};
+}
+
 /// Error type for ReAct agent operations
 #[derive(Debug, thiserror::Error)]
 pub enum ReActError {
@@ -574,7 +601,7 @@ impl ReActAgent {
 
     let system_prompt = self.build_system_prompt();
 
-    Ok(LoopState {
+    let mut state = LoopState {
       steps: vec![AgentStep::new(
         0,
         AgentStepKind::Observe {
@@ -602,7 +629,23 @@ impl ReActAgent {
       system_prompt,
       trace_context: context.trace_context.clone(),
       between_turn_hook: context.between_turn_hook.clone(),
-    })
+    };
+    // H.1.1: the first step (`observe`) is recorded in the initial vec above, so
+    // emit its `step_started` live here too — every other step does so via
+    // `push_step!`. Reuse the recorded step's kind/index so the `step_type`
+    // never drifts. Without it, a live-aware runtime would lose the observe
+    // boundary (the post-hoc path is skipped once step_started goes live).
+    let observe_started = AgentEvent::StepStarted {
+      session_id: self.session_id.clone(),
+      step_index: state.steps[0].index,
+      step_type: state.steps[0].kind.kind_name().to_string(),
+      timestamp: context.started_at,
+    };
+    if let Some(handle) = self.live_sink.as_ref() {
+      handle.0.emit(&observe_started).await;
+    }
+    state.events.push(observe_started);
+    Ok(state)
   }
 
   /// Begin a **turn-driven** run: set up the session and hand back a
@@ -770,18 +813,26 @@ impl ReActAgent {
         );
         tracing::trace!(thought = %thought, "Final answer thought body");
         if !thought.trim().is_empty() {
-          st.steps.push(AgentStep::new(
+          push_step!(
+            self.live_sink,
+            st.steps,
+            st.events,
+            self.session_id,
             st.step_index,
-            AgentStepKind::Plan { thought },
-          ));
+            AgentStepKind::Plan { thought }
+          );
           st.step_index += 1;
         }
-        st.steps.push(AgentStep::new(
+        push_step!(
+          self.live_sink,
+          st.steps,
+          st.events,
+          self.session_id,
           st.step_index,
           AgentStepKind::FinalAnswer {
             answer: answer.clone(),
-          },
-        ));
+          }
+        );
         st.step_index += 1;
         self
           .record_reflection(
@@ -802,12 +853,16 @@ impl ReActAgent {
 
       AgentResponse::Malformed(text) => {
         warn!("LLM returned non-JSON text; treating as final answer");
-        st.steps.push(AgentStep::new(
+        push_step!(
+          self.live_sink,
+          st.steps,
+          st.events,
+          self.session_id,
           st.step_index,
           AgentStepKind::FinalAnswer {
             answer: text.clone(),
-          },
-        ));
+          }
+        );
         st.step_index += 1;
         self
           .record_reflection(
@@ -1246,12 +1301,16 @@ impl ReActAgent {
     }
 
     if !thought.trim().is_empty() {
-      steps.push(AgentStep::new(
+      push_step!(
+        self.live_sink,
+        steps,
+        events,
+        self.session_id,
         *step_index,
         AgentStepKind::Plan {
           thought: thought.clone(),
-        },
-      ));
+        }
+      );
       *step_index += 1;
     }
 
@@ -1311,13 +1370,17 @@ impl ReActAgent {
         timestamp: Utc::now(),
       }
     );
-    steps.push(AgentStep::new(
+    push_step!(
+      self.live_sink,
+      steps,
+      events,
+      self.session_id,
       tool_step_index,
       AgentStepKind::ToolCall {
         tool: tool.clone(),
         params: trace_params,
-      },
-    ));
+      }
+    );
     *step_index += 1;
 
     let started_at = std::time::Instant::now();
@@ -1354,15 +1417,19 @@ impl ReActAgent {
     };
 
     info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
-    steps.push(AgentStep::new(
+    push_step!(
+      self.live_sink,
+      steps,
+      events,
+      self.session_id,
       *step_index,
       AgentStepKind::ToolResult {
         tool: tool.clone(),
         content: tool_output.content.clone(),
         is_error: tool_output.is_error,
         parts: tool_output.parts.clone(),
-      },
-    ));
+      }
+    );
     emit_and_push!(
       self.live_sink,
       events,
@@ -1551,12 +1618,16 @@ impl ReActAgent {
     };
 
     let current_step = *step_index;
-    steps.push(AgentStep::new(
+    push_step!(
+      self.live_sink,
+      steps,
+      events,
+      self.session_id,
       current_step,
       AgentStepKind::Reflect {
         content: reflection.content,
-      },
-    ));
+      }
+    );
     events.push(AgentEvent::ReflectionAdded {
       session_id: self.session_id.clone(),
       step_index: current_step,
@@ -2039,13 +2110,17 @@ impl ReActAgent {
           timestamp: Utc::now(),
         }
       );
-      steps.push(AgentStep::new(
+      push_step!(
+        self.live_sink,
+        steps,
+        events,
+        self.session_id,
         call_step_idx,
         AgentStepKind::ToolCall {
           tool: call.name.clone(),
           params: trace_params,
-        },
-      ));
+        }
+      );
 
       prepared.push(PreparedToolCall {
         tool: call.name.clone(),
@@ -2255,15 +2330,19 @@ impl ReActAgent {
       );
       let result_step_idx = *step_index;
       *step_index += 1;
-      steps.push(AgentStep::new(
+      push_step!(
+        self.live_sink,
+        steps,
+        events,
+        self.session_id,
         result_step_idx,
         AgentStepKind::ToolResult {
           tool: prep.tool.clone(),
           content: output.content.clone(),
           is_error: output.is_error,
           parts: output.parts.clone(),
-        },
-      ));
+        }
+      );
       emit_and_push!(
         self.live_sink,
         events,
