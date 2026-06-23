@@ -65,16 +65,18 @@ fn harness_run_requires_model_or_skill() {
 }
 
 #[test]
-fn harness_chat_rejects_approve_cli() {
-  // The REPL owns stdin, so a stdin approval prompt would race it. The
-  // combo is rejected up front (before any LLM init).
+fn harness_chat_accepts_approve_cli() {
+  // H.2.1: `--approve cli` is now supported in the chat REPL. The approval
+  // prompt reads from the REPL's shared stdin line reader instead of racing
+  // it, so the combo is accepted: the REPL starts with `approve: cli` in its
+  // banner and exits cleanly on `exit`.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd.args(["harness", "chat", "--model", "mock", "--approve", "cli"]);
   cmd.write_stdin("exit\n");
   cmd
     .assert()
-    .failure()
-    .stderr(predicate::str::contains("not supported in `harness chat`"));
+    .success()
+    .stderr(predicate::str::contains("approve: cli"));
 }
 
 #[test]
