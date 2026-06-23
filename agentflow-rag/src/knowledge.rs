@@ -175,9 +175,15 @@ mod tests {
 
   fn sample_backend() -> Bm25KnowledgeBackend {
     Bm25KnowledgeBackend::from_documents([
-      ("doc-rust", "Rust is a systems programming language focused on safety"),
+      (
+        "doc-rust",
+        "Rust is a systems programming language focused on safety",
+      ),
       ("doc-python", "Python is a high level scripting language"),
-      ("doc-gc", "Garbage collection frees memory automatically at runtime"),
+      (
+        "doc-gc",
+        "Garbage collection frees memory automatically at runtime",
+      ),
     ])
   }
 
@@ -186,10 +192,16 @@ mod tests {
     let backend = sample_backend();
     let chunks = backend.search("rust safety", 3).await.expect("search ok");
     assert!(!chunks.is_empty(), "expected at least one hit");
-    assert_eq!(chunks[0].id, "doc-rust", "most relevant doc should rank first");
+    assert_eq!(
+      chunks[0].id, "doc-rust",
+      "most relevant doc should rank first"
+    );
     // Scores are sorted best-first.
     for w in chunks.windows(2) {
-      assert!(w[0].score >= w[1].score, "results must be ranked best-first");
+      assert!(
+        w[0].score >= w[1].score,
+        "results must be ranked best-first"
+      );
     }
   }
 
@@ -203,7 +215,10 @@ mod tests {
   #[tokio::test]
   async fn bm25_backend_empty_query_is_invalid() {
     let backend = sample_backend();
-    let err = backend.search("   ", 3).await.expect_err("empty query rejected");
+    let err = backend
+      .search("   ", 3)
+      .await
+      .expect_err("empty query rejected");
     assert!(matches!(err, KnowledgeError::InvalidQuery(_)));
   }
 

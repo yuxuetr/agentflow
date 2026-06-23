@@ -1173,7 +1173,10 @@ mod tests {
     );
     assert!(result.steps.iter().any(|step| matches!(
       &step.kind,
-      AgentStepKind::ToolResult { is_error: false, .. }
+      AgentStepKind::ToolResult {
+        is_error: false,
+        ..
+      }
     )));
     assert!(
       result
@@ -1345,13 +1348,23 @@ providers:
   #[test]
   fn compile_plan_to_flow_chains_steps_sequentially_by_default() {
     let agent = agent_with_echo();
-    let steps = vec![tool_step("s1", vec![]), tool_step("s2", vec![]), tool_step("s3", vec![])];
+    let steps = vec![
+      tool_step("s1", vec![]),
+      tool_step("s2", vec![]),
+      tool_step("s3", vec![]),
+    ];
     let flow = agent.compile_plan_to_flow(&steps).expect("compiles");
     assert_eq!(flow.nodes().len(), 3);
     // Empty depends_on chains each step after the previous one.
     assert!(flow.nodes().get("s1").unwrap().dependencies.is_empty());
-    assert_eq!(flow.nodes().get("s2").unwrap().dependencies, vec!["s1".to_string()]);
-    assert_eq!(flow.nodes().get("s3").unwrap().dependencies, vec!["s2".to_string()]);
+    assert_eq!(
+      flow.nodes().get("s2").unwrap().dependencies,
+      vec!["s1".to_string()]
+    );
+    assert_eq!(
+      flow.nodes().get("s3").unwrap().dependencies,
+      vec!["s2".to_string()]
+    );
   }
 
   #[test]
@@ -1389,6 +1402,9 @@ providers:
     assert_eq!(flow.nodes().len(), 2);
     assert!(flow.nodes().contains_key("s1"));
     assert!(flow.nodes().contains_key("s2"));
-    assert_eq!(flow.nodes().get("s2").unwrap().dependencies, vec!["s1".to_string()]);
+    assert_eq!(
+      flow.nodes().get("s2").unwrap().dependencies,
+      vec!["s1".to_string()]
+    );
   }
 }

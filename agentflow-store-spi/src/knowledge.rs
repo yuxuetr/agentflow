@@ -125,8 +125,14 @@ mod tests {
     let c = KnowledgeChunk::new("id", "body", 1.0);
     let json = serde_json::to_string(&c).expect("serialize");
     // `source` / `metadata` are skipped when empty so the wire stays compact.
-    assert!(!json.contains("source"), "empty source must be skipped: {json}");
-    assert!(!json.contains("metadata"), "empty metadata must be skipped: {json}");
+    assert!(
+      !json.contains("source"),
+      "empty source must be skipped: {json}"
+    );
+    assert!(
+      !json.contains("metadata"),
+      "empty metadata must be skipped: {json}"
+    );
     let back: KnowledgeChunk = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, c);
   }

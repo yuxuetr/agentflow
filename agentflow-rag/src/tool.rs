@@ -9,11 +9,9 @@
 use std::sync::Arc;
 
 use agentflow_store_spi::{KnowledgeBackend, KnowledgeChunk};
-use agentflow_tools::{
-  Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,
-};
+use agentflow_tools::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Default number of passages returned when the caller omits `top_k`.
 const DEFAULT_TOP_K: usize = 5;
@@ -99,12 +97,13 @@ impl Tool for RagSearchTool {
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
-    let query = params
-      .get("query")
-      .and_then(Value::as_str)
-      .ok_or_else(|| ToolError::InvalidParams {
-        message: "missing required string field `query`".to_string(),
-      })?;
+    let query =
+      params
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidParams {
+          message: "missing required string field `query`".to_string(),
+        })?;
 
     let top_k = params
       .get("top_k")
@@ -112,13 +111,14 @@ impl Tool for RagSearchTool {
       .map(|n| (n as usize).max(1))
       .unwrap_or(self.default_top_k);
 
-    let chunks = self
-      .backend
-      .search(query, top_k)
-      .await
-      .map_err(|e| ToolError::ExecutionFailed {
-        message: format!("rag_search failed: {e}"),
-      })?;
+    let chunks =
+      self
+        .backend
+        .search(query, top_k)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed {
+          message: format!("rag_search failed: {e}"),
+        })?;
 
     let parts = chunks
       .iter()
@@ -138,7 +138,10 @@ mod tests {
 
   fn tool() -> RagSearchTool {
     let backend = Arc::new(Bm25KnowledgeBackend::from_documents([
-      ("doc-rust", "Rust is a systems programming language focused on safety"),
+      (
+        "doc-rust",
+        "Rust is a systems programming language focused on safety",
+      ),
       ("doc-python", "Python is a high level scripting language"),
     ]));
     RagSearchTool::new(backend)
@@ -164,7 +167,10 @@ mod tests {
       .expect("execute ok");
     assert!(!out.is_error);
     assert!(out.content.contains("Rust"), "content should cite the hit");
-    assert!(!out.parts.is_empty(), "structured parts should be populated");
+    assert!(
+      !out.parts.is_empty(),
+      "structured parts should be populated"
+    );
   }
 
   #[tokio::test]

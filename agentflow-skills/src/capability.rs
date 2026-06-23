@@ -158,7 +158,9 @@ backend = "rag"
     );
     // rag-tier content stays out of the lowered persona fragment.
     assert!(
-      !lowered.context[0].content.contains("Searchable reference corpus"),
+      !lowered.context[0]
+        .content
+        .contains("Searchable reference corpus"),
       "rag-tier content must not be inlined into the persona fragment"
     );
   }
