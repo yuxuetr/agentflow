@@ -1,169 +1,144 @@
 {
-  "session_id": "golden-session",
   "answer": "final: echo: hi",
-  "stop_reason": {
-    "reason": "final_answer"
-  },
-  "steps": [
-    {
-      "index": 0,
-      "kind": {
-        "type": "observe",
-        "input": "say hi"
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 1,
-      "kind": {
-        "type": "plan",
-        "thought": "use tool"
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 2,
-      "kind": {
-        "type": "tool_call",
-        "tool": "echo",
-        "params": {
-          "text": "hi"
-        }
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 3,
-      "kind": {
-        "type": "tool_result",
-        "tool": "echo",
-        "content": "echo: hi",
-        "is_error": false
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 4,
-      "kind": {
-        "type": "plan",
-        "thought": "done"
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 5,
-      "kind": {
-        "type": "final_answer",
-        "answer": "final: echo: hi"
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    },
-    {
-      "index": 6,
-      "kind": {
-        "type": "reflect",
-        "content": "Final answer produced at step 6: final: echo: hi"
-      },
-      "timestamp": "<timestamp>",
-      "duration_ms": null
-    }
-  ],
   "events": [
     {
       "event": "run_started",
-      "session_id": "golden-session",
       "model": "mock-golden-runtime",
+      "session_id": "golden-session",
       "timestamp": "<timestamp>"
     },
     {
-      "event": "llm_call_completed",
+      "event": "step_started",
       "session_id": "golden-session",
-      "step_index": 1,
+      "step_index": 0,
+      "step_type": "observe",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "completion_tokens": 2,
+      "duration_ms": 0,
+      "event": "llm_call_completed",
       "model": "mock-golden-runtime",
       "prompt_tokens": 50,
-      "completion_tokens": 2,
-      "total_tokens": 52,
-      "duration_ms": 0,
+      "session_id": "golden-session",
+      "step_index": 1,
+      "timestamp": "<timestamp>",
+      "total_tokens": 52
+    },
+    {
+      "event": "step_started",
+      "session_id": "golden-session",
+      "step_index": 1,
+      "step_type": "plan",
       "timestamp": "<timestamp>"
     },
     {
-      "event": "tool_policy_decision",
-      "session_id": "golden-session",
-      "step_index": 2,
-      "tool": "echo",
       "allowed": true,
+      "event": "tool_policy_decision",
       "matched_rule": "allow_all",
-      "source": "builtin",
       "params_summary": {
         "text": "string"
       },
-      "timestamp": "<timestamp>"
+      "session_id": "golden-session",
+      "source": "builtin",
+      "step_index": 2,
+      "timestamp": "<timestamp>",
+      "tool": "echo"
     },
     {
+      "allowed": true,
+      "effective": [],
       "event": "tool_capability_decision",
+      "required": [],
       "session_id": "golden-session",
       "step_index": 2,
+      "timestamp": "<timestamp>",
       "tool": "echo",
-      "allowed": true,
-      "required": [],
-      "effective": [],
       "trace": [
         {
-          "source": "tool_required",
           "allowed": [],
-          "running": []
+          "running": [],
+          "source": "tool_required"
         },
         {
-          "source": "skill_security",
-          "running": []
+          "running": [],
+          "source": "skill_security"
         },
         {
-          "source": "tool_policy",
-          "running": []
+          "running": [],
+          "source": "tool_policy"
         },
         {
-          "source": "cli_flag",
-          "running": []
+          "running": [],
+          "source": "cli_flag"
         }
-      ],
-      "timestamp": "<timestamp>"
+      ]
     },
     {
       "event": "tool_call_started",
-      "session_id": "golden-session",
-      "step_index": 2,
-      "tool": "echo",
-      "source": "builtin",
       "params": {
         "text": "hi"
       },
-      "timestamp": "<timestamp>"
+      "session_id": "golden-session",
+      "source": "builtin",
+      "step_index": 2,
+      "timestamp": "<timestamp>",
+      "tool": "echo"
     },
     {
-      "event": "tool_call_completed",
+      "event": "step_started",
       "session_id": "golden-session",
       "step_index": 2,
-      "tool": "echo",
-      "is_error": false,
-      "duration_ms": 0,
-      "source": "builtin",
+      "step_type": "tool_call",
       "timestamp": "<timestamp>"
     },
     {
-      "event": "llm_call_completed",
+      "event": "step_started",
       "session_id": "golden-session",
-      "step_index": 4,
+      "step_index": 3,
+      "step_type": "tool_result",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": 0,
+      "event": "tool_call_completed",
+      "is_error": false,
+      "session_id": "golden-session",
+      "source": "builtin",
+      "step_index": 2,
+      "timestamp": "<timestamp>",
+      "tool": "echo"
+    },
+    {
+      "completion_tokens": 3,
+      "duration_ms": 0,
+      "event": "llm_call_completed",
       "model": "mock-golden-runtime",
       "prompt_tokens": 50,
-      "completion_tokens": 3,
-      "total_tokens": 53,
-      "duration_ms": 0,
+      "session_id": "golden-session",
+      "step_index": 4,
+      "timestamp": "<timestamp>",
+      "total_tokens": 53
+    },
+    {
+      "event": "step_started",
+      "session_id": "golden-session",
+      "step_index": 4,
+      "step_type": "plan",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "step_started",
+      "session_id": "golden-session",
+      "step_index": 5,
+      "step_type": "final_answer",
+      "timestamp": "<timestamp>"
+    },
+    {
+      "event": "step_started",
+      "session_id": "golden-session",
+      "step_index": 6,
+      "step_type": "reflect",
       "timestamp": "<timestamp>"
     },
     {
@@ -174,11 +149,85 @@
     },
     {
       "event": "run_stopped",
-      "session_id": "golden-session",
       "reason": {
         "reason": "final_answer"
       },
+      "session_id": "golden-session",
       "timestamp": "<timestamp>"
     }
-  ]
+  ],
+  "session_id": "golden-session",
+  "steps": [
+    {
+      "duration_ms": null,
+      "index": 0,
+      "kind": {
+        "input": "say hi",
+        "type": "observe"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 1,
+      "kind": {
+        "thought": "use tool",
+        "type": "plan"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 2,
+      "kind": {
+        "params": {
+          "text": "hi"
+        },
+        "tool": "echo",
+        "type": "tool_call"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 3,
+      "kind": {
+        "content": "echo: hi",
+        "is_error": false,
+        "tool": "echo",
+        "type": "tool_result"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 4,
+      "kind": {
+        "thought": "done",
+        "type": "plan"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 5,
+      "kind": {
+        "answer": "final: echo: hi",
+        "type": "final_answer"
+      },
+      "timestamp": "<timestamp>"
+    },
+    {
+      "duration_ms": null,
+      "index": 6,
+      "kind": {
+        "content": "Final answer produced at step 6: final: echo: hi",
+        "type": "reflect"
+      },
+      "timestamp": "<timestamp>"
+    }
+  ],
+  "stop_reason": {
+    "reason": "final_answer"
+  }
 }

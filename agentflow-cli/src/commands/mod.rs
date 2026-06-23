@@ -14,6 +14,7 @@ pub mod memory;
 #[cfg(feature = "plugin")]
 pub mod plugin;
 pub mod rag;
+pub mod repl;
 pub mod serve;
 pub mod skill;
 pub mod trace;

@@ -15,15 +15,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
-  ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEventSink, HarnessProfile,
-  HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
-  RoadmapMdProvider, SeqAllocator, SinkChain, TodosMdProvider, WorkspaceLayoutProvider,
-  default_session_dir, wrap_registry,
+  ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEvent, HarnessEventBody,
+  HarnessEventSink, HarnessProfile, HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind,
+  HookConfig, JsonlEventSink, RoadmapMdProvider, SeqAllocator, SinkChain, TodosMdProvider,
+  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::{MemoryStore, SqliteMemory};
@@ -32,6 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::run::{ApproveMode, build_agent, parse_runtime_kind};
 use super::{parse_profile, resolve_run_dir};
+use crate::commands::repl::{LineReader, ReadLine};
 
 /// Per-chat configuration that does not change across REPL commands.
 /// Bundled so [`build_chat_runtime`] can be called again to rebuild the
@@ -57,6 +57,66 @@ struct ChatConfig {
 /// A pending approval handed to the REPL: the request + a one-shot channel to
 /// return the user's decision on.
 type ApprovalAsk = (ApprovalRequest, oneshot::Sender<ApprovalDecision>);
+
+/// H.3.1: streams concise live progress lines to stderr as the Harness emits
+/// tool / memory events *during* a turn, so the user sees activity step-by-step
+/// instead of only the final answer appearing after the whole turn completes.
+///
+/// Gated on a TTY: when stderr is piped (tests, `… | cat`) it stays silent so
+/// captured output is just the answer on stdout. Each line first clears the
+/// `⏳ thinking…` spinner (or the prior progress line) with CR + erase-to-EOL,
+/// so progress lines stack cleanly above the eventual answer.
+struct ChatProgressSink {
+  enabled: bool,
+}
+
+impl ChatProgressSink {
+  fn new() -> Self {
+    Self {
+      enabled: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    }
+  }
+
+  fn line(&self, text: &str) {
+    use std::io::Write;
+    eprint!("\r\x1b[K{text}\n");
+    std::io::stderr().flush().ok();
+  }
+}
+
+#[async_trait::async_trait]
+impl HarnessEventSink for ChatProgressSink {
+  fn name(&self) -> &str {
+    "chat-progress"
+  }
+
+  async fn write(&self, event: &HarnessEvent) -> Result<(), HarnessError> {
+    if !self.enabled {
+      return Ok(());
+    }
+    if let Some(text) = progress_line(&event.body) {
+      self.line(&text);
+    }
+    Ok(())
+  }
+}
+
+/// Map a Harness event body to the concise progress line the REPL streams, or
+/// `None` for events that are not part of the live activity narrative (session
+/// lifecycle, approvals, post-hoc `step_started`). Pure so it is unit-testable.
+fn progress_line(body: &HarnessEventBody) -> Option<String> {
+  match body {
+    HarnessEventBody::ToolCallRequested(p) => Some(format!("   🔧 {}…", p.tool)),
+    HarnessEventBody::ToolCallCompleted(p) => {
+      let mark = if p.is_error { "✗" } else { "✓" };
+      Some(format!("   {mark} {} ({} ms)", p.tool, p.duration_ms))
+    }
+    HarnessEventBody::MemorySummaryAdded(p) => {
+      Some(format!("   📝 context compacted ({})", p.layer))
+    }
+    _ => None,
+  }
+}
 
 /// Interactive `--approve cli` provider for `harness chat` (H.2.1). The blocking
 /// [`agentflow_harness::CliApprovalProvider`] can't be used here because it reads
@@ -123,10 +183,10 @@ fn parse_approval_response(input: &str) -> (ApprovalOutcome, ApprovalScope, Opti
 }
 
 /// Print the approval prompt to stderr and read one decision line from the
-/// REPL's shared stdin reader. EOF / read error → fail-closed deny.
+/// REPL's shared line reader (H.4.1). EOF / Ctrl-C / read error → fail-closed deny.
 async fn prompt_and_read_decision(
   request: &ApprovalRequest,
-  lines: &mut tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+  reader: &mut LineReader,
 ) -> ApprovalDecision {
   use std::io::Write;
   eprintln!("\n── Harness approval request ──");
@@ -137,12 +197,15 @@ async fn prompt_and_read_decision(
   );
   eprintln!("  reason: {}", request.reason);
   eprintln!("  params: {}", request.params_summary);
-  eprint!("Allow this call? [y]es / [s]ession / [r]un / [n]o / [q]uit: ");
   std::io::stderr().flush().ok();
 
-  let line = match lines.next_line().await {
-    Ok(Some(line)) => line,
-    _ => String::new(), // EOF / error → deny
+  let line = match reader
+    .read_line("Allow this call? [y]es / [s]ession / [r]un / [n]o / [q]uit: ")
+    .await
+  {
+    Ok(ReadLine::Line(line)) => line,
+    // EOF / Ctrl-C / error → fail-closed deny.
+    _ => String::new(),
   };
   let (decision, scope, reason) = parse_approval_response(&line);
   ApprovalDecision {
@@ -235,20 +298,23 @@ pub async fn execute(
 
   print_banner(&model, skill_name.as_deref(), &cfg, &approve);
 
-  let mut lines = BufReader::new(tokio::io::stdin()).lines();
+  // H.4.1: line editing + up/down history on a TTY; transparent plain-reader
+  // fallback when piped (tests). The same reader feeds the H.2.1 approval prompt
+  // so input stays consistent.
+  let mut reader = LineReader::new();
   'repl: loop {
-    eprint!("› ");
-    use std::io::Write;
-    std::io::stderr().flush().ok();
-
-    let next = tokio::select! {
-      biased;
-      line = lines.next_line() => line,
-      _ = crate::shutdown::shutdown_signal() => { eprintln!("\n🛑 bye"); break; }
-    };
-    let Some(input) = next.context("failed to read stdin")? else {
-      eprintln!("\n👋 bye (EOF)");
-      break;
+    let input = match reader.read_line("› ").await? {
+      ReadLine::Line(line) => line,
+      // Ctrl-C at the prompt abandons the current line and re-prompts; `exit` /
+      // quit / Ctrl-D leave (matches the banner's "Ctrl-D to leave").
+      ReadLine::Interrupted => {
+        eprintln!();
+        continue;
+      }
+      ReadLine::Eof => {
+        eprintln!("\n👋 bye (EOF)");
+        break;
+      }
     };
     let input = input.trim();
     if input.is_empty() {
@@ -404,7 +470,7 @@ pub async fn execute(
             eprint!("\r\x1b[K");
             std::io::stderr().flush().ok();
           }
-          let decision = prompt_and_read_decision(&req, &mut lines).await;
+          let decision = prompt_and_read_decision(&req, &mut reader).await;
           let _ = resp_tx.send(decision);
         }
         _ = crate::shutdown::shutdown_signal() => {
@@ -477,6 +543,8 @@ async fn build_chat_runtime(
   };
   runtime = runtime
     .with_event_sink(cfg.jsonl.clone())
+    // H.3.1: stream live tool/memory progress to stderr (self-gates on a TTY).
+    .with_event_sink(Arc::new(ChatProgressSink::new()))
     .with_seq_allocator(cfg.seq_allocator.clone());
   if !cfg.no_default_context {
     runtime = runtime
@@ -538,10 +606,79 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_harness::ApprovalRisk;
+  use agentflow_harness::{
+    ApprovalRisk, MemorySummaryAddedPayload, SessionStartedPayload, ToolCallCompletedPayload,
+    ToolCallRequestedPayload,
+  };
   use agentflow_memory::Message;
   use agentflow_tools::ToolIdempotency;
   use tempfile::TempDir;
+
+  #[test]
+  fn progress_line_renders_tool_and_memory_events() {
+    let req = progress_line(&HarnessEventBody::ToolCallRequested(
+      ToolCallRequestedPayload {
+        step_index: 1,
+        tool: "search".into(),
+        source: None,
+        permissions: vec![],
+        idempotency: None,
+        params_summary: serde_json::Value::Null,
+      },
+    ));
+    assert_eq!(req.as_deref(), Some("   🔧 search…"));
+
+    let ok = progress_line(&HarnessEventBody::ToolCallCompleted(
+      ToolCallCompletedPayload {
+        step_index: 1,
+        tool: "search".into(),
+        is_error: false,
+        duration_ms: 12,
+        source: None,
+        output_summary: None,
+      },
+    ));
+    assert_eq!(ok.as_deref(), Some("   ✓ search (12 ms)"));
+
+    let err = progress_line(&HarnessEventBody::ToolCallCompleted(
+      ToolCallCompletedPayload {
+        step_index: 2,
+        tool: "shell".into(),
+        is_error: true,
+        duration_ms: 3,
+        source: None,
+        output_summary: None,
+      },
+    ));
+    assert_eq!(err.as_deref(), Some("   ✗ shell (3 ms)"));
+
+    let mem = progress_line(&HarnessEventBody::MemorySummaryAdded(
+      MemorySummaryAddedPayload {
+        layer: "context_refresh".into(),
+        summary: "x".into(),
+        token_estimate: 1,
+      },
+    ));
+    assert_eq!(
+      mem.as_deref(),
+      Some("   📝 context compacted (context_refresh)")
+    );
+  }
+
+  #[test]
+  fn progress_line_ignores_non_activity_events() {
+    // Session lifecycle is not part of the live activity narrative.
+    let started = progress_line(&HarnessEventBody::SessionStarted(SessionStartedPayload {
+      workspace_root: "/tmp".into(),
+      runtime: HarnessRuntimeKind::React,
+      profile: HarnessProfile::Local,
+      model: "mock".into(),
+      skills: vec![],
+      context_item_count: 0,
+      context_token_estimate: 0,
+    }));
+    assert_eq!(started, None);
+  }
 
   fn sample_request(id: &str) -> ApprovalRequest {
     ApprovalRequest {
