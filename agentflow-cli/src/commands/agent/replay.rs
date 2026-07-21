@@ -352,6 +352,7 @@ pub fn step_kind_discriminant(kind: &AgentStepKind) -> &'static str {
     AgentStepKind::ToolCall { .. } => "tool_call",
     AgentStepKind::ToolResult { .. } => "tool_result",
     AgentStepKind::Reflect { .. } => "reflect",
+    AgentStepKind::Verify { .. } => "verify",
     AgentStepKind::FinalAnswer { .. } => "final_answer",
     AgentStepKind::Handoff { .. } => "handoff",
     AgentStepKind::BlackboardOp { .. } => "blackboard_op",

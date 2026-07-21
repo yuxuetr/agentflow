@@ -473,6 +473,22 @@ pub enum AgentStepKind {
     /// The reflection text.
     content: String,
   },
+  /// A verdict produced by a `VerificationStrategy` (agentflow-agents).
+  ///
+  /// Unlike [`AgentStepKind::Reflect`], a verification can gate control
+  /// flow: `approved: false` sends the loop back around for another
+  /// attempt instead of terminating with [`AgentStopReason::FinalAnswer`].
+  Verify {
+    /// Whether the strategy accepted the candidate final answer.
+    approved: bool,
+    /// Critique fed back into the loop as the next observation when
+    /// `approved` is `false`. `None` when approved, or when the strategy
+    /// approved without comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feedback: Option<String>,
+    /// 1-based attempt number this verdict was produced for.
+    attempt: usize,
+  },
   /// Terminal answer returned to the caller.
   FinalAnswer {
     /// The user-visible answer.
@@ -520,6 +536,7 @@ impl AgentStepKind {
       AgentStepKind::ToolCall { .. } => "tool_call",
       AgentStepKind::ToolResult { .. } => "tool_result",
       AgentStepKind::Reflect { .. } => "reflect",
+      AgentStepKind::Verify { .. } => "verify",
       AgentStepKind::FinalAnswer { .. } => "final_answer",
       AgentStepKind::Handoff { .. } => "handoff",
       AgentStepKind::BlackboardOp { .. } => "blackboard_op",
@@ -618,6 +635,15 @@ pub enum AgentEvent {
   ReflectionAdded {
     session_id: String,
     step_index: usize,
+    timestamp: DateTime<Utc>,
+  },
+  /// A `VerificationStrategy` (agentflow-agents) produced a verdict on a
+  /// candidate final answer. `approved: false` means the loop is about to
+  /// continue for another attempt rather than terminate.
+  VerificationCompleted {
+    session_id: String,
+    step_index: usize,
+    approved: bool,
     timestamp: DateTime<Utc>,
   },
   /// One LLM round-trip completed. Emitted by every runtime that calls

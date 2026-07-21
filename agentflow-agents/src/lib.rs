@@ -13,6 +13,7 @@ pub mod nodes;
 pub mod plan_execute;
 pub mod react;
 pub mod reflection;
+pub mod verification;
 // The agent-runtime contracts moved to `agentflow-agent-spi` (P-A1.1).
 // Re-export under the original `agentflow_agents::runtime` path so every
 // consumer — and this crate's own runtimes — keep compiling unchanged.
@@ -59,6 +60,9 @@ pub use runtime::{
 };
 pub use supervisor::{Supervisor, SupervisorBuilder};
 pub use tools::{AgentTool, WorkflowTool};
+pub use verification::{
+  AlwaysApprove, VerificationContext, VerificationError, VerificationOutcome, VerificationStrategy,
+};
 
 // Common result type for agents
 pub type AgentResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;

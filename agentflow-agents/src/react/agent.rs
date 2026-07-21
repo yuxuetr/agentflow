@@ -19,6 +19,7 @@ use crate::runtime::{
   AgentRuntimeError, AgentStep, AgentStepKind, AgentStopReason, MemoryHookContext, MemoryHookKind,
   RuntimeLimits,
 };
+use crate::verification::{VerificationContext, VerificationOutcome, VerificationStrategy};
 // Turn-driven contracts moved to agentflow-agent-spi (P-A2.1); ReActAgent /
 // ReActLoopSession impl them below. `pub use` so `agentflow_agents::react`
 // keeps re-exporting them for back-compat.
@@ -195,6 +196,16 @@ pub struct ReActConfig {
   /// Enable reflection strategy execution when a strategy is attached.
   pub reflection_enabled: bool,
 
+  /// Enable verification strategy execution when a strategy is attached.
+  pub verification_enabled: bool,
+
+  /// Maximum number of times a `VerificationStrategy` may reject a
+  /// candidate final answer before the runtime force-accepts it and stops
+  /// anyway. Bounds the verification loop so a strategy that never
+  /// approves can't run forever. Only relevant when a strategy is
+  /// attached and `verification_enabled` is `true`.
+  pub max_verification_attempts: usize,
+
   /// Optional token budget for memory included in each LLM prompt.
   pub memory_prompt_token_budget: Option<u32>,
 
@@ -222,6 +233,8 @@ impl Default for ReActConfig {
       budget_tokens: Some(50_000),
       stop_conditions: vec![],
       reflection_enabled: true,
+      verification_enabled: true,
+      max_verification_attempts: 2,
       memory_prompt_token_budget: None,
       memory_summary_strategy: MemorySummaryStrategy::Disabled,
     }
@@ -258,6 +271,16 @@ impl ReActConfig {
 
   pub fn with_reflection_enabled(mut self, enabled: bool) -> Self {
     self.reflection_enabled = enabled;
+    self
+  }
+
+  pub fn with_verification_enabled(mut self, enabled: bool) -> Self {
+    self.verification_enabled = enabled;
+    self
+  }
+
+  pub fn with_max_verification_attempts(mut self, attempts: usize) -> Self {
+    self.max_verification_attempts = attempts;
     self
   }
 
@@ -311,6 +334,7 @@ pub struct ReActAgent {
   memory: Box<dyn MemoryStore>,
   tools: Arc<ToolRegistry>,
   reflection: Option<Arc<dyn ReflectionStrategy>>,
+  verification: Option<Arc<dyn VerificationStrategy>>,
   memory_hook: Option<Arc<dyn AgentMemoryHook>>,
   memory_summary_backend: Option<Arc<dyn MemorySummaryBackend>>,
   /// Stable identifier for this agent's conversation session
@@ -346,6 +370,7 @@ impl ReActAgent {
       memory,
       tools,
       reflection: None,
+      verification: None,
       memory_hook: None,
       memory_summary_backend: None,
       session_id,
@@ -398,6 +423,17 @@ impl ReActAgent {
   /// Attach a reflection strategy to the runtime trace.
   pub fn with_reflection_strategy(mut self, strategy: Arc<dyn ReflectionStrategy>) -> Self {
     self.reflection = Some(strategy);
+    self
+  }
+
+  /// Attach a verification strategy that gates candidate final answers.
+  ///
+  /// Unlike a reflection strategy, a verification's verdict can change
+  /// control flow: a rejection sends the loop back around for another
+  /// attempt (bounded by `ReActConfig::max_verification_attempts`)
+  /// instead of terminating with `AgentStopReason::FinalAnswer`.
+  pub fn with_verification_strategy(mut self, strategy: Arc<dyn VerificationStrategy>) -> Self {
+    self.verification = Some(strategy);
     self
   }
 
@@ -616,6 +652,7 @@ impl ReActAgent {
       step_index: 1,
       iteration: 0,
       tool_calls: 0,
+      verification_attempts: 0,
       last_tool_call: None,
       max_iterations: context
         .limits
@@ -629,6 +666,7 @@ impl ReActAgent {
       system_prompt,
       trace_context: context.trace_context.clone(),
       between_turn_hook: context.between_turn_hook.clone(),
+      user_input: context.input.clone(),
     };
     // H.1.1: the first step (`observe`) is recorded in the initial vec above, so
     // emit its `step_started` live here too — every other step does so via
@@ -842,6 +880,9 @@ impl ReActAgent {
             &mut st.events,
           )
           .await?;
+        if self.gate_candidate_answer(&answer, st).await? {
+          return Ok(TurnStep::Continue);
+        }
         Ok(TurnStep::Stop(Self::stopped_result(
           &self.session_id,
           Some(answer),
@@ -872,6 +913,9 @@ impl ReActAgent {
             &mut st.events,
           )
           .await?;
+        if self.gate_candidate_answer(&text, st).await? {
+          return Ok(TurnStep::Continue);
+        }
         Ok(TurnStep::Stop(Self::stopped_result(
           &self.session_id,
           Some(text),
@@ -881,6 +925,51 @@ impl ReActAgent {
         )))
       }
     }
+  }
+
+  /// Run the attached `VerificationStrategy` (if any) against a candidate
+  /// final answer. Returns `true` when `run_one_turn` should loop back
+  /// around for another attempt instead of stopping.
+  ///
+  /// Shared by the `AgentResponse::Answer` and `AgentResponse::Malformed`
+  /// branches of [`Self::run_one_turn`] — both reach a candidate final
+  /// answer and must apply the same gate.
+  async fn gate_candidate_answer(
+    &mut self,
+    answer: &str,
+    st: &mut LoopState,
+  ) -> Result<bool, ReActError> {
+    let attempt = st.verification_attempts + 1;
+    let outcome = self
+      .record_verification(
+        VerificationContext::for_answer(
+          &self.session_id,
+          st.step_index,
+          &st.user_input,
+          answer,
+          attempt,
+        ),
+        &mut st.step_index,
+        &mut st.steps,
+        &mut st.events,
+      )
+      .await?;
+
+    let VerificationOutcome::Rejected { .. } = outcome else {
+      return Ok(false);
+    };
+    if attempt >= self.config.max_verification_attempts {
+      warn!(
+        attempt,
+        max_attempts = self.config.max_verification_attempts,
+        "verification attempts exhausted; force-accepting candidate answer"
+      );
+      return Ok(false);
+    }
+
+    st.verification_attempts = attempt;
+    st.iteration += 1;
+    Ok(true)
   }
 
   fn context_for_input(&self, user_input: &str) -> AgentContext {
@@ -1637,6 +1726,86 @@ impl ReActAgent {
     Ok(())
   }
 
+  /// Gate a candidate final answer through the attached
+  /// [`VerificationStrategy`], if any. Always records a `Verify` step
+  /// (and `VerificationCompleted` event) when a strategy is attached and
+  /// enabled, so the trace shows every verdict. A [`VerificationOutcome::Rejected`]
+  /// feeds its feedback into memory as the next observation, mirroring
+  /// how `dispatch_single_tool_call` feeds tool results back for the
+  /// following turn.
+  ///
+  /// Returns [`VerificationOutcome::Approved`] when no strategy is
+  /// attached, verification is disabled, or the strategy call itself
+  /// fails (non-fatal — logged and treated as approved so the run can't
+  /// deadlock).
+  async fn record_verification(
+    &mut self,
+    context: VerificationContext,
+    step_index: &mut usize,
+    steps: &mut Vec<AgentStep>,
+    events: &mut Vec<AgentEvent>,
+  ) -> Result<VerificationOutcome, ReActError> {
+    if !self.config.verification_enabled {
+      return Ok(VerificationOutcome::Approved);
+    }
+    let Some(strategy) = self.verification.clone() else {
+      return Ok(VerificationOutcome::Approved);
+    };
+
+    let attempt = context.attempt;
+    let outcome = match strategy.verify(&context).await {
+      Ok(outcome) => outcome,
+      Err(err) => {
+        warn!(
+          strategy = strategy.name(),
+          error = %err,
+          "verification strategy failed; accepting candidate answer"
+        );
+        VerificationOutcome::Approved
+      }
+    };
+
+    let approved = matches!(outcome, VerificationOutcome::Approved);
+    let feedback = match &outcome {
+      VerificationOutcome::Approved => None,
+      VerificationOutcome::Rejected { feedback } => Some(feedback.clone()),
+    };
+
+    let current_step = *step_index;
+    push_step!(
+      self.live_sink,
+      steps,
+      events,
+      self.session_id,
+      current_step,
+      AgentStepKind::Verify {
+        approved,
+        feedback,
+        attempt,
+      }
+    );
+    events.push(AgentEvent::VerificationCompleted {
+      session_id: self.session_id.clone(),
+      step_index: current_step,
+      approved,
+      timestamp: Utc::now(),
+    });
+    *step_index += 1;
+
+    if let VerificationOutcome::Rejected { feedback } = &outcome {
+      self
+        .add_memory_message(Message::tool_result_with_counter(
+          &self.session_id,
+          "verifier",
+          feedback,
+          &*self.message_counter,
+        ))
+        .await?;
+    }
+
+    Ok(outcome)
+  }
+
   async fn add_memory_message(&mut self, message: Message) -> Result<(), ReActError> {
     self.memory.add_message(message.clone()).await?;
     self.notify_memory_write(message);
@@ -1715,6 +1884,23 @@ impl ReActAgent {
               &*self.message_counter,
             ))
             .await?;
+        }
+        AgentStepKind::Verify {
+          approved, feedback, ..
+        } => {
+          // Only a rejection ever fed a message into memory live (see
+          // `record_verification`): an approval is a pure gate with no
+          // observation attached, so restoring it is a no-op.
+          if !*approved && let Some(feedback) = feedback {
+            self
+              .add_memory_message(Message::tool_result_with_counter(
+                &self.session_id,
+                "verifier",
+                feedback,
+                &*self.message_counter,
+              ))
+              .await?;
+          }
         }
         AgentStepKind::Handoff { .. }
         | AgentStepKind::BlackboardOp { .. }
@@ -2483,6 +2669,7 @@ struct LoopState {
   step_index: usize,
   iteration: usize,
   tool_calls: usize,
+  verification_attempts: usize,
   last_tool_call: Option<(String, serde_json::Value)>,
   max_iterations: usize,
   max_tool_calls: Option<usize>,
@@ -2493,6 +2680,10 @@ struct LoopState {
   system_prompt: String,
   trace_context: Option<agentflow_llm::LlmTraceContext>,
   between_turn_hook: Option<crate::runtime::BetweenTurnHookHandle>,
+  /// The original user input that started this run, kept around so
+  /// verification strategies can judge a candidate answer against the
+  /// request it's meant to satisfy.
+  user_input: String,
 }
 
 /// A **live** turn-driven ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
@@ -2527,8 +2718,10 @@ pub struct ReActLoopSession<'a> {
 /// `Finished` hands back the result (and the agent borrow, so the caller can
 /// still inspect memory) and **no session** — nothing is left to drive.
 pub enum ReActTurn<'a> {
-  /// The agent advanced; drive `session` again.
-  Continued(ReActLoopSession<'a>),
+  /// The agent advanced; drive `session` again. Boxed because `LoopState`
+  /// (embedded in `ReActLoopSession`) is much larger than the `Finished`
+  /// variant, and clippy's `large_enum_variant` flags the unboxed gap.
+  Continued(Box<ReActLoopSession<'a>>),
   /// The agent reached a terminal state.
   Finished {
     /// The completed run.
@@ -2545,7 +2738,7 @@ impl<'a> ReActLoopSession<'a> {
   /// drive, or [`ReActTurn::Finished`] once the agent reaches a terminal state.
   pub async fn next_turn(mut self) -> Result<ReActTurn<'a>, ReActError> {
     match self.agent.run_one_turn(&mut self.state).await {
-      Ok(TurnStep::Continue) => Ok(ReActTurn::Continued(self)),
+      Ok(TurnStep::Continue) => Ok(ReActTurn::Continued(Box::new(self))),
       Ok(TurnStep::Stop(result)) => Ok(ReActTurn::Finished {
         result,
         agent: self.agent,
@@ -2632,7 +2825,7 @@ impl LoopSession for ReActTurnDriver<'_> {
         message: e.to_string(),
       })? {
       ReActTurn::Continued(active) => {
-        self.session = Some(active);
+        self.session = Some(*active);
         Ok(TurnProgress::Continued)
       }
       ReActTurn::Finished { result, agent } => {
@@ -3094,6 +3287,208 @@ providers:
   }
 
   #[tokio::test]
+  async fn run_with_context_retries_after_verification_rejection_then_approves() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-verify-retry-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"draft","answer":"answer v1"}"#,
+          r#"{"thought":"revised","answer":"answer v2"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct RejectOnce;
+
+    #[async_trait]
+    impl VerificationStrategy for RejectOnce {
+      fn name(&self) -> &'static str {
+        "reject-once"
+      }
+
+      async fn verify(
+        &self,
+        context: &VerificationContext,
+      ) -> Result<VerificationOutcome, crate::verification::VerificationError> {
+        if context.attempt == 1 {
+          Ok(VerificationOutcome::Rejected {
+            feedback: "cite your sources".to_string(),
+          })
+        } else {
+          Ok(VerificationOutcome::Approved)
+        }
+      }
+    }
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_verification_strategy(Arc::new(RejectOnce));
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-verify-1", "research X", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("answer v2"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+
+    let verify_steps: Vec<(bool, usize)> = result
+      .steps
+      .iter()
+      .filter_map(|step| match &step.kind {
+        AgentStepKind::Verify {
+          approved, attempt, ..
+        } => Some((*approved, *attempt)),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(verify_steps, vec![(false, 1), (true, 2)]);
+
+    assert_eq!(
+      result
+        .steps
+        .iter()
+        .filter(|step| matches!(step.kind, AgentStepKind::FinalAnswer { .. }))
+        .count(),
+      2
+    );
+    assert_eq!(
+      result
+        .events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::VerificationCompleted { .. }))
+        .count(),
+      2
+    );
+  }
+
+  #[tokio::test]
+  async fn run_with_context_force_accepts_after_exhausting_verification_attempts() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-verify-exhaust-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"draft","answer":"answer v1"}"#,
+          r#"{"thought":"still not great","answer":"answer v2"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct AlwaysReject;
+
+    #[async_trait]
+    impl VerificationStrategy for AlwaysReject {
+      fn name(&self) -> &'static str {
+        "always-reject"
+      }
+
+      async fn verify(
+        &self,
+        _context: &VerificationContext,
+      ) -> Result<VerificationOutcome, crate::verification::VerificationError> {
+        Ok(VerificationOutcome::Rejected {
+          feedback: "never good enough".to_string(),
+        })
+      }
+    }
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(4)
+        .with_max_verification_attempts(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_verification_strategy(Arc::new(AlwaysReject));
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-verify-2", "research X", &model))
+      .await
+      .unwrap();
+
+    // Exhausting max_verification_attempts force-accepts rather than
+    // erroring — the run degrades gracefully instead of getting stuck.
+    assert_eq!(result.answer.as_deref(), Some("answer v2"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(
+      result
+        .steps
+        .iter()
+        .filter(|step| matches!(step.kind, AgentStepKind::Verify { .. }))
+        .count(),
+      2
+    );
+  }
+
+  #[tokio::test]
+  async fn run_with_context_skips_verification_when_disabled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-verify-disabled-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![r#"{"thought":"draft","answer":"answer v1"}"#]).unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct AlwaysReject;
+
+    #[async_trait]
+    impl VerificationStrategy for AlwaysReject {
+      fn name(&self) -> &'static str {
+        "always-reject"
+      }
+
+      async fn verify(
+        &self,
+        _context: &VerificationContext,
+      ) -> Result<VerificationOutcome, crate::verification::VerificationError> {
+        Ok(VerificationOutcome::Rejected {
+          feedback: "never good enough".to_string(),
+        })
+      }
+    }
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(4)
+        .with_verification_enabled(false),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_verification_strategy(Arc::new(AlwaysReject));
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-verify-3", "research X", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("answer v1"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert!(
+      !result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::Verify { .. }))
+    );
+  }
+
+  #[tokio::test]
   async fn run_with_context_consumes_native_tool_calls_when_available() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
     let model = format!("mock-native-tool-{}", uuid::Uuid::new_v4());
@@ -3277,7 +3672,7 @@ providers:
     // Turn 0: tool call → Continued; the consuming `next_turn` hands back a
     // fresh live session, and memory is observable between turns.
     let session = match session.next_turn().await.unwrap() {
-      ReActTurn::Continued(active) => active,
+      ReActTurn::Continued(active) => *active,
       ReActTurn::Finished { .. } => panic!("expected Continued on the first turn"),
     };
     assert_eq!(session.turn_index(), 1);

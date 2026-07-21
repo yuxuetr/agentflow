@@ -461,6 +461,11 @@ fn step_text(kind: &AgentStepKind) -> String {
     AgentStepKind::ToolCall { tool, params } => format!("{} {}", tool, params),
     AgentStepKind::ToolResult { content, .. } => content.clone(),
     AgentStepKind::Reflect { content } => content.clone(),
+    AgentStepKind::Verify {
+      approved, feedback, ..
+    } => feedback
+      .clone()
+      .unwrap_or_else(|| format!("approved={approved}")),
     AgentStepKind::FinalAnswer { answer } => answer.clone(),
     AgentStepKind::Handoff { from, to, message } => format!("{} -> {}: {}", from, to, message),
     AgentStepKind::BlackboardOp { op, key, agent, .. } => {
@@ -482,6 +487,7 @@ fn step_kind_label(kind: &AgentStepKind) -> &'static str {
     AgentStepKind::ToolCall { .. } => "tool_call",
     AgentStepKind::ToolResult { .. } => "tool_result",
     AgentStepKind::Reflect { .. } => "reflect",
+    AgentStepKind::Verify { .. } => "verify",
     AgentStepKind::FinalAnswer { .. } => "final_answer",
     AgentStepKind::Handoff { .. } => "handoff",
     AgentStepKind::BlackboardOp { .. } => "blackboard_op",
