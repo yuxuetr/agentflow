@@ -28,9 +28,9 @@ The boundary is:
 - `AgentContext`: per-run input, session, model, persona, limits, metadata,
   and an optional cancellation token.
 - `AgentStep`: durable step history for observe, plan, tool call, tool result,
-  reflection, and final answer.
-- `AgentEvent`: runtime event stream for run start/stop, tool calls, and
-  reflection.
+  reflection, verification, and final answer.
+- `AgentEvent`: runtime event stream for run start/stop, tool calls,
+  reflection, and verification.
 - `AgentStopReason`: structured stop reason for final answer, stop condition,
   max steps, max tool calls, timeout, cancellation, token budget, or error.
 - `AgentRunResult`: final runtime output containing answer, stop reason, steps,
@@ -38,6 +38,9 @@ The boundary is:
 - `AgentCancellationToken`: shared shutdown signal that can stop an active
   agent run through `AgentContext`.
 - `ReflectionStrategy`: optional pluggable reflection hook.
+- `VerificationStrategy`: optional pluggable gate on a candidate final answer;
+  unlike `ReflectionStrategy` it can reject the answer and send the loop back
+  around for another attempt.
 - `AgentMemoryHook`: optional observer for memory reads, searches, and writes.
 
 ## ReAct Runtime
@@ -67,6 +70,20 @@ Reflection remains opt-in through `with_reflection_strategy(...)` and can be
 disabled at runtime configuration level with
 `ReActConfig::with_reflection_enabled(false)`. When disabled, no `Reflect` step
 or `ReflectionAdded` event is recorded even if a strategy is attached.
+
+Verification is opt-in through `with_verification_strategy(...)` and gates the
+loop rather than just observing it: after a candidate final answer is recorded
+(and reflected on, if a `ReflectionStrategy` is attached), the strategy's
+verdict decides whether the run actually stops. `VerificationOutcome::Rejected
+{ feedback }` records a `Verify` step (`approved: false`) and a
+`VerificationCompleted` event, feeds `feedback` into memory as the next
+observation (the same mechanism used for tool results), and loops the agent
+for another attempt. Attempts are bounded by
+`ReActConfig::with_max_verification_attempts(...)` (default `2`); exhausting
+the bound force-accepts the candidate answer instead of erroring, so a
+strategy that never approves cannot hang a run. Disabling verification with
+`ReActConfig::with_verification_enabled(false)` skips the gate entirely, even
+with a strategy attached — no `Verify` step or event is recorded.
 
 `ReActAgent::query_memory(...)` and `query_session_memory(...)` expose the
 runtime memory query boundary. The active `MemoryStore` owns retrieval behavior:
@@ -210,6 +227,7 @@ cargo run -p agentflow-agents --example plan_execute_agent
 ## Extending the runtime
 
 Want to write a custom `AgentRuntime`, `ReflectionStrategy`,
-`MemorySummaryBackend`, `Tool`, or `MemoryStore`? See
+`VerificationStrategy`, `MemorySummaryBackend`, `Tool`, or `MemoryStore`? See
 [`AGENT_SDK.md`](./AGENT_SDK.md) for the extension contract and runnable
-examples (`custom_runtime`, `custom_reflection`, `custom_memory_summary`).
+examples (`custom_runtime`, `custom_reflection`, `custom_verification`,
+`custom_memory_summary`).

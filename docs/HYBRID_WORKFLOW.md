@@ -243,6 +243,7 @@ When an `AgentNode` completes, its output is saved in workflow state. That inclu
 - plan or tool call steps.
 - tool result steps.
 - reflection steps when enabled.
+- verification steps when enabled.
 - final answer step.
 
 On resume, `Flow` skips nodes already completed in the checkpoint. If a downstream node failed after an `AgentNode`, resume continues after the agent node and does not repeat completed agent tool calls.

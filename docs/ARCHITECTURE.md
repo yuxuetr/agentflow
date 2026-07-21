@@ -179,11 +179,13 @@ Paradigms). The two foundational runtimes they build on:
     `FuturesUnordered` with a configurable `max_concurrency` window. Nodes whose
     dependencies are all `Ok(_)` or `NodeSkipped` are launched immediately.
 - **Agent loops**: `agentflow-agents::AgentRuntime` records observe, plan, tool
-  call, tool result, reflection, and final answer steps. ReAct, plan/execute, and
-  multi-agent examples are built on this runtime. Each run produces an
-  `AgentRunResult` with a structured `AgentStopReason` (one of: final answer,
-  stop condition, max steps, max tool calls, timeout, cancelled, token budget,
-  error).
+  call, tool result, reflection, verification, and final answer steps. ReAct,
+  plan/execute, and multi-agent examples are built on this runtime. A
+  `ReflectionStrategy` only observes a stop decision already made; a
+  `VerificationStrategy` gates it — a rejection sends the loop back around for
+  another attempt instead of stopping. Each run produces an `AgentRunResult`
+  with a structured `AgentStopReason` (one of: final answer, stop condition,
+  max steps, max tool calls, timeout, cancelled, token budget, error).
 
 The intended direction of composition is:
 

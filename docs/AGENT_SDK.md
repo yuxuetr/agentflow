@@ -59,6 +59,7 @@ end-to-end. The whole example is ~120 lines and exercises:
 | --- | --- | --- | --- |
 | `AgentRuntime` | `agentflow-agents` | Replace the entire planning / execution loop | [`custom_runtime.rs`](../agentflow-agents/examples/custom_runtime.rs) |
 | `ReflectionStrategy` | `agentflow-agents` | Inject reflection text into the step trace | [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs) |
+| `VerificationStrategy` | `agentflow-agents` | Gate a candidate final answer; reject to loop again | [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs) |
 | `MemorySummaryBackend` | `agentflow-agents::react` | Compress prompt memory when it overflows the budget | [`custom_memory_summary.rs`](../agentflow-agents/examples/custom_memory_summary.rs) |
 | `AgentMemoryHook` | `agentflow-agents` | Non-failing observer for memory reads / writes | (in tests, see `react/agent.rs`) |
 | `Tool` | `agentflow-tools` | Add a new tool callable by any agent | [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs) (`EchoTool`) |
@@ -164,6 +165,66 @@ let agent = ReActAgent::new(config, memory, tools)
 
 Built-ins: `NoOpReflection`, `FailureReflection`, `FinalReflection` (in
 `agentflow_agents::reflection`).
+
+### `VerificationStrategy`
+
+```rust
+#[async_trait]
+pub trait VerificationStrategy: Send + Sync {
+  fn name(&self) -> &'static str;
+  async fn verify(
+    &self,
+    context: &VerificationContext,
+  ) -> Result<VerificationOutcome, VerificationError>;
+}
+```
+
+**What it does.** Gates a candidate final answer *before* the loop stops.
+Unlike `ReflectionStrategy`, its verdict changes control flow:
+`VerificationOutcome::Rejected { feedback }` sends `ReActAgent` back around
+for another attempt instead of terminating with
+`AgentStopReason::FinalAnswer`.
+
+**Contract.**
+
+- `name()` is stable, lowercase, kebab- or snake_case (used in log lines and
+  as your strategy's identity in the trace).
+- `VerificationOutcome::Approved` accepts the candidate answer; the run
+  stops as normal.
+- `VerificationOutcome::Rejected { feedback }` rejects it. `feedback` is
+  appended to memory as the next observation (the same mechanism tool
+  results use), so phrase it as you would a tool result the model should
+  react to.
+- Treat your own failures as soft: return `Err(VerificationError::Failed)`
+  only when genuinely actionable. The runtime treats a strategy error as
+  non-fatal and accepts the candidate answer rather than getting the run
+  stuck.
+- Verification runs **inline** with the loop and gates every candidate
+  answer; don't call slow blocking APIs without an explicit timeout.
+- Rejections are bounded by `ReActConfig::max_verification_attempts`
+  (default `2`, set via `with_max_verification_attempts(...)`). Exhausting
+  the bound force-accepts the candidate answer rather than looping forever
+  or erroring — a strategy that never approves degrades gracefully instead
+  of hanging the run.
+
+**Wiring.**
+
+```rust
+let agent = ReActAgent::new(config, memory, tools)
+  .with_verification_strategy(Arc::new(MyStrategy::new()));
+```
+
+Disable the gate at runtime with `ReActConfig::with_verification_enabled(false)`
+— no `Verify` step or `VerificationCompleted` event is recorded even with a
+strategy attached.
+
+Built-in: `AlwaysApprove` (in `agentflow_agents::verification`) — useful as a
+base to wrap with real domain logic (an LLM-judge call, a test-runner
+invocation, a schema check, ...).
+
+See [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs)
+for a strategy that rejects a candidate answer missing a citation marker and
+approves the revised one.
 
 ### `MemorySummaryBackend`
 
@@ -318,8 +379,9 @@ Two patterns:
    [`custom_runtime.rs`](../agentflow-agents/examples/custom_runtime.rs).
 2. **Mock provider**: register the `mock` provider and pre-load it via
    `AGENTFLOW_MOCK_RESPONSES` (a JSON-encoded list of canned replies).
-   See [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs)
-   and [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs)
+   See [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs),
+   [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs),
+   and [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs)
    for the standard wiring.
 
 ## FlowValue field reference (F-DOC-2)

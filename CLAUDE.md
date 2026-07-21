@@ -75,7 +75,8 @@ Agent-native runtime and patterns:
 - `AgentRuntime` trait with `AgentContext`, `RuntimeLimits` (max_steps, max_tool_calls, timeout_ms, token_budget), `AgentCancellationToken`
 - `ReActAgent` (observe/plan/tool/result/reflect/final answer with memory summary)
 - `PlanExecuteAgent` (structured plan JSON + sequential execution)
-- `ReflectionStrategy` trait (`FailureReflection` / `FinalReflection` / `NoOpReflection`)
+- `ReflectionStrategy` trait (`FailureReflection` / `FinalReflection` / `NoOpReflection`) — non-fatal, self-critique only; fires after a stop decision is already made and cannot change control flow
+- `VerificationStrategy` trait (`AlwaysApprove` built-in) — gates a `ReActAgent` candidate final answer *before* it stops: a `Rejected { feedback }` verdict feeds the critique back into memory and loops the agent for another attempt (bounded by `ReActConfig::max_verification_attempts`, default 2; exhausting it force-accepts rather than erroring). Recorded as an `AgentStepKind::Verify` step / `AgentEvent::VerificationCompleted` event. See `agentflow-agents/examples/custom_verification.rs`.
 - `MemorySummaryBackend` trait (`RecentOnlyMemorySummary` / `CompactMemorySummary`)
 - `AgentNode` (agent in DAG) + `WorkflowTool` (DAG as agent tool) + `AgentNodeResumeContract` (partial resume)
 - Multi-agent collaboration: `HandoffSupervisor` / `BlackboardSupervisor` / `DebateSupervisor`

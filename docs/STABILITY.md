@@ -167,6 +167,30 @@ production deployments must explicitly opt in to
 `Ed25519SignatureVerifier::new(default_keys_dir())` via
 `RemoteMarketplaceCache::with_client_and_verifier`.
 
+### `AgentStepKind::Verify` / `AgentEvent::VerificationCompleted` — new additive variants
+
+`agentflow-agents` gained a `VerificationStrategy` extension point (parallel to
+the existing `ReflectionStrategy`, but able to gate control flow: a rejection
+sends `ReActAgent` back around for another attempt instead of stopping). This
+added two new variants to the "Stable closed schema" enums documented above:
+
+- `AgentStepKind::Verify { approved: bool, feedback: Option<String>, attempt: usize }`
+- `AgentEvent::VerificationCompleted { session_id, step_index, approved, timestamp }`
+  (non-breaking regardless of stability level — `AgentEvent` is
+  `#[non_exhaustive]`)
+
+Both are purely additive: existing readers that pattern-match `AgentStepKind`
+exhaustively will fail to compile until they add a `Verify` arm (by design —
+the enum is intentionally closed to keep trace replay honest), but no
+existing variant, field, or serialized shape changed. Readers that already
+have a wildcard arm (`_ => ...`) or that only match `AgentEvent` (already
+`#[non_exhaustive]`) are unaffected.
+
+The `agentflow-agents/tests/fixtures/agent_steps/compatibility_steps.json` /
+`agent_trace_compat.rs` golden fixture has **not** been extended with a
+`Verify` step yet — the fixture still only exercises the pre-existing variant
+set. Extending it is a tracked follow-up, not implied by this note.
+
 ## Non-Stable Surfaces
 
 The following are intentionally not v1-stable yet:
