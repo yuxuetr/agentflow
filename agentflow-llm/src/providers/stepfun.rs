@@ -112,17 +112,19 @@ impl StepFunProvider {
 
   fn get_model_type(&self, model: &str) -> ModelType {
     match model {
-      // Text models
-      "step-1-8k" | "step-1-32k" | "step-1-256k" | "step-2-16k" | "step-2-mini"
-      | "step-2-16k-202411" | "step-2-16k-exp" => ModelType::Text,
+      // Text models. The whole step-1-*/step-2-* lineage was retired from
+      // StepFun's `/v1/models` (confirmed 404 `model_invalid`); step-3.5-flash
+      // and step-3.5-flash-2603 are the current text-reasoning models.
+      "step-3.5-flash" | "step-3.5-flash-2603" => ModelType::Text,
 
-      // Image understanding models
-      "step-1o-turbo-vision" | "step-1o-vision-32k" | "step-1v-8k" | "step-1v-32k" => {
-        ModelType::ImageUnderstand
-      }
+      // Image understanding models. step-1o-vision-32k / step-1v-8k /
+      // step-1v-32k are no longer listed by the live API — step-1o-turbo-vision
+      // is the only current vision-understanding entry point.
+      "step-1o-turbo-vision" => ModelType::ImageUnderstand,
 
-      // Multimodal models
-      "step-3" => ModelType::Multimodal,
+      // Multimodal models. step-3 (bare) was retired; step-3.7-flash is the
+      // current multimodal (text + image + video) reasoning model.
+      "step-3.7-flash" => ModelType::Multimodal,
 
       // Text-to-Speech models
       "step-tts-vivid" | "step-tts-mini" => ModelType::TTS,
@@ -130,11 +132,11 @@ impl StepFunProvider {
       // Automatic Speech Recognition models
       "step-asr" => ModelType::ASR,
 
-      // Image generation models
-      "step-2x-large" | "step-1x-medium" => ModelType::GenerateImage,
+      // Image generation models. step-1x-medium is no longer listed.
+      "step-2x-large" => ModelType::GenerateImage,
 
-      // Image editing models
-      "step-1x-edit" => ModelType::EditImage,
+      // Image editing models. step-1x-edit was renamed to step-image-edit-2.
+      "step-image-edit-2" => ModelType::EditImage,
 
       // Default to text for unknown models
       _ => ModelType::Text,
@@ -316,7 +318,7 @@ impl LLMProvider for StepFunProvider {
     // Simple health check - try to make a minimal request
     let url = format!("{}/chat/completions", self.base_url);
     let test_body = json!({
-      "model": "step-1-8k",
+      "model": "step-3.5-flash",
       "messages": [{"role": "user", "content": "test"}],
       "max_tokens": 1
     });
@@ -346,28 +348,19 @@ impl LLMProvider for StepFunProvider {
   fn supported_models(&self) -> Vec<String> {
     vec![
       // Text models
-      "step-1-8k".to_string(),
-      "step-1-32k".to_string(),
-      "step-1-256k".to_string(),
-      "step-2-16k".to_string(),
-      "step-2-mini".to_string(),
-      "step-2-16k-202411".to_string(),
-      "step-2-16k-exp".to_string(),
+      "step-3.5-flash".to_string(),
+      "step-3.5-flash-2603".to_string(),
       // Image understanding models
       "step-1o-turbo-vision".to_string(),
-      "step-1o-vision-32k".to_string(),
-      "step-1v-8k".to_string(),
-      "step-1v-32k".to_string(),
       // Multimodal models
-      "step-3".to_string(),
+      "step-3.7-flash".to_string(),
       // Audio models (for chat completions interface)
       "step-tts-vivid".to_string(),
       "step-tts-mini".to_string(),
       "step-asr".to_string(),
       // Image generation models (for chat completions interface)
       "step-2x-large".to_string(),
-      "step-1x-medium".to_string(),
-      "step-1x-edit".to_string(),
+      "step-image-edit-2".to_string(),
     ]
   }
 }
@@ -523,27 +516,37 @@ impl StreamingResponse for StepFunStreamingResponse {
     }
 
     loop {
-      // Try to get the next chunk from the stream
+      // Drain any complete lines already sitting in the buffer *before*
+      // pulling more bytes off the network. A single network read can
+      // contain multiple SSE `data:` lines — e.g. a burst of reasoning-
+      // delta tokens from a thinking model, which stream densely with no
+      // natural pacing between them. Without this, whatever's left in
+      // the buffer after returning the first parsed line is silently
+      // dropped the moment the underlying stream ends (or stalls) before
+      // another network read arrives, because the old loop only ever
+      // inspected the buffer immediately after a fresh `stream.next()`.
+      if let Some(ref mut buffer) = self.buffer {
+        while let Some(newline_pos) = buffer.find('\n') {
+          let line = buffer[..newline_pos].trim().to_string();
+          buffer.drain(..=newline_pos);
+
+          if !line.is_empty()
+            && let Some(chunk) = Self::parse_sse_chunk(&line)
+          {
+            if chunk.is_final {
+              self.finished = true;
+            }
+            return Ok(Some(chunk));
+          }
+        }
+      }
+
+      // Buffer has no complete parseable line left — pull more from the
+      // network.
       match self.stream.next().await {
         Some(Ok(data)) => {
-          // Add to buffer
           if let Some(ref mut buffer) = self.buffer {
             buffer.push_str(&data);
-
-            // Process complete lines
-            while let Some(newline_pos) = buffer.find('\n') {
-              let line = buffer[..newline_pos].trim().to_string();
-              buffer.drain(..=newline_pos);
-
-              if !line.is_empty()
-                && let Some(chunk) = Self::parse_sse_chunk(&line)
-              {
-                if chunk.is_final {
-                  self.finished = true;
-                }
-                return Ok(Some(chunk));
-              }
-            }
           }
         }
         Some(Err(e)) => return Err(e),
@@ -1434,7 +1437,7 @@ mod tests {
     let provider = StepFunProvider::new("test-key", None).unwrap();
     let tool = ToolSpec::new("ping", "Ping a host", json!({"type": "object"}));
     let request = ProviderRequest {
-      model: "step-2-16k".to_string(),
+      model: "step-3.5-flash".to_string(),
       messages: vec![],
       stream: false,
       parameters: std::collections::HashMap::new(),
@@ -1459,7 +1462,7 @@ mod tests {
 
   #[test]
   fn test_text2image_builder() {
-    let request = Text2ImageBuilder::new("step-1x-medium", "A beautiful landscape")
+    let request = Text2ImageBuilder::new("step-2x-large", "A beautiful landscape")
       .size("1024x1024")
       .response_format("b64_json")
       .seed(12345)
@@ -1467,7 +1470,7 @@ mod tests {
       .cfg_scale(7.5)
       .build();
 
-    assert_eq!(request.model, "step-1x-medium");
+    assert_eq!(request.model, "step-2x-large");
     assert_eq!(request.prompt, "A beautiful landscape");
     assert_eq!(request.size, Some("1024x1024".to_string()));
     assert_eq!(request.seed, Some(12345));

@@ -367,7 +367,7 @@ mod tests {
       "qwen-vl-plus",
       "abab6.5-chat",
       "minimax-text-01",
-      "step-1-8k",
+      "step-3.5-flash",
     ] {
       assert_eq!(
         counter_for_model(model).name(),

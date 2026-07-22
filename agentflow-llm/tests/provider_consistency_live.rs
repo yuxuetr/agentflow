@@ -339,7 +339,12 @@ fn provider_tool_request(model: &str) -> ProviderRequest {
     stream: false,
     parameters: HashMap::from([
       ("temperature".to_string(), json!(0.0)),
-      ("max_tokens".to_string(), json!(64)),
+      // 64 was enough for the classic chat models, but reasoning models
+      // (e.g. StepFun's step-3.5-flash) burn a chunk of the budget on
+      // internal reasoning tokens before emitting the tool call — see the
+      // 256-token comment on `provider_request` above for the same
+      // rationale applied there first.
+      ("max_tokens".to_string(), json!(256)),
     ]),
     tools: Some(vec![ToolSpec::new(
       "get_weather",
@@ -775,7 +780,10 @@ where
     // is the current cheap-tier model.
     "google" => live_text_model(provider_name, "gemini-2.5-flash"),
     "moonshot" => live_text_model(provider_name, "moonshot-v1-8k"),
-    "stepfun" => live_text_model(provider_name, "step-1-8k"),
+    // The whole step-1-*/step-2-* lineage was retired from StepFun's
+    // `/v1/models` (confirmed 404 `model_invalid`); step-3.5-flash is the
+    // current text-reasoning default.
+    "stepfun" => live_text_model(provider_name, "step-3.5-flash"),
     other => panic!("unknown provider in live harness: {other}"),
   };
 
@@ -841,13 +849,8 @@ async fn stepfun_live_text_path() {
     StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
   let model = stepfun_live_model(
     "TEXT",
-    "step-1-8k",
-    &[
-      "step-2-16k-202411",
-      "step-2-16k",
-      "step-2-mini",
-      "step-1-8k",
-    ],
+    "step-3.5-flash",
+    &["step-3.5-flash-2603", "step-3.5-flash"],
     |model| model.model_type() == "text",
   )
   .await;
@@ -878,13 +881,8 @@ async fn stepfun_live_streaming_path() {
     StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
   let model = stepfun_live_model(
     "TEXT",
-    "step-1-8k",
-    &[
-      "step-2-16k-202411",
-      "step-2-16k",
-      "step-2-mini",
-      "step-1-8k",
-    ],
+    "step-3.5-flash",
+    &["step-3.5-flash-2603", "step-3.5-flash"],
     |model| model.model_type() == "text" && model.supports_streaming_capability(),
   )
   .await;
@@ -909,13 +907,8 @@ async fn stepfun_live_tool_calling_or_fallback_path() {
     StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
   let model = stepfun_live_model(
     "TOOLS",
-    "step-1-8k",
-    &[
-      "step-2-16k-202411",
-      "step-2-16k",
-      "step-2-mini",
-      "step-1-8k",
-    ],
+    "step-3.5-flash",
+    &["step-3.5-flash-2603", "step-3.5-flash"],
     |model| model.model_type() == "text" && model.supports_tools_capability(),
   )
   .await;
@@ -955,13 +948,7 @@ async fn stepfun_live_vision_path() {
   let model = stepfun_live_model(
     "VISION",
     "step-1o-turbo-vision",
-    &[
-      "step-1o-turbo-vision",
-      "step-1v-8k",
-      "step-1o-vision-32k",
-      "step-1v-32k",
-      "step-3",
-    ],
+    &["step-1o-turbo-vision", "step-3.7-flash"],
     |model| matches!(model.model_type(), "imageunderstand" | "multimodal") || model.is_multimodal(),
   )
   .await;
@@ -984,15 +971,9 @@ async fn stepfun_live_image_generation_path() {
   };
   let client = StepFunSpecializedClient::with_client(no_proxy_client(), &api_key, base_url)
     .expect("stepfun specialized client");
-  let model = stepfun_live_model(
-    "IMAGE",
-    "step-1x-medium",
-    &["step-1x-medium", "step-2x-large"],
-    |model| {
-      matches!(model.model_type(), "generateimage" | "text2image" | "image")
-        || model.is_image_model()
-    },
-  )
+  let model = stepfun_live_model("IMAGE", "step-2x-large", &["step-2x-large"], |model| {
+    matches!(model.model_type(), "generateimage" | "text2image" | "image") || model.is_image_model()
+  })
   .await;
 
   let request = Text2ImageBuilder::new(&model, "a tiny red square icon on a white background")

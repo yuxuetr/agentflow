@@ -2728,37 +2728,11 @@ models:
     response_format: null
   
   # StepFun Text Models
-  step-1-8k:
-    vendor: step
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-1-32k:
-    vendor: step
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 16384
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-1-256k:
+  # The whole step-1-*/step-2-* lineage was retired from StepFun's
+  # `/v1/models` (confirmed via live 404 `model_invalid` + a direct
+  # `/v1/models` query); step-3.5-flash / step-3.5-flash-2603 are the
+  # current text-reasoning models, both with a 256K context window.
+  step-3.5-flash:
     vendor: step
     type: chat
     model_id: null
@@ -2773,59 +2747,14 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
-  step-2-16k:
+  step-3.5-flash-2603:
     vendor: step
     type: chat
     model_id: null
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-2-mini:
-    vendor: step
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-2-16k-202411:
-    vendor: step
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    response_format: null
-  step-2-16k-exp:
-    vendor: step
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 8192
+    max_tokens: 262144
     frequency_penalty: null
     stop: null
     n: null
@@ -2835,6 +2764,8 @@ models:
     response_format: null
 
   # StepFun Image Understanding Models
+  # step-1o-vision-32k / step-1v-8k / step-1v-32k are no longer listed by
+  # the live API — step-1o-turbo-vision is the only current entry point.
   step-1o-turbo-vision:
     vendor: step
     type: chat
@@ -2851,57 +2782,11 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
-  step-1o-vision-32k:
-    vendor: step
-    type: chat
-    accepts: [text, image]
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 32768
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  step-1v-8k:
-    vendor: step
-    type: chat
-    accepts: [text, image]
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  step-1v-32k:
-    vendor: step
-    type: chat
-    accepts: [text, image]
-    model_id: null
-    base_url: null
-    temperature: 0.7
-    top_p: null
-    max_tokens: 32768
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
 
   # StepFun Multimodal Models
-  step-3:
+  # step-3 (bare) was retired; step-3.7-flash is the current multimodal
+  # (text + image + video) reasoning model, 256K context window.
+  step-3.7-flash:
     vendor: step
     type: chat
     accepts: [text, image]
@@ -2909,7 +2794,7 @@ models:
     base_url: null
     temperature: 0.7
     top_p: null
-    max_tokens: 8192
+    max_tokens: 262144
     frequency_penalty: null
     stop: null
     n: null
@@ -2989,22 +2874,8 @@ models:
     base_url: null
 
   # StepFun Image Generation Models
+  # step-1x-medium is no longer listed by the live API.
   step-2x-large:
-    vendor: step
-    type: text_to_image
-    model_id: null
-    base_url: null
-    temperature: null
-    top_p: null
-    max_tokens: null
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: false
-    supports_tools: false
-    supports_multimodal: false
-    response_format: null
-  step-1x-medium:
     vendor: step
     type: text_to_image
     model_id: null
@@ -3021,7 +2892,8 @@ models:
     response_format: null
 
   # StepFun Image Editing Models
-  step-1x-edit:
+  # step-1x-edit was renamed to step-image-edit-2.
+  step-image-edit-2:
     vendor: step
     type: image_edit
     model_id: null

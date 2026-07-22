@@ -2827,7 +2827,10 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
   LiveModelProbe {
     name: "stepfun",
     key_envs: &["STEPFUN_API_KEY", "STEP_API_KEY"],
-    default_text_model: "step-1-8k",
+    // The whole step-1-*/step-2-* lineage was retired; step-3.5-flash is
+    // the current text-reasoning default. Mirror the live test
+    // source-of-truth in `agentflow-llm/tests/provider_consistency_live.rs`.
+    default_text_model: "step-3.5-flash",
     endpoint: LiveModelsEndpoint::OpenAICompat("https://api.stepfun.com/v1/models"),
   },
   LiveModelProbe {
