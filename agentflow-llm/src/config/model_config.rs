@@ -1124,11 +1124,14 @@ models:
     assert!(counts.get("text_to_image").copied().unwrap_or(0) >= 1);
     assert!(counts.get("image_edit").copied().unwrap_or(0) >= 1);
 
-    // At least the 65 image-accepting chat models surface their
-    // capability via the explicit `accepts: [text, image]` field.
+    // At least the 63 image-accepting chat models surface their
+    // capability via the explicit `accepts: [text, image]` field. (Was 65
+    // pre the 800dbae StepFun step-1/step-2 retirement migration, which
+    // dropped a couple of the retired lineup's vision variants along with
+    // the rest of that dead model line.)
     assert!(
-      accepts_image_count >= 65,
-      "expected ≥ 65 entries with image in accepts, got {accepts_image_count}"
+      accepts_image_count >= 63,
+      "expected ≥ 63 entries with image in accepts, got {accepts_image_count}"
     );
   }
 
