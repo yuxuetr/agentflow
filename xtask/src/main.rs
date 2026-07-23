@@ -73,6 +73,11 @@ const AGENT_SDK_ALLOWLIST: &[&str] = &[
   "Critique",
   "Final",
   "FailureReason",
+  // AgentStepKind::Verify / AgentEvent::VerificationCompleted (verification
+  // loop-gating extension point) — same "variant, not its own pub item"
+  // shape as the AgentStepKind variants above.
+  "Verify",
+  "VerificationCompleted",
   // FlowValue variants: `FlowValue::File` and `FlowValue::Url` show up in the
   // typed-value section. The parent `FlowValue` enum is declared in
   // agentflow-core/src/value.rs.
