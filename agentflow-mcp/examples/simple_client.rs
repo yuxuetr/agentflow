@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(text) = content.as_text() {
                   println!(
                     "Content (first 200 chars): {}...",
-                    &text.chars().take(200).collect::<String>()
+                    text.chars().take(200).collect::<String>()
                   );
                 } else {
                   println!(
@@ -186,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  Message {}: {:?} - {}",
                     i + 1,
                     message.role,
-                    &text.chars().take(100).collect::<String>()
+                    text.chars().take(100).collect::<String>()
                   );
                 }
               }

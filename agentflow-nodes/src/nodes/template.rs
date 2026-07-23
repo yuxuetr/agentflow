@@ -111,7 +111,7 @@ impl AsyncNode for TemplateNode {
       "json" => {
         println!(
           "📝 Attempting to parse rendered template as JSON: {}",
-          &rendered
+          rendered
         );
         match serde_json::from_str::<Value>(&rendered) {
           Ok(Value::Object(map)) => {
@@ -136,7 +136,7 @@ impl AsyncNode for TemplateNode {
           Err(e) => {
             // Invalid JSON, treat as string
             println!("⚠️  Template rendered but JSON parsing failed: {}", e);
-            println!("    Rendered content: {}", &rendered);
+            println!("    Rendered content: {}", rendered);
             let mut outputs = HashMap::new();
             outputs.insert(
               self.output_key.clone(),

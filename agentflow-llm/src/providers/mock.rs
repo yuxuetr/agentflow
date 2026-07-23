@@ -96,7 +96,7 @@ impl MockProvider {
 
     format!(
       "Mock response for: '{}'... (model: {})",
-      &first_message.chars().take(50).collect::<String>(),
+      first_message.chars().take(50).collect::<String>(),
       request.model
     )
   }
