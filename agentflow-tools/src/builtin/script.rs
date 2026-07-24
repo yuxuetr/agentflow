@@ -43,6 +43,15 @@ pub struct ScriptTool {
   /// isn't a key in `map`, or whose content doesn't match the recorded
   /// hash, is refused. See docs/RFC_CODE_EXECUTION_TRUST.md.
   script_hashes: Option<HashMap<String, String>>,
+  /// S2.3: absolute path to a `.py`-specific interpreter (a per-skill
+  /// isolated venv's `python3`, built per docs/RFC_CODE_EXECUTION_TRUST.md
+  /// S2). `None` (the default) means `.py` scripts run against the
+  /// global `python3` on `PATH`, exactly as before this field existed.
+  /// This only changes *which binary gets spawned* — the sandbox
+  /// command-allowlist check still gates on the logical name `"python3"`
+  /// regardless, so policy authoring is unaffected by whether a venv is
+  /// configured.
+  python_interpreter: Option<PathBuf>,
 }
 
 impl ScriptTool {
@@ -55,6 +64,7 @@ impl ScriptTool {
         "ScriptTool default backend; opt in via with_os_sandbox()",
       )),
       script_hashes: None,
+      python_interpreter: None,
     }
   }
 
@@ -83,6 +93,14 @@ impl ScriptTool {
   /// file, or a content mismatch all refuse to run rather than warn.
   pub fn with_script_hashes(mut self, hashes: HashMap<String, String>) -> Self {
     self.script_hashes = Some(hashes);
+    self
+  }
+
+  /// Configure a per-skill isolated Python interpreter (S2.3): `.py`
+  /// scripts spawn `interpreter_path` instead of the global `python3`.
+  /// `.sh`/`.js` scripts are unaffected.
+  pub fn with_python_interpreter(mut self, interpreter_path: PathBuf) -> Self {
+    self.python_interpreter = Some(interpreter_path);
     self
   }
 
@@ -261,7 +279,11 @@ impl Tool for ScriptTool {
       ),
     })?;
 
-    // Check that the interpreter is allowed by the sandbox policy.
+    // Check that the interpreter is allowed by the sandbox policy. This is
+    // always keyed on the *logical* command name ("python3"/"bash"/"node"),
+    // never on a resolved venv path — S2.3's `python_interpreter` only
+    // changes which physical binary gets spawned below, not the sandbox
+    // policy question of whether that language is allowed to run at all.
     if !self.policy.is_command_allowed(interpreter) {
       return Err(ToolError::SandboxViolation {
         message: format!(
@@ -270,6 +292,13 @@ impl Tool for ScriptTool {
         ),
       });
     }
+
+    // S2.3: `.py` scripts spawn the skill's own isolated venv interpreter
+    // when one is configured, instead of the global `python3`.
+    let spawn_interpreter = match (ext, &self.python_interpreter) {
+      ("py", Some(venv_python)) => venv_python.as_os_str(),
+      _ => std::ffi::OsStr::new(interpreter),
+    };
 
     // ── Serialise args as JSON for stdin ─────────────────────────────────
     let stdin_json = match params.get("args") {
@@ -280,7 +309,7 @@ impl Tool for ScriptTool {
     // ── Execution ────────────────────────────────────────────────────────
     let timeout = Duration::from_secs(self.policy.max_exec_time_secs);
 
-    let mut cmd = tokio::process::Command::new(interpreter);
+    let mut cmd = tokio::process::Command::new(spawn_interpreter);
     cmd
       .arg(&canonical_script_path)
       .current_dir(&canonical_scripts_dir)
@@ -288,7 +317,11 @@ impl Tool for ScriptTool {
       .stdout(std::process::Stdio::piped())
       .stderr(std::process::Stdio::piped());
 
-    let scope = build_script_scope(&canonical_scripts_dir, &self.policy);
+    let scope = build_script_scope(
+      &canonical_scripts_dir,
+      &self.policy,
+      self.python_interpreter.as_deref(),
+    );
     let caps = self.requires_capabilities();
     self
       .backend
@@ -373,13 +406,29 @@ fn default_script_parameters_schema() -> Value {
 /// resources it imports live there). When the policy declares additional
 /// allowed paths we add them as both read- and write-targets so scripts can
 /// produce outputs in skill-managed scratch dirs without escaping.
-fn build_script_scope(scripts_dir: &std::path::Path, policy: &SandboxPolicy) -> SandboxScope {
+///
+/// S2.3: when a per-skill venv interpreter is configured, its root
+/// directory (`.venv/`, two levels up from `.venv/bin/python3`) is also
+/// granted read+write — the interpreter needs to read its own standard
+/// library / site-packages and may write `__pycache__` bytecode.
+fn build_script_scope(
+  scripts_dir: &std::path::Path,
+  policy: &SandboxPolicy,
+  python_interpreter: Option<&std::path::Path>,
+) -> SandboxScope {
   let mut scope = SandboxScope::new()
     .with_read_paths([scripts_dir.to_path_buf()])
     .with_working_directory(scripts_dir.to_path_buf());
   for path in &policy.allowed_paths {
     scope.read_paths.push(path.clone());
     scope.write_paths.push(path.clone());
+  }
+  if let Some(venv_root) = python_interpreter
+    .and_then(|p| p.parent())
+    .and_then(|p| p.parent())
+  {
+    scope.read_paths.push(venv_root.to_path_buf());
+    scope.write_paths.push(venv_root.to_path_buf());
   }
   if scope.write_paths.is_empty() {
     scope.write_paths.push(std::path::PathBuf::from("/tmp"));
@@ -580,5 +629,78 @@ mod tests {
     let tool = make_tool(dir.path());
     let result = tool.execute(json!({"script": "hello.sh"})).await;
     assert!(result.is_ok());
+  }
+
+  // ── S2.3: per-skill python interpreter ──────────────────────────────────
+
+  /// `.py` scripts must spawn the configured venv interpreter, not the
+  /// global `python3` — proven with a stand-in executable so the test
+  /// doesn't depend on a real venv existing.
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn python_scripts_spawn_the_configured_interpreter() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("run.py"), "print('should not run')").unwrap();
+
+    let fake_interpreter = dir.path().join("fake_python3");
+    std::fs::write(
+      &fake_interpreter,
+      "#!/bin/bash\necho from-venv-interpreter\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_interpreter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_interpreter, perms).unwrap();
+
+    let tool = make_tool(dir.path()).with_python_interpreter(fake_interpreter);
+    let result = tool.execute(json!({"script": "run.py"})).await.unwrap();
+
+    assert!(result.content.contains("from-venv-interpreter"));
+  }
+
+  /// `.sh`/`.js` scripts are unaffected by a configured python interpreter.
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn python_interpreter_override_does_not_affect_other_extensions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("run.sh"), "#!/bin/bash\necho real-bash").unwrap();
+
+    let fake_interpreter = dir.path().join("fake_python3");
+    std::fs::write(
+      &fake_interpreter,
+      "#!/bin/bash\necho from-venv-interpreter\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_interpreter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_interpreter, perms).unwrap();
+
+    let tool = make_tool(dir.path()).with_python_interpreter(fake_interpreter);
+    let result = tool.execute(json!({"script": "run.sh"})).await.unwrap();
+
+    assert!(result.content.contains("real-bash"));
+  }
+
+  /// Without `with_python_interpreter`, `.py` scripts are still gated by
+  /// the sandbox policy's `"python3"` allow-list entry exactly as before
+  /// this field existed — a policy that never allowed python3 still
+  /// refuses `.py` execution regardless of a venv being configured.
+  #[tokio::test]
+  async fn without_python_interpreter_override_py_scripts_still_need_python3_allowed() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("run.py"), "print('hi')").unwrap();
+    let policy = SandboxPolicy {
+      allowed_commands: vec!["bash".to_string(), "node".to_string()], // no python3
+      allowed_paths: vec![dir.path().to_path_buf()],
+      ..Default::default()
+    };
+    let tool = ScriptTool::new(dir.path().to_path_buf(), Arc::new(policy));
+
+    let result = tool.execute(json!({"script": "run.py"})).await;
+    assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
   }
 }
