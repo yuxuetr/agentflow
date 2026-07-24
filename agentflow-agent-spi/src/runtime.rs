@@ -371,6 +371,13 @@ pub enum AgentStopReason {
     used_usd: f64,
     budget_usd: f64,
   },
+  /// L1.2: the same (tool, params) signature appeared `repeats` or more
+  /// times within the configured sliding window — the run stopped before
+  /// exhausting its step/tool-call/token budget on a stuck loop.
+  LoopDetected {
+    tool: String,
+    repeats: usize,
+  },
   Error {
     message: String,
   },

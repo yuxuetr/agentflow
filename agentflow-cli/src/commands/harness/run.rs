@@ -398,6 +398,7 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
       used_usd,
       budget_usd,
     } => format!("cost_limit(${used_usd:.4}/${budget_usd:.4})"),
+    LoopDetected { tool, repeats } => format!("loop_detected({tool}x{repeats})"),
     Error { message } => format!("error({message})"),
   }
 }

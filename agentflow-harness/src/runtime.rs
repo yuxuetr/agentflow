@@ -1206,6 +1206,11 @@ fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> Stopp
         "cost_limit_usd exceeded: ${used_usd:.4}/${budget_usd:.4}"
       )),
     },
+    AgentStopReason::LoopDetected { tool, repeats } => StoppedPayload {
+      reason: StopReason::LimitReached,
+      final_answer: None,
+      error: Some(format!("loop_detected: tool={tool} repeats={repeats}")),
+    },
     AgentStopReason::Error { message } => StoppedPayload {
       reason: StopReason::Failed,
       final_answer: None,

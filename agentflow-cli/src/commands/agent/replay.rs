@@ -374,6 +374,7 @@ pub fn stop_reason_label(reason: &AgentStopReason) -> String {
     AgentStopReason::Cancelled { .. } => "cancelled".to_string(),
     AgentStopReason::TokenBudgetExceeded { .. } => "token_budget_exceeded".to_string(),
     AgentStopReason::CostLimitExceeded { .. } => "cost_limit_exceeded".to_string(),
+    AgentStopReason::LoopDetected { .. } => "loop_detected".to_string(),
     AgentStopReason::Error { .. } => "error".to_string(),
   }
 }

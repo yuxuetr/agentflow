@@ -46,8 +46,8 @@ pub use nodes::{
 };
 pub use plan_execute::{PlanExecuteAgent, PlanExecuteConfig, PlanExecuteError, PlanExecuteStep};
 pub use react::{
-  CompactMemorySummary, MemorySummaryBackend, MemorySummaryContext, MemorySummaryStrategy,
-  RecentOnlyMemorySummary,
+  CompactMemorySummary, LoopDetectionConfig, MemorySummaryBackend, MemorySummaryContext,
+  MemorySummaryStrategy, RecentOnlyMemorySummary,
 };
 pub use reflection::{
   FailureReflection, FinalReflection, NoOpReflection, Reflection, ReflectionContext,

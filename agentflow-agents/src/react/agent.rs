@@ -211,6 +211,40 @@ pub struct ReActConfig {
 
   /// Strategy used when prompt memory exceeds `memory_prompt_token_budget`.
   pub memory_summary_strategy: MemorySummaryStrategy,
+
+  /// L1.2: sliding-window loop detection. `None` disables it. `Some(cfg)`
+  /// stops the run with `AgentStopReason::LoopDetected` if the same
+  /// `(tool, params)` signature appears `cfg.threshold` or more times
+  /// within the last `cfg.window` tool calls — a safety net against a
+  /// stuck loop burning through the step/tool-call/token budget instead
+  /// of tripping any of them. This checks a wider window than F-A2-13
+  /// (which only ever compares against the immediately prior call) and
+  /// catches non-consecutive patterns (e.g. A, B, A, B, ...) too. Fires
+  /// after `record_reflection` gets a chance to react, same as every
+  /// other limit check.
+  pub loop_detection: Option<LoopDetectionConfig>,
+}
+
+/// See [`ReActConfig::loop_detection`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopDetectionConfig {
+  /// How many of the most recent tool calls to consider.
+  pub window: usize,
+  /// How many times the same signature must appear within `window` to
+  /// trip a stop.
+  pub threshold: usize,
+}
+
+impl Default for LoopDetectionConfig {
+  /// `threshold: 3` deliberately leaves room for F-A2-13's steering nudge
+  /// (fired on the 2nd identical call) to work first — a legitimate retry
+  /// pattern that repeats twice must not be treated as a stuck loop.
+  fn default() -> Self {
+    Self {
+      window: 6,
+      threshold: 3,
+    }
+  }
 }
 
 /// Strategy used to fit conversation memory into a prompt budget.
@@ -237,6 +271,7 @@ impl Default for ReActConfig {
       max_verification_attempts: 2,
       memory_prompt_token_budget: None,
       memory_summary_strategy: MemorySummaryStrategy::Disabled,
+      loop_detection: Some(LoopDetectionConfig::default()),
     }
   }
 }
@@ -291,6 +326,18 @@ impl ReActConfig {
 
   pub fn with_memory_summary_strategy(mut self, strategy: MemorySummaryStrategy) -> Self {
     self.memory_summary_strategy = strategy;
+    self
+  }
+
+  /// Configure loop detection (L1.2). See [`ReActConfig::loop_detection`].
+  pub fn with_loop_detection(mut self, window: usize, threshold: usize) -> Self {
+    self.loop_detection = Some(LoopDetectionConfig { window, threshold });
+    self
+  }
+
+  /// Disable loop detection entirely.
+  pub fn without_loop_detection(mut self) -> Self {
+    self.loop_detection = None;
     self
   }
 }
@@ -654,6 +701,8 @@ impl ReActAgent {
       tool_calls: 0,
       verification_attempts: 0,
       last_tool_call: None,
+      recent_tool_calls: std::collections::VecDeque::new(),
+      loop_detection: self.config.loop_detection,
       max_iterations: context
         .limits
         .max_steps
@@ -726,6 +775,8 @@ impl ReActAgent {
         st.max_iterations,
         st.budget_tokens,
         &st.cancellation_token,
+        &st.recent_tool_calls,
+        st.loop_detection,
       )
       .await?
     {
@@ -780,6 +831,8 @@ impl ReActAgent {
           &mut st.events,
           &mut st.step_index,
           &mut st.tool_calls,
+          &mut st.recent_tool_calls,
+          st.loop_detection,
           st.max_tool_calls,
           st.run_started_at,
           st.timeout_ms,
@@ -826,6 +879,8 @@ impl ReActAgent {
           &mut st.step_index,
           &mut st.tool_calls,
           &mut st.last_tool_call,
+          &mut st.recent_tool_calls,
+          st.loop_detection,
           st.iteration,
           st.max_tool_calls,
           st.run_started_at,
@@ -1344,6 +1399,8 @@ impl ReActAgent {
     step_index: &mut usize,
     tool_calls: &mut usize,
     last_tool_call: &mut Option<(String, serde_json::Value)>,
+    recent_tool_calls: &mut std::collections::VecDeque<(String, serde_json::Value)>,
+    loop_detection: Option<LoopDetectionConfig>,
     iteration: usize,
     max_tool_calls: Option<usize>,
     run_started_at: Instant,
@@ -1566,7 +1623,15 @@ impl ReActAgent {
       .await?;
 
     // Track the call so the next iteration's check can run.
-    *last_tool_call = Some((tool.clone(), params_snapshot));
+    *last_tool_call = Some((tool.clone(), params_snapshot.clone()));
+
+    // L1.2: feed the sliding window; checked at the top of the next turn.
+    if let Some(cfg) = loop_detection {
+      recent_tool_calls.push_back((tool.clone(), params_snapshot));
+      while recent_tool_calls.len() > cfg.window {
+        recent_tool_calls.pop_front();
+      }
+    }
 
     Ok(TurnStep::Continue)
   }
@@ -1593,6 +1658,8 @@ impl ReActAgent {
     max_iterations: usize,
     budget_tokens: Option<u32>,
     cancellation_token: &Option<AgentCancellationToken>,
+    recent_tool_calls: &std::collections::VecDeque<(String, serde_json::Value)>,
+    loop_detection: Option<LoopDetectionConfig>,
   ) -> Result<Option<AgentRunResult>, ReActError> {
     if is_cancelled(cancellation_token) {
       return Ok(Some(Self::cancelled_result(
@@ -1677,6 +1744,40 @@ impl ReActAgent {
           std::mem::take(events),
         )));
       }
+    }
+
+    // L1.2: sliding-window loop detection — catches a stuck loop (whether
+    // strictly consecutive or alternating, e.g. A, B, A, B, ...) before it
+    // exhausts the step/tool-call/token budget above. Checked against calls
+    // accumulated during prior turns, so it fires with a one-turn delay
+    // relative to the call that actually tipped it over the threshold.
+    if let Some(cfg) = loop_detection
+      && let Some((tool, repeats)) = most_repeated_signature(recent_tool_calls)
+      && repeats >= cfg.threshold
+    {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!(
+              "loop detected: tool `{tool}` called with identical params {repeats} times \
+               within the last {} calls",
+              recent_tool_calls.len()
+            ),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::LoopDetected { tool, repeats },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
     }
 
     Ok(None)
@@ -2002,6 +2103,10 @@ impl ReActAgent {
           used_usd, budget_usd
         ),
       }),
+      AgentStopReason::LoopDetected { tool, repeats } => Err(ReActError::ToolError {
+        tool,
+        message: format!("loop detected: repeated {repeats} times with identical params"),
+      }),
       AgentStopReason::Error { message } => Err(ReActError::ToolError {
         tool: "runtime".to_string(),
         message,
@@ -2180,6 +2285,8 @@ impl ReActAgent {
     events: &mut Vec<AgentEvent>,
     step_index: &mut usize,
     tool_calls_counter: &mut usize,
+    recent_tool_calls: &mut std::collections::VecDeque<(String, serde_json::Value)>,
+    loop_detection: Option<LoopDetectionConfig>,
     max_tool_calls: Option<usize>,
     run_started_at: Instant,
     timeout_ms: Option<u64>,
@@ -2307,6 +2414,15 @@ impl ReActAgent {
           params: trace_params,
         }
       );
+
+      // L1.2: feed the sliding window for every call in the batch, in
+      // dispatch order; checked at the top of the next turn.
+      if let Some(cfg) = loop_detection {
+        recent_tool_calls.push_back((call.name.clone(), call.arguments.clone()));
+        while recent_tool_calls.len() > cfg.window {
+          recent_tool_calls.pop_front();
+        }
+      }
 
       prepared.push(PreparedToolCall {
         tool: call.name.clone(),
@@ -2671,6 +2787,11 @@ struct LoopState {
   tool_calls: usize,
   verification_attempts: usize,
   last_tool_call: Option<(String, serde_json::Value)>,
+  /// L1.2: the last `loop_detection.window` (tool, params) signatures
+  /// dispatched, oldest first — fed from both the single-call and batch
+  /// dispatch paths, checked at the top of the next turn.
+  recent_tool_calls: std::collections::VecDeque<(String, serde_json::Value)>,
+  loop_detection: Option<LoopDetectionConfig>,
   max_iterations: usize,
   max_tool_calls: Option<usize>,
   timeout_ms: Option<u64>,
@@ -2897,6 +3018,23 @@ fn is_cancelled(token: &Option<AgentCancellationToken>) -> bool {
   token
     .as_ref()
     .is_some_and(AgentCancellationToken::is_cancelled)
+}
+
+/// L1.2: the `(tool, repeat count)` for whichever `(tool, params)`
+/// signature appears most often in `window` — direct `PartialEq` scan
+/// rather than hashing (`serde_json::Value` isn't `Hash`), which is fine
+/// at the single-digit window sizes loop detection is configured with.
+/// Returns `None` for an empty window.
+fn most_repeated_signature(
+  window: &std::collections::VecDeque<(String, serde_json::Value)>,
+) -> Option<(String, usize)> {
+  window
+    .iter()
+    .map(|signature| {
+      let count = window.iter().filter(|other| *other == signature).count();
+      (signature.0.clone(), count)
+    })
+    .max_by_key(|(_, count)| *count)
 }
 
 /// Convert a provider-emitted native tool call into the existing
@@ -5037,6 +5175,153 @@ providers:
 
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  // ── L1.2: sliding-window loop detection ─────────────────────────────────
+
+  /// The agent keeps calling the same tool with identical params forever
+  /// (the mock LLM never varies its response) — loop detection must stop
+  /// the run well before `max_iterations`, not let it grind to the budget.
+  #[tokio::test]
+  async fn loop_detection_stops_before_budget_exhausted_on_repeated_identical_calls() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-loop-{}", uuid::Uuid::new_v4());
+    // Unbounded singular response (not the FIFO _RESPONSES queue) so
+    // every turn sees the exact same action — proves detection fires on
+    // its own, not because the mock ran out of canned responses.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSE",
+        r#"{"thought":"again","action":{"tool":"counting_echo","params":{"text":"x"}}}"#,
+      );
+    }
+    init_mock_model(&model).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: calls.clone(),
+    }));
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(20),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-loop", "go", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::LoopDetected {
+        tool: "counting_echo".to_string(),
+        repeats: 3,
+      }
+    );
+    let call_count = calls.load(Ordering::SeqCst);
+    assert!(
+      call_count < 20,
+      "must stop well before max_iterations (20), called {call_count} times"
+    );
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSE");
+    }
+  }
+
+  /// Alternating tool calls (A, B, A, B, ...) must also trip detection —
+  /// not just strictly consecutive repeats, which F-A2-13 already
+  /// (weakly) covers.
+  #[tokio::test]
+  async fn loop_detection_catches_alternating_signature_pattern() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-loop-alt-{}", uuid::Uuid::new_v4());
+    let action_a = r#"{"thought":"a","action":{"tool":"counting_echo","params":{"text":"a"}}}"#;
+    let action_b = r#"{"thought":"b","action":{"tool":"counting_echo","params":{"text":"b"}}}"#;
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          action_a, action_b, action_a, action_b, action_a, action_b, action_a, action_b,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: calls.clone(),
+    }));
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(20),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-loop-alt", "go", &model))
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(result.stop_reason, AgentStopReason::LoopDetected { .. }),
+      "alternating A/B calls must trip loop detection too, got {:?}",
+      result.stop_reason
+    );
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// `without_loop_detection()` must disable the feature entirely — the
+  /// run falls through to whatever other limit trips first (here,
+  /// `max_iterations`), matching pre-L1.2 behaviour.
+  #[tokio::test]
+  async fn loop_detection_can_be_disabled() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-loop-disabled-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSE",
+        r#"{"thought":"again","action":{"tool":"counting_echo","params":{"text":"x"}}}"#,
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: Arc::new(AtomicUsize::new(0)),
+    }));
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(4)
+        .without_loop_detection(),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new("session-loop-disabled", "go", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::MaxSteps { max_steps: 4 },
+      "with loop detection disabled, max_iterations must be what stops the run"
+    );
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSE");
     }
   }
 }

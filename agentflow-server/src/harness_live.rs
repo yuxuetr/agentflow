@@ -515,6 +515,11 @@ async fn live_execute(
         "cost_limit_exceeded:${used_usd:.4}/${budget_usd:.4}"
       )),
     ),
+    AgentStopReason::LoopDetected { tool, repeats } => (
+      HarnessSessionStatus::Failed,
+      result.answer.clone(),
+      Some(format!("loop_detected:{tool}x{repeats}")),
+    ),
     AgentStopReason::Error { message } => (
       HarnessSessionStatus::Failed,
       None,
