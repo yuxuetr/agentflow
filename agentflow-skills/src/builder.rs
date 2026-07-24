@@ -247,7 +247,12 @@ fn build_tool_registry(
   }
 
   // Merge all per-tool constraints into a single SandboxPolicy.
-  // Each built-in tool only checks its relevant policy field, so merging is safe.
+  // Each built-in tool only checks its relevant policy field, so merging is
+  // safe *as long as no tool's own execution-boundary defaults populate a
+  // field another tool also reads*. `script` is the exception: its default
+  // interpreters/`scripts/` path are layered on separately below
+  // (`finalize_script_policy`), never into this shared object — see
+  // docs/RFC_CODE_EXECUTION_TRUST.md (S0.2).
   let policy = Arc::new(build_sandbox_policy(tool_configs, skill_dir));
 
   // P10.4.1: per-tool override of the manifest-level `os_sandbox`.
@@ -267,7 +272,13 @@ fn build_tool_registry(
         registry.register(Arc::new(tool));
       }
       "file" => {
-        registry.register(Arc::new(FileTool::new(policy.clone())));
+        // S0.2: `scripts/` is `script`'s execution boundary — `file` must
+        // never be able to write (or read) there, even if it leaked in via
+        // explicit config, since an LLM writing content that `script` will
+        // later execute defeats the author-signed-only invariant regardless
+        // of how the allow-list got populated.
+        let file_policy = Arc::new(exclude_scripts_dir(&policy, skill_dir));
+        registry.register(Arc::new(FileTool::new(file_policy)));
       }
       "http" => {
         let http_tool = HttpTool::new(policy.clone())
@@ -276,7 +287,11 @@ fn build_tool_registry(
       }
       "script" => {
         let scripts_dir = skill_dir.join("scripts");
-        let mut tool = ScriptTool::new(scripts_dir, policy.clone());
+        // S0.2: layer script's own default interpreters + `scripts/` path on
+        // top of the shared policy in a private copy — never write them back
+        // into `policy`, which `shell`/`file` also read.
+        let script_policy = Arc::new(finalize_script_policy(&policy, skill_dir));
+        let mut tool = ScriptTool::new(scripts_dir, script_policy);
         if let Some(schema) = &tool_cfg.parameters {
           tool = tool.with_parameters_schema(schema.clone());
         }
@@ -571,19 +586,38 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig], skill_dir: &Path) -> Sandbo
 
   // If the skill declares a shell tool but leaves allowed_commands empty,
   // use the built-in safe default list rather than allowing everything.
+  // NOTE: `script`'s own defaults (interpreters, `scripts/`) are deliberately
+  // NOT injected here — this policy is shared with `file`/`shell`/`http`,
+  // and populating it with script's execution-boundary defaults would leak
+  // them into tools that consume LLM-generated content. See
+  // `finalize_script_policy` + docs/RFC_CODE_EXECUTION_TRUST.md (S0.2).
   let has_shell = tool_configs
     .iter()
     .any(|t| t.name.to_lowercase() == "shell");
-  let has_script = tool_configs
-    .iter()
-    .any(|t| t.name.to_lowercase() == "script");
   if has_shell && allowed_commands.is_empty() {
     // Default safe command list from SandboxPolicy::default()
     allowed_commands = SandboxPolicy::default().allowed_commands;
   }
-  if has_script && allowed_commands.is_empty() {
+
+  SandboxPolicy {
+    allowed_commands,
+    allowed_paths,
+    allowed_domains,
+    max_exec_time_secs,
+    ..SandboxPolicy::default()
+  }
+}
+
+/// Layer `script`'s own defaults (interpreters + `scripts/` path) on top of
+/// the shared base policy, in a private copy scoped to `ScriptTool` alone.
+/// Never write these back into `base` — `file`/`shell` read that same
+/// object and must not inherit script's execution-boundary privileges
+/// (docs/RFC_CODE_EXECUTION_TRUST.md, S0.2).
+fn finalize_script_policy(base: &SandboxPolicy, skill_dir: &Path) -> SandboxPolicy {
+  let mut allowed_commands = base.allowed_commands.clone();
+  if allowed_commands.is_empty() {
     allowed_commands = default_script_interpreters();
-  } else if has_script {
+  } else {
     for interpreter in default_script_interpreters() {
       if !allowed_commands.contains(&interpreter) {
         allowed_commands.push(interpreter);
@@ -593,16 +627,35 @@ fn build_sandbox_policy(tool_configs: &[ToolConfig], skill_dir: &Path) -> Sandbo
     allowed_commands.dedup();
   }
 
-  if has_script && allowed_paths.is_empty() {
+  let mut allowed_paths = base.allowed_paths.clone();
+  if allowed_paths.is_empty() {
     allowed_paths.push(skill_dir.join("scripts"));
   }
 
   SandboxPolicy {
     allowed_commands,
     allowed_paths,
-    allowed_domains,
-    max_exec_time_secs,
-    ..SandboxPolicy::default()
+    ..base.clone()
+  }
+}
+
+/// Exclude the skill's `scripts/` directory (and anything under it) from a
+/// policy, unconditionally — regardless of whether it got there via
+/// `script`'s implicit default or explicit tool config. `file` must never
+/// read or write there: that directory is `script`'s execution boundary,
+/// and an LLM-writable execution boundary defeats the author-signed-only
+/// invariant no matter how the allow-list was populated
+/// (docs/RFC_CODE_EXECUTION_TRUST.md, S0.2).
+fn exclude_scripts_dir(base: &SandboxPolicy, skill_dir: &Path) -> SandboxPolicy {
+  let scripts_dir = skill_dir.join("scripts");
+  SandboxPolicy {
+    allowed_paths: base
+      .allowed_paths
+      .iter()
+      .filter(|p| **p != scripts_dir && !p.starts_with(&scripts_dir))
+      .cloned()
+      .collect(),
+    ..base.clone()
   }
 }
 
@@ -1379,7 +1432,10 @@ name = "shell"
   }
 
   #[test]
-  fn sandbox_policy_restricts_script_defaults_to_scripts_dir_and_interpreters() {
+  fn sandbox_policy_does_not_inject_script_defaults_into_shared_policy() {
+    // S0.2: the shared policy (what `file`/`shell` read) must stay free of
+    // script's own execution-boundary defaults, even when `script` is
+    // declared — those are layered on separately via `finalize_script_policy`.
     let dir = TempDir::new().unwrap();
     let tool_configs = vec![ToolConfig {
       name: "script".to_string(),
@@ -1388,10 +1444,97 @@ name = "shell"
 
     let policy = build_sandbox_policy(&tool_configs, dir.path());
 
+    assert!(policy.allowed_paths.is_empty());
+    assert!(!policy.allowed_commands.contains(&"python3".to_string()));
+    assert!(!policy.allowed_commands.contains(&"bash".to_string()));
+    assert!(!policy.allowed_commands.contains(&"node".to_string()));
+  }
+
+  #[test]
+  fn finalize_script_policy_restricts_defaults_to_scripts_dir_and_interpreters() {
+    let dir = TempDir::new().unwrap();
+    let tool_configs = vec![ToolConfig {
+      name: "script".to_string(),
+      ..ToolConfig::default()
+    }];
+
+    let base = build_sandbox_policy(&tool_configs, dir.path());
+    let policy = finalize_script_policy(&base, dir.path());
+
     assert_eq!(policy.allowed_paths, vec![dir.path().join("scripts")]);
     assert!(policy.allowed_commands.contains(&"python3".to_string()));
     assert!(policy.allowed_commands.contains(&"bash".to_string()));
     assert!(policy.allowed_commands.contains(&"node".to_string()));
+  }
+
+  #[test]
+  fn exclude_scripts_dir_strips_scripts_path_from_file_policy() {
+    let dir = TempDir::new().unwrap();
+    let base = SandboxPolicy {
+      allowed_paths: vec![dir.path().join("scripts"), dir.path().join("data")],
+      ..SandboxPolicy::default()
+    };
+
+    let policy = exclude_scripts_dir(&base, dir.path());
+
+    assert_eq!(policy.allowed_paths, vec![dir.path().join("data")]);
+  }
+
+  /// S0.2 regression: a skill declaring `file` + `script` with no explicit
+  /// `allowed_paths` must not let the LLM write a new script into
+  /// `scripts/` and then have `script` execute it.
+  #[tokio::test]
+  async fn file_plus_script_skill_cannot_write_then_execute_a_new_script() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("scripts")).unwrap();
+    write_file(
+      &dir.path().join("scripts").join("hello.sh"),
+      "#!/bin/bash\necho hi",
+    );
+
+    let mut manifest = minimal_manifest("file-script-skill");
+    manifest.tools = vec![
+      ToolConfig {
+        name: "file".to_string(),
+        ..ToolConfig::default()
+      },
+      ToolConfig {
+        name: "script".to_string(),
+        ..ToolConfig::default()
+      },
+    ];
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+
+    let evil_path = dir
+      .path()
+      .join("scripts")
+      .join("evil.sh")
+      .to_string_lossy()
+      .into_owned();
+    let write_result = registry
+      .execute(
+        "file",
+        serde_json::json!({
+          "operation": "write",
+          "path": evil_path,
+          "content": "#!/bin/bash\necho pwned"
+        }),
+      )
+      .await;
+    assert!(
+      write_result.is_err(),
+      "file tool must not be able to write into scripts/, got {write_result:?}"
+    );
+
+    // The author-signed script that was already there must still run.
+    let run_result = registry
+      .execute("script", serde_json::json!({"script": "hello.sh"}))
+      .await
+      .unwrap();
+    assert!(run_result.content.contains("hi"));
   }
 
   #[test]
