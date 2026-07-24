@@ -156,6 +156,22 @@ impl AsyncNode for ToolCallNode {
   }
 }
 
+/// A node whose output is already known (L1.1). Used to represent a plan step
+/// that already succeeded in an earlier `run_with_replan` round: it never
+/// touches the tool registry or re-executes anything, it just replays the
+/// previously-recorded result, so a revised plan reusing this id is a no-op
+/// re-run rather than a real one.
+struct PrecomputedResultNode {
+  value: HashMap<String, FlowValue>,
+}
+
+#[async_trait::async_trait]
+impl AsyncNode for PrecomputedResultNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    Ok(self.value.clone())
+  }
+}
+
 /// Compile a [`WorkflowPlan`] into an executable [`Flow`].
 ///
 /// Each step becomes a graph node that invokes its tool; `depends_on` becomes
@@ -172,6 +188,19 @@ impl AsyncNode for ToolCallNode {
 pub fn compile_plan_to_flow(
   plan: &WorkflowPlan,
   registry: Arc<ToolRegistry>,
+) -> Result<Flow, AgentFlowError> {
+  compile_plan_to_flow_with_precomputed(plan, registry, &HashMap::new())
+}
+
+/// Same as [`compile_plan_to_flow`], but any step whose id is a key in
+/// `precomputed` compiles to a [`PrecomputedResultNode`] instead of a real
+/// tool/agent node — used by [`DynamicWorkflowAgent::run_with_replan`] (L1.1)
+/// so a revised plan can carry forward already-succeeded steps without
+/// re-running them.
+pub fn compile_plan_to_flow_with_precomputed(
+  plan: &WorkflowPlan,
+  registry: Arc<ToolRegistry>,
+  precomputed: &HashMap<String, HashMap<String, FlowValue>>,
 ) -> Result<Flow, AgentFlowError> {
   let ids: HashSet<&str> = plan.steps.iter().map(|step| step.id.as_str()).collect();
   if ids.len() != plan.steps.len() {
@@ -246,47 +275,57 @@ pub fn compile_plan_to_flow(
         )
       };
 
-      let (node_type, initial_inputs): (NodeType, HashMap<String, FlowValue>) = match step.kind {
-        PlanStepKind::Tool => (
-          NodeType::Standard(Arc::new(ToolCallNode {
-            id: step.id.clone(),
-            registry: Arc::clone(&registry),
-            tool: step.tool.clone(),
-            params: step.params.clone(),
-          })),
-          HashMap::new(),
-        ),
-        PlanStepKind::Agent => {
-          // Validated above: model + prompt are present strings.
-          let model = step
-            .params
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-          let prompt = step
-            .params
-            .get("prompt")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-          let mut config = ReActConfig::new(model);
-          if let Some(persona) = step.params.get("persona").and_then(Value::as_str) {
-            config = config.with_persona(persona);
+      let (node_type, initial_inputs): (NodeType, HashMap<String, FlowValue>) =
+        if let Some(value) = precomputed.get(&step.id) {
+          (
+            NodeType::Standard(Arc::new(PrecomputedResultNode {
+              value: value.clone(),
+            })),
+            HashMap::new(),
+          )
+        } else {
+          match step.kind {
+            PlanStepKind::Tool => (
+              NodeType::Standard(Arc::new(ToolCallNode {
+                id: step.id.clone(),
+                registry: Arc::clone(&registry),
+                tool: step.tool.clone(),
+                params: step.params.clone(),
+              })),
+              HashMap::new(),
+            ),
+            PlanStepKind::Agent => {
+              // Validated above: model + prompt are present strings.
+              let model = step
+                .params
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+              let prompt = step
+                .params
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+              let mut config = ReActConfig::new(model);
+              if let Some(persona) = step.params.get("persona").and_then(Value::as_str) {
+                config = config.with_persona(persona);
+              }
+              let agent = ReActAgent::new(
+                config,
+                Box::new(SessionMemory::default_window()),
+                Arc::clone(&registry),
+              );
+              let node = AgentNode::from_agent(step.id.clone(), agent);
+              // AgentNode reads its `message` input; dependency outputs gate
+              // ordering (and are available in the pool) but the message is static.
+              let initial = HashMap::from([(
+                "message".to_string(),
+                FlowValue::Json(Value::String(prompt.to_string())),
+              )]);
+              (NodeType::Standard(Arc::new(node)), initial)
+            }
           }
-          let agent = ReActAgent::new(
-            config,
-            Box::new(SessionMemory::default_window()),
-            Arc::clone(&registry),
-          );
-          let node = AgentNode::from_agent(step.id.clone(), agent);
-          // AgentNode reads its `message` input; dependency outputs gate
-          // ordering (and are available in the pool) but the message is static.
-          let initial = HashMap::from([(
-            "message".to_string(),
-            FlowValue::Json(Value::String(prompt.to_string())),
-          )]);
-          (NodeType::Standard(Arc::new(node)), initial)
-        }
-      };
+        };
 
       GraphNode {
         id: step.id.clone(),
@@ -396,6 +435,155 @@ impl DynamicWorkflowAgent {
     let flow = compile_plan_to_flow(&plan, Arc::clone(&self.tools))?;
     Ok(self.runner.run(&flow, HashMap::new()).await?)
   }
+
+  /// Like [`Self::run`], but recovers from node failures instead of
+  /// stopping at the first one (L1.1).
+  ///
+  /// After each attempt, any plan step without a successful result —
+  /// whether it failed outright or was never attempted because an
+  /// upstream dependency failed — is treated as still outstanding.
+  /// Already-succeeded steps are never re-run: their results are carried
+  /// forward as [`PrecomputedResultNode`]s, and the planner is asked for a
+  /// revised plan covering only what's still missing, given the goal, the
+  /// ids (and results) already available, and why the rest failed.
+  /// Repeats until everything succeeds or `max_replans` revisions have
+  /// been spent, at which point the last attempt's (partial) state is
+  /// returned as-is — same "no top-level `Err` for node failures"
+  /// contract as [`Self::run`].
+  pub async fn run_with_replan(
+    &self,
+    goal: &str,
+    max_replans: usize,
+  ) -> Result<DynamicWorkflowRunOutcome, DynamicWorkflowError> {
+    let mut plan = self.plan(goal).await?;
+    let mut precomputed: HashMap<String, HashMap<String, FlowValue>> = HashMap::new();
+    let mut completed_steps: HashMap<String, WorkflowPlanStep> = HashMap::new();
+    let mut revisions = 0usize;
+
+    loop {
+      let flow =
+        compile_plan_to_flow_with_precomputed(&plan, Arc::clone(&self.tools), &precomputed)?;
+      let state = self.runner.run(&flow, HashMap::new()).await?;
+
+      let mut failures: Vec<(String, String)> = Vec::new();
+      let mut outstanding = false;
+      for step in &plan.steps {
+        match state.get(&step.id) {
+          Some(Ok(value)) => {
+            precomputed.insert(step.id.clone(), value.clone());
+            completed_steps.insert(step.id.clone(), step.clone());
+          }
+          Some(Err(err)) => {
+            failures.push((step.id.clone(), err.to_string()));
+            outstanding = true;
+          }
+          None => {
+            outstanding = true;
+          }
+        }
+      }
+
+      if !outstanding || revisions >= max_replans {
+        return Ok(DynamicWorkflowRunOutcome {
+          state,
+          plan,
+          revisions,
+        });
+      }
+
+      revisions += 1;
+      tracing::info!(
+        event = "dynamic_workflow_plan_revision",
+        revision = revisions,
+        failed_steps = ?failures.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        completed_step_count = completed_steps.len(),
+        "Revising dynamic workflow plan after failures"
+      );
+      let completed_ids: Vec<&str> = completed_steps.keys().map(String::as_str).collect();
+      let revised = self.replan(goal, &completed_ids, &failures).await?;
+
+      // Merge: every completed step (unchanged, becomes a precomputed
+      // pass-through node) + this round's replacement steps for whatever
+      // is still missing.
+      let mut merged_steps: Vec<WorkflowPlanStep> = completed_steps.values().cloned().collect();
+      merged_steps.extend(revised.steps);
+      plan = WorkflowPlan {
+        steps: merged_steps,
+      };
+    }
+  }
+
+  /// Ask the LLM for a revised [`WorkflowPlan`] covering only the steps
+  /// still needed after a partial failure (L1.1). `completed_ids` are
+  /// steps a revised plan may `depends_on` but must not redefine — their
+  /// results are already fixed. `failures` are `(step_id, error message)`
+  /// pairs for steps that failed outright; steps that were merely blocked
+  /// by an upstream failure aren't in `failures` at all (they were simply
+  /// never attempted).
+  async fn replan(
+    &self,
+    goal: &str,
+    completed_ids: &[&str],
+    failures: &[(String, String)],
+  ) -> Result<WorkflowPlan, DynamicWorkflowError> {
+    let tools_desc: String = self
+      .tools
+      .list()
+      .iter()
+      .map(|tool| format!("- {}: {}", tool.name(), tool.description()))
+      .collect::<Vec<_>>()
+      .join("\n");
+    let system = "You are a workflow planner revising a plan after a partial failure. \
+      Some steps from the prior plan already succeeded and must NOT be redefined — you may \
+      reference their ids in depends_on, their results are already available. Respond with \
+      ONLY a JSON object {\"steps\":[{\"id\":\"...\",\"tool\":\"...\",\"params\":{...},\"depends_on\":[\"...\"]}]} \
+      containing ONLY the new steps needed to reach the goal, given what already succeeded and \
+      why the rest failed. Use only the listed tools.";
+    let completed_desc = if completed_ids.is_empty() {
+      "(none)".to_string()
+    } else {
+      completed_ids.join(", ")
+    };
+    let failures_desc = if failures.is_empty() {
+      "(none of the outstanding steps failed outright — they were simply never attempted \
+       because an earlier dependency failed)"
+        .to_string()
+    } else {
+      failures
+        .iter()
+        .map(|(id, err)| format!("- step '{id}' failed: {err}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+    let user = format!(
+      "Goal: {goal}\n\nAlready succeeded (do not redefine, may depend_on): {completed_desc}\n\n\
+       Failures to address:\n{failures_desc}\n\nAvailable tools:\n{tools_desc}"
+    );
+
+    let response = AgentFlow::model(&self.model)
+      .multimodal_messages(vec![
+        MultimodalMessage::text("system", system),
+        MultimodalMessage::text("user", user),
+      ])
+      .execute_full()
+      .await
+      .map_err(|err| DynamicWorkflowError::Llm(err.to_string()))?;
+
+    serde_json::from_str(extract_json(&response.content))
+      .map_err(|err| DynamicWorkflowError::PlanParse(err.to_string()))
+  }
+}
+
+/// Outcome of [`DynamicWorkflowAgent::run_with_replan`]: the final executed
+/// state pool, the plan that actually produced it (merged across every
+/// revision — completed steps from earlier rounds plus each round's
+/// replacement steps for whatever was still missing), and how many
+/// revisions it took (`0` means the first attempt already succeeded).
+#[derive(Debug)]
+pub struct DynamicWorkflowRunOutcome {
+  pub state: HashMap<String, AsyncNodeResult>,
+  pub plan: WorkflowPlan,
+  pub revisions: usize,
 }
 
 #[cfg(test)]
@@ -553,6 +741,53 @@ mod tests {
       .expect("init mock model");
   }
 
+  /// Clears `AGENTFLOW_MOCK_RESPONSES` on drop (including on panic/unwind)
+  /// so a queue set up by one test can never leak into whichever test
+  /// acquires `LLM_TEST_LOCK` next — `AGENTFLOW_MOCK_RESPONSES` takes
+  /// priority over `AGENTFLOW_MOCK_RESPONSE` in the mock provider, so a
+  /// stale queue silently hijacks every subsequent mock-model test in the
+  /// process until the binary exits.
+  struct MockResponsesGuard;
+  impl Drop for MockResponsesGuard {
+    fn drop(&mut self) {
+      // SAFETY: guarded by LLM_TEST_LOCK for the guard's whole lifetime.
+      unsafe {
+        std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+      }
+    }
+  }
+
+  /// Same as [`init_mock_model`], but queues multiple responses consumed
+  /// FIFO across successive LLM calls (`AGENTFLOW_MOCK_RESPONSES`) — used
+  /// by replan tests where `plan()` and `replan()` each need a distinct
+  /// canned response. Returns a guard that clears the queue env var when
+  /// dropped, even if the test panics.
+  #[must_use]
+  async fn init_mock_model_with_responses(model: &str, responses: &[&str]) -> MockResponsesGuard {
+    // SAFETY: callers hold LLM_TEST_LOCK while mutating these process-wide vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(responses).expect("serialize mock responses"),
+      );
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSE");
+    }
+    let config_path =
+      std::env::temp_dir().join(format!("agentflow-dyn-wf-{}.yml", uuid::Uuid::new_v4()));
+    std::fs::write(
+      &config_path,
+      format!(
+        "models:\n  {model}:\n    vendor: mock\n    type: text\n    model_id: {model}\n\
+         providers:\n  mock:\n    api_key_env: MOCK_API_KEY\n"
+      ),
+    )
+    .expect("write mock config");
+    agentflow_llm::AgentFlow::init_with_config(config_path.to_str().expect("utf8 path"))
+      .await
+      .expect("init mock model");
+    MockResponsesGuard
+  }
+
   #[tokio::test]
   async fn llm_plans_then_engine_executes_in_parallel() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
@@ -669,6 +904,186 @@ mod tests {
       mapping.get("plan"),
       Some(&("plan".to_string(), "response".to_string())),
       "a dependent of an agent step must read its `response` output"
+    );
+  }
+
+  // ── L1.1: failure-driven replan loop ────────────────────────────────────
+
+  /// Counts invocations so tests can prove a precomputed step is never
+  /// re-run across replan rounds.
+  struct CountingEchoTool {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+  }
+
+  #[async_trait::async_trait]
+  impl Tool for CountingEchoTool {
+    fn name(&self) -> &str {
+      "counting_echo"
+    }
+    fn description(&self) -> &str {
+      "echoes its params as JSON and counts how many times it ran"
+    }
+    fn parameters_schema(&self) -> Value {
+      json!({ "type": "object" })
+    }
+    fn metadata(&self) -> ToolMetadata {
+      ToolMetadata::builtin_named("counting_echo")
+    }
+    async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
+      self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+      Ok(ToolOutput::success(params.to_string()))
+    }
+  }
+
+  /// Always reports a tool-level error — simulates a step that fails
+  /// outright (as opposed to the tool call itself erroring at the
+  /// transport level).
+  struct FailTool;
+
+  #[async_trait::async_trait]
+  impl Tool for FailTool {
+    fn name(&self) -> &str {
+      "fail"
+    }
+    fn description(&self) -> &str {
+      "always reports failure"
+    }
+    fn parameters_schema(&self) -> Value {
+      json!({ "type": "object" })
+    }
+    fn metadata(&self) -> ToolMetadata {
+      ToolMetadata::builtin_named("fail")
+    }
+    async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+      Ok(ToolOutput::error("boom"))
+    }
+  }
+
+  /// `compile_plan_to_flow_with_precomputed` in isolation: a precomputed
+  /// step's node replays the stored value and never touches the registry
+  /// (a registry with no tools at all still compiles and runs fine).
+  #[tokio::test]
+  async fn precomputed_step_replays_stored_value_without_touching_registry() {
+    let plan = WorkflowPlan {
+      steps: vec![WorkflowPlanStep {
+        id: "a".into(),
+        kind: PlanStepKind::Tool,
+        tool: "does-not-exist".into(),
+        params: json!({}),
+        depends_on: vec![],
+      }],
+    };
+    let precomputed = HashMap::from([(
+      "a".to_string(),
+      HashMap::from([(
+        "result".to_string(),
+        FlowValue::Json(Value::String("cached".to_string())),
+      )]),
+    )]);
+
+    let empty_registry = Arc::new(ToolRegistry::new());
+    let flow = compile_plan_to_flow_with_precomputed(&plan, empty_registry, &precomputed)
+      .expect("compiles even though 'does-not-exist' is never registered");
+    let state = CoreFlowRunner::concurrent(1)
+      .run(&flow, HashMap::new())
+      .await
+      .expect("run");
+
+    assert_eq!(result_text(&state, "a"), "cached");
+  }
+
+  /// L1.1 regression: a step that fails is replanned; the step that
+  /// already succeeded is carried forward and never re-executed.
+  #[tokio::test]
+  async fn run_with_replan_reuses_completed_steps_and_recovers_from_failure() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let _responses_guard = init_mock_model_with_responses(
+      "mock-replan",
+      &[
+        // Round 1: 'a' will succeed, 'b' is doomed.
+        r#"{"steps":[
+          {"id":"a","tool":"counting_echo","params":{"v":"A"}},
+          {"id":"b","tool":"fail","params":{}}
+        ]}"#,
+        // Round 2 (replan): only the replacement for 'b' — must NOT
+        // redefine 'a'.
+        r#"{"steps":[{"id":"b2","tool":"echo","params":{"v":"B-fixed"}}]}"#,
+      ],
+    )
+    .await;
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    registry.register(Arc::new(CountingEchoTool {
+      calls: calls.clone(),
+    }));
+    registry.register(Arc::new(FailTool));
+
+    let agent = DynamicWorkflowAgent::new(
+      "mock-replan",
+      Arc::new(registry),
+      Arc::new(CoreFlowRunner::concurrent(8)),
+    );
+
+    let outcome = agent
+      .run_with_replan("do a then b", 3)
+      .await
+      .expect("run_with_replan");
+
+    assert_eq!(outcome.revisions, 1);
+    assert_eq!(
+      calls.load(std::sync::atomic::Ordering::SeqCst),
+      1,
+      "step 'a' must run exactly once across both rounds, never re-run"
+    );
+    assert!(result_text(&outcome.state, "a").contains('A'));
+    assert!(result_text(&outcome.state, "b2").contains("B-fixed"));
+    assert!(
+      !outcome.state.contains_key("b"),
+      "the failed step id from round 1 must not reappear in the final state"
+    );
+    let final_ids: HashSet<&str> = outcome.plan.steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(final_ids, HashSet::from(["a", "b2"]));
+  }
+
+  /// When every attempt keeps failing, `run_with_replan` gives up after
+  /// `max_replans` revisions and returns the last (partial) state rather
+  /// than looping forever or erroring out — same "no top-level Err for
+  /// node failures" contract as `run`.
+  #[tokio::test]
+  async fn run_with_replan_stops_after_max_replans_and_returns_partial_state() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let _responses_guard = init_mock_model_with_responses(
+      "mock-replan-exhausted",
+      &[
+        r#"{"steps":[{"id":"b","tool":"fail","params":{}}]}"#,
+        r#"{"steps":[{"id":"b2","tool":"fail","params":{}}]}"#,
+        // A 3rd response would only be consumed if max_replans were higher
+        // than 1; its presence would not matter either way here.
+        r#"{"steps":[{"id":"b3","tool":"fail","params":{}}]}"#,
+      ],
+    )
+    .await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(FailTool));
+
+    let agent = DynamicWorkflowAgent::new(
+      "mock-replan-exhausted",
+      Arc::new(registry),
+      Arc::new(CoreFlowRunner::concurrent(8)),
+    );
+
+    let outcome = agent
+      .run_with_replan("do something doomed", 1)
+      .await
+      .expect("run_with_replan must not error out on exhaustion");
+
+    assert_eq!(outcome.revisions, 1);
+    assert!(
+      outcome.state.values().any(|r| r.is_err()),
+      "the last attempt's failure must still be visible in the returned state"
     );
   }
 }
