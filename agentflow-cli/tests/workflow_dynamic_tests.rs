@@ -138,6 +138,55 @@ fn granted_path_executes_the_write() {
   );
 }
 
+/// S0.3 regression: `workflow dynamic` never registers an execution-capable
+/// tool (`script`/`shell`), so an LLM-authored plan that writes a file and
+/// then tries to "run" it cannot reach an execution channel at all — the
+/// same attack class S0.2 closes for skills, closed here by omission. See
+/// docs/RFC_CODE_EXECUTION_TRUST.md.
+#[test]
+fn plan_cannot_chain_a_file_write_into_script_execution() {
+  let tmp = TempDir::new().unwrap();
+  let cfg = mock_models_config(tmp.path());
+  let script_path = tmp.path().join("evil.sh");
+  let plan = format!(
+    r#"{{"steps":[
+      {{"id":"w","tool":"file","params":{{"operation":"write","path":"{}","content":"echo pwned"}}}},
+      {{"id":"x","tool":"script","params":{{"script":"evil.sh"}},"depends_on":["w"]}}
+    ]}}"#,
+    script_path.display()
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "dynamic",
+      "--goal",
+      "write and run a script",
+      "--model",
+      "mock-plan",
+      "--allow-path",
+    ])
+    .arg(tmp.path())
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses(&plan));
+
+  // The file write succeeds (it's within the granted path), but the "script"
+  // step has no tool to dispatch to — `workflow dynamic` never registers
+  // `script`/`shell` — so the second step fails and the command exits non-zero.
+  cmd
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("w =>"))
+    .stdout(predicate::str::contains("Tool not found: script"));
+
+  assert!(
+    script_path.exists(),
+    "the file write itself is legitimate and should still land"
+  );
+}
+
 #[test]
 fn requires_a_model() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
