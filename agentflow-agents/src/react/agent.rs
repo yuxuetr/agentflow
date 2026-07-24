@@ -389,6 +389,14 @@ pub struct ReActAgent {
   /// -identical behaviour to before this existed.
   task_summary_store: Option<Arc<dyn agentflow_memory::TaskSummaryStore>>,
   task_summary_generator: Arc<dyn crate::task_summary::TaskSummaryGenerator>,
+  /// L3.1: durable, cross-session project facts (e.g. commands observed
+  /// to have been run). `None` (the default) disables the feature
+  /// entirely. Unlike `task_summary_store` (keyed by `session_id`), this
+  /// is keyed by a caller-supplied `project_key` — see
+  /// `agentflow_memory::project_key_for_path`.
+  project_memory_store: Option<Arc<dyn agentflow_memory::ProjectMemoryStore>>,
+  project_key: Option<String>,
+  project_fact_generator: Arc<dyn crate::project_memory::ProjectFactGenerator>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
   /// Token counter used for every `Message::*_with_counter` call
@@ -427,6 +435,9 @@ impl ReActAgent {
       memory_summary_backend: None,
       task_summary_store: None,
       task_summary_generator: Arc::new(crate::task_summary::DeterministicTaskSummaryGenerator),
+      project_memory_store: None,
+      project_key: None,
+      project_fact_generator: Arc::new(crate::project_memory::DeterministicProjectFactGenerator),
       session_id,
       message_counter,
       live_sink: None,
@@ -527,6 +538,41 @@ impl ReActAgent {
     generator: Arc<dyn crate::task_summary::TaskSummaryGenerator>,
   ) -> Self {
     self.task_summary_generator = generator;
+    self
+  }
+
+  /// Enable L3.1 project-memory checkpointing: at the end of every
+  /// `run_with_context` call, extract durable facts (by default, commands
+  /// observed via the `shell`/`script` tools) from the completed run's
+  /// steps and persist them under `project_key`, then inject the
+  /// accumulated facts back into every subsequent turn's prompt (in this
+  /// run and any future run/session that reuses the same store +
+  /// `project_key`). `project_key` is caller-supplied — see
+  /// [`agentflow_memory::project_key_for_path`] for the recommended
+  /// derivation from a project root path.
+  ///
+  /// Only fires from `run_with_context` (and therefore `run`/
+  /// `run_with_trace`); the caller-driven turn-by-turn `LoopSession` path
+  /// doesn't go through that chokepoint, so it doesn't get this hook —
+  /// callers driving turns manually would need to call the same
+  /// extraction themselves.
+  pub fn with_project_memory(
+    mut self,
+    store: Arc<dyn agentflow_memory::ProjectMemoryStore>,
+    project_key: impl Into<String>,
+  ) -> Self {
+    self.project_memory_store = Some(store);
+    self.project_key = Some(project_key.into());
+    self
+  }
+
+  /// Override the default [`crate::project_memory::DeterministicProjectFactGenerator`].
+  /// No effect unless [`Self::with_project_memory`] is also configured.
+  pub fn with_project_fact_generator(
+    mut self,
+    generator: Arc<dyn crate::project_memory::ProjectFactGenerator>,
+  ) -> Self {
+    self.project_fact_generator = generator;
     self
   }
 
@@ -684,9 +730,28 @@ impl ReActAgent {
     loop {
       match self.run_one_turn(&mut st).await? {
         TurnStep::Continue => {}
-        TurnStep::Stop(result) => return Ok(result),
+        TurnStep::Stop(result) => {
+          self.record_project_facts(&result.steps).await?;
+          return Ok(result);
+        }
       }
     }
+  }
+
+  /// L3.1: extract + persist project facts from a completed run's steps.
+  /// No-op if `with_project_memory` wasn't configured, or the generator
+  /// found nothing worth recording.
+  async fn record_project_facts(&self, steps: &[AgentStep]) -> Result<(), ReActError> {
+    let (Some(store), Some(project_key)) = (&self.project_memory_store, &self.project_key) else {
+      return Ok(());
+    };
+    let candidates = self.project_fact_generator.extract(steps).await;
+    for candidate in candidates {
+      store
+        .record_project_fact(project_key, &candidate.tool, &candidate.command)
+        .await?;
+    }
+    Ok(())
   }
 
   /// Set up a run — apply context, capture the live sink, store the user
@@ -2217,6 +2282,22 @@ impl ReActAgent {
     // Always start with the system prompt
     messages.push(MultimodalMessage::system().add_text(system_prompt).build());
 
+    // L3.1: project facts (if any) come right after the system prompt —
+    // even more foundational than the L2.1 task summary below, since
+    // they're project-wide rather than scoped to this one session.
+    if let Some(store) = &self.project_memory_store
+      && let Some(project_key) = &self.project_key
+    {
+      let facts = store.get_project_facts(project_key).await?;
+      if !facts.is_empty() {
+        messages.push(
+          MultimodalMessage::system()
+            .add_text(format_project_facts_for_prompt(&facts))
+            .build(),
+        );
+      }
+    }
+
     // L2.1: the persisted task-summary checkpoint (if any) comes right
     // after the system prompt and before the transient per-turn
     // compaction note below — it's the durable "big picture," read fresh
@@ -3145,6 +3226,24 @@ fn format_task_summary_for_prompt(summary: &agentflow_memory::TaskSummary) -> St
   section("Key results:", &summary.key_results, &mut out);
   section("Open questions:", &summary.open_questions, &mut out);
   section("Next steps:", &summary.next_steps, &mut out);
+  out
+}
+
+/// L3.1: render accumulated project facts (commands observed run in
+/// prior sessions of this project) as a system message. Caller already
+/// checked `!facts.is_empty()`.
+fn format_project_facts_for_prompt(facts: &[agentflow_memory::ProjectFact]) -> String {
+  let mut out =
+    String::from("[Project Memory — commands observed run in prior sessions of this project]\n");
+  for fact in facts {
+    out.push_str(&format!(
+      "- ({}) {} — observed {} time(s), last seen {}\n",
+      fact.tool,
+      fact.command,
+      fact.observation_count,
+      fact.last_seen.to_rfc3339()
+    ));
+  }
   out
 }
 
@@ -5597,5 +5696,159 @@ providers:
       .unwrap();
     assert!(summary.is_some());
     assert_eq!(kept.len(), 1);
+  }
+
+  // ── L3.1: project-memory checkpoint ─────────────────────────────────────
+
+  struct MockShellTool;
+
+  #[async_trait]
+  impl Tool for MockShellTool {
+    fn name(&self) -> &str {
+      "shell"
+    }
+    fn description(&self) -> &str {
+      "mock shell for tests"
+    }
+    fn parameters_schema(&self) -> Value {
+      json!({ "type": "object" })
+    }
+    async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
+      Ok(ToolOutput::success(format!(
+        "ran: {}",
+        params.get("command").and_then(|v| v.as_str()).unwrap_or("")
+      )))
+    }
+  }
+
+  /// The regression L3.1 exists for: a second, brand-new agent instance
+  /// (same project_key + store, but no session in common with the first)
+  /// can see a fact the first agent's *real run* established, without
+  /// re-exploring — mirrors L2.1's
+  /// `resumed_agent_still_sees_facts_established_before_truncation`, one
+  /// layer up (project-scoped instead of session-scoped).
+  #[tokio::test]
+  async fn second_agent_sees_project_facts_established_by_first_run() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-project-memory-{}", uuid::Uuid::new_v4());
+    let store: Arc<dyn agentflow_memory::ProjectMemoryStore> =
+      Arc::new(agentflow_memory::InMemoryProjectMemoryStore::new());
+    let project_key = "proj-l3-1";
+
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"build it","action":{"tool":"shell","params":{"command":"cargo build --release"}}}"#,
+          r#"{"thought":"done","answer":"built"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(MockShellTool));
+
+    let mut first_agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_project_memory(store.clone(), project_key);
+
+    let result = first_agent
+      .run_with_context(AgentContext::new("session-1", "build the project", &model))
+      .await
+      .unwrap();
+    assert_eq!(result.answer.as_deref(), Some("built"));
+
+    // A second, unrelated agent instance — different session, but the
+    // same project_key + store — must see the fact without ever running
+    // the command itself.
+    let second_agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id("session-2")
+    .with_project_memory(store.clone(), project_key);
+
+    let messages = second_agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("cargo build --release"),
+      "the second agent's prompt must carry the project fact established by the \
+       first agent's run, got: {rendered}"
+    );
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// Facts are scoped to `project_key` — a different project must not see
+  /// them.
+  #[tokio::test]
+  async fn project_facts_are_isolated_by_project_key() {
+    let store: Arc<dyn agentflow_memory::ProjectMemoryStore> =
+      Arc::new(agentflow_memory::InMemoryProjectMemoryStore::new());
+    store
+      .record_project_fact("proj-a", "shell", "cargo build")
+      .await
+      .unwrap();
+
+    let agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_project_memory(store, "proj-b");
+
+    let messages = agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      !rendered.contains("cargo build"),
+      "a different project_key must not see proj-a's facts, got: {rendered}"
+    );
+  }
+
+  /// Without `with_project_memory`, behaviour is unchanged: no
+  /// persistence, no injection, no extra store reads.
+  #[tokio::test]
+  async fn project_memory_is_a_no_op_when_not_configured() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-no-project-memory-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"build it","action":{"tool":"shell","params":{"command":"cargo build"}}}"#,
+          r#"{"thought":"done","answer":"built"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(MockShellTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    // Must not panic or error just because no project-memory store is
+    // configured.
+    let result = agent
+      .run_with_context(AgentContext::new("session-none", "build", &model))
+      .await
+      .unwrap();
+    assert_eq!(result.answer.as_deref(), Some("built"));
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
   }
 }

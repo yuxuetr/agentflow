@@ -11,6 +11,7 @@ pub mod dynamic;
 pub mod eval;
 pub mod nodes;
 pub mod plan_execute;
+pub mod project_memory;
 pub mod react;
 pub mod reflection;
 pub mod task_summary;
@@ -46,6 +47,9 @@ pub use nodes::{
   AgentNodeToolResumeRecord,
 };
 pub use plan_execute::{PlanExecuteAgent, PlanExecuteConfig, PlanExecuteError, PlanExecuteStep};
+pub use project_memory::{
+  DeterministicProjectFactGenerator, ProjectFactCandidate, ProjectFactGenerator,
+};
 pub use react::{
   CompactMemorySummary, LoopDetectionConfig, MemorySummaryBackend, MemorySummaryContext,
   MemorySummaryStrategy, RecentOnlyMemorySummary,
