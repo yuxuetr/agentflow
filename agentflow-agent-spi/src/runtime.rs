@@ -698,6 +698,19 @@ pub enum AgentEvent {
     timestamp: DateTime<Utc>,
   },
 
+  /// L2.1: the run's persisted `TaskSummary` (a structured checkpoint of
+  /// what a long-horizon task has established, distinct from the raw
+  /// message log) was regenerated after a memory-compaction event.
+  TaskSummaryUpdated {
+    session_id: String,
+    /// Generator that produced the update (e.g. `deterministic`).
+    generator: String,
+    goal: String,
+    completed_step_count: usize,
+    key_result_count: usize,
+    timestamp: DateTime<Utc>,
+  },
+
   // ── Multi-agent collaboration events (since 0.4.0) ─────────────────────────
   /// Recorded each time a HandoffSupervisor switches the active agent.
   HandoffOccurred {

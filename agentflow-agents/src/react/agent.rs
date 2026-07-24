@@ -384,6 +384,11 @@ pub struct ReActAgent {
   verification: Option<Arc<dyn VerificationStrategy>>,
   memory_hook: Option<Arc<dyn AgentMemoryHook>>,
   memory_summary_backend: Option<Arc<dyn MemorySummaryBackend>>,
+  /// L2.1: persisted structured task-narrative checkpoint. `None` (the
+  /// default) disables the feature entirely — no reads, no writes, byte
+  /// -identical behaviour to before this existed.
+  task_summary_store: Option<Arc<dyn agentflow_memory::TaskSummaryStore>>,
+  task_summary_generator: Arc<dyn crate::task_summary::TaskSummaryGenerator>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
   /// Token counter used for every `Message::*_with_counter` call
@@ -420,6 +425,8 @@ impl ReActAgent {
       verification: None,
       memory_hook: None,
       memory_summary_backend: None,
+      task_summary_store: None,
+      task_summary_generator: Arc::new(crate::task_summary::DeterministicTaskSummaryGenerator),
       session_id,
       message_counter,
       live_sink: None,
@@ -493,6 +500,33 @@ impl ReActAgent {
   /// Attach a custom memory summary backend used when prompt memory exceeds budget.
   pub fn with_memory_summary_backend(mut self, backend: Arc<dyn MemorySummaryBackend>) -> Self {
     self.memory_summary_backend = Some(backend);
+    self
+  }
+
+  /// Enable L2.1 task-summary checkpointing: persist a structured
+  /// [`agentflow_memory::TaskSummary`] whenever compaction drops messages
+  /// from the prompt, and inject it back into the prompt on every turn
+  /// (covering resumed runs and a fresh run reusing the same session id
+  /// alike, since both read the same store). Requires
+  /// `memory_prompt_token_budget` + a non-`Disabled` summary strategy to
+  /// actually trigger — this only persists/injects, it doesn't decide
+  /// when compaction happens.
+  pub fn with_task_summary_store(
+    mut self,
+    store: Arc<dyn agentflow_memory::TaskSummaryStore>,
+  ) -> Self {
+    self.task_summary_store = Some(store);
+    self
+  }
+
+  /// Override the default [`crate::task_summary::DeterministicTaskSummaryGenerator`]
+  /// with a custom generator (e.g. LLM-backed). No effect unless
+  /// [`Self::with_task_summary_store`] is also configured.
+  pub fn with_task_summary_generator(
+    mut self,
+    generator: Arc<dyn crate::task_summary::TaskSummaryGenerator>,
+  ) -> Self {
+    self.task_summary_generator = generator;
     self
   }
 
@@ -2182,6 +2216,22 @@ impl ReActAgent {
 
     // Always start with the system prompt
     messages.push(MultimodalMessage::system().add_text(system_prompt).build());
+
+    // L2.1: the persisted task-summary checkpoint (if any) comes right
+    // after the system prompt and before the transient per-turn
+    // compaction note below — it's the durable "big picture," read fresh
+    // every turn so a resumed run, or a fresh run reusing this session
+    // id, sees it exactly like a run that's been going the whole time.
+    if let Some(store) = &self.task_summary_store
+      && let Some(summary) = store.get_task_summary(&self.session_id).await?
+    {
+      messages.push(
+        MultimodalMessage::system()
+          .add_text(format_task_summary_for_prompt(&summary))
+          .build(),
+      );
+    }
+
     if let Some(summary) = memory_summary {
       messages.push(MultimodalMessage::system().add_text(summary).build());
     }
@@ -2237,6 +2287,16 @@ impl ReActAgent {
     let omitted_count = history.len().saturating_sub(kept_reversed.len());
     let omitted_tokens = total_tokens.saturating_sub(kept_tokens);
     let omitted_messages = history[..omitted_count].to_vec();
+
+    // L2.1: fold whatever this round of compaction is about to drop into
+    // the persisted task-summary checkpoint, before the raw messages are
+    // gone from the prompt for good.
+    if let Some(store) = self.task_summary_store.clone() {
+      self
+        .update_task_summary(&store, &history, &omitted_messages)
+        .await?;
+    }
+
     let context = MemorySummaryContext {
       session_id: self.session_id.clone(),
       budget_tokens: budget,
@@ -2255,6 +2315,65 @@ impl ReActAgent {
     };
 
     Ok((summary, kept_reversed))
+  }
+
+  /// L2.1: regenerate the persisted [`agentflow_memory::TaskSummary`] for
+  /// this session from a compaction round's dropped messages. No-op if
+  /// nothing was dropped or the generator has nothing worth recording.
+  async fn update_task_summary(
+    &self,
+    store: &Arc<dyn agentflow_memory::TaskSummaryStore>,
+    history: &[Message],
+    omitted_messages: &[Message],
+  ) -> Result<(), ReActError> {
+    if omitted_messages.is_empty() {
+      return Ok(());
+    }
+
+    let previous = store.get_task_summary(&self.session_id).await?;
+    let goal = previous
+      .as_ref()
+      .map(|p| p.goal.clone())
+      .filter(|g| !g.is_empty())
+      .or_else(|| {
+        history
+          .iter()
+          .find(|m| m.role == Role::User)
+          .map(|m| m.content.clone())
+      })
+      .unwrap_or_default();
+
+    let Some(updated) = self
+      .task_summary_generator
+      .generate(crate::task_summary::TaskSummaryContext {
+        goal,
+        previous,
+        newly_omitted: omitted_messages.to_vec(),
+      })
+      .await
+    else {
+      return Ok(());
+    };
+
+    store
+      .set_task_summary(&self.session_id, updated.clone())
+      .await?;
+
+    if let Some(handle) = &self.live_sink {
+      handle
+        .0
+        .emit(&AgentEvent::TaskSummaryUpdated {
+          session_id: self.session_id.clone(),
+          generator: self.task_summary_generator.name().to_string(),
+          goal: updated.goal.clone(),
+          completed_step_count: updated.completed_steps.len(),
+          key_result_count: updated.key_results.len(),
+          timestamp: Utc::now(),
+        })
+        .await;
+    }
+
+    Ok(())
   }
 
   /// Clear the current session's memory.
@@ -3000,6 +3119,33 @@ impl AgentRuntime for ReActAgent {
   fn runtime_name(&self) -> &'static str {
     "react"
   }
+}
+
+/// L2.1: render a persisted [`agentflow_memory::TaskSummary`] as a system
+/// message. Empty sections are omitted so an early-run summary (e.g. just
+/// a goal, no steps yet) doesn't pad the prompt with empty headers.
+fn format_task_summary_for_prompt(summary: &agentflow_memory::TaskSummary) -> String {
+  let mut out = String::from(
+    "[Task Summary — established before this point in the conversation, some earlier messages may have been dropped from the prompt]\n",
+  );
+  if !summary.goal.is_empty() {
+    out.push_str(&format!("Goal: {}\n", summary.goal));
+  }
+  let section = |title: &str, items: &[String], out: &mut String| {
+    if items.is_empty() {
+      return;
+    }
+    out.push_str(title);
+    out.push('\n');
+    for item in items {
+      out.push_str(&format!("- {item}\n"));
+    }
+  };
+  section("Completed steps:", &summary.completed_steps, &mut out);
+  section("Key results:", &summary.key_results, &mut out);
+  section("Open questions:", &summary.open_questions, &mut out);
+  section("Next steps:", &summary.next_steps, &mut out);
+  out
 }
 
 fn timed_out(started_at: Instant, timeout_ms: Option<u64>) -> bool {
@@ -5323,5 +5469,133 @@ providers:
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSE");
     }
+  }
+
+  // ── L2.1: task-summary checkpoint ───────────────────────────────────────
+
+  /// Compaction that drops messages must persist a `TaskSummary` capturing
+  /// what was in them.
+  #[tokio::test]
+  async fn compaction_persists_a_task_summary() {
+    let store: Arc<dyn agentflow_memory::TaskSummaryStore> =
+      Arc::new(agentflow_memory::InMemoryTaskSummaryStore::new());
+
+    let agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime")
+        .with_memory_prompt_token_budget(8)
+        .with_memory_summary_strategy(MemorySummaryStrategy::Compact),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_task_summary_store(store.clone());
+
+    let mut goal = Message::user("budget-session", "find the config file location");
+    goal.token_count = 1;
+    let mut tool_result = Message::tool_result(
+      "budget-session",
+      "file",
+      "config file is at /etc/agentflow/config.toml",
+    );
+    tool_result.token_count = 10;
+    let mut recent = Message::assistant("budget-session", "recent thought");
+    recent.token_count = 4;
+
+    agent
+      .apply_memory_prompt_budget(vec![goal, tool_result, recent])
+      .await
+      .unwrap();
+
+    let persisted = store
+      .get_task_summary(&agent.session_id)
+      .await
+      .unwrap()
+      .expect("a task summary must have been persisted");
+    assert!(
+      persisted
+        .key_results
+        .iter()
+        .any(|r| r.contains("/etc/agentflow/config.toml")),
+      "expected the dropped tool result's fact to survive into key_results, got {:?}",
+      persisted.key_results
+    );
+  }
+
+  /// The regression L2.1 exists for: a fact established before messages
+  /// were dropped from the prompt must still be visible to a *different*
+  /// agent instance — same session id, same task-summary store, but
+  /// otherwise-empty memory (simulating the raw history being gone: a
+  /// resumed process, or a fresh run reusing the session id after the
+  /// original process exited).
+  #[tokio::test]
+  async fn resumed_agent_still_sees_facts_established_before_truncation() {
+    let store: Arc<dyn agentflow_memory::TaskSummaryStore> =
+      Arc::new(agentflow_memory::InMemoryTaskSummaryStore::new());
+    let session_id = "resume-session";
+
+    // First "process": establishes a fact, then compacts it out of the
+    // live prompt window.
+    let first_agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime")
+        .with_memory_prompt_token_budget(8)
+        .with_memory_summary_strategy(MemorySummaryStrategy::Compact),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id(session_id)
+    .with_task_summary_store(store.clone());
+
+    let mut tool_result =
+      Message::tool_result(session_id, "file", "the deploy target is prod-us-east-1");
+    tool_result.token_count = 10;
+    let mut recent = Message::assistant(session_id, "recent thought");
+    recent.token_count = 4;
+    first_agent
+      .apply_memory_prompt_budget(vec![tool_result, recent])
+      .await
+      .unwrap();
+
+    // Second "process": brand-new agent, same session id, same
+    // task-summary store — but a fresh, empty MemoryStore, so the raw
+    // message history is genuinely gone, not just compacted.
+    let resumed_agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id(session_id)
+    .with_task_summary_store(store.clone());
+
+    let messages = resumed_agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("prod-us-east-1"),
+      "the resumed agent's prompt must still carry the pre-truncation fact, got: {rendered}"
+    );
+  }
+
+  /// Without `with_task_summary_store`, behaviour is unchanged: no
+  /// persistence, no injection, no extra store reads.
+  #[tokio::test]
+  async fn task_summary_is_a_no_op_when_not_configured() {
+    let agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime")
+        .with_memory_prompt_token_budget(8)
+        .with_memory_summary_strategy(MemorySummaryStrategy::Compact),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let mut older = Message::user("budget-session", "older context");
+    older.token_count = 10;
+    let mut recent = Message::assistant("budget-session", "recent");
+    recent.token_count = 4;
+
+    // Must not panic or error just because no store is configured.
+    let (summary, kept) = agent
+      .apply_memory_prompt_budget(vec![older, recent])
+      .await
+      .unwrap();
+    assert!(summary.is_some());
+    assert_eq!(kept.len(), 1);
   }
 }
