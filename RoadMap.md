@@ -1,6 +1,6 @@
 # AgentFlow Roadmap
 
-Last updated: 2026-06-20
+Last updated: 2026-07-23
 
 This roadmap is forward-looking only. For implemented behavior and current
 stability boundaries, see:
@@ -160,6 +160,68 @@ Converge the four execution paradigms onto one narrow-waist contract kernel by a
   (`template`/`file`/`http`/`batch`/`conditional`/`while`) stop dragging the
   `llm` / `rag` capabilities into the tool tier (evaluation R3).
 
+### S — Sandbox And Code Execution Hardening
+
+Deepen the two-layer sandbox (in-process `SandboxPolicy` + OS `SandboxBackend`)
+into a **trust-aware code execution model**. Source: the 2026-07-23 sandbox
+review; execution: `TODOs.md` §S. Sequenced as the next active wave now that the
+P-A contract-kernel track has closed. The gap the review surfaced: the runtime
+distinguishes *which tool* runs (shell/script/file) but not *where the code came
+from* — author-signed skill scripts and LLM-generated content share the same
+execution paths and trust assumptions.
+
+- Model code provenance explicitly (author-signed / user-provided /
+  llm-generated) and gate every execution channel on it
+  (`docs/RFC_CODE_EXECUTION_TRUST.md`, S0).
+- Close the file+script composition channel: the per-skill merged
+  `SandboxPolicy` must not let a `file`-tool write into `scripts/` become
+  executable via the `script` tool (S0.2).
+- Extend install-time trust to run time: manifest script inventories with
+  content hashes, verified on every `ScriptTool` execution, enforcement staged
+  by security profile (S1).
+- Support real project code in Skills: declared dependencies with lockfiles and
+  per-skill isolated interpreter environments (venv / node_modules), covered by
+  the same integrity inventory (S2).
+- Strengthen OS backends until `os_sandbox: true` can become the default:
+  Landlock path scoping + cgroups resource limits on Linux, interpreter-aware
+  SBPL profiles on macOS (S3).
+- Any LLM code-interpreter capability (`code_exec`) is RFC-gated and requires a
+  strongly isolated `ContainerBackend` (container / microVM) implementing the
+  existing `SandboxBackend` trait — it must never reuse the skill-script trust
+  model (S4).
+
+### L — Long-Horizon Agents And Retrieval Hardening
+
+Close the capability gaps confirmed by the 2026-07-23 curriculum-gap review
+(an external AI-agent training syllabus checked against this codebase — most
+of its themes are already covered here, usually more deeply; five concrete
+gaps remain). Execution: `TODOs.md` §L. Orthogonal to the S security track;
+can run in parallel after the S0 quick-fix wave. Directional leftovers that
+did not make the cut (task-level state machine surface, model routing /
+fallback chains, cross-cutting cache layer) stage in `docs/ROADMAP_v2.md` §K.
+
+- **Plan revision for dynamic workflows** — today `compile_plan_to_flow` is
+  plan-once → execute-deterministically; a failed node fails the run. Add a
+  failure-driven replan loop (completed-node outputs are reused, replan count
+  is budgeted) so long-horizon tasks survive mid-flight surprises, plus
+  loop-signature detection in the ReAct runtime (repeated tool+args → forced
+  reflection or a `LoopDetected` stop) (L1).
+- **Task-summary recovery** — checkpoints restore state pools, not narratives.
+  Persist a structured `TaskSummary` (goal / done / key results / open issues /
+  next steps) at compaction + checkpoint time so an agent can resume a long
+  task after context truncation (L2).
+- **Project-level memory** — a memory scope for codebase-level facts (build /
+  test commands, module boundaries, past fixes) so codebase agents stop
+  cold-starting every run (L3).
+- **Retrieval hardening** — AST-aware / fine-grained chunking (the P-A4.2
+  leftover), a rerank + post-processing chain, query rewrite / decomposition,
+  and citation-consistency checking — each admitted only on demonstrated
+  `rag eval` gains (L4).
+- **Subagent delegation contracts** — a structured `DelegationSpec` plus
+  per-subagent capability narrowing through the existing
+  `EffectiveCapabilities` intersection merge; result aggregation with explicit
+  conflict arbitration (L5).
+
 ## Later Tracks
 
 > **Looking for the consolidated post-v1.0 picture?** See
@@ -219,6 +281,14 @@ Explicit Non-Goals for Harness Mode (preserved here):
 
 - Maintain live provider tests as explicit opt-in suites with cost guards.
 - Add RAG evaluation datasets with recall/MRR/nDCG baselines.
+- Grow the agent-level eval harness toward a benchmark platform: golden task
+  sets, batch runs, and metrics beyond retrieval — task success rate,
+  tool-call / parameter accuracy, citation accuracy, hallucination rate,
+  failure-recovery rate, human-handoff rate — plus failure-sample clustering,
+  pairwise comparison, and before/after version diffs. Security counters
+  (blocked over-privileged tool calls, approval-trigger rate, dangerous-command
+  intercepts) join the same report and double as the §S observability
+  acceptance list.
 - Keep release gates focused on formatting, clippy, workspace tests, schema
   compatibility tests, and example validation.
 
@@ -255,6 +325,9 @@ Explicit Non-Goals for Harness Mode (preserved here):
 
 - Native dynamic library plugins.
 - Unbounded remote code execution from marketplace packages.
+- Executing LLM-generated code in-process or under the process-level sandbox
+  alone; a dedicated strongly isolated backend is a prerequisite, and the
+  capability itself is RFC-gated (see `TODOs.md` §S4).
 - Provider-specific agent behavior that bypasses the shared Tool/Trace/Policy
   surfaces.
 - A Web UI that is required for headless operation; CLI and trace replay remain

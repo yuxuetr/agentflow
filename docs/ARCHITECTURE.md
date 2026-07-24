@@ -1,6 +1,6 @@
 # AgentFlow Architecture
 
-Last updated: 2026-06-21
+Last updated: 2026-07-23
 
 > **Direction note:** the workspace is migrating (in place, no rewrite) to a
 > narrow-waist **contract kernel** that converges the four execution paradigms.
@@ -46,6 +46,9 @@ reproducible, governable run.
 > "always worse". Dynamic workflow wins *only when the task is plannable up front*;
 > tasks that need replanning mid-flight are genuinely better served by the loop.
 > The real rule is **match the binding-time to how predictable the task is**.
+> A middle point is planned: a failure-driven **replan loop** (re-plan with
+> completed-node outputs preserved, replan count budgeted) lets dynamic workflow
+> slide back up the axis when a plan meets reality — tracked as `TODOs.md` §L1.
 
 Dynamic workflow has two flavors, a deliberate trade-off:
 - **structured `Flow`** (our first-class form): typed, inspectable, auto-governed
@@ -111,6 +114,9 @@ honest about which parts are production vs aspirational:
 | RAG on the capability axis (`KnowledgeBackend` + `rag_search`, Skill `knowledge: backend`) | P-A4.1 / P-A4.2 / P-A4.3 | ✅ |
 | Harness governs a `Flow`, not only an agent loop | P-A2.2 | ✅ MVP + node-level events + `harness run-flow` CLI; ⏳ server route |
 | Governance shell truly orthogonal (harness contracts in `agent-spi`) | P-A1.1 sub-step 2/2 | ✅ |
+| Plan revision — dynamic workflow survives mid-flight failure (replan loop + loop-signature detection) | L1 | ⏳ backlog (2026-07-23 review) |
+| Long-horizon recovery — structured `TaskSummary` survives context truncation | L2 | ⏳ backlog |
+| Per-subagent capability narrowing + structured delegation contract | L5 | ⏳ backlog |
 
 In short: the three-axis model is sound and self-consistent; three paradigms +
 the capability substrate + the composition adapters are production-grade;

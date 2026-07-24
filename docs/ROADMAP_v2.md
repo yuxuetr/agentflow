@@ -109,6 +109,19 @@ richer eval baselines are next.
   production, Elasticsearch, custom domain-specific). Easy via
   the `Retriever` trait — trigger when a real use case
   surfaces.
+- **Retrieval hardening beyond the BM25+dense baseline** —
+  AST-aware / fine-grained chunking, rerank + retrieval
+  post-processing chain, query rewrite / decomposition,
+  citation-consistency checking. _Promoted to `TODOs.md` §L4
+  (2026-07-23 curriculum-gap review)._
+- **Project-level memory layer** — codebase-scoped facts
+  (build / test commands, module boundaries, past fixes) as a
+  first-class memory scope alongside the existing four layers.
+  _Promoted to `TODOs.md` §L3 (2026-07-23)._
+- **Knowledge-asset governance ("LLM Wiki")** — knowledge-base
+  versioning, source/citation lineage, per-audience access
+  scoping, staleness cleanup. Product-layer; stays staged until
+  a real multi-user knowledge deployment demands it.
 
 ### C. Server / platform productization
 
@@ -297,6 +310,38 @@ coverage is uneven.
 - **Stretch json-envelope migrations** — periodic audit per the
   P10.11.3 pattern; today's audit landed exactly one holdout
   fix. Recheck after every new CLI subcommand added.
+
+### K. Long-horizon agent reliability
+
+Motivation: the 2026-07-23 curriculum-gap review (external
+AI-agent training syllabus vs this codebase) confirmed the
+long-horizon story currently stops at budgets + checkpoints —
+no replanning, no loop detection, no narrative recovery, no
+structured delegation. Four items were concrete enough to skip
+the staging ground and land directly in `TODOs.md`:
+
+- **Dynamic-workflow replan loop** (failure-driven re-planning,
+  completed-node reuse) — _promoted to `TODOs.md` §L1.1._
+- **Loop-signature detection** (repeated tool+args spinning
+  caught before budget exhaustion) — _promoted to §L1.2._
+- **Task-summary recovery** after context truncation —
+  _promoted to §L2._
+- **Subagent delegation contracts + result arbitration** —
+  _promoted to §L5._
+
+Still staging here (promote when demand sharpens):
+
+- **Task-level state machine surface** — `waiting_tool` /
+  `waiting_approval` / `tool_failed` as first-class queryable
+  run states on the server API (today they're derivable from
+  the event stream but not materialized).
+- **Model routing / fallback chains** in `agentflow-llm` —
+  automatic fallback across providers, strong/weak model
+  tiering, token-budget-aware routing. Today provider choice is
+  static per model id.
+- **Cross-cutting cache layer** — prompt / RAG-retrieval /
+  tool-result caches with invalidation policy. Tool idempotency
+  flags exist; an actual cache does not.
 
 ## Non-goals for v2
 
