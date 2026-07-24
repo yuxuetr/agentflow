@@ -176,6 +176,17 @@ pub trait SandboxBackend: Send + Sync {
   /// Backends may rewrite the command (e.g. macOS wraps it in
   /// `sandbox-exec`). Backends that install in-child filters (e.g. Linux
   /// seccomp via `pre_exec`) return without rewriting the program.
+  ///
+  /// **Caller contract (S3.3 finding):** configure `command`'s program,
+  /// args, `current_dir`, and `env` before calling this, but configure
+  /// `stdin`/`stdout`/`stderr` *after* — a backend that rewrites the
+  /// command wholesale (macOS) cannot read back and re-apply stdio
+  /// settings a caller made beforehand (`std::process::Command` exposes no
+  /// getter for them), so anything set before this call is silently lost
+  /// for a rewriting backend. `ShellTool` never trips this because it
+  /// configures stdio via `Command::output()`'s own internals, which run
+  /// after `wrap_command`; `ScriptTool` needs an explicit stdin pipe (to
+  /// write JSON args) and must set it up after, not before.
   fn wrap_command(
     &self,
     command: &mut Command,

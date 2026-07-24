@@ -300,6 +300,18 @@ impl Tool for ScriptTool {
       _ => std::ffi::OsStr::new(interpreter),
     };
 
+    // S3.3: resolve the *real* (symlink-followed) install location of
+    // whichever interpreter is about to be spawned. On macOS an
+    // interpreter that lives outside the sandbox baseline (Homebrew,
+    // pyenv, or a per-skill venv — whose `bin/python3` is itself
+    // typically a symlink into a Homebrew Cellar path) fails to load its
+    // own runtime under `os_sandbox: true` unless that real location is
+    // explicitly granted read access — see docs/RFC_CODE_EXECUTION_TRUST.md
+    // S3.3. Best-effort: `None` on failure just means no extra grant, same
+    // as before this existed.
+    let resolved_interpreter_real_path =
+      resolve_interpreter_real_path(&spawn_interpreter.to_string_lossy());
+
     // ── Serialise args as JSON for stdin ─────────────────────────────────
     let stdin_json = match params.get("args") {
       None | Some(Value::Null) => String::new(),
@@ -312,15 +324,13 @@ impl Tool for ScriptTool {
     let mut cmd = tokio::process::Command::new(spawn_interpreter);
     cmd
       .arg(&canonical_script_path)
-      .current_dir(&canonical_scripts_dir)
-      .stdin(std::process::Stdio::piped())
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped());
+      .current_dir(&canonical_scripts_dir);
 
     let scope = build_script_scope(
       &canonical_scripts_dir,
       &self.policy,
       self.python_interpreter.as_deref(),
+      resolved_interpreter_real_path.as_deref(),
     );
     let caps = self.requires_capabilities();
     self
@@ -329,6 +339,15 @@ impl Tool for ScriptTool {
       .map_err(|err| ToolError::SandboxViolation {
         message: format!("OS sandbox preparation failed: {err}"),
       })?;
+
+    // Stdio must be configured *after* `wrap_command`: an enforcing
+    // backend (e.g. macOS `sandbox-exec`) may rebuild the underlying
+    // `Command` wholesale to re-point it at a wrapper binary, which would
+    // silently discard any stdio configuration set beforehand.
+    cmd
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn '{}': {}", interpreter, e),
@@ -415,6 +434,7 @@ fn build_script_scope(
   scripts_dir: &std::path::Path,
   policy: &SandboxPolicy,
   python_interpreter: Option<&std::path::Path>,
+  resolved_interpreter_real_path: Option<&std::path::Path>,
 ) -> SandboxScope {
   let mut scope = SandboxScope::new()
     .with_read_paths([scripts_dir.to_path_buf()])
@@ -430,10 +450,39 @@ fn build_script_scope(
     scope.read_paths.push(venv_root.to_path_buf());
     scope.write_paths.push(venv_root.to_path_buf());
   }
+  // S3.3: the interpreter's real (symlink-resolved) install prefix — e.g.
+  // Homebrew's Cellar path a venv's `bin/python3` symlink ultimately points
+  // to, or a Homebrew-installed `bash`/`node` — needs read access too, on
+  // top of (not instead of) the venv directory itself: the venv's own
+  // site-packages live under the venv root, while the interpreter's core
+  // runtime (shared libraries, stdlib) lives under the real install prefix.
+  if let Some(interpreter_prefix) = resolved_interpreter_real_path
+    .and_then(|p| p.parent())
+    .and_then(|p| p.parent())
+  {
+    scope.read_paths.push(interpreter_prefix.to_path_buf());
+  }
   if scope.write_paths.is_empty() {
     scope.write_paths.push(std::path::PathBuf::from("/tmp"));
   }
   scope
+}
+
+/// Resolve `command` — a bare name (`"python3"`, `"bash"`, `"node"`) or an
+/// already-concrete path (a venv's interpreter) — to its real,
+/// symlink-followed absolute path: the actual install location whose
+/// contents the interpreter needs to read at startup (S3.3). Best-effort;
+/// `None` if it can't be found or resolved, same as before this existed.
+fn resolve_interpreter_real_path(command: &str) -> Option<std::path::PathBuf> {
+  let candidate = if command.contains(std::path::MAIN_SEPARATOR) {
+    std::path::PathBuf::from(command)
+  } else {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+      .map(|dir| dir.join(command))
+      .find(|candidate| candidate.is_file())?
+  };
+  candidate.canonicalize().ok()
 }
 
 /// Lowercase hex-encoded SHA-256 of `bytes` (S1.2 integrity check).

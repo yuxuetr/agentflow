@@ -158,26 +158,27 @@ fn build_profile(caps: &[Capability], scope: &SandboxScope) -> String {
     for path in &scope.read_paths {
       out.push_str(&format!(
         "(allow file-read* (subpath \"{}\"))\n",
-        escape_sbpl(path)
+        escape_sbpl(&canonicalize_for_sbpl(path))
       ));
     }
     if let Some(cwd) = &scope.working_directory {
       out.push_str(&format!(
         "(allow file-read* (subpath \"{}\"))\n",
-        escape_sbpl(cwd)
+        escape_sbpl(&canonicalize_for_sbpl(cwd))
       ));
     }
   }
   if allow_fs_write {
     for path in &scope.write_paths {
+      let canonical = canonicalize_for_sbpl(path);
       out.push_str(&format!(
         "(allow file-write* (subpath \"{}\"))\n",
-        escape_sbpl(path)
+        escape_sbpl(&canonical)
       ));
       // Writers usually need read on the same paths to do round-trip ops.
       out.push_str(&format!(
         "(allow file-read* (subpath \"{}\"))\n",
-        escape_sbpl(path)
+        escape_sbpl(&canonical)
       ));
     }
   }
@@ -190,6 +191,29 @@ fn escape_sbpl(path: &std::path::Path) -> String {
     .to_string_lossy()
     .replace('\\', "\\\\")
     .replace('"', "\\\"")
+}
+
+/// Resolve `path` to the form the kernel actually checks `subpath` grants
+/// against (S3.3 fix).
+///
+/// macOS symlinks several top-level directories to their real location
+/// under `/private` (`/tmp` -> `/private/tmp`, `/var` -> `/private/var`,
+/// and therefore `/var/folders/...` — where `std::env::temp_dir()` and
+/// `tempfile::TempDir` live). Seatbelt's `subpath` matching is a literal
+/// string prefix test against the resolved path the kernel sees when a
+/// file is actually opened, not the symlinked path a caller happened to
+/// spell. A profile built from the un-resolved form (e.g. granting
+/// `/var/folders/xy/.../scripts`) silently fails to match access to
+/// `/private/var/folders/xy/.../scripts` — the grant looks correct in the
+/// generated profile text but denies everything at runtime. Canonicalizing
+/// here, once, at profile-generation time, is cheaper and more robust than
+/// requiring every `SandboxScope` producer to remember to do it themselves.
+/// Best-effort: falls back to the original path if it doesn't exist yet
+/// (canonicalize requires the path to exist) — this only matters for
+/// `write_paths` naming a not-yet-created target, and callers spelling
+/// out `/private/...` directly are unaffected either way.
+fn canonicalize_for_sbpl(path: &std::path::Path) -> std::path::PathBuf {
+  path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn rewrite_command_with_sandbox_exec(command: &mut Command, profile_path: &PathBuf) {
@@ -302,5 +326,54 @@ mod tests {
     let write_only = build_profile(&[Capability::FsWrite], &scope);
     assert!(write_only.contains("(allow file-write* (subpath \"/tmp/bar\"))"));
     assert!(!write_only.contains("(allow file-read* (subpath \"/tmp/foo\"))"));
+  }
+
+  /// S3.3 fix: macOS symlinks `/tmp` -> `/private/tmp` and `/var` ->
+  /// `/private/var` (so `/var/folders/...`, where `std::env::temp_dir()`
+  /// and `tempfile::TempDir` live, resolves to `/private/var/folders/...`).
+  /// Seatbelt's `subpath` matching is a literal prefix test against the
+  /// resolved path the kernel actually checks, so a profile built from the
+  /// un-resolved `/var/folders/...` spelling silently fails to match —
+  /// the grant looks right in the generated text but denies everything at
+  /// runtime. The profile must contain the canonicalized form.
+  #[test]
+  fn profile_canonicalizes_symlinked_tmp_paths() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let raw = dir.path().to_path_buf();
+    let canonical = raw.canonicalize().unwrap();
+    // This assertion is the whole point of the test: if it doesn't hold on
+    // some future macOS, the fix has nothing to prove.
+    assert_ne!(
+      raw, canonical,
+      "test fixture assumption broken: temp dir is not behind a symlink on this host"
+    );
+
+    let scope = SandboxScope::new().with_read_paths([raw.as_path()]);
+    let profile = build_profile(&[Capability::FsRead], &scope);
+
+    assert!(
+      profile.contains(&format!(
+        "(allow file-read* (subpath \"{}\"))",
+        canonical.display()
+      )),
+      "profile must grant the canonicalized path, got: {profile}"
+    );
+    assert!(
+      !profile.contains(&format!(
+        "(allow file-read* (subpath \"{}\"))",
+        raw.display()
+      )),
+      "profile must not grant the un-resolved symlinked path, got: {profile}"
+    );
+  }
+
+  /// A path that doesn't exist yet (nothing to canonicalize) must still be
+  /// granted as-given, not dropped — matters for `write_paths` naming a
+  /// not-yet-created output location.
+  #[test]
+  fn profile_falls_back_to_original_path_when_canonicalize_fails() {
+    let scope = SandboxScope::new().with_write_paths([Path::new("/tmp/agentflow-does-not-exist")]);
+    let profile = build_profile(&[Capability::FsWrite], &scope);
+    assert!(profile.contains("(allow file-write* (subpath \"/tmp/agentflow-does-not-exist\"))"));
   }
 }
