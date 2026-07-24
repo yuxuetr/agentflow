@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::sandbox::{
   NoopSandboxBackend, SandboxBackend, SandboxPolicy, SandboxScope, SandboxStatus,
@@ -32,6 +34,15 @@ pub struct ScriptTool {
   /// Optional JSON schema for validating input parameters.
   parameters_schema: Option<Value>,
   backend: Arc<dyn SandboxBackend>,
+  /// S1.2: filename → expected lowercase-hex sha256, the execution-time
+  /// half of the skill's `[[scripts]]` integrity manifest (S1.1). `None`
+  /// (the default) means no integrity enforcement is configured — the
+  /// historical, permissive behaviour, used when a caller builds a
+  /// `ScriptTool` outside the skill-manifest path. `Some(map)` — even an
+  /// empty one — makes every execution fail-closed: a script whose name
+  /// isn't a key in `map`, or whose content doesn't match the recorded
+  /// hash, is refused. See docs/RFC_CODE_EXECUTION_TRUST.md.
+  script_hashes: Option<HashMap<String, String>>,
 }
 
 impl ScriptTool {
@@ -43,6 +54,7 @@ impl ScriptTool {
       backend: Arc::new(NoopSandboxBackend::new(
         "ScriptTool default backend; opt in via with_os_sandbox()",
       )),
+      script_hashes: None,
     }
   }
 
@@ -62,6 +74,15 @@ impl ScriptTool {
   /// Sets the parameters schema for validation.
   pub fn with_parameters_schema(mut self, schema: Value) -> Self {
     self.parameters_schema = Some(schema);
+    self
+  }
+
+  /// Configure execution-time integrity enforcement (S1.2): `hashes` maps
+  /// script filename → expected lowercase-hex sha256. Once set, every
+  /// `execute()` call is fail-closed — an unlisted script name, a missing
+  /// file, or a content mismatch all refuse to run rather than warn.
+  pub fn with_script_hashes(mut self, hashes: HashMap<String, String>) -> Self {
+    self.script_hashes = Some(hashes);
     self
   }
 
@@ -191,6 +212,41 @@ impl Tool for ScriptTool {
           canonical_script_path.display()
         ),
       });
+    }
+
+    // ── Integrity verification (S1.2) ──────────────────────────────────────
+    // Only engages when the caller configured `script_hashes` (the skill
+    // builder does this from the manifest's `[[scripts]]` list, S1.3).
+    // Fail-closed: an unlisted or mismatched script never reaches spawn.
+    if let Some(expected_hashes) = &self.script_hashes {
+      let expected =
+        expected_hashes
+          .get(script_name)
+          .ok_or_else(|| ToolError::SandboxViolation {
+            message: format!(
+              "Script '{}' is not listed in the skill's script integrity manifest",
+              script_name
+            ),
+          })?;
+      let bytes = tokio::fs::read(&canonical_script_path)
+        .await
+        .map_err(ToolError::IoError)?;
+      let actual = sha256_hex(&bytes);
+      if &actual != expected {
+        return Err(ToolError::SandboxViolation {
+          message: format!(
+            "Script '{}' failed integrity verification (expected sha256 {}, found {}) \
+             — refusing to execute a script whose content changed after install",
+            script_name, expected, actual
+          ),
+        });
+      }
+      tracing::info!(
+        event = "script_integrity_verified",
+        script = script_name,
+        sha256 = %actual,
+        "Script integrity check passed"
+      );
     }
 
     // ── Interpreter selection ────────────────────────────────────────────
@@ -331,6 +387,13 @@ fn build_script_scope(scripts_dir: &std::path::Path, policy: &SandboxPolicy) -> 
   scope
 }
 
+/// Lowercase hex-encoded SHA-256 of `bytes` (S1.2 integrity check).
+fn sha256_hex(bytes: &[u8]) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  format!("{:x}", hasher.finalize())
+}
+
 /// Map a file extension to a known interpreter binary name.
 fn interpreter_for(ext: &str) -> Option<&'static str> {
   match ext {
@@ -446,5 +509,76 @@ mod tests {
     let result = tool.execute(json!({"script": "escape.sh"})).await;
 
     assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+  }
+
+  // ── S1.2: execute-time integrity verification ──────────────────────────
+
+  #[tokio::test]
+  async fn executes_when_hash_matches() {
+    let dir = TempDir::new().unwrap();
+    let content = "#!/bin/bash\necho hello from script";
+    let script = dir.path().join("hello.sh");
+    std::fs::write(&script, content).unwrap();
+
+    let tool = make_tool(dir.path()).with_script_hashes(HashMap::from([(
+      "hello.sh".to_string(),
+      sha256_hex(content.as_bytes()),
+    )]));
+
+    let result = tool.execute(json!({"script": "hello.sh"})).await.unwrap();
+    assert!(result.content.contains("hello from script"));
+  }
+
+  /// S1.2 regression: a script whose content was modified after its hash
+  /// was recorded must be refused, not silently executed.
+  #[tokio::test]
+  async fn rejects_tampered_script_content() {
+    let dir = TempDir::new().unwrap();
+    let original = "#!/bin/bash\necho original";
+    let script = dir.path().join("hello.sh");
+    std::fs::write(&script, original).unwrap();
+
+    let tool = make_tool(dir.path()).with_script_hashes(HashMap::from([(
+      "hello.sh".to_string(),
+      sha256_hex(original.as_bytes()),
+    )]));
+
+    // Tamper with the file after the hash was recorded.
+    std::fs::write(&script, "#!/bin/bash\necho tampered").unwrap();
+
+    let result = tool.execute(json!({"script": "hello.sh"})).await;
+    assert!(
+      matches!(result, Err(ToolError::SandboxViolation { .. })),
+      "expected a SandboxViolation for tampered content, got {result:?}"
+    );
+  }
+
+  /// A script that exists on disk but was never listed in `script_hashes`
+  /// must also be refused — fail-closed on omission, not just mismatch.
+  #[tokio::test]
+  async fn rejects_unlisted_script_when_hashes_configured() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("hello.sh"), "echo ok").unwrap();
+    std::fs::write(dir.path().join("other.sh"), "echo other").unwrap();
+
+    // Only "other.sh" is listed — "hello.sh" is not, even though it exists.
+    let tool = make_tool(dir.path()).with_script_hashes(HashMap::from([(
+      "other.sh".to_string(),
+      sha256_hex(b"echo other"),
+    )]));
+
+    let result = tool.execute(json!({"script": "hello.sh"})).await;
+    assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+  }
+
+  /// Without `with_script_hashes`, behaviour is unchanged (back-compat).
+  #[tokio::test]
+  async fn executes_without_integrity_check_when_hashes_not_configured() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("hello.sh"), "echo ok").unwrap();
+
+    let tool = make_tool(dir.path());
+    let result = tool.execute(json!({"script": "hello.sh"})).await;
+    assert!(result.is_ok());
   }
 }
