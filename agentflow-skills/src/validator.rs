@@ -316,6 +316,7 @@ mod tests {
       knowledge: vec![],
       memory: None,
       validation,
+      scripts: vec![],
     }
   }
 

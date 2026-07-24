@@ -205,6 +205,10 @@ impl SkillMd {
       knowledge: vec![],
       memory: None,
       validation: Default::default(),
+      // SKILL.md has no `[[scripts]]`-equivalent frontmatter syntax yet; a
+      // `script` tool declared this way falls into the "no integrity
+      // manifest" back-compat path in `SkillLoader::validate` (S1.1).
+      scripts: vec![],
     }
   }
 }

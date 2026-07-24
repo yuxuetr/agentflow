@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,8 +14,8 @@ use crate::{
   error::SkillError,
   loader::resolve_knowledge_path,
   manifest::{
-    KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig, SecurityConfig,
-    SkillManifest, ToolConfig,
+    KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig, ScriptIntegrityEntry,
+    SecurityConfig, SkillManifest, ToolConfig,
   },
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
@@ -80,7 +81,12 @@ impl SkillBuilder {
     manifest: &SkillManifest,
     skill_dir: &Path,
   ) -> Result<ToolRegistry, SkillError> {
-    let mut registry = build_tool_registry(&manifest.tools, &manifest.security, skill_dir)?;
+    let mut registry = build_tool_registry(
+      &manifest.tools,
+      &manifest.security,
+      &manifest.scripts,
+      skill_dir,
+    )?;
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
     register_knowledge_backends(&mut registry, manifest, skill_dir)?;
     Ok(registry)
@@ -223,6 +229,7 @@ pub(crate) fn build_persona(
 fn build_tool_registry(
   tool_configs: &[ToolConfig],
   security: &SecurityConfig,
+  script_manifest: &[ScriptIntegrityEntry],
   skill_dir: &Path,
 ) -> Result<ToolRegistry, SkillError> {
   // SkillSecurity is the first layer of the three-way capability merge.
@@ -294,6 +301,19 @@ fn build_tool_registry(
         let mut tool = ScriptTool::new(scripts_dir, script_policy);
         if let Some(schema) = &tool_cfg.parameters {
           tool = tool.with_parameters_schema(schema.clone());
+        }
+        // S1.3: once the skill declares a `[[scripts]]` integrity manifest,
+        // enforce it unconditionally at execution time (S1.2) — no profile
+        // check needed here, since `SkillLoader::validate` already gated
+        // whether an *undeclared* skill was allowed to load at all (S1.1).
+        // An empty manifest leaves `ScriptTool` permissive (`None`), matching
+        // historical behaviour for skills that haven't adopted S1 yet.
+        if !script_manifest.is_empty() {
+          let hashes: HashMap<String, String> = script_manifest
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.sha256.to_lowercase()))
+            .collect();
+          tool = tool.with_script_hashes(hashes);
         }
         if effective_os_sandbox {
           tool = tool.with_os_sandbox();
@@ -798,6 +818,7 @@ mod tests {
       knowledge: vec![],
       memory: None,
       validation: Default::default(),
+      scripts: vec![],
     }
   }
 
@@ -1535,6 +1556,60 @@ name = "shell"
       .await
       .unwrap();
     assert!(run_result.content.contains("hi"));
+  }
+
+  /// S1.3 regression: `manifest.scripts` reaches `ScriptTool` end-to-end
+  /// through `SkillBuilder::build_registry` — a script tampered after the
+  /// registry was built is rejected at execution time, not just when
+  /// exercising `ScriptTool` directly (agentflow-tools unit tests already
+  /// cover the tool in isolation; this proves the manifest → tool wiring).
+  #[tokio::test]
+  async fn declared_script_hash_is_enforced_through_build_registry() {
+    let dir = TempDir::new().unwrap();
+    let content = "#!/bin/bash\necho hi";
+    write_file(&dir.path().join("scripts").join("hello.sh"), content);
+
+    let mut manifest = minimal_manifest("integrity-skill");
+    manifest.tools = vec![ToolConfig {
+      name: "script".to_string(),
+      ..ToolConfig::default()
+    }];
+    manifest.scripts = vec![crate::manifest::ScriptIntegrityEntry {
+      name: "hello.sh".to_string(),
+      sha256: {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
+      },
+    }];
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+
+    // Hash matches at first: runs fine.
+    let ok_result = registry
+      .execute("script", serde_json::json!({"script": "hello.sh"}))
+      .await
+      .unwrap();
+    assert!(ok_result.content.contains("hi"));
+
+    // Tamper after the registry (and its ScriptTool) was already built.
+    write_file(
+      &dir.path().join("scripts").join("hello.sh"),
+      "#!/bin/bash\necho tampered",
+    );
+    let tampered_result = registry
+      .execute("script", serde_json::json!({"script": "hello.sh"}))
+      .await;
+    assert!(
+      matches!(
+        tampered_result,
+        Err(agentflow_tools::ToolError::SandboxViolation { .. })
+      ),
+      "expected a SandboxViolation for tampered content, got {tampered_result:?}"
+    );
   }
 
   #[test]

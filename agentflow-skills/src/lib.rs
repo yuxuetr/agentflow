@@ -58,9 +58,9 @@ pub use index::{
 };
 pub use loader::SkillLoader;
 pub use manifest::{
-  KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, SecurityConfig,
-  SkillInfo, SkillManifest, ToolConfig, VALIDATOR_TIMEOUT_SECS_MAX, VALIDATOR_TIMEOUT_SECS_MIN,
-  ValidationConfig,
+  KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, ScriptIntegrityEntry,
+  SecurityConfig, SkillInfo, SkillManifest, ToolConfig, VALIDATOR_TIMEOUT_SECS_MAX,
+  VALIDATOR_TIMEOUT_SECS_MIN, ValidationConfig,
 };
 pub use marketplace::{
   FeaturedSkill, MarketplaceResolvedSkill, MarketplaceSkillListing, SkillMarketplace,

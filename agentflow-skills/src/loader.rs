@@ -1,4 +1,9 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+use agentflow_tools::SecurityProfile;
 
 use crate::{error::SkillError, manifest::SkillManifest, skill_md::SkillMd};
 
@@ -44,7 +49,28 @@ impl SkillLoader {
 
   /// Validate a loaded manifest and return a list of warnings.
   /// Returns `Err` for hard failures, `Ok(warnings)` for soft issues.
+  ///
+  /// Uses the ambient [`SecurityProfile`] (`AGENTFLOW_SECURITY_PROFILE`,
+  /// defaulting to [`SecurityProfile::Local`] when unset or unparsable) to
+  /// gate the S1.1 script-integrity back-compat check. Callers that already
+  /// have a resolved profile (server/CLI entry points) should prefer
+  /// [`Self::validate_with_profile`] instead of relying on the environment
+  /// read happening here.
   pub fn validate(manifest: &SkillManifest, skill_dir: &Path) -> Result<Vec<String>, SkillError> {
+    Self::validate_with_profile(
+      manifest,
+      skill_dir,
+      SecurityProfile::from_env().unwrap_or_default(),
+    )
+  }
+
+  /// Same as [`Self::validate`], but with an explicit [`SecurityProfile`]
+  /// instead of reading `AGENTFLOW_SECURITY_PROFILE` from the environment.
+  pub fn validate_with_profile(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+    profile: SecurityProfile,
+  ) -> Result<Vec<String>, SkillError> {
     let mut warnings: Vec<String> = Vec::new();
 
     // ── skill section ───────────────────────────────────────────────────
@@ -86,6 +112,7 @@ impl SkillLoader {
             ),
           });
         }
+        validate_script_integrity(manifest, &scripts_dir, profile, &mut warnings)?;
       }
     }
 
@@ -230,6 +257,134 @@ fn executable_name(command: &str) -> String {
     .and_then(|name| name.to_str())
     .unwrap_or(command)
     .to_string()
+}
+
+/// Script filename extensions [`ScriptTool`](agentflow_tools::builtin::ScriptTool)
+/// knows how to execute — mirrors `interpreter_for` in
+/// `agentflow-tools/src/builtin/script.rs`. Only files with one of these
+/// extensions are "invocable" and therefore in scope for the S1.1
+/// integrity manifest; anything else in `scripts/` (data files, READMEs,
+/// helper modules never named as the top-level `script` param) is out of
+/// scope.
+const SCRIPT_EXTENSIONS: &[&str] = &["py", "sh", "js"];
+
+/// S1.1: check the `[[scripts]]` integrity manifest against `scripts_dir`.
+///
+/// Two independent failure modes, deliberately handled differently (see
+/// docs/RFC_CODE_EXECUTION_TRUST.md):
+/// - **Declared but wrong** (a listed script is missing from disk, or its
+///   content no longer matches the declared sha256) is evidence of
+///   tampering or a stale manifest — always a hard error, in every
+///   `SecurityProfile`.
+/// - **Not declared at all** (the skill has no `[[scripts]]` entries, or
+///   `scripts/` has invocable files the manifest doesn't list) means the
+///   skill simply hasn't adopted integrity checking yet — gated by
+///   `profile` (S1.3): silent in `Dev`, a warning in `Local`, a hard
+///   error in `Production`.
+fn validate_script_integrity(
+  manifest: &SkillManifest,
+  scripts_dir: &Path,
+  profile: SecurityProfile,
+  warnings: &mut Vec<String>,
+) -> Result<(), SkillError> {
+  let mut declared: HashMap<String, String> = HashMap::new();
+  for entry in &manifest.scripts {
+    if entry.name.is_empty()
+      || entry.name.contains('/')
+      || entry.name.contains('\\')
+      || entry.name.contains("..")
+    {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "[[scripts]] entry name '{}' must be a plain filename inside scripts/",
+          entry.name
+        ),
+      });
+    }
+    if declared
+      .insert(entry.name.clone(), entry.sha256.to_lowercase())
+      .is_some()
+    {
+      return Err(SkillError::ValidationError {
+        message: format!("[[scripts]] declares '{}' more than once", entry.name),
+      });
+    }
+  }
+
+  // Declared but wrong: always a hard error, regardless of profile.
+  for (name, expected_sha256) in &declared {
+    let path = scripts_dir.join(name);
+    let bytes = std::fs::read(&path).map_err(|_| SkillError::ValidationError {
+      message: format!(
+        "[[scripts]] declares '{}' but it is missing from {}",
+        name,
+        scripts_dir.display()
+      ),
+    })?;
+    let actual_sha256 = sha256_hex(&bytes);
+    if &actual_sha256 != expected_sha256 {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "script '{}' content does not match its declared sha256 (expected {}, found {}) \
+           — it may have been modified after install",
+          name, expected_sha256, actual_sha256
+        ),
+      });
+    }
+  }
+
+  // Not declared: profile-gated.
+  let mut undeclared: Vec<String> = Vec::new();
+  if let Ok(entries) = std::fs::read_dir(scripts_dir) {
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if !path.is_file() {
+        continue;
+      }
+      let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+      if !SCRIPT_EXTENSIONS.contains(&ext) {
+        continue;
+      }
+      let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        continue;
+      };
+      if !declared.contains_key(&name) {
+        undeclared.push(name);
+      }
+    }
+  }
+  undeclared.sort();
+
+  if !undeclared.is_empty() {
+    let message = if manifest.scripts.is_empty() {
+      format!(
+        "Tool 'script' declared but the skill has no [[scripts]] integrity manifest \
+         ({} script file(s) will run without hash verification: {})",
+        undeclared.len(),
+        undeclared.join(", ")
+      )
+    } else {
+      format!(
+        "scripts/ contains file(s) not listed in [[scripts]] — they will run without \
+         hash verification: {}",
+        undeclared.join(", ")
+      )
+    };
+    match profile {
+      SecurityProfile::Dev => {}
+      SecurityProfile::Local => warnings.push(message),
+      SecurityProfile::Production => return Err(SkillError::ValidationError { message }),
+    }
+  }
+
+  Ok(())
+}
+
+/// Lowercase hex-encoded SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  format!("{:x}", hasher.finalize())
 }
 
 /// Resolve a knowledge path (possibly a glob) relative to `skill_dir`.
@@ -517,6 +672,8 @@ path = "./knowledge/missing.md"
       &dir.path().join("scripts").join("run.sh"),
       "#!/bin/bash\necho ok",
     );
+    // S1.1: declaring the script in [[scripts]] with its correct hash is
+    // the fully-adopted, zero-warning path.
     write_toml(
       dir.path(),
       r#"
@@ -530,11 +687,105 @@ role = "expert"
 
 [[tools]]
 name = "script"
+
+[[scripts]]
+name = "run.sh"
+sha256 = "1a51f79939e75f9c3891c2000ca479781486d2c04dd3c39db2f05c4ecfe01b54"
 "#,
     );
     let m = SkillLoader::load(dir.path()).unwrap();
     let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
     assert!(warnings.is_empty());
+  }
+
+  /// S1.1: a `script` tool with no `[[scripts]]` integrity manifest at all
+  /// is the pre-S1.1 back-compat case — `Local` (the ambient default when
+  /// no profile is set) warns rather than rejecting.
+  #[test]
+  fn script_tool_without_integrity_manifest_warns_under_local_profile() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("scripts")).unwrap();
+    write_file(
+      &dir.path().join("scripts").join("run.sh"),
+      "#!/bin/bash\necho ok",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "scripter-no-manifest"
+version = "0.1"
+description = "has scripts, no integrity manifest"
+
+[persona]
+role = "expert"
+
+[[tools]]
+name = "script"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+
+    let warnings =
+      SkillLoader::validate_with_profile(&m, dir.path(), SecurityProfile::Local).unwrap();
+    assert!(
+      warnings.iter().any(|w| w.contains("run.sh")),
+      "expected a warning naming the unverified script, got {warnings:?}"
+    );
+
+    // Dev is the fast-iteration profile: no [[scripts]] manifest, no noise.
+    let dev_warnings =
+      SkillLoader::validate_with_profile(&m, dir.path(), SecurityProfile::Dev).unwrap();
+    assert!(dev_warnings.is_empty());
+
+    // Production fails closed: an unverified script tool must not load.
+    let result = SkillLoader::validate_with_profile(&m, dir.path(), SecurityProfile::Production);
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  /// S1.1 regression: a declared script whose on-disk content no longer
+  /// matches its manifest sha256 is tampering/staleness evidence and must
+  /// be rejected at load time in every profile, not just Production.
+  #[test]
+  fn tampered_declared_script_is_rejected_in_every_profile() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("scripts")).unwrap();
+    write_file(
+      &dir.path().join("scripts").join("run.sh"),
+      "#!/bin/bash\necho tampered-after-install",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "scripter-tampered"
+version = "0.1"
+description = "hash no longer matches"
+
+[persona]
+role = "expert"
+
+[[tools]]
+name = "script"
+
+[[scripts]]
+name = "run.sh"
+sha256 = "1a51f79939e75f9c3891c2000ca479781486d2c04dd3c39db2f05c4ecfe01b54"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+
+    for profile in [
+      SecurityProfile::Dev,
+      SecurityProfile::Local,
+      SecurityProfile::Production,
+    ] {
+      let result = SkillLoader::validate_with_profile(&m, dir.path(), profile);
+      assert!(
+        matches!(result, Err(SkillError::ValidationError { .. })),
+        "profile {profile:?} must reject a tampered declared script"
+      );
+    }
   }
 
   #[test]
@@ -670,8 +921,15 @@ env = { API_KEY = "secret" }
     let m = SkillLoader::load(dir.path()).unwrap();
     assert_eq!(m.tools.len(), 1);
     assert_eq!(m.tools[0].name, "script");
+    // S1.1: SKILL.md has no `[[scripts]]`-equivalent frontmatter syntax, so
+    // this always lands in the "no integrity manifest" back-compat path —
+    // still a successful (non-fatal) load under the default Local profile,
+    // but with a warning naming the unverified script.
     let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
-    assert!(warnings.is_empty());
+    assert!(
+      warnings.iter().any(|w| w.contains("run.py")),
+      "expected a warning naming the unverified script, got {warnings:?}"
+    );
   }
 
   #[test]

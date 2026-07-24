@@ -56,6 +56,30 @@ pub struct SkillManifest {
   /// [`ValidationConfig::None`].
   #[serde(default)]
   pub validation: ValidationConfig,
+  /// `[[scripts]]` integrity manifest for the `script` tool (S1.1):
+  /// author-signed filename + sha256, fixed at install time. Checked
+  /// against `scripts/` at load time (`SkillLoader::validate`) and, when
+  /// non-empty, enforced again at execution time by `ScriptTool` itself
+  /// (S1.2) — see `docs/RFC_CODE_EXECUTION_TRUST.md`. Empty (the default,
+  /// and every manifest predating this field) means the skill has not
+  /// adopted script integrity; `SkillLoader::validate` gates that on the
+  /// active `SecurityProfile` (S1.3).
+  #[serde(default)]
+  pub scripts: Vec<ScriptIntegrityEntry>,
+}
+
+/// One `[[scripts]]` entry: a plain filename inside `scripts/` and the
+/// lowercase hex-encoded SHA-256 of its exact bytes at install time.
+///
+/// ```toml
+/// [[scripts]]
+/// name   = "check_syntax.py"
+/// sha256 = "8f0e2a1c...(64 hex chars)"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ScriptIntegrityEntry {
+  pub name: String,
+  pub sha256: String,
 }
 
 /// Closed `kind` discriminator backing the v1 skill validator
