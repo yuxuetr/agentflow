@@ -209,6 +209,8 @@ impl SkillMd {
       // `script` tool declared this way falls into the "no integrity
       // manifest" back-compat path in `SkillLoader::validate` (S1.1).
       scripts: vec![],
+      // No `[dependencies]`-equivalent frontmatter syntax either (S2.1).
+      dependencies: Default::default(),
     }
   }
 }

@@ -46,6 +46,7 @@ pub mod manifest;
 pub mod marketplace;
 pub mod mcp_tools;
 pub mod policy;
+pub mod python_env;
 pub mod remote_marketplace;
 pub mod skill_md;
 pub mod validator;
@@ -58,9 +59,9 @@ pub use index::{
 };
 pub use loader::SkillLoader;
 pub use manifest::{
-  KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig, ScriptIntegrityEntry,
-  SecurityConfig, SkillInfo, SkillManifest, ToolConfig, VALIDATOR_TIMEOUT_SECS_MAX,
-  VALIDATOR_TIMEOUT_SECS_MIN, ValidationConfig,
+  DependenciesConfig, KnowledgeConfig, McpServerConfig, MemoryConfig, ModelConfig, PersonaConfig,
+  ScriptIntegrityEntry, SecurityConfig, SkillInfo, SkillManifest, ToolConfig,
+  VALIDATOR_TIMEOUT_SECS_MAX, VALIDATOR_TIMEOUT_SECS_MIN, ValidationConfig,
 };
 pub use marketplace::{
   FeaturedSkill, MarketplaceResolvedSkill, MarketplaceSkillListing, SkillMarketplace,

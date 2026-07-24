@@ -317,6 +317,7 @@ mod tests {
       memory: None,
       validation,
       scripts: vec![],
+      dependencies: Default::default(),
     }
   }
 

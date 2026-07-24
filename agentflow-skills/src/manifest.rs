@@ -66,6 +66,35 @@ pub struct SkillManifest {
   /// active `SecurityProfile` (S1.3).
   #[serde(default)]
   pub scripts: Vec<ScriptIntegrityEntry>,
+  /// `[dependencies]` (S2.1): per-skill Python dependency declaration,
+  /// installed into an isolated `.venv/` at load time (S2.2) instead of
+  /// running scripts against whatever's globally installed on the host.
+  /// Default (`python: None`) means the skill declares no dependencies —
+  /// `script` tool `.py` files run against the global `python3`, exactly
+  /// as before this field existed.
+  #[serde(default)]
+  pub dependencies: DependenciesConfig,
+}
+
+/// `[dependencies]` section.
+///
+/// ```toml
+/// [dependencies]
+/// python = "requirements.txt"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct DependenciesConfig {
+  /// Path, relative to the skill directory, to a pip-style requirements
+  /// file. Every entry must be exactly version-pinned (`==`) and carry a
+  /// `--hash=sha256:...` (pip's own native hash-checking mode) —
+  /// `SkillLoader::validate` rejects any entry missing either. Installed
+  /// fully offline: `pip install --no-index --find-links vendor/
+  /// --require-hashes -r <this file>` against the skill's own `vendor/`
+  /// directory of pre-fetched wheels/sdists — AgentFlow itself never
+  /// touches the network to build this environment. See
+  /// `docs/RFC_CODE_EXECUTION_TRUST.md`.
+  #[serde(default)]
+  pub python: Option<String>,
 }
 
 /// One `[[scripts]]` entry: a plain filename inside `scripts/` and the

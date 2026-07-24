@@ -116,6 +116,11 @@ impl SkillLoader {
       }
     }
 
+    // ── dependencies (S2.1) ─────────────────────────────────────────────
+    if let Some(requirements_rel_path) = &manifest.dependencies.python {
+      validate_python_requirements(requirements_rel_path, skill_dir)?;
+    }
+
     // ── MCP servers ─────────────────────────────────────────────────────
     let max_servers = manifest.security.resolved_mcp_max_servers();
     if manifest.mcp_servers.len() > max_servers {
@@ -257,6 +262,73 @@ fn executable_name(command: &str) -> String {
     .and_then(|name| name.to_str())
     .unwrap_or(command)
     .to_string()
+}
+
+/// S2.1: a `[dependencies].python` requirements file must be fully pinned
+/// and hash-locked — every entry needs an exact `==` version and a
+/// `--hash=sha256:...` (pip's own native hash-checking mode, honored by
+/// `pip install --require-hashes` in S2.2). This is "declared but wrong"
+/// territory (docs/RFC_CODE_EXECUTION_TRUST.md): an unpinned or unhashed
+/// dependency defeats the whole point of an isolated, reproducible
+/// environment, so it is a hard error in every `SecurityProfile`, not
+/// gated like S1.1's "not declared at all" case.
+fn validate_python_requirements(
+  requirements_rel_path: &str,
+  skill_dir: &Path,
+) -> Result<(), SkillError> {
+  if requirements_rel_path.contains("..") {
+    return Err(SkillError::ValidationError {
+      message: format!(
+        "[dependencies].python '{}' must not contain '..'",
+        requirements_rel_path
+      ),
+    });
+  }
+  let path = skill_dir.join(requirements_rel_path);
+  let content = std::fs::read_to_string(&path).map_err(|e| SkillError::ValidationError {
+    message: format!(
+      "[dependencies].python references '{}' but it could not be read: {}",
+      path.display(),
+      e
+    ),
+  })?;
+
+  // Join pip-style backslash line continuations into logical lines before
+  // filtering comments/blanks, so a hash split across lines (common pip
+  // requirements style) is validated as one requirement.
+  let mut logical_lines: Vec<String> = Vec::new();
+  let mut pending = String::new();
+  for raw_line in content.lines() {
+    let line = raw_line.trim_end();
+    pending.push_str(line.trim_end_matches('\\').trim_end());
+    if line.trim_end().ends_with('\\') {
+      pending.push(' ');
+      continue;
+    }
+    logical_lines.push(std::mem::take(&mut pending));
+  }
+  if !pending.is_empty() {
+    logical_lines.push(pending);
+  }
+
+  for line in &logical_lines {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+      continue;
+    }
+    if !trimmed.contains("==") || !trimmed.contains("--hash=sha256:") {
+      return Err(SkillError::ValidationError {
+        message: format!(
+          "[dependencies].python entry '{}' in {} must be exactly pinned (==) \
+           and carry a --hash=sha256:... entry",
+          trimmed,
+          path.display()
+        ),
+      });
+    }
+  }
+
+  Ok(())
 }
 
 /// Script filename extensions [`ScriptTool`](agentflow_tools::builtin::ScriptTool)
@@ -938,6 +1010,158 @@ env = { API_KEY = "secret" }
     write_skill_md(
       dir.path(),
       "---\nname: broken\ndescription: Declares script tool without scripts dir.\nallowed-tools: script\n---\n\nBody.\n",
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  // ── dependencies (S2.1) tests ───────────────────────────────────────────
+
+  #[test]
+  fn pinned_and_hashed_requirements_validate_cleanly() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("requirements.txt"),
+      "requests==2.31.0 --hash=sha256:1111111111111111111111111111111111111111111111111111111111111111\n",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-ok"
+version = "0.1"
+description = "has pinned deps"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "requirements.txt"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+    assert!(warnings.is_empty());
+  }
+
+  /// Pip's own line-continuation style (hash on its own continued line)
+  /// must be accepted, not misread as two separate broken requirements.
+  #[test]
+  fn requirements_with_line_continuation_validate_cleanly() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("requirements.txt"),
+      "requests==2.31.0 \\\n    --hash=sha256:1111111111111111111111111111111111111111111111111111111111111111\n",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-continuation"
+version = "0.1"
+description = "continuation line"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "requirements.txt"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let warnings = SkillLoader::validate(&m, dir.path()).unwrap();
+    assert!(warnings.is_empty());
+  }
+
+  #[test]
+  fn unpinned_requirement_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("requirements.txt"), "requests\n");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-unpinned"
+version = "0.1"
+description = "no pin"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "requirements.txt"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  #[test]
+  fn pinned_but_unhashed_requirement_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("requirements.txt"), "requests==2.31.0\n");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-unhashed"
+version = "0.1"
+description = "no hash"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "requirements.txt"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  #[test]
+  fn missing_requirements_file_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-missing-file"
+version = "0.1"
+description = "no such file"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "requirements.txt"
+"#,
+    );
+    let m = SkillLoader::load(dir.path()).unwrap();
+    let result = SkillLoader::validate(&m, dir.path());
+    assert!(matches!(result, Err(SkillError::ValidationError { .. })));
+  }
+
+  #[test]
+  fn requirements_path_traversal_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "deps-traversal"
+version = "0.1"
+description = "escapes skill dir"
+
+[persona]
+role = "expert"
+
+[dependencies]
+python = "../../etc/requirements.txt"
+"#,
     );
     let m = SkillLoader::load(dir.path()).unwrap();
     let result = SkillLoader::validate(&m, dir.path());

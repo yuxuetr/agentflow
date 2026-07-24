@@ -14,8 +14,8 @@ use crate::{
   error::SkillError,
   loader::resolve_knowledge_path,
   manifest::{
-    KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig, ScriptIntegrityEntry,
-    SecurityConfig, SkillManifest, ToolConfig,
+    DependenciesConfig, KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig,
+    ScriptIntegrityEntry, SecurityConfig, SkillManifest, ToolConfig,
   },
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
@@ -85,6 +85,7 @@ impl SkillBuilder {
       &manifest.tools,
       &manifest.security,
       &manifest.scripts,
+      &manifest.dependencies,
       skill_dir,
     )?;
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
@@ -230,6 +231,7 @@ fn build_tool_registry(
   tool_configs: &[ToolConfig],
   security: &SecurityConfig,
   script_manifest: &[ScriptIntegrityEntry],
+  dependencies: &DependenciesConfig,
   skill_dir: &Path,
 ) -> Result<ToolRegistry, SkillError> {
   // SkillSecurity is the first layer of the three-way capability merge.
@@ -314,6 +316,16 @@ fn build_tool_registry(
             .map(|entry| (entry.name.clone(), entry.sha256.to_lowercase()))
             .collect();
           tool = tool.with_script_hashes(hashes);
+        }
+        // S2.2/S2.3: a declared `[dependencies].python` gets its own
+        // isolated venv, built (or reused, if already up to date)
+        // offline from the skill's `vendor/` directory. This must
+        // succeed — a skill that declared dependencies and can't get
+        // them installed correctly must not silently fall back to
+        // running against the global interpreter in any profile.
+        if let Some(requirements_rel_path) = &dependencies.python {
+          let python_bin = crate::python_env::ensure_python_venv(skill_dir, requirements_rel_path)?;
+          tool = tool.with_python_interpreter(python_bin);
         }
         if effective_os_sandbox {
           tool = tool.with_os_sandbox();
@@ -819,6 +831,7 @@ mod tests {
       memory: None,
       validation: Default::default(),
       scripts: vec![],
+      dependencies: Default::default(),
     }
   }
 
@@ -1611,6 +1624,122 @@ name = "shell"
       "expected a SandboxViolation for tampered content, got {tampered_result:?}"
     );
   }
+
+  /// S2 regression: a skill that declares `[dependencies].python` but has
+  /// no `vendor/` directory to install from offline must fail to build its
+  /// registry — never silently fall back to the global interpreter.
+  #[tokio::test]
+  async fn declared_python_dependencies_without_vendor_dir_fails_build_registry() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("scripts").join("run.py"), "print('hi')");
+    write_file(
+      &dir.path().join("requirements.txt"),
+      "pkg==1.0.0 --hash=sha256:deadbeef\n",
+    );
+
+    let mut manifest = minimal_manifest("deps-no-vendor");
+    manifest.tools = vec![ToolConfig {
+      name: "script".to_string(),
+      ..ToolConfig::default()
+    }];
+    manifest.dependencies = crate::manifest::DependenciesConfig {
+      python: Some("requirements.txt".to_string()),
+    };
+
+    let result = SkillBuilder::build_registry(&manifest, dir.path()).await;
+    assert!(result.is_err(), "expected a build failure");
+  }
+
+  /// S2.2/S2.3 end-to-end: `manifest.dependencies.python` reaches
+  /// `ScriptTool` through `SkillBuilder::build_registry` — a `.py` script
+  /// actually runs against the skill's isolated venv, with a real
+  /// installed dependency importable, not the global `python3`.
+  /// `agentflow-skills/src/python_env.rs` unit-tests venv construction in
+  /// isolation; this proves the manifest → builder → tool wiring.
+  #[tokio::test]
+  async fn declared_python_dependencies_are_installed_and_used_through_build_registry() {
+    if std::process::Command::new("python3")
+      .arg("--version")
+      .output()
+      .map(|o| !o.status.success())
+      .unwrap_or(true)
+    {
+      eprintln!("skipping: python3 not on PATH");
+      return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("scripts").join("run.py"),
+      "import agentflow_test_pkg\nprint(agentflow_test_pkg.VALUE)\n",
+    );
+
+    let vendor_dir = dir.path().join("vendor");
+    fs::create_dir(&vendor_dir).unwrap();
+    let wheel_path = vendor_dir.join("agentflow_test_pkg-1.0.0-py3-none-any.whl");
+    let build_wheel_script = dir.path().join("build_wheel.py");
+    write_file(&build_wheel_script, WHEEL_BUILDER_SCRIPT);
+    let status = std::process::Command::new("python3")
+      .arg(&build_wheel_script)
+      .arg(&wheel_path)
+      .status()
+      .expect("spawn wheel builder");
+    assert!(status.success(), "failed to build the test fixture wheel");
+
+    let wheel_hash = {
+      use sha2::{Digest, Sha256};
+      let mut hasher = Sha256::new();
+      hasher.update(std::fs::read(&wheel_path).unwrap());
+      format!("{:x}", hasher.finalize())
+    };
+    write_file(
+      &dir.path().join("requirements.txt"),
+      &format!("agentflow-test-pkg==1.0.0 --hash=sha256:{wheel_hash}\n"),
+    );
+
+    let mut manifest = minimal_manifest("deps-real-venv");
+    manifest.tools = vec![ToolConfig {
+      name: "script".to_string(),
+      ..ToolConfig::default()
+    }];
+    manifest.dependencies = crate::manifest::DependenciesConfig {
+      python: Some("requirements.txt".to_string()),
+    };
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+
+    let result = registry
+      .execute("script", serde_json::json!({"script": "run.py"}))
+      .await
+      .unwrap();
+    assert_eq!(result.content.trim(), "42");
+  }
+
+  /// Builds a minimal, valid, dependency-free wheel by hand (via stdlib
+  /// `zipfile`) — mirrors `agentflow-skills/src/python_env.rs`'s test
+  /// fixture builder; kept separate since builder.rs's `tests` module
+  /// doesn't share private items with `python_env`'s.
+  const WHEEL_BUILDER_SCRIPT: &str = r#"
+import sys
+import zipfile
+
+out_path = sys.argv[1]
+dist_info = "agentflow_test_pkg-1.0.0.dist-info"
+
+with zipfile.ZipFile(out_path, "w") as zf:
+    zf.writestr("agentflow_test_pkg.py", "VALUE = 42\n")
+    zf.writestr(
+        f"{dist_info}/METADATA",
+        "Metadata-Version: 2.1\nName: agentflow-test-pkg\nVersion: 1.0.0\n",
+    )
+    zf.writestr(
+        f"{dist_info}/WHEEL",
+        "Wheel-Version: 1.0\nGenerator: agentflow-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )
+    zf.writestr(f"{dist_info}/RECORD", "")
+"#;
 
   #[test]
   fn mcp_governance_applies_default_limits() {
