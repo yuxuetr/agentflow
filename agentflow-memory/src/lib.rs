@@ -25,6 +25,7 @@ pub mod semantic;
 pub mod session;
 pub mod sqlite;
 mod sqlite_pool;
+pub mod task_summary;
 
 // The storage *contracts* (`MemoryError`, `Message`/`Role`/`TokenCounter`,
 // `MemoryStore`) moved to `agentflow-store-spi` (P-A1.2). Re-export them under
@@ -46,4 +47,7 @@ pub use semantic::SemanticMemory;
 pub use session::SessionMemory;
 pub use sqlite::SqliteMemory;
 pub use store::MemoryStore;
+pub use task_summary::{InMemoryTaskSummaryStore, SqliteTaskSummaryStore};
 pub use types::{HeuristicCounter, Message, Role, TokenCounter};
+
+pub use agentflow_store_spi::{TaskSummary, TaskSummaryStore};
