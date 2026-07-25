@@ -58,6 +58,7 @@ pub mod knowledge;
 pub mod postprocess;
 pub mod reranking;
 pub mod retrieval;
+pub mod rewrite;
 pub mod sources;
 pub mod tool;
 pub mod types;

@@ -23,6 +23,7 @@ pub mod dataset;
 pub mod metrics;
 pub mod postprocess_eval;
 pub mod retrievers;
+pub mod rewrite_eval;
 pub mod runner;
 
 pub use chunking_eval::{
@@ -36,6 +37,7 @@ pub use dataset::{CorpusDoc, Dataset, DatasetManifest, Judgment, Query, Relevanc
 pub use metrics::{LatencyAggregate, MetricKind, ndcg_at_k, recall_at_k, reciprocal_rank};
 pub use postprocess_eval::{PrecomputedRetriever, build_post_processed_retriever};
 pub use retrievers::{Bm25Eval, DenseEval, HybridEval};
+pub use rewrite_eval::build_multi_query_retriever;
 pub use runner::{
   EvalConfig, EvalReport, PerKMetrics, PerQueryRow, Retriever, evaluate, evaluate_with_remapping,
 };
