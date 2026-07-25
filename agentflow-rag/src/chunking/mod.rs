@@ -2,12 +2,20 @@
 
 use crate::{error::Result, types::TextChunk};
 
+#[cfg(feature = "code-chunking")]
+pub mod code_ast;
 pub mod fixed_size;
+pub mod heading;
+pub mod paragraph;
 pub mod recursive;
 pub mod semantic;
 pub mod sentence;
 
+#[cfg(feature = "code-chunking")]
+pub use code_ast::CodeAstChunker;
 pub use fixed_size::FixedSizeChunker;
+pub use heading::HeadingChunker;
+pub use paragraph::ParagraphChunker;
 pub use recursive::RecursiveChunker;
 pub use semantic::{SemanticChunker, SemanticChunkerBuilder};
 pub use sentence::SentenceChunker;
@@ -51,7 +59,74 @@ pub fn create_chunker(
     crate::types::ChunkingStrategy::Semantic => Err(crate::error::RAGError::chunking(
       "Semantic chunking not yet implemented",
     )),
+    crate::types::ChunkingStrategy::Paragraph => {
+      Ok(Box::new(ParagraphChunker::try_new(chunk_size, overlap)?))
+    }
+    crate::types::ChunkingStrategy::Heading => {
+      Ok(Box::new(HeadingChunker::try_new(chunk_size, overlap)?))
+    }
+    crate::types::ChunkingStrategy::CodeAst => {
+      #[cfg(feature = "code-chunking")]
+      {
+        Ok(Box::new(code_ast::CodeAstChunker::try_new(
+          chunk_size, overlap,
+        )?))
+      }
+      #[cfg(not(feature = "code-chunking"))]
+      {
+        Err(crate::error::RAGError::chunking(
+          "CodeAst chunking requires the `code-chunking` feature",
+        ))
+      }
+    }
   }
+}
+
+/// `(id, content, metadata)` triple produced by
+/// [`chunk_document_for_knowledge_backend`], ready for
+/// [`crate::knowledge::Bm25KnowledgeBackend::from_chunked_documents`].
+pub type ChunkedKnowledgeDocument = (
+  String,
+  String,
+  std::collections::HashMap<String, crate::types::MetadataValue>,
+);
+
+/// Chunk a single document's content and package each resulting
+/// [`TextChunk`] as an `(id, content, metadata)` triple, ready for
+/// [`crate::knowledge::Bm25KnowledgeBackend::from_chunked_documents`] (L4.1).
+///
+/// `source_id` becomes the `source` metadata key on every chunk (unless the
+/// chunker already set one) and the chunk id prefix, so downstream citation
+/// checks (L4.4) can trace a chunk back to the file — and, combined with the
+/// `start_line`/`end_line` metadata every new chunker populates, the exact
+/// line range — it came from.
+pub fn chunk_document_for_knowledge_backend(
+  strategy: crate::types::ChunkingStrategy,
+  chunk_size: usize,
+  overlap: usize,
+  source_id: &str,
+  content: &str,
+) -> Result<Vec<ChunkedKnowledgeDocument>> {
+  let chunker = create_chunker(strategy, chunk_size, overlap)?;
+  let chunks = chunker.chunk(content)?;
+  let multi = chunks.len() > 1;
+  Ok(
+    chunks
+      .into_iter()
+      .map(|chunk| {
+        let id = if multi {
+          format!("{source_id}#chunk{}", chunk.chunk_index)
+        } else {
+          source_id.to_string()
+        };
+        let mut metadata = chunk.metadata;
+        metadata
+          .entry("source".to_string())
+          .or_insert_with(|| crate::types::MetadataValue::String(source_id.to_string()));
+        (id, chunk.content, metadata)
+      })
+      .collect(),
+  )
 }
 
 #[cfg(test)]
@@ -120,5 +195,55 @@ mod tests {
     // clamp, since the operator likely typo'd the config.
     let result = create_chunker(crate::types::ChunkingStrategy::FixedSize, 100, 150);
     assert!(result.is_err());
+  }
+
+  #[test]
+  fn create_chunker_supports_the_l4_1_strategies() {
+    assert!(create_chunker(crate::types::ChunkingStrategy::Paragraph, 100, 0).is_ok());
+    assert!(create_chunker(crate::types::ChunkingStrategy::Heading, 100, 0).is_ok());
+    #[cfg(feature = "code-chunking")]
+    assert!(create_chunker(crate::types::ChunkingStrategy::CodeAst, 100, 0).is_ok());
+    #[cfg(not(feature = "code-chunking"))]
+    assert!(create_chunker(crate::types::ChunkingStrategy::CodeAst, 100, 0).is_err());
+  }
+
+  #[test]
+  fn chunk_document_for_knowledge_backend_ids_and_tags_source() {
+    let text = "Para one is short.\n\nPara two is also short.";
+    let triples = chunk_document_for_knowledge_backend(
+      crate::types::ChunkingStrategy::Paragraph,
+      1000,
+      0,
+      "docs/guide.md",
+      text,
+    )
+    .expect("chunk ok");
+    // Small paragraphs merge into a single chunk at this chunk_size, so the
+    // id must be the bare source_id (no #chunkN suffix).
+    assert_eq!(triples.len(), 1);
+    assert_eq!(triples[0].0, "docs/guide.md");
+    assert_eq!(
+      triples[0].2.get("source"),
+      Some(&crate::types::MetadataValue::String(
+        "docs/guide.md".to_string()
+      ))
+    );
+  }
+
+  #[test]
+  fn chunk_document_for_knowledge_backend_suffixes_ids_when_multiple_chunks() {
+    let text = "Para one.\n\nPara two.\n\nPara three.";
+    let triples = chunk_document_for_knowledge_backend(
+      crate::types::ChunkingStrategy::Paragraph,
+      10,
+      0,
+      "docs/guide.md",
+      text,
+    )
+    .expect("chunk ok");
+    assert!(triples.len() > 1);
+    for (id, _, _) in &triples {
+      assert!(id.starts_with("docs/guide.md#chunk"));
+    }
   }
 }

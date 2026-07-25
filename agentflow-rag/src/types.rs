@@ -256,6 +256,23 @@ pub enum ChunkingStrategy {
 
   /// Semantic chunking (embedding-based)
   Semantic,
+
+  /// Paragraph-based chunking (L4.1): never splits mid-paragraph, merges
+  /// small consecutive paragraphs up to `chunk_size`. Populates
+  /// `start_line`/`end_line` chunk metadata.
+  Paragraph,
+
+  /// Markdown-heading-based chunking (L4.1): one chunk per section
+  /// (a heading line through the line before the next heading), falling
+  /// back to fixed-size sub-splitting for an oversized section.
+  /// Populates `start_line`/`end_line` chunk metadata.
+  Heading,
+
+  /// Rust-source AST-based chunking (L4.1, requires the `code-chunking`
+  /// feature): one chunk per top-level item (fn/struct/enum/impl/trait/
+  /// mod/...). Populates `start_line`/`end_line` chunk metadata from real
+  /// source spans.
+  CodeAst,
 }
 
 /// Embedding configuration

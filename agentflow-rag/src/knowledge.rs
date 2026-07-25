@@ -12,6 +12,7 @@
 //!   fires when bundled-file navigation is insufficient (large / dynamic /
 //!   multi-tenant corpora).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentflow_store_spi::{KnowledgeBackend, KnowledgeChunk, KnowledgeError};
@@ -87,6 +88,33 @@ impl Bm25KnowledgeBackend {
     let mut retriever = BM25Retriever::new();
     for (id, content) in docs {
       retriever.add_document(id, content);
+    }
+    retriever.finalize();
+    Self {
+      retriever,
+      name: "bm25".to_string(),
+    }
+  }
+
+  /// Build a backend from pre-chunked `(id, content, metadata)` triples —
+  /// e.g. the output of
+  /// [`crate::chunking::chunk_document_for_knowledge_backend`] (L4.1).
+  /// Unlike [`Self::from_documents`], each entry keeps its own metadata
+  /// (typically `source` + `start_line`/`end_line`, and for
+  /// [`crate::chunking::HeadingChunker`] output — or `CodeAstChunker` under
+  /// the `code-chunking` feature — also `heading` / `item_kind` /
+  /// `item_name`), which flattens into the kernel
+  /// [`KnowledgeChunk::metadata`] / `source` so callers can cite a specific
+  /// line range instead of just a whole file.
+  pub fn from_chunked_documents<I, S1, S2>(chunks: I) -> Self
+  where
+    I: IntoIterator<Item = (S1, S2, HashMap<String, MetadataValue>)>,
+    S1: Into<String>,
+    S2: Into<String>,
+  {
+    let mut retriever = BM25Retriever::new();
+    for (id, content, metadata) in chunks {
+      retriever.add_document_with_metadata(id, content, metadata);
     }
     retriever.finalize();
     Self {
@@ -230,6 +258,40 @@ mod tests {
       .await
       .expect("no-match is Ok(empty), not an error");
     assert!(chunks.is_empty());
+  }
+
+  #[tokio::test]
+  async fn chunked_backend_surfaces_source_and_line_range_metadata() {
+    // L4.1 end-to-end: chunk a multi-paragraph file, index the chunks with
+    // metadata, and confirm a search hit carries the file + line range it
+    // came from — not just "the whole file matched somewhere."
+    let text = "Rust intro.\n\nRust is a systems programming language focused on memory safety.\n\nPython intro.\n\nPython is a dynamically typed scripting language.";
+    let triples = crate::chunking::chunk_document_for_knowledge_backend(
+      crate::types::ChunkingStrategy::Paragraph,
+      60,
+      0,
+      "docs/languages.md",
+      text,
+    )
+    .expect("chunk ok");
+    assert!(
+      triples.len() > 1,
+      "fixture must actually produce multiple chunks to prove line-range attribution"
+    );
+
+    let backend = Bm25KnowledgeBackend::from_chunked_documents(triples);
+    let chunks = backend
+      .search("rust memory safety", 3)
+      .await
+      .expect("search ok");
+    assert!(!chunks.is_empty());
+    let top = &chunks[0];
+    assert_eq!(top.source.as_deref(), Some("docs/languages.md"));
+    assert!(top.content.contains("Rust"));
+    assert!(
+      top.metadata.contains_key("start_line") && top.metadata.contains_key("end_line"),
+      "chunk metadata must carry the source line range for citation use"
+    );
   }
 
   #[test]

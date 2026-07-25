@@ -16,6 +16,10 @@ qdrant = ["dep:qdrant-client"]
 local-embeddings = ["dep:ort", "dep:ndarray", "dep:tokenizers"]
 pdf = ["dep:pdf-extract"]
 html = ["dep:scraper"]
+# L4.1: Rust-source AST-aware chunking (`ChunkingStrategy::CodeAst`). Gated
+# behind a feature since `syn` is a real dependency-weight addition that
+# most RAG consumers (prose/markdown corpora) never need.
+code-chunking = ["dep:syn", "dep:proc-macro2"]
 
 [dependencies]
 # Kernel contracts (P-A4.1): `KnowledgeBackend` SPI implemented here, `Tool`
@@ -47,6 +51,12 @@ regex = "1.10"
 pdf-extract = { version = "0.7", optional = true }
 scraper = { version = "0.19", optional = true }
 csv = "1.3"
+
+# Rust-source AST parsing for `CodeAstChunker` (`code-chunking` feature).
+# `span-locations` is required to read real line numbers off `syn::Item`
+# spans outside of an actual proc-macro invocation context.
+syn = { version = "2.0", features = ["full"], optional = true }
+proc-macro2 = { version = "1.0", features = ["span-locations"], optional = true }
 
 # Local embeddings (optional)
 ort = { version = "2.0.0-rc.10", features = ["download-binaries"], optional = true }

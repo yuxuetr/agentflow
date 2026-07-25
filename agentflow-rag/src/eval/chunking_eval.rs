@@ -15,9 +15,9 @@
 //! regressions that the un-chunked eval can't surface.
 
 use super::dataset::{CorpusDoc, Dataset, Query};
-use crate::chunking::FixedSizeChunker;
+use crate::chunking::create_chunker;
 use crate::error::Result;
-use crate::types::TextChunk;
+use crate::types::{ChunkingStrategy, TextChunk};
 use std::collections::HashMap;
 
 /// A corpus that has been re-chunked for evaluation. Carries the
@@ -38,10 +38,14 @@ pub struct ChunkedDataset {
   /// `corpus`. Lookups during retrieval evaluation use this to fold
   /// multiple chunks of the same doc into a single hit.
   pub chunk_to_doc: HashMap<String, String>,
-  /// Fixed-size chunker config used to produce this dataset. Pinned
-  /// for diagnostics + future fidelity.
+  /// Chunker config used to produce this dataset. Pinned for
+  /// diagnostics + future fidelity.
   pub chunk_size: usize,
   pub overlap: usize,
+  /// Chunking strategy used to produce this dataset (L4.1). Lets a
+  /// report distinguish "chunk-30-fixed_size" from
+  /// "chunk-30-paragraph" comparison groups.
+  pub strategy: ChunkingStrategy,
 }
 
 impl ChunkedDataset {
@@ -65,6 +69,23 @@ impl ChunkedDataset {
 /// how much each chunk overlaps with the next. Pass `overlap = 0`
 /// for non-overlapping chunks, the canonical fast baseline.
 ///
+/// Equivalent to [`chunk_dataset_with_strategy`] pinned to
+/// [`ChunkingStrategy::FixedSize`] — kept as a separate entry point so
+/// existing callers (and their exact `RAGError::InvalidInputError`
+/// messages) are unaffected by the L4.1 strategy generalization.
+pub fn chunk_dataset(
+  dataset: &Dataset,
+  chunk_size: usize,
+  overlap: usize,
+) -> Result<ChunkedDataset> {
+  chunk_dataset_with_strategy(dataset, ChunkingStrategy::FixedSize, chunk_size, overlap)
+}
+
+/// Chunk every corpus doc in `dataset` with the given chunking `strategy`
+/// (L4.1) — the generalization of [`chunk_dataset`] that lets `rag eval`
+/// build a comparison group across chunking strategies (fixed-size vs.
+/// paragraph vs. heading vs. code-AST) instead of only fixed-size.
+///
 /// The synthetic chunk ids follow the pattern `{orig_id}::chunk{idx}`
 /// (zero-based). Operators reading per-query rows in a report can
 /// recover the source doc by splitting on `::chunk` (or by reading
@@ -74,8 +95,9 @@ impl ChunkedDataset {
 /// preserved as a single empty-body chunk so qrels still resolve;
 /// this matches the un-chunked baseline's behaviour for
 /// pathological inputs.
-pub fn chunk_dataset(
+pub fn chunk_dataset_with_strategy(
   dataset: &Dataset,
+  strategy: ChunkingStrategy,
   chunk_size: usize,
   overlap: usize,
 ) -> Result<ChunkedDataset> {
@@ -89,7 +111,7 @@ pub fn chunk_dataset(
       "overlap ({overlap}) must be strictly less than chunk_size ({chunk_size})"
     )));
   }
-  let chunker = FixedSizeChunker::new(chunk_size, overlap);
+  let chunker = create_chunker(strategy, chunk_size, overlap)?;
   let mut corpus: Vec<CorpusDoc> = Vec::with_capacity(dataset.corpus.len());
   let mut chunk_to_doc: HashMap<String, String> = HashMap::with_capacity(dataset.corpus.len());
 
@@ -115,9 +137,7 @@ pub fn chunk_dataset(
         total_chunks: 1,
       }]
     } else {
-      // Errors from the chunker are not expected for the fixed-size
-      // backend (it doesn't fail), but propagate them just in case.
-      chunker_chunk(&chunker, &body)?
+      chunker.chunk(&body)?
     };
     for chunk in chunks {
       let chunk_id = format!("{}::chunk{}", doc.id, chunk.chunk_index);
@@ -140,6 +160,7 @@ pub fn chunk_dataset(
     chunk_to_doc,
     chunk_size,
     overlap,
+    strategy,
   })
 }
 
@@ -175,14 +196,6 @@ pub fn remap_chunks_to_doc_ids(
     }
   }
   out
-}
-
-/// Thin wrapper so the call sites stay readable. The chunker's own
-/// `chunk()` API returns `crate::error::Result<Vec<TextChunk>>`; we
-/// just propagate it.
-fn chunker_chunk(chunker: &FixedSizeChunker, text: &str) -> Result<Vec<TextChunk>> {
-  use crate::chunking::ChunkingStrategy;
-  chunker.chunk(text)
 }
 
 #[cfg(test)]
@@ -311,6 +324,34 @@ mod tests {
         .map(String::as_str),
       Some("d-empty")
     );
+  }
+
+  #[test]
+  fn chunk_dataset_with_strategy_supports_paragraph_strategy() {
+    // L4.1 comparison group: the same corpus doc chunked with the
+    // paragraph strategy instead of fixed-size, and the resulting
+    // dataset records which strategy produced it.
+    let ds = make_dataset(&[(
+      "d1",
+      "First paragraph.\n\nSecond paragraph, a bit longer than the first one.",
+    )]);
+    let chunked =
+      chunk_dataset_with_strategy(&ds, ChunkingStrategy::Paragraph, 30, 0).expect("chunk ok");
+    assert_eq!(chunked.strategy, ChunkingStrategy::Paragraph);
+    assert!(
+      chunked.corpus.len() >= 2,
+      "two distinct paragraphs must not merge at chunk_size=30"
+    );
+    for doc in &chunked.corpus {
+      assert!(doc.id.starts_with("d1::chunk"));
+    }
+  }
+
+  #[test]
+  fn chunk_dataset_defaults_to_fixed_size_strategy() {
+    let ds = make_dataset(&[("d1", "hello world")]);
+    let chunked = chunk_dataset(&ds, 10, 0).expect("chunk ok");
+    assert_eq!(chunked.strategy, ChunkingStrategy::FixedSize);
   }
 
   #[test]

@@ -24,7 +24,9 @@ pub mod metrics;
 pub mod retrievers;
 pub mod runner;
 
-pub use chunking_eval::{ChunkedDataset, chunk_dataset, remap_chunks_to_doc_ids};
+pub use chunking_eval::{
+  ChunkedDataset, chunk_dataset, chunk_dataset_with_strategy, remap_chunks_to_doc_ids,
+};
 pub use compare::{
   ComparisonReport, MetricDelta, Verdict, compare, paired_sign_lower_tail_p_value,
 };
