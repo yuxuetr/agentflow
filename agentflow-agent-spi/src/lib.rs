@@ -24,11 +24,13 @@
 //! runtime. `agentflow-harness` re-exports them under their original paths.
 
 pub mod capability;
+pub mod delegation;
 pub mod harness;
 pub mod runtime;
 pub mod turn;
 
 pub use capability::{Capability, CapabilityError, Lowered};
+pub use delegation::{DelegationSpec, SchemaValidation, validate_output};
 pub use harness::*;
 pub use runtime::*;
 pub use turn::*;
