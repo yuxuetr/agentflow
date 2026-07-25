@@ -12,10 +12,20 @@
 //! `HandoffSupervisorBuilder::add_agent` — so a supervisor applies the
 //! narrowing itself instead of the caller doing it up front — is a
 //! natural, smaller follow-up once this primitive exists.
+//!
+//! [`subagent_answer_from_outcome`] is the L5.1 → L5.2 bridge: it turns a
+//! [`DelegationOutcome`] into the [`agentflow_agent_spi::SubagentAnswer`]
+//! shape [`agentflow_agent_spi::aggregate_answers`] consumes, so a caller
+//! running the same [`DelegationSpec`] goal across several subagents can
+//! aggregate their answers (dedup / rank / conflict-flag) with no glue
+//! code of its own.
 
 use std::sync::Arc;
 
 use agentflow_agent_spi::RuntimeLimits;
+pub use agentflow_agent_spi::aggregation::{
+  AggregationReport, AnswerGroup, SubagentAnswer, aggregate_answers,
+};
 pub use agentflow_agent_spi::delegation::{DelegationSpec, SchemaValidation, validate_output};
 use agentflow_memory::MemoryStore;
 use agentflow_tools::ToolRegistry;
@@ -84,6 +94,20 @@ pub async fn run_delegated(
   Ok(DelegationOutcome {
     result,
     schema_validation,
+  })
+}
+
+/// Bridge a [`DelegationOutcome`] into the [`SubagentAnswer`] shape L5.2's
+/// [`aggregate_answers`] consumes. Returns `None` when the run produced no
+/// final answer (e.g. it hit `AgentStopReason::MaxIterations` or was
+/// cancelled) — nothing to aggregate.
+pub fn subagent_answer_from_outcome(
+  agent_name: impl Into<String>,
+  outcome: &DelegationOutcome,
+) -> Option<SubagentAnswer> {
+  outcome.result.answer.as_ref().map(|answer| {
+    SubagentAnswer::new(agent_name, answer.clone())
+      .with_schema_validation(outcome.schema_validation.clone())
   })
 }
 
@@ -314,5 +338,80 @@ providers:
       "the denied http call must show up as a failed ToolResult step in the trace: {:#?}",
       outcome.result.steps
     );
+  }
+
+  /// L5.1 → L5.2 end to end: three subagents run the same `DelegationSpec`
+  /// goal with a structured `expected_output_schema`; two agree, one
+  /// dissents. Bridging each `DelegationOutcome` through
+  /// `subagent_answer_from_outcome` into `aggregate_answers` must flag the
+  /// dissenter for review rather than silently picking the majority.
+  #[tokio::test]
+  async fn aggregating_delegation_outcomes_flags_the_dissenting_subagent() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let spec =
+      DelegationSpec::new("is this PR safe to merge?").with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "approved": { "type": "boolean" } },
+        "required": ["approved"]
+      }));
+
+    async fn run_one(
+      spec: &DelegationSpec,
+      name_suffix: &str,
+      answer_json: &str,
+    ) -> DelegationOutcome {
+      let model = format!("mock-delegation-agg-{name_suffix}-{}", uuid::Uuid::new_v4());
+      // SAFETY: LLM_TEST_LOCK (held by the caller) serializes these process-wide mutations.
+      unsafe {
+        std::env::set_var(
+          "AGENTFLOW_MOCK_RESPONSES",
+          serde_json::to_string(&vec![format!(
+            r#"{{"thought":"done","answer":"{}"}}"#,
+            answer_json.replace('"', "\\\"")
+          )])
+          .unwrap(),
+        );
+      }
+      let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+      init_mock_model(&model).await;
+      let mut agent = build_delegated_agent(
+        spec,
+        &ToolRegistry::new(),
+        ReActConfig::new(&model).with_max_iterations(2),
+        Box::new(SessionMemory::default_window()),
+      );
+      run_delegated(
+        spec,
+        &mut agent,
+        &format!("session-agg-{name_suffix}"),
+        &model,
+      )
+      .await
+      .unwrap()
+    }
+
+    let outcome_a = run_one(&spec, "a", r#"{"approved":true}"#).await;
+    let outcome_b = run_one(&spec, "b", r#"{"approved":true}"#).await;
+    let outcome_c = run_one(&spec, "c", r#"{"approved":false}"#).await;
+
+    let answers: Vec<SubagentAnswer> = [
+      ("reviewer-a", &outcome_a),
+      ("reviewer-b", &outcome_b),
+      ("reviewer-c", &outcome_c),
+    ]
+    .into_iter()
+    .filter_map(|(name, outcome)| subagent_answer_from_outcome(name, outcome))
+    .collect();
+    assert_eq!(answers.len(), 3, "every run produced a final answer");
+
+    let report = aggregate_answers(&answers);
+    assert!(report.has_conflict);
+    assert_eq!(report.groups.len(), 2);
+    assert_eq!(
+      report.groups[0].agent_names,
+      vec!["reviewer-a", "reviewer-b"]
+    );
+    assert_eq!(report.flagged_for_review(), vec!["reviewer-c"]);
+    assert!(report.render_summary().contains("Conflict"));
   }
 }
