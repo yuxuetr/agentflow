@@ -6,6 +6,7 @@
 //! ## ReAct Agent (Phase 1)
 //! Use [`react::ReActAgent`] for autonomous Thought/Action/Observation loops.
 
+pub mod citation;
 pub mod common;
 pub mod dynamic;
 pub mod eval;

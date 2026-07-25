@@ -12,6 +12,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
+use crate::citation::CitationChecker;
 use crate::react::parser::AgentResponse;
 use crate::reflection::{ReflectionContext, ReflectionStrategy};
 use crate::runtime::{
@@ -382,6 +383,12 @@ pub struct ReActAgent {
   tools: Arc<ToolRegistry>,
   reflection: Option<Arc<dyn ReflectionStrategy>>,
   verification: Option<Arc<dyn VerificationStrategy>>,
+  /// L4.4: optional citation-consistency check applied to an approved
+  /// candidate final answer, right before the run stops. `None` (the
+  /// default) disables it entirely — a run with no `rag_search` tool
+  /// calls is unaffected either way, since `verify_citations` is a no-op
+  /// when there's no `rag_search` result to check citations against.
+  citation_checker: Option<Arc<dyn CitationChecker>>,
   memory_hook: Option<Arc<dyn AgentMemoryHook>>,
   memory_summary_backend: Option<Arc<dyn MemorySummaryBackend>>,
   /// L2.1: persisted structured task-narrative checkpoint. `None` (the
@@ -431,6 +438,7 @@ impl ReActAgent {
       tools,
       reflection: None,
       verification: None,
+      citation_checker: None,
       memory_hook: None,
       memory_summary_backend: None,
       task_summary_store: None,
@@ -499,6 +507,20 @@ impl ReActAgent {
   /// instead of terminating with `AgentStopReason::FinalAnswer`.
   pub fn with_verification_strategy(mut self, strategy: Arc<dyn VerificationStrategy>) -> Self {
     self.verification = Some(strategy);
+    self
+  }
+
+  /// Attach a citation-consistency checker (L4.4). Runs once an answer
+  /// clears verification (or when verification is disabled/absent),
+  /// right before the run stops: if the answer's citations point at a
+  /// `rag_search` result, checks whether each one is actually supported.
+  /// Unlike a verification rejection, this never loops the run back
+  /// around — an unsupported citation set downgrades the answer to a
+  /// citation-free version (`crate::citation::downgrade_answer`) and
+  /// records the outcome as a `Verify` step / `VerificationCompleted`
+  /// event, same as a verification-strategy rejection would.
+  pub fn with_citation_checker(mut self, checker: Arc<dyn CitationChecker>) -> Self {
+    self.citation_checker = Some(checker);
     self
   }
 
@@ -1037,6 +1059,7 @@ impl ReActAgent {
         if self.gate_candidate_answer(&answer, st).await? {
           return Ok(TurnStep::Continue);
         }
+        let answer = self.apply_citation_check(answer, st).await;
         Ok(TurnStep::Stop(Self::stopped_result(
           &self.session_id,
           Some(answer),
@@ -1070,6 +1093,7 @@ impl ReActAgent {
         if self.gate_candidate_answer(&text, st).await? {
           return Ok(TurnStep::Continue);
         }
+        let text = self.apply_citation_check(text, st).await;
         Ok(TurnStep::Stop(Self::stopped_result(
           &self.session_id,
           Some(text),
@@ -1124,6 +1148,84 @@ impl ReActAgent {
     st.verification_attempts = attempt;
     st.iteration += 1;
     Ok(true)
+  }
+
+  /// L4.4: run the attached [`CitationChecker`] (if any) against an
+  /// approved candidate final answer. Returns the answer unchanged when
+  /// there's no checker configured, no `rag_search` result to check
+  /// against, or every referenced citation is supported. Otherwise
+  /// downgrades the answer (strips every referenced citation marker),
+  /// records the outcome as a `Verify` step + `VerificationCompleted`
+  /// event (reusing the existing verification step/event kinds rather
+  /// than introducing new ones — `AgentStepKind` is closed by design),
+  /// and returns the downgraded text.
+  ///
+  /// A checker error is logged and treated as non-fatal (the original
+  /// answer passes through unchanged) — same failure philosophy as
+  /// `record_verification`'s strategy-error handling: a broken checker
+  /// must not block the run.
+  async fn apply_citation_check(&mut self, answer: String, st: &mut LoopState) -> String {
+    let Some(checker) = self.citation_checker.clone() else {
+      return answer;
+    };
+    let report = match crate::citation::verify_citations(&st.steps, &answer, checker.as_ref()).await
+    {
+      Ok(report) => report,
+      Err(err) => {
+        warn!(
+          checker = checker.name(),
+          error = %err,
+          "citation checker failed; keeping candidate answer unchanged"
+        );
+        return answer;
+      }
+    };
+    let Some(report) = report else {
+      return answer;
+    };
+    if report.all_supported() {
+      return answer;
+    }
+
+    let markers = report.markers();
+    let unsupported: Vec<String> = report
+      .verdicts
+      .iter()
+      .filter_map(|(c, v)| match v {
+        crate::citation::CitationVerdict::Unsupported { reason } => {
+          Some(format!("{} ({reason})", c.marker))
+        }
+        crate::citation::CitationVerdict::Supported => None,
+      })
+      .collect();
+    let feedback = format!(
+      "citation check failed for {}; answer downgraded to a citation-free version",
+      unsupported.join(", ")
+    );
+    let downgraded = crate::citation::downgrade_answer(&answer, &markers);
+
+    let current_step = st.step_index;
+    push_step!(
+      self.live_sink,
+      st.steps,
+      st.events,
+      self.session_id,
+      current_step,
+      AgentStepKind::Verify {
+        approved: false,
+        feedback: Some(feedback),
+        attempt: 0,
+      }
+    );
+    st.events.push(AgentEvent::VerificationCompleted {
+      session_id: self.session_id.clone(),
+      step_index: current_step,
+      approved: false,
+      timestamp: Utc::now(),
+    });
+    st.step_index += 1;
+
+    downgraded
   }
 
   fn context_for_input(&self, user_input: &str) -> AgentContext {
@@ -3750,6 +3852,181 @@ providers:
         .filter(|event| matches!(event, AgentEvent::VerificationCompleted { .. }))
         .count(),
       2
+    );
+  }
+
+  /// L4.4 end-to-end: a `rag_search` result is cited by the final answer,
+  /// but the answer's claim (garbage collection) has nothing to do with
+  /// the cited passage (Rust ownership) — the citation checker must catch
+  /// this and downgrade the answer to a citation-free version, recorded
+  /// as a failed `Verify` step.
+  #[tokio::test]
+  async fn run_with_context_downgrades_answer_with_unsupported_citation() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-citation-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"search","action":{"tool":"rag_search","params":{"query":"rust ownership"}}}"#,
+          r#"{"thought":"done","answer":"Python uses garbage collection [1]."}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct FakeRagSearchTool;
+
+    #[async_trait]
+    impl Tool for FakeRagSearchTool {
+      fn name(&self) -> &str {
+        "rag_search"
+      }
+      fn description(&self) -> &str {
+        "search"
+      }
+      fn parameters_schema(&self) -> Value {
+        json!({
+          "type": "object",
+          "properties": { "query": { "type": "string" } },
+          "required": ["query"]
+        })
+      }
+      async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::success(
+          "[1] (source: docs/rust.md, score: 0.900)\nRust ownership moves values on assignment."
+            .to_string(),
+        ))
+      }
+    }
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(FakeRagSearchTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_citation_checker(Arc::new(
+      crate::citation::KeywordOverlapCitationChecker::default(),
+    ));
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "session-citation",
+        "explain memory management",
+        &model,
+      ))
+      .await
+      .unwrap();
+
+    let answer = result.answer.as_deref().expect("final answer present");
+    assert!(
+      !answer.contains('['),
+      "citation marker must be stripped after downgrade: {answer}"
+    );
+    assert!(answer.contains("garbage collection"));
+    assert!(
+      result.steps.iter().any(|step| matches!(
+        &step.kind,
+        AgentStepKind::Verify {
+          approved: false,
+          ..
+        }
+      )),
+      "downgrade must be recorded as a failed Verify step"
+    );
+    assert!(
+      result.events.iter().any(|event| matches!(
+        event,
+        AgentEvent::VerificationCompleted {
+          approved: false,
+          ..
+        }
+      )),
+      "downgrade must emit a VerificationCompleted(approved=false) event"
+    );
+  }
+
+  /// A supported citation must NOT be stripped or trigger a downgrade —
+  /// only unsupported citations change the answer.
+  #[tokio::test]
+  async fn run_with_context_keeps_answer_unchanged_when_citation_is_supported() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-citation-ok-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"search","action":{"tool":"rag_search","params":{"query":"rust ownership"}}}"#,
+          r#"{"thought":"done","answer":"Rust ownership moves values on assignment [1]."}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    struct FakeRagSearchTool;
+
+    #[async_trait]
+    impl Tool for FakeRagSearchTool {
+      fn name(&self) -> &str {
+        "rag_search"
+      }
+      fn description(&self) -> &str {
+        "search"
+      }
+      fn parameters_schema(&self) -> Value {
+        json!({
+          "type": "object",
+          "properties": { "query": { "type": "string" } },
+          "required": ["query"]
+        })
+      }
+      async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::success(
+          "[1] (source: docs/rust.md, score: 0.900)\nRust ownership moves values on assignment."
+            .to_string(),
+        ))
+      }
+    }
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(FakeRagSearchTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_citation_checker(Arc::new(
+      crate::citation::KeywordOverlapCitationChecker::default(),
+    ));
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "session-citation-ok",
+        "explain ownership",
+        &model,
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.answer.as_deref(),
+      Some("Rust ownership moves values on assignment [1].")
+    );
+    assert!(
+      !result.steps.iter().any(|step| matches!(
+        &step.kind,
+        AgentStepKind::Verify {
+          approved: false,
+          ..
+        }
+      )),
+      "a supported citation must not trigger a downgrade Verify step"
     );
   }
 
