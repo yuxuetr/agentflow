@@ -57,8 +57,10 @@ fn chunk_from_result(result: SearchResult) -> KnowledgeChunk {
 }
 
 /// Translate a RAG-layer error into the kernel knowledge error so the SPI
-/// surface stays free of RAG types.
-fn knowledge_error(err: RAGError) -> KnowledgeError {
+/// surface stays free of RAG types. `pub(crate)` so
+/// [`crate::postprocess::PostProcessedKnowledgeBackend`] can reuse the same
+/// mapping instead of duplicating it.
+pub(crate) fn knowledge_error(err: RAGError) -> KnowledgeError {
   match err {
     RAGError::EmbeddingError { message } => KnowledgeError::Embedding(message),
     other => KnowledgeError::Backend(other.to_string()),

@@ -55,6 +55,7 @@ pub mod error;
 pub mod eval;
 pub mod indexing;
 pub mod knowledge;
+pub mod postprocess;
 pub mod reranking;
 pub mod retrieval;
 pub mod sources;

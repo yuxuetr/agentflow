@@ -269,6 +269,87 @@ fn log_choose(n: usize, k: usize) -> f64 {
   log_c
 }
 
+/// Decision from [`requires_gain`] — the mirror image of a regression
+/// gate: BOTH a metric's absolute gain AND evidence the win rate isn't
+/// noise must clear their thresholds together for `gain_confirmed`.
+#[derive(Debug, Clone)]
+pub struct GainDecision {
+  pub gain_confirmed: bool,
+  pub reason: String,
+  pub metric: String,
+  pub metric_gain: Option<f64>,
+  pub p_value: Option<f64>,
+  pub threshold_metric_gain: f64,
+  pub threshold_p_value: f64,
+}
+
+/// L4.2's "no gain, no merge" gate: does `cmp`'s candidate show a real
+/// improvement over the baseline on `metric` (e.g. `"Recall@5"`,
+/// `"nDCG@10"`, `"MRR"`)?
+///
+/// Mirrors the shape of a regression gate (`agentflow-cli`'s
+/// `evaluate_regression` for chunking/retriever changes) but with inverted
+/// polarity and reusable here at the eval-harness level, since L4.2's bar
+/// applies to any post-processor chain, not just the CLI's chunking flow.
+///
+/// [`ComparisonReport::paired_sign_p_value`] answers "is the candidate
+/// worse than the baseline?" (a *small* value there is evidence of
+/// regression). Proving a *gain* needs the mirror question — "is the
+/// candidate's win rate higher than chance?" — which by the binomial's
+/// symmetry around n/2 is exactly
+/// `paired_sign_lower_tail_p_value(losses, wins)` (swap the arguments):
+/// `P(X ≤ losses) = P(X ≥ n - losses) = P(X ≥ wins)` under
+/// `Binomial(n, 0.5)`.
+pub fn requires_gain(
+  cmp: &ComparisonReport,
+  metric: &str,
+  threshold_metric_gain: f64,
+  threshold_p_value: f64,
+) -> GainDecision {
+  let metric_gain = cmp
+    .deltas
+    .iter()
+    .find(|d| d.metric == metric)
+    .map(|d| d.abs_delta);
+  let p_value = paired_sign_lower_tail_p_value(cmp.paired_losses, cmp.paired_wins);
+
+  let gain_tripped = metric_gain.is_some_and(|gain| gain >= threshold_metric_gain);
+  let p_tripped = p_value.is_some_and(|p| p < threshold_p_value);
+  let gain_confirmed = gain_tripped && p_tripped;
+
+  let reason = if gain_confirmed {
+    format!(
+      "gain confirmed: {metric} improved by {gain:.4} (≥{threshold_metric_gain:.4}) AND win-rate p-value {p:.4} < {threshold_p_value:.4}",
+      gain = metric_gain.unwrap_or(0.0),
+      p = p_value.unwrap_or(1.0),
+    )
+  } else if gain_tripped {
+    format!(
+      "{metric} improved ≥ threshold but win-rate p-value {p:?} not significant enough to rule out chance",
+      p = p_value
+    )
+  } else if p_tripped {
+    format!(
+      "win-rate is statistically significant but {metric} gain {gain:?} is below threshold",
+      gain = metric_gain
+    )
+  } else if metric_gain.is_none() {
+    format!("metric `{metric}` not present in the comparison — nothing to gate on")
+  } else {
+    format!("no confirmed gain: neither {metric} nor win-rate p-value crossed the threshold")
+  };
+
+  GainDecision {
+    gain_confirmed,
+    reason,
+    metric: metric.to_string(),
+    metric_gain,
+    p_value,
+    threshold_metric_gain,
+    threshold_p_value,
+  }
+}
+
 fn format_label(report: &EvalReport) -> String {
   if report.label.is_empty() {
     report.retriever.clone()
@@ -506,5 +587,88 @@ mod tests {
     let candidate = make_report("candidate", 0.5, vec![("qX", 0.5)]);
     let cmp = compare(&baseline, &candidate);
     assert!(cmp.paired_sign_p_value.is_none());
+  }
+
+  // ── requires_gain (L4.2 "no gain, no merge" gate) ───────────────────
+
+  fn comparison_with_gain(
+    metric_gain: f64,
+    wins: usize,
+    losses: usize,
+    ties: usize,
+  ) -> ComparisonReport {
+    ComparisonReport {
+      baseline_label: "baseline".to_string(),
+      candidate_label: "candidate".to_string(),
+      deltas: vec![MetricDelta {
+        metric: "Recall@5".to_string(),
+        baseline: 0.5,
+        candidate: 0.5 + metric_gain,
+        abs_delta: metric_gain,
+        rel_delta: Some(metric_gain / 0.5),
+      }],
+      paired_wins: wins,
+      paired_losses: losses,
+      paired_ties: ties,
+      verdict: Verdict::Inconclusive,
+      verdict_reason: "fixture".to_string(),
+      paired_sign_p_value: paired_sign_lower_tail_p_value(wins, losses),
+    }
+  }
+
+  #[test]
+  fn requires_gain_confirms_when_both_criteria_trip() {
+    // 9 wins / 1 loss: upper-tail p-value = lower_tail(losses=1, wins=9)
+    // = P(X<=1 | Binomial(10,0.5)) ≈ 0.01074 — solidly significant.
+    let cmp = comparison_with_gain(0.10, 9, 1, 0);
+    let d = requires_gain(&cmp, "Recall@5", 0.03, 0.05);
+    assert!(d.gain_confirmed, "reason: {}", d.reason);
+    assert!(d.reason.contains("gain confirmed"));
+  }
+
+  #[test]
+  fn requires_gain_rejects_when_metric_gain_below_threshold() {
+    let cmp = comparison_with_gain(0.01, 9, 1, 0);
+    let d = requires_gain(&cmp, "Recall@5", 0.03, 0.05);
+    assert!(!d.gain_confirmed);
+    assert!(d.reason.contains("below threshold"), "reason: {}", d.reason);
+  }
+
+  #[test]
+  fn requires_gain_rejects_when_win_rate_not_significant() {
+    // 6 wins / 4 losses: nowhere near enough imbalance to rule out chance.
+    let cmp = comparison_with_gain(0.10, 6, 4, 0);
+    let d = requires_gain(&cmp, "Recall@5", 0.03, 0.05);
+    assert!(!d.gain_confirmed);
+    assert!(d.reason.contains("not significant"), "reason: {}", d.reason);
+  }
+
+  #[test]
+  fn requires_gain_rejects_when_metric_absent() {
+    let cmp = comparison_with_gain(0.10, 9, 1, 0);
+    let d = requires_gain(&cmp, "nDCG@5", 0.03, 0.05);
+    assert!(!d.gain_confirmed);
+    assert_eq!(d.metric_gain, None);
+  }
+
+  #[test]
+  fn requires_gain_is_the_mirror_of_evaluate_regression_polarity() {
+    // A candidate that WINS on every paired query (the "good" direction)
+    // must produce a *small* upper-tail p-value here — the opposite of
+    // compare()'s own `paired_sign_p_value`, which is small when the
+    // candidate is *worse*. Guards the swapped-argument trick in
+    // `requires_gain`'s doc comment from silently regressing.
+    let cmp = comparison_with_gain(0.20, 10, 0, 0);
+    assert!(
+      cmp.paired_sign_p_value.unwrap() > 0.9,
+      "compare()'s own p-value should NOT read as significant here"
+    );
+    let d = requires_gain(&cmp, "Recall@5", 0.03, 0.05);
+    assert!(
+      d.p_value.unwrap() < 0.01,
+      "requires_gain's p-value must be small when the candidate wins everywhere: {:?}",
+      d.p_value
+    );
+    assert!(d.gain_confirmed);
   }
 }
