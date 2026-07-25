@@ -8,6 +8,7 @@
 
 pub mod citation;
 pub mod common;
+pub mod delegation;
 pub mod dynamic;
 pub mod eval;
 pub mod nodes;
