@@ -82,6 +82,49 @@ impl ToolRegistry {
     self.skill_capabilities.as_deref()
   }
 
+  /// Build a narrowed copy of this registry (L5.1 — subagent delegation
+  /// capability narrowing).
+  ///
+  /// `allowed_tools`, if `Some`, keeps only the named tools (by
+  /// [`Tool::name`]) and installs a [`ToolPolicy::allow_tools`] on the
+  /// result so the restriction is enforced at every `execute()` call, not
+  /// just at construction time. `allowed_capabilities`, if `Some`,
+  /// installs it as the result's skill-capability layer — the same
+  /// `SkillSecurity` layer [`crate::capability::EffectiveCapabilities::
+  /// resolve`] already intersects for a Skill's own
+  /// `security.tool_permission_allowlist` — so a narrowed subagent
+  /// registry enforces its capability grant through the exact mechanism
+  /// that already exists, rather than a new merge algorithm.
+  ///
+  /// `None` for either parameter inherits this registry's tools /
+  /// capabilities unrestricted — passing `(None, None)` produces a
+  /// functionally-unrestricted copy (still useful: an isolated audit
+  /// trail per subagent, since the copy's `policy_audit` /
+  /// `capability_audit` start empty rather than sharing this registry's).
+  pub fn narrowed(
+    &self,
+    allowed_tools: Option<&[String]>,
+    allowed_capabilities: Option<Vec<Capability>>,
+  ) -> ToolRegistry {
+    let mut narrowed = ToolRegistry::new();
+    for tool in self.list() {
+      let keep = match allowed_tools {
+        Some(names) => names.iter().any(|n| n == tool.name()),
+        None => true,
+      };
+      if keep {
+        narrowed.register(tool);
+      }
+    }
+    if let Some(names) = allowed_tools {
+      narrowed = narrowed.with_policy(ToolPolicy::allow_tools(names.iter().cloned()));
+    }
+    if let Some(capabilities) = allowed_capabilities {
+      narrowed = narrowed.with_skill_capabilities(capabilities);
+    }
+    narrowed
+  }
+
   pub fn cli_capabilities(&self) -> Option<&[Capability]> {
     self.cli_capabilities.as_deref()
   }
@@ -367,6 +410,123 @@ mod tests {
     assert_eq!(network_tools[0].name(), "http");
     assert!(registry.tool_has_permission("workflow", &ToolPermission::Workflow));
     assert!(!registry.tool_has_permission("workflow", &ToolPermission::Network));
+  }
+
+  // ── narrowed (L5.1 subagent capability narrowing) ───────────────────
+
+  #[test]
+  fn narrowed_by_tool_names_keeps_only_named_tools() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let narrowed = registry.narrowed(Some(&["http".to_string()]), None);
+    let tools = narrowed.list();
+    let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+    assert_eq!(names, vec!["http"]);
+  }
+
+  #[test]
+  fn narrowed_with_none_keeps_every_tool() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let narrowed = registry.narrowed(None, None);
+    assert_eq!(narrowed.list().len(), 2);
+  }
+
+  #[tokio::test]
+  async fn narrowed_registry_denies_calls_to_tools_outside_allowed_tools() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    registry.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let narrowed = registry.narrowed(Some(&["http".to_string()]), None);
+    // The tool isn't even present in `narrowed`, so this hits NotFound
+    // first — the defence-in-depth ToolPolicy layer is what protects a
+    // registry that (for whatever reason) still carries the tool.
+    let error = narrowed.execute("shell", json!({})).await.unwrap_err();
+    assert!(matches!(error, ToolError::NotFound { .. }));
+  }
+
+  #[tokio::test]
+  async fn narrowed_registry_policy_survives_even_if_a_disallowed_tool_is_present() {
+    // Defence-in-depth: even a registry that (via some other code path)
+    // still holds a tool outside `allowed_tools` must have its
+    // `ToolPolicy` reject calls to it, not just omit it from `list()`.
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    let mut narrowed = registry.narrowed(Some(&["http".to_string()]), None);
+    narrowed.register(Arc::new(StaticTool {
+      name: "shell",
+      metadata: ToolMetadata::builtin_named("shell"),
+    }));
+
+    let error = narrowed.execute("shell", json!({})).await.unwrap_err();
+    assert!(matches!(error, ToolError::PolicyDenied { .. }));
+  }
+
+  #[test]
+  fn narrowed_installs_the_capability_layer() {
+    let registry = ToolRegistry::new();
+    let narrowed = registry.narrowed(None, Some(vec![Capability::Net]));
+    assert_eq!(
+      narrowed.skill_capabilities(),
+      Some([Capability::Net].as_slice())
+    );
+  }
+
+  #[tokio::test]
+  async fn narrowed_capability_layer_denies_a_tool_requiring_an_ungranted_capability() {
+    use crate::builtin::ShellTool;
+    use crate::sandbox::SandboxPolicy;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(ShellTool::new(Arc::new(
+      SandboxPolicy::permissive(),
+    ))));
+
+    // Grant only Net — ShellTool requires Exec, so it must be denied
+    // through the SAME EffectiveCapabilities::resolve merge a Skill's
+    // own tool_permission_allowlist already goes through.
+    let narrowed = registry.narrowed(None, Some(vec![Capability::Net]));
+    let effective = narrowed.evaluate_capabilities("shell").unwrap();
+    assert!(!effective.allowed);
+    assert!(effective.denied.contains(&Capability::Exec));
+  }
+
+  #[test]
+  fn narrowed_registry_has_its_own_independent_audit_trail() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(StaticTool {
+      name: "http",
+      metadata: ToolMetadata::builtin_named("http"),
+    }));
+    let narrowed = registry.narrowed(None, None);
+    assert!(narrowed.policy_audit_log().is_empty());
+    assert!(narrowed.capability_audit_log().is_empty());
   }
 
   #[test]
