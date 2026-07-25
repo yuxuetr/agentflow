@@ -424,6 +424,22 @@ pub struct KnowledgeConfig {
   /// Retrieval tier for this entry. Defaults to [`KnowledgeBackendKind::Files`].
   #[serde(default)]
   pub backend: KnowledgeBackendKind,
+  /// Chunking strategy for `backend = "rag"` entries (L4.1): one of
+  /// `"fixed_size"`, `"sentence"`, `"recursive"`, `"paragraph"`, `"heading"`,
+  /// or `"code_ast"` (Rust source only, requires `agentflow-rag`'s
+  /// `code-chunking` feature). `None` (the default) preserves the pre-L4.1
+  /// behaviour of indexing each file as one whole-file document — set this
+  /// to opt a knowledge entry into finer-grained, citable chunks.
+  #[serde(default)]
+  pub chunk_strategy: Option<String>,
+  /// Target chunk size in characters. Only consulted when `chunk_strategy`
+  /// is set. Defaults to 1000.
+  #[serde(default)]
+  pub chunk_size: Option<usize>,
+  /// Overlap between consecutive chunks in characters. Only consulted when
+  /// `chunk_strategy` is set. Defaults to 100.
+  #[serde(default)]
+  pub chunk_overlap: Option<usize>,
 }
 
 /// Configures the memory backend for the agent.

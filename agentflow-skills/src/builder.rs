@@ -535,15 +535,23 @@ fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String 
 ///
 /// All rag-tier files share one backend / one `rag_search` tool so the LLM sees
 /// a single "search the knowledge base" affordance regardless of how many files
-/// back it. Each file is indexed as one document (id = path relative to the
-/// skill dir); finer chunking is a future refinement that can swap in the rag
-/// crate's chunker without changing this wiring.
+/// back it. By default each file is still indexed as one whole-file document
+/// (id = path relative to the skill dir) — unchanged from pre-L4.1 behaviour.
+/// A knowledge entry that sets `chunk_strategy` (L4.1) is instead split via
+/// [`agentflow_rag::chunking::chunk_document_for_knowledge_backend`] into
+/// smaller, independently-citable chunks (each carrying `start_line`/
+/// `end_line` metadata), so a whole-file and a chunked entry can coexist in
+/// the same skill without the LLM ever seeing the difference.
 fn register_knowledge_backends(
   registry: &mut ToolRegistry,
   manifest: &SkillManifest,
   skill_dir: &Path,
 ) -> Result<(), SkillError> {
-  let mut documents: Vec<(String, String)> = Vec::new();
+  let mut documents: Vec<(
+    String,
+    String,
+    HashMap<String, agentflow_rag::types::MetadataValue>,
+  )> = Vec::new();
   for kc in &manifest.knowledge {
     if kc.backend != KnowledgeBackendKind::Rag {
       continue;
@@ -561,7 +569,22 @@ fn register_knowledge_backends(
         .unwrap_or(&path)
         .to_string_lossy()
         .into_owned();
-      documents.push((id, content));
+
+      match &kc.chunk_strategy {
+        Some(strategy_name) => {
+          let strategy = parse_chunk_strategy(strategy_name)?;
+          let chunk_size = kc.chunk_size.unwrap_or(1000);
+          let overlap = kc.chunk_overlap.unwrap_or(100);
+          let chunked = agentflow_rag::chunking::chunk_document_for_knowledge_backend(
+            strategy, chunk_size, overlap, &id, &content,
+          )
+          .map_err(|e| SkillError::ValidationError {
+            message: format!("Failed to chunk knowledge file {}: {e}", path.display()),
+          })?;
+          documents.extend(chunked);
+        }
+        None => documents.push((id, content, HashMap::new())),
+      }
     }
   }
 
@@ -573,9 +596,31 @@ fn register_knowledge_backends(
     rag_document_count = documents.len(),
     "Indexing rag-tier knowledge into a rag_search tool"
   );
-  let backend = Bm25KnowledgeBackend::from_documents(documents);
+  let backend = Bm25KnowledgeBackend::from_chunked_documents(documents);
   registry.register(Arc::new(RagSearchTool::new(Arc::new(backend))));
   Ok(())
+}
+
+/// Parse a `[[knowledge]].chunk_strategy` string into the `agentflow-rag`
+/// enum (L4.1). Kept as a small string→enum mapping here (rather than making
+/// `KnowledgeConfig.chunk_strategy` itself an `agentflow_rag::ChunkingStrategy`)
+/// so `agentflow-skills`' manifest types don't need to special-case a
+/// `code-chunking`-feature-gated variant at the serde layer.
+fn parse_chunk_strategy(name: &str) -> Result<agentflow_rag::types::ChunkingStrategy, SkillError> {
+  use agentflow_rag::types::ChunkingStrategy;
+  match name {
+    "fixed_size" => Ok(ChunkingStrategy::FixedSize),
+    "sentence" => Ok(ChunkingStrategy::Sentence),
+    "recursive" => Ok(ChunkingStrategy::Recursive),
+    "paragraph" => Ok(ChunkingStrategy::Paragraph),
+    "heading" => Ok(ChunkingStrategy::Heading),
+    "code_ast" => Ok(ChunkingStrategy::CodeAst),
+    other => Err(SkillError::ValidationError {
+      message: format!(
+        "Unknown knowledge chunk_strategy '{other}'; expected one of fixed_size, sentence, recursive, paragraph, heading, code_ast"
+      ),
+    }),
+  }
 }
 
 /// Merge all tool constraints into a unified `SandboxPolicy`.
@@ -1193,6 +1238,94 @@ backend = "rag"
       .await
       .unwrap();
     assert!(registry.get("rag_search").is_some());
+  }
+
+  /// L4.1: a rag-tier entry with `chunk_strategy` set narrows a search hit
+  /// down to the matching paragraph instead of returning the whole file —
+  /// the literal scenario the TODO calls out ("避免整文件索引丢失精度").
+  #[tokio::test]
+  async fn chunk_strategy_narrows_search_hits_to_the_matching_paragraph() {
+    let dir = TempDir::new().unwrap();
+    let unrelated_filler = "Filler paragraph about widgets. ".repeat(20);
+    let content = format!(
+      "Deployment overview.\n\n{unrelated_filler}\n\nRotate the signing key every ninety days per the security policy.\n\n{unrelated_filler}"
+    );
+    write_file(&dir.path().join("knowledge").join("manual.md"), &content);
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "chunked-rag-skill"
+version = "0.1"
+description = "rag-tier knowledge with paragraph chunking"
+
+[persona]
+role = "You are an ops assistant."
+
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+chunk_strategy = "paragraph"
+chunk_size = 200
+chunk_overlap = 0
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    let tool = registry.get("rag_search").expect("rag_search registered");
+
+    let out = tool
+      .execute(serde_json::json!({ "query": "rotate signing key ninety days" }))
+      .await
+      .expect("execute ok");
+    assert!(!out.is_error);
+    assert!(
+      out.content.contains("signing key"),
+      "top hit must contain the matching passage: {}",
+      out.content
+    );
+    assert!(
+      !out.content.contains("Filler paragraph"),
+      "chunking must keep the unrelated filler paragraphs out of the matching chunk: {}",
+      out.content
+    );
+    assert!(
+      out.content.len() < content.len(),
+      "a chunked hit must be smaller than the whole source file"
+    );
+  }
+
+  /// An unrecognized `chunk_strategy` must surface a clear build error
+  /// rather than silently falling back to whole-file indexing.
+  #[tokio::test]
+  async fn unknown_chunk_strategy_is_a_build_error() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("knowledge").join("manual.md"), "content");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "bad-chunk-strategy-skill"
+version = "0.1"
+description = "rag-tier knowledge with a typo'd chunk strategy"
+
+[persona]
+role = "You are an ops assistant."
+
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+chunk_strategy = "fixed_sized"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+    match SkillBuilder::build_registry(&manifest, dir.path()).await {
+      Err(SkillError::ValidationError { .. }) => {}
+      Err(other) => panic!("expected ValidationError, got a different SkillError: {other}"),
+      Ok(_) => panic!("unknown chunk_strategy must be rejected, not silently built"),
+    }
   }
 
   // ── P10.4.1: per-tool os_sandbox override ──────────────────────────────────
