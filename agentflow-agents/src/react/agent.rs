@@ -3875,6 +3875,7 @@ providers:
         .unwrap(),
       );
     }
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
     init_mock_model(&model).await;
 
     struct FakeRagSearchTool;
@@ -3967,6 +3968,7 @@ providers:
         .unwrap(),
       );
     }
+    let _responses = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
     init_mock_model(&model).await;
 
     struct FakeRagSearchTool;
