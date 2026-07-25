@@ -542,6 +542,11 @@ fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String 
 /// smaller, independently-citable chunks (each carrying `start_line`/
 /// `end_line` metadata), so a whole-file and a chunked entry can coexist in
 /// the same skill without the LLM ever seeing the difference.
+///
+/// A rag-tier entry that sets `query_rewrite` (L4.3) additionally wraps the
+/// backend in an `agentflow_rag::rewrite::MultiQueryKnowledgeBackend` — see
+/// [`KnowledgeConfig::query_rewrite`] for the "first entry wins" semantics
+/// when a skill has more than one rag-tier entry.
 fn register_knowledge_backends(
   registry: &mut ToolRegistry,
   manifest: &SkillManifest,
@@ -552,9 +557,13 @@ fn register_knowledge_backends(
     String,
     HashMap<String, agentflow_rag::types::MetadataValue>,
   )> = Vec::new();
+  let mut query_rewrite: Option<&str> = None;
   for kc in &manifest.knowledge {
     if kc.backend != KnowledgeBackendKind::Rag {
       continue;
+    }
+    if query_rewrite.is_none() {
+      query_rewrite = kc.query_rewrite.as_deref();
     }
     for path in resolve_knowledge_path(&kc.path, skill_dir) {
       let content = std::fs::read_to_string(&path).map_err(|e| {
@@ -596,9 +605,32 @@ fn register_knowledge_backends(
     rag_document_count = documents.len(),
     "Indexing rag-tier knowledge into a rag_search tool"
   );
-  let backend = Bm25KnowledgeBackend::from_chunked_documents(documents);
-  registry.register(Arc::new(RagSearchTool::new(Arc::new(backend))));
+  let backend: Arc<dyn agentflow_rag::KnowledgeBackend> =
+    Arc::new(Bm25KnowledgeBackend::from_chunked_documents(documents));
+  let backend = match query_rewrite {
+    Some(strategy_name) => {
+      let rewriter = parse_query_rewriter(strategy_name)?;
+      Arc::new(agentflow_rag::rewrite::MultiQueryKnowledgeBackend::new(
+        backend, rewriter,
+      )) as Arc<dyn agentflow_rag::KnowledgeBackend>
+    }
+    None => backend,
+  };
+  registry.register(Arc::new(RagSearchTool::new(backend)));
   Ok(())
+}
+
+/// Parse a `[[knowledge]].query_rewrite` string into a
+/// `agentflow_rag::rewrite::QueryRewriter` (L4.3).
+fn parse_query_rewriter(
+  name: &str,
+) -> Result<Arc<dyn agentflow_rag::rewrite::QueryRewriter>, SkillError> {
+  match name {
+    "split" => Ok(Arc::new(agentflow_rag::rewrite::SplitQueryRewriter)),
+    other => Err(SkillError::ValidationError {
+      message: format!("Unknown knowledge query_rewrite '{other}'; expected 'split'"),
+    }),
+  }
 }
 
 /// Parse a `[[knowledge]].chunk_strategy` string into the `agentflow-rag`
@@ -1325,6 +1357,97 @@ chunk_strategy = "fixed_sized"
       Err(SkillError::ValidationError { .. }) => {}
       Err(other) => panic!("expected ValidationError, got a different SkillError: {other}"),
       Ok(_) => panic!("unknown chunk_strategy must be rejected, not silently built"),
+    }
+  }
+
+  /// L4.3: a rag-tier entry with `query_rewrite = "split"` recovers a doc
+  /// whose relevant content is split across the two halves of a compound
+  /// query — the literal scenario the TODO calls out ("拆分子查询 /
+  /// 多路召回合并"). Without decomposition, the raw compound query
+  /// matches neither half well enough to surface both docs.
+  #[tokio::test]
+  async fn query_rewrite_split_recovers_docs_split_across_a_compound_query() {
+    let dir = TempDir::new().unwrap();
+    write_file(
+      &dir.path().join("knowledge").join("ownership.md"),
+      "Rust ownership rules move values on assignment.",
+    );
+    write_file(
+      &dir.path().join("knowledge").join("borrowing.md"),
+      "Rust borrowing lets you reference data without taking ownership.",
+    );
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "query-rewrite-skill"
+version = "0.1"
+description = "rag-tier knowledge with query rewrite"
+
+[persona]
+role = "You are a Rust tutor."
+
+[[knowledge]]
+path = "./knowledge/ownership.md"
+backend = "rag"
+query_rewrite = "split"
+
+[[knowledge]]
+path = "./knowledge/borrowing.md"
+backend = "rag"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    let tool = registry.get("rag_search").expect("rag_search registered");
+
+    let out = tool
+      .execute(serde_json::json!({ "query": "ownership rules and borrowing data", "top_k": 2 }))
+      .await
+      .expect("execute ok");
+    assert!(!out.is_error);
+    assert!(
+      out.content.contains("move values"),
+      "expected the ownership doc in results: {}",
+      out.content
+    );
+    assert!(
+      out.content.contains("reference data"),
+      "expected the borrowing doc in results (recovered via decomposition): {}",
+      out.content
+    );
+  }
+
+  /// An unrecognized `query_rewrite` must surface a clear build error
+  /// rather than silently skipping rewriting.
+  #[tokio::test]
+  async fn unknown_query_rewrite_is_a_build_error() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("knowledge").join("manual.md"), "content");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "bad-query-rewrite-skill"
+version = "0.1"
+description = "rag-tier knowledge with a typo'd query_rewrite"
+
+[persona]
+role = "You are an ops assistant."
+
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+query_rewrite = "splt"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+    match SkillBuilder::build_registry(&manifest, dir.path()).await {
+      Err(SkillError::ValidationError { .. }) => {}
+      Err(other) => panic!("expected ValidationError, got a different SkillError: {other}"),
+      Ok(_) => panic!("unknown query_rewrite must be rejected, not silently built"),
     }
   }
 

@@ -440,6 +440,19 @@ pub struct KnowledgeConfig {
   /// `chunk_strategy` is set. Defaults to 100.
   #[serde(default)]
   pub chunk_overlap: Option<usize>,
+  /// Query rewrite / decomposition strategy for the shared `rag_search`
+  /// tool (L4.3): currently only `"split"` (deterministic decomposition on
+  /// conjunctions/punctuation — see `agentflow_rag::rewrite::SplitQueryRewriter`)
+  /// is supported. `None` (the default) preserves pre-L4.3 behaviour: the
+  /// tool searches with the caller's query verbatim.
+  ///
+  /// All rag-tier `[[knowledge]]` entries share one backend / one
+  /// `rag_search` tool (see [`crate::builder::register_knowledge_backends`]
+  /// doc comment), so this is effectively a skill-wide setting: the first
+  /// entry (in manifest order) that sets it wins. Skills with a single
+  /// rag-tier entry — the common case — have no ambiguity here.
+  #[serde(default)]
+  pub query_rewrite: Option<String>,
 }
 
 /// Configures the memory backend for the agent.
