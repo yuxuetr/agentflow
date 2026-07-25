@@ -14,8 +14,9 @@
 use agentflow_rag::embeddings::{EmbeddingProvider, OpenAIEmbedding};
 use agentflow_rag::eval::{
   Bm25Eval, ChunkedDataset, ComparisonReport, Dataset, DenseEval, EvalConfig, EvalReport,
-  HybridEval, chunk_dataset, compare, evaluate_with_remapping,
+  HybridEval, chunk_dataset_with_strategy, compare, evaluate_with_remapping,
 };
+use agentflow_rag::types::ChunkingStrategy;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde_json::{Value, json};
@@ -51,6 +52,7 @@ pub async fn execute(
   output: Option<PathBuf>,
   format: String,
   chunk_size: Option<usize>,
+  chunk_strategy: String,
 ) -> Result<()> {
   let is_envelope = format == "json-envelope";
 
@@ -61,15 +63,23 @@ pub async fn execute(
   let dataset = Dataset::load_from_dir(&dataset_dir)
     .with_context(|| format!("loading dataset from {}", dataset_dir.display()))?;
 
-  // P10.6.3: when `--chunk-size N` is set, re-chunk the corpus once
-  // up front. Both the baseline and (optional) `--compare-to`
-  // candidate share the same chunked corpus so the comparison stays
-  // apples-to-apples.
+  // P10.6.3 / L4.1: when `--chunk-size N` is set, re-chunk the corpus
+  // once up front with the requested `--chunk-strategy` (default
+  // fixed_size, preserving pre-L4.1 behaviour). Both the baseline and
+  // (optional) `--compare-to` candidate share the same chunked corpus
+  // so the comparison stays apples-to-apples. Running the same dataset
+  // once per strategy (fixed_size / paragraph / heading / ...) builds
+  // the chunking-strategy comparison group the TODO calls for — diff
+  // the resulting reports across runs.
   let chunked = match chunk_size {
-    Some(n) => Some(
-      chunk_dataset(&dataset, n, 0)
-        .with_context(|| format!("chunking corpus at chunk_size={n}"))?,
-    ),
+    Some(n) => {
+      let strategy = parse_chunk_strategy(&chunk_strategy)?;
+      Some(
+        chunk_dataset_with_strategy(&dataset, strategy, n, 0).with_context(|| {
+          format!("chunking corpus at chunk_size={n} strategy={chunk_strategy}")
+        })?,
+      )
+    }
     None => None,
   };
   if let Some(ref c) = chunked
@@ -244,6 +254,25 @@ pub async fn execute(
     std::process::exit(1);
   }
   Ok(())
+}
+
+/// Parse `--chunk-strategy` into the `agentflow-rag` enum. `clap`'s
+/// `value_parser` already restricts the raw string to the known set, so
+/// this only needs to cover those values (an `other` arm would be
+/// unreachable in practice, but is kept as a defensive error rather than
+/// a panic).
+fn parse_chunk_strategy(name: &str) -> Result<ChunkingStrategy> {
+  match name {
+    "fixed_size" => Ok(ChunkingStrategy::FixedSize),
+    "sentence" => Ok(ChunkingStrategy::Sentence),
+    "recursive" => Ok(ChunkingStrategy::Recursive),
+    "paragraph" => Ok(ChunkingStrategy::Paragraph),
+    "heading" => Ok(ChunkingStrategy::Heading),
+    "code_ast" => Ok(ChunkingStrategy::CodeAst),
+    other => bail!(
+      "unknown --chunk-strategy `{other}` (expected one of fixed_size, sentence, recursive, paragraph, heading, code_ast)"
+    ),
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -600,6 +629,24 @@ mod tests {
   #[test]
   fn parse_bm25_params_rejects_non_numeric() {
     assert!(parse_bm25_params("k1=oops,b=0.5").is_err());
+  }
+
+  #[test]
+  fn parse_chunk_strategy_covers_every_clap_value() {
+    for name in [
+      "fixed_size",
+      "sentence",
+      "recursive",
+      "paragraph",
+      "heading",
+      "code_ast",
+    ] {
+      assert!(
+        parse_chunk_strategy(name).is_ok(),
+        "clap value `{name}` must be parseable"
+      );
+    }
+    assert!(parse_chunk_strategy("bogus").is_err());
   }
 
   /// P10.6.1: `--retriever dense` without `OPENAI_API_KEY` must

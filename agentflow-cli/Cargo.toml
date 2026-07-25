@@ -29,7 +29,10 @@ default = ["plugin", "rag"]
 # Features forward to `agentflow-config` (which owns the executor + the
 # capability-node deps), while still gating the CLI's own feature commands.
 mcp = ["agentflow-config/mcp"]
-rag = ["agentflow-rag", "agentflow-config/rag"]
+# `code-chunking` (L4.1): enabled so `agentflow rag eval --chunk-strategy
+# code_ast` is actually usable — Cargo features are compile-time, so
+# leaving it off would make that CLI flag value silently unusable.
+rag = ["agentflow-rag", "agentflow-rag/code-chunking", "agentflow-config/rag"]
 # Enables the subprocess plugin runtime for `type: plugin` workflow nodes.
 # See docs/PLUGIN_DESIGN.md.
 plugin = ["agentflow-core/plugin", "agentflow-config/plugin"]

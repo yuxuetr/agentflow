@@ -1508,6 +1508,15 @@ enum RagCommands {
     /// identical to pre-P10.6.3 (single un-chunked index).
     #[arg(long)]
     chunk_size: Option<usize>,
+    /// Chunking strategy used when --chunk-size is set (L4.1). One of
+    /// fixed_size (default), sentence, recursive, paragraph, heading, or
+    /// code_ast (Rust source only; requires the CLI to be built with
+    /// agentflow-rag's `code-chunking` feature). Lets an operator build a
+    /// chunking-strategy comparison group instead of only fixed-size,
+    /// e.g. run once per strategy and diff the reports.
+    #[arg(long, default_value = "fixed_size",
+          value_parser = ["fixed_size", "sentence", "recursive", "paragraph", "heading", "code_ast"])]
+    chunk_strategy: String,
   },
 }
 
@@ -2477,6 +2486,7 @@ async fn main() {
         output,
         format,
         chunk_size,
+        chunk_strategy,
       } => {
         rag::eval::execute(
           dataset,
@@ -2490,6 +2500,7 @@ async fn main() {
           output,
           format,
           chunk_size,
+          chunk_strategy,
         )
         .await
       }
