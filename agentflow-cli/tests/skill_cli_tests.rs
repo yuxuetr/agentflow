@@ -630,9 +630,10 @@ fn skill_inspect_explain_permissions_prints_sandbox_profile_section() {
     env!("CARGO_MANIFEST_DIR")
   );
 
-  // rust_expert declares shell + script tools but leaves
-  // security.os_sandbox = false, so the report should flag the opt-out
-  // when the platform backend actually enforces.
+  // rust_expert declares shell + script tools and leaves `[security]`
+  // unset (S3.4: manifests that don't opt out inherit security.os_sandbox
+  // = true), so the report should show it already opted in and only flag
+  // a problem if the platform backend can't actually enforce.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   let assert = cmd
     .args([
@@ -647,32 +648,35 @@ fn skill_inspect_explain_permissions_prints_sandbox_profile_section() {
     .stdout(predicate::str::contains("backend:"))
     .stdout(predicate::str::contains("enforcement:"))
     .stdout(predicate::str::contains(
-      "manifest opt-in:   security.os_sandbox = false",
+      "manifest opt-in:   security.os_sandbox = true",
     ));
-  // Note text only fires when the active backend reports `enforcing`. macOS
-  // CI runners typically do; Linux runners will too via seccomp. On hosts
-  // that fall back to `noop` (Windows / unsupported arch) the note is
-  // expected to be absent — assert the section header is still present and
-  // omit the note assertion in that case.
+  // Note text only fires when the active backend does NOT enforce (S3.4
+  // default is already opted in, so the "consider enabling" note this test
+  // used to check for can no longer fire). macOS CI runners typically
+  // enforce via sandbox-exec; Linux runners via seccomp. On hosts that fall
+  // back to `noop` (Windows / unsupported arch), or where seccomp applies
+  // but Landlock/cgroups aren't available, the mismatch note fires instead.
   let output = assert.get_output().stdout.clone();
   let stdout = String::from_utf8(output).unwrap();
   if stdout.contains("enforcement:       enforcing") {
     assert!(
-      stdout.contains("skill declares shell/script tools but has not opted in"),
-      "expected opt-out note on enforcing platform; got:\n{stdout}"
+      stdout.contains("notes:             (none)"),
+      "expected no notes when already opted in on an enforcing platform; got:\n{stdout}"
     );
   } else {
     assert!(
-      stdout.contains("notes:"),
-      "sandbox profile section should always render a notes field; got:\n{stdout}"
+      stdout.contains("skill opted in to OS sandbox but the active backend reports"),
+      "expected the opted-in-but-not-enforcing note on a non-enforcing platform; got:\n{stdout}"
     );
   }
 }
 
 #[test]
-fn skill_inspect_explain_permissions_sandbox_profile_clean_for_mcp_only_skill() {
-  // mcp-basic declares no shell/script tool, so the notes block should be
-  // "(none)" regardless of whether the platform backend is enforcing.
+fn skill_inspect_explain_permissions_sandbox_profile_notes_mcp_only_skill_flag_has_no_effect() {
+  // mcp-basic declares no shell/script tool and leaves `[security]` unset,
+  // so it inherits the S3.4 default security.os_sandbox = true — a note
+  // fires because the flag has no effect without a sandboxable tool,
+  // regardless of whether the platform backend is enforcing.
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
     .args([
@@ -685,9 +689,11 @@ fn skill_inspect_explain_permissions_sandbox_profile_clean_for_mcp_only_skill() 
     .success()
     .stdout(predicate::str::contains("Sandbox profile:"))
     .stdout(predicate::str::contains(
-      "manifest opt-in:   security.os_sandbox = false",
+      "manifest opt-in:   security.os_sandbox = true",
     ))
-    .stdout(predicate::str::contains("notes:             (none)"));
+    .stdout(predicate::str::contains(
+      "security.os_sandbox is enabled but no shell/script tool is declared",
+    ));
 }
 
 #[test]

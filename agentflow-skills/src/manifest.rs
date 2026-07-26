@@ -286,10 +286,15 @@ pub struct SecurityConfig {
   #[serde(default)]
   pub tool_permission_allowlist: Vec<ToolPermission>,
   /// Wrap `shell` and `script` invocations in the platform OS-level sandbox
-  /// (macOS `sandbox-exec` profile, Linux seccomp BPF). Defaults to `false`
-  /// to preserve current behaviour for skills authored before this flag
-  /// existed; new skills should opt in.
-  #[serde(default)]
+  /// (macOS `sandbox-exec` profile, Linux seccomp BPF + Landlock + cgroup
+  /// v2 resource limits). Defaults to `true` (S3.4) now that the Linux
+  /// backend has path-scoped containment (S3.1) and resource limits (S3.2)
+  /// on par with macOS (S3.3); a skill can still opt out per-manifest or
+  /// per-tool (`ToolConfig::os_sandbox`, P10.4.1) if it genuinely needs
+  /// unsandboxed shell/script access. Skills authored before this flag
+  /// existed and that never set it pick up enforcement automatically —
+  /// see `docs/HARNESS_MODE.md` / skill authoring docs for the opt-out.
+  #[serde(default = "default_os_sandbox")]
   pub os_sandbox: bool,
 }
 
@@ -303,9 +308,13 @@ impl Default for SecurityConfig {
       mcp_max_concurrent_calls: DEFAULT_MCP_MAX_CONCURRENT_CALLS,
       mcp_max_servers: DEFAULT_MCP_MAX_SERVERS,
       tool_permission_allowlist: Vec::new(),
-      os_sandbox: false,
+      os_sandbox: default_os_sandbox(),
     }
   }
+}
+
+fn default_os_sandbox() -> bool {
+  true
 }
 
 impl SecurityConfig {

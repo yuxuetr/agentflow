@@ -309,8 +309,7 @@ impl Tool for ScriptTool {
     // explicitly granted read access — see docs/RFC_CODE_EXECUTION_TRUST.md
     // S3.3. Best-effort: `None` on failure just means no extra grant, same
     // as before this existed.
-    let resolved_interpreter_real_path =
-      resolve_interpreter_real_path(&spawn_interpreter.to_string_lossy());
+    let resolved_interpreter = resolve_interpreter_real_path(&spawn_interpreter.to_string_lossy());
 
     // ── Serialise args as JSON for stdin ─────────────────────────────────
     let stdin_json = match params.get("args") {
@@ -330,7 +329,7 @@ impl Tool for ScriptTool {
       &canonical_scripts_dir,
       &self.policy,
       self.python_interpreter.as_deref(),
-      resolved_interpreter_real_path.as_deref(),
+      resolved_interpreter.as_ref(),
     );
     let caps = self.requires_capabilities();
     self
@@ -434,7 +433,7 @@ fn build_script_scope(
   scripts_dir: &std::path::Path,
   policy: &SandboxPolicy,
   python_interpreter: Option<&std::path::Path>,
-  resolved_interpreter_real_path: Option<&std::path::Path>,
+  resolved_interpreter: Option<&ResolvedInterpreter>,
 ) -> SandboxScope {
   let mut scope = SandboxScope::new()
     .with_read_paths([scripts_dir.to_path_buf()])
@@ -456,11 +455,39 @@ fn build_script_scope(
   // top of (not instead of) the venv directory itself: the venv's own
   // site-packages live under the venv root, while the interpreter's core
   // runtime (shared libraries, stdlib) lives under the real install prefix.
-  if let Some(interpreter_prefix) = resolved_interpreter_real_path
-    .and_then(|p| p.parent())
+  if let Some(interpreter_prefix) = resolved_interpreter
+    .and_then(|r| r.real.parent())
     .and_then(|p| p.parent())
   {
     scope.read_paths.push(interpreter_prefix.to_path_buf());
+  }
+  // S3.4: a package-manager-installed interpreter's own prefix isn't always
+  // enough — Homebrew binaries link against *sibling* Cellar packages'
+  // shared libraries through the `<prefix>/opt/<pkg>/...` symlink farm
+  // (e.g. Homebrew bash needs `<prefix>/opt/readline/lib/libreadline.8.dylib`,
+  // which lives under a completely different package's own prefix). When the
+  // resolved path follows this layout, widen the read grant to the whole
+  // package-manager root (still read-only) so dyld/ld.so can resolve
+  // transitive runtime dependencies — see `package_manager_root`.
+  if let Some(pm_root) = resolved_interpreter.and_then(|r| package_manager_root(&r.real)) {
+    scope.read_paths.push(pm_root);
+  }
+  // S3.4: `command` as found on `PATH` may itself be a symlink into an
+  // *ambient* venv (e.g. a shell with a venv activated so plain `python3`
+  // resolves to `<venv>/bin/python3`, distinct from S2.3's explicit
+  // `[dependencies]`-configured venv above) whose target is a completely
+  // different, fully-canonicalized system install. Python's `site` module
+  // looks for `pyvenv.cfg` next to the *original*, pre-canonicalize path,
+  // not its resolved target — grant that original directory's parent too,
+  // read-only, whenever it differs from the resolved target's own prefix.
+  if let Some(ambient_venv_root) = resolved_interpreter.and_then(|r| {
+    if r.original == r.real {
+      None
+    } else {
+      r.original.parent().and_then(|p| p.parent())
+    }
+  }) {
+    scope.read_paths.push(ambient_venv_root.to_path_buf());
   }
   if scope.write_paths.is_empty() {
     scope.write_paths.push(std::path::PathBuf::from("/tmp"));
@@ -471,13 +498,44 @@ fn build_script_scope(
   scope
 }
 
+/// Detect a Homebrew/Linuxbrew-style package layout in `resolved_path`
+/// (`<prefix>/Cellar/<pkg>/<version>/...`) and return `<prefix>` if found.
+/// Package managers using this layout resolve a package's transitive shared
+/// library dependencies through a separate `<prefix>/opt/<pkg>/...` symlink
+/// farm rather than anything under the dependent package's own `Cellar`
+/// subtree, so granting only the interpreter's own resolved prefix (as S3.3
+/// originally did) misses them entirely. `None` for any other layout (plain
+/// system binaries, pyenv, a skill's own venv, ...) — those already get
+/// read access via the venv-root / interpreter-prefix grants above.
+fn package_manager_root(resolved_path: &std::path::Path) -> Option<std::path::PathBuf> {
+  let mut prefix = std::path::PathBuf::new();
+  for component in resolved_path.components() {
+    if component.as_os_str() == "Cellar" {
+      return Some(prefix);
+    }
+    prefix.push(component);
+  }
+  None
+}
+
+/// The interpreter path as found on `PATH` (or given verbatim), alongside
+/// its fully symlink-resolved target. Kept separate (S3.4) because they
+/// answer different sandbox-grant questions: `original` may itself be a
+/// venv shim whose *own* directory holds files (`pyvenv.cfg`) the
+/// interpreter needs read access to, while `real` is the actual install
+/// prefix whose runtime files (shared libs, stdlib) need it.
+struct ResolvedInterpreter {
+  original: std::path::PathBuf,
+  real: std::path::PathBuf,
+}
+
 /// Resolve `command` — a bare name (`"python3"`, `"bash"`, `"node"`) or an
 /// already-concrete path (a venv's interpreter) — to its real,
 /// symlink-followed absolute path: the actual install location whose
 /// contents the interpreter needs to read at startup (S3.3). Best-effort;
 /// `None` if it can't be found or resolved, same as before this existed.
-fn resolve_interpreter_real_path(command: &str) -> Option<std::path::PathBuf> {
-  let candidate = if command.contains(std::path::MAIN_SEPARATOR) {
+fn resolve_interpreter_real_path(command: &str) -> Option<ResolvedInterpreter> {
+  let original = if command.contains(std::path::MAIN_SEPARATOR) {
     std::path::PathBuf::from(command)
   } else {
     let path_var = std::env::var_os("PATH")?;
@@ -485,7 +543,8 @@ fn resolve_interpreter_real_path(command: &str) -> Option<std::path::PathBuf> {
       .map(|dir| dir.join(command))
       .find(|candidate| candidate.is_file())?
   };
-  candidate.canonicalize().ok()
+  let real = original.canonicalize().ok()?;
+  Some(ResolvedInterpreter { original, real })
 }
 
 /// Lowercase hex-encoded SHA-256 of `bytes` (S1.2 integrity check).
