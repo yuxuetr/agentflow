@@ -1,9 +1,36 @@
-//! Linux sandbox backend backed by seccomp-bpf.
+//! Linux sandbox backend backed by seccomp-bpf, layered with Landlock (S3.1)
+//! for path-scoped filesystem access.
 //!
-//! The filter is compiled once on the host, then re-installed in each child
-//! through `pre_exec` (between `fork(2)` and `execve(2)`). The default action
-//! is `Allow`; specific syscalls are denied with `Errno(EPERM)` when the
-//! corresponding [`Capability`] is missing from the effective set.
+//! The seccomp filter is compiled once on the host, then re-installed in
+//! each child through `pre_exec` (between `fork(2)` and `execve(2)`). The
+//! default action is `Allow`; specific syscalls are denied with
+//! `Errno(EPERM)` when the corresponding [`Capability`] is missing from the
+//! effective set.
+//!
+//! ## Landlock path scoping (S3.1)
+//!
+//! seccomp is syscall-scoped, not path-scoped (see "Limits" below) — before
+//! this, a child with `FsRead` could read anything the host user could read
+//! (`~/.ssh`, `~/.aws`, ...), because path restriction only happened
+//! in-process ([`crate::sandbox::SandboxPolicy::is_path_allowed`]), which a
+//! subprocess's own code never goes through. [`LinuxSeccompBackend`] now
+//! additionally builds a [`landlock::Ruleset`] from the [`SandboxScope`]
+//! passed to [`SandboxBackend::wrap_command`] — read-only access to
+//! `scope.read_paths` (+ `scope.working_directory`), read-write access to
+//! `scope.write_paths` when [`Capability::FsWrite`] is granted (read-only
+//! otherwise) — and applies it via `restrict_self()` in the same `pre_exec`
+//! closure as the seccomp filter, so both layers are active before the
+//! child's `execve` returns.
+//!
+//! Landlock availability is probed once at construction (kernel >= 5.13,
+//! LSM enabled at boot) via a side-effect-free syscall
+//! (`probe_landlock_abi`). When unavailable, the seccomp filter still
+//! applies (unchanged syscall-level containment) but
+//! [`SandboxBackend::enforcement_level`] reports
+//! [`SandboxEnforcement::Permissive`] instead of `Enforcing`, since the
+//! path-scoping guarantee this module's docs describe no longer holds —
+//! the existing three-state pattern already used for "unsupported arch"
+//! and the macOS `sandbox-exec`-missing case.
 //!
 //! ## What this enforces
 //!
@@ -31,10 +58,13 @@
 //!
 //! ## Limits
 //!
-//! seccomp filters are syscall-scoped, not path-scoped. Restricting `FsRead`
-//! to a particular subtree requires Landlock or an LSM, which is out of
-//! scope for this backend. Path-prefix gating is still enforced in-process
-//! by [`crate::sandbox::SandboxPolicy::is_path_allowed`].
+//! seccomp filters are syscall-scoped, not path-scoped — Landlock (above)
+//! is what adds path-scoped `FsRead`/`FsWrite` containment. Landlock itself
+//! has kernel-documented limits (e.g. arbitrary mounts are always denied,
+//! and rules only cover the six `AccessFs` rights defined as of ABI V1,
+//! which this module targets — see `build_landlock_ruleset`). Path-prefix
+//! gating is still enforced in-process too, independent of either kernel
+//! layer, by [`crate::sandbox::SandboxPolicy::is_path_allowed`].
 //!
 //! ## Architecture support
 //!
@@ -45,6 +75,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use landlock::{
+  ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetError,
+  path_beneath_rules,
+};
 use seccompiler::{
   BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
   SeccompRule, TargetArch,
@@ -55,17 +89,28 @@ use crate::capability::Capability;
 
 use super::{SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope};
 
-/// Linux seccomp backend. Cheap to clone: holds an `Arc` of the compiled BPF.
+/// Linux seccomp + Landlock backend. Cheap to clone: holds an `Arc` of the
+/// compiled BPF; the Landlock ruleset is rebuilt per [`Self::wrap_command`]
+/// call since it's scoped to that call's [`SandboxScope`] and effective
+/// capabilities (unlike the seccomp filter, whose only per-call inputs are
+/// the effective capabilities).
 pub struct LinuxSeccompBackend {
   /// `None` means the host arch is unsupported; the backend falls back to
   /// reporting `is_enforcing = false`.
   arch: Option<TargetArch>,
+  /// S3.1: highest Landlock ABI version this kernel supports (probed once,
+  /// side-effect-free — see [`probe_landlock_abi`]). `None` means Landlock
+  /// is unavailable (pre-5.13 kernel, or disabled at boot via `lsm=`);
+  /// [`Self::wrap_command`] still applies the seccomp filter but skips
+  /// Landlock, and [`Self::enforcement_level`] reports `Permissive`.
+  landlock_abi: Option<i32>,
 }
 
 impl LinuxSeccompBackend {
   pub fn new() -> Self {
     Self {
       arch: detect_target_arch(),
+      landlock_abi: probe_landlock_abi(),
     }
   }
 }
@@ -82,16 +127,25 @@ impl SandboxBackend for LinuxSeccompBackend {
   }
 
   fn is_enforcing(&self) -> bool {
+    // Landlock availability does not gate this: seccomp's syscall-level
+    // containment is fully active either way. `enforcement_level` is where
+    // the Landlock nuance (path-scoping is or isn't guaranteed) surfaces.
     self.arch.is_some()
   }
 
   fn enforcement_level(&self) -> SandboxEnforcement {
-    if self.arch.is_some() {
-      SandboxEnforcement::Enforcing
-    } else {
+    if self.arch.is_none() {
       // We are on Linux but the architecture is not in the supported
       // (`x86_64`, `aarch64`) set. Report Permissive so operators can see
       // that an enforcing backend exists on this platform but isn't active.
+      return SandboxEnforcement::Permissive;
+    }
+    if self.landlock_abi.is_some() {
+      SandboxEnforcement::Enforcing
+    } else {
+      // S3.1: seccomp is still applied, but without Landlock the
+      // path-scoped FsRead/FsWrite containment this module's docs promise
+      // isn't guaranteed (pre-5.13 kernel, or LSM disabled at boot).
       SandboxEnforcement::Permissive
     }
   }
@@ -100,7 +154,7 @@ impl SandboxBackend for LinuxSeccompBackend {
     &self,
     command: &mut Command,
     effective_capabilities: &[Capability],
-    _scope: &SandboxScope,
+    scope: &SandboxScope,
   ) -> Result<(), SandboxError> {
     let arch = self.arch.ok_or_else(|| SandboxError::Unsupported {
       platform: "linux",
@@ -115,17 +169,126 @@ impl SandboxBackend for LinuxSeccompBackend {
         message: format!("failed to compile seccomp filter: {err}"),
       })?;
 
+    // S3.1: build the Landlock ruleset here, in the parent, not inside
+    // `pre_exec` — `PathFd::new` (via `path_beneath_rules`) opens each
+    // path with `open(2)`, which is not guaranteed async-signal-safe, so
+    // it must happen before the fork. Only `restrict_self()` (a single
+    // `landlock_restrict_self(2)` syscall) runs inside `pre_exec`, mirroring
+    // how `compile_filter` happens here while only `apply_filter` (a single
+    // `seccomp(2)` syscall) runs in the child.
+    let landlock_ruleset = if self.landlock_abi.is_some() {
+      match build_landlock_ruleset(effective_capabilities, scope) {
+        Ok(ruleset) => Some(ruleset),
+        Err(err) => {
+          // Best-effort: the seccomp filter below still applies. A failure
+          // here (e.g. a scope path that doesn't exist) degrades this
+          // spawn to seccomp-only rather than aborting it — matching the
+          // "unavailable -> Permissive, not a hard error" contract this
+          // module documents for the Landlock layer as a whole.
+          tracing::warn!(
+            error = %err,
+            "failed to build landlock ruleset; child will run with seccomp-only enforcement"
+          );
+          None
+        }
+      }
+    } else {
+      None
+    };
+
     // Share one Arc across all closure invocations (one per spawn).
     let bpf = Arc::new(bpf);
+    let mut landlock_ruleset = landlock_ruleset;
     // SAFETY: the closure runs in the forked child between fork and execve.
-    // `apply_filter` only calls `prctl` + `seccomp(2)` — both async-signal-safe.
+    // `apply_filter` only calls `prctl` + `seccomp(2)`, and
+    // `RulesetCreated::restrict_self` only calls `landlock_restrict_self(2)`
+    // — both async-signal-safe. No path is opened here (see above).
     unsafe {
       command.pre_exec(move || {
-        seccompiler::apply_filter(&bpf).map_err(|err| std::io::Error::other(err.to_string()))
+        seccompiler::apply_filter(&bpf).map_err(|err| std::io::Error::other(err.to_string()))?;
+        if let Some(ruleset) = landlock_ruleset.take() {
+          // Best-effort, same rationale as the build failure above: don't
+          // fail the spawn over a Landlock enforcement error once seccomp
+          // is already active.
+          let _ = ruleset.restrict_self();
+        }
+        Ok(())
       });
     }
     Ok(())
   }
+}
+
+/// Build a Landlock ruleset from `scope`: read-only access to
+/// `scope.read_paths` and `scope.working_directory`, read-write access to
+/// `scope.write_paths` when [`Capability::FsWrite`] is in
+/// `effective_capabilities` (read-only otherwise — a write-scoped path a
+/// tool isn't allowed to write to should still be readable, not vanish
+/// from its view). Targets [`ABI::V1`] (Linux 5.13, the TODO's own stated
+/// minimum) rather than probing for a newer ABI to request more access
+/// rights: the `landlock` crate's own docs discourage picking `ABI` based
+/// on a runtime probe ("can lead to unreliable sandboxing"); requesting a
+/// fixed, tested version and letting the crate's best-effort compatibility
+/// layer downgrade further is the documented pattern.
+fn build_landlock_ruleset(
+  effective_capabilities: &[Capability],
+  scope: &SandboxScope,
+) -> Result<RulesetCreated, RulesetError> {
+  let abi = ABI::V1;
+  let allow_fs_write = effective_capabilities.contains(&Capability::FsWrite);
+  let access_all = AccessFs::from_all(abi);
+  let access_read = AccessFs::from_read(abi);
+  let write_access = if allow_fs_write {
+    access_all
+  } else {
+    access_read
+  };
+
+  let mut created = Ruleset::default().handle_access(access_all)?.create()?;
+  created = created.add_rules(path_beneath_rules(&scope.read_paths, access_read))?;
+  created = created.add_rules(path_beneath_rules(&scope.write_paths, write_access))?;
+  if let Some(dir) = &scope.working_directory {
+    created = created.add_rules(path_beneath_rules(std::iter::once(dir), access_read))?;
+  }
+  Ok(created)
+}
+
+/// Highest Landlock ABI version the running kernel supports (1-8+), or
+/// `None` when Landlock is unavailable (pre-5.13 kernel, or disabled at
+/// boot via the `lsm=` cmdline).
+///
+/// Uses the raw `landlock_create_ruleset(NULL, 0,
+/// LANDLOCK_CREATE_RULESET_VERSION)` syscall directly rather than the
+/// `landlock` crate: this specific invocation is documented as a pure
+/// version query (no ruleset fd is created, nothing is restricted),
+/// whereas every other path through the crate's API — including any
+/// attempt to use it for ABI *detection* — is explicitly discouraged by
+/// the crate's own docs ([`landlock::ABI`]'s doc comment: constructing an
+/// `ABI` from a runtime probe "can lead to unreliable sandboxing where
+/// rules might differ between executions"). This probe exists solely to
+/// answer `enforcement_level()` *before* any ruleset is built; the actual
+/// ruleset applied to a child (`build_landlock_ruleset`) always requests
+/// the fixed `ABI::V1` and lets the crate's own best-effort compatibility
+/// layer handle any further downgrade.
+pub(crate) fn probe_landlock_abi() -> Option<i32> {
+  // Stable UAPI constant from `linux/landlock.h` — `1U << 0`. Landlock's
+  // ABI is a frozen userspace contract (see the kernel's Landlock
+  // documentation on backward compatibility), so hard-coding this bit is
+  // as stable as depending on the kernel header itself.
+  const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
+  // SAFETY: `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)`
+  // is documented as a pure version query with no side effects — it
+  // creates no ruleset, opens no fd, and restricts nothing. `attr = NULL`
+  // and `size = 0` are only valid together with this flag.
+  let ret = unsafe {
+    libc::syscall(
+      libc::SYS_landlock_create_ruleset,
+      std::ptr::null::<libc::c_void>(),
+      0usize,
+      LANDLOCK_CREATE_RULESET_VERSION,
+    )
+  };
+  if ret > 0 { Some(ret as i32) } else { None }
 }
 
 fn detect_target_arch() -> Option<TargetArch> {
@@ -408,5 +571,71 @@ mod tests {
       assert!(backend.is_enforcing());
       assert_eq!(backend.name(), "seccomp");
     }
+  }
+
+  // ── S3.1: Landlock ─────────────────────────────────────────────────
+
+  #[test]
+  fn probe_landlock_abi_returns_a_positive_version_or_none() {
+    // Can't assert a specific outcome — depends on the test host's
+    // kernel — but the probe must never panic, and any `Some` value must
+    // be a real positive ABI number (matches the syscall's documented
+    // return-value contract: positive version, or -1/errno).
+    if let Some(version) = probe_landlock_abi() {
+      assert!(
+        version > 0,
+        "landlock ABI version must be positive: {version}"
+      );
+    }
+  }
+
+  #[test]
+  fn build_landlock_ruleset_succeeds_with_empty_scope() {
+    // An empty SandboxScope (no read/write paths, no working directory)
+    // is a degenerate-but-legal input: the ruleset just won't grant any
+    // path-scoped access. Must not error, even when Landlock itself is
+    // unavailable on this kernel (best-effort mode degrades silently at
+    // the `landlock` crate level; `create()` only fails on a genuine
+    // misuse, not on kernel unavailability).
+    let scope = SandboxScope::new();
+    let result = build_landlock_ruleset(&[], &scope);
+    assert!(
+      result.is_ok(),
+      "empty scope must build a (possibly no-op) ruleset: {result:?}"
+    );
+  }
+
+  #[test]
+  fn build_landlock_ruleset_succeeds_with_real_paths() {
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    let read_dir = temp.path().join("read");
+    let write_dir = temp.path().join("write");
+    std::fs::create_dir_all(&read_dir).unwrap();
+    std::fs::create_dir_all(&write_dir).unwrap();
+
+    let scope = SandboxScope::new()
+      .with_read_paths([read_dir])
+      .with_write_paths([write_dir.clone()])
+      .with_working_directory(write_dir);
+    let result = build_landlock_ruleset(&[Capability::FsWrite], &scope);
+    assert!(
+      result.is_ok(),
+      "real, existing paths must build a ruleset: {result:?}"
+    );
+  }
+
+  #[test]
+  fn build_landlock_ruleset_ignores_nonexistent_paths_rather_than_erroring() {
+    // `path_beneath_rules` (from the `landlock` crate) silently skips
+    // paths it can't open — matches this backend's own "best-effort,
+    // degrade rather than abort the spawn" philosophy for the Landlock
+    // layer (see `wrap_command`'s doc comment on the build-failure path).
+    let scope =
+      SandboxScope::new().with_read_paths(["/agentflow-sandbox-test-path-that-does-not-exist"]);
+    let result = build_landlock_ruleset(&[], &scope);
+    assert!(
+      result.is_ok(),
+      "a missing path must not fail ruleset construction: {result:?}"
+    );
   }
 }

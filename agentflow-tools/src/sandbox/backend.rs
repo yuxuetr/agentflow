@@ -291,16 +291,28 @@ mod tests {
 
   #[cfg(target_os = "linux")]
   #[test]
-  fn linux_backend_enforcement_matches_arch_support() {
-    use crate::sandbox::linux::LinuxSeccompBackend;
+  fn linux_backend_enforcement_matches_arch_and_landlock_support() {
+    use crate::sandbox::linux::{LinuxSeccompBackend, probe_landlock_abi};
     let backend = LinuxSeccompBackend::new();
     let level = backend.enforcement_level();
-    if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
-      assert_eq!(level, SandboxEnforcement::Enforcing);
-      assert!(backend.is_enforcing());
-    } else {
+    if !cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
       assert_eq!(level, SandboxEnforcement::Permissive);
       assert!(!backend.is_enforcing());
+      return;
+    }
+    // On a supported arch, seccomp's own containment is unconditional —
+    // `is_enforcing` doesn't depend on Landlock (see its doc comment).
+    assert!(backend.is_enforcing());
+    // S3.1: the tri-state `enforcement_level` additionally reflects
+    // whether *this* kernel actually supports Landlock — not guaranteed
+    // in every test environment (e.g. some container/VM kernels ship
+    // without `CONFIG_SECURITY_LANDLOCK`). Assert consistency with the
+    // same probe the backend itself uses rather than a hardcoded
+    // expectation, so this test is meaningful on both kinds of host.
+    if probe_landlock_abi().is_some() {
+      assert_eq!(level, SandboxEnforcement::Enforcing);
+    } else {
+      assert_eq!(level, SandboxEnforcement::Permissive);
     }
   }
 }

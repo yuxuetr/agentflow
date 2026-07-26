@@ -12,7 +12,10 @@
 //!   from the policy + capability set and re-runs the inner command via
 //!   `sandbox-exec -f <profile> <cmd>`.
 //! * Linux: `LinuxSeccompBackend` installs a seccomp BPF filter through
-//!   `Command::pre_exec` so the filter is active before `execve` returns.
+//!   `Command::pre_exec` so the filter is active before `execve` returns,
+//!   layered (S3.1) with a Landlock ruleset (kernel >= 5.13, probed at
+//!   runtime) for path-scoped `FsRead`/`FsWrite` containment that seccomp
+//!   alone cannot express.
 //! * Other platforms: [`NoopSandboxBackend`] is a pass-through. Callers can
 //!   detect this via [`SandboxBackend::is_enforcing`] and decide whether to
 //!   refuse the call rather than run unsandboxed.

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use agentflow_tools::Tool;
 use agentflow_tools::builtin::ShellTool;
 use agentflow_tools::sandbox::{
-  LinuxSeccompBackend, SandboxBackend as _, SandboxPolicy, SandboxScope,
+  LinuxSeccompBackend, SandboxBackend as _, SandboxEnforcement, SandboxPolicy, SandboxScope,
 };
 use serde_json::json;
 
@@ -33,6 +33,16 @@ fn python3_available() -> bool {
     .output()
     .map(|out| out.status.success())
     .unwrap_or(false)
+}
+
+/// S3.1: whether this kernel actually supports Landlock. `enforcement_level`
+/// already folds this in (`Enforcing` only when Landlock is available;
+/// `Permissive` when seccomp-only) — reusing it here avoids duplicating the
+/// backend's own probe logic in the test suite. Not every CI / container /
+/// VM kernel ships `CONFIG_SECURITY_LANDLOCK`, so the path-scoping tests
+/// below skip (with a clear message) rather than fail on such hosts.
+fn landlock_enforcing() -> bool {
+  LinuxSeccompBackend::new().enforcement_level() == SandboxEnforcement::Enforcing
 }
 
 #[tokio::test]
@@ -166,5 +176,95 @@ async fn linux_seccomp_blocks_openat_with_o_creat_when_fs_write_absent() {
   assert!(
     !std::path::Path::new(&path).exists(),
     "seccomp failed: file '{path}' was created despite missing FsWrite capability"
+  );
+}
+
+// ── S3.1: Landlock path-scoped filesystem containment ──────────────────
+
+/// S3.1 literal regression scenario: a child confined to a specific
+/// directory via `SandboxScope` must not be able to read a file outside
+/// that scope — the gap seccomp alone left open (seccomp is syscall-
+/// scoped: any `open`/`read` of an already-world-readable path succeeds
+/// regardless of which directory it lives in). Skips (doesn't fail) on a
+/// kernel without Landlock, since this specifically asserts what S3.1
+/// *adds* on top of seccomp, not what seccomp already covered — some CI /
+/// container / VM kernels don't ship `CONFIG_SECURITY_LANDLOCK`.
+#[tokio::test]
+async fn linux_landlock_blocks_reads_outside_the_allowed_scope() {
+  if !landlock_enforcing() {
+    eprintln!("skipping: this kernel does not support Landlock (CONFIG_SECURITY_LANDLOCK)");
+    return;
+  }
+  if !python3_available() {
+    eprintln!("skipping: python3 not on PATH");
+    return;
+  }
+
+  let temp = tempfile::TempDir::new().expect("create temp dir");
+  let policy = SandboxPolicy {
+    allowed_paths: vec![temp.path().to_path_buf()],
+    allow_all_commands: true,
+    ..SandboxPolicy::default()
+  };
+  let tool = ShellTool::new(Arc::new(policy)).with_os_sandbox();
+
+  // /etc/hostname is world-readable on any stock Linux distro and lives
+  // well outside the temp dir the policy scoped this child to.
+  let cmd = "python3 -c 'print(open(\"/etc/hostname\").read())'";
+  let result = tool
+    .execute(json!({"command": cmd}))
+    .await
+    .expect("tool call must complete");
+
+  assert!(
+    result.is_error,
+    "expected Landlock to block reading outside the allowed scope, but got success: {}",
+    result.content
+  );
+}
+
+/// Sibling positive case: a read *inside* the allowed scope must still
+/// succeed — S3.1 must add path scoping without turning into a blanket
+/// deny of everything the policy did grant.
+#[tokio::test]
+async fn linux_landlock_allows_reads_inside_the_allowed_scope() {
+  if !landlock_enforcing() {
+    eprintln!("skipping: this kernel does not support Landlock (CONFIG_SECURITY_LANDLOCK)");
+    return;
+  }
+  if !python3_available() {
+    eprintln!("skipping: python3 not on PATH");
+    return;
+  }
+
+  let temp = tempfile::TempDir::new().expect("create temp dir");
+  let file_path = temp.path().join("inside.txt");
+  std::fs::write(&file_path, "hello-from-inside-scope").expect("write fixture file");
+
+  let policy = SandboxPolicy {
+    allowed_paths: vec![temp.path().to_path_buf()],
+    allow_all_commands: true,
+    ..SandboxPolicy::default()
+  };
+  let tool = ShellTool::new(Arc::new(policy)).with_os_sandbox();
+
+  let cmd = format!(
+    "python3 -c 'print(open(\"{}\").read())'",
+    file_path.display()
+  );
+  let result = tool
+    .execute(json!({"command": cmd}))
+    .await
+    .expect("tool call must complete");
+
+  assert!(
+    !result.is_error,
+    "expected read inside the allowed scope to succeed, got error: {}",
+    result.content
+  );
+  assert!(
+    result.content.contains("hello-from-inside-scope"),
+    "stdout did not contain expected content: {}",
+    result.content
   );
 }
