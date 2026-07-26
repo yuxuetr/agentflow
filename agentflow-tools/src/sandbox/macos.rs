@@ -13,6 +13,26 @@
 //! but `sandbox-exec` continues to ship and is widely used by Chromium,
 //! Firefox, etc. If a future macOS removes it, callers will see
 //! [`SandboxError::Unsupported`] when [`MacosSandboxExecBackend::new`] runs.
+//!
+//! ## Resource limits (S3.2)
+//!
+//! macOS has no cgroups equivalent, so [`SandboxScope::max_memory_bytes`] /
+//! `max_pids` / `max_cpu_secs` are applied via POSIX `setrlimit` in the
+//! same `pre_exec` closure the seccomp/Landlock backend uses on Linux for
+//! `max_cpu_secs` — but the memory/pids mapping is a coarser
+//! approximation than Linux's cgroup-based hard caps:
+//!
+//! * `max_memory_bytes` → `RLIMIT_AS` (total virtual address space, not
+//!   resident memory — a process can reserve address space far beyond
+//!   what it actually touches, so this is a looser bound than Linux's
+//!   `memory.max`).
+//! * `max_pids` → `RLIMIT_NPROC`, which is scoped to the **user id**, not
+//!   this specific process tree — every other process the same user
+//!   already runs counts against the same limit, unlike Linux's
+//!   `pids.max` (scoped to the cgroup, i.e. exactly this tree).
+//! * `max_cpu_secs` → `RLIMIT_CPU`, the one exact match: POSIX defines
+//!   this as cumulative CPU-seconds for the calling process, identical
+//!   semantics to what the field name implies.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -92,7 +112,55 @@ impl SandboxBackend for MacosSandboxExecBackend {
     })?;
 
     rewrite_command_with_sandbox_exec(command, &profile_path);
+
+    // S3.2: attach the rlimit `pre_exec` *after* the rewrite above — that
+    // rewrite fully replaces `*command` (see `rewrite_command_with_sandbox_exec`),
+    // so a `pre_exec` set before it would be silently discarded, same
+    // caller-contract reasoning as the stdio-ordering note on
+    // `SandboxBackend::wrap_command`'s doc comment.
+    if scope.max_memory_bytes.is_some() || scope.max_pids.is_some() || scope.max_cpu_secs.is_some()
+    {
+      let max_memory_bytes = scope.max_memory_bytes;
+      let max_pids = scope.max_pids;
+      let max_cpu_secs = scope.max_cpu_secs;
+      // SAFETY: the closure runs in the forked child between fork and
+      // execve; `setrlimit` is a single syscall touching only its own
+      // stack-local `rlimit` struct — async-signal-safe.
+      unsafe {
+        command.pre_exec(move || {
+          if let Some(bytes) = max_memory_bytes {
+            apply_rlimit(libc::RLIMIT_AS, bytes as libc::rlim_t)?;
+          }
+          if let Some(pids) = max_pids {
+            apply_rlimit(libc::RLIMIT_NPROC, pids as libc::rlim_t)?;
+          }
+          if let Some(secs) = max_cpu_secs {
+            apply_rlimit(libc::RLIMIT_CPU, secs as libc::rlim_t)?;
+          }
+          Ok(())
+        });
+      }
+    }
+
     Ok(())
+  }
+}
+
+/// Set both the soft and hard limit of `resource` to `value`. Shared by all
+/// three `SandboxScope` resource-limit fields — POSIX `setrlimit` takes the
+/// same `(resource, &rlimit)` shape for each.
+fn apply_rlimit(resource: libc::c_int, value: libc::rlim_t) -> std::io::Result<()> {
+  let limit = libc::rlimit {
+    rlim_cur: value,
+    rlim_max: value,
+  };
+  // SAFETY: `limit` is a fully-initialised, stack-local value; `setrlimit`
+  // does not retain the pointer past the call.
+  let ret = unsafe { libc::setrlimit(resource, &limit) };
+  if ret == 0 {
+    Ok(())
+  } else {
+    Err(std::io::Error::last_os_error())
   }
 }
 
@@ -376,4 +444,17 @@ mod tests {
     let profile = build_profile(&[Capability::FsWrite], &scope);
     assert!(profile.contains("(allow file-write* (subpath \"/tmp/agentflow-does-not-exist\"))"));
   }
+
+  // ── S3.2: RLIMIT_* resource limits ──────────────────────────────────
+  //
+  // `apply_rlimit` is deliberately NOT unit-tested by calling it in-process:
+  // it calls `setrlimit` on the CALLING process, and doing that from a test
+  // would permanently shrink the test binary's own limits (RLIMIT_AS in
+  // particular — a low cap there would crash the test process on its next
+  // allocation). Production only ever calls it from inside a `pre_exec`
+  // closure, i.e. in a forked child that's about to `execve` and disappear.
+  // The real, safe-to-run verification is the end-to-end test in
+  // `tests/sandbox_macos.rs::macos_sandbox_enforces_max_cpu_secs_via_rlimit`,
+  // which spawns a genuine child process and observes it get killed once it
+  // exceeds its `RLIMIT_CPU` budget — exactly the production code path.
 }

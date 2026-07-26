@@ -24,6 +24,16 @@ pub struct SandboxScope {
   pub write_paths: Vec<PathBuf>,
   /// Working directory of the child (helps backends pre-allow access).
   pub working_directory: Option<PathBuf>,
+  /// S3.2: maximum resident memory in bytes. `None` means no limit. See
+  /// [`crate::sandbox::SandboxPolicy::max_memory_bytes`] for the
+  /// per-platform enforcement mechanism.
+  pub max_memory_bytes: Option<u64>,
+  /// S3.2: maximum process/thread count. `None` means no limit. See
+  /// [`crate::sandbox::SandboxPolicy::max_pids`].
+  pub max_pids: Option<u32>,
+  /// S3.2: maximum CPU time in seconds. `None` means no limit. See
+  /// [`crate::sandbox::SandboxPolicy::max_cpu_secs`].
+  pub max_cpu_secs: Option<u64>,
 }
 
 impl SandboxScope {
@@ -51,6 +61,21 @@ impl SandboxScope {
 
   pub fn with_working_directory<P: Into<PathBuf>>(mut self, dir: P) -> Self {
     self.working_directory = Some(dir.into());
+    self
+  }
+
+  pub fn with_max_memory_bytes(mut self, bytes: u64) -> Self {
+    self.max_memory_bytes = Some(bytes);
+    self
+  }
+
+  pub fn with_max_pids(mut self, pids: u32) -> Self {
+    self.max_pids = Some(pids);
+    self
+  }
+
+  pub fn with_max_cpu_secs(mut self, secs: u64) -> Self {
+    self.max_cpu_secs = Some(secs);
     self
   }
 }

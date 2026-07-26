@@ -78,6 +78,35 @@ pub struct SandboxPolicy {
 
   /// Maximum bytes that FileTool will read in a single operation.
   pub max_file_read_bytes: u64,
+
+  /// S3.2: maximum resident memory a spawned child (and its descendants)
+  /// may use, in bytes. `None` (the default) means no limit — unchanged
+  /// pre-S3.2 behaviour. Enforced via a cgroup v2 `memory.max` on Linux
+  /// (hard cap, OOM-kills the cgroup on breach) and `RLIMIT_AS` on macOS
+  /// (a coarser, per-process address-space approximation — see
+  /// `crate::sandbox::macos`'s module docs for the gap this leaves).
+  pub max_memory_bytes: Option<u64>,
+
+  /// S3.2: maximum number of processes/threads a spawned child (and its
+  /// descendants) may create. `None` (the default) means no limit. The
+  /// primary defense against a fork bomb when `Capability::Exec` is
+  /// granted. Enforced via a cgroup v2 `pids.max` on Linux (counts the
+  /// whole descendant tree) and `RLIMIT_NPROC` on macOS (a coarser,
+  /// per-*user* — not per-process-tree — approximation).
+  pub max_pids: Option<u32>,
+
+  /// S3.2: maximum CPU time a spawned child (and its descendants) may
+  /// consume, in seconds. `None` (the default) means no limit. Distinct
+  /// from `max_exec_time_secs` (wall-clock deadline): a child sleeping or
+  /// blocked on I/O can run past its CPU budget without approaching the
+  /// wall-clock one, and vice versa. Enforced via `RLIMIT_CPU` (via
+  /// `setrlimit` in `pre_exec`) on both platforms — POSIX gives this
+  /// exactly the "total CPU-seconds consumed, then SIGXCPU/SIGKILL"
+  /// semantics the field name implies, unlike cgroup v2's `cpu.max`
+  /// (a *rate* cap: fraction of CPU per period, not a cumulative total),
+  /// so this one deliberately does not route through cgroups even on
+  /// Linux.
+  pub max_cpu_secs: Option<u64>,
 }
 
 impl Default for SandboxPolicy {
@@ -101,6 +130,9 @@ impl Default for SandboxPolicy {
       allow_hardlinked_files: false,
       max_exec_time_secs: 30,
       max_file_read_bytes: 10 * 1024 * 1024, // 10 MB
+      max_memory_bytes: None,
+      max_pids: None,
+      max_cpu_secs: None,
     }
   }
 }
@@ -122,6 +154,16 @@ impl SandboxPolicy {
       allow_hardlinked_files: true,
       max_exec_time_secs: 60,
       max_file_read_bytes: 100 * 1024 * 1024,
+      // Deliberately still `None` under `permissive()`: this constructor
+      // relaxes the *allow-list* axis (paths/commands/network), not
+      // resource ceilings. A caller that wants "everything allowed AND
+      // unbounded resources" sets these explicitly — `permissive()`
+      // staying resource-conservative avoids a fork bomb / OOM footgun
+      // becoming the default for anyone reaching for the "just let it
+      // run" constructor.
+      max_memory_bytes: None,
+      max_pids: None,
+      max_cpu_secs: None,
     }
   }
 

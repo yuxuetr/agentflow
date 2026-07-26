@@ -426,6 +426,9 @@ pub(crate) fn build_scope_from_policy(policy: &SandboxPolicy) -> SandboxScope {
       scope.write_paths.push(path.clone());
     }
   }
+  scope.max_memory_bytes = policy.max_memory_bytes;
+  scope.max_pids = policy.max_pids;
+  scope.max_cpu_secs = policy.max_cpu_secs;
   scope
 }
 

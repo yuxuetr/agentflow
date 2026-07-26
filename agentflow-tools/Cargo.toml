@@ -22,10 +22,13 @@ url = "2.5"
 jsonschema = "0.17"
 tempfile = "3"
 sha2 = "0.10"
+# S3.2: RLIMIT_CPU (+ RLIMIT_AS/RLIMIT_NPROC on macOS) via `setrlimit` in
+# `pre_exec` — needed on every Unix target this crate builds for, so this
+# is a plain dependency, not target-gated like `seccompiler`/`landlock`.
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 seccompiler = "0.5"
-libc = "0.2"
 # S3.1: path-scoped filesystem access control layered on top of the
 # seccomp syscall filter (kernel >= 5.13, runtime ABI probed).
 landlock = "0.4"

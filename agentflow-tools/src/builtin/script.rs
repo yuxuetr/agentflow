@@ -465,6 +465,9 @@ fn build_script_scope(
   if scope.write_paths.is_empty() {
     scope.write_paths.push(std::path::PathBuf::from("/tmp"));
   }
+  scope.max_memory_bytes = policy.max_memory_bytes;
+  scope.max_pids = policy.max_pids;
+  scope.max_cpu_secs = policy.max_cpu_secs;
   scope
 }
 

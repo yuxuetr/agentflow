@@ -71,8 +71,36 @@
 //! Compiled for `x86_64` and `aarch64`. On other Linux architectures the
 //! backend reports itself as non-enforcing rather than installing a filter
 //! for the wrong audit arch (which would be a security footgun).
+//!
+//! ## Resource limits (S3.2)
+//!
+//! [`SandboxScope::max_memory_bytes`] / `max_pids` are enforced via a
+//! cgroup v2 hierarchy (`memory.max` hard-caps resident memory with an
+//! OOM-kill on breach; `pids.max` hard-caps the whole descendant process
+//! tree, the primary defense against a fork bomb when [`Capability::Exec`]
+//! is granted) — see [`resolve_cgroup_root`] for how the writable cgroup
+//! directory is found (root vs. non-root) and [`setup_cgroup_for_spawn`]
+//! for how a per-spawn leaf cgroup is built and the child migrated into it.
+//! `max_cpu_secs` does **not** route through cgroups (`cpu.max` is a
+//! *rate* cap — a fraction of CPU per period — not the cumulative "total
+//! CPU-seconds, then kill" semantics the field name implies); instead it
+//! uses `RLIMIT_CPU` via `setrlimit` in the same `pre_exec` closure,
+//! exactly like the macOS backend (`crate::sandbox::macos`) does, since
+//! POSIX gives `RLIMIT_CPU` exactly the right semantics on both platforms.
+//!
+//! When no writable cgroup delegation is available (see
+//! [`resolve_cgroup_root`]'s doc comment for the non-root case), a call
+//! that requested `max_memory_bytes` / `max_pids` degrades to spawning
+//! without them — logged via `tracing::warn!`, matching the same
+//! best-effort philosophy as a Landlock ruleset build failure above. This
+//! does not change [`SandboxBackend::enforcement_level`] (which reflects
+//! whether *anything* spawned through this backend is contained at all,
+//! not whether every optional resource limit a specific call asked for
+//! could be applied) — a caller that never sets `max_memory_bytes` /
+//! `max_pids` is unaffected either way.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use landlock::{
@@ -196,16 +224,54 @@ impl SandboxBackend for LinuxSeccompBackend {
       None
     };
 
+    // S3.2: build the per-spawn leaf cgroup here, in the parent — same
+    // reasoning as the Landlock ruleset above: `mkdir`/`write` (via
+    // `setup_cgroup_for_spawn`) are not async-signal-safe, so all of that
+    // happens before the fork. Only the final pid migration (a raw,
+    // allocation-free `open`/`write`/`close` — see
+    // `migrate_self_into_cgroup`) runs inside `pre_exec`.
+    let cgroup_procs_path = if scope.max_memory_bytes.is_some() || scope.max_pids.is_some() {
+      match setup_cgroup_for_spawn(scope) {
+        Ok(path) => Some(path),
+        Err(err) => {
+          // Best-effort, same "unavailable -> degrade, don't abort"
+          // contract as Landlock above: a non-root process with no
+          // systemd delegation (see `resolve_cgroup_root`) is the
+          // expected common case this hits, not a bug.
+          tracing::warn!(
+            error = %err,
+            "failed to set up cgroup resource limits; spawning without memory/pids limits"
+          );
+          None
+        }
+      }
+    } else {
+      None
+    };
+    let max_cpu_secs = scope.max_cpu_secs;
+
     // Share one Arc across all closure invocations (one per spawn).
     let bpf = Arc::new(bpf);
     let mut landlock_ruleset = landlock_ruleset;
     // SAFETY: the closure runs in the forked child between fork and execve.
-    // `apply_filter` only calls `prctl` + `seccomp(2)`, and
-    // `RulesetCreated::restrict_self` only calls `landlock_restrict_self(2)`
-    // — both async-signal-safe. No path is opened here (see above).
+    // `apply_filter` only calls `prctl` + `seccomp(2)`;
+    // `RulesetCreated::restrict_self` only calls `landlock_restrict_self(2)`;
+    // `migrate_self_into_cgroup` only calls raw `open`/`write`/`close`
+    // (no `std::fs`, no allocation — see its doc comment); `setrlimit` is a
+    // single syscall over a stack-local struct. All async-signal-safe. No
+    // path is opened for the first time here — `cgroup_procs_path` and the
+    // Landlock rule paths were all resolved in the parent, above.
     unsafe {
       command.pre_exec(move || {
         seccompiler::apply_filter(&bpf).map_err(|err| std::io::Error::other(err.to_string()))?;
+        if let Some(procs_path) = &cgroup_procs_path {
+          // Best-effort: a migration failure shouldn't abort a spawn that
+          // seccomp (and possibly Landlock) already contain.
+          let _ = migrate_self_into_cgroup(procs_path);
+        }
+        if let Some(secs) = max_cpu_secs {
+          let _ = apply_cpu_rlimit(secs);
+        }
         if let Some(ruleset) = landlock_ruleset.take() {
           // Best-effort, same rationale as the build failure above: don't
           // fail the spawn over a Landlock enforcement error once seccomp
@@ -217,6 +283,216 @@ impl SandboxBackend for LinuxSeccompBackend {
     }
     Ok(())
   }
+}
+
+/// Set both the soft and hard limit of `RLIMIT_CPU` to `max_cpu_secs`.
+/// Mirrors `crate::sandbox::macos::apply_rlimit` — see [`SandboxScope::
+/// max_cpu_secs`]'s doc comment for why this field routes through
+/// `RLIMIT_CPU` on both platforms rather than through cgroups here.
+fn apply_cpu_rlimit(max_cpu_secs: u64) -> std::io::Result<()> {
+  let limit = libc::rlimit {
+    rlim_cur: max_cpu_secs as libc::rlim_t,
+    rlim_max: max_cpu_secs as libc::rlim_t,
+  };
+  // SAFETY: `limit` is a fully-initialised, stack-local value; `setrlimit`
+  // does not retain the pointer past the call.
+  let ret = unsafe { libc::setrlimit(libc::RLIMIT_CPU, &limit) };
+  if ret == 0 {
+    Ok(())
+  } else {
+    Err(std::io::Error::last_os_error())
+  }
+}
+
+/// Determine a writable cgroup v2 directory this process can place child
+/// processes into, or `None` if no usable delegation exists for the
+/// current uid. Idempotent — safe to call on every spawn.
+///
+/// - **Root** (uid 0): `/sys/fs/cgroup/agentflow`.
+/// - **Non-root**: the systemd user-session delegated slice conventionally
+///   owned by the user's own uid (`man systemd.resource-control`'s
+///   "Delegation" section — the default on modern systemd distros via
+///   `user@.service`'s `Delegate=yes`):
+///   `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/agentflow`.
+///
+/// Returns `None` when the expected parent directory doesn't exist (no
+/// systemd user manager, an older distro without delegation, or — the
+/// environment this module's own tests were verified against — no
+/// systemd at all) rather than erroring; per the TODO's own "非 root 场景
+/// 走 systemd delegation 或降级 Permissive" allowance, callers degrade
+/// silently for that spawn rather than treat this as fatal.
+/// Probe, without side effects beyond [`resolve_cgroup_root`]'s own
+/// idempotent `subtree_control` writes, whether this process can actually
+/// delegate a usable cgroup v2 subtree right now. Exposed `pub` (the
+/// `linux` module itself is `pub`) so the integration test suite
+/// (`tests/sandbox_linux.rs`, a separate crate) can skip the
+/// enforcement-behavior tests with a clear message on hosts where
+/// delegation isn't available (e.g. a minimal container init with no
+/// systemd, where the root cgroup's `cgroup.procs` is non-empty) — mirrors
+/// how those tests use the public `enforcement_level()` API to skip the
+/// Landlock tests rather than reaching into a private probe.
+pub fn cgroup_v2_delegation_available() -> bool {
+  resolve_cgroup_root().is_some()
+}
+
+fn resolve_cgroup_root() -> Option<PathBuf> {
+  // SAFETY: `getuid()` takes no arguments and cannot fail.
+  let uid = unsafe { libc::getuid() };
+  let (parent, subdir) = if uid == 0 {
+    let base = PathBuf::from("/sys/fs/cgroup");
+    (base.clone(), base.join("agentflow"))
+  } else {
+    let base = PathBuf::from(format!(
+      "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"
+    ));
+    let subdir = base.join("agentflow");
+    (base, subdir)
+  };
+  if !parent.exists() {
+    return None;
+  }
+  // Both levels must actually succeed: cgroup v2's "no internal processes"
+  // rule means enabling a controller on `parent`'s `subtree_control` fails
+  // with EBUSY if `parent` itself has member processes attached directly
+  // (`cgroup.procs` non-empty) — true, for instance, of a minimal
+  // container init that never bothered to move itself into a leaf scope
+  // the way a full systemd boot sequence does. Rather than optimistically
+  // proceed and let the *later* `memory.max` / `pids.max` write in
+  // `setup_cgroup_for_spawn` fail instead (same end result, but after
+  // wastefully creating a leaf cgroup that can never be usable), check
+  // each `enable_controllers` call's own success and bail out immediately.
+  if !enable_controllers(&parent, &["memory", "pids"]) {
+    return None;
+  }
+  std::fs::create_dir_all(&subdir).ok()?;
+  if !enable_controllers(&subdir, &["memory", "pids"]) {
+    return None;
+  }
+  Some(subdir)
+}
+
+/// Enable `controllers` in `cgroup_dir`'s `cgroup.subtree_control`, so
+/// cgroups created *under* `cgroup_dir` can actually use them — cgroup v2
+/// requires each ancestor to opt a controller in for its descendants.
+/// Returns whether every controller that `cgroup_dir` actually lists as
+/// available (per its own `cgroup.controllers`) was successfully enabled;
+/// a controller neither this kernel nor this cgroup's tier offers at all
+/// is not requested in the first place, so its absence doesn't count as a
+/// failure — only a `write` that was attempted and rejected does.
+fn enable_controllers(cgroup_dir: &Path, controllers: &[&str]) -> bool {
+  let available =
+    std::fs::read_to_string(cgroup_dir.join("cgroup.controllers")).unwrap_or_default();
+  let request: String = controllers
+    .iter()
+    .filter(|c| available.split_whitespace().any(|a| a == **c))
+    .map(|c| format!("+{c}"))
+    .collect::<Vec<_>>()
+    .join(" ");
+  if request.is_empty() {
+    return true;
+  }
+  std::fs::write(cgroup_dir.join("cgroup.subtree_control"), request).is_ok()
+}
+
+/// Build a per-spawn leaf cgroup under [`resolve_cgroup_root`]'s directory
+/// and apply `scope`'s `max_memory_bytes` / `max_pids` to it (whichever is
+/// set — `memory.max` / `pids.max`). Returns the leaf cgroup's
+/// `cgroup.procs` path pre-converted to a `CString`, ready for the
+/// allocation-free write [`migrate_self_into_cgroup`] does from inside
+/// `pre_exec`.
+///
+/// The leaf cgroup is intentionally never removed after the child exits —
+/// `wrap_command` only runs pre-spawn, with no post-exit hook to clean up
+/// from. Left-over empty cgroup directories accumulate over a long-running
+/// `agentflow` process; this is a resource-bookkeeping cost, not a
+/// security concern (an empty cgroup enforces nothing and is trivially
+/// prunable — `rmdir` on any empty, process-free cgroup directory always
+/// succeeds), and is a reasonable follow-up rather than something this
+/// change needs to solve.
+fn setup_cgroup_for_spawn(scope: &SandboxScope) -> std::io::Result<std::ffi::CString> {
+  let root = resolve_cgroup_root().ok_or_else(|| {
+    std::io::Error::other("no writable cgroup v2 delegation available for this uid")
+  })?;
+
+  let unique = format!(
+    "spawn-{}-{}",
+    std::process::id(),
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|d| d.as_nanos())
+      .unwrap_or_default()
+  );
+  let leaf = root.join(unique);
+  std::fs::create_dir_all(&leaf)?;
+  if let Some(bytes) = scope.max_memory_bytes {
+    std::fs::write(leaf.join("memory.max"), bytes.to_string())?;
+  }
+  if let Some(pids) = scope.max_pids {
+    std::fs::write(leaf.join("pids.max"), pids.to_string())?;
+  }
+
+  let procs_path = leaf.join("cgroup.procs");
+  let procs_path_str = procs_path
+    .to_str()
+    .ok_or_else(|| std::io::Error::other("cgroup path is not valid UTF-8"))?;
+  std::ffi::CString::new(procs_path_str)
+    .map_err(|_| std::io::Error::other("cgroup path contains a NUL byte"))
+}
+
+/// Write this process's own pid into `cgroup_procs_path` (a leaf cgroup's
+/// `cgroup.procs` file), moving it into that cgroup.
+///
+/// Uses raw `open`/`write`/`close` rather than `std::fs` because this
+/// runs inside `pre_exec` — after `fork()`, before `execve()` — where
+/// only async-signal-safe operations are safe to call. `std::fs` types
+/// may allocate (e.g. `File`'s internal buffering, `String`/`Vec` path
+/// handling), which can deadlock if another thread of the *parent* held
+/// the allocator's lock at the moment of `fork()`; a multithreaded tokio
+/// process is exactly the case where that's not a theoretical concern.
+/// Formats the pid into a fixed-size stack buffer for the same reason —
+/// no `format!`, no heap.
+fn migrate_self_into_cgroup(cgroup_procs_path: &std::ffi::CStr) -> std::io::Result<()> {
+  let mut buf = [0u8; 20]; // enough ASCII digits for any pid_t, no NUL needed
+  let len = format_pid_into(unsafe { libc::getpid() }, &mut buf);
+  // SAFETY: `cgroup_procs_path` is a valid, NUL-terminated C string owned
+  // by the caller for the duration of this call; `buf[..len]` is a valid,
+  // fully-initialised slice. `open`/`write`/`close` are POSIX
+  // async-signal-safe.
+  unsafe {
+    let fd = libc::open(cgroup_procs_path.as_ptr(), libc::O_WRONLY);
+    if fd < 0 {
+      return Err(std::io::Error::last_os_error());
+    }
+    let ret = libc::write(fd, buf.as_ptr().cast(), len);
+    libc::close(fd);
+    if ret < 0 {
+      return Err(std::io::Error::last_os_error());
+    }
+  }
+  Ok(())
+}
+
+/// Format `pid` (always non-negative in practice) as ASCII decimal digits
+/// into `buf`, returning the number of bytes written. No allocation —
+/// safe to call from `pre_exec`. `pid == 0` is handled explicitly since
+/// the digit-extraction loop below would otherwise write nothing for it.
+fn format_pid_into(pid: libc::pid_t, buf: &mut [u8; 20]) -> usize {
+  if pid <= 0 {
+    buf[0] = b'0';
+    return 1;
+  }
+  let mut n = pid as u32;
+  let mut tmp = [0u8; 20];
+  let mut i = 0;
+  while n > 0 {
+    tmp[i] = b'0' + (n % 10) as u8;
+    n /= 10;
+    i += 1;
+  }
+  for j in 0..i {
+    buf[j] = tmp[i - 1 - j];
+  }
+  i
 }
 
 /// Build a Landlock ruleset from `scope`: read-only access to

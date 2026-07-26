@@ -17,9 +17,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use agentflow_tools::Tool;
 use agentflow_tools::builtin::{ScriptTool, ShellTool};
-use agentflow_tools::sandbox::SandboxPolicy;
+use agentflow_tools::sandbox::{
+  MacosSandboxExecBackend, SandboxBackend as _, SandboxPolicy, SandboxScope,
+};
+use agentflow_tools::{Capability, Tool};
 use serde_json::json;
 
 fn permissive_shell_with_sandbox() -> ShellTool {
@@ -323,5 +325,96 @@ async fn macos_sandbox_venv_python_still_denied_outside_granted_scope() {
     result.is_error,
     "expected sandbox to still deny a read outside every granted scope, got success: {}",
     result.content
+  );
+}
+
+// ── S3.2: resource limits via RLIMIT_* ──────────────────────────────────
+
+/// Compile a tiny, dependency-free, pure-CPU busy-loop binary (`for(;;)
+/// x++;`, no syscalls in the hot loop, no output) and return its path.
+///
+/// Deliberately not `/usr/bin/python3` (a modern-macOS `xcrun` shim
+/// needing Xcode/CommandLineTools read grants no minimal test scope has)
+/// nor `/usr/bin/yes` (empirically — confirmed independently of this
+/// crate's code via plain `bash -c 'ulimit -t 1; exec /usr/bin/yes'` —
+/// does *not* reliably get killed by `RLIMIT_CPU` within several seconds
+/// on this platform, apparently because its tight `write(2)` loop doesn't
+/// accumulate accounted CPU time the way a pure user-space loop does;
+/// `python3`'s equivalent busy loop *does* get killed correctly under the
+/// exact same `ulimit -t 1`, confirming this is a property of the test
+/// *subject*, not of `RLIMIT_CPU` or this module's `pre_exec` wiring).
+/// Only depends on `/usr/lib/libSystem.B.dylib`, already covered by the
+/// backend's unconditional baseline SBPL grant, so it needs no additional
+/// scope beyond what every sandboxed spawn already gets.
+fn compile_busy_loop_binary(dir: &std::path::Path) -> std::path::PathBuf {
+  let src = dir.join("busy_loop.c");
+  std::fs::write(
+    &src,
+    "int main(void) { volatile long x = 0; for (;;) { x++; } return 0; }\n",
+  )
+  .expect("write busy_loop.c");
+  let bin = dir.join("busy_loop");
+  let status = std::process::Command::new("cc")
+    .arg("-O2")
+    .arg("-o")
+    .arg(&bin)
+    .arg(&src)
+    .status()
+    .expect("invoke cc");
+  assert!(
+    status.success(),
+    "cc failed to compile the busy-loop test fixture"
+  );
+  bin
+}
+
+/// S3.2 literal regression: `max_cpu_secs` must actually bound CPU time —
+/// a busy loop that would otherwise spin forever must be killed once it
+/// exceeds its CPU-second budget.
+///
+/// Drives [`MacosSandboxExecBackend::wrap_command`] directly (rather than
+/// through `ShellTool`) so the test isolates the S3.2 mechanism itself
+/// from unrelated `ShellTool`/SBPL-profile plumbing (command parsing,
+/// shell-mode `getcwd` requirements, output capture) that isn't what
+/// this test is about.
+#[tokio::test]
+async fn macos_sandbox_enforces_max_cpu_secs_via_rlimit() {
+  if !sandbox_exec_usable() {
+    eprintln!("skipping: sandbox-exec is present but not usable in this environment");
+    return;
+  }
+  if std::process::Command::new("cc")
+    .arg("--version")
+    .output()
+    .map(|out| !out.status.success())
+    .unwrap_or(true)
+  {
+    eprintln!("skipping: no working `cc` to compile the busy-loop test fixture");
+    return;
+  }
+
+  let dir = tempfile::TempDir::new().expect("create temp dir");
+  let busy_loop = compile_busy_loop_binary(dir.path());
+
+  let backend = MacosSandboxExecBackend::new();
+  let scope = SandboxScope::new().with_max_cpu_secs(1);
+  let mut cmd = tokio::process::Command::new(&busy_loop);
+  backend
+    .wrap_command(&mut cmd, &[Capability::Exec], &scope)
+    .expect("wrap_command must succeed");
+  cmd.stdout(std::process::Stdio::null());
+  cmd.stderr(std::process::Stdio::null());
+
+  let start = std::time::Instant::now();
+  let status = cmd.status().await.expect("child must spawn");
+  let elapsed = start.elapsed();
+
+  assert!(
+    !status.success(),
+    "expected RLIMIT_CPU to kill the busy loop, but it exited successfully"
+  );
+  assert!(
+    elapsed < std::time::Duration::from_secs(10),
+    "expected the RLIMIT_CPU kill within a few seconds of the 1s budget, took {elapsed:?}"
   );
 }
