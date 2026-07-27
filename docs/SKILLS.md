@@ -50,7 +50,7 @@ Important fields:
 
 - `name`: lowercase identifier using letters, digits, and hyphens.
 - `description`: short explanation of what the skill does and when to use it.
-- `allowed-tools`: optional space-delimited built-in tool list. Supported values are `shell`, `file`, `http`, and `script`.
+- `allowed-tools`: optional space-delimited built-in tool list. Supported values are `shell`, `file`, `http`, `script`, and `code_exec`.
 - `metadata.version`: optional version. Defaults to `1.0.0`.
 - Markdown body: becomes the base persona/system instructions.
 
@@ -78,6 +78,7 @@ The current built-ins are:
 - `shell`: execute allowed commands.
 - `http`: make HTTP requests subject to allowed domain policy.
 - `script`: execute scripts from the skill's `scripts/` directory.
+- `code_exec`: run LLM-generated Python in a strongly-isolated, ephemeral, network-off sandbox — see [Code Execution Tool](#code-execution-tool) below.
 
 For tighter sandbox constraints, use `skill.toml`:
 
@@ -131,6 +132,24 @@ type = "array"
 ```
 
 For sandboxing, script tools resolve and canonicalize the target path before execution. Symlinks or paths that escape `scripts/` are rejected. If a skill declares only the `script` tool and omits `allowed_commands`, AgentFlow allows only the known script interpreters: `python3`, `bash`, and `node`.
+
+## Code Execution Tool
+
+`script` only runs author-signed files that existed in `scripts/` before the run started — it never executes content the model wrote this turn. `code_exec` fills that gap: it runs Python source the LLM generates in the conversation itself, inside a strongly-isolated container/microVM (Apple's `container` CLI or rootless Podman), never through the OS-sandbox tier `script`/`shell` use. See [RFC_LLM_CODE_EXECUTION.md](RFC_LLM_CODE_EXECUTION.md) for the full design rationale.
+
+```toml
+[[tools]]
+name = "code_exec"
+```
+
+Declare it the same way as any other tool — no additional constraint fields are supported in this version (`allowed_commands` / `allowed_paths` / `allowed_domains` / `os_sandbox` are ignored for `code_exec`; none of its isolation is author-configurable):
+
+- One call runs one Python script, passed inline as the `code` parameter — there's no `scripts/` directory involvement and no persistent state between calls.
+- Every call gets a fresh, disposable working directory, discarded when the call returns.
+- No network access at all, always — there is no opt-in yet (an egress allowlist proxy is a planned prerequisite before that changes).
+- Resident memory, CPU time, and process count are capped (256 MiB / 30 CPU-seconds / 32 processes as of this writing) and enforced by the container engine.
+- Requires a container engine on the host. If none is available, `code_exec` refuses every call rather than running unsandboxed — check `agentflow doctor` or `agentflow skill inspect --explain-permissions` for the current status.
+- Only Python is supported in this version.
 
 ## MCP Tools
 

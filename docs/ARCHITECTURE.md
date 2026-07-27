@@ -223,7 +223,7 @@ nodes that build a `ReActAgent` from a Skill manifest at run time.
 | `agentflow-cli` | User-facing commands for workflow run/validate/debug, dynamic workflow (`workflow dynamic`), config, LLM model discovery, MCP, Skills, tracing, audio, image, and optional RAG operations. |
 | `agentflow-config` | Shared config-first workflow assembly: YAML workflow schema (`config::v2`), the `executor` that builds an `agentflow-core` `Flow`, and the `diagnostics` report builder. Consumed by both `agentflow-cli` and `agentflow-server` (P-A2.4). |
 | `agentflow-agents` | ReAct / plan-execute / supervisor runtimes, `AgentNode`, `WorkflowTool`, and the `dynamic` module (`compile_plan_to_flow` + `DynamicWorkflowAgent`) for dynamic workflows. The runtime *contracts* live in `agentflow-agent-spi`. |
-| `agentflow-tools` | Built-in tool interfaces, registry, sandbox and permission policy, file/http/shell/script tools. |
+| `agentflow-tools` | Built-in tool interfaces, registry, sandbox and permission policy, file/http/shell/script/`code_exec` tools. `code_exec` (S4.2) runs LLM-generated Python inside a strongly-isolated `ContainerBackend` (Apple `container` CLI / rootless Podman) — a separate tier from the OS-sandbox backend the other tools use. |
 | `agentflow-skills` | Skill loading, `SKILL.md` parsing, manifests, registry indexes, marketplace files, MCP tool discovery, and Skill builder integration. |
 | `agentflow-mcp` | MCP stdio transport, client sessions, tools, resources, prompts, retry, and builder APIs. |
 | `agentflow-rag` | RAG abstractions including vector store and reranking modules. |
