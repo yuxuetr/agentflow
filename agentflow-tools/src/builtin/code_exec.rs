@@ -67,6 +67,15 @@ const MAX_PIDS: u32 = 32;
 /// gives the ulimit room to fire first, so its distinct failure mode stays
 /// observable.
 const SPAWN_TIMEOUT_SECS: u64 = MAX_CPU_SECS + 15;
+/// Cap on captured stdout/stderr, independent of [`MAX_MEMORY_BYTES`]
+/// above — that bounds the *guest* container's memory, not this host
+/// process's own buffers. A payload that writes continuously (not
+/// sleeping, so the wall-clock timeout backstop is what would eventually
+/// catch it, not immediately) could otherwise grow an unbounded `Vec` on
+/// the host before any other limit fires — found via adversarial code
+/// review this session. Matches the `agentflow-harness::tasks`
+/// `DEFAULT_MAX_OUTPUT_BYTES` convention for the same class of problem.
+const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub struct CodeExecTool {
   backend: std::sync::Arc<dyn SandboxBackend>,
@@ -232,9 +241,11 @@ impl Tool for CodeExecTool {
       .stderr(std::process::Stdio::piped())
       .kill_on_drop(true);
 
-    let child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
+    let mut child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn code_exec container: {e}"),
     })?;
+    let mut stdout_pipe = child.stdout.take().expect("stdout was configured as piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was configured as piped");
 
     // Guarantees `self.backend.terminate(&scope)` runs on every exit path
     // from here on *except* a clean `wait_with_output()` completion (armed
@@ -265,15 +276,27 @@ impl Tool for CodeExecTool {
       armed: true,
     };
 
-    let wait_result = tokio::time::timeout(
-      std::time::Duration::from_secs(SPAWN_TIMEOUT_SECS),
-      child.wait_with_output(),
-    )
-    .await;
-    let output = match wait_result {
-      Ok(Ok(output)) => {
+    // Bounded, concurrent reads (not `wait_with_output()`, which
+    // accumulates each stream into an unbounded `Vec`) — see
+    // `MAX_OUTPUT_BYTES` and `read_capped`. `read_capped` drains past the
+    // cap rather than stopping, so a chatty child never blocks on a full
+    // pipe waiting for a reader that gave up on it; `child.wait()` runs
+    // concurrently with both via `tokio::join!`, not after, for the same
+    // reason.
+    let wait_result =
+      tokio::time::timeout(std::time::Duration::from_secs(SPAWN_TIMEOUT_SECS), async {
+        let (stdout_bytes, stderr_bytes, status) = tokio::join!(
+          read_capped(&mut stdout_pipe, MAX_OUTPUT_BYTES),
+          read_capped(&mut stderr_pipe, MAX_OUTPUT_BYTES),
+          child.wait(),
+        );
+        status.map(|status| (stdout_bytes, stderr_bytes, status))
+      })
+      .await;
+    let (stdout_bytes, stderr_bytes, status) = match wait_result {
+      Ok(Ok(triple)) => {
         cleanup_guard.armed = false;
-        output
+        triple
       }
       Ok(Err(io_err)) => return Err(ToolError::IoError(io_err)),
       Err(_) => {
@@ -286,10 +309,10 @@ impl Tool for CodeExecTool {
     // `workdir` is dropped (and its temp directory removed) once this
     // function returns — nothing here needs to reach back into it after
     // this point (RFC constraint #4: results only via `ToolOutput`).
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
 
-    if output.status.success() {
+    if status.success() {
       let result = if stdout.trim().is_empty() {
         "(no output)".to_string()
       } else {
@@ -304,11 +327,37 @@ impl Tool for CodeExecTool {
       };
       Ok(ToolOutput::error(format!(
         "code_exec exited with code {}: {}",
-        output.status.code().unwrap_or(-1),
+        status.code().unwrap_or(-1),
         msg
       )))
     }
   }
+}
+
+/// Read `reader` to EOF, keeping only the first `cap` bytes — see
+/// [`MAX_OUTPUT_BYTES`] for why this exists instead of the unbounded
+/// accumulation `Child::wait_with_output()` would otherwise do. Drains
+/// past the cap rather than stopping once it's reached: a child whose
+/// pipe fills up because nothing is reading from it anymore blocks on the
+/// next write, which would otherwise turn "cap the output" into "hang the
+/// container until the wall-clock timeout," defeating the point of a
+/// resource limit.
+async fn read_capped(mut reader: impl tokio::io::AsyncRead + Unpin, cap: usize) -> Vec<u8> {
+  use tokio::io::AsyncReadExt;
+  let mut buf = Vec::with_capacity(cap.min(8192));
+  let mut chunk = [0u8; 8192];
+  loop {
+    match reader.read(&mut chunk).await {
+      Ok(0) | Err(_) => break,
+      Ok(n) => {
+        if buf.len() < cap {
+          let take = (cap - buf.len()).min(n);
+          buf.extend_from_slice(&chunk[..take]);
+        }
+      }
+    }
+  }
+  buf
 }
 
 #[cfg(test)]

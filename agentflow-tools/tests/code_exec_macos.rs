@@ -30,6 +30,42 @@ fn container_engine_available() -> bool {
 /// directories.
 static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Regression test for a resource-exhaustion gap found via adversarial
+/// code review this session: `Child::wait_with_output()` accumulates
+/// stdout/stderr into unbounded host-side `Vec`s, so a payload that just
+/// writes continuously (never sleeping, so it's not caught by
+/// `code_exec_orphaned_container_is_stopped_on_timeout`'s scenario, and
+/// not necessarily CPU-bound enough to trip the ulimit quickly either)
+/// could grow the *host* agentflow process's own memory well past
+/// whatever the container's own memory cap bounds inside the guest.
+#[tokio::test]
+async fn code_exec_output_is_capped_independent_of_container_memory_limit() {
+  let _guard = TEST_LOCK.lock().await;
+  if !container_engine_available() {
+    eprintln!("skipping: no container engine ('container' or 'podman') on PATH");
+    return;
+  }
+  let tool = CodeExecTool::new();
+  // Writes ~1 MiB of stdout — comfortably more than the 64 KiB cap, but
+  // small enough to finish well within the CPU/wall-clock limits so this
+  // test exercises the *capture* bound specifically, not the timeout path.
+  let code = "print('x' * 1024 * 1024)";
+  let result = tool
+    .execute(json!({"code": code}))
+    .await
+    .expect("tool call must complete");
+  assert!(
+    !result.is_error,
+    "expected success, got: {}",
+    result.content
+  );
+  assert!(
+    result.content.len() <= 64 * 1024,
+    "expected captured output to be capped at 64 KiB, got {} bytes",
+    result.content.len()
+  );
+}
+
 #[tokio::test]
 async fn code_exec_runs_real_computation() {
   let _guard = TEST_LOCK.lock().await;
