@@ -943,6 +943,40 @@ mod tests {
     );
   }
 
+  /// S4.2 follow-up: `production_profile_escalates_non_idempotent_tools`
+  /// above proves the *mechanism* works for any `NonIdempotent` tool via
+  /// `ProbeTool`, a hand-rolled test double. This proves it for the real,
+  /// shipped `code_exec` tool specifically — the thing actually missing
+  /// after S4.2 first claimed to be done. Uses `AutoDenyApprovalProvider`
+  /// so the assertion holds regardless of whether this host has a
+  /// container engine on PATH: a denied approval short-circuits before
+  /// `CodeExecTool::execute` ever runs its own enforcing-backend check or
+  /// tries to spawn anything, so this test needs no skip-guard.
+  #[tokio::test]
+  async fn production_profile_escalates_code_exec() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(agentflow_tools::builtin::CodeExecTool::new()));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(AutoDenyApprovalProvider::new()), sinks)
+      .with_profile(HarnessProfile::Production);
+    let registry = wrap_registry(registry, config);
+    let result = registry
+      .execute("code_exec", serde_json::json!({"code": "print(1)"}))
+      .await;
+    assert!(
+      matches!(result, Err(ToolError::PolicyDenied { .. })),
+      "expected the production-profile escalation to deny code_exec before it ran, got {result:?}"
+    );
+    let events = sink.snapshot().await;
+    assert!(
+      events
+        .iter()
+        .any(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_))),
+      "expected an approval_requested event for code_exec"
+    );
+  }
+
   struct ScopedAllowOnceProvider {
     scope: ApprovalScope,
     calls: Arc<std::sync::Mutex<usize>>,
