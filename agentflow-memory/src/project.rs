@@ -43,7 +43,7 @@ use crate::MemoryError;
 /// instances, or a future variant).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectFact {
-  /// Tool that ran the command (`"shell"` or `"script"`).
+  /// Tool that ran the command (`"shell"`, `"script"`, or `"code_exec"`).
   pub tool: String,
   /// The exact command text observed.
   pub command: String,

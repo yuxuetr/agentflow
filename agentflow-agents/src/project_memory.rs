@@ -28,10 +28,11 @@ pub trait ProjectFactGenerator: Send + Sync {
   async fn extract(&self, steps: &[AgentStep]) -> Vec<ProjectFactCandidate>;
 }
 
-/// LLM-free, deterministic [`ProjectFactGenerator`]: every `shell`/`script`
-/// tool call's command becomes a candidate. Deduplicated within the run
-/// (the store's own upsert handles dedup *across* runs) so a command
-/// looped 50 times in one session doesn't produce 50 identical candidates.
+/// LLM-free, deterministic [`ProjectFactGenerator`]: every
+/// `shell`/`script`/`code_exec` tool call's command becomes a candidate.
+/// Deduplicated within the run (the store's own upsert handles dedup
+/// *across* runs) so a command looped 50 times in one session doesn't
+/// produce 50 identical candidates.
 #[derive(Debug, Default, Clone)]
 pub struct DeterministicProjectFactGenerator;
 
@@ -51,6 +52,12 @@ impl ProjectFactGenerator for DeterministicProjectFactGenerator {
       let command = match tool.as_str() {
         "shell" => params.get("command").and_then(|v| v.as_str()),
         "script" => params.get("script").and_then(|v| v.as_str()),
+        // S4.2: code_exec is the same "ran something in this project"
+        // signal as shell/script, just llm-generated Python instead of a
+        // shell one-liner or an author-signed script filename — recorded
+        // verbatim like the other two, no summarization (this extractor
+        // stays LLM-free by design, see the module doc comment).
+        "code_exec" => params.get("code").and_then(|v| v.as_str()),
         _ => None,
       };
       let Some(command) = command else { continue };
@@ -110,6 +117,20 @@ mod tests {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].tool, "script");
     assert_eq!(candidates[0].command, "check_syntax.py");
+  }
+
+  #[tokio::test]
+  async fn extracts_code_exec_code() {
+    let generator = DeterministicProjectFactGenerator;
+    let steps = vec![tool_call_step(
+      0,
+      "code_exec",
+      json!({"code": "print(sum(range(10)))"}),
+    )];
+    let candidates = generator.extract(&steps).await;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].tool, "code_exec");
+    assert_eq!(candidates[0].command, "print(sum(range(10)))");
   }
 
   #[tokio::test]
