@@ -18,7 +18,7 @@ pub enum SkillError {
   #[error("Invalid skill configuration: {message}")]
   ValidationError { message: String },
 
-  #[error("Unknown tool '{name}' — available: shell, file, http, script")]
+  #[error("Unknown tool '{name}' — available: shell, file, http, script, code_exec")]
   UnknownTool { name: String },
 
   #[error("Knowledge file not found: {path}")]

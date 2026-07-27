@@ -8,7 +8,9 @@ use agentflow_skills::policy::{
   McpCapabilityMap, PolicyResolutionInput, ResolvedToolPolicy, ToolAdmission, resolve_tool_policy,
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
-use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
+use agentflow_tools::sandbox::{
+  SandboxBackend as _, SandboxEnforcement, code_exec_backend, default_backend,
+};
 use agentflow_tools::{Capability, EffectiveCapabilities, ToolPermission};
 
 use super::error_context::mcp_context;
@@ -355,6 +357,34 @@ fn print_sandbox_profile(os_sandbox_optin: bool, tools: &[agentflow_skills::mani
       println!("    - {}", note);
     }
   }
+
+  // S4.2: code_exec's isolation is a completely separate axis from
+  // shell/script's opt-in os_sandbox above — a different backend
+  // (ContainerBackend, not the platform default), and mandatory rather
+  // than opt-in (code_exec refuses to run at all when this isn't
+  // Enforcing, it never falls back to unsandboxed). Reported in its own
+  // section rather than folded into the block above, since none of that
+  // block's opt-in vocabulary ("manifest opt-in", "consider enabling")
+  // applies to it. Note: unlike `default_backend()` above, detecting the
+  // container engine spawns a short `<engine> --version` probe — this
+  // section is not fully hermetic.
+  if tools.iter().any(|t| t.name.to_lowercase() == "code_exec") {
+    let code_exec = code_exec_backend();
+    let code_exec_enforcement = code_exec.enforcement_level();
+    println!("\nCode-exec isolation (code_exec tool, always mandatory):");
+    println!("  backend:           {}", code_exec.name());
+    println!("  enforcement:       {}", code_exec_enforcement.as_str());
+    if code_exec_enforcement == SandboxEnforcement::Enforcing {
+      println!("  notes:             (none)");
+    } else {
+      println!("  notes:");
+      println!(
+        "    - skill declares code_exec but no container engine ('container' or 'podman') \
+         is available — every code_exec call will fail closed (SandboxViolation) rather \
+         than run unsandboxed"
+      );
+    }
+  }
 }
 
 fn resolve_skill_policy(
@@ -561,6 +591,7 @@ fn builtin_tool_required_capabilities(name: &str) -> Option<Vec<Capability>> {
     "file" => Some(vec![Capability::FsRead, Capability::FsWrite]),
     "http" => Some(vec![Capability::Net]),
     "script" => Some(vec![Capability::Exec, Capability::FsRead]),
+    "code_exec" => Some(vec![Capability::Exec]),
     _ => None,
   }
 }

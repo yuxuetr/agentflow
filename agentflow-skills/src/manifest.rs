@@ -363,7 +363,11 @@ pub fn default_mcp_command_allowlist() -> Vec<String> {
 /// Declares a tool the skill is authorised to use, with optional constraints.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolConfig {
-  /// Tool name — one of `"shell"`, `"file"`, `"http"`, `"script"`.
+  /// Tool name — one of `"shell"`, `"file"`, `"http"`, `"script"`,
+  /// `"code_exec"`. The constraint fields below (`allowed_commands`,
+  /// `allowed_paths`, `allowed_domains`, `os_sandbox`) are ignored for
+  /// `code_exec` — none of its isolation is author-configurable in v1
+  /// (S4.2).
   pub name: String,
 
   // ── shell constraints ────────────────────────────────────────────────────

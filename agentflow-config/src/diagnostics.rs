@@ -3,7 +3,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use agentflow_llm::{LLMConfig, LLMConfigSource, MODELS_CONFIG_ENV};
-use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
+use agentflow_tools::sandbox::{
+  SandboxBackend as _, SandboxEnforcement, code_exec_backend, default_backend,
+};
 use agentflow_tools::{SECURITY_PROFILE_ENV, SecurityProfile, SecurityProfileDefaults};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,7 @@ pub struct DoctorReport {
   config: ConfigReport,
   security: SecurityReport,
   sandbox: SandboxReport,
+  code_exec: CodeExecReport,
   environment: EnvironmentReport,
   disk: DiskReport,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +260,20 @@ pub struct SandboxReport {
   warnings: Vec<String>,
 }
 
+/// S4.2: the `ContainerBackend` `code_exec` uses — a separate, stronger
+/// isolation tier from [`SandboxReport`]'s OS-sandbox backend above, so
+/// it's reported independently rather than folded in. Purely informational
+/// (does not affect [`DoctorStatus`]): `code_exec` is opt-in per skill
+/// manifest, so a non-enforcing container engine here only matters to a
+/// skill that actually declares the tool, which `doctor`'s host-wide scope
+/// has no visibility into.
+#[derive(Debug, Serialize)]
+pub struct CodeExecReport {
+  backend: &'static str,
+  enforcement: SandboxEnforcement,
+  enforcing: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct EnvironmentReport {
   agentflow_run_dir: Option<String>,
@@ -430,6 +447,17 @@ pub async fn build_report(
     warnings: sandbox_warnings(sandbox_backend.name(), enforcement),
   };
 
+  // S4.2: probing this spawns a short `<engine> --version` check (unlike
+  // `default_backend()` above, which is hermetic) — acceptable for a
+  // once-per-`doctor`-run diagnostic.
+  let code_exec_backend = code_exec_backend();
+  let code_exec_enforcement = code_exec_backend.enforcement_level();
+  let code_exec = CodeExecReport {
+    backend: code_exec_backend.name(),
+    enforcement: code_exec_enforcement,
+    enforcing: code_exec_enforcement.is_enforcing(),
+  };
+
   let security = security_report();
   let disk = disk_report(home.as_deref());
   let server_report = match server {
@@ -578,6 +606,7 @@ pub async fn build_report(
     config,
     security,
     sandbox,
+    code_exec,
     environment: EnvironmentReport {
       agentflow_run_dir: std::env::var("AGENTFLOW_RUN_DIR").ok(),
       agentflow_trace_dir: std::env::var("AGENTFLOW_TRACE_DIR").ok(),
@@ -1151,6 +1180,12 @@ pub fn print_text_report(report: &DoctorReport) {
   for warning in &report.sandbox.warnings {
     println!("  warning: {warning}");
   }
+  println!();
+
+  println!("Code-exec isolation (code_exec tool, opt-in per skill):");
+  println!("  backend: {}", report.code_exec.backend);
+  println!("  enforcement: {}", report.code_exec.enforcement.as_str());
+  println!("  enforcing: {}", enabled_label(report.code_exec.enforcing));
   println!();
 
   println!("Environment:");

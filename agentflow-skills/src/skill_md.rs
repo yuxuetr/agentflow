@@ -84,7 +84,7 @@ pub struct SkillMd {
   /// AgentFlow extension for security and tool governance controls.
   pub security: SecurityConfig,
   /// Space-delimited tool names recognised by agentflow
-  /// (`shell`, `file`, `http`, `script`).
+  /// (`shell`, `file`, `http`, `script`, `code_exec`).
   pub allowed_tools: Vec<String>,
   /// AgentFlow extension: LLM model name from frontmatter (F-AF-2).
   /// `None` when unspecified — `into_manifest` will leave

@@ -59,7 +59,8 @@ Unified tool abstraction:
 - `ToolMetadata` with `source: ToolSource::{Builtin, Script, Mcp, Workflow}`, permissions, original MCP server/tool names
 - Built-in `FileTool` / `HttpTool` / `ShellTool` (shell defaults to disabled)
 - `ToolOutputPart::{Text, Image, Resource}` for typed multimodal output
-- OS-level sandbox backends (macOS sandbox-exec / Linux seccomp) for `ShellTool` / `ScriptTool`
+- OS-level sandbox backends (macOS sandbox-exec / Linux seccomp + Landlock + cgroup v2 resource limits) for `ShellTool` / `ScriptTool`, `SecurityConfig::os_sandbox` defaults `true` (S3.4) — a skill opts a tool *out* rather than in
+- **`code_exec` (S4.2, `docs/RFC_LLM_CODE_EXECUTION.md`):** runs LLM-generated Python (v1, no other languages yet) inside `ContainerBackend` — a strongly-isolated tier shelling out to a real container engine (Apple's `container` CLI, preferred: genuine per-invocation Linux microVM; or rootless Podman) instead of the syscall-scoped OS sandbox above, since llm-generated content is adversarial by construction on every call (never author-signed like `ScriptTool`'s). Mandatory isolation — refuses to run rather than degrade when no engine is available — with a fresh ephemeral workdir per call, hardcoded resource limits (256 MiB / 30 CPU-seconds / 32 pids), zero network access (no egress allowlist proxy exists yet), and `ToolIdempotency::NonIdempotent` so harness's production-profile approval escalation applies automatically. `agentflow skill inspect --explain-permissions` and `agentflow doctor` both report the container engine's status independently from the OS-sandbox backend above.
 
 #### L2 — agentflow-mcp
 Model Context Protocol integration: client + server + transport (stdio first), JSON-RPC 2.0, retry/timeout/reconnect, latency benchmarks. The MCP→`agentflow-tools::Tool` adapter (`McpToolAdapter` + `McpClientPool`) lives in `agentflow-skills/src/mcp_tools.rs`, not in this crate — `agentflow-skills` owns the conversion because the skill builder is the entry point that knows which MCP servers a skill manifest declares.
@@ -173,7 +174,8 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag ops search|index|collections` (operator vector-store ops) + `rag eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
 - **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks, checkpoint recovery, retry, resource management, structured logging, Prometheus metrics
 - **Tracing** — `EventListener`, JSONL/SQLite/Postgres persistence, `trace replay` TUI, OTel span model + W3C `traceparent` propagation (inbound on workflow start + outbound through LLM HTTP calls). First-party OTLP transport (HTTP/gRPC + TLS + auth) is **deferred** (Q2.3.3) — operators wire their own `OtelSpanSink`.
-- **OS-level sandbox** — macOS sandbox-exec / Linux seccomp backends for shell/script tools (opt-in via `security.os_sandbox`); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output
+- **OS-level sandbox** — macOS sandbox-exec / Linux seccomp+Landlock+cgroup v2 backends for shell/script tools, `security.os_sandbox` defaults `true` (S3.4 — a skill opts a tool *out*, not in); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output
+- **`code_exec` LLM code execution** (S4.2) — `ContainerBackend` (Apple `container` CLI / rootless Podman) runs LLM-generated Python in a mandatory, strongly-isolated per-call container/microVM, separate from the OS-sandbox tier above; zero network access until an egress allowlist proxy lands; `agentflow doctor` / `skill inspect --explain-permissions` report its status independently
 - **Platform skeleton** — server gateway routes (`/v1/runs`, SSE, skills) + DB schema/repos + auth
 - **Distributed worker foundation** — `agentflow-worker` runtime/binary, gRPC `WorkerProtocol`, server control-plane façade, stitched worker traces mapped to OTel spans (node-payload coverage is partial; see P2.8)
 - **Web UI alpha shell** — `agentflow-ui` SPA embedded at `/ui`, run list, DAG graph/status, event history, SSE updates
@@ -282,7 +284,7 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 
 ---
 
-**Last Updated**: 2026-06-21 (P-A track sync: `agentflow-config` crate, dynamic-workflow CLI, `race_with_limits`, burned `server→cli` edge)
+**Last Updated**: 2026-07-27 (S-track sandbox hardening closed: Linux Landlock + cgroup v2 resource limits, `os_sandbox` default flip, `code_exec` LLM code execution via `ContainerBackend`)
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
 **Composite Maturity Rating**: A (per `docs/archive/PROJECT_EVALUATION_2026-05-19.md`)

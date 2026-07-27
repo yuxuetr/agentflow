@@ -9,7 +9,7 @@ use crate::{error::SkillError, manifest::SkillManifest, skill_md::SkillMd};
 
 const MANIFEST_FILE: &str = "skill.toml";
 const SKILL_MD_FILE: &str = "SKILL.md";
-const KNOWN_TOOLS: &[&str] = &["shell", "file", "http", "script"];
+const KNOWN_TOOLS: &[&str] = &["shell", "file", "http", "script", "code_exec"];
 const KNOWN_MEMORY_TYPES: &[&str] = &["session", "sqlite", "none"];
 
 /// Loads and validates a skill manifest from a skill directory.
