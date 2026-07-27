@@ -6,7 +6,7 @@ use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
-use agentflow_tools::builtin::{FileTool, HttpTool, ScriptTool, ShellTool};
+use agentflow_tools::builtin::{CodeExecTool, FileTool, HttpTool, ScriptTool, ShellTool};
 use agentflow_tools::{Capability, SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
 use tracing::info;
 
@@ -331,6 +331,15 @@ fn build_tool_registry(
           tool = tool.with_os_sandbox();
         }
         registry.register(Arc::new(tool));
+      }
+      // S4.2: code_exec deliberately does not consult `policy`/
+      // `effective_os_sandbox` — none of its constraints are
+      // author-configurable in v1 (RFC_LLM_CODE_EXECUTION.md's "no sharing
+      // at all" design: unlike `script`'s opt-in OS sandbox, code_exec's
+      // strong isolation is mandatory and its own `ContainerBackend` is
+      // never the shared `SandboxPolicy`-driven `default_backend()`).
+      "code_exec" => {
+        registry.register(Arc::new(CodeExecTool::new()));
       }
       other => {
         // Already validated by SkillLoader; log and skip unknown tools.
@@ -1063,6 +1072,50 @@ mod tests {
       ..ToolConfig::default()
     }];
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+  }
+
+  /// S4.2: a `[[tools]] name = "code_exec"` manifest entry registers a real,
+  /// callable `CodeExecTool` — no `SandboxPolicy`/`os_sandbox` threading
+  /// needed (unlike `script`), matching the builder's dedicated match arm.
+  /// Skips the actual `execute()` call (with a clear message) on a host
+  /// with no container engine, mirroring the skip-guard pattern already
+  /// established for `agentflow-tools`' S3/S4.2 real-enforcement tests.
+  #[tokio::test]
+  async fn build_registers_code_exec_tool() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("code-exec-skill");
+    manifest.tools = vec![ToolConfig {
+      name: "code_exec".to_string(),
+      ..ToolConfig::default()
+    }];
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+    let tool = registry
+      .get("code_exec")
+      .expect("code_exec must be registered");
+    assert_eq!(
+      registry.tool_idempotency("code_exec", &serde_json::json!({})),
+      Some(agentflow_tools::ToolIdempotency::NonIdempotent)
+    );
+
+    if tool
+      .sandbox_status()
+      .is_none_or(|status| status.enforcement != agentflow_tools::SandboxEnforcement::Enforcing)
+    {
+      eprintln!("skipping execute(): no container engine ('container' or 'podman') on PATH");
+      return;
+    }
+    let result = registry
+      .execute("code_exec", serde_json::json!({"code": "print(1 + 1)"}))
+      .await
+      .expect("tool call must complete");
+    assert!(
+      !result.is_error,
+      "expected success, got: {}",
+      result.content
+    );
+    assert_eq!(result.content, "2");
   }
 
   /// build() with knowledge files injects content into the persona.

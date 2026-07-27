@@ -19,8 +19,18 @@
 //! * Other platforms: [`NoopSandboxBackend`] is a pass-through. Callers can
 //!   detect this via [`SandboxBackend::is_enforcing`] and decide whether to
 //!   refuse the call rather than run unsandboxed.
+//!
+//! [`ContainerBackend`] (S4.2) is a separate, stronger tier used only by the
+//! `code_exec` tool: instead of syscall/path-scoped containment on the
+//! shared host kernel, it shells out to a real container engine (Apple's
+//! `container` CLI or rootless Podman) so llm-generated code — adversarial
+//! by construction, unlike the author-signed content the OS-sandbox backends
+//! above are designed for — gets its own kernel boundary per invocation. It
+//! hard-refuses (`Err`) rather than degrading when no engine is available;
+//! see its module docs for the full rationale.
 
 pub mod backend;
+pub mod container;
 pub mod policy;
 
 #[cfg(target_os = "linux")]
@@ -32,6 +42,7 @@ pub mod noop;
 pub use backend::{
   SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope, SandboxStatus, default_backend,
 };
+pub use container::{ContainerBackend, code_exec_backend};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxSeccompBackend;
 #[cfg(target_os = "macos")]

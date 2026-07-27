@@ -196,6 +196,11 @@ impl ToolPermissionSet {
         ToolPermission::FilesystemWrite,
       ]),
       "http" => Self::new([ToolPermission::Network]),
+      // S4.2: code_exec runs llm-generated code inside a ContainerBackend
+      // (never the host process directly), so it needs ProcessExec for
+      // admission purposes even though its filesystem access is confined
+      // entirely to its own ephemeral in-container workdir.
+      "code_exec" => Self::new([ToolPermission::ProcessExec]),
       _ => Self::empty(),
     }
   }
@@ -320,7 +325,7 @@ impl Default for ToolMetadata {
 
 fn builtin_tool_idempotency(tool_name: &str) -> ToolIdempotency {
   match tool_name {
-    "shell" => ToolIdempotency::NonIdempotent,
+    "shell" | "code_exec" => ToolIdempotency::NonIdempotent,
     "file" | "http" => ToolIdempotency::Unknown,
     _ => ToolIdempotency::Unknown,
   }
