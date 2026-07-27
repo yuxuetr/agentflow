@@ -10,8 +10,8 @@
 
 #![cfg(target_os = "macos")]
 
-use agentflow_tools::Tool;
 use agentflow_tools::builtin::CodeExecTool;
+use agentflow_tools::{Tool, ToolError};
 use serde_json::json;
 
 fn container_engine_available() -> bool {
@@ -174,6 +174,18 @@ async fn code_exec_enforces_memory_limit() {
     "expected the 256 MiB cap to reject a 512 MiB allocation, got success: {}",
     result.content
   );
+  // Not just any error: confirmed (this session) that an unrelated
+  // spawn/flag failure would also set is_error, and a prior version of
+  // this assertion accepted that as false-positive "proof" the cap fired
+  // — the same leniency already fixed once for the pids test after it
+  // masked a real Podman `--uid` bug. `MemoryError` is Python's own
+  // OOM-under-the-cgroup-limit signature, distinct from any other failure
+  // mode this call could hit.
+  assert!(
+    result.content.contains("MemoryError"),
+    "expected a MemoryError proving the 256 MiB cap fired, got an unrelated failure instead: {}",
+    result.content
+  );
 }
 
 #[tokio::test]
@@ -202,10 +214,72 @@ while True:
     "expected the CPU-seconds ulimit to kill the busy loop, got success: {}",
     result.content
   );
+  // Not just any error — see the identical rationale on
+  // `code_exec_enforces_memory_limit`. A `--ulimit cpu=` kill reports as
+  // exit code 137 (128 + SIGKILL) on Apple's `container` CLI (confirmed
+  // this session), with no Python-level traceback (the process is killed
+  // outright, never gets to print one) — distinguishable from any other
+  // failure this call could hit.
+  assert!(
+    result.content.contains("code 137"),
+    "expected exit code 137 (SIGKILL via the CPU ulimit) proving the cap fired, got an \
+     unrelated failure instead: {}",
+    result.content
+  );
   assert!(
     elapsed < std::time::Duration::from_secs(40),
     "expected the ulimit (30s CPU budget) to fire noticeably before the 45s wall-clock \
      spawn timeout backstop, took {elapsed:?}"
+  );
+}
+
+/// Regression test for a critical bug found via adversarial code review
+/// this session: killing the `container`/`podman` CLI **client** process
+/// on timeout does not stop the container it launched (confirmed
+/// empirically outside this test suite — `SIGKILL`-ing a running
+/// `container run` client left its container `running` indefinitely).
+/// A payload that sleeps rather than burns CPU/memory never trips the
+/// CPU-seconds ulimit or the memory cap — only the wall-clock timeout
+/// backstop can end it, and that backstop must actually stop the
+/// container, not just abandon it running on the host.
+#[tokio::test]
+async fn code_exec_orphaned_container_is_stopped_on_timeout() {
+  let _guard = TEST_LOCK.lock().await;
+  if !container_engine_available() {
+    eprintln!("skipping: no container engine ('container' or 'podman') on PATH");
+    return;
+  }
+  let tool = CodeExecTool::new();
+  let code = "import time\ntime.sleep(120)\n";
+  let started = std::time::Instant::now();
+  let result = tool.execute(json!({"code": code})).await;
+  let elapsed = started.elapsed();
+  assert!(
+    matches!(result, Err(ToolError::ExecutionFailed { .. })),
+    "expected a timeout error, got {result:?}"
+  );
+  assert!(
+    elapsed < std::time::Duration::from_secs(60),
+    "expected the 45s wall-clock timeout to fire, took {elapsed:?}"
+  );
+
+  // Give `terminate()`'s `stop` a brief moment to take effect, then
+  // confirm no container from this exact test process is still running.
+  // Matched by pid prefix (this test process's own pid, embedded in the
+  // container name code_exec.rs generates) so this is immune to other
+  // concurrent containers on the host.
+  tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+  let prefix = format!("agentflow-code-exec-{}-", std::process::id());
+  let listing = std::process::Command::new("container")
+    .arg("list")
+    .output()
+    .ok()
+    .filter(|o| o.status.success())
+    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    .unwrap_or_default();
+  assert!(
+    !listing.contains(&prefix),
+    "expected the timed-out container to be stopped, but it's still listed as running:\n{listing}"
   );
 }
 

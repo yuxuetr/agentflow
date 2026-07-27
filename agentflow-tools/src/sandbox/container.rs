@@ -236,6 +236,9 @@ impl SandboxBackend for ContainerBackend {
 
     let mut new_cmd = Command::new(engine.binary());
     new_cmd.arg("run").arg("--rm");
+    if let Some(name) = &scope.container_name {
+      new_cmd.arg("--name").arg(name);
+    }
     new_cmd
       .arg("-v")
       .arg(format!("{}:/workspace", canonical_workdir.display()));
@@ -293,6 +296,39 @@ impl SandboxBackend for ContainerBackend {
 
     *command = new_cmd;
     Ok(())
+  }
+
+  /// Forcefully stop the container `wrap_command` named via
+  /// `scope.container_name`. Required override, not optional polish: the
+  /// `Command`'s own `Child` here is the `container`/`podman` **client**
+  /// process, and killing that client does not stop the container it
+  /// launched — confirmed empirically (S4.2 follow-up, both engines) by
+  /// `SIGKILL`-ing a running client process and observing the container
+  /// stayed `running`/`Up` indefinitely afterward. No-op if
+  /// `scope.container_name` is unset (nothing to address) or no engine
+  /// was detected (nothing to run this against).
+  ///
+  /// `-t 2`: both engines default `stop` to a SIGTERM-then-wait-then-SIGKILL
+  /// sequence (5s / 10s default grace period respectively) — appropriate
+  /// for a cooperative container, not for content that reached this path
+  /// specifically because it exceeded a call it never legitimately needed
+  /// (a stalled, sleeping, or deliberately unresponsive payload should not
+  /// get an *extra* 5-10s grace period on top of already having timed
+  /// out). 2 seconds is enough for a well-behaved process to flush and
+  /// exit; anything still running past that gets SIGKILL.
+  fn terminate(&self, scope: &SandboxScope) {
+    let Some(engine) = self.engine else { return };
+    let Some(name) = &scope.container_name else {
+      return;
+    };
+    let _ = std::process::Command::new(engine.binary())
+      .arg("stop")
+      .arg("-t")
+      .arg("2")
+      .arg(name)
+      .stdout(StdStdio::null())
+      .stderr(StdStdio::null())
+      .status();
   }
 }
 

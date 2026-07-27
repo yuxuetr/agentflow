@@ -187,13 +187,27 @@ impl Tool for CodeExecTool {
     let canonical_workdir = workdir.path().canonicalize().map_err(ToolError::IoError)?;
 
     // ── Sandbox scope + spawn ─────────────────────────────────────────────
+    // Stable name so `SandboxBackend::terminate` can address this specific
+    // container later — see that call below for why this is required, not
+    // optional (a killed `container`/`podman` *client* process does not
+    // stop the container it launched; confirmed empirically, S4.2
+    // follow-up).
+    let container_name = format!(
+      "agentflow-code-exec-{}-{}",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default()
+    );
     let scope = SandboxScope::new()
       .with_read_paths([canonical_workdir.clone()])
       .with_write_paths([canonical_workdir.clone()])
       .with_working_directory(canonical_workdir)
       .with_max_memory_bytes(MAX_MEMORY_BYTES)
       .with_max_cpu_secs(MAX_CPU_SECS)
-      .with_max_pids(MAX_PIDS);
+      .with_max_pids(MAX_PIDS)
+      .with_container_name(container_name);
     let caps = self.requires_capabilities();
 
     let mut cmd = tokio::process::Command::new("python3");
@@ -210,24 +224,64 @@ impl Tool for CodeExecTool {
 
     // Stdio must be configured *after* `wrap_command` — see the trait's
     // caller contract (`SandboxBackend::wrap_command` doc comment).
+    // `kill_on_drop` is defense in depth for the client process itself;
+    // it does NOT stop the container (see `TerminateOnDrop` below).
     cmd
       .stdin(std::process::Stdio::null())
       .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped());
+      .stderr(std::process::Stdio::piped())
+      .kill_on_drop(true);
 
     let child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn code_exec container: {e}"),
     })?;
 
-    let output = tokio::time::timeout(
+    // Guarantees `self.backend.terminate(&scope)` runs on every exit path
+    // from here on *except* a clean `wait_with_output()` completion (armed
+    // = false below) — a container that actually finished is already torn
+    // down by its own `--rm`. Every other path (timeout, an I/O error
+    // losing track of the child, a future early return this function
+    // doesn't have yet) leaves the guard armed, so `Drop` fires it: without
+    // this, a code_exec call whose payload merely sleeps/blocks (burning
+    // no CPU, so RLIMIT_CPU never fires, and no memory, so the memory cap
+    // never fires) would outlive this function's own timeout indefinitely,
+    // orphaning a live container/VM on the host — confirmed as a real gap
+    // via adversarial code review this session, not hypothetical.
+    struct TerminateOnDrop<'a> {
+      backend: &'a dyn SandboxBackend,
+      scope: &'a SandboxScope,
+      armed: bool,
+    }
+    impl Drop for TerminateOnDrop<'_> {
+      fn drop(&mut self) {
+        if self.armed {
+          self.backend.terminate(self.scope);
+        }
+      }
+    }
+    let mut cleanup_guard = TerminateOnDrop {
+      backend: self.backend.as_ref(),
+      scope: &scope,
+      armed: true,
+    };
+
+    let wait_result = tokio::time::timeout(
       std::time::Duration::from_secs(SPAWN_TIMEOUT_SECS),
       child.wait_with_output(),
     )
-    .await
-    .map_err(|_| ToolError::ExecutionFailed {
-      message: format!("code_exec timed out after {SPAWN_TIMEOUT_SECS} seconds"),
-    })?
-    .map_err(ToolError::IoError)?;
+    .await;
+    let output = match wait_result {
+      Ok(Ok(output)) => {
+        cleanup_guard.armed = false;
+        output
+      }
+      Ok(Err(io_err)) => return Err(ToolError::IoError(io_err)),
+      Err(_) => {
+        return Err(ToolError::ExecutionFailed {
+          message: format!("code_exec timed out after {SPAWN_TIMEOUT_SECS} seconds"),
+        });
+      }
+    };
 
     // `workdir` is dropped (and its temp directory removed) once this
     // function returns — nothing here needs to reach back into it after

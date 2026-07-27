@@ -34,6 +34,14 @@ pub struct SandboxScope {
   /// S3.2: maximum CPU time in seconds. `None` means no limit. See
   /// [`crate::sandbox::SandboxPolicy::max_cpu_secs`].
   pub max_cpu_secs: Option<u64>,
+  /// S4.2: a stable, caller-chosen name/ID for this spawn, consumed only
+  /// by [`crate::sandbox::ContainerBackend`] (passed as `--name` to the
+  /// container engine) so [`SandboxBackend::terminate`] can later address
+  /// this specific instance even after the `Command`'s own `Child`
+  /// process (the engine CLI client, not the container itself) is gone.
+  /// `None` means the backend picks whatever default naming its engine
+  /// uses — fine for callers that never need to force-terminate early.
+  pub container_name: Option<String>,
 }
 
 impl SandboxScope {
@@ -76,6 +84,11 @@ impl SandboxScope {
 
   pub fn with_max_cpu_secs(mut self, secs: u64) -> Self {
     self.max_cpu_secs = Some(secs);
+    self
+  }
+
+  pub fn with_container_name(mut self, name: impl Into<String>) -> Self {
+    self.container_name = Some(name.into());
     self
   }
 }
@@ -218,6 +231,32 @@ pub trait SandboxBackend: Send + Sync {
     effective_capabilities: &[Capability],
     scope: &SandboxScope,
   ) -> Result<(), SandboxError>;
+
+  /// Best-effort, forceful termination of whatever `wrap_command` most
+  /// recently prepared for `scope`, when that work runs somewhere the
+  /// spawned `Command`'s own `Child` handle does not fully control.
+  ///
+  /// Default no-op — sufficient for backends where the `Child` genuinely
+  /// *is* the work (macOS `sandbox-exec` re-execs the target program
+  /// in-place; Linux seccomp installs an in-process filter via
+  /// `pre_exec`), so a caller killing its own `Child` (e.g.
+  /// `Command::kill_on_drop(true)`) already tears everything down.
+  ///
+  /// [`crate::sandbox::ContainerBackend`] overrides this: its `Child` is
+  /// the `container`/`podman` **client** process, not the container/VM
+  /// itself, and killing the client does not stop the container it
+  /// launched — confirmed empirically (S4.2 follow-up): a `container run`
+  /// client killed with `SIGKILL` left its container in the `running`
+  /// state indefinitely. Callers whose work might outlive their own
+  /// timeout (llm-generated code that mostly sleeps/blocks, e.g., never
+  /// hits a CPU or memory cap) must call this on the timeout path, not
+  /// just drop the `Child`.
+  ///
+  /// Synchronous and intentionally best-effort: this runs on a cleanup
+  /// path, not the hot path, so a brief blocking call is acceptable, and
+  /// there is nothing meaningful to do if cleanup itself fails (errors
+  /// are swallowed).
+  fn terminate(&self, _scope: &SandboxScope) {}
 }
 
 /// Return the appropriate enforcing backend for the current platform, or a
