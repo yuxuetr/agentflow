@@ -1,5 +1,22 @@
 # Kubernetes Deployment with AgentFlow Health Checks
 
+> **R2.1 (2026-07-28): the YAML in this doc predates the real Helm chart and
+> does not match it.** This guide is dated 2025-11-16 ("Phase 1.5 Complete"),
+> before `charts/agentflow/` existed. Its example manifests — the container
+> port (8080/9090 here vs. `3000` in the real chart), PersistentVolumeClaim +
+> RBAC for checkpoints, HorizontalPodAutoscaler, ServiceMonitor,
+> NetworkPolicy, PodDisruptionBudget, and Fluentd log shipping — are **not**
+> implemented as Helm templates anywhere in this repo (`charts/agentflow/templates/`
+> only has `deployment.yaml` / `service.yaml` / `serviceaccount.yaml` /
+> `secret.yaml`). For the actual, tested deployment path, see
+> [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm) and `charts/agentflow/values.yaml`.
+> The Health Check Integration section below (the Rust code + `/health/live`
+> `/health/ready` `/metrics` endpoints) is still accurate and is exactly what
+> the real chart's liveness/readiness probes call. Everything from
+> "Deployment Configuration" onward is retained as a reference sketch for
+> operators who want to build out HPA/PDB/NetworkPolicy/ServiceMonitor
+> support themselves — adapt it, don't `kubectl apply` it as-is.
+
 This guide demonstrates how to deploy AgentFlow workflows in Kubernetes with integrated health checks, leveraging Phase 1.5 features for production-ready deployments.
 
 ## Table of Contents
@@ -95,6 +112,11 @@ async fn readiness_check(
 ```
 
 ## Deployment Configuration
+
+> Reference sketch, not the shipped path — see the banner at the top of this
+> doc. For an actual deployment, use `helm install` with
+> `charts/agentflow/` as documented in
+> [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm).
 
 ### Basic Deployment
 
