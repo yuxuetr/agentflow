@@ -1,5 +1,11 @@
 # AgentFlow 模块优化评估报告
 
+> **Historical reference（R2.2，2026-07-28 补标）**：本报告保留 2025-01-04 的
+> 评估上下文，其中的完成度百分比（如 agents 30%、RAG 80%）已被后续近一年半
+> 的开发彻底超越，不代表当前状态。参见 `docs/CURRENT_STATUS.md` 获取当前
+> 权威状态；`OVERALL_EVALUATION_REPORT.md`（2026-04-28）、
+> `docs/archive/PROJECT_EVALUATION_2026-05-19.md` 等是更新的中间快照。
+
 **评估日期**: 2025-01-04
 **评估范围**: 所有核心模块
 **评估人**: Claude Code
