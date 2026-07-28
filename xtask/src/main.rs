@@ -40,10 +40,12 @@
 //!   `agentflow_tracing::redaction` or `prompt_fingerprint`. Backs
 //!   the Q5.2 workspace redaction audit.
 //! - `check-arch` — assert the subset of the eight crate-dependency laws
-//!   (`docs/RFC_CRATE_ARCHITECTURE.md` §7) checkable today: runtime-isolation
-//!   and surface-isolation. Known current violations live in `ARCH_ALLOWLIST`
-//!   with a P-A burndown task; the gate fails on any NEW violation or any
-//!   stale allowlist entry, so the list can only shrink (P-A0.2).
+//!   (`docs/RFC_CRATE_ARCHITECTURE.md` §7) checkable today: runtime-isolation,
+//!   surface-isolation, and kernel-isolation (R1.2 — an L0 contract crate must
+//!   not depend on anything outside the L0 kernel set). Known current
+//!   violations live in `ARCH_ALLOWLIST` with a P-A burndown task; the gate
+//!   fails on any NEW violation or any stale allowlist entry, so the list can
+//!   only shrink (P-A0.2).
 
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
@@ -3805,18 +3807,29 @@ mod refresh_live_models_tests {
   }
 }
 
-// ── check-arch (P-A0.2) ─────────────────────────────────────────────────────
+// ── check-arch (P-A0.2, kernel-isolation added R1.2) ────────────────────────
 //
 // Enforce the subset of the eight crate-dependency laws from
 // `docs/RFC_CRATE_ARCHITECTURE.md` §7 that is checkable against the *current*
-// crate set — i.e. before the contract-kernel crates (graph / agent-spi /
-// store-spi / async-util / value) land. Two laws are active today:
+// crate set. Three laws are active today:
 //
 //   - runtime-isolation (RFC §7 Law 4/6): a runtime crate must not depend on
 //     another runtime crate. Runtimes today = { core (executor),
 //     agents (loop), harness (shell) }.
 //   - surface-isolation (RFC §10 P-A2): a surface binary crate must not depend
 //     on another surface binary crate. Surfaces = { cli, server, worker }.
+//   - kernel-isolation (RFC §7 Law 1, R1.2 2026-07-28): an L0 contract-kernel
+//     crate must not depend on anything outside the kernel set. Kernel today
+//     = { value, graph, store-spi, agent-spi, async-util, tools } — the crate
+//     list CLAUDE.md's "L0 Contract Kernel" section names. Added after an
+//     independent audit found `agentflow-agent-spi` depending directly on
+//     `agentflow-llm` (an L2 impl crate) for over a month with neither the
+//     allowlist nor the latent-edge map ever noticing, because until R1.2 no
+//     law covered kernel crates at all (see R1.1 in TODOs.md for the fix that
+//     paid that specific edge down first). Intra-kernel edges (e.g.
+//     `graph -> value`, `agent-spi -> store-spi`) are the intended shape of
+//     the narrow waist and are NOT violations — only an edge that leaves the
+//     kernel set entirely breaks this law.
 //
 // Every edge that breaks an active law must either be FIXED or recorded in
 // `ARCH_ALLOWLIST` with the P-A task that burns it down. The gate FAILS on:
@@ -3825,10 +3838,11 @@ mod refresh_live_models_tests {
 //       violates a law) — forcing the allowlist to shrink as the migration
 //       pays each edge down.
 //
-// Activating a new law once the kernel crates exist is a one-line change: add
-// the crate set + a `classify_arch_edge` clause. Only `[dependencies]` and
-// `[build-dependencies]` count; `[dev-dependencies]` are test-only and do not
-// shape the shipped dependency graph, so they are intentionally excluded.
+// Activating a new law is a one-line change: add the crate set + a
+// `classify_arch_edge` clause (kernel-isolation above is the reference
+// example). Only `[dependencies]` and `[build-dependencies]` count;
+// `[dev-dependencies]` are test-only and do not shape the shipped dependency
+// graph, so they are intentionally excluded.
 
 /// Runtime-tier crates (RFC §3). No runtime may depend on another runtime.
 const ARCH_RUNTIME_CRATES: &[&str] = &["agentflow-core", "agentflow-agents", "agentflow-harness"];
@@ -3837,8 +3851,21 @@ const ARCH_RUNTIME_CRATES: &[&str] = &["agentflow-core", "agentflow-agents", "ag
 /// surface — they compose only via shared contract / assembly crates.
 const ARCH_SURFACE_CRATES: &[&str] = &["agentflow-cli", "agentflow-server", "agentflow-worker"];
 
+/// L0 contract-kernel crates (RFC §4, CLAUDE.md "L0 Contract Kernel"). A
+/// kernel crate may depend on other kernel crates (that's the narrow waist
+/// working as intended) but never on an L2/L3/L4 crate.
+const ARCH_KERNEL_CRATES: &[&str] = &[
+  "agentflow-value",
+  "agentflow-graph",
+  "agentflow-store-spi",
+  "agentflow-agent-spi",
+  "agentflow-async-util",
+  "agentflow-tools",
+];
+
 const LAW_RUNTIME_ISOLATION: &str = "runtime-isolation (RFC §7 Law 4/6)";
 const LAW_SURFACE_ISOLATION: &str = "surface-isolation (RFC §10 P-A2)";
+const LAW_KERNEL_ISOLATION: &str = "kernel-isolation (RFC §7 Law 1)";
 
 /// A currently-tolerated dependency-law violation paired with the P-A
 /// migration task that removes it. Each entry must correspond to a real edge
@@ -3987,6 +4014,7 @@ fn classify_arch_edge(
   to: &str,
   runtimes: &[&str],
   surfaces: &[&str],
+  kernels: &[&str],
 ) -> Option<&'static str> {
   let member = |set: &[&str], c: &str| set.contains(&c);
   if member(runtimes, from) && member(runtimes, to) {
@@ -3994,6 +4022,9 @@ fn classify_arch_edge(
   }
   if member(surfaces, from) && member(surfaces, to) {
     return Some(LAW_SURFACE_ISOLATION);
+  }
+  if member(kernels, from) && !member(kernels, to) {
+    return Some(LAW_KERNEL_ISOLATION);
   }
   None
 }
@@ -4015,6 +4046,7 @@ fn evaluate_arch(
   edges: &[(String, String)],
   runtimes: &[&str],
   surfaces: &[&str],
+  kernels: &[&str],
   allowlist: &[(&str, &str)],
 ) -> ArchEval {
   let allow: BTreeSet<(&str, &str)> = allowlist.iter().copied().collect();
@@ -4026,7 +4058,7 @@ fn evaluate_arch(
   let mut tracked = Vec::new();
   let mut new = Vec::new();
   for (from, to) in edges {
-    if let Some(law) = classify_arch_edge(from, to, runtimes, surfaces) {
+    if let Some(law) = classify_arch_edge(from, to, runtimes, surfaces, kernels) {
       if allow.contains(&(from.as_str(), to.as_str())) {
         tracked.push((from.clone(), to.clone(), law));
       } else {
@@ -4038,7 +4070,7 @@ fn evaluate_arch(
   let mut stale = Vec::new();
   for (from, to) in allowlist {
     let present = edge_set.contains(&(*from, *to));
-    let violates = classify_arch_edge(from, to, runtimes, surfaces).is_some();
+    let violates = classify_arch_edge(from, to, runtimes, surfaces, kernels).is_some();
     if !present || !violates {
       stale.push((from.to_string(), to.to_string()));
     }
@@ -4071,6 +4103,7 @@ fn evaluate_latent(
   latent: &[(&str, &str, &'static str)],
   runtimes: &[&str],
   surfaces: &[&str],
+  kernels: &[&str],
 ) -> LatentEval {
   let edge_set: BTreeSet<(&str, &str)> = edges
     .iter()
@@ -4082,7 +4115,7 @@ fn evaluate_latent(
   for (from, to, becomes) in latent {
     if !edge_set.contains(&(*from, *to)) {
       resolved.push((from.to_string(), to.to_string()));
-    } else if let Some(law) = classify_arch_edge(from, to, runtimes, surfaces) {
+    } else if let Some(law) = classify_arch_edge(from, to, runtimes, surfaces, kernels) {
       misfiled.push((from.to_string(), to.to_string(), law));
     } else {
       present.push((from.to_string(), to.to_string(), *becomes));
@@ -4155,6 +4188,7 @@ fn check_arch_at(workspace_root: &Path, out: &mut impl Write, err: &mut impl Wri
     &edges,
     ARCH_RUNTIME_CRATES,
     ARCH_SURFACE_CRATES,
+    ARCH_KERNEL_CRATES,
     &allow_pairs,
   );
 
@@ -4167,11 +4201,12 @@ fn check_arch_at(workspace_root: &Path, out: &mut impl Write, err: &mut impl Wri
     &latent_pairs,
     ARCH_RUNTIME_CRATES,
     ARCH_SURFACE_CRATES,
+    ARCH_KERNEL_CRATES,
   );
 
   writeln!(
     out,
-    "check-arch: {} member(s), {} internal edge(s), 2 active law(s)",
+    "check-arch: {} member(s), {} internal edge(s), 3 active law(s)",
     members.len(),
     edges.len()
   )?;
@@ -4264,7 +4299,7 @@ mod arch_tests {
   #[test]
   fn runtime_to_runtime_is_a_new_violation() {
     let e = edges(&[("r-a", "r-b")]);
-    let eval = evaluate_arch(&e, &["r-a", "r-b"], &[], &[]);
+    let eval = evaluate_arch(&e, &["r-a", "r-b"], &[], &[], &[]);
     assert_eq!(eval.new.len(), 1);
     assert_eq!(eval.tracked.len(), 0);
     assert_eq!(eval.stale.len(), 0);
@@ -4274,7 +4309,7 @@ mod arch_tests {
   #[test]
   fn allowlisted_violation_is_tracked_not_new() {
     let e = edges(&[("r-a", "r-b")]);
-    let eval = evaluate_arch(&e, &["r-a", "r-b"], &[], &[("r-a", "r-b")]);
+    let eval = evaluate_arch(&e, &["r-a", "r-b"], &[], &[], &[("r-a", "r-b")]);
     assert_eq!(eval.new.len(), 0);
     assert_eq!(eval.tracked.len(), 1);
     assert_eq!(eval.stale.len(), 0);
@@ -4283,7 +4318,7 @@ mod arch_tests {
   #[test]
   fn surface_to_surface_is_flagged() {
     let e = edges(&[("s-a", "s-b")]);
-    let eval = evaluate_arch(&e, &[], &["s-a", "s-b"], &[]);
+    let eval = evaluate_arch(&e, &[], &["s-a", "s-b"], &[], &[]);
     assert_eq!(eval.new.len(), 1);
     assert_eq!(eval.new[0].2, LAW_SURFACE_ISOLATION);
   }
@@ -4291,14 +4326,14 @@ mod arch_tests {
   #[test]
   fn non_tier_edges_are_allowed() {
     let e = edges(&[("cap", "tool")]);
-    let eval = evaluate_arch(&e, &["r-a"], &["s-a"], &[]);
+    let eval = evaluate_arch(&e, &["r-a"], &["s-a"], &[], &[]);
     assert!(eval.new.is_empty() && eval.tracked.is_empty() && eval.stale.is_empty());
   }
 
   #[test]
   fn stale_allowlist_when_edge_removed() {
     // The allowlisted edge is no longer in the graph → it must be pruned.
-    let eval = evaluate_arch(&[], &["r-a", "r-b"], &[], &[("r-a", "r-b")]);
+    let eval = evaluate_arch(&[], &["r-a", "r-b"], &[], &[], &[("r-a", "r-b")]);
     assert_eq!(eval.stale, vec![("r-a".to_string(), "r-b".to_string())]);
   }
 
@@ -4307,9 +4342,37 @@ mod arch_tests {
     // Edge still present but neither endpoint is a runtime/surface → no law
     // broken, so the allowlist entry is pointless and flagged stale.
     let e = edges(&[("plain-a", "plain-b")]);
-    let eval = evaluate_arch(&e, &["r-a"], &[], &[("plain-a", "plain-b")]);
+    let eval = evaluate_arch(&e, &["r-a"], &[], &[], &[("plain-a", "plain-b")]);
     assert_eq!(eval.stale.len(), 1);
     assert_eq!(eval.new.len(), 0);
+  }
+
+  #[test]
+  fn kernel_depending_on_non_kernel_is_a_new_violation() {
+    // R1.2 regression pin: this is exactly the shape of the bug the audit
+    // found (agentflow-agent-spi -> agentflow-llm) before R1.1 fixed it.
+    let e = edges(&[("k-a", "impl-x")]);
+    let eval = evaluate_arch(&e, &[], &[], &["k-a", "k-b"], &[]);
+    assert_eq!(eval.new.len(), 1);
+    assert_eq!(eval.new[0].2, LAW_KERNEL_ISOLATION);
+  }
+
+  #[test]
+  fn kernel_depending_on_kernel_is_allowed() {
+    // Intra-kernel edges are the narrow waist working as intended, e.g.
+    // `agentflow-graph -> agentflow-value` or `agent-spi -> store-spi`.
+    let e = edges(&[("k-a", "k-b")]);
+    let eval = evaluate_arch(&e, &[], &[], &["k-a", "k-b"], &[]);
+    assert!(eval.new.is_empty() && eval.tracked.is_empty() && eval.stale.is_empty());
+  }
+
+  #[test]
+  fn non_kernel_depending_on_kernel_is_allowed() {
+    // The normal direction — any L1+ crate depending on a kernel contract
+    // crate is exactly what the kernel is for.
+    let e = edges(&[("impl-x", "k-a")]);
+    let eval = evaluate_arch(&e, &[], &[], &["k-a", "k-b"], &[]);
+    assert!(eval.new.is_empty() && eval.tracked.is_empty() && eval.stale.is_empty());
   }
 
   #[test]
@@ -4322,6 +4385,7 @@ mod arch_tests {
       &[("nodes", "llm", "law 2 tool→capability")],
       &["r-a"],
       &["s-a"],
+      &[],
     );
     assert_eq!(l.present.len(), 1);
     assert!(l.resolved.is_empty() && l.misfiled.is_empty());
@@ -4331,7 +4395,7 @@ mod arch_tests {
   #[test]
   fn latent_edge_gone_is_resolved() {
     // The latent edge was paid down (dep removed) → must be pruned from the list.
-    let l = evaluate_latent(&[], &[("nodes", "llm", "law 2")], &["r-a"], &["s-a"]);
+    let l = evaluate_latent(&[], &[("nodes", "llm", "law 2")], &["r-a"], &["s-a"], &[]);
     assert_eq!(l.resolved, vec![("nodes".to_string(), "llm".to_string())]);
     assert!(l.present.is_empty() && l.misfiled.is_empty());
   }
@@ -4345,6 +4409,7 @@ mod arch_tests {
       &e,
       &[("r-a", "r-b", "law 4 runtime→impl")],
       &["r-a", "r-b"],
+      &[],
       &[],
     );
     assert_eq!(l.misfiled.len(), 1);
