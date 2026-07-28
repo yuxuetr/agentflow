@@ -1,6 +1,8 @@
 # Current Project Status
 
-Last updated: 2026-06-21
+Last updated: 2026-07-28 (R2.3: added the S/L track summaries below, which
+closed after this file's previous 2026-06-21 update and had gone
+unmentioned here since — see `TODOs.md`'s R2.3 entry)
 
 This is the current authoritative status entrypoint for AgentFlow. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
@@ -23,8 +25,10 @@ shared contracts (enforced by `cargo xtask check-arch`; see
   `agentflow-async-util` (+ `agentflow-tools` as the `Tool` contract).
 - L1 execution core (the executor): `agentflow-core` runs the L0 `Flow` IR via
   the `FlowExt` trait (`flow.run()`).
-- L2 capability adapters: `agentflow-nodes`, `agentflow-llm`,
-  `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
+- L2 capability adapters: `agentflow-nodes` (tool-tier), `agentflow-nodes-ai`
+  (capability-backed node adapters, split out of `agentflow-nodes` by the
+  P-A4.0 nodes decomposition), `agentflow-llm`, `agentflow-tools`,
+  `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
 - L3 agent and orchestration: `agentflow-agents`, `agentflow-skills`,
   `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly
   + diagnostics, consumed by both the CLI and server), `agentflow-cli`.
@@ -61,6 +65,22 @@ shared contracts (enforced by `cargo xtask check-arch`; see
 - Distributed scheduler foundation, gRPC worker protocol, worker runtime, and
   stitched worker trace events.
 - Official offline-first ecosystem samples under `examples/ecosystem/`.
+- Sandbox and code-execution hardening (the **S** track, closed 2026-07-24
+  through 2026-07-27): file+script combination-chain and skill-script
+  integrity fixes; a real Linux 6.12 VM (via Apple's `container` CLI) used to
+  compile- and kernel-enforce the Landlock + cgroup v2 backend; OS sandbox now
+  defaults **on** (`security.os_sandbox = true`); `code_exec` — a mandatory,
+  strongly-isolated `ContainerBackend` tool for running LLM-generated Python,
+  separate from the OS-sandbox tier, with zero network access, hardcoded
+  resource limits, and automatic Harness approval escalation
+  (`ToolIdempotency::NonIdempotent`). See `docs/RFC_LLM_CODE_EXECUTION.md`.
+- Long-horizon tasks and retrieval hardening (the **L** track, closed
+  2026-07-2x): replan-loop closure for stalled/failed plan steps, task-summary
+  recovery so a resumed session doesn't re-derive prior progress from scratch,
+  project-level memory persisted across sessions, RAG retrieval
+  strengthening, and a delegation contract (`agentflow-agent-spi::delegation`
+  + `aggregation`) for sub-agent hand-off with schema-validated answers and
+  conflict-flagged result aggregation.
 
 ## LLM providers
 
@@ -85,9 +105,16 @@ contracts.
 
 ## Active Work
 
-The short-term execution queue remains in [`TODOs.md`](../TODOs.md). As of this
-update, the completed P0-P4 work has moved the project from platform skeletons
-toward a documented v1 boundary and offline ecosystem samples.
+The short-term execution queue remains in [`TODOs.md`](../TODOs.md). As of
+this update, the H (Harness follow-ups), P-A (contract kernel), S (sandbox
+hardening), and L (long-horizon/RAG) segments have all closed and been
+archived to `docs/archive/`. The active segment is **R (2026-07-28
+engineering-readiness remediation)** — findings from an independent audit
+that cross-checked this project's documentation against the actual code/CI
+state: a real `agentflow-rag` panic bug, a CI test-matrix coverage gap, a
+contract-kernel dependency leak `check-arch` wasn't catching, and several
+stale/self-contradicting docs (including this file's own staleness, which
+R2.3 fixes).
 
 The next active cleanup is documentation convergence:
 
