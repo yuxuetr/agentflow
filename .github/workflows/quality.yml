@@ -67,7 +67,12 @@ jobs:
           version: "27.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check lints
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # R0.4 (2026-07-28): was `--all-targets` only, so feature-gated code
+        # that isn't in any crate's default set (e.g. agentflow-rag's `html`
+        # feature, which is exactly where the R0.1 invalid-regex panic
+        # lived) never got compiled here and clippy's `invalid_regex` lint
+        # never saw it. `--all-features` closes that blind spot.
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   redaction-lint:
     # Q5.2: workspace redaction audit. Scans every
