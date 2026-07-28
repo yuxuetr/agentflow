@@ -13,6 +13,9 @@ use serde::{
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
+pub mod trace_context;
+pub use trace_context::LlmTraceContext;
+
 /// A unified data wrapper for all values passed between nodes in a workflow.
 ///
 /// `FlowValue` allows for handling heterogeneous, multi-modal data in a type-safe

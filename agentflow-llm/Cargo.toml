@@ -24,6 +24,13 @@ observability = []
 logging = ["dep:tracing-subscriber"]
 
 [dependencies]
+# R1.1: LlmTraceContext's data type now lives in agentflow-value (an L0
+# contract crate with no runtime/transport deps); this crate re-exports it
+# under its original `agentflow_llm::LlmTraceContext` path and keeps the
+# task-local scope + HTTP header injection helpers, which are genuinely
+# LLM-transport concerns.
+agentflow-value = { path = "../agentflow-value", version = "0.1" }
+
 # Core async and serialization
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"

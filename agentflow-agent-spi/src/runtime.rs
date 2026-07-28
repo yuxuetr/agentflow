@@ -83,7 +83,7 @@ pub struct AgentContext {
   /// the LLM hop. The session id alone is not enough — OpenTelemetry
   /// requires a 16-byte trace id and 8-byte span id.
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub trace_context: Option<agentflow_llm::LlmTraceContext>,
+  pub trace_context: Option<agentflow_value::LlmTraceContext>,
   /// Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): optional live event observer.
   /// When set, the runtime calls [`AgentEventSink::emit`] for each
   /// [`AgentEvent`] at the moment it is produced, in addition to
@@ -234,7 +234,7 @@ impl AgentContext {
   /// calls. Pass `None` to clear.
   pub fn with_trace_context(
     mut self,
-    context: impl Into<Option<agentflow_llm::LlmTraceContext>>,
+    context: impl Into<Option<agentflow_value::LlmTraceContext>>,
   ) -> Self {
     self.trace_context = context.into();
     self

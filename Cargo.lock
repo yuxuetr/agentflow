@@ -83,9 +83,9 @@ dependencies = [
 name = "agentflow-agent-spi"
 version = "0.1.0"
 dependencies = [
- "agentflow-llm",
  "agentflow-store-spi",
  "agentflow-tools",
+ "agentflow-value",
  "async-trait",
  "chrono",
  "jsonschema",
@@ -309,6 +309,7 @@ dependencies = [
 name = "agentflow-llm"
 version = "0.2.0"
 dependencies = [
+ "agentflow-value",
  "anyhow",
  "async-trait",
  "base64 0.21.7",
@@ -600,6 +601,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
