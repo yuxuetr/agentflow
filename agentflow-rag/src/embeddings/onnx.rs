@@ -13,6 +13,7 @@
 //! # Example
 //! ```no_run
 //! use agentflow_rag::embeddings::onnx::ONNXEmbedding;
+//! use agentflow_rag::embeddings::EmbeddingProvider;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let embedding = ONNXEmbedding::builder()
@@ -190,7 +191,7 @@ impl EmbeddingProvider for ONNXEmbedding {
       // Get shape and copy data
       let (shape, data) = output_tensor;
       let shape_dims: Vec<usize> = shape.as_ref().iter().map(|&x| x as usize).collect();
-      let token_data: Vec<f32> = data.iter().copied().collect();
+      let token_data: Vec<f32> = data.to_vec();
 
       (shape_dims, token_data)
     }; // Session lock dropped here

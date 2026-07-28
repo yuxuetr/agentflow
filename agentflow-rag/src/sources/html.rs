@@ -18,6 +18,14 @@ static STYLE_REGEX: OnceLock<Regex> = OnceLock::new();
 
 /// Get or initialize the script removal regex.
 ///
+/// R0.1: the original pattern used a negative-lookahead
+/// (`(?!<\/script>)`) that the `regex` crate has never supported —
+/// `Regex::new` panicked on every call. `regex` *does* support
+/// non-greedy quantifiers, so `(?s).*?` (dot-matches-newline,
+/// shortest match) removes exactly one `<script>...</script>` block
+/// per match without needing lookaround, matching how browsers treat
+/// script content as raw text up to the first literal `</script>`.
+///
 /// The `expect` fires only if the literal regex pattern itself fails to
 /// compile — a build-time bug, not a runtime risk on user input. Covered by
 /// `html.rs`'s unit tests below (Q5.1).
@@ -27,21 +35,22 @@ static STYLE_REGEX: OnceLock<Regex> = OnceLock::new();
 )]
 fn script_regex() -> &'static Regex {
   SCRIPT_REGEX.get_or_init(|| {
-    Regex::new(r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>")
+    Regex::new(r"(?is)<script\b[^>]*>.*?</script>")
       .expect("SCRIPT_REGEX pattern is invalid - this is a bug in agentflow-rag")
   })
 }
 
 /// Get or initialize the style removal regex.
 ///
-/// See `script_regex` for the `expect_used` allow rationale.
+/// See `script_regex` for the R0.1 fix rationale and `expect_used`
+/// allow rationale.
 #[allow(
   clippy::expect_used,
   reason = "compile-time regex literal; covered by unit tests in module"
 )]
 fn style_regex() -> &'static Regex {
   STYLE_REGEX.get_or_init(|| {
-    Regex::new(r"<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>")
+    Regex::new(r"(?is)<style\b[^>]*>.*?</style>")
       .expect("STYLE_REGEX pattern is invalid - this is a bug in agentflow-rag")
   })
 }
@@ -248,14 +257,14 @@ impl DocumentLoader for HtmlLoader {
 
     // Try to extract title
     let document = Html::parse_document(&html_content);
-    if let Ok(title_selector) = Selector::parse("title") {
-      if let Some(title_el) = document.select(&title_selector).next() {
-        let title: String = title_el.text().collect();
-        if !title.trim().is_empty() {
-          doc
-            .metadata
-            .insert("title".to_string(), title.trim().to_string().into());
-        }
+    if let Ok(title_selector) = Selector::parse("title")
+      && let Some(title_el) = document.select(&title_selector).next()
+    {
+      let title: String = title_el.text().collect();
+      if !title.trim().is_empty() {
+        doc
+          .metadata
+          .insert("title".to_string(), title.trim().to_string().into());
       }
     }
 
@@ -377,6 +386,39 @@ mod tests {
         </head>
         <body>
           <p>Content</p>
+        </body>
+      </html>
+    "#;
+    fs::write(&file_path, html_content).await.unwrap();
+
+    let loader = HtmlLoader::new();
+    let doc = loader.load(&file_path).await.unwrap();
+
+    assert!(doc.content.contains("Content"));
+    assert!(!doc.content.contains("console.log"));
+    assert!(!doc.content.contains("color: red"));
+  }
+
+  /// R0.1 regression — the negative-lookahead pattern this replaced
+  /// (`(?!<\/script>)`) always panicked on the very first call since
+  /// the `regex` crate has never supported lookaround. This exercises
+  /// the case that made the bug user-visible: script content
+  /// containing embedded `<` characters (comparisons) and multiple
+  /// script/style blocks in one document.
+  #[tokio::test]
+  async fn test_html_removes_scripts_with_embedded_angle_brackets() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("test.html");
+
+    let html_content = r#"
+      <html>
+        <head>
+          <script>if (a < b) { console.log('first'); }</script>
+          <style>body { color: red; }</style>
+        </head>
+        <body>
+          <p>Content</p>
+          <script>if (c < d) { console.log('second'); }</script>
         </body>
       </html>
     "#;

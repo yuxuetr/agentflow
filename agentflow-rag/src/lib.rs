@@ -80,6 +80,17 @@ pub use agentflow_store_spi::{KnowledgeBackend, KnowledgeChunk, KnowledgeError};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Check if a feature is enabled
+// R0.2: `--all-features` builds make clippy see every arm's `cfg!(...)`
+// resolve to the literal `true`, so it suggests collapsing this into
+// `matches!(feature, "qdrant" | "local-embeddings" | "pdf" | "html")`.
+// That rewrite is only correct under `--all-features` — with a partial
+// feature set (the normal case) it would report a feature as enabled
+// just because its name is recognized, regardless of whether the
+// corresponding `cfg` is actually active. Keep the per-arm `cfg!` checks.
+#[allow(
+  clippy::match_like_matches_macro,
+  reason = "cfg! per arm is not equivalent to matches! outside --all-features builds"
+)]
 pub fn has_feature(feature: &str) -> bool {
   match feature {
     "qdrant" => cfg!(feature = "qdrant"),
