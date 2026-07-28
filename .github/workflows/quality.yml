@@ -172,6 +172,28 @@ jobs:
   test:
     name: cargo test (${{ matrix.package }})
     runs-on: ubuntu-latest
+    # R0.3 (2026-07-28): a postgres service for the whole job (not just a
+    # dedicated e2e workflow) so agentflow-db / agentflow-server's DB-backed
+    # tests — which self-skip with an eprintln when
+    # AGENTFLOW_DATABASE_TEST_URL is unset — actually run here instead of
+    # silently no-op'ing. Mirrors ui-e2e.yml's service block. Harmless for
+    # the matrix legs that don't touch a database.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: agentflow
+          POSTGRES_DB: agentflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentflow -d agentflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      AGENTFLOW_DATABASE_TEST_URL: postgres://agentflow:agentflow@localhost:5432/agentflow
     strategy:
       fail-fast: false
       matrix:
@@ -184,17 +206,40 @@ jobs:
           - agentflow-agents
           - agentflow-cli
           - agentflow-llm
+          # R0.3 (2026-07-28): the remaining 15 workspace members this
+          # matrix never covered — `cargo test` for these crates had never
+          # run in CI. Found via an independent engineering-readiness audit
+          # after an agentflow-rag regression (an HTML-loader regex that
+          # panicked on every call, see the R0.1 fix) shipped invisibly
+          # because this job never touched the crate. `xtask test-gate`
+          # looked like the ready-made fix but turned out to be a wall-clock
+          # performance gate that deliberately ignores test failures
+          # (`capture_test_timings` records the elapsed time even when
+          # `output.status.success()` is false) — expanding this matrix is
+          # the actual correctness gate.
+          - agentflow-value
+          - agentflow-graph
+          - agentflow-store-spi
+          - agentflow-agent-spi
+          - agentflow-async-util
+          - agentflow-nodes
+          - agentflow-nodes-ai
+          - agentflow-config
+          - agentflow-rag
+          - agentflow-tracing
+          - agentflow-db
+          - agentflow-server
+          - agentflow-worker
+          - agentflow-worker-proto
+          - agentflow-harness
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Q3.3.3: agentflow-worker-proto's build.rs needs protoc to compile
-      # worker.proto. Only `agentflow-cli` in this matrix transitively
-      # pulls it in (the cargo build step below), but we install protoc
-      # unconditionally because the conditional `if:` below would skip
-      # the setup for any future package that depends on the proto crate,
-      # leading to a surprising failure.
+      # Q3.3.3 / R0.3: agentflow-worker-proto's build.rs needs protoc to
+      # compile worker.proto. agentflow-cli, agentflow-server and
+      # agentflow-worker all transitively pull it in too.
       - name: Install protoc
-        if: matrix.package == 'agentflow-cli'
+        if: contains(fromJSON('["agentflow-cli","agentflow-server","agentflow-worker","agentflow-worker-proto"]'), matrix.package)
         uses: arduino/setup-protoc@v3
         with:
           version: "27.x"
@@ -207,7 +252,26 @@ jobs:
         # an empty-stdout panic instead of running the readiness probe.
         run: cargo build -p agentflow-server
       - name: Run package tests
-        run: cargo test -p ${{ matrix.package }} --all-targets
+        # R0.3: agentflow-rag's default features (just `qdrant`) never
+        # compile sources/html.rs, which is exactly how the R0.1 regex
+        # panic went uncaught — opt into pdf/html/code-chunking too
+        # (local-embeddings excluded: it pulls the `ort` crate, which
+        # downloads ONNX Runtime binaries at build time, the same reason
+        # the `features` job's feature-combo matrix excludes it below).
+        # agentflow-nodes-ai's mcp/rag node adapters are similarly
+        # feature-gated to nothing by default.
+        run: |
+          case "${{ matrix.package }}" in
+            agentflow-rag)
+              cargo test -p agentflow-rag --all-targets --features pdf,html,code-chunking
+              ;;
+            agentflow-nodes-ai)
+              cargo test -p agentflow-nodes-ai --all-targets --features mcp,rag
+              ;;
+            *)
+              cargo test -p ${{ matrix.package }} --all-targets
+              ;;
+          esac
 
   doctest:
     name: cargo test docs
