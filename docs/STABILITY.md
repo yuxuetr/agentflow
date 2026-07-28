@@ -97,7 +97,7 @@ reads and stable writer output for its rows below.
 | Trace persistence events | Beta | `agentflow-tracing` | `agentflow-tracing/tests/fixtures/trace_events/` | File/JSON trace event persistence, replay fixtures, trace status transitions, node/LLM/agent/tool details, and redaction-sensitive fields. |
 | Server REST envelopes | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/rest_envelopes/` | `/v1/runs`, `/v1/runs/{id}`, `/v1/runs/{id}/events/history`, success envelopes, pagination fields, and `ApiError` envelopes. |
 | SSE events | Beta | `agentflow-server` | `agentflow-server/tests/fixtures/sse_events/` | `run_id`, monotonic `seq`, `kind`, `payload`, `ts`, backfill after `after_seq`, lag comments, and terminal event delivery. |
-| `HarnessEvent` / `ApprovalRequest` / `ApprovalDecision` | Experimental | `agentflow-harness` | `agentflow-harness/tests/fixtures/` | Closed kind set, session/approval envelopes, additive optional-field tolerance, and `HARNESS_ENVELOPE_SCHEMA_VERSION` ("harness/1") stability. |
+| `HarnessEvent` / `ApprovalRequest` / `ApprovalDecision` | Beta | `agentflow-harness` | `agentflow-harness/tests/fixtures/` | Closed kind set, session/approval envelopes, additive optional-field tolerance, and `HARNESS_ENVELOPE_SCHEMA_VERSION` ("harness/1") stability. R2.4 (2026-07-28): corrected from a stale "Experimental" — the main stability table above (`HarnessEvent envelope` / `ApprovalRequest` / `ApprovalDecision` rows) already documents both as Beta since P-H.5 slice 2; this row just never got updated to match when that promotion landed. |
 
 ## Migration Notes
 
