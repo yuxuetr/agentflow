@@ -147,7 +147,17 @@ mod tests {
   use super::*;
 
   #[tokio::test]
+  #[ignore] // Requires STEPFUN_API_KEY environment variable
   async fn test_tts_node_integration() {
+    // This test requires a valid STEP_API_KEY to be set in the environment.
+    // R4.3 (2026-07-28 audit): this crate was never in the CI test matrix
+    // before, so a missing skip guard here (unlike its asr/image_to_image/
+    // image_understand siblings) went unnoticed until R0.3 added it.
+    if std::env::var("STEP_API_KEY").is_err() {
+      println!("Skipping TTS integration test: STEP_API_KEY not set.");
+      return;
+    }
+
     let node = TTSNode {
       name: "test_tts".to_string(),
       model: "step-tts-mini".to_string(),
