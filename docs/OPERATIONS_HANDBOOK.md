@@ -43,6 +43,12 @@ agentflow doctor --format json --profile local
    ```
    重点看每个 `tool_calls[]` 项的 `idempotency`（`idempotent`/`non_idempotent`/`unknown`）和 `decision`（`replay`/`skip`/`requires_manual`）——`requires_manual` 说明这一步不能自动续跑，需要人工确认后加 `--force-replay`。
 5. **`--execution-mode concurrent` 下"卡住"但其实是假象**：`--max-concurrency` 设太大可能触发下游限流/资源竞争看起来像挂起；设太小则并发节点排队看起来像变慢。先切回 `--execution-mode serial` 复现一遍，能排除是不是并发调度的问题。
+6. **`workflow dynamic` 在 CI/非交互环境里"卡住不动"**（T1.3 起）：`--profile`
+   默认值是 `dev`（保留旧的无监督默认，不受影响）；一旦显式传
+   `--profile local`/`production` 又不显式传 `--approve`，默认值变成 `cli`
+   （交互式审批），会在等 stdin 输入——这是刻意的安全默认（LLM 生成的计划
+   天然对抗性），不是 bug。CI/非交互场景要么显式传
+   `--approve auto-allow`/`auto-deny`，要么继续用默认的 `--profile dev`。
 
 ### 2.2 Agent（ReAct）循环异常：不收敛 / 提前退出 / 结果被拒
 

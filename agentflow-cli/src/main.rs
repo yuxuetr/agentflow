@@ -763,10 +763,14 @@ enum WorkflowCommands {
     /// Grant the built-in HTTP tool access to a domain (repeatable).
     #[arg(long = "allow-domain")]
     allow_domain: Vec<String>,
-    /// Approval pipeline for tool calls: none (default; tools still sandboxed),
-    /// cli (interactive), auto-allow, or auto-deny.
-    #[arg(long, default_value = "none", value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
-    approve: String,
+    /// Approval pipeline for tool calls: none, cli (interactive),
+    /// auto-allow, or auto-deny. Unset defaults to `cli` under
+    /// `local`/`production` `--profile` (an LLM-authored plan is
+    /// adversarial by construction) and to `none` under `dev` (so local
+    /// iteration stays uninterrupted). Pass `--approve none` explicitly
+    /// to run non-`dev` unsupervised — T1.3.
+    #[arg(long, value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
+    approve: Option<String>,
     /// Security profile driving approval escalation (dev | production).
     #[arg(long, default_value = "dev")]
     profile: String,

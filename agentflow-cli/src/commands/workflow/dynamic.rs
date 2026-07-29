@@ -15,9 +15,15 @@
 //!   `--allow-domain`, and the shell tool is never registered;
 //! - `--dry-run` prints the plan without executing it, so an operator can audit
 //!   what the model intends before any tool runs;
-//! - `--approve cli|auto-allow|auto-deny` routes every call through the Harness
-//!   [`wrap_registry`] approval pipeline (the same `Arc<ToolRegistry>` is shared
-//!   by the planner and the compiler, so governance is not bypassed).
+//! - `--approve none|cli|auto-allow|auto-deny` routes every call through the
+//!   Harness [`wrap_registry`] approval pipeline (the same `Arc<ToolRegistry>`
+//!   is shared by the planner and the compiler, so governance is not
+//!   bypassed); [`RequireApprovalForEveryCall`] makes that true regardless of
+//!   `--profile`, since `HookConfig`'s own escalation only auto-requires
+//!   approval for `production`. T1.3: leaving `--approve` unset defaults to
+//!   `cli` under `local`/`production` — an LLM-authored plan is adversarial
+//!   by construction — and to `none` (unsupervised) only under `dev`. Pass
+//!   `--approve none` explicitly to opt out on any profile.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,12 +31,15 @@ use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result};
 
+use async_trait::async_trait;
+
 use agentflow_agents::dynamic::{DynamicWorkflowAgent, WorkflowPlan, compile_plan_to_flow};
 use agentflow_core::async_node::AsyncNodeResult;
 use agentflow_core::{FlowExecutionConfig, FlowExt, FlowValue};
 use agentflow_harness::{
-  ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider, CliApprovalProvider,
-  HarnessEventSink, HookConfig, SinkChain, StdoutEventSink, wrap_registry,
+  ApprovalProvider, ApprovalRisk, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
+  CliApprovalProvider, HarnessError, HarnessEventSink, HarnessProfile, HookConfig, PendingToolCall,
+  PreToolDecision, PreToolHook, SinkChain, StdoutEventSink, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_tools::builtin::{FileTool, HttpTool};
@@ -46,7 +55,7 @@ pub async fn execute(
   model: Option<String>,
   allow_path: Vec<String>,
   allow_domain: Vec<String>,
-  approve: String,
+  approve: Option<String>,
   profile: String,
   dry_run: bool,
   max_concurrency: usize,
@@ -61,6 +70,7 @@ pub async fn execute(
     other => anyhow::bail!("unsupported --output '{other}', expected text | json"),
   };
   let profile = parse_profile(&profile)?;
+  let approve = resolve_approve_default(approve, profile);
 
   AgentFlow::init()
     .await
@@ -82,8 +92,17 @@ pub async fn execute(
       let sinks =
         SinkChain::new().push(Arc::new(StdoutEventSink::new()) as Arc<dyn HarnessEventSink>);
       let session_id = format!("dynamic-{}", uuid::Uuid::new_v4().simple());
+      // T1.3: `HookConfig`'s own profile-based escalation only auto-requires
+      // approval for `NonIdempotent` calls under `HarnessProfile::Production`
+      // — under `Dev`/`Local` it would otherwise auto-allow every call even
+      // with a provider wired, silently defeating `--approve`. Attaching
+      // `RequireApprovalForEveryCall` makes "a provider is configured" and
+      // "every call is actually gated" mean the same thing on every profile,
+      // matching this module's own doc claim that `--approve` "routes every
+      // call through the Harness approval pipeline."
       let hook_config = HookConfig::new(session_id, provider, sinks)
         .with_profile(profile)
+        .with_pre_hook(Arc::new(RequireApprovalForEveryCall))
         .with_seq_counter(Arc::new(AtomicU64::new(0)));
       wrap_registry(registry, hook_config)
     }
@@ -163,6 +182,43 @@ fn build_policy(allow_path: &[String], allow_domain: &[String]) -> SandboxPolicy
     policy.allowed_domains = allow_domain.to_vec();
   }
   policy
+}
+
+/// T1.3: forces every tool call through the approval provider whenever
+/// one is configured. See the wiring comment at the `wrap_registry` call
+/// site for why `HookConfig`'s own profile-based escalation isn't enough
+/// on its own.
+struct RequireApprovalForEveryCall;
+
+#[async_trait]
+impl PreToolHook for RequireApprovalForEveryCall {
+  fn name(&self) -> &str {
+    "workflow_dynamic_require_approval"
+  }
+
+  async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError> {
+    Ok(PreToolDecision::RequireApproval {
+      risk: ApprovalRisk::High,
+      reason: format!(
+        "workflow dynamic: LLM-authored plan requires explicit approval before executing '{}'",
+        call.tool
+      ),
+    })
+  }
+}
+
+/// T1.3: resolve the effective `--approve` mode. An LLM-authored plan is
+/// adversarial by construction, so an *unset* `--approve` defaults to
+/// requiring approval (`"cli"`) under `local`/`production`; `dev` keeps
+/// the historical unsupervised default (`"none"`) so local iteration
+/// stays uninterrupted. An explicitly passed `--approve` (including
+/// `--approve none`) always wins, on any profile — this only changes
+/// what happens when the flag is omitted.
+fn resolve_approve_default(approve: Option<String>, profile: HarnessProfile) -> String {
+  approve.unwrap_or_else(|| match profile {
+    HarnessProfile::Dev => "none".to_string(),
+    HarnessProfile::Local | HarnessProfile::Production => "cli".to_string(),
+  })
 }
 
 /// Map the `--approve` flag to an approval provider, or `None` for "no wrapping"
@@ -295,6 +351,60 @@ mod tests {
     assert!(approve_provider("auto-allow").unwrap().is_some());
     assert!(approve_provider("auto-deny").unwrap().is_some());
     assert!(approve_provider("bogus").is_err());
+  }
+
+  // ── T1.3: --approve profile-aware default ──────────────────────────────
+
+  #[test]
+  fn unset_approve_requires_cli_approval_under_local_and_production() {
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Local),
+      "cli",
+      "an LLM-authored plan must not run unsupervised under local by default"
+    );
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Production),
+      "cli",
+      "an LLM-authored plan must not run unsupervised under production by default"
+    );
+  }
+
+  #[test]
+  fn unset_approve_stays_unsupervised_under_dev() {
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Dev),
+      "none",
+      "dev profile keeps the historical unsupervised default for fast local iteration"
+    );
+  }
+
+  #[test]
+  fn explicit_approve_none_overrides_the_profile_default_on_every_profile() {
+    for profile in [
+      HarnessProfile::Dev,
+      HarnessProfile::Local,
+      HarnessProfile::Production,
+    ] {
+      assert_eq!(
+        resolve_approve_default(Some("none".to_string()), profile),
+        "none",
+        "an explicit --approve none must win over the profile-aware default on {profile:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn explicit_approve_mode_always_wins_regardless_of_profile() {
+    for profile in [
+      HarnessProfile::Dev,
+      HarnessProfile::Local,
+      HarnessProfile::Production,
+    ] {
+      assert_eq!(
+        resolve_approve_default(Some("auto-deny".to_string()), profile),
+        "auto-deny"
+      );
+    }
   }
 
   fn ok_result(content: &str) -> AsyncNodeResult {

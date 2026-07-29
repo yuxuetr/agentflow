@@ -187,6 +187,100 @@ fn plan_cannot_chain_a_file_write_into_script_execution() {
   );
 }
 
+/// T1.3: an unset `--approve` under a non-`dev` `--profile` must wire the
+/// interactive CLI approval provider by default (an LLM-authored plan is
+/// adversarial by construction), rather than the pre-T1.3 behavior of
+/// running every tool call unsupervised regardless of profile. Closing
+/// stdin makes the approval read hit EOF immediately, which
+/// `CliApprovalProvider` treats as a deny — deterministic and fast, no
+/// hang, no timeout needed.
+#[test]
+fn local_profile_without_approve_flag_defaults_to_requiring_cli_approval() {
+  let tmp = TempDir::new().unwrap();
+  let cfg = mock_models_config(tmp.path());
+  let out = tmp.path().join("should-be-denied.txt");
+  let plan = format!(
+    r#"{{"steps":[{{"id":"w","tool":"file","params":{{"operation":"write","path":"{}","content":"x"}}}}]}}"#,
+    out.display()
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "dynamic",
+      "--goal",
+      "write a file",
+      "--model",
+      "mock-plan",
+      "--profile",
+      "local",
+      "--allow-path",
+    ])
+    .arg(tmp.path())
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses(&plan))
+    .write_stdin("");
+
+  // No --approve passed: the profile-aware default must still route the
+  // call through the interactive CLI approval provider (proven by the
+  // prompt appearing) and, since stdin is closed, the call is denied and
+  // the step — and the whole command — fails.
+  cmd
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("Harness approval request"));
+
+  assert!(
+    !out.exists(),
+    "a call denied by the default approval gate must not have executed"
+  );
+}
+
+/// T1.3: an explicit `--approve auto-allow` must still win over the
+/// profile-aware default on `production` — the safer default only
+/// changes what happens when `--approve` is *omitted*, never overrides
+/// an operator's explicit choice.
+#[test]
+fn production_profile_with_explicit_auto_allow_still_executes_unattended() {
+  let tmp = TempDir::new().unwrap();
+  let cfg = mock_models_config(tmp.path());
+  let out = tmp.path().join("auto-allowed.txt");
+  let plan = format!(
+    r#"{{"steps":[{{"id":"w","tool":"file","params":{{"operation":"write","path":"{}","content":"hello-auto-allow"}}}}]}}"#,
+    out.display()
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "dynamic",
+      "--goal",
+      "write a file",
+      "--model",
+      "mock-plan",
+      "--profile",
+      "production",
+      "--approve",
+      "auto-allow",
+      "--allow-path",
+    ])
+    .arg(tmp.path())
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses(&plan));
+
+  cmd.assert().success();
+
+  assert_eq!(
+    fs::read_to_string(&out).unwrap(),
+    "hello-auto-allow",
+    "an explicit --approve auto-allow must still execute without interactive input"
+  );
+}
+
 #[test]
 fn requires_a_model() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
