@@ -281,6 +281,59 @@ async fn linux_landlock_allows_reads_inside_the_allowed_scope() {
   );
 }
 
+/// R (2026-07-28 audit) regression: on a kernel that actually enforces
+/// Landlock, exec of a dynamically-linked system binary (`python3`) under a
+/// scope that only grants a scratch temp dir must still succeed, because
+/// `build_landlock_ruleset` now always grants `Execute`+`ReadFile`+`ReadDir`
+/// on the standard system binary/library directories regardless of what the
+/// caller's `SandboxPolicy` scoped. Before that baseline existed, Landlock
+/// handled the `Execute` right workspace-wide (`AccessFs::from_all`/
+/// `from_read` both include it) but only ever granted it on the caller's own
+/// `allowed_paths` — so `python3` itself (living in `/usr/bin`, never in the
+/// scoped temp dir) had `Execute` denied, and every seccomp+Landlock spawn
+/// failed regardless of policy. This is exactly the failure mode that let
+/// this ship silently: the S3 track's own local verification ran on a
+/// kernel without Landlock support, so `SandboxEnforcement::Permissive`
+/// kept this rule set from ever actually loading there; the bug only
+/// surfaced once this crate's tests ran on real CI for the first time.
+#[tokio::test]
+async fn linux_landlock_allows_exec_of_system_binary_outside_the_allowed_scope() {
+  if !landlock_enforcing() {
+    eprintln!("skipping: this kernel does not support Landlock (CONFIG_SECURITY_LANDLOCK)");
+    return;
+  }
+  if !python3_available() {
+    eprintln!("skipping: python3 not on PATH");
+    return;
+  }
+
+  let temp = tempfile::TempDir::new().expect("create temp dir");
+  // Mirrors the two tests above: policy only ever scopes a scratch temp
+  // dir, never `/usr/bin` (where `python3` actually lives).
+  let policy = SandboxPolicy {
+    allowed_paths: vec![temp.path().to_path_buf()],
+    allow_all_commands: true,
+    ..SandboxPolicy::default()
+  };
+  let tool = ShellTool::new(Arc::new(policy)).with_os_sandbox();
+
+  let result = tool
+    .execute(json!({"command": "python3 -c 'print(\"exec-still-works\")'"}))
+    .await
+    .expect("tool call must complete");
+
+  assert!(
+    !result.is_error,
+    "expected python3 to exec successfully under a Landlock-restricted scope, got error: {}",
+    result.content
+  );
+  assert!(
+    result.content.contains("exec-still-works"),
+    "stdout did not contain expected content: {}",
+    result.content
+  );
+}
+
 // ── S3.2: resource limits via cgroup v2 / RLIMIT_CPU ────────────────────
 
 fn cc_available() -> bool {

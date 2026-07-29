@@ -521,6 +521,47 @@ fn build_landlock_ruleset(
   };
 
   let mut created = Ruleset::default().handle_access(access_all)?.create()?;
+  // R (2026-07-28 audit): `access_read` bundles `Execute` (landlock crate's
+  // `AccessFs::from_read` = `Execute | ReadFile | ReadDir`), and Landlock
+  // denies by default once a right is handled — any path *not* covered by a
+  // rule below loses Execute too. Before this baseline existed, `wrap_command`
+  // only ever granted `scope.read_paths` (`/tmp` + cwd, or an explicit
+  // allowlist) and never anything under `/usr/bin`, `/lib`, etc., so once a
+  // kernel actually enforced Landlock (ABI V1, Linux 5.13+) no dynamically
+  // linked binary could exec at all — not even `/bin/echo` under a fully
+  // permissive `SandboxPolicy`. S3's own local verification never caught
+  // this because the Linux VM used for it (`docs/RFC_LLM_CODE_EXECUTION.md`'s
+  // container-CLI setup) didn't have Landlock support, so every spawn there
+  // ran in `SandboxEnforcement::Permissive` (seccomp-only) and this rule set
+  // never actually got loaded into the kernel. Mirrors
+  // `crate::sandbox::macos::build_profile`'s "bare minimum the child needs
+  // to start and link dyld" baseline — same problem, the Linux equivalent of
+  // dyld is the ELF interpreter (`ld-linux*.so`) plus libc, and the target
+  // binary itself has to be `Execute`-reachable in the first place. Every
+  // path below is filtered through `path_beneath_rules`'s existing
+  // silently-skip-if-missing behavior (tested by
+  // `build_landlock_ruleset_ignores_nonexistent_paths_rather_than_erroring`),
+  // so distros missing any one of these (e.g. no separate `/lib64`) just
+  // skip that entry rather than failing ruleset construction.
+  const BASELINE_EXEC_PATHS: &[&str] = &[
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/usr/lib",
+    "/usr/lib64",
+    "/lib",
+    "/lib64",
+    "/usr/libexec",
+    "/usr/share",
+  ];
+  created = created.add_rules(path_beneath_rules(BASELINE_EXEC_PATHS, access_read))?;
+  // The dynamic linker's cache is a single file directly under `/etc`, not
+  // under any of the subpaths above. Grant only this literal file — not all
+  // of `/etc` — so `/etc/passwd`, `/etc/shadow`, `/etc/ssh/*`, etc. stay out
+  // of view, matching `macos.rs`'s same narrow-literal-grant precedent for
+  // `/private/etc/localtime` there (Q1.1.3's rationale applies equally here).
+  created = created.add_rules(path_beneath_rules(["/etc/ld.so.cache"], access_read))?;
   created = created.add_rules(path_beneath_rules(&scope.read_paths, access_read))?;
   created = created.add_rules(path_beneath_rules(&scope.write_paths, write_access))?;
   if let Some(dir) = &scope.working_directory {
