@@ -244,7 +244,19 @@ impl Tool for CodeExecTool {
     let mut child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
       message: format!("Failed to spawn code_exec container: {e}"),
     })?;
+    // `.stdout(Stdio::piped())`/`.stderr(Stdio::piped())` above guarantee
+    // `Child::stdout`/`stderr` are `Some` on a successful spawn — this is a
+    // build-time invariant of `std::process::Command`, not a runtime risk on
+    // untrusted input (the code being sandboxed never touches this).
+    #[allow(
+      clippy::expect_used,
+      reason = "stdio configured as piped a few lines above; Some is guaranteed on successful spawn"
+    )]
     let mut stdout_pipe = child.stdout.take().expect("stdout was configured as piped");
+    #[allow(
+      clippy::expect_used,
+      reason = "stdio configured as piped a few lines above; Some is guaranteed on successful spawn"
+    )]
     let mut stderr_pipe = child.stderr.take().expect("stderr was configured as piped");
 
     // Guarantees `self.backend.terminate(&scope)` runs on every exit path
