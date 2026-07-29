@@ -107,7 +107,10 @@ impl InMemoryProjectMemoryStore {
 #[async_trait]
 impl ProjectMemoryStore for InMemoryProjectMemoryStore {
   async fn get_project_facts(&self, project_key: &str) -> Result<Vec<ProjectFact>, MemoryError> {
-    let facts = self.facts.lock().expect("project memory mutex poisoned");
+    let facts = self
+      .facts
+      .lock()
+      .map_err(|e| MemoryError::StorageError(format!("project memory mutex poisoned: {e}")))?;
     let mut list = facts.get(project_key).cloned().unwrap_or_default();
     list.sort_by_key(|f| std::cmp::Reverse(f.last_seen));
     Ok(list)
@@ -119,7 +122,10 @@ impl ProjectMemoryStore for InMemoryProjectMemoryStore {
     tool: &str,
     command: &str,
   ) -> Result<(), MemoryError> {
-    let mut facts = self.facts.lock().expect("project memory mutex poisoned");
+    let mut facts = self
+      .facts
+      .lock()
+      .map_err(|e| MemoryError::StorageError(format!("project memory mutex poisoned: {e}")))?;
     let list = facts.entry(project_key.to_string()).or_default();
     let now = Utc::now();
     if let Some(existing) = list
@@ -144,7 +150,7 @@ impl ProjectMemoryStore for InMemoryProjectMemoryStore {
     self
       .facts
       .lock()
-      .expect("project memory mutex poisoned")
+      .map_err(|e| MemoryError::StorageError(format!("project memory mutex poisoned: {e}")))?
       .remove(project_key);
     Ok(())
   }

@@ -67,6 +67,10 @@ pub trait CitationChecker: Send + Sync {
   fn name(&self) -> &str;
 }
 
+#[allow(
+  clippy::expect_used,
+  reason = "compile-time regex literal; never fails at runtime on any input"
+)]
 fn citation_marker_regex() -> &'static Regex {
   static RE: OnceLock<Regex> = OnceLock::new();
   RE.get_or_init(|| {

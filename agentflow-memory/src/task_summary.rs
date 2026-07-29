@@ -40,7 +40,7 @@ impl TaskSummaryStore for InMemoryTaskSummaryStore {
       self
         .summaries
         .lock()
-        .expect("task summary mutex poisoned")
+        .map_err(|e| MemoryError::StorageError(format!("task summary mutex poisoned: {e}")))?
         .get(session_id)
         .cloned(),
     )
@@ -54,7 +54,7 @@ impl TaskSummaryStore for InMemoryTaskSummaryStore {
     self
       .summaries
       .lock()
-      .expect("task summary mutex poisoned")
+      .map_err(|e| MemoryError::StorageError(format!("task summary mutex poisoned: {e}")))?
       .insert(session_id.to_string(), summary);
     Ok(())
   }
@@ -63,7 +63,7 @@ impl TaskSummaryStore for InMemoryTaskSummaryStore {
     self
       .summaries
       .lock()
-      .expect("task summary mutex poisoned")
+      .map_err(|e| MemoryError::StorageError(format!("task summary mutex poisoned: {e}")))?
       .remove(session_id);
     Ok(())
   }
