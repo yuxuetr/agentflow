@@ -331,8 +331,85 @@ fn apply_cpu_rlimit(max_cpu_secs: u64) -> std::io::Result<()> {
 /// systemd, where the root cgroup's `cgroup.procs` is non-empty) — mirrors
 /// how those tests use the public `enforcement_level()` API to skip the
 /// Landlock tests rather than reaching into a private probe.
+///
+/// R4.7 (2026-07-28 audit): `resolve_cgroup_root().is_some()` alone checks
+/// that the delegation *directory* exists with `memory`/`pids` enabled —
+/// necessary but not sufficient. cgroup v2 additionally requires write
+/// access to the *nearest common ancestor* of the caller's current cgroup
+/// and the destination cgroup in order to migrate a task
+/// (`cgroup.procs`, per `cgroups(7)`), not just the destination itself.
+/// Found on GitHub Actions' `ubuntu-24.04` runner: the job's own process
+/// lives under `/sys/fs/cgroup/system.slice/hosted-compute-agent.service`,
+/// not under the `user.slice/user-<uid>.slice/user@<uid>.service` tree
+/// `resolve_cgroup_root()` targets — so the common ancestor is the cgroup
+/// *root* itself, owned by root and unwritable by the runner's unprivileged
+/// uid. `resolve_cgroup_root()` still returns `Some` there (the directory
+/// genuinely exists and accepts `memory.max`/`pids.max` writes — only the
+/// task-migration write fails), so `linux_cgroup_enforces_max_memory_bytes`
+/// / `linux_cgroup_enforces_max_pids` used to run and assert real
+/// enforcement that can never happen on that class of host. This does
+/// **not** affect `wrap_command`'s runtime behavior — `migrate_self_into_
+/// cgroup`'s failure there is already best-effort (swallowed, spawn
+/// proceeds without the limit) exactly for hosts like this one; only the
+/// test-skip decision needed to get more precise. The check below actually
+/// attempts the migration — in a throwaway forked child that does nothing
+/// but try it and report its own exit code, never touching the calling
+/// process — since matching the kernel's own permission logic in userspace
+/// (walking cgroup mounts to find the true common ancestor) would be far
+/// more fragile than just asking the kernel directly.
 pub fn cgroup_v2_delegation_available() -> bool {
-  resolve_cgroup_root().is_some()
+  let Some(root) = resolve_cgroup_root() else {
+    return false;
+  };
+  // Must probe a *leaf* under `root`, not `root` itself: `root` ("agentflow")
+  // already had `memory`/`pids` delegated to its own `subtree_control` (so
+  // real spawns' per-call leaf dirs can use them), and cgroup v2's "no
+  // internal processes" rule forbids a cgroup from holding both
+  // controller-enabled children *and* member processes at once — writing a
+  // pid straight into `root/cgroup.procs` would be rejected on that
+  // structural ground alone, independent of the permission question this
+  // probe actually exists to answer. Mirrors the leaf-per-spawn shape
+  // `setup_cgroup_for_spawn` already uses at runtime.
+  let leaf = root.join("delegation-probe");
+  if std::fs::create_dir_all(&leaf).is_err() {
+    return false;
+  }
+  let probe_procs = leaf.join("cgroup.procs");
+  let Some(probe_procs_str) = probe_procs.to_str() else {
+    return false;
+  };
+  let Ok(probe_procs_cstr) = std::ffi::CString::new(probe_procs_str) else {
+    return false;
+  };
+  can_migrate_a_disposable_child_into(&probe_procs_cstr)
+}
+
+/// Forks a trivial child whose only job is to attempt
+/// [`migrate_self_into_cgroup`] on itself and exit with a status
+/// reflecting whether that write succeeded, then waits for it and reports
+/// the result. Never migrates (or risks migrating) the calling process.
+fn can_migrate_a_disposable_child_into(procs_path: &std::ffi::CStr) -> bool {
+  // SAFETY: single-threaded-safe fork/waitpid usage — the child only calls
+  // the already-async-signal-safe `migrate_self_into_cgroup` (raw
+  // open/write/close, no allocation) before `_exit`; the parent only waits
+  // on the exact pid `fork()` returned.
+  unsafe {
+    let pid = libc::fork();
+    if pid < 0 {
+      // Fork itself failed (resource limits, etc.) — conservatively
+      // report "can't", matching this function's fail-closed contract.
+      return false;
+    }
+    if pid == 0 {
+      let ok = migrate_self_into_cgroup(procs_path).is_ok();
+      libc::_exit(if ok { 0 } else { 1 });
+    }
+    let mut status: libc::c_int = 0;
+    if libc::waitpid(pid, &mut status, 0) < 0 {
+      return false;
+    }
+    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
+  }
 }
 
 fn resolve_cgroup_root() -> Option<PathBuf> {
@@ -804,37 +881,6 @@ fn install_write_open_rules(
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn debug_cgroup_migration_raw() {
-    let Some(root) = resolve_cgroup_root() else {
-      eprintln!("DEBUG: resolve_cgroup_root() = None");
-      return;
-    };
-    eprintln!("DEBUG: resolve_cgroup_root() = {}", root.display());
-    // No memory/pids limits set here on purpose: we're diagnosing the
-    // migration mechanism itself, not testing enforcement, and joining a
-    // real memory.max cgroup from this (large, many-dependency) test
-    // binary's own process risks self-OOM.
-    let scope = SandboxScope::new();
-    let procs_path = match setup_cgroup_for_spawn(&scope) {
-      Ok(p) => p,
-      Err(e) => {
-        eprintln!("DEBUG: setup_cgroup_for_spawn Err = {e:?}");
-        return;
-      }
-    };
-    eprintln!("DEBUG: procs_path = {:?}", procs_path);
-    let before = std::fs::read_to_string(procs_path.to_str().unwrap()).unwrap_or_default();
-    eprintln!("DEBUG: cgroup.procs before migrate = {before:?}");
-    match migrate_self_into_cgroup(&procs_path) {
-      Ok(()) => eprintln!("DEBUG: migrate_self_into_cgroup Ok"),
-      Err(e) => eprintln!("DEBUG: migrate_self_into_cgroup Err = {e:?}"),
-    }
-    let after = std::fs::read_to_string(procs_path.to_str().unwrap()).unwrap_or_default();
-    eprintln!("DEBUG: cgroup.procs after migrate = {after:?}");
-    eprintln!("DEBUG: my pid = {}", std::process::id());
-  }
 
   #[test]
   fn arch_detection_supports_known_targets() {
