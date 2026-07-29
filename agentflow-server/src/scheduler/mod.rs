@@ -26,7 +26,8 @@ pub mod jwt;
 // re-exported under their original `scheduler::*` paths so the control plane,
 // the gRPC server side, and the existing tests are unchanged.
 pub use admission::{
-  AdmissionError, AuthenticatedControlPlane, ControlError, WorkerAdmissionPolicy, WorkerCredential,
+  AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, ControlError,
+  WorkerAdmissionPolicy, WorkerCredential,
 };
 pub use agentflow_worker_proto::{
   ClaimHints, GrpcWorkerProtocol, InMemoryWorkerProtocol, NodeExecutionPayload, SELECTED_TRANSPORT,

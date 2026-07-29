@@ -244,6 +244,26 @@ The contract is **experimental** until N10 closes (see
 propagation of admission tokens is still deferred to the broader
 auth story.
 
+**Fail-closed construction (T0.2).** All the knobs above default to "no
+constraint" — `WorkerAdmissionPolicy::default()`/`::open()` admits any
+worker that presents any (or no) ID and credential, which is the
+correct dev / single-process posture but not something that should be
+silently reachable in production. `WorkerAdmissionPolicy::for_profile(self,
+profile: SecurityProfile) -> Result<Self, AdmissionConfigError>` validates
+the policy against the active `SecurityProfile` before it's handed to
+`AuthenticatedControlPlane::new`: under `SecurityProfile::Production`, a
+policy with none of `allowed_workers` / `pre_shared_keys` / `jwt` configured
+returns `AdmissionConfigError::MissingCredentialConfig` instead of building
+an control plane that would accept anonymous workers. This mirrors
+`auth::resolve_auth_config`'s fail-closed shape for the bearer-token
+gateway auth. `dev`/`local` profiles keep the historical open-by-default
+behavior. The check is exposed in `agentflow doctor`'s `security.defaults.
+worker_admission.require_credential_config` field (JSON) / "worker
+admission credentials required" line (text). This item only hardens the
+`AuthenticatedControlPlane` type's own default-safety — the server binary's
+gRPC listener flag that would actually construct and wire one up in
+production is tracked separately (T1.2).
+
 Test references:
 
 - `agentflow-server/src/scheduler/admission.rs#tests` — policy units
@@ -259,6 +279,12 @@ Test references:
   end-to-end scenarios: unknown worker rejected, admitted worker can
   poll/heartbeat/report, and token rotation does not drop in-flight
   tasks.
+- `agentflow-server/src/scheduler/admission.rs#tests` (T0.2) —
+  `for_profile` fail-closed unit coverage: empty policy rejected under
+  `Production`; each of `allowed_workers`/`pre_shared_keys`/`jwt` alone
+  is sufficient to pass; an explicit empty `allowed_workers` set (admits
+  nobody, but still not a real credential mechanism) is still rejected;
+  `dev`/`local` accept the empty policy unchanged.
 
 ## Worker Capability + Locality Hints (P10.16.2)
 

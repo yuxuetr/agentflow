@@ -87,6 +87,9 @@ impl SecurityProfile {
           require_signature_verification: false,
           allow_unsigned_local_fixtures: true,
         },
+        worker_admission: WorkerAdmissionDefaults {
+          require_credential_config: false,
+        },
       },
       Self::Local => SecurityProfileDefaults {
         profile: self,
@@ -134,6 +137,9 @@ impl SecurityProfile {
           require_signature_verification: true,
           allow_unsigned_local_fixtures: true,
         },
+        worker_admission: WorkerAdmissionDefaults {
+          require_credential_config: false,
+        },
       },
       Self::Production => SecurityProfileDefaults {
         profile: self,
@@ -167,6 +173,9 @@ impl SecurityProfile {
           allow_remote_installs: true,
           require_signature_verification: true,
           allow_unsigned_local_fixtures: false,
+        },
+        worker_admission: WorkerAdmissionDefaults {
+          require_credential_config: true,
         },
       },
     }
@@ -211,6 +220,7 @@ pub struct SecurityProfileDefaults {
   pub sandboxing: SandboxingDefaults,
   pub plugins: PluginExecutionDefaults,
   pub marketplace: MarketplaceInstallDefaults,
+  pub worker_admission: WorkerAdmissionDefaults,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,6 +275,17 @@ pub struct MarketplaceInstallDefaults {
   pub allow_unsigned_local_fixtures: bool,
 }
 
+/// T0.2: mirrors [`AuthDefaults::require_api_token`]'s fail-closed shape for
+/// the worker gRPC control plane's admission policy
+/// (`agentflow-server::scheduler::admission::WorkerAdmissionPolicy`). When
+/// `true`, a policy with no `allowed_workers` / `pre_shared_keys` / `jwt`
+/// configured must be rejected at construction time rather than silently
+/// admitting any unauthenticated worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerAdmissionDefaults {
+  pub require_credential_config: bool,
+}
+
 #[cfg(test)]
 mod tests {
   use super::{CorsMode, SecurityProfile};
@@ -296,6 +317,7 @@ mod tests {
     assert!(!defaults.sandboxing.require_os_sandbox);
     assert!(defaults.plugins.allow_subprocess_plugins);
     assert!(defaults.marketplace.allow_remote_installs);
+    assert!(!defaults.worker_admission.require_credential_config);
     assert!(
       defaults
         .tool_permissions
@@ -320,11 +342,22 @@ mod tests {
     assert!(!defaults.plugins.allow_subprocess_plugins);
     assert!(defaults.marketplace.require_signature_verification);
     assert!(!defaults.marketplace.allow_unsigned_local_fixtures);
+    assert!(defaults.worker_admission.require_credential_config);
     assert!(
       !defaults
         .tool_permissions
         .default_capabilities
         .contains(&Capability::Exec)
+    );
+  }
+
+  #[test]
+  fn dev_defaults_do_not_require_worker_admission_credentials() {
+    assert!(
+      !SecurityProfile::Dev
+        .defaults()
+        .worker_admission
+        .require_credential_config
     );
   }
 

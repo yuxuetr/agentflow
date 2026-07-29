@@ -42,7 +42,7 @@ pub use sandbox::{SandboxEnforcement, SandboxPolicy, SandboxStatus};
 pub use security_profile::{
   AuthDefaults, CorsDefaults, CorsMode, MarketplaceInstallDefaults, PluginExecutionDefaults,
   RequestLimitDefaults, SECURITY_PROFILE_ENV, SandboxingDefaults, SecurityProfile,
-  SecurityProfileDefaults, SecurityProfileError, ToolPermissionDefaults,
+  SecurityProfileDefaults, SecurityProfileError, ToolPermissionDefaults, WorkerAdmissionDefaults,
 };
 pub use tool::{
   Tool, ToolCall, ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,

@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use agentflow_tools::SecurityProfile;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -91,6 +92,19 @@ pub enum AdmissionError {
   WorkerFleetExhausted { max: usize },
   #[error("worker '{worker_id}' exceeded its concurrent-task quota ({max})")]
   WorkerQuotaExhausted { worker_id: String, max: u32 },
+}
+
+/// T0.2: startup-time configuration error from
+/// [`WorkerAdmissionPolicy::for_profile`]. Distinct from
+/// [`AdmissionError`], which is a per-call rejection — this fires once,
+/// before the control plane accepts any connections.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AdmissionConfigError {
+  #[error(
+    "worker admission requires at least one of allowed_workers / pre_shared_keys / jwt to be configured when {} is 'production'",
+    agentflow_tools::SECURITY_PROFILE_ENV
+  )]
+  MissingCredentialConfig { profile: SecurityProfile },
 }
 
 /// Credential a worker presents on every call.
@@ -163,6 +177,37 @@ impl WorkerAdmissionPolicy {
   /// "Anything goes" policy — equivalent to `Default::default()`.
   pub fn open() -> Self {
     Self::default()
+  }
+
+  /// True when at least one worker-identity/credential mechanism is
+  /// configured (an explicit allowlist, a PSK table, or a JWT policy).
+  /// An empty policy (the `Default`/[`Self::open`] value) admits any
+  /// worker that shows up with any ID and no credential at all.
+  fn has_credential_config(&self) -> bool {
+    self.allowed_workers.as_ref().is_some_and(|w| !w.is_empty())
+      || !self.pre_shared_keys.is_empty()
+      || self.jwt.is_some()
+  }
+
+  /// T0.2 (evaluation §5 finding 2): validate `self` against `profile`'s
+  /// fail-closed requirement, mirroring `auth::resolve_auth_config`'s
+  /// shape for the worker gRPC control plane. Under
+  /// [`SecurityProfile::Production`], a policy with no
+  /// [`Self::allowed_workers`] / [`Self::pre_shared_keys`] / [`Self::jwt`]
+  /// configured admits any anonymous worker that connects — this fails
+  /// startup instead, so an operator can't accidentally run an
+  /// unauthenticated worker control plane in production. `dev`/`local`
+  /// keep the historical open-by-default behavior.
+  pub fn for_profile(self, profile: SecurityProfile) -> Result<Self, AdmissionConfigError> {
+    if profile
+      .defaults()
+      .worker_admission
+      .require_credential_config
+      && !self.has_credential_config()
+    {
+      return Err(AdmissionConfigError::MissingCredentialConfig { profile });
+    }
+    Ok(self)
   }
 
   /// Check whether the worker may make admission-gated calls.
@@ -461,6 +506,82 @@ mod tests {
 
   fn worker(label: &str) -> WorkerId {
     WorkerId::new(label).expect("valid worker label")
+  }
+
+  // ── T0.2: profile-aware fail-closed admission config ──────────────────
+
+  #[test]
+  fn production_profile_rejects_empty_admission_policy() {
+    let err = WorkerAdmissionPolicy::open()
+      .for_profile(SecurityProfile::Production)
+      .unwrap_err();
+    assert!(matches!(
+      err,
+      AdmissionConfigError::MissingCredentialConfig {
+        profile: SecurityProfile::Production
+      }
+    ));
+  }
+
+  #[test]
+  fn production_profile_accepts_allowed_workers_only() {
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some([worker("a")].into_iter().collect()),
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_accepts_pre_shared_keys_only() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["secret".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_accepts_jwt_policy_only() {
+    let policy = WorkerAdmissionPolicy {
+      jwt: Some(crate::scheduler::jwt::JwtPolicy::new(
+        "issuer",
+        "agentflow-workers-prod",
+      )),
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_rejects_empty_allowed_workers_set() {
+    // A `Some(empty set)` allowlist admits nobody by the `check()` logic
+    // above, but it is also not a real credential mechanism — treat it
+    // the same as `None` for the fail-closed startup check.
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some(HashSet::new()),
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.for_profile(SecurityProfile::Production).unwrap_err(),
+      AdmissionConfigError::MissingCredentialConfig { .. }
+    ));
+  }
+
+  #[test]
+  fn dev_and_local_profiles_accept_empty_admission_policy() {
+    assert!(
+      WorkerAdmissionPolicy::open()
+        .for_profile(SecurityProfile::Dev)
+        .is_ok()
+    );
+    assert!(
+      WorkerAdmissionPolicy::open()
+        .for_profile(SecurityProfile::Local)
+        .is_ok()
+    );
   }
 
   #[test]

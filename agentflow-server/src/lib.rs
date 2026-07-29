@@ -76,10 +76,10 @@ pub use runs::{
   get_run_resume_plan, list_runs, submit_run,
 };
 pub use scheduler::{
-  AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService, ClaimHints,
-  ControlError, DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus,
-  GrpcWorkerProtocol, GrpcWorkerService, InMemoryWorkerProtocol, NodeExecutionPayload,
-  RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
+  AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,
+  ClaimHints, ControlError, DistributedDagRunResult, DistributedDagScheduler,
+  DistributedNodeStatus, GrpcWorkerProtocol, GrpcWorkerService, InMemoryWorkerProtocol,
+  NodeExecutionPayload, RunControlSnapshot, RunControlStatus, SELECTED_TRANSPORT, SchedulerError,
   StitchedWorkerTraceEvent, WorkerAdmissionPolicy, WorkerAssignment, WorkerCapabilities,
   WorkerControlPlane, WorkerControlServer, WorkerCredential, WorkerHeartbeat, WorkerId,
   WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,

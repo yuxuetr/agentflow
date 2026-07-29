@@ -1160,6 +1160,16 @@ pub fn print_text_report(report: &DoctorReport) {
         .require_signature_verification
     )
   );
+  println!(
+    "  worker admission credentials required: {}",
+    enabled_label(
+      report
+        .security
+        .defaults
+        .worker_admission
+        .require_credential_config
+    )
+  );
   if let Some(warning) = &report.security.warning {
     println!("  warning: {warning}");
   }
