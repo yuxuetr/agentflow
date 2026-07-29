@@ -16,8 +16,12 @@
 //!   assertions against the resulting [`crate::AgentRunResult`], emits
 //!   a per-case [`runner::CaseReport`] and an aggregate
 //!   [`runner::EvalReport`].
+//! - [`baseline`] (T2.1) — `EvalBaseline` / `compare_against_baseline`:
+//!   tolerance-based regression check against a checked-in baseline,
+//!   the mechanism behind `agentflow eval run --compare-baseline`.
 
 pub mod assertion;
+pub mod baseline;
 pub mod dataset;
 pub mod pricing;
 pub mod runner;
@@ -26,6 +30,7 @@ pub use assertion::{
   Assertion, AssertionContext, AssertionInScope, AssertionOutcome, AssertionTarget, SkillValidator,
   SkillValidatorVerdict,
 };
+pub use baseline::{BaselineComparison, BaselineTolerance, EvalBaseline, compare_against_baseline};
 pub use dataset::{Dataset, DatasetManifest, EvalCase, EvalCaseDefaults, EvalError, RawEvalCase};
 pub use pricing::{ModelPricing, PricingError, PricingTable};
 pub use runner::{

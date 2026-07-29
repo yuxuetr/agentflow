@@ -191,7 +191,138 @@ fn cli_eval_run_help_lists_format_filter_fail_on_status_flags() {
     .success()
     .stdout(predicate::str::contains("--format"))
     .stdout(predicate::str::contains("--filter"))
-    .stdout(predicate::str::contains("--fail-on-status"));
+    .stdout(predicate::str::contains("--fail-on-status"))
+    .stdout(predicate::str::contains("--compare-baseline"))
+    .stdout(predicate::str::contains("--dump-baseline"));
+}
+
+// ── T2.1: baseline regression gate ──────────────────────────────────────
+
+#[test]
+fn cli_eval_run_dump_baseline_writes_expected_metrics() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+  let work = TempDir::new().unwrap();
+  let baseline_path = work.path().join("baseline.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "eval",
+      "run",
+      &fixture_path(),
+      "--dump-baseline",
+      baseline_path.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Wrote baseline to"));
+
+  let baseline: Value = serde_json::from_str(&fs::read_to_string(&baseline_path).unwrap()).unwrap();
+  // Both fixture cases pass with 3 steps and 0 tool calls against the
+  // canned responses (see `mock_responses()` above).
+  assert_eq!(baseline["success_rate"], 1.0);
+  assert_eq!(baseline["avg_step_count"], 3.0);
+  assert_eq!(baseline["avg_tool_call_count"], 0.0);
+}
+
+#[test]
+fn cli_eval_run_compare_baseline_passes_when_metrics_match() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "eval",
+      "run",
+      &fixture_path(),
+      "--compare-baseline",
+      &checked_in_baseline_path(),
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Baseline comparison passed"));
+}
+
+#[test]
+fn cli_eval_run_compare_baseline_fails_ci_on_regression() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+  let work = TempDir::new().unwrap();
+  // A baseline that expects a perfect run; feeding responses that fail
+  // both cases' assertions must trip the regression gate.
+  let baseline_path = work.path().join("baseline.json");
+  fs::write(
+    &baseline_path,
+    r#"{"success_rate": 1.0, "avg_step_count": 3.0, "avg_tool_call_count": 0.0}"#,
+  )
+  .unwrap();
+
+  let bad_responses = serde_json::to_string(&vec![
+    r#"{"thought":"oops","answer":"totally unrelated"}"#,
+    r#"{"thought":"oops","answer":"also unrelated"}"#,
+  ])
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  let output = cmd
+    .args([
+      "eval",
+      "run",
+      &fixture_path(),
+      "--compare-baseline",
+      baseline_path.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", bad_responses)
+    .output()
+    .unwrap();
+
+  assert_eq!(output.status.code(), Some(1));
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("Baseline comparison FAILED"),
+    "stdout: {stdout}"
+  );
+  assert!(
+    stdout.contains("success_rate regressed"),
+    "stdout: {stdout}"
+  );
+}
+
+#[test]
+fn cli_eval_run_compare_baseline_and_dump_baseline_are_mutually_exclusive() {
+  let home = TempDir::new().unwrap();
+  write_eval_mock_models_config(home.path());
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "eval",
+      "run",
+      &fixture_path(),
+      "--compare-baseline",
+      &checked_in_baseline_path(),
+      "--dump-baseline",
+      "/tmp/should-not-be-written.json",
+    ])
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("mutually exclusive"));
+}
+
+fn checked_in_baseline_path() -> String {
+  format!(
+    "{}/../agentflow-agents/eval_baselines/ci_offline/baseline.json",
+    env!("CARGO_MANIFEST_DIR")
+  )
 }
 
 // ── Skill-aware factory + tools admission ───────────────────────────────

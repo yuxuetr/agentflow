@@ -12,8 +12,8 @@ use async_trait::async_trait;
 
 use agentflow_agents::eval::runner::BoxedSkillValidator;
 use agentflow_agents::eval::{
-  AgentRuntimeFactory, CaseStatus, Dataset, EvalCase, EvalReport, EvalRunner, EvalRunnerError,
-  PricingTable, SkillValidatorVerdict,
+  AgentRuntimeFactory, BaselineTolerance, CaseStatus, Dataset, EvalBaseline, EvalCase, EvalReport,
+  EvalRunner, EvalRunnerError, PricingTable, SkillValidatorVerdict, compare_against_baseline,
 };
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::AgentRuntime;
@@ -32,6 +32,8 @@ pub async fn execute(
   format: String,
   filter: Option<String>,
   fail_on_status: String,
+  compare_baseline: Option<String>,
+  dump_baseline: Option<String>,
 ) -> Result<()> {
   let format = parse_format(&format)?;
   let fail_threshold = parse_fail_on_status(&fail_on_status)?;
@@ -51,6 +53,35 @@ pub async fn execute(
   let pricing = load_pricing_table()?;
   runner = runner.with_pricing(pricing);
   let report = runner.run().await;
+
+  // T2.1: regenerate the checked-in baseline from this run. Mutually
+  // exclusive with `--compare-baseline` — dumping and comparing in the
+  // same invocation would just compare the fresh baseline to itself.
+  if let Some(path) = &dump_baseline {
+    if compare_baseline.is_some() {
+      bail!("--dump-baseline and --compare-baseline are mutually exclusive — pick one");
+    }
+    let baseline = EvalBaseline::from_report(&report);
+    let json = serde_json::to_string_pretty(&baseline)?;
+    std::fs::write(path, format!("{json}\n"))
+      .with_context(|| format!("failed to write baseline to '{path}'"))?;
+    println!("Wrote baseline to {path}: {baseline:?}");
+  }
+
+  let baseline_comparison = match &compare_baseline {
+    None => None,
+    Some(path) => {
+      let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read baseline file '{path}'"))?;
+      let baseline: EvalBaseline = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse baseline file '{path}' as JSON"))?;
+      Some(compare_against_baseline(
+        &report,
+        baseline,
+        BaselineTolerance::default(),
+      ))
+    }
+  };
 
   match format {
     OutputFormat::Text => print_text_report(&report),
@@ -94,9 +125,32 @@ pub async fn execute(
     }
   }
 
-  if exceeds_fail_threshold(&report, fail_threshold) {
-    // Exit 1 = at least one failure; exit 2 is reserved for dataset /
-    // config errors, which are handled by anyhow's bubble-up above.
+  // T2.1: print the baseline comparison after the report (any format) so
+  // it reads as a distinct verdict, then gate on it regardless of
+  // `--fail-on-status` — a regression here is a CI-relevant signal even
+  // under `--fail-on-status never`, which is scoped to per-case status.
+  if let Some(comparison) = &baseline_comparison {
+    if comparison.regressed() {
+      println!("❌ Baseline comparison FAILED:");
+      for violation in &comparison.violations {
+        println!("   - {violation}");
+      }
+    } else {
+      println!(
+        "✅ Baseline comparison passed (success_rate={:.3}, avg_step_count={:.2}, avg_tool_call_count={:.2})",
+        comparison.actual.success_rate,
+        comparison.actual.avg_step_count,
+        comparison.actual.avg_tool_call_count
+      );
+    }
+  }
+
+  if exceeds_fail_threshold(&report, fail_threshold)
+    || baseline_comparison.is_some_and(|cmp| cmp.regressed())
+  {
+    // Exit 1 = at least one failure (per-case or baseline regression);
+    // exit 2 is reserved for dataset / config errors, which are handled
+    // by anyhow's bubble-up above.
     std::process::exit(1);
   }
   Ok(())

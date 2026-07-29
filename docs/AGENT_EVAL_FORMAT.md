@@ -345,7 +345,23 @@ agentflow eval run path/to/dataset --fail-on-status failed
 
 # Compare against a checked-in baseline (mirrors `rag eval --compare-baseline`)
 agentflow eval run path/to/dataset --compare-baseline baselines/main.json
+
+# Regenerate the baseline file after a deliberate change (T2.1)
+agentflow eval run path/to/dataset --dump-baseline baselines/main.json
 ```
+
+`--compare-baseline`/`--dump-baseline` are implemented (T2.1) via
+`agentflow_agents::eval::{EvalBaseline, compare_against_baseline}`. The
+baseline JSON is three summary numbers computed over non-skipped cases
+— `success_rate`, `avg_step_count`, `avg_tool_call_count` — not a
+per-case diff. Comparison is regression-only tolerance checking (a
+metric moving in the favorable direction never fails the gate), not
+RAG eval's paired significance test: a smoke-scale dataset (a handful
+of cases) doesn't have RAG eval's per-query granularity to test
+significance against. `.github/workflows/quality.yml::agent-eval-smoke`
+runs this against `agentflow-agents/eval_datasets/ci_offline` and
+`agentflow-agents/eval_baselines/ci_offline/baseline.json` on every PR.
+`--compare-baseline` and `--dump-baseline` are mutually exclusive.
 
 Exit codes:
 

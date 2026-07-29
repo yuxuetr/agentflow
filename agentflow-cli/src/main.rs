@@ -207,6 +207,18 @@ enum EvalCommands {
     /// `never` (always exit 0 unless dataset itself is malformed).
     #[arg(long = "fail-on-status", default_value = "failed", value_parser = ["failed", "never"])]
     fail_on_status: String,
+    /// T2.1: compare this run's summary metrics (success rate, average
+    /// step/tool-call counts) against a checked-in baseline JSON file
+    /// (see `EvalBaseline`); exits nonzero on regression beyond
+    /// tolerance regardless of `--fail-on-status`. Mutually exclusive
+    /// with `--dump-baseline`.
+    #[arg(long)]
+    compare_baseline: Option<String>,
+    /// T2.1: write this run's summary metrics as a new baseline JSON
+    /// file at the given path, for later use with `--compare-baseline`.
+    /// Mutually exclusive with `--compare-baseline`.
+    #[arg(long)]
+    dump_baseline: Option<String>,
   },
 }
 
@@ -2295,7 +2307,19 @@ async fn main() {
         format,
         filter,
         fail_on_status,
-      } => eval_cmd::execute(dataset_dir, format, filter, fail_on_status).await,
+        compare_baseline,
+        dump_baseline,
+      } => {
+        eval_cmd::execute(
+          dataset_dir,
+          format,
+          filter,
+          fail_on_status,
+          compare_baseline,
+          dump_baseline,
+        )
+        .await
+      }
     },
     Commands::Serve(args) => {
       serve_cmd::execute(

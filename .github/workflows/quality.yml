@@ -417,6 +417,56 @@ jobs:
               --embedding-model text-embedding-3-small \
               --compare-baseline agentflow-rag/eval_baselines/ci_offline/hybrid.json
 
+  agent-eval-smoke:
+    name: agent eval schema + baseline regression
+    runs-on: ubuntu-latest
+    # T2.1: mirrors rag-eval-smoke's shape for `agentflow-agents/src/eval`
+    # (dataset/assertion/runner/pricing + T2.1's baseline module), which
+    # had a complete framework but no CI job exercising it. Uses the
+    # mock LLM provider only — no API key, no network, no DB — so it
+    # always runs, on forks included.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # agentflow-cli transitively depends on agentflow-worker-proto,
+      # whose build.rs shells out to protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run agent eval CI fixture + baseline-gate tests
+        run: cargo test -p agentflow-cli --test eval_cli_tests
+      - name: Run agent eval baseline-comparison unit tests
+        run: cargo test -p agentflow-agents --lib eval::baseline
+      - name: Run agent eval against checked-in ci_offline baseline
+        env:
+          # Registers the two mock model ids the `ci_offline` fixture's
+          # cases.jsonl references. Keep in sync with
+          # `agentflow-cli/tests/eval_cli_tests.rs::write_eval_mock_models_config`.
+          AGENTFLOW_MODELS_CONFIG: /tmp/agent-eval-smoke-models.yml
+          # Keep in sync with `eval_cli_tests.rs::mock_responses()` — the
+          # checked-in baseline was generated against this exact sequence.
+          AGENTFLOW_MOCK_RESPONSES: '["{\"thought\":\"answer directly\",\"answer\":\"hello there\"}", "{\"thought\":\"answer directly\",\"answer\":\"done\"}"]'
+        run: |
+          cat > /tmp/agent-eval-smoke-models.yml <<'EOF'
+          models:
+            mock-eval-hello:
+              vendor: mock
+              type: text
+              model_id: mock-eval-hello
+            mock-eval-budget:
+              vendor: mock
+              type: text
+              model_id: mock-eval-budget
+          providers:
+            mock:
+              api_key_env: MOCK_API_KEY
+          EOF
+          cargo run -p agentflow-cli --bin agentflow -- \
+            eval run agentflow-agents/eval_datasets/ci_offline \
+              --compare-baseline agentflow-agents/eval_baselines/ci_offline/baseline.json
+
   examples:
     name: examples compile and smoke
     runs-on: ubuntu-latest
@@ -476,6 +526,7 @@ jobs:
       - features
       - examples
       - rag-eval-smoke
+      - agent-eval-smoke
     if: ${{ always() }}
     steps:
       - name: Summarize required gates
@@ -494,6 +545,7 @@ jobs:
           echo "features: ${{ needs.features.result }}"
           echo "examples: ${{ needs.examples.result }}"
           echo "rag-eval-smoke: ${{ needs.rag-eval-smoke.result }}"
+          echo "agent-eval-smoke: ${{ needs.agent-eval-smoke.result }}"
           test "${{ needs.fmt.result }}" = "success"
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
@@ -508,3 +560,4 @@ jobs:
           test "${{ needs.features.result }}" = "success"
           test "${{ needs.examples.result }}" = "success"
           test "${{ needs.rag-eval-smoke.result }}" = "success"
+          test "${{ needs.agent-eval-smoke.result }}" = "success"
