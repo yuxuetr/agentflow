@@ -205,8 +205,11 @@ carries the verifier-specific message — for PSK it's typically
 `"psk did not match any rotation entry"`; for JWT it's the
 `JwtVerifyError` `Display` output (issuer mismatch, audience mismatch,
 expired, etc.). The gRPC adapter forwards the `Display` of the whole
-error to `tonic::Status::permission_denied` once admission-token
-metadata propagation lands (deferred follow-up).
+error to `tonic::Status::permission_denied`. Admission-token metadata
+propagation (Q1.6.1) is live: every RPC carries `authorization: Bearer
+<token>`, extracted server-side by `extract_admission_token` and
+verified against the active `WorkerAdmissionPolicy` before the call
+proceeds.
 
 **PSK rotation flow:**
 
@@ -240,9 +243,9 @@ needs the public key. Both algorithms can coexist in the same key
 pool during a migration.
 
 The contract is **experimental** until N10 closes (see
-`docs/STABILITY.md` for the wire-shape promise). gRPC-metadata
-propagation of admission tokens is still deferred to the broader
-auth story.
+`docs/STABILITY.md` for the wire-shape promise). Transport-layer TLS
+(server-auth and mutual) is covered separately in [Transport
+Security (T1.2)](#transport-security-t12) below.
 
 **Fail-closed construction (T0.2).** All the knobs above default to "no
 constraint" — `WorkerAdmissionPolicy::default()`/`::open()` admits any
@@ -259,10 +262,12 @@ an control plane that would accept anonymous workers. This mirrors
 gateway auth. `dev`/`local` profiles keep the historical open-by-default
 behavior. The check is exposed in `agentflow doctor`'s `security.defaults.
 worker_admission.require_credential_config` field (JSON) / "worker
-admission credentials required" line (text). This item only hardens the
-`AuthenticatedControlPlane` type's own default-safety — the server binary's
-gRPC listener flag that would actually construct and wire one up in
-production is tracked separately (T1.2).
+admission credentials required" line (text). At the time this landed it
+only hardened the `AuthenticatedControlPlane` type's own default-safety
+— the server binary had no gRPC listener flag to actually construct and
+wire one up in production. That gap is now closed by T1.2 (below):
+`WorkerGrpcServeConfig`/`agentflow serve --worker-grpc` is exactly the
+production entry point this paragraph originally deferred.
 
 Test references:
 
@@ -285,6 +290,74 @@ Test references:
   is sufficient to pass; an explicit empty `allowed_workers` set (admits
   nobody, but still not a real credential mechanism) is still rejected;
   `dev`/`local` accept the empty policy unchanged.
+
+## Transport Security (T1.2)
+
+Before T1.2, `agentflow-worker` accepted `--server-ca`/`--client-cert`/
+`--client-key` on the CLI but never used them (plaintext gRPC only),
+and `agentflow-server` had no gRPC listener at all — the "one control
+plane, N workers" shape below could not run end-to-end. Both halves are
+now wired:
+
+**Worker (client) side** — `agentflow-worker`:
+
+| Flag | Env fallback | Effect |
+|------|--------------|--------|
+| `--server-ca PATH` | `AGENTFLOW_WORKER_SERVER_CA` | PEM CA used to validate the server's certificate. Alone, this is server-authenticated TLS. |
+| `--client-cert PATH` | `AGENTFLOW_WORKER_CLIENT_CERT` | PEM client certificate. Must be paired with `--client-key` (mTLS). |
+| `--client-key PATH` | `AGENTFLOW_WORKER_CLIENT_KEY` | PEM private key for `--client-cert`. |
+
+Any of the three present switches `control-plane`'s `grpc://` shorthand
+from `http://` to `https://` (tonic rejects a `tls_config` paired with
+`http://`); an explicit `https://host:port` control-plane URL always
+means TLS regardless of the shorthand. `--client-cert`/`--client-key`
+must both be set or both omitted — a lone one of the pair is a startup
+error, not silently-ignored mTLS. `memory://local` never uses TLS; TLS
+flags set alongside it are a no-op warning, matching the existing
+`--admission-token` behavior for that mode.
+
+**Server (listener) side** — `agentflow-server` / `agentflow serve`:
+
+| Flag | Env var | Effect |
+|------|---------|--------|
+| `--worker-grpc HOST:PORT` | `AGENTFLOW_WORKER_GRPC_BIND` | Starts the worker gRPC control-plane listener as a background task. Unset (default): no gRPC socket is bound at all — this stays fully opt-in. |
+| `--worker-grpc-tls-cert PATH` | `AGENTFLOW_WORKER_GRPC_TLS_CERT` | PEM server certificate. Must be paired with `--worker-grpc-tls-key`. |
+| `--worker-grpc-tls-key PATH` | `AGENTFLOW_WORKER_GRPC_TLS_KEY` | PEM private key for the server certificate. |
+| `--worker-grpc-client-ca PATH` | `AGENTFLOW_WORKER_GRPC_CLIENT_CA` | PEM CA used to require and verify worker client certificates (mTLS) on top of the cert/key pair above. |
+| `--worker-ids a,b,c` | `AGENTFLOW_WORKER_IDS` | Comma-separated allowlist. Empty = any worker id. |
+| `--worker-psk TOKEN` | `AGENTFLOW_WORKER_PSK` | Shared pre-shared-key every listed id must present. |
+
+The listener is built from `agentflow_server::worker_grpc::
+WorkerGrpcServeConfig` via `build_worker_control_plane`, which runs the
+resulting `WorkerAdmissionPolicy` through T0.2's `for_profile` fail-closed
+check — a `production`-profile gateway with no `--worker-ids`+`--worker-psk`
+(or a hand-built policy with none of `allowed_workers`/`pre_shared_keys`/
+`jwt`) refuses to start, same as a missing bearer-auth token. A bad
+`--worker-grpc` bind address or TLS file path is logged as a background
+task error rather than refusing the whole gateway (mirroring the existing
+background-cleanup-loop precedent in `serve::run`) — the admission check
+is the one T1.2 treats as a hard, synchronous startup failure.
+
+`WorkerGrpcServeConfig`'s single-shared-PSK-per-listed-id model is
+deliberately the simple case; operators needing per-worker PSK rotation
+or JWT identity should construct a `WorkerAdmissionPolicy` directly and
+call `agentflow_server::worker_grpc::serve_worker_grpc` themselves
+instead of going through the CLI-facing config struct.
+
+Test references:
+
+- `agentflow-server/src/worker_grpc.rs#tests` — plaintext claim/
+  heartbeat/report round trip over the real gRPC wire; production
+  profile rejects an unconfigured admission policy before any socket is
+  touched.
+- `agentflow-worker/tests/grpc_tls_e2e.rs` — the full acceptance
+  scenario: a real, separately-compiled `agentflow-worker` process
+  (not an in-process mock) connects over **mutual TLS** to a
+  `serve_worker_grpc` listener (self-signed CA + server/client leaf
+  certs generated in-process via `rcgen`) and completes a claim →
+  execute → report cycle end to end; a companion test confirms a
+  worker presenting no client certificate is rejected at the mTLS
+  handshake before any admission/PSK check runs.
 
 ## Worker Capability + Locality Hints (P10.16.2)
 
@@ -419,17 +492,32 @@ or wall-clock races are needed.
 
 ## Two-Worker Deployment Shape
 
-The target deployment shape is one control plane plus N workers:
+The target deployment shape is one control plane plus N workers. As of
+T1.2 this runs end to end — the two-worker smoke coverage from earlier
+milestones plus the T1.2 mTLS end-to-end test (above) both exercise the
+exact commands below:
 
 ```bash
-agentflow-server --bind 0.0.0.0:8080 --worker-grpc 0.0.0.0:50051
-agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-a
-agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-b
+agentflow serve --bind 0.0.0.0:8080 \
+  --worker-grpc 0.0.0.0:50051 \
+  --worker-grpc-tls-cert server.pem --worker-grpc-tls-key server-key.pem \
+  --worker-grpc-client-ca ca.pem \
+  --worker-ids worker-a,worker-b --worker-psk "$WORKER_PSK"
+
+agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-a \
+  --admission-token "$WORKER_PSK" \
+  --server-ca ca.pem --client-cert worker-a.pem --client-key worker-a-key.pem
+agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-b \
+  --admission-token "$WORKER_PSK" \
+  --server-ca ca.pem --client-cert worker-b.pem --client-key worker-b-key.pem
 ```
 
-The library-level gRPC adapter and two-worker smoke coverage are in place. The
-server binary still needs a CLI flag/listener wiring step before the deployment
-shape above is a complete end-user command.
+Dropping the three `--worker-grpc-tls-*`/`--server-ca`/`--client-*` flags
+from both sides still works (plaintext gRPC) — appropriate only on a
+trusted network / same host, never across an untrusted link. See
+[Transport Security (T1.2)](#transport-security-t12) above for the full
+flag/env-var reference and the fail-closed admission behavior under
+`production`.
 
 ## Failure Semantics
 

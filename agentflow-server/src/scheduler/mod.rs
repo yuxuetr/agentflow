@@ -30,11 +30,11 @@ pub use admission::{
   WorkerAdmissionPolicy, WorkerCredential,
 };
 pub use agentflow_worker_proto::{
-  ClaimHints, GrpcWorkerProtocol, InMemoryWorkerProtocol, NodeExecutionPayload, SELECTED_TRANSPORT,
-  SchedulerError, StitchedWorkerTraceEvent, WorkerCapabilities, WorkerHeartbeat, WorkerId,
-  WorkerProtocol, WorkerTask, WorkerTaskResult, WorkerTraceEvent, WorkerTransport,
-  extract_traceparent_from_grpc_request, inject_traceparent_into_grpc_request,
-  run_in_traceparent_scope,
+  Certificate, ClaimHints, ClientTlsConfig, GrpcWorkerProtocol, Identity, InMemoryWorkerProtocol,
+  NodeExecutionPayload, SELECTED_TRANSPORT, SchedulerError, StitchedWorkerTraceEvent,
+  WorkerCapabilities, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask, WorkerTaskResult,
+  WorkerTraceEvent, WorkerTransport, extract_traceparent_from_grpc_request,
+  inject_traceparent_into_grpc_request, run_in_traceparent_scope,
 };
 pub use distributed::{DistributedDagRunResult, DistributedDagScheduler, DistributedNodeStatus};
 pub use grpc::{AuthenticatedGrpcWorkerService, GrpcWorkerService, WorkerControlServer};

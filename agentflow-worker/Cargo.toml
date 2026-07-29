@@ -41,3 +41,10 @@ agentflow-server = { path = "../agentflow-server", version = "0.1" }
 anyhow = "1"
 serde_yaml = "0.9"
 tonic = "0.12"
+# T1.2: the TLS e2e test spawns the real compiled `agentflow-worker`
+# binary (assert_cmd) against an in-process self-signed CA + server/
+# client cert chain (rcgen) — no fixture cert files checked into the repo.
+assert_cmd = "2.0"
+predicates = "3.0"
+rcgen = "0.13"
+tempfile = "3"

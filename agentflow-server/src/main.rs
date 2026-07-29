@@ -93,7 +93,68 @@ fn build_config_from_env() -> Result<ServeConfig, Box<dyn std::error::Error>> {
     auth_token_env,
     cors_origins: Vec::new(),
     max_body_mb: None,
+    worker_grpc: build_worker_grpc_config_from_env()?,
   })
+}
+
+/// T1.2: `AGENTFLOW_WORKER_GRPC_BIND` (e.g. `0.0.0.0:50051`) turns the
+/// worker gRPC control-plane listener on; its absence keeps pre-T1.2
+/// behavior (`worker_grpc: None`, no socket bound). TLS activates when
+/// both `AGENTFLOW_WORKER_GRPC_TLS_CERT` and `..._TLS_KEY` are set;
+/// `AGENTFLOW_WORKER_GRPC_CLIENT_CA` on top of that additionally
+/// requires and verifies a client certificate (mTLS).
+/// `AGENTFLOW_WORKER_IDS` (comma-separated) + `AGENTFLOW_WORKER_PSK`
+/// configure a single shared pre-shared-key admission policy — see
+/// `agentflow_server::worker_grpc::WorkerGrpcServeConfig` for the
+/// per-worker-PSK / JWT alternatives available to direct library
+/// callers.
+fn build_worker_grpc_config_from_env()
+-> Result<Option<agentflow_server::worker_grpc::WorkerGrpcServeConfig>, Box<dyn std::error::Error>>
+{
+  let Some(bind) = std::env::var("AGENTFLOW_WORKER_GRPC_BIND").ok() else {
+    return Ok(None);
+  };
+  let bind: SocketAddr = bind.parse()?;
+
+  let tls_cert = std::env::var("AGENTFLOW_WORKER_GRPC_TLS_CERT").ok();
+  let tls_key = std::env::var("AGENTFLOW_WORKER_GRPC_TLS_KEY").ok();
+  let client_ca = std::env::var("AGENTFLOW_WORKER_GRPC_CLIENT_CA")
+    .ok()
+    .map(PathBuf::from);
+  let tls = match (tls_cert, tls_key) {
+    (Some(cert), Some(key)) => Some(agentflow_server::worker_grpc::WorkerGrpcTlsConfig {
+      cert_pem_path: PathBuf::from(cert),
+      key_pem_path: PathBuf::from(key),
+      client_ca_pem_path: client_ca,
+    }),
+    (None, None) => None,
+    _ => {
+      return Err(
+        "AGENTFLOW_WORKER_GRPC_TLS_CERT and AGENTFLOW_WORKER_GRPC_TLS_KEY must both be set, or both unset"
+          .into(),
+      );
+    }
+  };
+
+  let allowed_worker_ids = std::env::var("AGENTFLOW_WORKER_IDS")
+    .ok()
+    .map(|raw| {
+      raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+  let shared_psk = std::env::var("AGENTFLOW_WORKER_PSK").ok();
+
+  Ok(Some(agentflow_server::worker_grpc::WorkerGrpcServeConfig {
+    bind,
+    tls,
+    allowed_worker_ids,
+    shared_psk,
+  }))
 }
 
 async fn run_cleanup_once(

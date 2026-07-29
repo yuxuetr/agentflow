@@ -41,6 +41,7 @@ pub mod serve;
 pub mod skills;
 pub mod tenant;
 pub mod ui;
+pub mod worker_grpc;
 
 pub use auth::{
   AuthConfig, AuthConfigError, require_bearer_token, resolve_auth_config,

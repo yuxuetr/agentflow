@@ -31,7 +31,10 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 dirs = "5.0"
 prost = "0.13"
-tonic = "0.12"
+# T1.2: explicit `tls`/`tls-roots` for the worker gRPC control-plane
+# listener's `ServerTlsConfig` — see the matching comment in
+# agentflow-worker-proto/Cargo.toml for why this must not be incidental.
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 # P10.16.1: signed-JWT worker admission. HS256 (single shared secret) + RS256
 # (asymmetric — operator-signed, worker-verifying — for the production IdP path).

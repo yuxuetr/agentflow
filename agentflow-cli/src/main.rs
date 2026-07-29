@@ -289,6 +289,32 @@ struct ServeArgs {
   /// Maximum request body size in megabytes
   #[arg(long)]
   max_body_mb: Option<u64>,
+  /// `host:port` to bind the worker gRPC control-plane listener on
+  /// (e.g. `0.0.0.0:50051`). Unset (default) does not start it — the
+  /// "one server, N workers" deployment shape from docs/DISTRIBUTED.md
+  /// is opt-in. T1.2.
+  #[arg(long)]
+  worker_grpc: Option<String>,
+  /// PEM server certificate for the worker gRPC listener. Must be
+  /// paired with `--worker-grpc-tls-key`; omit both for plaintext gRPC.
+  #[arg(long)]
+  worker_grpc_tls_cert: Option<String>,
+  /// PEM private key for `--worker-grpc-tls-cert`.
+  #[arg(long)]
+  worker_grpc_tls_key: Option<String>,
+  /// PEM CA used to verify worker client certificates (enables mTLS on
+  /// top of `--worker-grpc-tls-cert`/`--worker-grpc-tls-key`).
+  #[arg(long)]
+  worker_grpc_client_ca: Option<String>,
+  /// Worker IDs allowed to join the gRPC control plane (comma-separated).
+  /// Empty (default) allows any worker id — combined with no
+  /// `--worker-psk`, that is fully open and only permitted outside
+  /// `production` (T0.2's fail-closed admission check).
+  #[arg(long, value_delimiter = ',')]
+  worker_ids: Vec<String>,
+  /// Shared pre-shared-key token every id in `--worker-ids` must present.
+  #[arg(long)]
+  worker_psk: Option<String>,
   /// Run readiness diagnostics without binding any sockets and exit
   #[arg(long)]
   check: bool,
@@ -2278,6 +2304,12 @@ async fn main() {
         args.auth_token_env,
         args.cors_origins,
         args.max_body_mb,
+        args.worker_grpc,
+        args.worker_grpc_tls_cert,
+        args.worker_grpc_tls_key,
+        args.worker_grpc_client_ca,
+        args.worker_ids,
+        args.worker_psk,
         args.check,
       )
       .await

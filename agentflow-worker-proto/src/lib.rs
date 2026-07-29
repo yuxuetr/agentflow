@@ -26,7 +26,8 @@ pub mod grpc;
 pub mod protocol;
 
 pub use grpc::{
-  GrpcWorkerProtocol, extract_traceparent_from_grpc_request, inject_traceparent_into_grpc_request,
+  Certificate, ClientTlsConfig, GrpcWorkerProtocol, Identity,
+  extract_traceparent_from_grpc_request, inject_traceparent_into_grpc_request,
   run_in_traceparent_scope,
 };
 pub use protocol::*;

@@ -71,6 +71,10 @@ pub struct ServeConfig {
   /// Request body cap in megabytes. `None` defers to the security
   /// profile default.
   pub max_body_mb: Option<u64>,
+  /// T1.2: optional worker gRPC control-plane listener, run as a
+  /// background task alongside the primary HTTP listener. `None` (the
+  /// default) keeps pre-T1.2 behavior — no gRPC socket is bound.
+  pub worker_grpc: Option<crate::worker_grpc::WorkerGrpcServeConfig>,
 }
 
 impl ServeConfig {
@@ -94,6 +98,7 @@ impl ServeConfig {
       auth_token_env: "AGENTFLOW_API_TOKEN".to_string(),
       cors_origins: Vec::new(),
       max_body_mb: None,
+      worker_grpc: None,
     }
   }
 }
@@ -125,6 +130,10 @@ pub enum ServeError {
   Runtime(String),
   #[error("readiness check failed: {0}")]
   ReadinessFailed(String),
+  /// T1.2: the worker gRPC listener failed its fail-fast bind probe or
+  /// TLS/admission setup before the gateway finished starting.
+  #[error("worker gRPC listener error: {0}")]
+  WorkerGrpc(#[from] crate::worker_grpc::WorkerGrpcError),
 }
 
 /// Tri-state readiness verdict used by `agentflow serve --check`.
@@ -443,6 +452,33 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     config.run_dir.clone(),
     config.trace_dir.clone(),
   );
+
+  // T1.2: optional worker gRPC control-plane listener. Admission
+  // misconfiguration (e.g. production profile with no credentials —
+  // T0.2's fail-closed check) fails startup here, synchronously, same
+  // as a bad `--database-url`. TLS file / bind errors surface only as
+  // an error log from the spawned task — same best-effort precedent as
+  // `spawn_cleanup_loop` above, not a reason to refuse the whole gateway.
+  if let Some(worker_grpc_cfg) = config.worker_grpc.clone() {
+    let plane =
+      crate::worker_grpc::build_worker_control_plane(&worker_grpc_cfg, config.security_profile)?;
+    info!(
+      "Starting worker gRPC control plane on {}",
+      worker_grpc_cfg.bind
+    );
+    tokio::spawn(async move {
+      if let Err(err) = crate::worker_grpc::serve_worker_grpc(
+        worker_grpc_cfg.bind,
+        plane,
+        worker_grpc_cfg.tls.clone(),
+        shutdown_signal(),
+      )
+      .await
+      {
+        error!("worker gRPC control plane exited with error: {err}");
+      }
+    });
+  }
 
   info!("Starting AgentFlow Gateway on {}", config.bind);
   let listener = tokio::net::TcpListener::bind(config.bind)

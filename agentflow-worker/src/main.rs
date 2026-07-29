@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use agentflow_worker::{WorkerConfig, WorkerRuntime};
-use agentflow_worker_proto::{GrpcWorkerProtocol, InMemoryWorkerProtocol, WorkerId};
+use agentflow_worker_proto::{
+  Certificate, ClientTlsConfig, GrpcWorkerProtocol, Identity, InMemoryWorkerProtocol, WorkerId,
+};
 
 #[tokio::main]
 async fn main() {
@@ -20,8 +22,11 @@ use agentflow_core::shutdown::shutdown_signal;
 
 async fn run() -> Result<(), String> {
   let args = Args::parse(std::env::args().skip(1))?;
+  // T1.2: build the TLS config (if any) up front, before any field of
+  // `args` moves out — `build_tls_config` only borrows.
+  let tls_config = build_tls_config(&args)?;
   let worker_id = WorkerId::new(args.worker_id).map_err(|e| e.to_string())?;
-  let mut config = WorkerConfig::new(worker_id, args.control_plane);
+  let mut config = WorkerConfig::new(worker_id, args.control_plane.clone());
   config.poll_interval = args.poll_interval;
   config.heartbeat_interval = args.heartbeat_interval;
 
@@ -32,14 +37,25 @@ async fn run() -> Result<(), String> {
          control-plane is memory://local, which is auth-exempt. The token will be ignored."
       );
     }
+    if tls_config.is_some() {
+      eprintln!(
+        "agentflow-worker: warning — TLS flags are set but control-plane is memory://local, \
+         which is in-process and never uses TLS. They will be ignored."
+      );
+    }
     let runtime = WorkerRuntime::new(InMemoryWorkerProtocol::new(), config);
     return run_runtime(runtime, args.once).await;
   }
 
-  let endpoint = grpc_endpoint(&config.control_plane)?;
-  let mut protocol = GrpcWorkerProtocol::connect(&endpoint)
-    .await
-    .map_err(|e| e.to_string())?;
+  let endpoint = grpc_endpoint(&config.control_plane, tls_config.is_some())?;
+  let mut protocol = match tls_config {
+    Some(tls) => GrpcWorkerProtocol::connect_tls(&endpoint, tls)
+      .await
+      .map_err(|e| e.to_string())?,
+    None => GrpcWorkerProtocol::connect(&endpoint)
+      .await
+      .map_err(|e| e.to_string())?,
+  };
   // Q1.6.1: attach the admission credential (PSK) sent as
   // `authorization: Bearer <token>` gRPC metadata. Production
   // deployments MUST set this; the server side rejects with
@@ -54,17 +70,44 @@ async fn run() -> Result<(), String> {
        AuthenticatedGrpcWorkerService."
     );
   }
-  // TLS flags are accepted for CLI compatibility; current tonic
-  // wiring uses the channel as-is. Operators provide their own
-  // certificate material — no in-tree cert generation script.
-  if args.server_ca.is_some() || args.client_cert.is_some() || args.client_key.is_some() {
-    eprintln!(
-      "agentflow-worker: warning — TLS flags are accepted but not yet wired through the \
-       channel builder. Track Q3.x for the full mTLS uplift."
-    );
-  }
   let runtime = WorkerRuntime::new(protocol, config);
   run_runtime(runtime, args.once).await
+}
+
+/// T1.2: build a `ClientTlsConfig` from `--server-ca`/`--client-cert`/
+/// `--client-key` PEM file paths. Returns `Ok(None)` when none of the
+/// three flags are set (plaintext gRPC, the historical default).
+/// `--client-cert`/`--client-key` must both be present or both absent —
+/// a lone one of the pair is a config error, not silently-ignored mTLS.
+fn build_tls_config(args: &Args) -> Result<Option<ClientTlsConfig>, String> {
+  if args.server_ca.is_none() && args.client_cert.is_none() && args.client_key.is_none() {
+    return Ok(None);
+  }
+
+  let mut tls = ClientTlsConfig::new();
+  if let Some(path) = &args.server_ca {
+    let pem = std::fs::read(path)
+      .map_err(|e| format!("agentflow-worker: failed to read --server-ca '{path}': {e}"))?;
+    tls = tls.ca_certificate(Certificate::from_pem(pem));
+  }
+  match (&args.client_cert, &args.client_key) {
+    (Some(cert_path), Some(key_path)) => {
+      let cert_pem = std::fs::read(cert_path).map_err(|e| {
+        format!("agentflow-worker: failed to read --client-cert '{cert_path}': {e}")
+      })?;
+      let key_pem = std::fs::read(key_path)
+        .map_err(|e| format!("agentflow-worker: failed to read --client-key '{key_path}': {e}"))?;
+      tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
+    }
+    (None, None) => {}
+    _ => {
+      return Err(
+        "agentflow-worker: --client-cert and --client-key must both be set for mTLS, or both omitted"
+          .to_string(),
+      );
+    }
+  }
+  Ok(Some(tls))
 }
 
 async fn run_runtime<P>(runtime: WorkerRuntime<P>, once: bool) -> Result<(), String>
@@ -118,9 +161,16 @@ where
   }
 }
 
-fn grpc_endpoint(control_plane: &str) -> Result<String, String> {
+/// T1.2: `grpc://host:port` maps to `https://` when TLS is configured
+/// (tonic rejects a `tls_config` paired with an `http://` endpoint), and
+/// to `http://` otherwise — unchanged from the pre-T1.2 behavior. An
+/// explicit `http://`/`https://` control-plane URL always passes through
+/// as-is, so an operator who wants TLS without the `grpc://` shorthand
+/// can just write `https://host:port` directly.
+fn grpc_endpoint(control_plane: &str, tls_enabled: bool) -> Result<String, String> {
   if let Some(rest) = control_plane.strip_prefix("grpc://") {
-    return Ok(format!("http://{rest}"));
+    let scheme = if tls_enabled { "https" } else { "http" };
+    return Ok(format!("{scheme}://{rest}"));
   }
   if control_plane.starts_with("http://") || control_plane.starts_with("https://") {
     return Ok(control_plane.to_string());
@@ -140,11 +190,14 @@ struct Args {
   /// Q1.6.1: pre-shared admission token sent as gRPC `authorization`
   /// metadata. Falls back to `AGENTFLOW_ADMISSION_TOKEN`.
   admission_token: Option<String>,
-  /// PEM-encoded CA certificate used to validate the server cert.
-  /// Accepted today as a CLI surface but not yet wired into the
-  /// tonic channel — full mTLS lands in a follow-up.
+  /// Path to a PEM-encoded CA certificate used to validate the
+  /// server's cert. Set alone, this enables server-only TLS; paired
+  /// with `client_cert`/`client_key`, mutual TLS.
   server_ca: Option<String>,
+  /// Path to a PEM-encoded client certificate (mTLS). Must be set
+  /// together with `client_key`.
   client_cert: Option<String>,
+  /// Path to the PEM-encoded private key for `client_cert`.
   client_key: Option<String>,
 }
 
@@ -238,9 +291,9 @@ fn help() -> String {
    [--worker-id ID] \
    [--control-plane memory://local|grpc://host:port|http://host:port] \
    [--admission-token PSK]   # required for gRPC under AuthenticatedGrpcWorkerService \
-   [--server-ca PATH]        # PEM CA cert (TLS, not yet wired) \
-   [--client-cert PATH]      # PEM client cert (mTLS, not yet wired) \
-   [--client-key PATH]       # PEM client key (mTLS, not yet wired) \
+   [--server-ca PATH]        # PEM CA cert; enables TLS (grpc:// -> https://) \
+   [--client-cert PATH]      # PEM client cert; pair with --client-key for mTLS \
+   [--client-key PATH]       # PEM client key; pair with --client-cert for mTLS \
    [--once] [--poll-ms N] [--heartbeat-ms N]"
     .into()
 }

@@ -34,6 +34,12 @@ pub async fn execute(
   auth_token_env: String,
   cors_origins: Vec<String>,
   max_body_mb: Option<u64>,
+  worker_grpc: Option<String>,
+  worker_grpc_tls_cert: Option<String>,
+  worker_grpc_tls_key: Option<String>,
+  worker_grpc_client_ca: Option<String>,
+  worker_ids: Vec<String>,
+  worker_psk: Option<String>,
   check: bool,
 ) -> Result<()> {
   let server_bin = locate_server_binary().context(
@@ -70,6 +76,25 @@ pub async fn execute(
   if let Some(mb) = max_body_mb {
     let bytes = mb.saturating_mul(1024 * 1024);
     cmd.env("AGENTFLOW_MAX_REQUEST_BODY_BYTES", bytes.to_string());
+  }
+  // T1.2: worker gRPC control-plane listener passthrough.
+  if let Some(bind) = &worker_grpc {
+    cmd.env("AGENTFLOW_WORKER_GRPC_BIND", bind);
+  }
+  if let Some(cert) = &worker_grpc_tls_cert {
+    cmd.env("AGENTFLOW_WORKER_GRPC_TLS_CERT", cert);
+  }
+  if let Some(key) = &worker_grpc_tls_key {
+    cmd.env("AGENTFLOW_WORKER_GRPC_TLS_KEY", key);
+  }
+  if let Some(ca) = &worker_grpc_client_ca {
+    cmd.env("AGENTFLOW_WORKER_GRPC_CLIENT_CA", ca);
+  }
+  if !worker_ids.is_empty() {
+    cmd.env("AGENTFLOW_WORKER_IDS", worker_ids.join(","));
+  }
+  if let Some(psk) = &worker_psk {
+    cmd.env("AGENTFLOW_WORKER_PSK", psk);
   }
 
   if check {

@@ -16,6 +16,11 @@ use tonic::transport::{Channel, Endpoint};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+// T1.2: re-exported so `agentflow-worker` can build a `ClientTlsConfig`
+// from PEM file bytes without taking its own direct dependency on tonic
+// (it depends on this crate for the gRPC transport already).
+pub use tonic::transport::{Certificate, ClientTlsConfig, Identity};
+
 use crate::pb;
 use crate::{
   SchedulerError, WorkerHeartbeat, WorkerId, WorkerProtocol, WorkerTask, WorkerTaskResult,
@@ -59,6 +64,32 @@ impl GrpcWorkerProtocol {
       channel,
       admission_token: None,
     }
+  }
+
+  /// T1.2: connect over TLS (or mTLS, when `tls` carries a client
+  /// [`Identity`]). `endpoint` must use the `https://` scheme — tonic
+  /// rejects a `tls_config` paired with `http://`.
+  pub async fn connect_tls(
+    endpoint: impl AsRef<str>,
+    tls: ClientTlsConfig,
+  ) -> Result<Self, SchedulerError> {
+    let channel = Endpoint::from_shared(endpoint.as_ref().to_string())
+      .map_err(|err| SchedulerError::Transport {
+        message: err.to_string(),
+      })?
+      .tls_config(tls)
+      .map_err(|err| SchedulerError::Transport {
+        message: err.to_string(),
+      })?
+      .connect()
+      .await
+      .map_err(|err| SchedulerError::Transport {
+        message: err.to_string(),
+      })?;
+    Ok(Self {
+      channel,
+      admission_token: None,
+    })
   }
 
   /// Pin the admission token attached to every outgoing call as
