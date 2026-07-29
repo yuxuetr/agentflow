@@ -1,0 +1,28 @@
+name: Debug Sandbox Probe (temporary)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cgroup environment facts
+        run: |
+          id
+          echo "--- /sys/fs/cgroup/user.slice ---"
+          find /sys/fs/cgroup/user.slice -maxdepth 3 2>&1 || true
+          echo "--- cgroup.controllers at delegation root ---"
+          cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers 2>&1 || true
+          echo "--- cgroup.subtree_control at delegation root ---"
+          cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control 2>&1 || true
+          echo "--- cgroup.procs at delegation root (should be empty per 'no internal processes') ---"
+          cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.procs 2>&1 || true
+          echo "--- my own cgroup (/proc/self/cgroup) ---"
+          cat /proc/self/cgroup 2>&1 || true
+      - name: Run debug_cgroup_migration_raw with backtrace
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          RUST_BACKTRACE=full cargo test -p agentflow-tools --lib sandbox::linux::tests::debug_cgroup_migration_raw -- --nocapture 2>&1 | tail -80

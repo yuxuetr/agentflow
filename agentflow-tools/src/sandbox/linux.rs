@@ -806,6 +806,37 @@ mod tests {
   use super::*;
 
   #[test]
+  fn debug_cgroup_migration_raw() {
+    let Some(root) = resolve_cgroup_root() else {
+      eprintln!("DEBUG: resolve_cgroup_root() = None");
+      return;
+    };
+    eprintln!("DEBUG: resolve_cgroup_root() = {}", root.display());
+    // No memory/pids limits set here on purpose: we're diagnosing the
+    // migration mechanism itself, not testing enforcement, and joining a
+    // real memory.max cgroup from this (large, many-dependency) test
+    // binary's own process risks self-OOM.
+    let scope = SandboxScope::new();
+    let procs_path = match setup_cgroup_for_spawn(&scope) {
+      Ok(p) => p,
+      Err(e) => {
+        eprintln!("DEBUG: setup_cgroup_for_spawn Err = {e:?}");
+        return;
+      }
+    };
+    eprintln!("DEBUG: procs_path = {:?}", procs_path);
+    let before = std::fs::read_to_string(procs_path.to_str().unwrap()).unwrap_or_default();
+    eprintln!("DEBUG: cgroup.procs before migrate = {before:?}");
+    match migrate_self_into_cgroup(&procs_path) {
+      Ok(()) => eprintln!("DEBUG: migrate_self_into_cgroup Ok"),
+      Err(e) => eprintln!("DEBUG: migrate_self_into_cgroup Err = {e:?}"),
+    }
+    let after = std::fs::read_to_string(procs_path.to_str().unwrap()).unwrap_or_default();
+    eprintln!("DEBUG: cgroup.procs after migrate = {after:?}");
+    eprintln!("DEBUG: my pid = {}", std::process::id());
+  }
+
+  #[test]
   fn arch_detection_supports_known_targets() {
     let detected = detect_target_arch();
     if cfg!(target_arch = "x86_64") {
