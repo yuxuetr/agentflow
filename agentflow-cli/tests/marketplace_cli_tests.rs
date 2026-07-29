@@ -1042,3 +1042,267 @@ description = "Echo node"
     .stderr(predicate::str::contains("entrypoint"))
     .stderr(predicate::str::contains("outside package root"));
 }
+
+// ── T0.1: non-local registries default to real Ed25519 verification ───────
+//
+// A `registry` argument that is an http(s) URL is a genuinely remote
+// marketplace, so `install`/`verify` must default to
+// `Ed25519SignatureVerifier { require_signature: true }` rather than the
+// weak checksum-only re-hash. These tests spin up a throwaway blocking
+// HTTP server (the CLI subprocess fetches the manifest for real) and
+// pre-populate the artifact cache directly on disk — mirroring "already
+// downloaded" — so no artifact fetch over HTTP is needed.
+
+/// Serve `body` exactly once over a loopback HTTP server and return the URL.
+/// The server thread is intentionally left detached: the test only needs
+/// one GET to complete before the CLI subprocess parses the response.
+fn spawn_blocking_manifest_server(body: String) -> String {
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
+
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let addr = listener.local_addr().unwrap();
+  std::thread::spawn(move || {
+    if let Ok((mut socket, _)) = listener.accept() {
+      let mut buf = [0u8; 4096];
+      let _ = socket.read(&mut buf);
+      let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      let _ = socket.write_all(response.as_bytes());
+    }
+  });
+  format!("http://{addr}/marketplace.toml")
+}
+
+/// Write `entry`'s manifest TOML to a temp file (reusing
+/// `write_marketplace_for_entry`) and return its contents, ready to be
+/// served by [`spawn_blocking_manifest_server`].
+fn manifest_toml_for_entry(entry: &RemoteMarketplaceEntry) -> String {
+  let work = TempDir::new().unwrap();
+  let path = work.path().join("marketplace.toml");
+  write_marketplace_for_entry(&path, entry);
+  fs::read_to_string(&path).unwrap()
+}
+
+fn ed25519_signed_entry_for_bytes(
+  bytes: &[u8],
+  key_id: &str,
+  sk: &ed25519_dalek::SigningKey,
+) -> RemoteMarketplaceEntry {
+  use base64::Engine;
+  use ed25519_dalek::Signer;
+
+  let sig = sk.sign(bytes);
+  let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+  RemoteMarketplaceEntry {
+    name: "rust-expert".into(),
+    version: "1.0.0".into(),
+    package_type: MarketplacePackageType::Skill,
+    source: MarketplaceSource {
+      registry_url: "https://registry.example.com/marketplace.toml".into(),
+      artifact_url: "https://registry.example.com/rust-expert.tar.gz".into(),
+      checksum_sha256: sha256_hex(bytes),
+    },
+    signature: Some(MarketplaceSignature {
+      algorithm: "ed25519".into(),
+      key_id: key_id.into(),
+      value: sig_b64,
+    }),
+    aliases: vec!["rust".into()],
+    description: Some("Rust review skill".into()),
+  }
+}
+
+fn write_ed25519_pub_key(dir: &Path, key_id: &str, sk: &ed25519_dalek::SigningKey) {
+  use base64::Engine;
+  let pub_b64 = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+  fs::create_dir_all(dir).unwrap();
+  fs::write(dir.join(format!("{key_id}.pub")), pub_b64).unwrap();
+}
+
+#[test]
+fn marketplace_verify_remote_registry_rejects_unsigned_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"unsigned remote package";
+  let mut entry = entry_for_bytes(bytes);
+  entry.signature = None;
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("requires one"));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_rejects_checksum_only_signature_by_default() {
+  // A `checksum-sha256` signature block is the pre-fix weak default — a
+  // remote registry must reject it outright by default, not silently
+  // downgrade to accepting it.
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"checksum-signed remote package";
+  let entry = entry_for_bytes(bytes);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("rejected algorithm"));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_allow_unsigned_falls_back_to_checksum() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"checksum-signed remote package, opted out";
+  let entry = entry_for_bytes(bytes);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--allow-unsigned",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("--allow-unsigned"))
+    .stdout(predicate::str::contains("signature_checked: true"))
+    .stdout(predicate::str::contains(
+      "signature_verification: checksum_only",
+    ));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_accepts_valid_ed25519_signature_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let keys_dir = work.path().join("keys");
+  let bytes = b"a real ed25519-signed remote package";
+
+  let seed: [u8; 32] = *b"agentflow-cli-test-key-32-bytes!";
+  let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+  write_ed25519_pub_key(&keys_dir, "publisher-a", &sk);
+
+  let entry = ed25519_signed_entry_for_bytes(bytes, "publisher-a", &sk);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+
+  // Populate the cache directly on disk (bypassing any verifier) to
+  // simulate "already downloaded" — the default `ChecksumSha256`-backed
+  // cache would itself reject an `ed25519`-algorithm signature block.
+  let probe_cache = RemoteMarketplaceCache::new(&cache_dir);
+  let artifact_path = probe_cache.artifact_path(&entry).unwrap();
+  fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+  fs::write(&artifact_path, bytes).unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--keys-dir",
+      keys_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("signature_checked: true"))
+    .stdout(predicate::str::contains(
+      "signature_verification: cryptographic_signature",
+    ));
+}
+
+#[test]
+fn marketplace_install_remote_registry_rejects_unsigned_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+---
+
+# Rust Expert
+"#,
+    0o644,
+  )]);
+  let mut entry = entry_for_bytes(&package);
+  entry.signature = None;
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  RemoteMarketplaceCache::new(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("requires one"));
+
+  assert!(
+    !install_dir.join("rust-expert").exists(),
+    "an artifact rejected by default signature policy must never be unpacked"
+  );
+}

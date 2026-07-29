@@ -171,6 +171,7 @@ dependencies = [
  "console",
  "dirs",
  "dotenvy",
+ "ed25519-dalek",
  "flate2",
  "futures",
  "glob",

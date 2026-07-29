@@ -7,12 +7,14 @@ use std::io::{Cursor, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Component;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
 use agentflow_skills::{
-  MarketplacePackageType, RemoteMarketplaceCache, RemoteMarketplaceClient, RemoteMarketplaceEntry,
-  RemoteMarketplaceManifest, SkillLoader,
+  ChecksumSha256SignatureVerifier, Ed25519SignatureVerifier, MarketplacePackageType,
+  MarketplaceSignatureVerifier, RemoteMarketplaceCache, RemoteMarketplaceClient,
+  RemoteMarketplaceEntry, RemoteMarketplaceManifest, SkillLoader,
 };
 
 const MAX_MARKETPLACE_ARCHIVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -132,6 +134,7 @@ fn render_search_envelope(
   Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn install(
   registry: String,
   package: String,
@@ -140,11 +143,13 @@ pub async fn install(
   install_dir: Option<String>,
   force: bool,
   cache_only: bool,
+  allow_unsigned: bool,
+  keys_dir: Option<String>,
 ) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
   let package_type = parse_package_type_opt(package_type.as_deref())?;
   let entry = resolve_entry(&manifest, &package, package_type)?;
-  let cache = cache_from_dir(cache_dir);
+  let cache = cache_from_dir(cache_dir, &registry, allow_unsigned, keys_dir);
   let cached = if cache.is_cached(entry)? {
     cache
       .verify_cached_artifact(entry)
@@ -165,6 +170,10 @@ pub async fn install(
   println!("   path: {}", cached.path.display());
   println!("   checksum: sha256:{}", cached.checksum_sha256);
   println!("   signature_checked: {}", cached.signature_checked);
+  println!(
+    "   signature_verification: {}",
+    cached.signature_verification
+  );
 
   if cache_only {
     println!("   cache_only: true");
@@ -191,7 +200,9 @@ pub async fn install(
 
 pub async fn update(registry: String, cache_dir: Option<String>) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
-  let cache = cache_from_dir(cache_dir);
+  // `update` only persists the manifest TOML itself — it never verifies an
+  // artifact — so the signature verifier choice is moot here.
+  let cache = cache_from_dir(cache_dir, &registry, false, None);
   let registry_dir = cache.root().join("registries");
   fs::create_dir_all(&registry_dir).with_context(|| {
     format!(
@@ -212,16 +223,19 @@ pub async fn update(registry: String, cache_dir: Option<String>) -> Result<()> {
   Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn verify(
   registry: String,
   package: Option<String>,
   package_type: Option<String>,
   cache_dir: Option<String>,
   strict: bool,
+  allow_unsigned: bool,
+  keys_dir: Option<String>,
 ) -> Result<()> {
   let manifest = load_manifest(&registry).await?;
   let package_type = parse_package_type_opt(package_type.as_deref())?;
-  let cache = cache_from_dir(cache_dir);
+  let cache = cache_from_dir(cache_dir, &registry, allow_unsigned, keys_dir);
   let entries: Vec<&RemoteMarketplaceEntry> = if let Some(package) = package {
     vec![resolve_entry(&manifest, &package, package_type)?]
   } else {
@@ -252,12 +266,25 @@ pub async fn verify(
     println!("   path: {}", cached.path.display());
     println!("   checksum: sha256:{}", cached.checksum_sha256);
     println!("   signature_checked: {}", cached.signature_checked);
+    println!(
+      "   signature_verification: {}",
+      cached.signature_verification
+    );
   }
   Ok(())
 }
 
+/// A registry argument is "remote" when it names an HTTP(S) URL rather than
+/// a local manifest file. T0.1: this is the signal that decides whether
+/// installs default to real Ed25519 signature verification — a locally
+/// authored/bootstrap manifest has no network-facing publisher identity to
+/// verify against, but anything fetched from a registry URL does.
+fn is_remote_registry(registry: &str) -> bool {
+  registry.starts_with("http://") || registry.starts_with("https://")
+}
+
 async fn load_manifest(registry: &str) -> Result<RemoteMarketplaceManifest> {
-  if registry.starts_with("http://") || registry.starts_with("https://") {
+  if is_remote_registry(registry) {
     RemoteMarketplaceClient::new()
       .fetch_manifest(registry)
       .await
@@ -268,11 +295,44 @@ async fn load_manifest(registry: &str) -> Result<RemoteMarketplaceManifest> {
   }
 }
 
-fn cache_from_dir(cache_dir: Option<String>) -> RemoteMarketplaceCache {
+/// T0.1 (evaluation §5 finding 1): non-local registries default to real
+/// `Ed25519SignatureVerifier { require_signature: true }` — the pre-fix
+/// default (`ChecksumSha256SignatureVerifier`) only re-hashes the artifact
+/// and compares against a manifest-supplied field, which is not a signature
+/// at all: an attacker who can modify the artifact can trivially recompute
+/// it. `--allow-unsigned` is the explicit, loudly-warned opt-out back to
+/// checksum-only verification. Local manifest files keep the previous
+/// checksum-only default unconditionally, since they have no publisher
+/// identity to verify against.
+fn cache_from_dir(
+  cache_dir: Option<String>,
+  registry: &str,
+  allow_unsigned: bool,
+  keys_dir: Option<String>,
+) -> RemoteMarketplaceCache {
   let root = cache_dir
     .map(PathBuf::from)
     .unwrap_or_else(RemoteMarketplaceCache::default_root);
-  RemoteMarketplaceCache::new(root)
+  let client = RemoteMarketplaceClient::new();
+  let remote = is_remote_registry(registry);
+  let verifier: Arc<dyn MarketplaceSignatureVerifier> = if remote && !allow_unsigned {
+    let dir = keys_dir
+      .map(PathBuf::from)
+      .unwrap_or_else(Ed25519SignatureVerifier::default_keys_dir);
+    Arc::new(Ed25519SignatureVerifier::new(dir))
+  } else {
+    if remote && allow_unsigned {
+      eprintln!(
+        "⚠️  --allow-unsigned: skipping cryptographic signature verification for remote registry '{registry}'."
+      );
+      eprintln!(
+        "   Only a self-reported SHA-256 checksum will be checked — this does NOT prove the artifact came from a trusted publisher."
+      );
+      eprintln!("   Do not use this flag for production installs.");
+    }
+    Arc::new(ChecksumSha256SignatureVerifier)
+  };
+  RemoteMarketplaceCache::with_client_and_verifier(root, client, verifier)
 }
 
 fn matching_entries<'a>(

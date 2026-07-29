@@ -126,6 +126,10 @@ sha2 = "0.10"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"
+# T0.1 marketplace signature verification tests sign fixture artifacts
+# with a real Ed25519 keypair to exercise the CLI's default-verification
+# happy path end-to-end (not just the rejection paths).
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 # `workflow_tests` builds Flows directly with tool + capability nodes.
 agentflow-nodes = { path = "../agentflow-nodes" }
 agentflow-nodes-ai = { path = "../agentflow-nodes-ai" }

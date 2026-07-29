@@ -319,7 +319,7 @@ impl RemoteMarketplaceCache {
         entry.name, entry.version, expected, actual
       )));
     }
-    self.signature_verifier.verify(entry, &bytes)?;
+    let signature_verification = self.signature_verifier.verify(entry, &bytes)?;
     Ok(CachedMarketplaceArtifact {
       entry_name: entry.name.clone(),
       version: entry.version.clone(),
@@ -327,6 +327,7 @@ impl RemoteMarketplaceCache {
       path,
       checksum_sha256: actual,
       signature_checked: entry.signature.is_some(),
+      signature_verification,
     })
   }
 
@@ -355,7 +356,7 @@ impl RemoteMarketplaceCache {
         entry.name, entry.version, expected, actual
       )));
     }
-    self.signature_verifier.verify(entry, bytes)?;
+    let signature_verification = self.signature_verifier.verify(entry, bytes)?;
 
     let path = self.artifact_path(entry)?;
     if let Some(parent) = path.parent() {
@@ -372,6 +373,7 @@ impl RemoteMarketplaceCache {
       path,
       checksum_sha256: actual,
       signature_checked: entry.signature.is_some(),
+      signature_verification,
     })
   }
 }
@@ -384,6 +386,50 @@ pub struct CachedMarketplaceArtifact {
   pub path: PathBuf,
   pub checksum_sha256: String,
   pub signature_checked: bool,
+  /// T0.1: what kind of check `signature_checked` actually represents —
+  /// distinguishes a real Ed25519 signature from a self-reported checksum
+  /// re-hash so callers can't accidentally treat the latter as the former.
+  pub signature_verification: SignatureVerificationKind,
+}
+
+/// What kind of check a [`MarketplaceSignatureVerifier`] actually performed.
+///
+/// T0.1: `signature_checked` on [`CachedMarketplaceArtifact`] only answers
+/// "was there a `[signature]` block that matched" — it can't distinguish a
+/// real cryptographic signature from a self-reported checksum re-hash
+/// (which an attacker who controls the artifact can trivially recompute).
+/// This type carries that distinction explicitly so callers don't have to
+/// infer it from which verifier they happened to construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureVerificationKind {
+  /// No `[signature]` block was present, and the active verifier did not
+  /// require one.
+  Unsigned,
+  /// Only a self-reported SHA-256 checksum was checked. **Not a real
+  /// signature** — it proves the manifest and artifact agree, not that
+  /// either came from a trusted publisher.
+  ChecksumOnly,
+  /// Verified against a real Ed25519 cryptographic signature.
+  CryptographicSignature,
+}
+
+impl SignatureVerificationKind {
+  /// True only when a genuine cryptographic signature was verified.
+  pub fn is_cryptographic(self) -> bool {
+    matches!(self, Self::CryptographicSignature)
+  }
+}
+
+impl std::fmt::Display for SignatureVerificationKind {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let label = match self {
+      Self::Unsigned => "unsigned",
+      Self::ChecksumOnly => "checksum_only",
+      Self::CryptographicSignature => "cryptographic_signature",
+    };
+    write!(f, "{label}")
+  }
 }
 
 /// Pluggable marketplace signature verifier.
@@ -392,16 +438,24 @@ pub struct CachedMarketplaceArtifact {
 /// bootstrap registries. Production registries should install a verifier for
 /// their chosen signature system (for example minisign or sigstore).
 pub trait MarketplaceSignatureVerifier: Send + Sync + std::fmt::Debug {
-  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError>;
+  fn verify(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+    artifact: &[u8],
+  ) -> Result<SignatureVerificationKind, SkillError>;
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ChecksumSha256SignatureVerifier;
 
 impl MarketplaceSignatureVerifier for ChecksumSha256SignatureVerifier {
-  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError> {
+  fn verify(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+    artifact: &[u8],
+  ) -> Result<SignatureVerificationKind, SkillError> {
     let Some(signature) = &entry.signature else {
-      return Ok(());
+      return Ok(SignatureVerificationKind::Unsigned);
     };
     let algorithm = signature.algorithm.trim().to_ascii_lowercase();
     if algorithm != "checksum-sha256" && algorithm != "sha256" {
@@ -418,7 +472,7 @@ impl MarketplaceSignatureVerifier for ChecksumSha256SignatureVerifier {
         entry.name, entry.version, expected, actual
       )));
     }
-    Ok(())
+    Ok(SignatureVerificationKind::ChecksumOnly)
   }
 }
 
@@ -536,7 +590,11 @@ impl Ed25519SignatureVerifier {
 }
 
 impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
-  fn verify(&self, entry: &RemoteMarketplaceEntry, artifact: &[u8]) -> Result<(), SkillError> {
+  fn verify(
+    &self,
+    entry: &RemoteMarketplaceEntry,
+    artifact: &[u8],
+  ) -> Result<SignatureVerificationKind, SkillError> {
     use ed25519_dalek::Verifier;
 
     let Some(signature) = &entry.signature else {
@@ -546,7 +604,7 @@ impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
           entry.name, entry.version
         )));
       }
-      return Ok(());
+      return Ok(SignatureVerificationKind::Unsigned);
     };
     let algorithm = signature.algorithm.trim().to_ascii_lowercase();
     if algorithm != "ed25519" {
@@ -574,7 +632,7 @@ impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
         entry.name, entry.version, err
       ))
     })?;
-    Ok(())
+    Ok(SignatureVerificationKind::CryptographicSignature)
   }
 }
 

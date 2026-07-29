@@ -117,15 +117,30 @@ directories. The cache API verifies the artifact before writing it:
 3. run the configured `MarketplaceSignatureVerifier`;
 4. write the artifact atomically via a temporary file and rename.
 
-The default verifier is `ChecksumSha256SignatureVerifier`. It accepts
-`signature.algorithm = "checksum-sha256"` or `"sha256"` and compares
-`signature.value` to the artifact SHA-256. This is useful for deterministic
-tests and bootstrap registries; production registries should plug in a verifier
-for a real signing system such as minisign or sigstore.
+`RemoteMarketplaceCache::new()`'s library-level default verifier is still
+`ChecksumSha256SignatureVerifier` — it accepts `signature.algorithm =
+"checksum-sha256"` or `"sha256"` and compares `signature.value` to the
+artifact SHA-256. This is a bootstrap verifier for deterministic tests and
+purely local registries; it is **not** a real signature — an attacker who
+controls the artifact can trivially recompute the checksum it compares
+against. **The CLI does not use this default for non-local registries**; see
+[CLI Default Verifier Selection](#cli-default-verifier-selection) below.
 
-Artifacts without a signature are still allowed at this layer because signature
-requirements are a CLI/policy decision. The cache records whether a signature
-was checked in `CachedMarketplaceArtifact::signature_checked`.
+A real `Ed25519SignatureVerifier` also ships in `agentflow-skills` and is what
+the CLI wires up by default for HTTP(S) registries. It loads a publisher's
+Ed25519 public key from a keys directory (one `<key_id>.pub` file per
+publisher, base64-encoded raw 32-byte key material) and verifies a
+base64-encoded detached signature over the raw artifact bytes.
+
+Artifacts without a signature are still allowed at the cache layer when the
+active verifier doesn't require one — signature *requirements* are a CLI/
+policy decision layered on top. The cache records whether a signature was
+checked in `CachedMarketplaceArtifact::signature_checked`, and — since T0.1 —
+*what kind* of check actually ran in `CachedMarketplaceArtifact::
+signature_verification` (`unsigned` / `checksum_only` /
+`cryptographic_signature`). Don't infer verification strength from
+`signature_checked` alone: it is `true` for both a checksum-only match and a
+real Ed25519 signature, and only `signature_verification` tells them apart.
 
 ## CLI
 
@@ -161,6 +176,52 @@ Install options:
 - `verify --strict` also requires signature metadata to be present and
   successfully checked. Without `--strict`, unsigned artifacts may be verified
   by checksum only.
+- `--allow-unsigned` and `--keys-dir` — see
+  [CLI Default Verifier Selection](#cli-default-verifier-selection).
+
+## CLI Default Verifier Selection
+
+**T0.1** (evaluation §5 finding 1): `install` and `verify` pick their
+`MarketplaceSignatureVerifier` based on whether `registry` is a genuinely
+remote registry:
+
+| `registry` argument | Default verifier | Notes |
+| --- | --- | --- |
+| `http://` / `https://` URL | `Ed25519SignatureVerifier { require_signature: true }` | Every entry **must** carry a valid `[signature]` block with `algorithm = "ed25519"`, or verification fails. |
+| local file path | `ChecksumSha256SignatureVerifier` | Unchanged bootstrap behavior — local manifests have no network-facing publisher identity to verify against. |
+
+Keys are read from `~/.agentflow/marketplace-keys/<key_id>.pub` by default;
+override the directory with `--keys-dir <path>`. Each file holds a single
+base64-encoded 32-byte raw Ed25519 public key (see
+`Ed25519SignatureVerifier` rustdoc in `agentflow-skills/src/
+remote_marketplace.rs` for the `openssl` command that produces one).
+
+For a non-local registry, this means by default:
+
+- an entry with **no** `[signature]` block is rejected
+  (`"... has no [signature] block but Ed25519 verifier requires one"`);
+- an entry signed with anything other than `algorithm = "ed25519"` (including
+  the old `checksum-sha256` bootstrap style) is rejected
+  (`"Ed25519 verifier rejected algorithm '...'"`);
+- an entry with a tampered artifact or a signature that doesn't verify against
+  the named `key_id`'s public key is rejected.
+
+`--allow-unsigned` is the explicit opt-out: it downgrades a non-local registry
+back to `ChecksumSha256SignatureVerifier` and prints a loud warning to stderr
+before proceeding. **Do not use it for production installs** — it does not
+prove the artifact came from a trusted publisher, only that the manifest and
+artifact bytes agree with each other.
+
+```bash
+# Default: rejected unless the entry carries a valid ed25519 signature.
+agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill
+
+# Explicit, loudly-warned downgrade to checksum-only verification.
+agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --allow-unsigned
+
+# Point at a non-default publisher keys directory.
+agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --keys-dir ./ci-marketplace-keys
+```
 
 Package artifacts are `.tar` or `.tar.gz` archives. The archive may contain the
 manifest at the root or inside a single top-level directory:
@@ -182,16 +243,36 @@ Every artifact must match `entries[].source.checksum_sha256`; checksum
 mismatches are always fatal. Signature enforcement has two layers:
 
 - the cache calls the configured `MarketplaceSignatureVerifier` whenever an
-  `entries[].signature` block is present;
-- CLI policy decides whether a missing signature is acceptable.
+  `entries[].signature` block is present (or unconditionally, if the verifier
+  requires one — see `Ed25519SignatureVerifier`'s `require_signature`);
+- CLI policy (registry_kind → verifier selection, `--strict`) decides which
+  verifier is active and whether a missing signature is acceptable.
 
-The default verifier, `ChecksumSha256SignatureVerifier`, is a bootstrap
-verifier for deterministic tests and simple local registries. It treats the
-signature value as another SHA-256 checksum and proves only that the artifact
-matches the catalog metadata. It does not provide publisher identity,
-transparency, expiry, revocation, or key rotation. Production registries should
-install a real verifier such as minisign or sigstore and run
-`agentflow marketplace verify --strict` in release or deployment workflows.
+Two verifiers ship today:
+
+- `ChecksumSha256SignatureVerifier` — bootstrap verifier for deterministic
+  tests and simple local registries. It treats the signature value as
+  another SHA-256 checksum and proves only that the artifact matches the
+  catalog metadata; it provides no publisher identity, transparency, expiry,
+  revocation, or key rotation. This is still `RemoteMarketplaceCache::new()`'s
+  library-level default, and what the CLI uses for local manifest files or
+  when `--allow-unsigned` is passed for a remote registry.
+- `Ed25519SignatureVerifier` — real cryptographic signature verification
+  against a publisher's Ed25519 public key. **Since T0.1, this is the CLI's
+  default for any HTTP(S) registry** (see [CLI Default Verifier
+  Selection](#cli-default-verifier-selection)); it still has no transparency
+  log, expiry, revocation, or key rotation of its own, but it does prove the
+  artifact was signed by whoever holds the private key for the named
+  `key_id` — the checksum-only verifier proves nothing beyond internal
+  consistency.
+
+Registries that need transparency/revocation/rotation on top of raw Ed25519
+signature checking should implement `MarketplaceSignatureVerifier` against
+sigstore, minisign with a key-rotation policy, or another signing system, and
+pass it to `RemoteMarketplaceCache::with_client_and_verifier`. `agentflow
+marketplace verify --strict` remains an orthogonal, additional gate — it
+requires signature metadata to be present and successfully checked
+regardless of which verifier is configured.
 
 ## Local signing
 
@@ -213,11 +294,22 @@ default `ChecksumSha256SignatureVerifier` checks. The flow is:
 4. Publish the archive at `source.artifact_url` (or, for offline
    tests, hand the bytes to `RemoteMarketplaceCache::cache_artifact_bytes`).
 
-The cache layer accepts archives with or without a `signature` block.
-The strict policy (`--require-signature` on the CLI in the future, or
-the `marketplace.require_signature_verification` security-profile flag
-today) is layered on top: when set, callers must reject any cached
-artifact whose `CachedMarketplaceArtifact::signature_checked` is
+This checksum-style signing only satisfies `ChecksumSha256SignatureVerifier` —
+against the CLI's default `Ed25519SignatureVerifier` for a remote registry, an
+entry signed this way is rejected outright (`algorithm` must be `"ed25519"`).
+For a real Ed25519-signed fixture, generate a keypair and sign the archive
+bytes directly; see `Ed25519SignatureVerifier` rustdoc in
+`agentflow-skills/src/remote_marketplace.rs` for the `openssl` commands and
+`agentflow-cli/tests/marketplace_cli_tests.rs`'s
+`marketplace_verify_remote_registry_accepts_valid_ed25519_signature_by_default`
+for a full worked example (keypair → `.pub` file → signed entry → CLI
+`verify`).
+
+The cache layer accepts archives with or without a `signature` block when the
+active verifier doesn't require one. The strict policy (`verify --strict` on
+the CLI, or the `marketplace.require_signature_verification`
+security-profile flag) is layered on top: when set, callers must reject any
+cached artifact whose `CachedMarketplaceArtifact::signature_checked` is
 `false`.
 
 Tests covering both paths live alongside the fixture archives:
@@ -225,15 +317,10 @@ Tests covering both paths live alongside the fixture archives:
 ```text
 agentflow-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md
 agentflow-core/tests/fixtures/signed/plugin-echo/plugin.toml
-agentflow-skills/tests/marketplace_signed.rs   # strict + non-strict
+agentflow-skills/tests/marketplace_signed.rs   # strict + non-strict (checksum-only verifier)
 agentflow-core/tests/plugin_signed_fixture.rs  # manifest sanity
+agentflow-cli/tests/marketplace_cli_tests.rs   # T0.1: remote-registry default Ed25519 verification + --allow-unsigned
 ```
-
-Real registries should swap `ChecksumSha256SignatureVerifier` for a
-`MarketplaceSignatureVerifier` implementation backed by minisign,
-sigstore, or another signing system. The plumbing above only changes
-which verifier is configured on the cache — the strict / non-strict
-CLI gates are independent.
 
 ## Offline Flow
 
@@ -252,8 +339,11 @@ without downloading the artifact again.
 
 The implemented remote marketplace layer covers catalog schema, read-only
 registry fetch, verified artifact caching, offline cache verification, safe
-archive unpack, and package-specific install into Skill or Plugin roots.
+archive unpack, package-specific install into Skill or Plugin roots, and (T0.1)
+CLI-default real Ed25519 signature verification for non-local registries with
+an explicit, warned `--allow-unsigned` opt-out.
 
-It does not yet implement background update jobs, dependency resolution between
-packages, or a production signing verifier beyond the pluggable verifier
-interface and checksum-based bootstrap verifier.
+It does not yet implement background update jobs, dependency resolution
+between packages, or transparency-log/expiry/revocation/key-rotation on top of
+raw Ed25519 signature checking — registries needing those should implement
+`MarketplaceSignatureVerifier` against sigstore or a similar system.

@@ -162,10 +162,19 @@ trivially "passed" verification.
 
 `ChecksumSha256SignatureVerifier` is retained as
 `MarketplaceSignatureVerifier::ChecksumSha256` for local fixtures
-and is the default for `RemoteMarketplaceCache::new(...)` —
-production deployments must explicitly opt in to
-`Ed25519SignatureVerifier::new(default_keys_dir())` via
-`RemoteMarketplaceCache::with_client_and_verifier`.
+and is still the library-level default for `RemoteMarketplaceCache::new(...)`.
+
+**T0.1 update:** the CLI no longer requires callers to opt in manually. As of
+T0.1, `agentflow marketplace install`/`verify` construct
+`Ed25519SignatureVerifier::new(default_keys_dir())` automatically whenever
+`registry` is an HTTP(S) URL (i.e. a genuinely remote, non-local registry);
+`ChecksumSha256SignatureVerifier` remains the default only for local manifest
+files, or for a remote registry when the operator explicitly passes
+`--allow-unsigned` (which prints a warning). See
+[`docs/MARKETPLACE.md` § CLI Default Verifier
+Selection](./MARKETPLACE.md#cli-default-verifier-selection). Direct library
+consumers who construct `RemoteMarketplaceCache` themselves (not through the
+CLI) must still opt in via `RemoteMarketplaceCache::with_client_and_verifier`.
 
 ### `AgentStepKind::Verify` / `AgentEvent::VerificationCompleted` — new additive variants
 

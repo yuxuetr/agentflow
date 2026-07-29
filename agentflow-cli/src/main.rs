@@ -1294,6 +1294,14 @@ enum RemoteMarketplaceCommands {
     /// Only download/verify/cache the artifact; do not unpack it into the runtime install directory.
     #[arg(long)]
     cache_only: bool,
+    /// Downgrade a non-local (http/https) registry from mandatory Ed25519
+    /// signature verification to checksum-only verification. Prints a
+    /// warning; refuse to use this for production installs.
+    #[arg(long)]
+    allow_unsigned: bool,
+    /// Directory of Ed25519 publisher public keys (default: ~/.agentflow/marketplace-keys)
+    #[arg(long)]
+    keys_dir: Option<String>,
   },
   /// Fetch and cache the registry manifest itself
   Update {
@@ -1318,6 +1326,14 @@ enum RemoteMarketplaceCommands {
     /// Require each verified artifact to include and pass signature metadata
     #[arg(long)]
     strict: bool,
+    /// Downgrade a non-local (http/https) registry from mandatory Ed25519
+    /// signature verification to checksum-only verification. Prints a
+    /// warning; refuse to use this for production installs.
+    #[arg(long)]
+    allow_unsigned: bool,
+    /// Directory of Ed25519 publisher public keys (default: ~/.agentflow/marketplace-keys)
+    #[arg(long)]
+    keys_dir: Option<String>,
   },
 }
 
@@ -2136,6 +2152,8 @@ async fn main() {
         install_dir,
         force,
         cache_only,
+        allow_unsigned,
+        keys_dir,
       } => {
         marketplace::install(
           registry,
@@ -2145,6 +2163,8 @@ async fn main() {
           install_dir,
           force,
           cache_only,
+          allow_unsigned,
+          keys_dir,
         )
         .await
       }
@@ -2158,7 +2178,20 @@ async fn main() {
         package_type,
         cache_dir,
         strict,
-      } => marketplace::verify(registry, package, package_type, cache_dir, strict).await,
+        allow_unsigned,
+        keys_dir,
+      } => {
+        marketplace::verify(
+          registry,
+          package,
+          package_type,
+          cache_dir,
+          strict,
+          allow_unsigned,
+          keys_dir,
+        )
+        .await
+      }
     },
     Commands::Trace(args) => match args.command {
       TraceCommands::Replay {
