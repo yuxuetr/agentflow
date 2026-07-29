@@ -629,7 +629,16 @@ async fn list_runs_returns_recent_rows_for_tenant() {
   let response = app
     .oneshot(
       Request::builder()
-        .uri("/v1/runs?tenant_id=tenant-a&limit=10")
+        .uri("/v1/runs?limit=10")
+        // R4.4 (2026-07-28 audit): tenant scoping moved to the
+        // `X-Agentflow-Tenant` header under Q1.4.1 — the `?tenant_id=`
+        // query parameter this test used to rely on was removed because it
+        // let any authenticated client list arbitrary tenants' runs (see
+        // `runs.rs::list_runs`'s doc comment). This test predates that
+        // change and was never updated; it only surfaced once R0.3 put
+        // agentflow-server's DB-backed tests in front of a real postgres
+        // for the first time instead of self-skipping.
+        .header("X-Agentflow-Tenant", "tenant-a")
         .body(Body::empty())
         .unwrap(),
     )
