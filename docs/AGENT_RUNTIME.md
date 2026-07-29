@@ -32,7 +32,8 @@ The boundary is:
 - `AgentEvent`: runtime event stream for run start/stop, tool calls,
   reflection, and verification.
 - `AgentStopReason`: structured stop reason for final answer, stop condition,
-  max steps, max tool calls, timeout, cancellation, token budget, or error.
+  max steps, max tool calls, timeout, cancellation, token budget, cost budget
+  (T1.1), loop detection, or error.
 - `AgentRunResult`: final runtime output containing answer, stop reason, steps,
   and events.
 - `AgentCancellationToken`: shared shutdown signal that can stop an active
@@ -58,7 +59,14 @@ legacy `run(&str) -> Result<String, ReActError>` API.
 - tool and reflection events.
 
 Runtime guards cover max steps, max tool calls, global timeout, token budget,
-and stop conditions.
+stop conditions, and (T1.1) a USD cost budget (`RuntimeLimits::cost_limit_usd`
+/ `ReActConfig::cost_limit_usd`, checked at the top of each turn against
+cumulative spend estimated from `ReActConfig::pricing_table` —
+`agentflow-agents::eval::pricing::PricingTable`, the same table the eval
+harness uses. The table defaults to all-zero prices, so the guard is inert
+until configured with real per-model rates). `PlanExecuteAgent` enforces the
+same cost budget around its single planner call via the matching
+`PlanExecuteConfig` fields.
 
 Runs can be cancelled by passing
 `AgentContext::with_cancellation_token(AgentCancellationToken::new())` and
@@ -216,7 +224,8 @@ It reuses:
 - `ToolRegistry` for all tool calls.
 - `MemoryStore` for user, planner, tool, and final-answer messages.
 - `AgentMemoryHook` for memory read/write observability.
-- `AgentCancellationToken`, timeout, max steps, and max tool call guards.
+- `AgentCancellationToken`, timeout, max steps, max tool call, token budget,
+  and (T1.1) cost budget guards.
 
 Run the mock example with:
 

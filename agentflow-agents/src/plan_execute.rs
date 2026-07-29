@@ -49,6 +49,16 @@ pub struct PlanExecuteConfig {
   pub model: String,
   pub persona: Option<String>,
   pub max_steps: usize,
+  /// T1.1: USD spend budget for the run's single planner call. `None`
+  /// disables the guard. Overridable per-run via
+  /// `AgentContext::limits.cost_limit_usd` (the context value wins when
+  /// both are set, mirroring `ReActConfig::cost_limit_usd`).
+  pub cost_limit_usd: Option<f64>,
+  /// T1.1: pricing table used to translate the planner call's token
+  /// usage into a USD cost estimate. Defaults to an empty table (every
+  /// call costs $0) — reuses `agentflow-agents::eval::pricing` rather
+  /// than a second pricing representation.
+  pub pricing_table: crate::eval::PricingTable,
 }
 
 impl Default for PlanExecuteConfig {
@@ -57,6 +67,8 @@ impl Default for PlanExecuteConfig {
       model: "gpt-4o".to_string(),
       persona: None,
       max_steps: 8,
+      cost_limit_usd: None,
+      pricing_table: crate::eval::PricingTable::default(),
     }
   }
 }
@@ -76,6 +88,19 @@ impl PlanExecuteConfig {
 
   pub fn with_max_steps(mut self, max_steps: usize) -> Self {
     self.max_steps = max_steps;
+    self
+  }
+
+  /// Configure the USD spend cap. See [`PlanExecuteConfig::cost_limit_usd`].
+  pub fn with_cost_limit_usd(mut self, budget_usd: f64) -> Self {
+    self.cost_limit_usd = Some(budget_usd);
+    self
+  }
+
+  /// Configure the pricing table used to cost the planner call. See
+  /// [`PlanExecuteConfig::pricing_table`].
+  pub fn with_pricing_table(mut self, table: crate::eval::PricingTable) -> Self {
+    self.pricing_table = table;
     self
   }
 }
@@ -289,6 +314,25 @@ impl PlanExecuteAgent {
         return Ok(self.stopped_result(
           None,
           AgentStopReason::TokenBudgetExceeded { used, budget },
+          steps,
+          events,
+        ));
+      }
+    }
+
+    // T1.1: cost-limit guard for the single planner call. PlanExecute
+    // makes exactly one LLM call per run, so there is no cross-turn
+    // accumulation to track — the planner call's own cost is the run's
+    // total cost.
+    if let Some(budget) = context.limits.cost_limit_usd.or(self.config.cost_limit_usd) {
+      let used_usd = self.cost_for_response(&planner_response);
+      if used_usd > budget {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::CostLimitExceeded {
+            used_usd,
+            budget_usd: budget,
+          },
           steps,
           events,
         ));
@@ -511,6 +555,23 @@ impl PlanExecuteAgent {
       }
     }
 
+    // T1.1: cost-limit guard for the single planner call — see the
+    // matching check + comment in `run_as_flow`.
+    if let Some(budget) = context.limits.cost_limit_usd.or(self.config.cost_limit_usd) {
+      let used_usd = self.cost_for_response(&planner_response);
+      if used_usd > budget {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::CostLimitExceeded {
+            used_usd,
+            budget_usd: budget,
+          },
+          steps,
+          events,
+        ));
+      }
+    }
+
     let plan = if !planner_response.tool_calls.is_empty() {
       // Native tool calls drive the plan directly: each call becomes one
       // sequential plan step. Falls back to JSON parsing only when the
@@ -713,6 +774,21 @@ impl PlanExecuteAgent {
     ));
 
     Ok(self.stopped_result(Some(answer), AgentStopReason::FinalAnswer, steps, events))
+  }
+
+  /// T1.1: estimate the USD cost of the planner call from its reported
+  /// token usage and `config.pricing_table`. Returns `0.0` when the
+  /// provider didn't report usage or no pricing is configured.
+  fn cost_for_response(&self, response: &LLMResponse) -> f64 {
+    let usage = response.usage.as_ref();
+    self
+      .config
+      .pricing_table
+      .lookup(&self.config.model)
+      .cost_for_call(
+        usage.and_then(|u| u.prompt_tokens),
+        usage.and_then(|u| u.completion_tokens),
+      )
   }
 
   async fn call_planner(
@@ -1049,6 +1125,7 @@ fn tool_event_metadata(metadata: Option<&ToolMetadata>) -> (Option<String>, Vec<
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::runtime::RuntimeLimits;
   use agentflow_memory::SessionMemory;
   use agentflow_tools::{Tool, ToolError, ToolOutput};
   use serde_json::json;
@@ -1134,6 +1211,105 @@ mod tests {
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
     );
+  }
+
+  // ── T1.1: production cost-limit enforcement ───────────────────────────
+
+  /// $1.00 flat per planner call: the mock provider always reports
+  /// `prompt_tokens: 50`, so pricing entirely off `input_per_1k` (with
+  /// `output_per_1k: 0.0`) makes the call's cost independent of the
+  /// response word count.
+  fn flat_dollar_per_call_pricing() -> crate::eval::PricingTable {
+    crate::eval::PricingTable::default().with_default(crate::eval::ModelPricing {
+      input_per_1k: 20.0,
+      output_per_1k: 0.0,
+    })
+  }
+
+  #[tokio::test]
+  async fn run_with_context_stops_with_cost_limit_exceeded_before_executing_plan() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model(
+      "mock-pe-cost-limit",
+      r#"{"plan":[{"id":"1","description":"echo input","tool":"echo","params":{"text":"hi"}}]}"#,
+    )
+    .await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-pe-cost-limit")
+        .with_pricing_table(flat_dollar_per_call_pricing()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let limits = RuntimeLimits {
+      // The single planner call costs $1.00; a $0.50 budget is blown
+      // immediately (no tool runs, no plan executed).
+      cost_limit_usd: Some(0.5),
+      ..Default::default()
+    };
+    let result = agent
+      .run_with_context(
+        AgentContext::new("pe-cost-session", "say hi", "mock-pe-cost-limit").with_limits(limits),
+      )
+      .await
+      .unwrap();
+
+    match result.stop_reason {
+      AgentStopReason::CostLimitExceeded {
+        used_usd,
+        budget_usd,
+      } => {
+        assert_eq!(budget_usd, 0.5);
+        assert!(
+          (used_usd - 1.0).abs() < 1e-9,
+          "expected $1.00, got {used_usd}"
+        );
+      }
+      other => panic!("expected CostLimitExceeded, got {other:?}"),
+    }
+    assert!(
+      !result
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, AgentStepKind::ToolCall { .. })),
+      "plan must not execute once the planner call alone exceeds budget"
+    );
+  }
+
+  #[tokio::test]
+  async fn run_with_context_cost_limit_does_not_interrupt_a_run_within_budget() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model(
+      "mock-pe-cost-ok",
+      r#"{"plan":[{"id":"1","description":"echo input","tool":"echo","params":{"text":"hi"}}]}"#,
+    )
+    .await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-pe-cost-ok").with_pricing_table(flat_dollar_per_call_pricing()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let limits = RuntimeLimits {
+      // A single $1.00 call comfortably fits a $100 budget.
+      cost_limit_usd: Some(100.0),
+      ..Default::default()
+    };
+    let result = agent
+      .run_with_context(
+        AgentContext::new("pe-cost-ok-session", "say hi", "mock-pe-cost-ok").with_limits(limits),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("echo: hi"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
   }
 
   #[tokio::test]

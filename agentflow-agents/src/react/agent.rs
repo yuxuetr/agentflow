@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use crate::citation::CitationChecker;
+use crate::eval::PricingTable;
 use crate::react::parser::AgentResponse;
 use crate::reflection::{ReflectionContext, ReflectionStrategy};
 use crate::runtime::{
@@ -224,6 +225,21 @@ pub struct ReActConfig {
   /// after `record_reflection` gets a chance to react, same as every
   /// other limit check.
   pub loop_detection: Option<LoopDetectionConfig>,
+
+  /// T1.1: stop the run once cumulative LLM spend (computed from
+  /// [`Self::pricing_table`]) crosses this many USD. `None` disables the
+  /// guard. Overridable per-run via `AgentContext::limits.cost_limit_usd`
+  /// (the context value wins when both are set, mirroring
+  /// `Self::budget_tokens`/`RuntimeLimits::token_budget`).
+  pub cost_limit_usd: Option<f64>,
+
+  /// T1.1: pricing table used to translate each LLM call's token usage
+  /// into a USD cost estimate, checked against [`Self::cost_limit_usd`]
+  /// at the top of every turn. Defaults to an empty table (every call
+  /// costs $0), so cost tracking is inert unless the caller configures
+  /// real per-model prices — reuses `agentflow-agents::eval::pricing`
+  /// rather than a second pricing representation.
+  pub pricing_table: PricingTable,
 }
 
 /// See [`ReActConfig::loop_detection`].
@@ -273,6 +289,8 @@ impl Default for ReActConfig {
       memory_prompt_token_budget: None,
       memory_summary_strategy: MemorySummaryStrategy::Disabled,
       loop_detection: Some(LoopDetectionConfig::default()),
+      cost_limit_usd: None,
+      pricing_table: PricingTable::default(),
     }
   }
 }
@@ -339,6 +357,19 @@ impl ReActConfig {
   /// Disable loop detection entirely.
   pub fn without_loop_detection(mut self) -> Self {
     self.loop_detection = None;
+    self
+  }
+
+  /// Configure the USD spend cap. See [`ReActConfig::cost_limit_usd`].
+  pub fn with_cost_limit_usd(mut self, budget_usd: f64) -> Self {
+    self.cost_limit_usd = Some(budget_usd);
+    self
+  }
+
+  /// Configure the pricing table used to cost each LLM call. See
+  /// [`ReActConfig::pricing_table`].
+  pub fn with_pricing_table(mut self, table: PricingTable) -> Self {
+    self.pricing_table = table;
     self
   }
 }
@@ -831,6 +862,8 @@ impl ReActAgent {
       max_tool_calls: context.limits.max_tool_calls,
       timeout_ms: context.limits.timeout_ms,
       budget_tokens: context.limits.token_budget.or(self.config.budget_tokens),
+      cost_limit_usd: context.limits.cost_limit_usd.or(self.config.cost_limit_usd),
+      cumulative_cost_usd: 0.0,
       cancellation_token: context.cancellation_token.clone(),
       run_started_at: Instant::now(),
       system_prompt,
@@ -895,6 +928,8 @@ impl ReActAgent {
         st.timeout_ms,
         st.max_iterations,
         st.budget_tokens,
+        st.cost_limit_usd,
+        st.cumulative_cost_usd,
         &st.cancellation_token,
         &st.recent_tool_calls,
         st.loop_detection,
@@ -917,6 +952,7 @@ impl ReActAgent {
         st.run_started_at,
         st.timeout_ms,
         &st.cancellation_token,
+        &mut st.cumulative_cost_usd,
       )
       .await?
     {
@@ -1235,6 +1271,7 @@ impl ReActAgent {
         max_tool_calls: None,
         timeout_ms: None,
         token_budget: self.config.budget_tokens,
+        cost_limit_usd: self.config.cost_limit_usd,
       });
     if let Some(persona) = &self.config.persona {
       context = context.with_persona(persona.clone());
@@ -1315,6 +1352,7 @@ impl ReActAgent {
     run_started_at: Instant,
     timeout_ms: Option<u64>,
     cancellation_token: &Option<AgentCancellationToken>,
+    cumulative_cost_usd: &mut f64,
   ) -> Result<LlmTurnOutcome, ReActError> {
     // Phase 2b between-turn control point.
     if let Some(hook) = between_turn_hook {
@@ -1403,6 +1441,18 @@ impl ReActAgent {
       duration_ms: llm_call_started.elapsed().as_millis() as u64,
       timestamp: chrono::Utc::now(),
     });
+
+    // T1.1: accrue this call's estimated cost against the run's cost
+    // budget. `pricing_table` defaults to all-zero, so this is a no-op
+    // unless the caller configured real per-model prices.
+    *cumulative_cost_usd += self
+      .config
+      .pricing_table
+      .lookup(&self.config.model)
+      .cost_for_call(
+        usage.and_then(|u| u.prompt_tokens),
+        usage.and_then(|u| u.completion_tokens),
+      );
 
     let raw_response = llm_response.content.clone();
     debug!(
@@ -1858,6 +1908,8 @@ impl ReActAgent {
     timeout_ms: Option<u64>,
     max_iterations: usize,
     budget_tokens: Option<u32>,
+    cost_limit_usd: Option<f64>,
+    cumulative_cost_usd: f64,
     cancellation_token: &Option<AgentCancellationToken>,
     recent_tool_calls: &std::collections::VecDeque<(String, serde_json::Value)>,
     loop_detection: Option<LoopDetectionConfig>,
@@ -1945,6 +1997,41 @@ impl ReActAgent {
           std::mem::take(events),
         )));
       }
+    }
+
+    // T1.1: cumulative-cost guard. Checked at the top of the turn (like
+    // every other bound above) so a call that tips the run over budget
+    // is allowed to finish and be recorded, then the *next* LLM call is
+    // what actually gets stopped — mirrors the token-budget check's
+    // one-turn-delayed reaction rather than trying to abort mid-call.
+    if let Some(budget) = cost_limit_usd
+      && cumulative_cost_usd > budget
+    {
+      self
+        .record_reflection(
+          ReflectionContext::failure(
+            &self.session_id,
+            *step_index,
+            format!(
+              "cost limit exceeded: ${:.4} / ${:.4}",
+              cumulative_cost_usd, budget
+            ),
+          ),
+          step_index,
+          steps,
+          events,
+        )
+        .await?;
+      return Ok(Some(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::CostLimitExceeded {
+          used_usd: cumulative_cost_usd,
+          budget_usd: budget,
+        },
+        std::mem::take(steps),
+        std::mem::take(events),
+      )));
     }
 
     // L1.2: sliding-window loop detection — catches a stuck loop (whether
@@ -3098,6 +3185,11 @@ struct LoopState {
   max_tool_calls: Option<usize>,
   timeout_ms: Option<u64>,
   budget_tokens: Option<u32>,
+  /// T1.1: USD spend cap for this run. `None` disables the guard.
+  cost_limit_usd: Option<f64>,
+  /// T1.1: running total of `pricing_table`-estimated cost across every
+  /// LLM call made so far this run.
+  cumulative_cost_usd: f64,
   cancellation_token: Option<AgentCancellationToken>,
   run_started_at: Instant,
   system_prompt: String,
@@ -4684,6 +4776,130 @@ providers:
 
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  // ── T1.1: production cost-limit enforcement ───────────────────────────
+
+  /// $1.00 per call regardless of response content: the mock provider
+  /// always reports `prompt_tokens: 50`, so pricing entirely off
+  /// `input_per_1k` (with `output_per_1k: 0.0`) makes each call's cost a
+  /// fixed, deterministic amount independent of response word count.
+  fn flat_dollar_per_call_pricing() -> crate::eval::PricingTable {
+    crate::eval::PricingTable::default().with_default(crate::eval::ModelPricing {
+      input_per_1k: 20.0,
+      output_per_1k: 0.0,
+    })
+  }
+
+  #[tokio::test]
+  async fn cost_limit_stops_run_before_next_llm_call_once_exceeded() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-cost-limit-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![
+            serde_json::json!({"id": "c1", "name": "counting_echo", "arguments": {"text": "a"}}),
+          ],
+          vec![
+            serde_json::json!({"id": "c2", "name": "counting_echo", "arguments": {"text": "b"}}),
+          ],
+          vec![
+            serde_json::json!({"id": "c3", "name": "counting_echo", "arguments": {"text": "c"}}),
+          ],
+        ])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused)"]).unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(CountingTool {
+      calls: calls.clone(),
+    }));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(10)
+        .without_loop_detection()
+        .with_pricing_table(flat_dollar_per_call_pricing()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let limits = RuntimeLimits {
+      cost_limit_usd: Some(1.5),
+      ..Default::default()
+    };
+    let result = agent
+      .run_with_context(AgentContext::new("session-cost", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    match result.stop_reason {
+      AgentStopReason::CostLimitExceeded {
+        used_usd,
+        budget_usd,
+      } => {
+        assert_eq!(budget_usd, 1.5);
+        // Two calls at $1.00 each = $2.00: over budget, but not wildly so
+        // (the guard reacts at the next turn boundary, not mid-call).
+        assert!(
+          (used_usd - 2.0).abs() < 1e-9,
+          "expected used_usd == 2.0 (2 calls x $1.00), got {used_usd}"
+        );
+      }
+      other => panic!("expected CostLimitExceeded, got {other:?}"),
+    }
+    // Exactly 2 tool calls ran before the 3rd turn's top-of-loop check
+    // stopped the run — the 3rd queued tool-call batch is never reached.
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  #[tokio::test]
+  async fn cost_limit_does_not_interrupt_a_run_that_stays_within_budget() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-cost-ok-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![r#"{"thought":"done","answer":"all good"}"#]).unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(10)
+        .with_pricing_table(flat_dollar_per_call_pricing()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let limits = RuntimeLimits {
+      // A single $1.00 call comfortably fits a $100 budget.
+      cost_limit_usd: Some(100.0),
+      ..Default::default()
+    };
+    let result = agent
+      .run_with_context(AgentContext::new("session-cost-ok", "go", &model).with_limits(limits))
+      .await
+      .unwrap();
+
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(result.answer.as_deref(), Some("all good"));
+
+    unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
     }
   }

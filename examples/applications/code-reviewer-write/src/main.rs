@@ -345,6 +345,7 @@ async fn main() -> Result<()> {
         max_tool_calls: Some(max_tool_calls),
         timeout_ms: None,
         token_budget: Some(60_000),
+        ..Default::default()
       });
   let result = agent
     .run_with_context(context)

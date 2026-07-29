@@ -52,7 +52,7 @@ agentflow doctor --format json --profile local
 - **`TokenBudgetExceeded`**：说明 `RuntimeLimits::token_budget`（ReAct 默认 50 000）被打满。先看是不是 `MemorySummaryStrategy::Disabled`（默认值！）在无脑塞全量历史——开 `RecentOnly` 或 `Compact` 通常比单纯调大 budget 更治本，见 [§3.1](#31-tokencost-优化)。
 - **`Verify` 步骤反复出现 `approved=false`，最后被强制放行**：说明挂了 `VerificationStrategy` 但候选答案一直不达标，`max_verification_attempts`（默认 2）耗尽后**会强制接受而不是报错**——这是设计上的优雅降级，但意味着"最终答案"不代表"verifier 认可"。排查时读 `Verify` 步骤里的 `feedback` 字段：如果 feedback 每次都合理但 agent 没改进，问题在 agent 侧（没把 feedback 当回事）；如果 feedback 本身就在无理由拒绝，问题在 verifier 策略太严。
 - **`Cancelled` 但资源没释放干净**：`AgentCancellationToken` 是协作式取消，只中断了正在 `.await` 的 in-process Tokio future；已经 `tokio::spawn`/`spawn_blocking`/FFI 出去的工作**不会**被真的打断（见 `agentflow-agent-spi/src/runtime.rs`）。如果取消后还看到副作用继续发生，先确认是不是工具内部自己 spawn 了detached task。
-- **`CostLimitExceeded`**：目前只有 eval harness（`agentflow eval run`）会真正执行这个限制，线上 ReAct/PlanExecute 跑起来不会自己掐成本——如果需要生产环境的成本熔断，这是一个已知空白，别指望 `RuntimeLimits` 帮你兜底。
+- **`CostLimitExceeded`**（T1.1 起 ReAct/PlanExecute 生产运行时都会真正执行）：`RuntimeLimits::cost_limit_usd`（或 `ReActConfig`/`PlanExecuteConfig::cost_limit_usd`）设置后，运行时用 `pricing_table`（`agentflow-agents::eval::pricing::PricingTable`，同一套定价表，不是另一套）估算每次 LLM 调用的花费并累加；**默认 `pricing_table` 是全零价格表**，不配置真实单价，`cost_limit_usd` 设了也不会触发——先确认价格表配的对不对。ReAct 在下一轮 turn 顶部检查（和 `TokenBudgetExceeded` 一样有一轮延迟：真正超预算的是上一次调用，停止发生在下一次调用之前）；PlanExecute 只有一次 planner 调用，检查在该调用之后、执行计划之前。`agentflow eval run` 的 `dataset.toml::cost_limit_usd` 是独立的事后核算层（`aggregate_cost` 用自己的 `--pricing` 表重新计算并在报告里改判 `Failed`），两者可以同时生效，互不依赖。
 
 ### 2.3 Harness Session 排查（`agentflow harness run/chat`）
 
@@ -185,7 +185,7 @@ agentflow rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 | `Timeout { timeout_ms }` | 达到墙钟超时 | 检查是不是某个工具/LLM 调用异常慢 |
 | `Cancelled { message }` | 收到取消信号 | 确认是谁触发的；注意 detached 任务不会被真正打断 |
 | `TokenBudgetExceeded { used, budget }` | 会话记忆 token 估算超预算（默认 50 000） | 开 `RecentOnly`/`Compact` 摘要策略，或调大 budget |
-| `CostLimitExceeded { used_usd, budget_usd }` | 累计成本超限（**仅 eval harness 生效**，线上 runtime 不会自动熔断） | 检查 `dataset.toml` 的 `cost_limit_usd` |
+| `CostLimitExceeded { used_usd, budget_usd }` | 累计成本超限（T1.1 起 ReAct/PlanExecute 生产 runtime 都会真正熔断，默认 `pricing_table` 全零价格不生效） | 检查 `RuntimeLimits::cost_limit_usd` + 是否配了非零 `pricing_table`；eval 场景另看 `dataset.toml` 的 `cost_limit_usd` |
 | `Error { message }` | 未分类的运行时错误 | 直接读 `message` |
 
 ### 5.2 `HarnessEvent` kind 对照表

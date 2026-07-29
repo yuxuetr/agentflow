@@ -156,6 +156,7 @@ pub async fn execute(
     max_tool_calls,
     timeout_ms,
     token_budget,
+    ..Default::default()
   });
   if let Some(budget) = context_budget {
     options = options.with_context_token_budget(budget);

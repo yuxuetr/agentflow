@@ -459,6 +459,11 @@ fn limits_from_case(case: &EvalCase) -> RuntimeLimits {
     max_tool_calls: case.max_tool_calls.or(defaults.max_tool_calls),
     timeout_ms: case.latency_limit_ms.or(defaults.timeout_ms),
     token_budget: case.token_budget.or(defaults.token_budget),
+    // T1.1: a factory-built real ReActAgent/PlanExecuteAgent now enforces
+    // this in-loop; the post-hoc `cost_exceeded` re-stamp below stays as
+    // a harness-level safety net for runtimes that don't (e.g. custom
+    // `AgentRuntime` test doubles), not as the only enforcement point.
+    cost_limit_usd: case.cost_limit_usd.or(defaults.cost_limit_usd),
   }
 }
 

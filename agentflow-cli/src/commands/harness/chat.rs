@@ -440,6 +440,7 @@ pub async fn execute(
       max_tool_calls: None,
       timeout_ms: None,
       token_budget,
+      ..Default::default()
     });
     if let Some(budget) = cfg.context_budget {
       options = options.with_context_token_budget(budget);

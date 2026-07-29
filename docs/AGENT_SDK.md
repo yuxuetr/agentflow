@@ -88,7 +88,11 @@ step trace, event stream).
 
 1. Honour `RuntimeLimits` (`max_steps`, `max_tool_calls`, `timeout_ms`,
    `token_budget`); whichever is hit first stops the loop with the
-   matching `AgentStopReason`.
+   matching `AgentStopReason`. `cost_limit_usd` (T1.1) is a fifth,
+   optional bound — `ReActAgent`/`PlanExecuteAgent` honour it against a
+   configurable per-model `PricingTable`, but a custom runtime is not
+   required to track cost; if it doesn't, the field is simply inert for
+   that runtime (same as leaving it `None`).
 2. Honour `context.cancellation_token` if present (poll
    `AgentCancellationToken::is_cancelled` between steps; stop with
    `AgentStopReason::Cancelled`).

@@ -12,7 +12,7 @@ use agentflow_tools::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOu
 
 /// Runtime limits shared by agent-native execution loops.
 ///
-/// All four bounds are independent stop signals; whichever is hit first
+/// All five bounds are independent stop signals; whichever is hit first
 /// terminates the run with the corresponding [`AgentStopReason`]. `None`
 /// disables that bound.
 ///
@@ -20,7 +20,8 @@ use agentflow_tools::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOu
 /// call / tool result / reflect / final answer). `token_budget` is checked
 /// against the running estimated-token tally for the session memory and is
 /// the primary defence against runaway prompt growth.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+// `Eq` is intentionally not derived: `cost_limit_usd` carries an `f64`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeLimits {
   /// Maximum total [`AgentStep`]s before the runtime stops.
   pub max_steps: Option<usize>,
@@ -30,6 +31,15 @@ pub struct RuntimeLimits {
   pub timeout_ms: Option<u64>,
   /// Approximate token budget for the conversation memory.
   pub token_budget: Option<u32>,
+  /// T1.1: USD spend budget for the run, checked against the cumulative
+  /// cost of every LLM call made so far (using whatever pricing table the
+  /// runtime is configured with — pricing is a runtime-layer concern, not
+  /// part of this contract type). `None` disables the guard. Note the
+  /// `f64` representation: `PartialEq`/`Eq` above compare it by bit
+  /// pattern like every other field, which is fine for the common cases
+  /// (unset, or round-tripped through the same serializer) but is not a
+  /// tolerant floating-point comparison.
+  pub cost_limit_usd: Option<f64>,
 }
 
 impl RuntimeLimits {
@@ -41,6 +51,7 @@ impl RuntimeLimits {
       max_tool_calls: None,
       timeout_ms: None,
       token_budget: Some(50_000),
+      cost_limit_usd: None,
     }
   }
 }
