@@ -62,6 +62,13 @@ fn push_group(paragraphs: &[Paragraph], group: &[usize], chunks: &mut Vec<TextCh
     .collect::<Vec<_>>()
     .join("\n\n");
   let start_line = paragraphs[group[0]].start_line;
+  // Both call sites gate on `!group.is_empty()` before calling `push_group`
+  // (the `group[0]` index above already relies on the same invariant
+  // unconditionally), so `group.last()` is always `Some` here.
+  #[allow(
+    clippy::expect_used,
+    reason = "callers only invoke push_group with a non-empty group; group[0] above already assumes it"
+  )]
   let end_line = paragraphs[*group.last().expect("group is non-empty")].end_line;
 
   let mut metadata = HashMap::new();

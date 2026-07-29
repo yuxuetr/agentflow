@@ -404,7 +404,13 @@ int main(void) {
 
   let backend = LinuxSeccompBackend::new();
   // 32 MiB budget — comfortably below the 256 MiB the fixture touches.
-  let scope = SandboxScope::new().with_max_memory_bytes(32 * 1024 * 1024);
+  // R4.5 (2026-07-28 audit): the compiled fixture lives in `dir`, a path
+  // Landlock never grants Execute on unless the scope says so explicitly
+  // (same bug class R4.2 fixed for system binaries — this is the test's
+  // own scope under-granting its own tempdir, not a `wrap_command` defect).
+  let scope = SandboxScope::new()
+    .with_max_memory_bytes(32 * 1024 * 1024)
+    .with_read_paths([dir.path()]);
   let mut cmd = tokio::process::Command::new(&bin);
   backend
     .wrap_command(&mut cmd, &[Capability::Exec], &scope)
@@ -467,7 +473,10 @@ int main(void) {
   );
 
   let backend = LinuxSeccompBackend::new();
-  let scope = SandboxScope::new().with_max_pids(5);
+  // R4.5: same tempdir-grant reasoning as linux_cgroup_enforces_max_memory_bytes.
+  let scope = SandboxScope::new()
+    .with_max_pids(5)
+    .with_read_paths([dir.path()]);
   let mut cmd = tokio::process::Command::new(&bin);
   backend
     .wrap_command(&mut cmd, &[Capability::Exec], &scope)
