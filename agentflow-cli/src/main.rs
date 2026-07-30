@@ -8,8 +8,8 @@ use commands::plugin;
 use commands::rag;
 use commands::{
   agent, audio, backup as backup_cmd, cleanup as cleanup_cmd, config as config_cmd, doctor,
-  eval as eval_cmd, harness, image, llm, marketplace, mcp, memory, serve as serve_cmd, skill,
-  trace, workflow,
+  eval as eval_cmd, harness, image, llm, marketplace, mcp, memory, restore as restore_cmd,
+  serve as serve_cmd, skill, trace, workflow,
 };
 
 #[derive(Parser)]
@@ -53,6 +53,8 @@ enum Commands {
   Cleanup(CleanupArgs),
   /// Snapshot Postgres + filesystem state into a single bundle directory (P10.15.1)
   Backup(BackupArgs),
+  /// Restore Postgres + filesystem state from an `agentflow backup` bundle (T2.2)
+  Restore(RestoreArgs),
   /// Run an agent eval dataset and emit a structured report
   Eval(EvalArgs),
   #[cfg(feature = "plugin")]
@@ -261,6 +263,33 @@ struct BackupArgs {
   /// all 6 (db, run_dir, trace_dir, marketplace_cache,
   /// skills_dir, plugins_dir). Aliases accepted: `runs` →
   /// `run_dir`, `traces` → `trace_dir`, `database` → `db`, etc.
+  #[arg(long = "include", short = 'i', value_name = "INCLUDE", num_args = 0..)]
+  includes: Vec<String>,
+  /// Output format (canonical `CliJsonEnvelope` — `agentflow.cli/1`
+  /// wire schema for `json-envelope`).
+  #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
+  format: String,
+}
+
+#[derive(Args)]
+struct RestoreArgs {
+  /// Bundle directory produced by a prior `agentflow backup --output <path>`.
+  input: std::path::PathBuf,
+  /// Postgres URL to restore into (default env: DATABASE_URL). Only
+  /// consulted when the `db` include is requested and present in the
+  /// bundle's manifest.
+  #[arg(long)]
+  database_url: Option<String>,
+  /// Print the plan (parsed manifest + which steps would run), mutate nothing.
+  #[arg(long)]
+  dry_run: bool,
+  /// Overwrite an existing target directory for a filesystem include
+  /// by removing it first, instead of failing that step.
+  #[arg(long)]
+  force: bool,
+  /// Restrict to one or more includes (repeat the flag). Empty = every
+  /// include present in the bundle's manifest. Same aliases as
+  /// `agentflow backup --include`.
   #[arg(long = "include", short = 'i', value_name = "INCLUDE", num_args = 0..)]
   includes: Vec<String>,
   /// Output format (canonical `CliJsonEnvelope` — `agentflow.cli/1`
@@ -2290,6 +2319,30 @@ async fn main() {
         Ok(includes) => {
           backup_cmd::execute(backup_cmd::BackupArgs {
             output: args.output,
+            database_url: args.database_url,
+            dry_run: args.dry_run,
+            force: args.force,
+            includes,
+            format: args.format,
+          })
+          .await
+        }
+        Err(err) => Err(err),
+      }
+    }
+    Commands::Restore(args) => {
+      let parsed_includes: Result<Vec<_>, _> = args
+        .includes
+        .iter()
+        .map(|s| {
+          backup_cmd::BackupInclude::parse(s)
+            .ok_or_else(|| anyhow::anyhow!("unknown --include value: {s}"))
+        })
+        .collect();
+      match parsed_includes {
+        Ok(includes) => {
+          restore_cmd::execute(restore_cmd::RestoreArgs {
+            input: args.input,
             database_url: args.database_url,
             dry_run: args.dry_run,
             force: args.force,

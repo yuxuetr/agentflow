@@ -15,6 +15,7 @@ pub mod memory;
 pub mod plugin;
 pub mod rag;
 pub mod repl;
+pub mod restore;
 pub mod serve;
 pub mod skill;
 pub mod trace;

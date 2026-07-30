@@ -584,7 +584,9 @@ fn prepare_output_dir(output: &Path, force: bool, dry_run: bool) -> Result<()> {
   Ok(())
 }
 
-fn resolve_include_dir(include: BackupInclude) -> Option<PathBuf> {
+/// T2.2: shared with `commands::restore` so a restore writes back to
+/// exactly the path a backup would have read from.
+pub(crate) fn resolve_include_dir(include: BackupInclude) -> Option<PathBuf> {
   let home = dirs::home_dir();
   match include {
     BackupInclude::Db => None,
@@ -625,7 +627,9 @@ fn resolve_env_or_default(home: Option<&Path>, env_var: &str, tail: &[&str]) -> 
 /// confidently parse falls through to the unredacted string —
 /// callers don't depend on this for security, just operator
 /// hygiene.
-fn redact_url(url: &str) -> String {
+/// T2.2: shared with `commands::restore` to mask the same URLs in its
+/// own reports/logs.
+pub(crate) fn redact_url(url: &str) -> String {
   // postgres://user:pass@host:5432/db
   if let Some(scheme_end) = url.find("://") {
     let scheme = &url[..scheme_end + 3];
@@ -641,7 +645,8 @@ fn redact_url(url: &str) -> String {
   url.to_string()
 }
 
-fn which_in_path(exe: &str) -> Option<PathBuf> {
+/// T2.2: shared with `commands::restore`.
+pub(crate) fn which_in_path(exe: &str) -> Option<PathBuf> {
   let path = std::env::var_os("PATH")?;
   for entry in std::env::split_paths(&path) {
     let candidate = entry.join(exe);
@@ -652,7 +657,8 @@ fn which_in_path(exe: &str) -> Option<PathBuf> {
   None
 }
 
-fn exit_label(status: &ExitStatus) -> String {
+/// T2.2: shared with `commands::restore`.
+pub(crate) fn exit_label(status: &ExitStatus) -> String {
   if let Some(code) = status.code() {
     format!("with code {code}")
   } else {

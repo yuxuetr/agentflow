@@ -1,6 +1,7 @@
 # AgentFlow Server Backup & Restore
 
-Status: stable as of `P2.7`.
+Status: stable as of `P2.7`; `agentflow restore` (T2.2) closes the
+round trip described below.
 Scope: covers `agentflow serve` deployments in the `local` and
 `production` security profiles. Workflow-only single-binary
 deployments back up the same state minus the Postgres bullet point.
@@ -121,15 +122,62 @@ The `manifest_version` field on the bundle (currently
 is a breaking change for any future restore tooling that pins
 to the prior shape.
 
-Restore is **not** wrapped yet (tracked separately in v1.x — a
-future `agentflow restore --input <path>` would consume the
-same manifest); for now use the [Restore sequencing](#restore-sequencing)
-steps below with `pg_restore` and `tar -xzf` directly.
+`agentflow restore <bundle-dir>` consumes exactly this manifest and
+reverses each artifact back into the paths `agentflow backup` read
+them from — see [Restore sequencing](#restore-sequencing) below.
+
+## `agentflow restore` (T2.2)
+
+`agentflow restore <input>` reads a bundle directory produced by
+`agentflow backup` and reverses each artifact it finds in
+`manifest.json`: `pg_restore` for `db.dump`, `tar -xzf` for the
+directory tarballs. It restores in a fixed order — Postgres first,
+then the independent caches, then trace storage, then run artifacts
+last — regardless of `--include` order or the manifest's own artifact
+order, for the same reason backup/restore ordering matters below.
+
+```bash
+agentflow restore /var/backups/agentflow/2026-05-20 \
+  --database-url "$DATABASE_URL"
+```
+
+Key flags (mirror `agentflow backup`):
+
+- `<input>` *(positional, required)* — bundle directory containing
+  `manifest.json` (as produced by `agentflow backup --output`).
+- `--database-url <URL>` — Postgres connection string to restore
+  into. Falls back to `$DATABASE_URL`. Only consulted when the `db`
+  include is active and the manifest has a `db` artifact.
+- `--include <NAME>` *(repeatable)* — restrict to one or more
+  includes, same names/aliases as `agentflow backup`. Empty = every
+  include present in the manifest.
+- `--dry-run` — parse the manifest and print what would run, mutate
+  nothing (no DB writes, no target directories created).
+- `--force` — overwrite an existing target directory for a
+  filesystem include (removes it before extracting). Without
+  `--force`, a target directory that already exists fails that step
+  rather than merging tar contents into stale files.
+- `--format text|json|json-envelope` — same three report formats as
+  `agentflow backup`.
+
+Failure handling mirrors `agentflow backup`: an artifact absent from
+the manifest is `skipped`, a missing bundle/manifest file or a tool
+not on PATH (`pg_restore` / `tar`) is `failed`, and the process exits
+`2` if any step failed. A restore target directory is created fresh
+(not merged into) so the archive's original top-level path component
+never leaks into the restored layout, even when the restore target
+has a different name than the directory that was originally backed
+up (different host, renamed env override, etc.).
 
 ## Restore sequencing
 
-1. **Postgres first.** `pg_restore` into a fresh database, then point
-   `agentflow serve --database-url` at it.
+`agentflow restore` already applies this order internally; it's
+listed here for operators restoring a surface manually (e.g. via raw
+`pg_restore` / `tar -xzf`) instead of through the command.
+
+1. **Postgres first.** `pg_restore` into a fresh database (or
+   `agentflow restore --include db`), then point `agentflow serve
+   --database-url` at it.
 2. **Marketplace cache, skills, plugins.** These are independent of
    the DB and can restore in any order before the server starts.
 3. **Trace storage.** Optional. Restore only if you need history for
@@ -211,3 +259,6 @@ If any line fails, **do not swing traffic**. Fix the gap, re-run
   smoke this document refers to.
 - `agentflow backup --output <path>` (P10.15.1) — the
   orchestrator that wraps `pg_dump` + `tar` into one command.
+- `agentflow restore <input>` (T2.2) — the counterpart orchestrator
+  that wraps `pg_restore` + `tar -xzf` into one command, consuming
+  the manifest `agentflow backup` writes.

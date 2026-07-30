@@ -140,6 +140,11 @@ agentflow-nodes-ai = { path = "../agentflow-nodes-ai" }
 agentflow-server = { path = "../agentflow-server" }
 agentflow-db = { path = "../agentflow-db" }
 axum = "0.7"
+# T2.2: the backup/restore round-trip test creates + drops a throwaway
+# database on the shared AGENTFLOW_DATABASE_TEST_URL Postgres server so
+# a destructive `pg_restore --clean` can never disturb rows other
+# parallel tests seed into the shared test database.
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 # P3.8 E2E cross-hop acceptance test constructs a tonic Request
 # (the worker gRPC carrier) without going through a full Channel.
 # Test-only; the cli library itself doesn't speak gRPC.
