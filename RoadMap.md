@@ -269,12 +269,15 @@ Explicit Non-Goals for Harness Mode (preserved here):
 ### Distributed Execution
 
 - Move the distributed scheduler from foundation to production readiness.
-- Add worker admission, authentication, resource limits, and failure-domain
-  tests.
-- Expand worker-executable node types beyond the current `template/file/mock`
-  set to include `llm`, `http`, `mcp`, and `agent` so worker mode is useful
-  for real workloads. Tracked under `P2.8` in `TODOs.md` as a prereq for the
-  rest of the P5 worker hardening sequence.
+- Worker admission, authentication, resource limits, and failure-domain tests
+  are done (`P5.5`–`P5.7`, closed).
+- Worker-executable node types are done (`P2.8`, closed): `template`, `file`,
+  `mock`, `llm`, `http`, `mcp`, and `agent` all dispatch
+  (`agentflow-worker/src/lib.rs::execute_supported_node_payload`). The
+  `agent` payload's tool wiring stays minimal — it runs against a fresh,
+  empty `ToolRegistry` (no distributed tool-call support yet); richer tool
+  wiring rides the same `parameters` plumbing once that distribution
+  contract is decided.
 - Validate large DAG scheduling with mixed local and worker-executed nodes.
 
 ### Evaluation Expansion

@@ -39,6 +39,14 @@ surface-isolation) and tracks **4 allow-listed edges**. The remaining **7 latent
 violations** (against laws not yet activatable because the kernel crates don't
 exist) are enumerated below so each kernel-landing PR has its burndown list ready.
 
+**Update (T2.4, post-R1.2):** the P-A track landed the L0 contract kernel and
+`xtask check-arch` now enforces **3 of the 8 laws** — runtime-isolation,
+surface-isolation, and kernel-isolation (RFC §7 Law 1: an L0 contract-kernel
+crate must not depend on any runtime/capability/tool/ops crate), added in R1.2
+(2026-07-28). The rest of this document is left as the 2026-06-20 point-in-time
+evaluation; see `docs/ARCHITECTURE_DIAGRAM.md` and `cargo xtask check-arch`'s
+own output for the current dependency-law count and latent-edge list.
+
 ## 1. Ground-truth dependency graph (src-confirmed, `[dependencies]` only)
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |

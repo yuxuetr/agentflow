@@ -135,7 +135,7 @@ AgentFlow 是一个 Rust workspace，采用 **"窄腰"（narrow-waist）契约�
 
 | 模块 | 职责 |
 |---|---|
-| **xtask** | 内部任务运行器（非发布 crate）。核心命令 `check-arch`：对工作区依赖图断言 8 条 crate 依赖律的子集（runtime-isolation / surface-isolation），任何新增越层边或过期 allowlist 条目都会让 gate 失败——这是架构隔离的自动化守卫。 |
+| **xtask** | 内部任务运行器（非发布 crate）。核心命令 `check-arch`：对工作区依赖图断言 8 条 crate 依赖律中的 3 条（runtime-isolation / surface-isolation / kernel-isolation，后者 R1.2 随 L0 契约内核落地新增），任何新增越层边或过期 allowlist 条目都会让 gate 失败——这是架构隔离的自动化守卫。 |
 
 ---
 
