@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use agentflow_tools::SecurityProfile;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 
 use crate::scheduler::{
@@ -80,6 +81,32 @@ pub enum WorkerGrpcError {
   Runtime(String),
 }
 
+/// U3.4: `true` when `config`/`profile` combine into a configuration
+/// worth warning an operator about — worker gRPC running under
+/// [`SecurityProfile::Production`] with no TLS configured, so admission
+/// credentials (PSK/JWT) travel in plaintext over the network. Split out
+/// from [`build_worker_control_plane`] so the condition itself is unit
+/// testable without capturing `tracing` output.
+///
+/// This is deliberately **warn-only, not fail-closed** — asymmetric
+/// with `WorkerAdmissionPolicy::for_profile`'s T0.2 credential check,
+/// which *does* fail closed under `Production`. The difference: a
+/// missing credential has no legitimate deployment shape (it means
+/// literally any anonymous connection is admitted), whereas plaintext
+/// gRPC on a fully trusted network (same host, or an isolated private
+/// network) is an already-documented, intentional configuration —
+/// `docs/DISTRIBUTED.md` explicitly shows dropping the TLS flags as
+/// working, "appropriate only on a trusted network / same host, never
+/// across an untrusted link." Failing startup here would break that
+/// documented shape for an operator who has already made that trust
+/// judgment; warning keeps them informed without forcing the choice.
+fn production_worker_grpc_lacks_tls(
+  config: &WorkerGrpcServeConfig,
+  profile: SecurityProfile,
+) -> bool {
+  profile == SecurityProfile::Production && config.tls.is_none()
+}
+
 /// Build the [`AuthenticatedControlPlane`] described by `config`,
 /// validated against `profile`'s fail-closed requirement (T0.2's
 /// `WorkerAdmissionPolicy::for_profile`).
@@ -88,6 +115,16 @@ pub fn build_worker_control_plane(
   profile: agentflow_tools::SecurityProfile,
 ) -> Result<Arc<AuthenticatedControlPlane<InMemoryWorkerProtocol>>, WorkerGrpcError> {
   use crate::scheduler::{WorkerAdmissionPolicy, WorkerControlPlane, WorkerId};
+
+  if production_worker_grpc_lacks_tls(config, profile) {
+    tracing::warn!(
+      "worker gRPC control plane is running under the `production` security profile with no TLS \
+       configured (--worker-grpc-tls-cert/--worker-grpc-tls-key); admission credentials (PSK/JWT) \
+       will travel in plaintext over the network. This is only safe on a fully trusted network \
+       (same host, or an isolated private network) — see docs/DISTRIBUTED.md § Transport Security \
+       for guidance."
+    );
+  }
 
   let mut policy = WorkerAdmissionPolicy::default();
   if !config.allowed_worker_ids.is_empty() {
@@ -267,5 +304,65 @@ mod tests {
     let err = build_worker_control_plane(&config, agentflow_tools::SecurityProfile::Production)
       .unwrap_err();
     assert!(matches!(err, WorkerGrpcError::Admission(_)));
+  }
+
+  // ── U3.4: TLS posture under `production` (warn-only) ────────────────────
+
+  fn config_without_tls() -> WorkerGrpcServeConfig {
+    WorkerGrpcServeConfig {
+      bind: "127.0.0.1:0".parse().unwrap(),
+      tls: None,
+      allowed_worker_ids: vec!["worker-a".to_string()],
+      shared_psk: Some("test-token".to_string()),
+    }
+  }
+
+  #[test]
+  fn production_worker_grpc_lacks_tls_is_true_without_tls_under_production() {
+    assert!(production_worker_grpc_lacks_tls(
+      &config_without_tls(),
+      SecurityProfile::Production
+    ));
+  }
+
+  #[test]
+  fn production_worker_grpc_lacks_tls_is_false_with_tls_configured() {
+    let mut config = config_without_tls();
+    config.tls = Some(WorkerGrpcTlsConfig {
+      cert_pem_path: PathBuf::from("cert.pem"),
+      key_pem_path: PathBuf::from("key.pem"),
+      client_ca_pem_path: None,
+    });
+    assert!(!production_worker_grpc_lacks_tls(
+      &config,
+      SecurityProfile::Production
+    ));
+  }
+
+  #[test]
+  fn production_worker_grpc_lacks_tls_is_false_under_dev_and_local() {
+    for profile in [SecurityProfile::Dev, SecurityProfile::Local] {
+      assert!(
+        !production_worker_grpc_lacks_tls(&config_without_tls(), profile),
+        "only the production profile should trigger this, got true for {profile:?}"
+      );
+    }
+  }
+
+  /// The regression U3.4 exists for: this must NOT fail startup — only
+  /// `WorkerAdmissionPolicy::for_profile`'s credential check (T0.2) is
+  /// fail-closed under `production`. A plaintext worker gRPC listener
+  /// with credentials configured is a documented, intentional
+  /// trusted-network deployment shape (`docs/DISTRIBUTED.md`), so
+  /// `build_worker_control_plane` must still succeed — it only warns.
+  #[tokio::test]
+  async fn build_worker_control_plane_succeeds_without_tls_under_production_when_credentials_present()
+   {
+    let config = config_without_tls();
+    let result = build_worker_control_plane(&config, SecurityProfile::Production);
+    assert!(
+      result.is_ok(),
+      "a missing TLS config must warn, not fail startup, when credentials are present"
+    );
   }
 }

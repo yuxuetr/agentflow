@@ -338,6 +338,34 @@ task error rather than refusing the whole gateway (mirroring the existing
 background-cleanup-loop precedent in `serve::run`) — the admission check
 is the one T1.2 treats as a hard, synchronous startup failure.
 
+### `production` without TLS: warns, does not fail startup (U3.4)
+
+`build_worker_control_plane` also checks whether `--worker-grpc` is
+enabled under `SecurityProfile::Production` with no
+`--worker-grpc-tls-cert`/`--worker-grpc-tls-key` configured. When true,
+it logs a `tracing::warn!` naming the risk (admission credentials — PSK
+or JWT — travel in plaintext over the network) and the trust boundary
+that makes it acceptable. **It does not refuse to start.**
+
+This is intentionally asymmetric with the credential check above, which
+*does* fail closed under `production`. The distinction: a missing
+credential has no legitimate deployment shape at all — it means any
+anonymous connection is admitted, full stop, on any network. Plaintext
+gRPC on a fully trusted network is different — it's the exact shape the
+"Dropping the three `--worker-grpc-tls-*`/`--server-ca`/`--client-*`
+flags" paragraph below already documents as a supported, intentional
+configuration ("appropriate only on a trusted network / same host,
+never across an untrusted link"). Failing startup here would break that
+already-documented shape for an operator who has already made the
+trust-boundary judgment that network isolation (not TLS) is their
+security boundary; a fail-closed credential check has no equivalent
+"this is fine, I meant to do that" case to protect. If that trade-off
+changes (e.g. a future requirement that `production` always terminates
+TLS), tighten `production_worker_grpc_lacks_tls` in
+`agentflow-server/src/worker_grpc.rs` into a hard error alongside the
+admission check, and update this section and the deployment shape
+example below accordingly.
+
 `WorkerGrpcServeConfig`'s single-shared-PSK-per-listed-id model is
 deliberately the simple case; operators needing per-worker PSK rotation
 or JWT identity should construct a `WorkerAdmissionPolicy` directly and
@@ -516,8 +544,11 @@ Dropping the three `--worker-grpc-tls-*`/`--server-ca`/`--client-*` flags
 from both sides still works (plaintext gRPC) — appropriate only on a
 trusted network / same host, never across an untrusted link. See
 [Transport Security (T1.2)](#transport-security-t12) above for the full
-flag/env-var reference and the fail-closed admission behavior under
-`production`.
+flag/env-var reference, the fail-closed admission behavior under
+`production`, and [§ `production` without TLS: warns, does not fail
+startup (U3.4)](#production-without-tls-warns-does-not-fail-startup-u34)
+for why dropping TLS specifically (as opposed to dropping admission
+credentials) is a warning under `production`, not a startup failure.
 
 ## Failure Semantics
 
