@@ -292,7 +292,16 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     .await?;
 
   let run_id = ctx.run_id.to_string();
-  let mut flow = agentflow_config::executor::build_flow_from_yaml(&ctx.workflow, None)?;
+  let flow_def = agentflow_config::executor::parse_workflow_definition(&ctx.workflow)?;
+  let mut flow = agentflow_config::executor::build_flow_from_definition(&flow_def, None)?;
+  // T3.2: the gateway doesn't accept ad-hoc per-run inputs yet (`--input`
+  // isn't wired to `POST /v1/runs`), so `default`-filling is the only way
+  // a server-submitted run can ever populate a declared input; a
+  // `required` input with no `default` always fails the run here rather
+  // than an in-flight node's `input_mapping` resolution failing later
+  // with a far less direct error.
+  let mut initial_inputs = HashMap::new();
+  agentflow_config::executor::apply_declared_inputs(&flow_def, &mut initial_inputs)?;
   // The gateway always streams workflow events into Postgres + the SSE
   // broker. `AGENTFLOW_TRACE_DIR` opts in to *additionally* writing a
   // file-backed `ExecutionTrace` JSON so operators can run `agentflow
@@ -342,7 +351,7 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   let execution_config =
     server_execution_config(ctx.run_base_dir.clone(), ctx.cancellation_token.clone());
   let state = flow
-    .execute_from_inputs_with_id_and_config(run_id, HashMap::new(), execution_config)
+    .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
     .await?;
 
   // The listener bridges sync Flow events to async DB/SSE writes. Give the

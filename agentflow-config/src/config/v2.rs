@@ -5,20 +5,31 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 pub struct FlowDefinitionV2 {
   pub name: String,
+  /// T3.2: enforced by `executor::apply_declared_inputs` — a `required`
+  /// input missing from the caller-supplied initial inputs (and with no
+  /// `default`) fails the run before any node executes; a missing input
+  /// with a `default` gets that value filled in.
   #[serde(default)]
-  #[allow(dead_code)]
   pub inputs: HashMap<String, InputDefinitionV2>,
   pub nodes: Vec<NodeDefinitionV2>,
 }
 
-/// Defines a required input for the workflow.
+/// Declares one named workflow input, consumed by
+/// `executor::apply_declared_inputs` (T3.2).
 #[derive(Debug, Deserialize)]
 pub struct InputDefinitionV2 {
+  /// Documentation only — not enforced.
   #[allow(dead_code)]
   pub description: Option<String>,
-  #[allow(dead_code)]
+  /// Defaults to `false` when omitted, so a purely-documented optional
+  /// input doesn't need to spell it out.
+  #[serde(default)]
   pub required: bool,
-  #[allow(dead_code)]
+  /// Filled into the initial input pool when the caller doesn't supply
+  /// this input. `required: true` with no `default` is a legal
+  /// declaration (fails the run instead of filling a gap) — see
+  /// `apply_declared_inputs`.
+  #[serde(default)]
   pub default: Option<serde_yaml::Value>,
 }
 

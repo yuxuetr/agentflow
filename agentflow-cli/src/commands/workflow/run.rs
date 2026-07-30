@@ -65,6 +65,17 @@ pub async fn execute(
     println!("🤖 Model override: {}", model);
   }
 
+  // T3.2: enact `inputs:` declarations (required-check + default-fill)
+  // against the CLI-supplied `--input` values before either the dry-run
+  // preview or a real execution — a workflow requiring an input the
+  // caller forgot to pass should fail clearly here, not with a confusing
+  // downstream input_mapping error deep into a real run.
+  let mut initial_inputs = parse_inputs(input)?;
+  crate::executor::apply_declared_inputs(&flow_def, &mut initial_inputs)?;
+  if !initial_inputs.is_empty() {
+    println!("📥 Loaded {} input value(s).", initial_inputs.len());
+  }
+
   if dry_run {
     let order = flow
       .execution_order()
@@ -107,11 +118,6 @@ pub async fn execute(
       workflow_id,
       dir.display()
     );
-  }
-
-  let initial_inputs = parse_inputs(input)?;
-  if !initial_inputs.is_empty() {
-    println!("📥 Loaded {} CLI input value(s).", initial_inputs.len());
   }
 
   let timeout_duration =

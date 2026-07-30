@@ -105,6 +105,39 @@ nodes:
   workflow
 }
 
+/// T3.2: a workflow declaring `inputs.topic` (required + default), backing
+/// `apply_declared_inputs`'s CLI-level wiring.
+fn write_declared_input_workflow(
+  dir: &TempDir,
+  required: bool,
+  default: Option<&str>,
+) -> std::path::PathBuf {
+  let workflow = dir.path().join("declared_input_workflow.yml");
+  let default_line = match default {
+    Some(value) => format!("    default: \"{value}\""),
+    None => String::new(),
+  };
+  fs::write(
+    &workflow,
+    format!(
+      r#"
+name: CLI Declared Input Workflow
+inputs:
+  topic:
+    required: {required}
+{default_line}
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello {{{{ topic }}}}"
+"#,
+    ),
+  )
+  .unwrap();
+  workflow
+}
+
 fn fixed_dag_multibranch_fixture() -> std::path::PathBuf {
   std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("examples/workflows/fixed_dag_multibranch.yml")
@@ -362,6 +395,80 @@ fn cli_workflow_validate_rejects_generic_timeout_ms_on_while_node() {
     .stdout(predicate::str::contains(
       "timeout_ms/max_retries are not supported on 'while' nodes",
     ));
+}
+
+#[test]
+fn cli_workflow_run_fails_clearly_when_required_input_is_missing() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_declared_input_workflow(&work, true, None);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--dry-run"])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "requires input 'topic', which was not supplied and has no default",
+    ));
+}
+
+#[test]
+fn cli_workflow_run_fills_declared_default_when_not_supplied() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_declared_input_workflow(&work, false, Some("AgentFlow"));
+  let output = work.path().join("result.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success();
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(
+    saved.contains("Hello AgentFlow"),
+    "expected the declared default to fill 'topic', got: {saved}"
+  );
+}
+
+#[test]
+fn cli_workflow_run_cli_input_overrides_declared_default() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_declared_input_workflow(&work, false, Some("AgentFlow"));
+  let output = work.path().join("result.json");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--input",
+      "topic",
+      "CustomValue",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .success();
+
+  let saved = fs::read_to_string(output).unwrap();
+  assert!(
+    saved.contains("Hello CustomValue"),
+    "expected the CLI-supplied value to win over the declared default, got: {saved}"
+  );
 }
 
 #[test]

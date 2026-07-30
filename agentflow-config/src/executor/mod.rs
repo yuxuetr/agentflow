@@ -11,6 +11,7 @@ use crate::config::{
   v2::{FlowDefinitionV2, NodeDefinitionV2},
 };
 use agentflow_core::{
+  async_node::AsyncNodeInputs,
   flow::{Flow, GraphNode},
   value::FlowValue,
 };
@@ -49,6 +50,45 @@ pub fn build_flow_from_definition(
   Ok(flow)
 }
 
+/// T3.2: enact `flow_def.inputs`'s declarations against the caller's actual
+/// initial inputs, in place.
+///
+/// For each declared input not already present in `external_inputs`:
+/// - if it has a `default`, that value is filled in;
+/// - else if `required`, the run fails with a clear error naming the
+///   missing input, rather than silently proceeding and letting a
+///   downstream node's `input_mapping` resolution fail with a much less
+///   direct error later;
+/// - else (optional, no default) it's simply left absent — nothing to do.
+///
+/// A caller-supplied value always wins over a `default`; this never
+/// overwrites an input the caller already provided.
+pub fn apply_declared_inputs(
+  flow_def: &FlowDefinitionV2,
+  external_inputs: &mut AsyncNodeInputs,
+) -> Result<()> {
+  for (name, def) in &flow_def.inputs {
+    if external_inputs.contains_key(name) {
+      continue;
+    }
+    if let Some(default) = &def.default {
+      let json_value: Value = serde_yaml::from_value(default.clone()).with_context(|| {
+        format!(
+          "workflow '{}': invalid default for input '{name}'",
+          flow_def.name
+        )
+      })?;
+      external_inputs.insert(name.clone(), FlowValue::Json(json_value));
+    } else if def.required {
+      bail!(
+        "workflow '{}' requires input '{name}', which was not supplied and has no default",
+        flow_def.name
+      );
+    }
+  }
+  Ok(())
+}
+
 /// Apply the CLI/server model override to node kinds that invoke agents or LLMs.
 pub fn apply_model_override(
   node_def: &NodeDefinitionV2,
@@ -83,4 +123,129 @@ fn format_validation_error(
     message.push_str(issue);
   }
   message
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn parse(yaml: &str) -> FlowDefinitionV2 {
+    serde_yaml::from_str(yaml).expect("test fixture must parse")
+  }
+
+  #[test]
+  fn missing_input_with_default_gets_filled_in() {
+    let flow_def = parse(
+      r#"
+name: Test
+inputs:
+  topic:
+    required: false
+    default: "AgentFlow"
+nodes:
+  - id: a
+    type: template
+    parameters:
+      template: "hi"
+"#,
+    );
+    let mut inputs = AsyncNodeInputs::new();
+    apply_declared_inputs(&flow_def, &mut inputs).expect("default fill must succeed");
+    assert_eq!(
+      inputs.get("topic"),
+      Some(&FlowValue::Json(Value::String("AgentFlow".to_string())))
+    );
+  }
+
+  #[test]
+  fn caller_supplied_value_is_never_overwritten_by_default() {
+    let flow_def = parse(
+      r#"
+name: Test
+inputs:
+  topic:
+    required: false
+    default: "AgentFlow"
+nodes:
+  - id: a
+    type: template
+    parameters:
+      template: "hi"
+"#,
+    );
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert(
+      "topic".to_string(),
+      FlowValue::Json(Value::String("caller-value".to_string())),
+    );
+    apply_declared_inputs(&flow_def, &mut inputs).expect("must succeed");
+    assert_eq!(
+      inputs.get("topic"),
+      Some(&FlowValue::Json(Value::String("caller-value".to_string())))
+    );
+  }
+
+  #[test]
+  fn missing_required_input_with_no_default_fails_clearly() {
+    let flow_def = parse(
+      r#"
+name: Test
+inputs:
+  topic:
+    required: true
+nodes:
+  - id: a
+    type: template
+    parameters:
+      template: "hi"
+"#,
+    );
+    let mut inputs = AsyncNodeInputs::new();
+    let err =
+      apply_declared_inputs(&flow_def, &mut inputs).expect_err("missing required input must fail");
+    assert!(
+      err.to_string().contains("requires input 'topic'"),
+      "unexpected message: {err}"
+    );
+  }
+
+  #[test]
+  fn missing_optional_input_with_no_default_is_left_absent() {
+    let flow_def = parse(
+      r#"
+name: Test
+inputs:
+  topic:
+    required: false
+nodes:
+  - id: a
+    type: template
+    parameters:
+      template: "hi"
+"#,
+    );
+    let mut inputs = AsyncNodeInputs::new();
+    apply_declared_inputs(&flow_def, &mut inputs).expect("optional-absent must not fail");
+    assert!(!inputs.contains_key("topic"));
+  }
+
+  #[test]
+  fn required_defaults_to_false_when_omitted() {
+    let flow_def = parse(
+      r#"
+name: Test
+inputs:
+  topic:
+    description: "just documentation"
+nodes:
+  - id: a
+    type: template
+    parameters:
+      template: "hi"
+"#,
+    );
+    let mut inputs = AsyncNodeInputs::new();
+    apply_declared_inputs(&flow_def, &mut inputs)
+      .expect("required must default to false, so this must not fail");
+  }
 }

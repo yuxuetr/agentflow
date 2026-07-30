@@ -127,7 +127,7 @@ Top-level fields:
 | Field | Required | Description |
 | --- | --- | --- |
 | `name` | Yes | Workflow name used in CLI output and validation reports. |
-| `inputs` | No | Named workflow inputs with `description`, `required`, and `default`. |
+| `inputs` | No | Named workflow inputs with `description`, `required` (defaults to `false` if omitted), and `default`. Enforced (T3.2) before a run starts: a missing `required` input with no `default` fails the run with a clear error naming it; a missing input with a `default` gets that value filled into the initial input pool. A value supplied via `--input` always wins over a declared `default`. `description` is documentation only. |
 | `nodes` | Yes | Ordered list of workflow node definitions. |
 
 Node fields:
