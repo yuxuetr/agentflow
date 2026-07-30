@@ -135,6 +135,34 @@ chart fighting it back to `replicaCount` on every `helm upgrade`.
 it (e.g. `--set autoscaling.targetMemoryUtilizationPercentage=80`) to add
 a memory-based scaling metric alongside CPU.
 
+### PodDisruptionBudget (U3.2)
+
+A `PodDisruptionBudget` template is available but disabled by default
+(`podDisruptionBudget.enabled: false`). **Only enable it for
+multi-replica deployments** (`replicaCount > 1`, or `autoscaling.enabled`
+with `minReplicas > 1`) — with the single-replica default, a PDB
+requiring `minAvailable: 1` can never be satisfied while giving up the
+only replica, so it blocks voluntary pod eviction entirely (node
+drains for maintenance/upgrades stall indefinitely instead of
+respecting `terminationGracePeriodSeconds`).
+
+```bash
+helm install agentflow charts/agentflow \
+  --set image.repository=agentflow \
+  --set image.tag=server \
+  --set existingSecret=agentflow-db \
+  --set autoscaling.enabled=true \
+  --set autoscaling.minReplicas=2 \
+  --set podDisruptionBudget.enabled=true \
+  --set podDisruptionBudget.minAvailable=1
+```
+
+Set exactly one of `podDisruptionBudget.minAvailable` /
+`podDisruptionBudget.maxUnavailable` (both accept an integer or a
+percentage string like `"50%"`); `minAvailable` takes precedence if
+both are set. `helm template`/`helm lint` validate cleanly with the
+default (PDB omitted entirely) and with it explicitly enabled.
+
 ## Health Checks
 
 `agentflow-server` exposes:

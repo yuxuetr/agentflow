@@ -79,6 +79,22 @@ autoscaling:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 80
 
+# U3.2: PodDisruptionBudget, opt-in (enabled: false) — like autoscaling
+# above, and for the same single-replica-by-default reason: with
+# replicaCount: 1, a PDB requiring minAvailable: 1 blocks voluntary
+# eviction entirely (node drains for maintenance/upgrades would stall
+# waiting for a PDB that can never be satisfied while giving up the
+# only replica). Only enable this for deployments actually running
+# more than one replica (replicaCount > 1, or autoscaling.enabled with
+# minReplicas > 1) — see docs/DEPLOYMENT.md § PodDisruptionBudget.
+podDisruptionBudget:
+  enabled: false
+  # Set exactly one of minAvailable / maxUnavailable; minAvailable
+  # takes precedence if both are set. Accepts an integer or a
+  # percentage string (e.g. "50%").
+  minAvailable: 1
+  maxUnavailable: ""
+
 livenessProbe:
   path: /health/live
   initialDelaySeconds: 10
