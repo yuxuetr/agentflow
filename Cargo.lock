@@ -295,6 +295,7 @@ dependencies = [
  "agentflow-graph",
  "agentflow-llm",
  "agentflow-memory",
+ "agentflow-store-spi",
  "agentflow-tool",
  "agentflow-tools",
  "agentflow-tracing",

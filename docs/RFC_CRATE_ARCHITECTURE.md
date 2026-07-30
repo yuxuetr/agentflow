@@ -304,3 +304,16 @@ deps). Verdict: **direction confirmed, adopt as-is**, with these deltas folded i
   rather than minting micro-crates: `harness→llm` (tokenizer only) and
   `memory→rag` (`EmbeddingProvider` only) → `store-spi`/`value`; `mcp→tracing`
   (traceparent ambient only) → `agent-spi`/`value`. Keeps the kernel at six.
+
+**Status (U2.1, 2026-07-30):** the `harness→memory` edge R5 flagged is paid
+down — `agentflow-harness` now depends on `agentflow-store-spi` directly
+(production code only ever needed `MemoryStore`/`Message`, both plain
+`store-spi` re-exports), leaving `harness` with 4 impl edges instead of 5.
+The parallel `agents→memory` edge is **not** paid down and, on closer
+inspection, isn't the same kind of edge R5/R6 describe: `agentflow-agents`'s
+`ReActAgent` depends on `ProjectMemoryStore`/`ProjectFact`
+(project-memory feature, added after this RFC's writing), which have no
+`store-spi` contract yet — this needs a genuine contract extraction (T3.3's
+`Tool`/`agentflow-tool` split is the template), not just "inject the
+existing contract at the surface." See `docs/ARCHITECTURE_EVALUATION_
+2026-06-20.md`'s U2.1 update for the full accounting.

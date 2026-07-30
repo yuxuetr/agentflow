@@ -3957,15 +3957,20 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.2 — tokenizer via value/store-spi util (R6)",
   },
-  ArchLatent {
-    from: "agentflow-harness",
-    to: "agentflow-memory",
-    becomes: "law 4 runtime→impl",
-    burndown: "P-A1.2 — depend on store-spi MemoryStore",
-  },
   // T3.3 (2026-07-30): `harness -> tools` PAID DOWN alongside `agents ->
   // tools` above — `agentflow-harness` now depends on the `agentflow-tool`
   // contract crate only.
+  // U2.1 (2026-07-30): `harness -> memory` PAID DOWN — production code
+  // only ever touched `MemoryStore`/`Message` (both plain store-spi
+  // re-exports), so `[dependencies]` now points at `agentflow-store-spi`
+  // directly; `agentflow-memory` moved to `[dev-dependencies]` for
+  // `SessionMemory` in this crate's own tests. `agents -> memory` (row
+  // above) stays real, not paid down — `ReActAgent` production code
+  // depends on `ProjectMemoryStore`/`ProjectFact`, which have no
+  // store-spi contract yet (unlike `MemoryStore`/`TaskSummaryStore`,
+  // which do); extracting those is the actual remaining prerequisite,
+  // tracked as a follow-up, not "default-value construction" as
+  // originally assumed when this edge was scoped.
   ArchLatent {
     from: "agentflow-harness",
     to: "agentflow-tracing",

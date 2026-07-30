@@ -843,7 +843,7 @@ async fn refresh_context_between_turns(
   providers: &[Arc<dyn ContextProvider>],
   ctx: &HarnessContext,
   last_context: &mut Option<String>,
-  memory: &dyn agentflow_memory::MemoryStore,
+  memory: &dyn agentflow_store_spi::MemoryStore,
   sinks: &SinkChain,
   seq_allocator: &SeqAllocator,
 ) -> Result<(), HarnessError> {
@@ -863,7 +863,7 @@ async fn refresh_context_between_turns(
     return Ok(());
   }
   if let Some(block_str) = block.as_deref() {
-    let message = agentflow_memory::Message::user(
+    let message = agentflow_store_spi::Message::user(
       &ctx.session_id,
       format!("[workspace context refresh]\n{block_str}"),
     );

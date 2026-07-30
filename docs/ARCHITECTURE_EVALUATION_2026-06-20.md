@@ -47,6 +47,27 @@ crate must not depend on any runtime/capability/tool/ops crate), added in R1.2
 evaluation; see `docs/ARCHITECTURE_DIAGRAM.md` and `cargo xtask check-arch`'s
 own output for the current dependency-law count and latent-edge list.
 
+**Update (U2.1, 2026-07-30):** edge #6's `harness → memory` half (row 6 of
+§2's table) is **paid down** — `agentflow-harness`'s production code only
+ever touched `MemoryStore`/`Message` (both plain `store-spi` re-exports, not
+`agentflow-memory`-specific impls), so `[dependencies]` now points at
+`agentflow-store-spi` directly; `agentflow-memory` moved to
+`[dev-dependencies]` for `SessionMemory`, used only by this crate's own
+tests. `ARCH_LATENT_EDGES` in `xtask/src/main.rs` no longer tracks it.
+Edge #5's `agents → memory` half stays **real, not paid down** — re-auditing
+turned up a materially different reason than this table's "inject via
+`agent-spi`/`store-spi` at surfaces" framing assumed: `agentflow-agents`'s
+`ReActAgent` production code (`react/agent.rs`) depends on
+`ProjectMemoryStore`/`ProjectFact` (project-memory feature, landed after
+this evaluation's 2026-06-20 baseline), and neither has a `store-spi`
+contract today — unlike `MemoryStore`/`TaskSummaryStore`/`Message`, which
+already do. Closing this edge for real requires first extracting a
+`ProjectMemoryStore`/`ProjectFact` contract into `store-spi` (the same
+`Tool`/`agentflow-tool` split shape T3.3 already used for the tool
+contract) — a separate, larger follow-up, not "inject the existing
+contract at the surface." Tracked as a new backlog item rather than left
+as a stale "inject via store-spi" resolution note.
+
 ## 1. Ground-truth dependency graph (src-confirmed, `[dependencies]` only)
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |
