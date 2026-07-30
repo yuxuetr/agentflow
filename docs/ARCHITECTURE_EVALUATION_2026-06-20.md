@@ -68,6 +68,25 @@ contract) — a separate, larger follow-up, not "inject the existing
 contract at the surface." Tracked as a new backlog item rather than left
 as a stale "inject via store-spi" resolution note.
 
+**Update (U3.3, 2026-07-31):** T3.3 (commit `b06ce03`, 2026-07-30 — one
+day *after* this evaluation's ground-truth pass) split the `Tool`
+contract out of `agentflow-tools` into a new, dependency-free
+`agentflow-tool` L0 kernel crate (`docs/RFC_TOOL_CONTRACT_SPLIT.md`).
+§1's table below still lists `agentflow-tools` as "Tool contract +
+builtins" and §2's violation map still lists `agents/harness → tools`
+as the latent edge — both accurate **as of the 2026-06-20 snapshot**,
+which predates the split by five weeks, so the table rows are left
+as-is per this doc's own snapshot-preservation convention (see the
+T2.4 update above). Post-split, the accurate framing is: `agentflow-tool`
+(L0, zero internal deps) carries the actual `Tool` contract;
+`agentflow-agents`/`agentflow-harness` depend on `agentflow-tool`
+directly, not on `agentflow-tools`; `agentflow-tools` (L2) depends on
+and fully re-exports `agentflow-tool`, adding the builtin tool impls +
+OS-sandbox backends. `cargo xtask check-arch`'s live edge list and
+`docs/ARCHITECTURE_DIAGRAM.md` (updated alongside this note) are the
+sources of truth for the current graph; this file stays a historical
+point-in-time evaluation.
+
 ## 1. Ground-truth dependency graph (src-confirmed, `[dependencies]` only)
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |

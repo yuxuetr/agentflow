@@ -41,7 +41,7 @@ AgentFlow 是一个 Rust workspace，采用 **"窄腰"（narrow-waist）契约�
 │                                                                                          │
 │  ┌────────────┐ ┌──────────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐ ┌────────┐ ┌──────┐│
 │  │  -nodes    │ │ -nodes-ai    │ │  -llm   │ │ -tools  │ │ -mcp   │ │ -rag   │ │-memory││
-│  │ 工具层节点  │ │ 能力层节点    │ │ 6家LLM  │ │ Tool契约│ │ MCP    │ │ 检索增强│ │ 会话  ││
+│  │ 工具层节点  │ │ 能力层节点    │ │ 6家LLM  │ │ 内置工具│ │ MCP    │ │ 检索增强│ │ 会话  ││
 │  │ http/file  │ │ llm/asr/tts  │ │ 流式/   │ │ 注册表/ │ │ 协议    │ │ 向量/  │ │ 记忆  ││
 │  │ template   │ │ image/mcp/rag│ │ 工具调用│ │ 沙箱    │ │ 客户端  │ │ BM25   │ │ SQLite││
 │  └─────┬──────┘ └──────┬───────┘ └────┬────┘ └────┬────┘ └───┬────┘ └───┬────┘ └──┬───┘│
@@ -67,7 +67,7 @@ AgentFlow 是一个 Rust workspace，采用 **"窄腰"（narrow-waist）契约�
 │  │ 类型化状态  │ │ AsyncNode/ │ │ Knowledge-   │ │ /Capability  │ │ race_with_limits│  │
 │  │            │ │ expr/Error │ │ Backend SPI  │ │ 契约         │ │                 │  │
 │  └────────────┘ └────────────┘ └──────────────┘ └──────────────┘ └─────────────────┘  │
-│         (-tools 的 Tool 契约亦属 L0 契约面，物理上随 L2 工具 crate 提供)                    │
+│  (T3.3 起 Tool 契约拆为独立、零依赖的 L0 crate -tool；-tools 只是依赖并 re-export 它的 L2 实现) │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 
 工具:  xtask — 内部任务运行器 (check-arch 依赖律守卫, 非发布 crate)
@@ -90,7 +90,7 @@ AgentFlow 是一个 Rust workspace，采用 **"窄腰"（narrow-waist）契约�
 | **agentflow-store-spi** | 存储服务提供者接口：`MemoryStore`（会话记忆抽象）+ `KnowledgeBackend`（知识检索抽象）。让 memory / rag 的具体实现可被注入而非硬编码。 |
 | **agentflow-agent-spi** | 智能体契约：`AgentRuntime` trait、turn-driven（逐回合驱动）façade、`Capability` 降解（lowering）。这是 harness 等编排层依赖 agent 的窄接口，避免直接依赖 `agentflow-agents` 实现。 |
 | **agentflow-async-util** | 异步原语：retry、timeout、`race_with_limits`（带并发上限的竞速）。被各层复用的可靠性工具箱。 |
-| **agentflow-tools**（契约面） | `Tool` trait + `ToolRegistry` + `SandboxPolicy` / `ToolPolicy` + `ToolMetadata`（`source: Builtin/Script/Mcp/Workflow`、权限、幂等性）。内置 `FileTool` / `HttpTool` / `ShellTool`（shell 默认禁用），`ToolOutputPart::{Text,Image,Resource}` 多模态输出，以及 macOS sandbox-exec / Linux seccomp 的 OS 级沙箱后端。物理上是 L2 crate，但其 `Tool` 契约充当 L0 契约面。 |
+| **agentflow-tool**（T3.3 起独立） | `Tool` 契约本体：`Tool` trait + `ToolRegistry` + `ToolMetadata`（`source: Builtin/Script/Mcp/Workflow`、权限、幂等性）+ `ToolIdempotency` + `ToolOutputPart::{Text,Image,Resource}` + `Capability`/`EffectiveCapabilities` + `ToolPolicy` + `SecurityProfile` + `SandboxBackend` trait 及其 DTO。**零依赖**，是名副其实的 L0 内核 crate（从 L2 的 `agentflow-tools` 拆出）。`agentflow-agents`/`agentflow-harness` 等运行时直接依赖这个契约 crate，从不依赖下面 L2 的 `agentflow-tools`。见 `docs/RFC_TOOL_CONTRACT_SPLIT.md`。 |
 
 ### L1 — 执行核心
 
@@ -105,7 +105,7 @@ AgentFlow 是一个 Rust workspace，采用 **"窄腰"（narrow-waist）契约�
 | **agentflow-nodes** | **工具层** `AsyncNode`：`template`(Tera) / `file` / `http` / `batch` / `conditional` / `arxiv` / `markmap`。只依赖 IR + `agentflow-tools`，**不携带任何能力依赖**。Feature：默认 `["http","file","template"]`，`batch` / `conditional` 可选。 |
 | **agentflow-nodes-ai** | **能力层**节点适配器：`llm` / `asr` / `tts` / `text_to_image` / `image_to_image` / `image_understand` / `image_edit` / `mcp` / `rag`。依赖 `agentflow-nodes`（共享 common/error）+ 能力 crate（llm 必选；mcp/rag 经 feature 门控）。AI 模态节点不再有逐模态门控。 |
 | **agentflow-llm** | LLM provider 抽象。流式 fluent API `AgentFlow::model(...).prompt(...).execute()`。6 家 provider：OpenAI / Anthropic / Google / StepFun / Moonshot / Mock（另 4 家 OpenAI 兼容厂商 GLM / DashScope / DeepSeek / MiniMax 复用 `OpenAIProvider`）。多模态（text + image url/base64）、流式、模型注册/发现、原生 `tool_calls` / `tool_choice`、W3C `traceparent` 透传。 |
-| **agentflow-tools** | （见 L0 契约面）统一工具抽象与沙箱实现。 |
+| **agentflow-tools** | L2 builtin 实现：依赖并**完整 re-export** L0 的 `agentflow-tool` 契约（既有 `use agentflow_tools::{Tool, ToolRegistry, ...}` 调用点不受影响），额外提供 `SandboxPolicy`（进程内 allow-list）、内置 `FileTool`/`HttpTool`/`ShellTool`（shell 默认禁用）、macOS sandbox-exec / Linux seccomp+Landlock+cgroup v2 的 OS 级沙箱后端、以及 `code_exec`（LLM 代码执行，走 `ContainerBackend` 强隔离）。 |
 | **agentflow-mcp** | Model Context Protocol 集成：client + server + transport（stdio 优先）、JSON-RPC 2.0、retry/timeout/重连、延迟基准。注意 MCP→`Tool` 的适配器（`McpToolAdapter` + `McpClientPool`）住在 `agentflow-skills` 而非这里——因为 skill builder 才是知道某个 skill 声明了哪些 MCP server 的入口。 |
 | **agentflow-rag** | 检索增强：文档分块、embedding（OpenAI API 或本地 ONNX）、Qdrant 向量库、检索、重排。来源 PDF/HTML/CSV/text（PDF/HTML 加载器默认 50 MiB / 10 MiB 上限）。实现 L0 `KnowledgeBackend`：`Bm25KnowledgeBackend`（内存关键词索引）+ `VectorStoreKnowledgeBackend`（向量层），并暴露 `RagSearchTool`（可注册的只读幂等 `rag_search` 工具）。Eval 框架：JSONL 数据集，Recall@K / MRR / nDCG@K + 配对符号检验，CLI `agentflow rag eval`。 |
 | **agentflow-memory** | 智能体对话记忆：`MemoryStore` 实现 `SessionMemory`（token 窗口内存）+ `SqliteMemory`（持久化）。`SemanticMemory` 相似度检索（与 rag 联动）。 |
