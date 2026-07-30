@@ -1,6 +1,8 @@
 # Memory Layering
 
-Status: design as of `P4.5`.
+Status: design as of `P4.5`; backend implementations closed under
+P4.7 (2026-05-24, `5098719`) — see the "Wiring status" note under
+§4/§Precedence for what remains unwired (T4.1, 2026-07-30).
 Crate: `agentflow-memory`.
 Implements: P4.7 (backend implementations) and P-H.4 (background task
 context).
@@ -101,16 +103,20 @@ specific aliases. The defining property is *exactness* — the agent
 asks "what is the value of key `tone`?" and expects either a single
 value back or `None`.
 
-Today's implementation: **not yet implemented**. Land under P4.7.
+Today's implementation (T4.1, closed 2026-05-24 under P4.7 —
+`5098719`):
 
-Suggested storage: SQLite with schema `(tenant_id, user_id, key,
-value JSON, updated_at, version)`. Encrypted at rest is optional;
-the trait should support it but a plaintext default is acceptable
-for the local profile.
+- [`SqlitePreferenceStore`](../agentflow-memory/src/preference.rs) —
+  SQLite-backed, schema `(tenant_id, user_id, key, value JSON,
+  updated_at, version)`, UPSERT with monotonic per-key `version`.
+- [`AgeEncryptedPreferenceStore`](../agentflow-memory/src/preference_encrypted.rs) —
+  `age`-encrypted-at-rest wrapper (P10.7.2) for deployments that need
+  it; the plaintext `SqlitePreferenceStore` remains the local-profile
+  default.
 
 Retention: keep indefinitely. Operators can prune via
-`agentflow memory prune --layer preference --older-than 1y` (CLI
-landing alongside P4.7).
+`agentflow memory prune --layer preference --older-than 1y`
+(`agentflow-cli/src/commands/memory/prune.rs`).
 
 ### 4. Entity facts memory
 
@@ -122,16 +128,19 @@ score, and an extraction timestamp. Conflicting facts about the same
 `(entity, attribute)` pair are kept as separate rows, not merged, so
 the agent runtime can render a per-fact citation when challenged.
 
-Today's implementation: **not yet implemented**. Land under P4.7.
+Today's implementation (T4.1, closed 2026-05-24 under P4.7 —
+`5098719`):
 
-Suggested storage: SQLite with schema
-`(entity_id, fact_id, attribute, value JSON, source_message_id,
-confidence f32, extracted_at, invalidated_at NULLABLE)`.
+- [`SqliteEntityFactStore`](../agentflow-memory/src/entity_facts.rs) —
+  SQLite-backed, schema `(entity_id, fact_id, attribute, value JSON,
+  source_message_id, confidence, extracted_at, invalidated_at
+  NULLABLE, invalidation_reason)`.
 
 Retention: keep until explicitly invalidated. Invalidation sets
 `invalidated_at`; the row is preserved for audit. A separate
-`agentflow memory prune --layer entity_facts --hard-delete --older-than 2y`
-removes invalidated rows past a grace window.
+`agentflow memory prune --layer entity_facts --older-than 2y`
+(`EntityFactStore::prune_invalidated`) removes invalidated rows past a
+grace window — active facts are never touched, even at a zero cutoff.
 
 ## Layer trait surface
 
@@ -155,7 +164,7 @@ pub trait MemoryStore: Send + Sync {
   async fn to_prompt(&self, session_id: &str) -> Result<String, MemoryError>;
 }
 
-// agentflow-memory/src/layer.rs (new under P4.7)
+// agentflow-memory/src/layer.rs (landed under P4.7, T4.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemoryLayer { Session, Semantic, Preference, EntityFacts }
 
@@ -180,13 +189,18 @@ pub trait PreferenceStore: Send + Sync {
     &mut self,
     scope: &PreferenceScope,
     key: &str,
-    value: PreferenceValue,
+    value: serde_json::Value,
   ) -> Result<(), MemoryError>;
   async fn delete_preference(
     &mut self,
     scope: &PreferenceScope,
     key: &str,
   ) -> Result<(), MemoryError>;
+  async fn list_preferences(
+    &self,
+    scope: &PreferenceScope,
+  ) -> Result<Vec<(String, PreferenceValue)>, MemoryError>;
+  async fn prune_older_than(&mut self, older_than: Duration) -> Result<u64, MemoryError>;
 }
 
 #[async_trait]
@@ -203,8 +217,15 @@ pub trait EntityFactStore: Send + Sync {
     fact_id: &str,
     reason: &str,
   ) -> Result<(), MemoryError>;
+  async fn prune_invalidated(&mut self, older_than: Duration) -> Result<u64, MemoryError>;
 }
 ```
+
+Implementations: [`SqlitePreferenceStore`](../agentflow-memory/src/preference.rs)
+/ [`SqliteEntityFactStore`](../agentflow-memory/src/entity_facts.rs). `PreferenceValue`
+wraps the stored `value` with its `updated_at`/`version` metadata on
+read; writes take a bare `serde_json::Value` since the store computes
+those fields itself.
 
 Rationale: `SemanticMemoryStore` extends `MemoryStore` because every
 semantic backend is also a valid session backend (you can read
@@ -251,6 +272,18 @@ operates **before** this list: when session history overflows the
 token budget, the summary backend compacts the oldest messages into
 a single synthetic message that takes their slot.
 
+**Wiring status (T4.1, as of this writing)**: the four-layer
+precedence above is the target design for prompt assembly. The
+Preference and Entity facts *stores* exist and are usable standalone
+(construct a `SqlitePreferenceStore`/`SqliteEntityFactStore` directly,
+or manage them operationally via `agentflow memory prune`), but
+neither `ReActAgent` nor `PlanExecuteAgent` reads from them yet — no
+agent-runtime code references `PreferenceStore`/`EntityFactStore`
+today. Wiring an agent's prompt assembly to consult these two layers
+automatically (and the matching `[memory.preference]`/
+`[memory.entity_facts]` skill.toml declarations below) remains
+unscheduled future work, not part of T4.1's scope.
+
 ## Migration path
 
 Today (`v0.3.0`):
@@ -262,18 +295,20 @@ Today (`v0.3.0`):
   `SemanticMemoryStore` impl that exposes the typed `search_semantic`
   API. The existing `search(session_id, query, k)` route stays for
   one stability tier (Beta) before being deprecated.
-- Preference and Entity facts stores are new code, not migrations.
-  No existing rows to back-fill.
+- Preference and Entity facts stores landed as new code (T4.1, P4.7,
+  `5098719`) — no existing rows to back-fill.
 
-Skill manifest impact:
+Skill manifest impact (**not yet implemented** — `agentflow-skills`'
+`[memory]` parsing only accepts `type = "session" | "sqlite" | "none"`
+today; `semantic` and the two sub-tables below are aspirational):
 
 ```toml
 # skill.toml (existing — no change required)
 [memory]
-type = "session"  # or "sqlite", "semantic"
+type = "session"  # or "sqlite"; "semantic" is not wired into SkillBuilder yet
 window_tokens = 12000
 
-# skill.toml (new under P4.7, all optional)
+# skill.toml (proposed, not implemented — no SkillBuilder support yet)
 [memory.preference]
 type = "sqlite"
 path = "~/.agentflow/memory/{skill}.preference.db"  # optional override
@@ -283,10 +318,10 @@ type = "sqlite"
 path = "~/.agentflow/memory/{skill}.facts.db"  # optional override
 ```
 
-The existing `[memory]` table is unchanged; the two new tables are
-additive. Skills written before P4.7 keep working — they simply don't
-attach preference / facts stores, and the agent runtime renders an
-empty section in the persona for those layers.
+The existing `[memory]` table is unchanged. The two new tables above
+are the proposed additive shape for when SkillBuilder wiring lands;
+until then, no skill.toml can attach a preference or facts store, and
+no agent-runtime persona section is populated from those layers.
 
 ## Stability
 
