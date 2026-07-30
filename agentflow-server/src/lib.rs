@@ -44,8 +44,8 @@ pub mod ui;
 pub mod worker_grpc;
 
 pub use auth::{
-  AuthConfig, AuthConfigError, require_bearer_token, resolve_auth_config,
-  resolve_auth_config_from_env,
+  AuthConfig, AuthConfigError, AuthenticatedTenant, TenantToken, require_bearer_token,
+  resolve_auth_config, resolve_auth_config_from_env,
 };
 pub use cleanup::{
   CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
@@ -539,14 +539,20 @@ pub fn create_router(state: AppState) -> Router {
       get(preferences::list_preferences).put(preferences::put_preferences),
     );
 
+  // P2.6/U1.1: resolve a TenantId extension on every /v1/* request.
+  // Layering order here is load-bearing — `.layer()` calls nest
+  // outside-in, so whichever is applied LAST runs FIRST on the
+  // request path. `extract_tenant_id` is layered first (innermost) so
+  // that when auth is configured, `require_bearer_token` (layered
+  // second/outermost, below) runs *before* it and can insert an
+  // `AuthenticatedTenant` extension for it to consult — without auth,
+  // this layer alone reproduces the pre-U1.1 "trust the client
+  // header, default to `default`" behavior.
+  let v1 = v1.layer(middleware::from_fn(tenant::extract_tenant_id));
   let v1 = match state.auth.clone() {
     Some(auth) => v1.layer(middleware::from_fn_with_state(auth, require_bearer_token)),
     None => v1,
   };
-  // P2.6: bind X-Agentflow-Tenant header into a TenantId extension on
-  // every /v1/* request. Falls back to TenantId("default") when absent
-  // so single-tenant local-dev stays zero-config.
-  let v1 = v1.layer(middleware::from_fn(tenant::extract_tenant_id));
 
   // Q3.4.1: install the global request body cap so every route gets a
   // sane upper bound, not just the three (`/v1/runs`, `/v1/skills/...`,

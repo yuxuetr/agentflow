@@ -207,6 +207,11 @@ pub struct StartupReport {
 pub struct AuthReport {
   pub token_env: String,
   pub token_present: bool,
+  /// U1.1: whether `AGENTFLOW_API_TOKEN_TENANTS` (per-tenant token
+  /// bindings) is set to a non-empty value. A deployment can satisfy
+  /// `require_token` with this alone, without `token_env` set at all
+  /// — see `docs/DEPLOYMENT.md` § Multi-tenant deployments.
+  pub tenant_tokens_present: bool,
   pub require_token: bool,
 }
 
@@ -249,19 +254,25 @@ pub async fn build_startup_report(config: &ServeConfig) -> StartupReport {
   let mut errors = Vec::new();
   let mut readiness = ServeReadiness::Ok;
 
-  // Auth.
+  // Auth. U1.1: AGENTFLOW_API_TOKEN_TENANTS (per-tenant token
+  // bindings) satisfies `require_token` on its own, same as the
+  // legacy unbound token — see `resolve_auth_config`.
   let token_present = std::env::var(&config.auth_token_env)
     .map(|value| !value.trim().is_empty())
     .unwrap_or(false);
+  let tenant_tokens_present = std::env::var("AGENTFLOW_API_TOKEN_TENANTS")
+    .map(|value| !value.trim().is_empty())
+    .unwrap_or(false);
+  let any_token_present = token_present || tenant_tokens_present;
   let defaults = config.security_profile.defaults();
   let require_token = defaults.auth.require_api_token;
-  if require_token && !token_present {
+  if require_token && !any_token_present {
     errors.push(format!(
-      "{} profile requires bearer auth but ${} is not set",
+      "{} profile requires bearer auth but neither ${} nor $AGENTFLOW_API_TOKEN_TENANTS is set",
       config.security_profile, config.auth_token_env
     ));
     readiness.promote(ServeReadiness::Fail);
-  } else if !require_token && !token_present {
+  } else if !require_token && !any_token_present {
     warnings.push(format!(
       "${} is not set; the gateway will run without bearer auth (acceptable for `{}`)",
       config.auth_token_env, config.security_profile
@@ -330,6 +341,7 @@ pub async fn build_startup_report(config: &ServeConfig) -> StartupReport {
     auth: AuthReport {
       token_env: config.auth_token_env.clone(),
       token_present,
+      tenant_tokens_present,
       require_token,
     },
     database: db_report,
@@ -572,6 +584,15 @@ fn database_host(url: &str) -> Option<String> {
 mod tests {
   use super::*;
 
+  /// U1.1's `AGENTFLOW_API_TOKEN_TENANTS` isn't configurable per test
+  /// (unlike `auth_token_env`), so any test that sets it — or assumes
+  /// it's unset — must serialize against every other such test in this
+  /// binary. Same pattern as `agentflow-harness`'s test-only `env_lock`.
+  fn tenant_tokens_env_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+  }
+
   #[test]
   fn defaults_parse_default_bind_address() {
     let cfg = ServeConfig::defaults();
@@ -620,12 +641,16 @@ mod tests {
 
   #[tokio::test]
   async fn run_check_production_without_auth_token_fails() {
+    let _guard = tenant_tokens_env_lock().lock().await;
     let mut cfg = ServeConfig::defaults();
     cfg.security_profile = SecurityProfile::Production;
     cfg.auth_token_env = "AGENTFLOW_API_TOKEN_TEST_MISSING".into();
-    // SAFETY: we use a dedicated env var name so concurrent tests cannot collide.
+    // SAFETY: `_guard` serializes this against every other test in this
+    // binary that touches AGENTFLOW_API_TOKEN_TENANTS (U1.1) — unlike
+    // `auth_token_env`, that var isn't configurable per test.
     unsafe {
       std::env::remove_var("AGENTFLOW_API_TOKEN_TEST_MISSING");
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TENANTS");
     }
     let report = run_check(cfg).await.unwrap();
     assert_eq!(report.readiness, ServeReadiness::Fail);
@@ -655,5 +680,39 @@ mod tests {
     }
     // Without a database URL we still expect Warn; promote check.
     assert!(report.readiness >= ServeReadiness::Warn);
+  }
+
+  #[tokio::test]
+  async fn run_check_production_satisfied_by_tenant_tokens_alone_u1_1() {
+    // U1.1: a deployment that migrated fully to per-tenant tokens (no
+    // legacy AGENTFLOW_API_TOKEN at all) must not be told production
+    // requires a token it doesn't have.
+    let _guard = tenant_tokens_env_lock().lock().await;
+    let mut cfg = ServeConfig::defaults();
+    cfg.security_profile = SecurityProfile::Production;
+    cfg.auth_token_env = "AGENTFLOW_API_TOKEN_TEST_MISSING_2".into();
+    // SAFETY: `_guard` serializes AGENTFLOW_API_TOKEN_TENANTS mutation
+    // against every other test in this binary that touches it.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TEST_MISSING_2");
+      std::env::set_var("AGENTFLOW_API_TOKEN_TENANTS", "tokA:tenant-a");
+    }
+    let report = run_check(cfg).await.unwrap();
+    unsafe {
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TENANTS");
+    }
+    assert!(!report.auth.token_present);
+    assert!(report.auth.tenant_tokens_present);
+    assert_ne!(
+      report.readiness,
+      ServeReadiness::Fail,
+      "tenant_tokens_present alone must satisfy require_token"
+    );
+    assert!(
+      !report
+        .errors
+        .iter()
+        .any(|e| e.contains("requires bearer auth"))
+    );
   }
 }

@@ -28,7 +28,11 @@ selection into:
 - `agentflow-server`: reads `AGENTFLOW_SECURITY_PROFILE`, defaults to
   `local`, stores the selected defaults in `AppState`, and logs the active
   profile. When the selected profile requires auth, startup fails unless
-  `AGENTFLOW_API_TOKEN` is set to a non-empty token.
+  `AGENTFLOW_API_TOKEN` and/or `AGENTFLOW_API_TOKEN_TENANTS` is set to a
+  non-empty value (either satisfies the requirement — see
+  [DEPLOYMENT.md § Multi-tenant deployments](DEPLOYMENT.md#multi-tenant-deployments-bind-tokens-to-tenants-u11)
+  for the token→tenant binding that closes cross-tenant header spoofing,
+  U1.1).
 - `agentflow doctor`: reports the selected profile, effective defaults, and
   invalid profile warnings in text and JSON output.
 

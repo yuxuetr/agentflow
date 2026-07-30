@@ -7,10 +7,10 @@
 //! `AGENTFLOW_DATABASE_TEST_URL`.
 
 use agentflow_db::Database;
-use agentflow_server::{ApiError, AppState, AuthConfig, create_router};
+use agentflow_server::{ApiError, AppState, AuthConfig, TenantToken, create_router};
 use agentflow_tools::SecurityProfile;
 use axum::{
-  Router,
+  Extension, Router,
   body::Body,
   http::{
     Request, StatusCode,
@@ -38,6 +38,31 @@ fn auth_only_router(auth: AuthConfig) -> Router {
     ))
 }
 
+/// Like `auth_only_router`, but also layers `tenant::extract_tenant_id`
+/// *inside* auth — matching `create_router`'s U1.1 layering order — and
+/// the route handler echoes the resolved `TenantId` back in the body, so
+/// tests can assert on token→tenant binding end to end (not just that
+/// auth passed/failed).
+fn auth_and_tenant_router(auth: AuthConfig) -> Router {
+  use axum::{middleware, routing::get};
+  Router::new()
+    .route(
+      "/v1/ping",
+      get(
+        |Extension(tenant): Extension<agentflow_server::tenant::TenantId>| async move {
+          tenant.as_str().to_string()
+        },
+      ),
+    )
+    .layer(middleware::from_fn(
+      agentflow_server::tenant::extract_tenant_id,
+    ))
+    .layer(middleware::from_fn_with_state(
+      auth,
+      agentflow_server::require_bearer_token,
+    ))
+}
+
 fn lazy_state() -> AppState {
   let pool = PgPoolOptions::new()
     .connect_lazy("postgres://postgres:postgres@localhost:5432/agentflow_test")
@@ -52,6 +77,7 @@ fn lazy_state() -> AppState {
 async fn missing_authorization_header_returns_401_with_unified_envelope() {
   let router = auth_only_router(AuthConfig {
     expected_token: "secret".into(),
+    ..Default::default()
   });
 
   let response = router
@@ -77,6 +103,7 @@ async fn missing_authorization_header_returns_401_with_unified_envelope() {
 async fn wrong_token_returns_403() {
   let router = auth_only_router(AuthConfig {
     expected_token: "secret".into(),
+    ..Default::default()
   });
 
   let response = router
@@ -102,6 +129,7 @@ async fn wrong_token_returns_403() {
 async fn correct_token_passes_through() {
   let router = auth_only_router(AuthConfig {
     expected_token: "secret".into(),
+    ..Default::default()
   });
 
   let response = router
@@ -122,6 +150,7 @@ async fn correct_token_passes_through() {
 async fn malformed_authorization_header_returns_401() {
   let router = auth_only_router(AuthConfig {
     expected_token: "secret".into(),
+    ..Default::default()
   });
 
   for header_value in ["secret", "Token secret", "Bearer ", "Bearer  "] {
@@ -240,4 +269,114 @@ async fn skill_run_body_limit_rejects_oversized_json_before_handler() {
     .await
     .unwrap();
   assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+// U1.1: token → tenant binding.
+
+fn tenant_bound_auth() -> AuthConfig {
+  AuthConfig {
+    expected_token: "legacy-shared-token".into(),
+    tenant_tokens: vec![
+      TenantToken {
+        token: "tenant-a-token".into(),
+        tenant_id: "tenant-a".into(),
+      },
+      TenantToken {
+        token: "tenant-b-token".into(),
+        tenant_id: "tenant-b".into(),
+      },
+    ],
+  }
+}
+
+async fn ping_with_headers(
+  router: Router,
+  bearer: &str,
+  tenant_header: Option<&str>,
+) -> axum::response::Response {
+  let mut req = Request::builder()
+    .uri("/v1/ping")
+    .header(AUTHORIZATION, format!("Bearer {bearer}"));
+  if let Some(t) = tenant_header {
+    req = req.header("x-agentflow-tenant", t);
+  }
+  router
+    .oneshot(req.body(Body::empty()).unwrap())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn tenant_bound_token_resolves_its_bound_tenant_with_no_header() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "tenant-a-token", None).await;
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  assert_eq!(&bytes[..], b"tenant-a");
+}
+
+#[tokio::test]
+async fn tenant_bound_token_accepts_a_header_that_agrees_with_the_binding() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "tenant-a-token", Some("tenant-a")).await;
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  assert_eq!(&bytes[..], b"tenant-a");
+}
+
+/// The regression this whole fix exists for: before U1.1,
+/// `extract_tenant_id` trusted `X-Agentflow-Tenant` unconditionally, so
+/// any caller holding *a* valid token (even one meant for tenant A) could
+/// self-report tenant B and read/write tenant B's data. A token bound to
+/// tenant A must not be usable to act as tenant B.
+#[tokio::test]
+async fn tenant_bound_token_cannot_self_report_a_different_tenant_via_header() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "tenant-a-token", Some("tenant-b")).await;
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(body["error"]["code"], "tenant_mismatch");
+}
+
+#[tokio::test]
+async fn a_different_tenant_bound_token_resolves_its_own_binding() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "tenant-b-token", None).await;
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  assert_eq!(&bytes[..], b"tenant-b");
+}
+
+/// The legacy unbound token keeps pre-U1.1 behavior: it can act as
+/// whatever tenant the client claims via the header (default `"default"`)
+/// — deployments that never adopted per-tenant tokens are unaffected.
+#[tokio::test]
+async fn legacy_unbound_token_still_trusts_the_client_header() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "legacy-shared-token", Some("whatever-i-want")).await;
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  assert_eq!(&bytes[..], b"whatever-i-want");
+}
+
+#[tokio::test]
+async fn legacy_unbound_token_defaults_to_default_tenant_with_no_header() {
+  let router = auth_and_tenant_router(tenant_bound_auth());
+  let response = ping_with_headers(router, "legacy-shared-token", None).await;
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    .await
+    .unwrap();
+  assert_eq!(&bytes[..], b"default");
 }

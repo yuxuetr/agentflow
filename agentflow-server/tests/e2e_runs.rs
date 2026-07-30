@@ -263,6 +263,7 @@ async fn submit_run_without_token_is_rejected_under_auth() {
   };
   let state = state.with_auth(Some(AuthConfig {
     expected_token: auth_token(),
+    ..Default::default()
   }));
   let app = create_router(state);
 
@@ -296,6 +297,7 @@ async fn submit_run_with_token_succeeds_under_auth() {
   };
   let state = state.with_auth(Some(AuthConfig {
     expected_token: auth_token(),
+    ..Default::default()
   }));
   let app = create_router(state);
 
@@ -588,6 +590,7 @@ async fn health_route_stays_open_under_auth() {
   };
   let state = state.with_auth(Some(AuthConfig {
     expected_token: auth_token(),
+    ..Default::default()
   }));
   let app = create_router(state);
 
@@ -768,4 +771,99 @@ async fn submit_run_accepts_body_tenant_id_that_matches_header() {
     .await
     .unwrap();
   assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ── U1.1: token → tenant binding, through the full router ────────────────
+
+/// End-to-end companion to the lower-level middleware tests in
+/// `tests/auth_and_errors.rs`: this exercises the real `create_router`
+/// wiring (auth + tenant middleware layering, DB-backed run submission)
+/// rather than a minimal test router. Tenant A's token must not be usable
+/// to submit a run as tenant B, even though both tenants share the same
+/// server and the caller genuinely holds *a* valid bearer token.
+#[tokio::test]
+async fn tenant_bound_token_cannot_submit_a_run_as_a_different_tenant() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping tenant_bound_token_cannot_submit_a_run_as_a_different_tenant");
+    return;
+  };
+  let state = state.with_auth(Some(AuthConfig {
+    expected_token: String::new(),
+    tenant_tokens: vec![
+      agentflow_server::TenantToken {
+        token: "tenant-a-token".into(),
+        tenant_id: "tenant-a".into(),
+      },
+      agentflow_server::TenantToken {
+        token: "tenant-b-token".into(),
+        tenant_id: "tenant-b".into(),
+      },
+    ],
+  }));
+  let app = create_router(state);
+  let body = json!({"workflow": FIXED_DAG}).to_string();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Authorization", "Bearer tenant-a-token")
+        .header(TENANT_HEADER, "tenant-b")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  let body: Value = serde_json::from_slice(
+    &axum::body::to_bytes(response.into_body(), 4096)
+      .await
+      .unwrap(),
+  )
+  .unwrap();
+  assert_eq!(body["error"]["code"], "tenant_mismatch");
+}
+
+/// Companion positive case: tenant A's token submitting as tenant A (no
+/// header, or a header that agrees) succeeds normally.
+#[tokio::test]
+async fn tenant_bound_token_submits_a_run_as_its_own_tenant() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping tenant_bound_token_submits_a_run_as_its_own_tenant");
+    return;
+  };
+  let state = state.with_auth(Some(AuthConfig {
+    expected_token: String::new(),
+    tenant_tokens: vec![agentflow_server::TenantToken {
+      token: "tenant-a-token".into(),
+      tenant_id: "tenant-a".into(),
+    }],
+  }));
+  let app = create_router(state);
+  let body = json!({"workflow": FIXED_DAG}).to_string();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/runs")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Authorization", "Bearer tenant-a-token")
+        .body(Body::from(body))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body: Value = serde_json::from_slice(
+    &axum::body::to_bytes(response.into_body(), 4096)
+      .await
+      .unwrap(),
+  )
+  .unwrap();
+  assert!(body["run_id"].is_string());
 }

@@ -159,8 +159,9 @@ docker compose exec postgres psql -U agentflow -d agentflow \
 ### Authentication
 
 Every `/v1/*` route requires `Authorization: Bearer <token>` when
-`AGENTFLOW_API_TOKEN` is set. With the env var unset the server runs open
-(useful for local dev — startup logs a warning).
+`AGENTFLOW_API_TOKEN` and/or `AGENTFLOW_API_TOKEN_TENANTS` is set. With
+neither set the server runs open (useful for local dev — startup logs a
+warning).
 
 ```bash
 export AGENTFLOW_API_TOKEN="dev-secret"
@@ -169,6 +170,33 @@ curl -H "Authorization: Bearer dev-secret" http://localhost:3000/v1/whoami
 
 Health probes (`/health`, `/health/live`, `/health/ready`) bypass auth so
 load balancers / kubelet probes work without secrets.
+
+#### Multi-tenant deployments: bind tokens to tenants (U1.1)
+
+`AGENTFLOW_API_TOKEN` is a single **unbound** token: any request
+authenticated with it can claim to act as *any* tenant via the
+`X-Agentflow-Tenant` header, because nothing ties the token to a specific
+tenant. That's fine for a single-tenant deployment, but it means a
+multi-tenant deployment sharing one token has **no real tenant
+isolation** — the header is a self-reported claim, not a credential.
+
+For genuine isolation, issue one token per tenant via
+`AGENTFLOW_API_TOKEN_TENANTS` — comma-separated `token:tenant_id` pairs:
+
+```bash
+export AGENTFLOW_API_TOKEN_TENANTS="tokA:tenant-acme,tokB:tenant-globex"
+```
+
+A request authenticated with `tokA` always acts as `tenant-acme`,
+regardless of what `X-Agentflow-Tenant` it sends — a header naming a
+*different* tenant is rejected (`403 tenant_mismatch`), not silently
+honored. `AGENTFLOW_API_TOKEN` can be set alongside
+`AGENTFLOW_API_TOKEN_TENANTS` (the legacy token keeps trusting the
+header, for callers that don't need per-tenant isolation — e.g. an
+internal ops tool) or omitted entirely (pure per-tenant-token mode). A
+token cannot appear in both variables — that's a startup config error.
+See `agentflow-server/src/auth.rs` module doc for the full precedence
+rule.
 
 ### Read-replica routing (P10.15.2)
 
