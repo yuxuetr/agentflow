@@ -80,7 +80,7 @@ Output layout:
 
 ```text
 <output>/
-  manifest.json          # schema version, timestamps, per-artifact bytes
+  manifest.json          # schema version, timestamps, per-artifact bytes + sha256
   db.dump                # pg_dump --format=custom of $DATABASE_URL
   run_dir.tar.gz         # tar -czf of $AGENTFLOW_RUN_DIR
   trace_dir.tar.gz       # tar -czf of $AGENTFLOW_TRACE_DIR
@@ -88,6 +88,12 @@ Output layout:
   skills_dir.tar.gz
   plugins_dir.tar.gz
 ```
+
+Each artifact entry in `manifest.json` records a `sha256:<hex>` of the
+artifact file (U0.2), computed right after `pg_dump`/`tar` writes it.
+`agentflow restore` recomputes this hash from the artifact on disk and
+compares it before running `pg_restore`/`tar` — see
+[Integrity verification](#integrity-verification) below.
 
 Key flags:
 
@@ -157,6 +163,11 @@ Key flags (mirror `agentflow backup`):
   filesystem include (removes it before extracting). Without
   `--force`, a target directory that already exists fails that step
   rather than merging tar contents into stale files.
+- `--skip-integrity-check` — restore an artifact even when its
+  recomputed SHA-256 does not match the manifest's recorded hash
+  (U0.2). Off by default. Not recommended outside of deliberate
+  recovery from a bundle you already know is off-spec (e.g. testing);
+  see [Integrity verification](#integrity-verification).
 - `--format text|json|json-envelope` — same three report formats as
   `agentflow backup`.
 
@@ -167,7 +178,39 @@ not on PATH (`pg_restore` / `tar`) is `failed`, and the process exits
 (not merged into) so the archive's original top-level path component
 never leaks into the restored layout, even when the restore target
 has a different name than the directory that was originally backed
-up (different host, renamed env override, etc.).
+up (different host, renamed env override, etc.). The safety guard
+that refuses a top-level/root restore target always runs before any
+destructive filesystem operation on that target (U0.1) — a
+misconfigured env override (e.g. `AGENTFLOW_RUN_DIR=/`) combined with
+`--force` fails closed instead of deleting the target's parent
+directory tree.
+
+## Integrity verification
+
+`agentflow restore` recomputes the SHA-256 of each artifact on disk
+and compares it against the hash `agentflow backup` recorded in
+`manifest.json`, **before** running `pg_restore --clean --if-exists`
+(which deletes existing database objects unconditionally) or `tar`
+(which has no archive-entry sanity checks of its own — path traversal
+and symlink safety depend entirely on the host's `tar` binary). A
+mismatch — a corrupted transfer, or a bundle that was tampered with —
+fails that step without touching the target:
+
+```text
+$ agentflow restore /var/backups/agentflow/2026-05-20
+  skills_dir         failed   /home/op/.agentflow/skills
+    └─ artifact integrity check failed: manifest recorded sha256:ab12…, computed sha256:cd34… —
+       the artifact may be corrupted or tampered with; pass --skip-integrity-check to restore
+       anyway (not recommended)
+```
+
+`--skip-integrity-check` overrides this per invocation (applies to
+every artifact restored in that run, not a per-artifact flag) and
+still surfaces a visible warning in the step's `reason` field rather
+than silently proceeding. A bundle produced by an `agentflow` build
+that predates U0.2 has no recorded hash for its artifacts; restoring
+it is unaffected — such artifacts are treated as "cannot verify" (a
+warning, not a failure) rather than rejected outright.
 
 ## Restore sequencing
 

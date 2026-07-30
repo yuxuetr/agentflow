@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use crate::commands::backup::{
-  BUNDLE_MANIFEST_VERSION, BackupInclude, BundleManifest, exit_label, redact_url,
-  resolve_include_dir, which_in_path,
+  BUNDLE_MANIFEST_VERSION, BackupInclude, BundleManifest, BundleManifestArtifact, exit_label,
+  redact_url, resolve_include_dir, sha256_file, which_in_path,
 };
 use crate::json_envelope::CliJsonEnvelope;
 
@@ -68,6 +68,12 @@ pub struct RestoreArgs {
   pub includes: Vec<BackupInclude>,
   /// Output format for the report — same three values as `agentflow backup`.
   pub format: String,
+  /// Restore an artifact even when its recomputed SHA-256 does not
+  /// match the manifest's recorded hash (U0.2). Off by default —
+  /// a mismatch fails that step rather than silently feeding a
+  /// possibly corrupted/tampered dump into `pg_restore --clean` or a
+  /// possibly path-traversing archive into `tar`.
+  pub skip_integrity_check: bool,
 }
 
 /// Per-include execution row in the restore report.
@@ -137,11 +143,11 @@ async fn run_restore(args: &RestoreArgs) -> Result<RestoreReport> {
     if !requested.contains(&include) {
       continue;
     }
-    if !manifest
+    let Some(artifact_meta) = manifest
       .artifacts
       .iter()
-      .any(|a| a.include == include.tag())
-    {
+      .find(|a| a.include == include.tag())
+    else {
       steps.push(RestoreStepReport {
         include: include.tag().to_string(),
         target: target_display(include),
@@ -151,8 +157,8 @@ async fn run_restore(args: &RestoreArgs) -> Result<RestoreReport> {
         reason: Some("not present in this bundle's manifest".to_string()),
       });
       continue;
-    }
-    steps.push(restore_one(include, &input, args).await);
+    };
+    steps.push(restore_one(include, &input, args, artifact_meta).await);
   }
 
   let total_executed = steps
@@ -203,17 +209,62 @@ async fn restore_one(
   include: BackupInclude,
   input: &Path,
   args: &RestoreArgs,
+  artifact_meta: &BundleManifestArtifact,
 ) -> RestoreStepReport {
   let started = std::time::Instant::now();
   match include {
-    BackupInclude::Db => restore_db(input, args, started).await,
-    other => restore_dir(other, input, args, started).await,
+    BackupInclude::Db => restore_db(input, args, artifact_meta, started).await,
+    other => restore_dir(other, input, args, artifact_meta, started).await,
   }
+}
+
+/// Recomputes the on-disk artifact's SHA-256 and compares it against
+/// the manifest's recorded hash (U0.2), before the caller executes
+/// `pg_restore`/`tar` against it.
+///
+/// - `Ok(None)` — either verified (hash matches) or there is nothing
+///   to verify (manifest predates U0.2); the caller proceeds silently.
+/// - `Ok(Some(warning))` — the caller proceeds but should surface
+///   `warning` in the step's `reason` (legacy manifest with no
+///   recorded hash, or a mismatch the caller explicitly opted past
+///   via `--skip-integrity-check`).
+/// - `Err(reason)` — the caller must fail this step without touching
+///   `pg_restore`/`tar`.
+fn verify_artifact_integrity(
+  artifact: &Path,
+  artifact_meta: &BundleManifestArtifact,
+  skip_check: bool,
+) -> Result<Option<String>, String> {
+  let Some(expected) = artifact_meta.sha256.as_deref() else {
+    return Ok(Some(
+      "integrity check skipped: this bundle's manifest predates SHA-256 recording (U0.2) and \
+       has no hash to verify against"
+        .to_string(),
+    ));
+  };
+  let actual = sha256_file(artifact)
+    .map_err(|err| format!("failed to hash artifact for integrity check: {err}"))?;
+  if actual == expected {
+    return Ok(None);
+  }
+  if skip_check {
+    return Ok(Some(format!(
+      "INTEGRITY CHECK FAILED (expected {expected}, computed {actual}) but \
+       --skip-integrity-check was passed; restoring an artifact that does not match the \
+       manifest's recorded checksum"
+    )));
+  }
+  Err(format!(
+    "artifact integrity check failed: manifest recorded {expected}, computed {actual} — the \
+     artifact may be corrupted or tampered with; pass --skip-integrity-check to restore anyway \
+     (not recommended)"
+  ))
 }
 
 async fn restore_db(
   input: &Path,
   args: &RestoreArgs,
+  artifact_meta: &BundleManifestArtifact,
   started: std::time::Instant,
 ) -> RestoreStepReport {
   let artifact = input.join(BackupInclude::Db.artifact_name());
@@ -275,6 +326,24 @@ async fn restore_db(
     };
   }
 
+  // U0.2: verify the dump on disk still matches what `agentflow
+  // backup` recorded, before feeding it to `pg_restore --clean
+  // --if-exists` (which deletes existing objects unconditionally).
+  let integrity_warning =
+    match verify_artifact_integrity(&artifact, artifact_meta, args.skip_integrity_check) {
+      Ok(warning) => warning,
+      Err(reason) => {
+        return RestoreStepReport {
+          include: BackupInclude::Db.tag().to_string(),
+          target: redact_url(&url),
+          artifact: BackupInclude::Db.artifact_name().to_string(),
+          status: "failed".to_string(),
+          duration_ms: started.elapsed().as_millis() as u64,
+          reason: Some(reason),
+        };
+      }
+    };
+
   let mut cmd = Command::new("pg_restore");
   // `--clean --if-exists` lets restore target either a truly fresh
   // database (the DROP IF EXISTS no-ops) or a previously-restored one
@@ -317,7 +386,7 @@ async fn restore_db(
       artifact: BackupInclude::Db.artifact_name().to_string(),
       status: "executed".to_string(),
       duration_ms: elapsed_ms,
-      reason: None,
+      reason: integrity_warning,
     },
   }
 }
@@ -344,6 +413,7 @@ async fn restore_dir(
   include: BackupInclude,
   input: &Path,
   args: &RestoreArgs,
+  artifact_meta: &BundleManifestArtifact,
   started: std::time::Instant,
 ) -> RestoreStepReport {
   let artifact = input.join(include.artifact_name());
@@ -397,6 +467,25 @@ async fn restore_dir(
       reason: Some("tar not found on PATH".to_string()),
     };
   }
+
+  // U0.2: verify the tarball on disk still matches what `agentflow
+  // backup` recorded, before extracting it — an unverified archive
+  // that path-traverses or symlinks outside `target` is otherwise
+  // entirely at the mercy of the host's unpinned `tar` binary.
+  let integrity_warning =
+    match verify_artifact_integrity(&artifact, artifact_meta, args.skip_integrity_check) {
+      Ok(warning) => warning,
+      Err(reason) => {
+        return RestoreStepReport {
+          include: include.tag().to_string(),
+          target: target_display,
+          artifact: include.artifact_name().to_string(),
+          status: "failed".to_string(),
+          duration_ms: started.elapsed().as_millis() as u64,
+          reason: Some(reason),
+        };
+      }
+    };
 
   // Safety guard MUST run before any destructive filesystem operation
   // below (`remove_dir_all` in particular) — never after. A
@@ -503,7 +592,7 @@ async fn restore_dir(
       artifact: include.artifact_name().to_string(),
       status: "executed".to_string(),
       duration_ms: elapsed_ms,
-      reason: None,
+      reason: integrity_warning,
     },
   }
 }
@@ -596,6 +685,11 @@ mod tests {
           source: "<test>".to_string(),
           artifact: include.artifact_name().to_string(),
           bytes: 0,
+          // Legacy-manifest shape on purpose: most tests in this
+          // module predate U0.2 and don't care about integrity
+          // verification, so they get the "cannot verify, no hash
+          // recorded" path rather than a real hash check.
+          sha256: None,
         })
         .collect(),
     };
@@ -609,6 +703,34 @@ mod tests {
     }
   }
 
+  /// Like [`write_manifest`], but records the real SHA-256 of each
+  /// artifact's content (U0.2) instead of leaving it unset — for
+  /// tests that exercise integrity verification.
+  fn write_manifest_with_content(dir: &Path, artifacts: &[(BackupInclude, &[u8])]) {
+    let mut manifest_artifacts = Vec::new();
+    for (include, content) in artifacts {
+      let path = dir.join(include.artifact_name());
+      std::fs::write(&path, content).unwrap();
+      manifest_artifacts.push(BundleManifestArtifact {
+        include: include.tag().to_string(),
+        source: "<test>".to_string(),
+        artifact: include.artifact_name().to_string(),
+        bytes: content.len() as u64,
+        sha256: Some(sha256_file(&path).unwrap()),
+      });
+    }
+    let manifest = BundleManifest {
+      manifest_version: BUNDLE_MANIFEST_VERSION.to_string(),
+      created_at: Utc::now(),
+      artifacts: manifest_artifacts,
+    };
+    std::fs::write(
+      dir.join("manifest.json"),
+      serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+  }
+
   fn base_args(input: PathBuf) -> RestoreArgs {
     RestoreArgs {
       input,
@@ -617,6 +739,7 @@ mod tests {
       force: false,
       includes: vec![],
       format: "json".into(),
+      skip_integrity_check: false,
     }
   }
 
@@ -821,5 +944,208 @@ mod tests {
       report.steps[0].reason
     );
     assert!(std::path::Path::new("/").is_dir(), "sanity: root untouched");
+  }
+
+  // U0.2 regression coverage: `agentflow backup` now records a
+  // `sha256:<hex>` for every artifact in the manifest, and
+  // `agentflow restore` recomputes + compares it before running
+  // `pg_restore`/`tar` against the artifact on disk.
+
+  #[test]
+  fn verify_artifact_integrity_accepts_a_matching_hash() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().join("skills_dir.tar.gz");
+    std::fs::write(&path, b"original content").unwrap();
+    let meta = BundleManifestArtifact {
+      include: "skills_dir".to_string(),
+      source: "<test>".to_string(),
+      artifact: "skills_dir.tar.gz".to_string(),
+      bytes: 17,
+      sha256: Some(sha256_file(&path).unwrap()),
+    };
+    let outcome = verify_artifact_integrity(&path, &meta, false).unwrap();
+    assert!(
+      outcome.is_none(),
+      "a matching hash must verify silently, got: {outcome:?}"
+    );
+  }
+
+  #[test]
+  fn verify_artifact_integrity_rejects_a_tampered_artifact_by_default() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().join("skills_dir.tar.gz");
+    std::fs::write(&path, b"original content").unwrap();
+    let meta = BundleManifestArtifact {
+      include: "skills_dir".to_string(),
+      source: "<test>".to_string(),
+      artifact: "skills_dir.tar.gz".to_string(),
+      bytes: 17,
+      sha256: Some(sha256_file(&path).unwrap()),
+    };
+    // Tamper with the artifact after the "manifest" recorded its hash.
+    std::fs::write(&path, b"tampered content!").unwrap();
+    let err = verify_artifact_integrity(&path, &meta, false).unwrap_err();
+    assert!(
+      err.contains("integrity check failed"),
+      "expected an integrity-check error, got: {err}"
+    );
+  }
+
+  #[test]
+  fn verify_artifact_integrity_allows_a_tampered_artifact_when_skip_flag_is_set() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().join("skills_dir.tar.gz");
+    std::fs::write(&path, b"original content").unwrap();
+    let meta = BundleManifestArtifact {
+      include: "skills_dir".to_string(),
+      source: "<test>".to_string(),
+      artifact: "skills_dir.tar.gz".to_string(),
+      bytes: 17,
+      sha256: Some(sha256_file(&path).unwrap()),
+    };
+    std::fs::write(&path, b"tampered content!").unwrap();
+    let warning = verify_artifact_integrity(&path, &meta, true)
+      .unwrap()
+      .expect("--skip-integrity-check must still surface a warning, not silence it");
+    assert!(warning.contains("INTEGRITY CHECK FAILED"));
+  }
+
+  #[test]
+  fn verify_artifact_integrity_skips_verification_for_a_legacy_manifest_with_no_hash() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().join("skills_dir.tar.gz");
+    std::fs::write(&path, b"content").unwrap();
+    let meta = BundleManifestArtifact {
+      include: "skills_dir".to_string(),
+      source: "<test>".to_string(),
+      artifact: "skills_dir.tar.gz".to_string(),
+      bytes: 7,
+      sha256: None,
+    };
+    let warning = verify_artifact_integrity(&path, &meta, false)
+      .unwrap()
+      .expect("a legacy (pre-U0.2) manifest with no recorded hash must warn, not silently pass");
+    assert!(warning.contains("predates SHA-256"));
+  }
+
+  #[tokio::test]
+  async fn restore_dir_rejects_a_tampered_artifact_before_ever_invoking_tar() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest_with_content(
+      tmp.path(),
+      &[(BackupInclude::SkillsDir, b"original tarball bytes")],
+    );
+    // Tamper with the on-disk artifact after the manifest recorded
+    // its hash — simulates a corrupted or maliciously modified bundle.
+    std::fs::write(
+      tmp.path().join(BackupInclude::SkillsDir.artifact_name()),
+      b"not the original bytes",
+    )
+    .unwrap();
+
+    let mut args = base_args(tmp.path().to_path_buf());
+    args.dry_run = false;
+    args.includes = vec![BackupInclude::SkillsDir];
+    let report = run_restore(&args).await.unwrap();
+
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.steps[0].status, "failed");
+    assert!(
+      report.steps[0]
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("integrity check failed"),
+      "got: {:?}",
+      report.steps[0].reason
+    );
+    assert!(!report.ok);
+  }
+
+  #[tokio::test]
+  async fn restore_dir_restores_normally_when_the_artifact_matches_its_recorded_hash() {
+    if which_in_path("tar").is_none() {
+      eprintln!(
+        "skipping restore_dir_restores_normally_when_the_artifact_matches_its_recorded_hash — \
+         tar not on PATH"
+      );
+      return;
+    }
+
+    let work = tempfile::TempDir::new().unwrap();
+    let source_dir = work.path().join("source_skills");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("SKILL.md"), "hello skill").unwrap();
+
+    // Build a real tarball the same way `agentflow backup` does
+    // (`run_tar_dir`'s `tar -C <parent> -czf <artifact> <basename>`),
+    // so this exercises the actual extraction path, not just the
+    // integrity check in isolation.
+    let bundle_dir = work.path().join("bundle");
+    std::fs::create_dir_all(&bundle_dir).unwrap();
+    let artifact = bundle_dir.join(BackupInclude::SkillsDir.artifact_name());
+    let status = tokio::process::Command::new("tar")
+      .arg("-C")
+      .arg(work.path())
+      .arg("-czf")
+      .arg(&artifact)
+      .arg("source_skills")
+      .status()
+      .await
+      .unwrap();
+    assert!(status.success(), "test setup: tar failed to build fixture");
+
+    let manifest = BundleManifest {
+      manifest_version: BUNDLE_MANIFEST_VERSION.to_string(),
+      created_at: Utc::now(),
+      artifacts: vec![BundleManifestArtifact {
+        include: BackupInclude::SkillsDir.tag().to_string(),
+        source: source_dir.display().to_string(),
+        artifact: BackupInclude::SkillsDir.artifact_name().to_string(),
+        bytes: std::fs::metadata(&artifact).unwrap().len(),
+        sha256: Some(sha256_file(&artifact).unwrap()),
+      }],
+    };
+    std::fs::write(
+      bundle_dir.join("manifest.json"),
+      serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let target_dir = work.path().join("restored_skills");
+    let saved = std::env::var("AGENTFLOW_SKILLS_DIR").ok();
+    // SAFETY: isolated to this test's scope, restored before return —
+    // same pattern as `restore_dir_fails_closed_before_deleting_...`
+    // above. Uses `AGENTFLOW_SKILLS_DIR`, the only other test in this
+    // file touching that variable is the root-path guard test, which
+    // never reaches a real filesystem write, so there's no
+    // read/write race between the two.
+    unsafe { std::env::set_var("AGENTFLOW_SKILLS_DIR", &target_dir) };
+
+    let mut args = base_args(bundle_dir.clone());
+    args.dry_run = false;
+    args.includes = vec![BackupInclude::SkillsDir];
+    let report = run_restore(&args).await.unwrap();
+
+    match saved {
+      Some(value) => unsafe { std::env::set_var("AGENTFLOW_SKILLS_DIR", value) },
+      None => unsafe { std::env::remove_var("AGENTFLOW_SKILLS_DIR") },
+    }
+
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(
+      report.steps[0].status, "executed",
+      "an untampered artifact must restore normally; got reason: {:?}",
+      report.steps[0].reason
+    );
+    assert!(
+      report.steps[0].reason.is_none(),
+      "an untampered artifact must not surface an integrity warning, got: {:?}",
+      report.steps[0].reason
+    );
+    assert_eq!(
+      std::fs::read_to_string(target_dir.join("SKILL.md")).unwrap(),
+      "hello skill"
+    );
   }
 }

@@ -142,6 +142,145 @@ fn dry_run_restore_never_writes_the_target_directory() {
 }
 
 #[test]
+fn backup_manifest_records_a_sha256_for_each_artifact() {
+  if !which("tar") {
+    eprintln!("skipping backup_manifest_records_a_sha256_for_each_artifact — tar not on PATH");
+    return;
+  }
+
+  let work = TempDir::new().unwrap();
+  let source_dir = work.path().join("source_skills");
+  fs::create_dir_all(&source_dir).unwrap();
+  fs::write(source_dir.join("SKILL.md"), "hello skill").unwrap();
+
+  let bundle_dir = work.path().join("bundle");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "backup",
+      "--output",
+      bundle_dir.to_str().unwrap(),
+      "--include",
+      "skills_dir",
+    ])
+    .env("AGENTFLOW_SKILLS_DIR", &source_dir)
+    .assert()
+    .success();
+
+  let manifest: serde_json::Value =
+    serde_json::from_str(&fs::read_to_string(bundle_dir.join("manifest.json")).unwrap()).unwrap();
+  let sha256 = manifest["artifacts"][0]["sha256"]
+    .as_str()
+    .expect("U0.2: manifest artifact must record a sha256 field");
+  assert!(
+    sha256.starts_with("sha256:") && sha256.len() == "sha256:".len() + 64,
+    "expected sha256:<64 hex chars>, got: {sha256}"
+  );
+}
+
+// U0.2 (evaluation §5 "新发现"): `agentflow restore` used to feed
+// `pg_restore --clean --if-exists` / `tar -xzf` directly from whatever
+// bytes were on disk under the bundle directory, with no check that
+// they still matched what `agentflow backup` originally wrote. This
+// simulates a bundle tampered with (or corrupted) after backup: the
+// manifest's recorded hash for `skills_dir.tar.gz` no longer matches
+// the file on disk.
+#[test]
+fn tampered_artifact_is_rejected_by_default_but_restorable_with_skip_integrity_check() {
+  if !which("tar") {
+    eprintln!(
+      "skipping tampered_artifact_is_rejected_by_default_but_restorable_with_skip_integrity_check \
+       — tar not on PATH"
+    );
+    return;
+  }
+
+  let work = TempDir::new().unwrap();
+
+  // Bundle 1: the "real" backup an operator would restore from.
+  let source_dir = work.path().join("source_skills");
+  fs::create_dir_all(&source_dir).unwrap();
+  fs::write(source_dir.join("SKILL.md"), "original content").unwrap();
+  let bundle_dir = work.path().join("bundle");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "backup",
+      "--output",
+      bundle_dir.to_str().unwrap(),
+      "--include",
+      "skills_dir",
+    ])
+    .env("AGENTFLOW_SKILLS_DIR", &source_dir)
+    .assert()
+    .success();
+
+  // Bundle 2: a different, but equally valid, tarball — stands in for
+  // "the artifact on disk was swapped/corrupted after backup ran".
+  let tampered_source_dir = work.path().join("tampered_source_skills");
+  fs::create_dir_all(&tampered_source_dir).unwrap();
+  fs::write(tampered_source_dir.join("SKILL.md"), "tampered content").unwrap();
+  let tampered_bundle_dir = work.path().join("tampered_bundle");
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "backup",
+      "--output",
+      tampered_bundle_dir.to_str().unwrap(),
+      "--include",
+      "skills_dir",
+    ])
+    .env("AGENTFLOW_SKILLS_DIR", &tampered_source_dir)
+    .assert()
+    .success();
+
+  // Overwrite bundle 1's artifact with bundle 2's — bundle 1's
+  // manifest.json (and its recorded hash) is untouched.
+  fs::copy(
+    tampered_bundle_dir.join("skills_dir.tar.gz"),
+    bundle_dir.join("skills_dir.tar.gz"),
+  )
+  .unwrap();
+
+  let target_dir = work.path().join("restored_skills");
+
+  // Without --skip-integrity-check: the mismatch must fail the step
+  // and the target directory must never be touched.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args(["restore", bundle_dir.to_str().unwrap()])
+    .env("AGENTFLOW_SKILLS_DIR", &target_dir)
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("integrity check failed"));
+  assert!(
+    !target_dir.exists(),
+    "a failed integrity check must not create the restore target"
+  );
+
+  // With --skip-integrity-check: proceeds (with a visible warning),
+  // and actually restores the artifact that's really on disk (the
+  // swapped-in one), not the one the manifest originally described —
+  // proving the override genuinely bypasses the check rather than
+  // silently no-op'ing.
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "restore",
+      bundle_dir.to_str().unwrap(),
+      "--skip-integrity-check",
+    ])
+    .env("AGENTFLOW_SKILLS_DIR", &target_dir)
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("INTEGRITY CHECK FAILED"));
+  assert_eq!(
+    fs::read_to_string(target_dir.join("SKILL.md")).unwrap(),
+    "tampered content"
+  );
+}
+
+#[test]
 fn restore_help_lists_documented_flags() {
   Command::cargo_bin("agentflow")
     .unwrap()
@@ -151,7 +290,8 @@ fn restore_help_lists_documented_flags() {
     .stdout(predicate::str::contains("--database-url"))
     .stdout(predicate::str::contains("--dry-run"))
     .stdout(predicate::str::contains("--force"))
-    .stdout(predicate::str::contains("--include"));
+    .stdout(predicate::str::contains("--include"))
+    .stdout(predicate::str::contains("--skip-integrity-check"));
 }
 
 #[test]

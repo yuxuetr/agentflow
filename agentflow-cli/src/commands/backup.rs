@@ -34,12 +34,14 @@
 //!   probe up front; we surface "tool not found" with the exact
 //!   apt-get / brew install line the operator needs.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 
 use crate::json_envelope::CliJsonEnvelope;
@@ -158,6 +160,10 @@ pub struct BackupStepReport {
   pub bytes: u64,
   /// Wall-clock duration of the underlying command, in ms.
   pub duration_ms: u64,
+  /// `sha256:<hex>` of the artifact file (U0.2). `None` for
+  /// `dry_run` / `skipped` steps — nothing was written to hash.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub sha256: Option<String>,
   /// One-line reason. Required for `skipped` / `failed`,
   /// optional otherwise.
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +210,13 @@ pub struct BundleManifestArtifact {
   pub source: String,
   pub artifact: String,
   pub bytes: u64,
+  /// `sha256:<hex>` of the artifact file, computed at backup time
+  /// (U0.2). `#[serde(default)]` so manifests produced by a
+  /// pre-U0.2 `agentflow backup` (no hash recorded) still parse;
+  /// `agentflow restore` treats a missing hash as "cannot verify"
+  /// rather than a hard error, but always verifies when present.
+  #[serde(default)]
+  pub sha256: Option<String>,
 }
 
 /// Entry point invoked by `main.rs`.
@@ -252,6 +265,7 @@ async fn run_backup(args: &BackupArgs) -> Result<BackupReport> {
         source: s.source.clone(),
         artifact: s.artifact.clone(),
         bytes: s.bytes,
+        sha256: s.sha256.clone(),
       })
       .collect(),
   };
@@ -308,6 +322,7 @@ async fn run_pg_dump(
       status: "skipped".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: Some(
         "no DATABASE_URL provided and `--database-url` not set; skipping DB dump".to_string(),
       ),
@@ -322,6 +337,7 @@ async fn run_pg_dump(
       status: "dry_run".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: None,
     };
   }
@@ -334,6 +350,7 @@ async fn run_pg_dump(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: Some(
         "pg_dump not found on PATH (install postgresql-client or postgresql via your package \
          manager)"
@@ -363,6 +380,7 @@ async fn run_pg_dump(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: elapsed_ms,
+      sha256: None,
       reason: Some(format!("failed to spawn pg_dump: {err}")),
     },
     Ok(out) if !out.status.success() => BackupStepReport {
@@ -372,6 +390,7 @@ async fn run_pg_dump(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: elapsed_ms,
+      sha256: None,
       reason: Some(format!(
         "pg_dump exited {}: {}",
         exit_label(&out.status),
@@ -380,14 +399,32 @@ async fn run_pg_dump(
     },
     Ok(_) => {
       let bytes = std::fs::metadata(&artifact).map(|m| m.len()).unwrap_or(0);
-      BackupStepReport {
-        include: BackupInclude::Db.tag().to_string(),
-        source: redact_url(&url),
-        artifact: BackupInclude::Db.artifact_name().to_string(),
-        status: "executed".to_string(),
-        bytes,
-        duration_ms: elapsed_ms,
-        reason: None,
+      // Fail closed rather than write a manifest entry with no
+      // hash: a silently-unhashed artifact defeats the U0.2
+      // integrity check restore performs before pg_restore/tar.
+      match sha256_file(&artifact) {
+        Ok(sha256) => BackupStepReport {
+          include: BackupInclude::Db.tag().to_string(),
+          source: redact_url(&url),
+          artifact: BackupInclude::Db.artifact_name().to_string(),
+          status: "executed".to_string(),
+          bytes,
+          duration_ms: elapsed_ms,
+          sha256: Some(sha256),
+          reason: None,
+        },
+        Err(err) => BackupStepReport {
+          include: BackupInclude::Db.tag().to_string(),
+          source: redact_url(&url),
+          artifact: BackupInclude::Db.artifact_name().to_string(),
+          status: "failed".to_string(),
+          bytes,
+          duration_ms: elapsed_ms,
+          sha256: None,
+          reason: Some(format!(
+            "pg_dump succeeded but hashing the artifact for the manifest failed: {err}"
+          )),
+        },
       }
     }
   }
@@ -409,6 +446,7 @@ async fn run_tar_dir(
         status: "skipped".to_string(),
         bytes: 0,
         duration_ms: started.elapsed().as_millis() as u64,
+        sha256: None,
         reason: Some(format!(
           "could not resolve {} (no env override and no home directory)",
           include.tag()
@@ -428,6 +466,7 @@ async fn run_tar_dir(
       status: "skipped".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: Some(format!(
         "source directory does not exist; nothing to back up for {}",
         include.tag()
@@ -443,6 +482,7 @@ async fn run_tar_dir(
       status: "dry_run".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: None,
     };
   }
@@ -455,6 +495,7 @@ async fn run_tar_dir(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: started.elapsed().as_millis() as u64,
+      sha256: None,
       reason: Some("tar not found on PATH".to_string()),
     };
   }
@@ -472,6 +513,7 @@ async fn run_tar_dir(
         status: "failed".to_string(),
         bytes: 0,
         duration_ms: started.elapsed().as_millis() as u64,
+        sha256: None,
         reason: Some(format!(
           "refusing to tar a top-level path: {}",
           source.display()
@@ -501,6 +543,7 @@ async fn run_tar_dir(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: elapsed_ms,
+      sha256: None,
       reason: Some(format!("failed to spawn tar: {err}")),
     },
     Ok(out) if !out.status.success() => BackupStepReport {
@@ -510,6 +553,7 @@ async fn run_tar_dir(
       status: "failed".to_string(),
       bytes: 0,
       duration_ms: elapsed_ms,
+      sha256: None,
       reason: Some(format!(
         "tar exited {}: {}",
         exit_label(&out.status),
@@ -518,17 +562,55 @@ async fn run_tar_dir(
     },
     Ok(_) => {
       let bytes = std::fs::metadata(&artifact).map(|m| m.len()).unwrap_or(0);
-      BackupStepReport {
-        include: include.tag().to_string(),
-        source: source_display,
-        artifact: include.artifact_name().to_string(),
-        status: "executed".to_string(),
-        bytes,
-        duration_ms: elapsed_ms,
-        reason: None,
+      // Fail closed rather than write a manifest entry with no
+      // hash: a silently-unhashed artifact defeats the U0.2
+      // integrity check restore performs before pg_restore/tar.
+      match sha256_file(&artifact) {
+        Ok(sha256) => BackupStepReport {
+          include: include.tag().to_string(),
+          source: source_display,
+          artifact: include.artifact_name().to_string(),
+          status: "executed".to_string(),
+          bytes,
+          duration_ms: elapsed_ms,
+          sha256: Some(sha256),
+          reason: None,
+        },
+        Err(err) => BackupStepReport {
+          include: include.tag().to_string(),
+          source: source_display,
+          artifact: include.artifact_name().to_string(),
+          status: "failed".to_string(),
+          bytes,
+          duration_ms: elapsed_ms,
+          sha256: None,
+          reason: Some(format!(
+            "tar succeeded but hashing the artifact for the manifest failed: {err}"
+          )),
+        },
       }
     }
   }
+}
+
+/// Streaming SHA-256 over a file's contents — `sha256:<hex>`,
+/// matching the `checksum_sha256` convention used elsewhere in the
+/// workspace (`agentflow-skills::remote_marketplace`). Reads in fixed
+/// chunks rather than `std::fs::read` so hashing a multi-GB
+/// `db.dump`/`*.tar.gz` doesn't require holding the whole file in
+/// memory.
+pub(crate) fn sha256_file(path: &Path) -> std::io::Result<String> {
+  let mut file = std::fs::File::open(path)?;
+  let mut hasher = Sha256::new();
+  let mut buf = [0u8; 64 * 1024];
+  loop {
+    let n = file.read(&mut buf)?;
+    if n == 0 {
+      break;
+    }
+    hasher.update(&buf[..n]);
+  }
+  Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 fn canonicalize_output(p: &Path) -> Result<PathBuf> {

@@ -296,6 +296,12 @@ struct RestoreArgs {
   /// wire schema for `json-envelope`).
   #[arg(long, default_value = "text", value_parser = ["text", "json", "json-envelope"])]
   format: String,
+  /// Restore an artifact even when its recomputed SHA-256 does not
+  /// match the manifest's recorded hash (U0.2). Not recommended — a
+  /// mismatch means the artifact was modified since `agentflow
+  /// backup` wrote it (corruption or tampering).
+  #[arg(long)]
+  skip_integrity_check: bool,
 }
 
 #[derive(Args)]
@@ -2348,6 +2354,7 @@ async fn main() {
             force: args.force,
             includes,
             format: args.format,
+            skip_integrity_check: args.skip_integrity_check,
           })
           .await
         }
