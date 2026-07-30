@@ -41,6 +41,11 @@ spec:
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
           env:
+            # U1.2: explicit ahead of the generic .Values.env range below
+            # so it's always present regardless of what operators set
+            # there, and shows up first in `kubectl describe pod`.
+            - name: AGENTFLOW_SECURITY_PROFILE
+              value: {{ .Values.securityProfile | quote }}
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}

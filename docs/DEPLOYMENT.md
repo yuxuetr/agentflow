@@ -42,6 +42,10 @@ Compose sets:
 - `AGENTFLOW_RUN_DIR=/data/runs` can be set to control workflow artifact storage.
 - `RUST_LOG=info`
 
+`AGENTFLOW_SECURITY_PROFILE` is left unset (defaults to `local`) — see
+[§ Security profile](#security-profile-u12) below for what that means
+and what to set for anything beyond local development.
+
 ## Helm
 
 Install with an existing PostgreSQL connection secret:
@@ -66,6 +70,39 @@ helm install agentflow charts/agentflow \
 ```
 
 Prefer `existingSecret` in shared environments so credentials do not live in Helm release values.
+
+### Security profile (U1.2)
+
+`values.yaml` ships `securityProfile: local` by default so existing
+installs keep their current behavior across `helm upgrade`. **This is
+not a production-safe default** — under `local`, a missing
+`AGENTFLOW_API_TOKEN` does not fail startup, the gateway just starts
+open with no bearer auth (a warning is logged, but it's easy to miss
+in aggregated logs). Setting `AGENTFLOW_API_TOKEN` still enforces it
+under `local` too — the profile only controls whether it's *required*.
+
+Any Helm install reachable by users or hosts you don't fully trust
+must set `production` explicitly:
+
+```bash
+helm install agentflow charts/agentflow \
+  --set image.repository=agentflow \
+  --set image.tag=server \
+  --set existingSecret=agentflow-db \
+  --set securityProfile=production
+```
+
+Under `production`: a missing bearer token fails startup instead of
+running open; CORS defaults to an explicit origin allow-list instead
+of permissive (see `AGENTFLOW_CORS_ALLOWED_ORIGINS` above); and if you
+also enable the worker gRPC control plane (T1.2, `--worker-grpc`),
+worker admission becomes fail-closed. See `docs/SECURITY_PROFILES.md`
+for the full per-profile defaults table. This chart does not yet wire
+`AGENTFLOW_API_TOKEN` through a dedicated Kubernetes `Secret` (only
+`DATABASE_URL` has that); until it does, set it via `--set
+env.AGENTFLOW_API_TOKEN=...` (plaintext in the Helm release, so prefer
+a values override file with restricted access over a bare CLI flag)
+or patch the Deployment post-install to source it from a `Secret`.
 
 ### Resource requests/limits and autoscaling (T4.3)
 

@@ -25,8 +25,20 @@ services:
       DATABASE_URL: postgres://agentflow:agentflow@postgres:5432/agentflow
       PORT: "3000"
       RUST_LOG: info
-      # Bearer auth for /v1/* routes. Leave unset for local dev (the server
-      # will log a warning); set in production.
+      # U1.2: AGENTFLOW_SECURITY_PROFILE defaults to `local` when unset.
+      # Under `local`, AGENTFLOW_API_TOKEN below is *optional* — if you
+      # forget to set it, the server just starts open with no auth
+      # (a warning is logged, but startup does not fail). Set this to
+      # `production` for any deployment reachable by other users/hosts so
+      # a missing token fails startup instead of silently running open,
+      # CORS defaults to an explicit origin allow-list instead of
+      # permissive, and (if you also run a worker gRPC control plane)
+      # worker admission becomes fail-closed. See docs/DEPLOYMENT.md §
+      # Security profile / docs/SECURITY_PROFILES.md.
+      # AGENTFLOW_SECURITY_PROFILE: "production"
+      # Bearer auth for /v1/* routes. Enforced whenever this is set,
+      # regardless of profile; only *required* (fails startup if unset)
+      # under `production`. Leave unset for local dev; set in production.
       # AGENTFLOW_API_TOKEN: "<replace-me>"
       # Path to a skills.index.toml on the container's filesystem. Mount
       # the host directory under /skills if you want skill listing /

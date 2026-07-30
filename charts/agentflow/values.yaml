@@ -1,3 +1,21 @@
+# U1.2: AGENTFLOW_SECURITY_PROFILE for the gateway process. Defaults to
+# `local` so existing installs keep their current (permissive) behavior
+# on `helm upgrade`.
+#
+# PRODUCTION DEPLOYMENTS MUST SET THIS TO `production` EXPLICITLY
+# (`--set securityProfile=production`), otherwise:
+#   - a missing bearer token does NOT fail startup — the gateway just
+#     starts open with no auth (a warning is logged, but that's easy
+#     to miss). Setting env.AGENTFLOW_API_TOKEN still enforces it under
+#     `local` too; this chart has no dedicated secret wiring for the
+#     token yet — see docs/DEPLOYMENT.md § Security profile;
+#   - CORS stays permissive instead of an explicit origin allow-list;
+#   - if you also enable a worker gRPC control plane, worker admission
+#     policy is NOT fail-closed under `local`.
+# See docs/DEPLOYMENT.md § Security profile and docs/SECURITY_PROFILES.md
+# for the full defaults table.
+securityProfile: local
+
 replicaCount: 1
 
 image:

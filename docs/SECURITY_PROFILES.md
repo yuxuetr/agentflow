@@ -55,7 +55,12 @@ The follow-up P1 tasks continue turning these defaults into enforcement:
 
 `local` is intentionally the default profile. It keeps permissive CORS,
 optional auth, optional OS sandboxing, subprocess plugins, and the existing
-tool capability surface so existing local workflows continue to run.
+tool capability surface so existing local workflows continue to run. This
+includes the Helm chart (`charts/agentflow/values.yaml`'s
+`securityProfile` defaults to `local` for the same reason, U1.2) and
+`docker-compose.yml` (`AGENTFLOW_SECURITY_PROFILE` unset) — see
+[DEPLOYMENT.md § Security profile](DEPLOYMENT.md#security-profile-u12)
+for what production deployments must set explicitly.
 
 Use `production` only when the server or daemon may be reachable by other
 users or hosts. Production mode now requires `AGENTFLOW_API_TOKEN` before the
