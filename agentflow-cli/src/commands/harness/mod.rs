@@ -66,6 +66,23 @@ pub(crate) fn parse_profile(value: &str) -> Result<HarnessProfile> {
   }
 }
 
+/// Resolve the effective `--approve` mode. Originally T1.3 (`workflow
+/// dynamic`, where an LLM-authored plan is adversarial by construction);
+/// U2.3 extended it to `harness run`/`chat`, whose `--approve` previously
+/// hardcoded `"none"` regardless of `--profile` — the same "unsupervised
+/// by default" gap T1.3 had already closed for `workflow dynamic`. An
+/// *unset* `--approve` defaults to requiring approval (`"cli"`) under
+/// `local`/`production`; `dev` keeps the historical unsupervised default
+/// (`"none"`) so local iteration stays uninterrupted. An explicitly
+/// passed `--approve` (including `--approve none`) always wins, on any
+/// profile — this only changes what happens when the flag is omitted.
+pub(crate) fn resolve_approve_default(approve: Option<String>, profile: HarnessProfile) -> String {
+  approve.unwrap_or_else(|| match profile {
+    HarnessProfile::Dev => "none".to_string(),
+    HarnessProfile::Local | HarnessProfile::Production => "cli".to_string(),
+  })
+}
+
 /// Parse `--output` flag.
 ///
 /// - `text`: colored human-readable output (default).
@@ -96,6 +113,65 @@ impl OutputFormat {
           "unsupported --output '{other}', expected text | json | stream-json | json-envelope"
         )
       }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  // ── U2.3 (originally T1.3): --approve profile-aware default ────────────
+
+  #[test]
+  fn unset_approve_requires_cli_approval_under_local_and_production() {
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Local),
+      "cli",
+      "must not run unsupervised under local by default"
+    );
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Production),
+      "cli",
+      "must not run unsupervised under production by default"
+    );
+  }
+
+  #[test]
+  fn unset_approve_stays_unsupervised_under_dev() {
+    assert_eq!(
+      resolve_approve_default(None, HarnessProfile::Dev),
+      "none",
+      "dev profile keeps the historical unsupervised default for fast local iteration"
+    );
+  }
+
+  #[test]
+  fn explicit_approve_none_overrides_the_profile_default_on_every_profile() {
+    for profile in [
+      HarnessProfile::Dev,
+      HarnessProfile::Local,
+      HarnessProfile::Production,
+    ] {
+      assert_eq!(
+        resolve_approve_default(Some("none".to_string()), profile),
+        "none",
+        "an explicit --approve none must win over the profile-aware default on {profile:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn explicit_approve_mode_always_wins_regardless_of_profile() {
+    for profile in [
+      HarnessProfile::Dev,
+      HarnessProfile::Local,
+      HarnessProfile::Production,
+    ] {
+      assert_eq!(
+        resolve_approve_default(Some("auto-deny".to_string()), profile),
+        "auto-deny"
+      );
     }
   }
 }

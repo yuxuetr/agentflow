@@ -38,7 +38,7 @@ use agentflow_core::async_node::AsyncNodeResult;
 use agentflow_core::{FlowExecutionConfig, FlowExt, FlowValue};
 use agentflow_harness::{
   ApprovalProvider, ApprovalRisk, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
-  CliApprovalProvider, HarnessError, HarnessEventSink, HarnessProfile, HookConfig, PendingToolCall,
+  CliApprovalProvider, HarnessError, HarnessEventSink, HookConfig, PendingToolCall,
   PreToolDecision, PreToolHook, SinkChain, StdoutEventSink, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
@@ -46,7 +46,7 @@ use agentflow_tools::builtin::{FileTool, HttpTool};
 use agentflow_tools::{SandboxPolicy, ToolRegistry};
 use serde_json::{Value, json};
 
-use crate::commands::harness::parse_profile;
+use crate::commands::harness::{parse_profile, resolve_approve_default};
 
 /// Run the `workflow dynamic` command.
 #[allow(clippy::too_many_arguments)]
@@ -207,20 +207,6 @@ impl PreToolHook for RequireApprovalForEveryCall {
   }
 }
 
-/// T1.3: resolve the effective `--approve` mode. An LLM-authored plan is
-/// adversarial by construction, so an *unset* `--approve` defaults to
-/// requiring approval (`"cli"`) under `local`/`production`; `dev` keeps
-/// the historical unsupervised default (`"none"`) so local iteration
-/// stays uninterrupted. An explicitly passed `--approve` (including
-/// `--approve none`) always wins, on any profile — this only changes
-/// what happens when the flag is omitted.
-fn resolve_approve_default(approve: Option<String>, profile: HarnessProfile) -> String {
-  approve.unwrap_or_else(|| match profile {
-    HarnessProfile::Dev => "none".to_string(),
-    HarnessProfile::Local | HarnessProfile::Production => "cli".to_string(),
-  })
-}
-
 /// Map the `--approve` flag to an approval provider, or `None` for "no wrapping"
 /// (tools still carry their sandbox policy; only the approval gate is skipped).
 fn approve_provider(value: &str) -> Result<Option<Arc<dyn ApprovalProvider>>> {
@@ -353,59 +339,9 @@ mod tests {
     assert!(approve_provider("bogus").is_err());
   }
 
-  // ── T1.3: --approve profile-aware default ──────────────────────────────
-
-  #[test]
-  fn unset_approve_requires_cli_approval_under_local_and_production() {
-    assert_eq!(
-      resolve_approve_default(None, HarnessProfile::Local),
-      "cli",
-      "an LLM-authored plan must not run unsupervised under local by default"
-    );
-    assert_eq!(
-      resolve_approve_default(None, HarnessProfile::Production),
-      "cli",
-      "an LLM-authored plan must not run unsupervised under production by default"
-    );
-  }
-
-  #[test]
-  fn unset_approve_stays_unsupervised_under_dev() {
-    assert_eq!(
-      resolve_approve_default(None, HarnessProfile::Dev),
-      "none",
-      "dev profile keeps the historical unsupervised default for fast local iteration"
-    );
-  }
-
-  #[test]
-  fn explicit_approve_none_overrides_the_profile_default_on_every_profile() {
-    for profile in [
-      HarnessProfile::Dev,
-      HarnessProfile::Local,
-      HarnessProfile::Production,
-    ] {
-      assert_eq!(
-        resolve_approve_default(Some("none".to_string()), profile),
-        "none",
-        "an explicit --approve none must win over the profile-aware default on {profile:?}"
-      );
-    }
-  }
-
-  #[test]
-  fn explicit_approve_mode_always_wins_regardless_of_profile() {
-    for profile in [
-      HarnessProfile::Dev,
-      HarnessProfile::Local,
-      HarnessProfile::Production,
-    ] {
-      assert_eq!(
-        resolve_approve_default(Some("auto-deny".to_string()), profile),
-        "auto-deny"
-      );
-    }
-  }
+  // `resolve_approve_default`'s own tests moved to `commands::harness`
+  // (U2.3) alongside the function itself, which now backs `harness
+  // run`/`chat` too, not just this command.
 
   fn ok_result(content: &str) -> AsyncNodeResult {
     let mut map = HashMap::new();

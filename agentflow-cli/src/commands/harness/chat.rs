@@ -30,7 +30,7 @@ use agentflow_tools::ToolRegistry;
 use tokio::sync::{mpsc, oneshot};
 
 use super::run::{ApproveMode, build_agent, parse_runtime_kind};
-use super::{parse_profile, resolve_run_dir};
+use super::{parse_profile, resolve_approve_default, resolve_run_dir};
 use crate::commands::repl::{LineReader, ReadLine};
 
 /// Per-chat configuration that does not change across REPL commands.
@@ -225,7 +225,7 @@ pub async fn execute(
   session: Option<String>,
   workspace: Option<String>,
   profile: String,
-  approve: String,
+  approve: Option<String>,
   runtime_kind: String,
   run_dir_override: Option<String>,
   context_budget: Option<usize>,
@@ -237,6 +237,9 @@ pub async fn execute(
 ) -> Result<()> {
   let profile = parse_profile(&profile)?;
   let runtime_kind = parse_runtime_kind(&runtime_kind)?;
+  // U2.3: unset --approve now defaults per-profile (mirrors T1.3's
+  // `workflow dynamic` fix) instead of always hardcoding "none".
+  let approve = resolve_approve_default(approve, profile);
   let approve_mode = ApproveMode::parse(&approve)?;
 
   if skill_dir.is_none() && model_override.is_none() {

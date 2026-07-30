@@ -19,7 +19,7 @@ use agentflow_memory::SqliteMemory;
 use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
 
-use super::{OutputFormat, parse_profile, resolve_run_dir};
+use super::{OutputFormat, parse_profile, resolve_approve_default, resolve_run_dir};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -29,7 +29,7 @@ pub async fn execute(
   session: Option<String>,
   workspace: Option<String>,
   profile: String,
-  approve: String,
+  approve: Option<String>,
   runtime_kind: String,
   output: String,
   run_dir_override: Option<String>,
@@ -45,6 +45,9 @@ pub async fn execute(
   let profile = parse_profile(&profile)?;
   let output = OutputFormat::parse(&output)?;
   let runtime_kind = parse_runtime_kind(&runtime_kind)?;
+  // U2.3: unset --approve now defaults per-profile (mirrors T1.3's
+  // `workflow dynamic` fix) instead of always hardcoding "none".
+  let approve = resolve_approve_default(approve, profile);
   let approve_mode = ApproveMode::parse(&approve)?;
 
   if skill_dir.is_none() && model_override.is_none() {

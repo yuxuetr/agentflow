@@ -79,6 +79,39 @@ fn harness_chat_accepts_approve_cli() {
     .stderr(predicate::str::contains("approve: cli"));
 }
 
+// U2.3: `--approve` previously hardcoded `"none"` regardless of
+// `--profile` — the same "unsupervised by default" gap T1.3 already
+// closed for `workflow dynamic` (see
+// `workflow_dynamic_tests.rs::local_profile_without_approve_flag_defaults_to_requiring_cli_approval`).
+// `resolve_approve_default`'s resolution logic itself is exhaustively
+// unit-tested in `commands::harness::tests`; these two prove the CLI
+// wiring reaches it (via the printed banner, which reflects the
+// resolved value, not the raw flag).
+
+#[test]
+fn harness_chat_defaults_to_cli_approval_under_local_profile_without_approve_flag() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  // Neither --approve nor --profile passed: --profile defaults to
+  // "local", which must resolve --approve to "cli".
+  cmd.args(["harness", "chat", "--model", "mock"]);
+  cmd.write_stdin("exit\n");
+  cmd
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("approve: cli"));
+}
+
+#[test]
+fn harness_chat_stays_unsupervised_under_dev_profile_without_approve_flag() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "chat", "--model", "mock", "--profile", "dev"]);
+  cmd.write_stdin("exit\n");
+  cmd
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("approve: none"));
+}
+
 #[test]
 fn harness_chat_requires_model_or_skill() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
