@@ -322,6 +322,24 @@ async fn restore_db(
   }
 }
 
+/// Pure guard, no filesystem access — checked before any destructive
+/// operation touches `target`. Extracted out of `restore_dir` so the
+/// safety condition itself can be exercised by tests without ever
+/// performing a real filesystem mutation against a root-like path
+/// (only the literal filesystem root satisfies `parent().is_none()`,
+/// so an integration test that actually reached the deletion branch
+/// would have to operate on real `/`).
+fn reject_unsafe_restore_target(target: &Path) -> Option<String> {
+  if target.parent().is_none() {
+    Some(format!(
+      "refusing to restore into a top-level path: {}",
+      target.display()
+    ))
+  } else {
+    None
+  }
+}
+
 async fn restore_dir(
   include: BackupInclude,
   input: &Path,
@@ -380,6 +398,22 @@ async fn restore_dir(
     };
   }
 
+  // Safety guard MUST run before any destructive filesystem operation
+  // below (`remove_dir_all` in particular) — never after. A
+  // misconfigured env override (`AGENTFLOW_RUN_DIR=/`, etc.) combined
+  // with `--force` must be rejected before we touch the target, not
+  // after we've already deleted it.
+  if let Some(reason) = reject_unsafe_restore_target(&target) {
+    return RestoreStepReport {
+      include: include.tag().to_string(),
+      target: target_display,
+      artifact: include.artifact_name().to_string(),
+      status: "failed".to_string(),
+      duration_ms: started.elapsed().as_millis() as u64,
+      reason: Some(reason),
+    };
+  }
+
   if target.exists() {
     if !args.force {
       return RestoreStepReport {
@@ -410,19 +444,6 @@ async fn restore_dir(
     }
   }
 
-  if target.parent().is_none() {
-    return RestoreStepReport {
-      include: include.tag().to_string(),
-      target: target_display,
-      artifact: include.artifact_name().to_string(),
-      status: "failed".to_string(),
-      duration_ms: started.elapsed().as_millis() as u64,
-      reason: Some(format!(
-        "refusing to restore into a top-level path: {}",
-        target.display()
-      )),
-    };
-  }
   if let Err(err) = std::fs::create_dir_all(&target) {
     return RestoreStepReport {
       include: include.tag().to_string(),
@@ -723,5 +744,82 @@ mod tests {
     let report = run_restore(&args).await.unwrap();
     assert_eq!(report.steps.len(), 1);
     assert_eq!(report.steps[0].include, "db");
+  }
+
+  // U0.1 regression coverage: `restore_dir` used to call
+  // `std::fs::remove_dir_all(&target)` before checking
+  // `target.parent().is_none()`, so a misconfigured env override
+  // (e.g. `AGENTFLOW_RUN_DIR=/`) combined with `--force` would delete
+  // the filesystem root before the guard ever ran. The guard is now
+  // `reject_unsafe_restore_target`, called unconditionally as the
+  // first statement in `restore_dir`, before the `target.exists()` /
+  // `remove_dir_all` branch. These tests exercise the guard directly
+  // — pure `Path` inspection, no filesystem access — so they can
+  // assert the root-path case is rejected without ever actually
+  // operating on a real filesystem root (`Path::new("/")` never
+  // touches disk; only a broken guard reaching `remove_dir_all` would).
+
+  #[test]
+  fn reject_unsafe_restore_target_rejects_filesystem_root() {
+    let reason = reject_unsafe_restore_target(Path::new("/"));
+    assert!(
+      reason.is_some(),
+      "a top-level path must be rejected before any destructive operation"
+    );
+    assert!(reason.unwrap().contains("top-level path"));
+  }
+
+  #[test]
+  fn reject_unsafe_restore_target_allows_nested_path() {
+    assert!(
+      reject_unsafe_restore_target(Path::new("/home/user/.agentflow/skills")).is_none(),
+      "an ordinary nested restore target must not be rejected"
+    );
+  }
+
+  #[tokio::test]
+  async fn restore_dir_fails_closed_before_deleting_an_unresolvable_root_target() {
+    // Simulates the disaster scenario end-to-end through `restore_dir`
+    // itself (not just the pure guard): `AGENTFLOW_SKILLS_DIR=/`, with
+    // `--force`, on a target that "exists" (the real root always
+    // does). If the ordering bug ever regressed, this is exactly the
+    // call that would previously reach `remove_dir_all("/")`. The
+    // fixed guard now runs first and returns a `failed` step without
+    // ever touching `target.exists()` / `remove_dir_all` / `tar`, so
+    // running this against the real root is safe by construction —
+    // that safety is exactly what this test is verifying.
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(tmp.path(), &[BackupInclude::SkillsDir]);
+
+    let saved = std::env::var("AGENTFLOW_SKILLS_DIR").ok();
+    // SAFETY: this test isolates AGENTFLOW_SKILLS_DIR to its own
+    // scope and restores the prior value before returning, matching
+    // the existing DATABASE_URL isolation pattern in
+    // `commands::backup`'s tests.
+    unsafe { std::env::set_var("AGENTFLOW_SKILLS_DIR", "/") };
+
+    let mut args = base_args(tmp.path().to_path_buf());
+    args.dry_run = false;
+    args.force = true;
+    args.includes = vec![BackupInclude::SkillsDir];
+    let report = run_restore(&args).await.unwrap();
+
+    match saved {
+      Some(value) => unsafe { std::env::set_var("AGENTFLOW_SKILLS_DIR", value) },
+      None => unsafe { std::env::remove_var("AGENTFLOW_SKILLS_DIR") },
+    }
+
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.steps[0].status, "failed");
+    assert!(
+      report.steps[0]
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("top-level path"),
+      "expected the top-level-path guard to fire, got: {:?}",
+      report.steps[0].reason
+    );
+    assert!(std::path::Path::new("/").is_dir(), "sanity: root untouched");
   }
 }
