@@ -118,6 +118,17 @@ impl BackupInclude {
   }
 }
 
+/// Parse a `--include` flag's raw string values into [`BackupInclude`]s.
+/// Shared by `agentflow backup` and `agentflow restore` (U3.1) — both
+/// dispatch arms used to inline this exact `map` + `ok_or_else` +
+/// `collect` in `main.rs`.
+pub fn parse_includes(raw: &[String]) -> anyhow::Result<Vec<BackupInclude>> {
+  raw
+    .iter()
+    .map(|s| BackupInclude::parse(s).ok_or_else(|| anyhow::anyhow!("unknown --include value: {s}")))
+    .collect()
+}
+
 /// Parsed CLI arguments for `agentflow backup`.
 #[derive(Debug, Clone)]
 pub struct BackupArgs {
@@ -830,6 +841,24 @@ mod tests {
       Some(BackupInclude::MarketplaceCache)
     );
     assert_eq!(BackupInclude::parse("nope"), None);
+  }
+
+  #[test]
+  fn parse_includes_accepts_empty_and_valid_values() {
+    // U3.1: `main.rs`'s Backup/Restore dispatch arms used to inline
+    // this map/collect; pin its behaviour here since neither
+    // subcommand has its own unit test for it.
+    assert_eq!(parse_includes(&[]).unwrap(), Vec::<BackupInclude>::new());
+    assert_eq!(
+      parse_includes(&["db".to_string(), "runs".to_string()]).unwrap(),
+      vec![BackupInclude::Db, BackupInclude::RunDir]
+    );
+  }
+
+  #[test]
+  fn parse_includes_rejects_an_unknown_value_naming_it_in_the_error() {
+    let err = parse_includes(&["db".to_string(), "bogus".to_string()]).unwrap_err();
+    assert!(err.to_string().contains("bogus"));
   }
 
   #[test]

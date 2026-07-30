@@ -2171,24 +2171,15 @@ async fn main() {
         tenant,
       } => match agentflow_cli::server_client::resolve_server_url(server.as_deref()) {
         Some(server_url) => {
-          // Reject local-only flags + the local-only `json` output
-          // value BEFORE any HTTP call. Both checks fold into the
-          // same `Result<()>` so the outer match sees one shape.
-          let validation: anyhow::Result<()> = (|| {
-            skill::server_ops::reject_local_only_flags(
-              model.as_deref(),
-              memory.as_deref(),
-              session.as_deref(),
-              trace,
-            )?;
-            if output == "json" {
-              anyhow::bail!(
-                "--output json is local-only; use --output json-envelope in server mode \
-                 for the canonical CliJsonEnvelope wire schema"
-              );
-            }
-            Ok(())
-          })();
+          // Reject local-only flags (including the local-only `json`
+          // output value) BEFORE any HTTP call.
+          let validation = skill::server_ops::reject_local_only_flags(
+            model.as_deref(),
+            memory.as_deref(),
+            session.as_deref(),
+            trace,
+            &output,
+          );
           match validation {
             Ok(()) => {
               skill::server_ops::run_via_server(
@@ -2329,55 +2320,35 @@ async fn main() {
       )
       .await
     }
-    Commands::Backup(args) => {
-      let parsed_includes: Result<Vec<_>, _> = args
-        .includes
-        .iter()
-        .map(|s| {
-          backup_cmd::BackupInclude::parse(s)
-            .ok_or_else(|| anyhow::anyhow!("unknown --include value: {s}"))
+    Commands::Backup(args) => match backup_cmd::parse_includes(&args.includes) {
+      Ok(includes) => {
+        backup_cmd::execute(backup_cmd::BackupArgs {
+          output: args.output,
+          database_url: args.database_url,
+          dry_run: args.dry_run,
+          force: args.force,
+          includes,
+          format: args.format,
         })
-        .collect();
-      match parsed_includes {
-        Ok(includes) => {
-          backup_cmd::execute(backup_cmd::BackupArgs {
-            output: args.output,
-            database_url: args.database_url,
-            dry_run: args.dry_run,
-            force: args.force,
-            includes,
-            format: args.format,
-          })
-          .await
-        }
-        Err(err) => Err(err),
+        .await
       }
-    }
-    Commands::Restore(args) => {
-      let parsed_includes: Result<Vec<_>, _> = args
-        .includes
-        .iter()
-        .map(|s| {
-          backup_cmd::BackupInclude::parse(s)
-            .ok_or_else(|| anyhow::anyhow!("unknown --include value: {s}"))
+      Err(err) => Err(err),
+    },
+    Commands::Restore(args) => match backup_cmd::parse_includes(&args.includes) {
+      Ok(includes) => {
+        restore_cmd::execute(restore_cmd::RestoreArgs {
+          input: args.input,
+          database_url: args.database_url,
+          dry_run: args.dry_run,
+          force: args.force,
+          includes,
+          format: args.format,
+          skip_integrity_check: args.skip_integrity_check,
         })
-        .collect();
-      match parsed_includes {
-        Ok(includes) => {
-          restore_cmd::execute(restore_cmd::RestoreArgs {
-            input: args.input,
-            database_url: args.database_url,
-            dry_run: args.dry_run,
-            force: args.force,
-            includes,
-            format: args.format,
-            skip_integrity_check: args.skip_integrity_check,
-          })
-          .await
-        }
-        Err(err) => Err(err),
+        .await
       }
-    }
+      Err(err) => Err(err),
+    },
     Commands::Eval(args) => match args.command {
       EvalCommands::Run {
         dataset_dir,

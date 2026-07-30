@@ -51,6 +51,7 @@ pub fn reject_local_only_flags(
   memory_override: Option<&str>,
   session_id: Option<&str>,
   trace: bool,
+  output: &str,
 ) -> Result<()> {
   if model_override.is_some() {
     anyhow::bail!(
@@ -76,6 +77,12 @@ pub fn reject_local_only_flags(
       "--trace is local-only (server runs persist their trace through the event log; consume it \
        via `agentflow workflow logs <run_id>` after the run completes). Drop --trace when using \
        --server."
+    );
+  }
+  if output == "json" {
+    anyhow::bail!(
+      "--output json is local-only; use --output json-envelope in server mode for the \
+       canonical CliJsonEnvelope wire schema"
     );
   }
   Ok(())
@@ -170,14 +177,15 @@ mod tests {
 
   #[test]
   fn reject_local_only_flags_accepts_no_flags() {
-    // The all-None / false path is the only one that's allowed in
-    // server mode; pin it so a regression to "always bail" surfaces.
-    reject_local_only_flags(None, None, None, false).expect("baseline must pass");
+    // The all-None / false / json-envelope path is the only one that's
+    // allowed in server mode; pin it so a regression to "always bail"
+    // surfaces.
+    reject_local_only_flags(None, None, None, false, "json-envelope").expect("baseline must pass");
   }
 
   #[test]
   fn reject_local_only_flags_rejects_model_override() {
-    let err = reject_local_only_flags(Some("gpt-4o"), None, None, false)
+    let err = reject_local_only_flags(Some("gpt-4o"), None, None, false, "text")
       .expect_err("--model must be rejected in server mode");
     let msg = err.to_string();
     assert!(msg.contains("--model is local-only"), "{msg}");
@@ -189,14 +197,14 @@ mod tests {
 
   #[test]
   fn reject_local_only_flags_rejects_memory_override() {
-    let err = reject_local_only_flags(None, Some("sqlite"), None, false)
+    let err = reject_local_only_flags(None, Some("sqlite"), None, false, "text")
       .expect_err("--memory must be rejected in server mode");
     assert!(err.to_string().contains("--memory is local-only"));
   }
 
   #[test]
   fn reject_local_only_flags_rejects_session_id() {
-    let err = reject_local_only_flags(None, None, Some("sid-xyz"), false)
+    let err = reject_local_only_flags(None, None, Some("sid-xyz"), false, "text")
       .expect_err("--session must be rejected in server mode");
     let msg = err.to_string();
     assert!(msg.contains("--session is local-only"), "{msg}");
@@ -207,12 +215,25 @@ mod tests {
 
   #[test]
   fn reject_local_only_flags_rejects_trace() {
-    let err = reject_local_only_flags(None, None, None, true)
+    let err = reject_local_only_flags(None, None, None, true, "text")
       .expect_err("--trace must be rejected in server mode");
     let msg = err.to_string();
     assert!(msg.contains("--trace is local-only"), "{msg}");
     // Operators get pointed at `workflow logs` as the consumption
     // surface for server-side traces.
     assert!(msg.contains("workflow logs"), "{msg}");
+  }
+
+  #[test]
+  fn reject_local_only_flags_rejects_output_json() {
+    // U3.1: this check used to live inline in main.rs's dispatch arm as
+    // a bail! wrapped in an ad hoc IIFE closure, alongside a call to
+    // this same function — folded in here so the whole validation is
+    // one delegated call, matching `workflow::server_ops`'s pattern.
+    let err = reject_local_only_flags(None, None, None, false, "json")
+      .expect_err("--output json must be rejected in server mode");
+    let msg = err.to_string();
+    assert!(msg.contains("--output json is local-only"), "{msg}");
+    assert!(msg.contains("json-envelope"), "{msg}");
   }
 }
