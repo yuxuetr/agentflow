@@ -836,6 +836,14 @@ enum WorkflowCommands {
     #[arg(long, value_parser = ["none", "cli", "auto-allow", "auto-deny"])]
     approve: Option<String>,
     /// Security profile driving approval escalation (dev | production).
+    /// Defaults to `dev`, which (per the `--approve` default above) runs
+    /// tool calls unsupervised. Unlike `harness run`/`chat` (default
+    /// `local`, interactive approval), invoking `workflow dynamic` with
+    /// no flags at all does NOT prompt for approval —
+    /// pass `--profile local` or `--profile production` explicitly for
+    /// CI/production use (U4.1: kept as-is intentionally, so existing
+    /// unsupervised-iteration scripts keep working; see
+    /// docs/HYBRID_WORKFLOW.md).
     #[arg(long, default_value = "dev")]
     profile: String,
     /// Print the authored plan and exit without executing any tool.

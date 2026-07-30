@@ -209,6 +209,20 @@ agent-authored plan is not a security hole:
   (`wrap_registry`): the planner and compiler share one `Arc<ToolRegistry>`, so the
   approved/audited registry is exactly the one the compiled `Flow` executes against.
 
+> **Bare invocation runs unsupervised (U4.1).** `--profile` defaults to `dev`,
+> which (per the `--approve` doc above) resolves to `--approve none` when
+> `--approve` itself is unset. That means `agentflow workflow dynamic --goal
+> ... --model ...` with no other flags executes every LLM-authored tool call
+> immediately, with no approval prompt — unlike `agentflow harness run`/`chat`,
+> which default to `--profile local` (interactive `cli` approval) since U2.3.
+> This asymmetry is intentional, not an oversight: `workflow dynamic`'s `dev`
+> default predates U2.3 and existing scripts/users rely on bare invocation
+> staying unsupervised for fast local iteration; changing it would be a
+> breaking change to that established behavior. For CI or production use,
+> **always pass `--profile local` or `--profile production` explicitly** (and
+> layer `--allow-path` / `--allow-domain` restrictively) rather than relying on
+> the bare-invocation default.
+
 ## Runnable Example
 
 Run the self-contained mock example:
