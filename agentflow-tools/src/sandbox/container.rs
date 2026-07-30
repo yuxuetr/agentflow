@@ -47,6 +47,16 @@
 //! ever needs its own ephemeral workdir; see the RFC's "ephemeral working
 //! directory" constraint).
 //!
+//! ## Read-only root filesystem (T2.3)
+//!
+//! Both engines additionally get `--read-only` (the same docker-compatible
+//! flag name on Apple's `container` CLI and Podman), so `/workspace` — the
+//! bind mount above — is the *only* writable path inside the container;
+//! everything else in the image's rootfs is read-only. Verified empirically
+//! this session: a plain `python:alpine` run needs no changes under this
+//! (stdlib bytecode ships precompiled in the image), and a write to `/etc`
+//! fails with `OSError` while a write to `/workspace` still succeeds.
+//!
 //! ## Resource limits (S3.2 fields, reused)
 //!
 //! `max_memory_bytes` → `-m`/`--memory` (MiB-rounded). `max_cpu_secs` →
@@ -243,6 +253,19 @@ impl SandboxBackend for ContainerBackend {
       .arg("-v")
       .arg(format!("{}:/workspace", canonical_workdir.display()));
     new_cmd.arg("-w").arg("/workspace");
+    // T2.3: `--read-only` mounts the container's root filesystem read-only,
+    // leaving only the `/workspace` bind mount above writable. Confirmed
+    // empirically (this session, both engines accept the identical
+    // docker-compatible flag name) that a plain `python:alpine` run still
+    // works unmodified under it — stdlib bytecode ships precompiled in the
+    // image, so nothing needs to write outside `/workspace` at runtime —
+    // and that a write to `/etc` fails with `OSError` while a write to
+    // `/workspace` still succeeds. Without this, code_exec's adversarial
+    // payload could write anywhere in the container's rootfs; `--rm` +
+    // zero network + no other bind mounts already bounded the practical
+    // impact, but this closes the gap outright rather than relying on
+    // those other layers alone.
+    new_cmd.arg("--read-only");
     // Verified empirically (this session, both engines): `--network none` is
     // a real, effective value on both CLIs even though Apple's isn't
     // documented in `run --help` — DNS/HTTP/raw sockets all confirmed

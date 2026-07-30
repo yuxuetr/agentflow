@@ -125,6 +125,51 @@ print(",".join(results))
   );
 }
 
+/// T2.3 regression: mirrors `code_exec_root_filesystem_is_read_only_outside_
+/// workspace` in `tests/code_exec_macos.rs` against Podman.
+#[tokio::test]
+async fn code_exec_root_filesystem_is_read_only_outside_workspace() {
+  let _guard = TEST_LOCK.lock().await;
+  if !container_engine_available() {
+    eprintln!("skipping: no container engine ('container' or 'podman') on PATH");
+    return;
+  }
+  if !cgroup_delegation_available() {
+    eprintln!(
+      "skipping: no writable cgroup v2 delegation available on this host — code_exec's \
+       mandatory memory limit can't be applied (same root cause as S3.2's Linux cgroup \
+       tests: no systemd / root cgroup has member processes)"
+    );
+    return;
+  }
+  let tool = CodeExecTool::new();
+  let code = r#"
+try:
+    with open("/etc/code_exec_write_probe", "w") as f:
+        f.write("x")
+    print("ROOTFS_WRITABLE")
+except OSError:
+    print("ROOTFS_READ_ONLY")
+with open("/workspace/ok.txt", "w") as f:
+    f.write("x")
+print("WORKSPACE_WRITE_OK")
+"#;
+  let result = tool
+    .execute(json!({"code": code}))
+    .await
+    .expect("tool call must complete");
+  assert!(
+    !result.is_error,
+    "expected success, got: {}",
+    result.content
+  );
+  assert_eq!(
+    result.content.trim(),
+    "ROOTFS_READ_ONLY\nWORKSPACE_WRITE_OK",
+    "expected the rootfs write to fail while the /workspace write still succeeds"
+  );
+}
+
 #[tokio::test]
 async fn code_exec_enforces_pids_limit() {
   let _guard = TEST_LOCK.lock().await;

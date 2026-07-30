@@ -101,7 +101,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use landlock::{
   ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetError,
@@ -132,6 +132,16 @@ pub struct LinuxSeccompBackend {
   /// [`Self::wrap_command`] still applies the seccomp filter but skips
   /// Landlock, and [`Self::enforcement_level`] reports `Permissive`.
   landlock_abi: Option<i32>,
+  /// T2.3: leaf cgroup directories created by [`Self::setup_cgroup_for_spawn`]
+  /// that haven't yet been confirmed removable. `wrap_command` has no
+  /// post-exit hook to run cleanup from (it only runs pre-spawn — see
+  /// [`Self::setup_cgroup_for_spawn`]'s doc comment), so instead every call
+  /// that creates a *new* leaf first sweeps this list and `rmdir`s whichever
+  /// previously-tracked leaves have since become empty (their child exited
+  /// and cgroup v2 auto-vacated `cgroup.procs`). This bounds the directory
+  /// count to roughly "leaves from calls since the last exited child" rather
+  /// than "every spawn this process has ever made".
+  tracked_leaf_cgroups: Mutex<Vec<PathBuf>>,
 }
 
 impl LinuxSeccompBackend {
@@ -139,8 +149,34 @@ impl LinuxSeccompBackend {
     Self {
       arch: detect_target_arch(),
       landlock_abi: probe_landlock_abi(),
+      tracked_leaf_cgroups: Mutex::new(Vec::new()),
     }
   }
+
+  /// Build a per-spawn leaf cgroup (see the free function
+  /// [`setup_cgroup_for_spawn`]) and track it for best-effort cleanup on a
+  /// future call — see [`Self::tracked_leaf_cgroups`]'s doc comment.
+  fn setup_cgroup_for_spawn(&self, scope: &SandboxScope) -> std::io::Result<std::ffi::CString> {
+    let (leaf, procs_cstring) = setup_cgroup_for_spawn(scope)?;
+    if let Ok(mut tracked) = self.tracked_leaf_cgroups.lock() {
+      sweep_removable_leaf_cgroups(&mut tracked);
+      tracked.push(leaf);
+    }
+    Ok(procs_cstring)
+  }
+}
+
+/// Best-effort cleanup pass over previously-tracked leaf cgroup
+/// directories: attempts `rmdir` on each and evicts whichever succeed.
+/// `rmdir` on a cgroup v2 directory only succeeds once it has no member
+/// processes — a still-populated leaf simply survives to the next sweep,
+/// no different from any other best-effort cleanup in this module. Pure
+/// filesystem operation, so unit tests exercise the retain/eviction
+/// bookkeeping directly against plain directories standing in for leaf
+/// cgroups; real per-cgroup kernel enforcement is covered separately by
+/// the hardware-gated integration tests in `tests/sandbox_linux.rs`.
+fn sweep_removable_leaf_cgroups(tracked: &mut Vec<PathBuf>) {
+  tracked.retain(|leaf| std::fs::remove_dir(leaf).is_err());
 }
 
 impl Default for LinuxSeccompBackend {
@@ -231,7 +267,7 @@ impl SandboxBackend for LinuxSeccompBackend {
     // allocation-free `open`/`write`/`close` — see
     // `migrate_self_into_cgroup`) runs inside `pre_exec`.
     let cgroup_procs_path = if scope.max_memory_bytes.is_some() || scope.max_pids.is_some() {
-      match setup_cgroup_for_spawn(scope) {
+      match self.setup_cgroup_for_spawn(scope) {
         Ok(path) => Some(path),
         Err(err) => {
           // Best-effort, same "unavailable -> degrade, don't abort"
@@ -473,20 +509,13 @@ fn enable_controllers(cgroup_dir: &Path, controllers: &[&str]) -> bool {
 
 /// Build a per-spawn leaf cgroup under [`resolve_cgroup_root`]'s directory
 /// and apply `scope`'s `max_memory_bytes` / `max_pids` to it (whichever is
-/// set — `memory.max` / `pids.max`). Returns the leaf cgroup's
-/// `cgroup.procs` path pre-converted to a `CString`, ready for the
+/// set — `memory.max` / `pids.max`). Returns the leaf cgroup's own path
+/// (T2.3: so [`LinuxSeccompBackend::setup_cgroup_for_spawn`] can track it
+/// for later best-effort `rmdir` — see that method's doc comment) alongside
+/// its `cgroup.procs` path pre-converted to a `CString`, ready for the
 /// allocation-free write [`migrate_self_into_cgroup`] does from inside
 /// `pre_exec`.
-///
-/// The leaf cgroup is intentionally never removed after the child exits —
-/// `wrap_command` only runs pre-spawn, with no post-exit hook to clean up
-/// from. Left-over empty cgroup directories accumulate over a long-running
-/// `agentflow` process; this is a resource-bookkeeping cost, not a
-/// security concern (an empty cgroup enforces nothing and is trivially
-/// prunable — `rmdir` on any empty, process-free cgroup directory always
-/// succeeds), and is a reasonable follow-up rather than something this
-/// change needs to solve.
-fn setup_cgroup_for_spawn(scope: &SandboxScope) -> std::io::Result<std::ffi::CString> {
+fn setup_cgroup_for_spawn(scope: &SandboxScope) -> std::io::Result<(PathBuf, std::ffi::CString)> {
   let root = resolve_cgroup_root().ok_or_else(|| {
     std::io::Error::other("no writable cgroup v2 delegation available for this uid")
   })?;
@@ -512,8 +541,9 @@ fn setup_cgroup_for_spawn(scope: &SandboxScope) -> std::io::Result<std::ffi::CSt
   let procs_path_str = procs_path
     .to_str()
     .ok_or_else(|| std::io::Error::other("cgroup path is not valid UTF-8"))?;
-  std::ffi::CString::new(procs_path_str)
-    .map_err(|_| std::io::Error::other("cgroup path contains a NUL byte"))
+  let procs_cstring = std::ffi::CString::new(procs_path_str)
+    .map_err(|_| std::io::Error::other("cgroup path contains a NUL byte"))?;
+  Ok((leaf, procs_cstring))
 }
 
 /// Write this process's own pid into `cgroup_procs_path` (a leaf cgroup's
@@ -1030,6 +1060,65 @@ mod tests {
     assert!(
       result.is_ok(),
       "a missing path must not fail ruleset construction: {result:?}"
+    );
+  }
+
+  // ── T2.3: leaf cgroup cleanup bookkeeping ───────────────────────────
+
+  #[test]
+  fn tracked_leaf_cgroups_do_not_accumulate_once_each_becomes_removable() {
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    let mut tracked: Vec<PathBuf> = Vec::new();
+
+    // Simulate 5 spawns whose prior leaf has already emptied out by the
+    // time the next spawn's sweep runs (the common case: short-lived
+    // children). Each iteration's sweep must reclaim the previous leaf
+    // before pushing the new one, so the tracked count never grows past 1
+    // regardless of how many spawns have happened.
+    for i in 0..5 {
+      let leaf = temp.path().join(format!("leaf-{i}"));
+      std::fs::create_dir_all(&leaf).expect("create leaf dir");
+      sweep_removable_leaf_cgroups(&mut tracked);
+      tracked.push(leaf);
+      assert_eq!(
+        tracked.len(),
+        1,
+        "tracked leaves must not accumulate once each becomes removable, iteration {i}: {tracked:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn tracked_leaf_cgroups_keep_a_still_populated_leaf_until_it_empties() {
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    let mut tracked: Vec<PathBuf> = Vec::new();
+
+    let busy_leaf = temp.path().join("busy");
+    std::fs::create_dir_all(&busy_leaf).expect("create leaf dir");
+    // Stand-in for a leaf cgroup that still has a member process: any
+    // directory entry makes `rmdir` fail, exactly like a cgroup v2
+    // directory with a non-empty `cgroup.procs`.
+    std::fs::write(busy_leaf.join("still-running-marker"), b"").expect("create marker file");
+    tracked.push(busy_leaf.clone());
+
+    sweep_removable_leaf_cgroups(&mut tracked);
+    assert_eq!(
+      tracked,
+      vec![busy_leaf.clone()],
+      "a still-populated leaf must survive a sweep, not be dropped"
+    );
+
+    // The child "exits" — the leaf empties out — and the next sweep must
+    // reclaim it.
+    std::fs::remove_file(busy_leaf.join("still-running-marker")).expect("remove marker file");
+    sweep_removable_leaf_cgroups(&mut tracked);
+    assert!(
+      tracked.is_empty(),
+      "an emptied leaf must be rmdir'd on the next sweep: {tracked:?}"
+    );
+    assert!(
+      !busy_leaf.exists(),
+      "the leaf directory itself must actually be removed from disk"
     );
   }
 }
