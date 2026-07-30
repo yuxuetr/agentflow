@@ -518,6 +518,8 @@ pub fn mock_node(
     dependencies,
     input_mapping: HashMap::new(),
     run_if: None,
+    timeout_ms: None,
+    max_retries: None,
     parameters: HashMap::from([(
       "value".to_string(),
       serde_yaml::to_value(value).unwrap_or(serde_yaml::Value::Null),

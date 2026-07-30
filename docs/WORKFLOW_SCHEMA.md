@@ -17,6 +17,13 @@ agentflow workflow validate path/to/workflow.yml --strict
 - `workflow debug --validate` 会复用同一套 schema validation，并叠加依赖和结构分析。
 - `run_if` 与 `while.parameters.condition` 使用统一表达式语言；参考
   `docs/EXPRESSION_LANGUAGE.md`。`--strict` 会编译这些表达式并报告列号。
+- `timeout_ms` / `max_retries`（T3.1）是节点级通用字段，与 `run_if` 同级、
+  不在 `parameters:` 内，对任意节点类型生效（`map`/`while` 除外，会被
+  拒绝——它们执行的是嵌套子流程而非单个节点）。重试只针对
+  网络/超时/限流类瞬时错误，非瞬时失败（校验错误、4xx 类应用层错误）不会
+  被重试。这与 `mcp` 节点自己的 `parameters.timeout_ms`/`max_retries`
+  （只控制其 MCP client 连接，见下表）是两套独立机制，字段名相同但含义
+  不同、互不影响。详见 `docs/CONFIGURATION.md` 的 Node fields 表。
 
 ## 通用规则
 
@@ -46,7 +53,7 @@ agentflow workflow validate path/to/workflow.yml --strict
 | `tts` | `model`, `voice` | `input_template` | - |
 | `map` | `template` | - | `parallel` |
 | `while` | `condition`, `max_iterations`, `do` | - | - |
-| `mcp` | `server_command`, `tool_name` | - | `tool_params`, `timeout_ms`, `max_retries` |
+| `mcp` | `server_command`, `tool_name` | - | `tool_params`, `parameters.timeout_ms`/`parameters.max_retries` (MCP-client-only, see note above) |
 | `rag` | `operation`, `collection` | - | `qdrant_url`, `embedding_model`, `query`, `documents`, `top_k`, `search_type`, `alpha`, `rerank`, `lambda`, `vector_size`, `distance` |
 
 ## 参数类型

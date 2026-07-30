@@ -211,6 +211,21 @@ fn validate_node_schema(
       .push(format!("{}.{}.run_if is invalid: {}", path, node.id, err));
   }
 
+  // T3.1: `timeout_ms` / `max_retries` wrap a single `NodeType::Standard`
+  // node (see `executor::timeout_retry`); `map` / `while` execute a
+  // nested sub-flow instead, which this wrapper doesn't (yet) support —
+  // reject rather than silently ignore, so a typo'd expectation surfaces
+  // immediately instead of quietly doing nothing.
+  if matches!(node.node_type.as_str(), "map" | "while")
+    && (node.timeout_ms.is_some() || node.max_retries.is_some())
+  {
+    report.issues.push(format!(
+      "{}.{}.timeout_ms/max_retries are not supported on '{}' nodes (they wrap a single \
+       node's execution, not a nested sub-flow)",
+      path, node.id, node.node_type
+    ));
+  }
+
   if node.node_type == "while"
     && let Some(condition) = node
       .parameters

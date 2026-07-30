@@ -139,6 +139,8 @@ Node fields:
 | `dependencies` | No | Node ids that must complete before this node runs. |
 | `input_mapping` | No | Runtime mappings from previous node outputs. |
 | `run_if` | No | Conditional expression evaluated by the workflow runtime. |
+| `timeout_ms` | No | Outer execution timeout in milliseconds, applied uniformly to any node type (T3.1). Not supported on `map`/`while` nodes (rejected at validation). Distinct from the `mcp` node's own `parameters.timeout_ms`, which only governs its MCP-client connection. |
+| `max_retries` | No | Retry count on transient (network/timeout/rate-limit-class) failures, applied uniformly to any node type (T3.1). Non-transient failures (validation errors, 4xx-style application errors) are not retried. Not supported on `map`/`while` nodes. |
 | `parameters` | No | Node-specific parameter map. |
 
 Supported mapping expressions currently use this form:
@@ -146,6 +148,25 @@ Supported mapping expressions currently use this form:
 ```yaml
 input_mapping:
   prompt: "{{ nodes.render_prompt.outputs.output }}"
+```
+
+`timeout_ms` / `max_retries` example — the two node types most prone to
+transient failures in practice:
+
+```yaml
+  - id: fetch
+    type: http
+    timeout_ms: 5000
+    max_retries: 2
+    parameters:
+      url: "https://api.example.com/data"
+
+  - id: summarize
+    type: llm
+    timeout_ms: 10000
+    max_retries: 3
+    parameters:
+      model: gpt-4o-mini
 ```
 
 See [WORKFLOW_SCHEMA.md](WORKFLOW_SCHEMA.md) for the supported node types and

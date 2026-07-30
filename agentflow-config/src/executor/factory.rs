@@ -322,6 +322,31 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     _ => Err(anyhow!("Unknown node type: {}", node_def.node_type)),
   }?;
 
+  // T3.1: generic timeout/retry wrapping — see `executor::timeout_retry`.
+  // Only `NodeType::Standard` is supported; `config::schema` already
+  // rejects `timeout_ms`/`max_retries` on `map`/`while` at validate time,
+  // this is defense in depth for a caller that builds a `Flow` without
+  // going through `validate_flow_definition` first.
+  let node_type = match node_type {
+    NodeType::Standard(inner) => {
+      NodeType::Standard(crate::executor::timeout_retry::wrap_if_configured(
+        inner,
+        node_def.timeout_ms,
+        node_def.max_retries,
+      ))
+    }
+    other @ (NodeType::Map { .. } | NodeType::While { .. }) => {
+      if node_def.timeout_ms.is_some() || node_def.max_retries.is_some() {
+        return Err(anyhow!(
+          "node '{}': timeout_ms/max_retries are not supported on '{}' nodes",
+          node_def.id,
+          node_def.node_type
+        ));
+      }
+      other
+    }
+  };
+
   let mut input_mapping = HashMap::new();
   for (k, v) in &node_def.input_mapping {
     let path = v.trim_start_matches("{{ ").trim_end_matches(" }}");

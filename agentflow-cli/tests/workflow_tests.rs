@@ -41,6 +41,70 @@ nodes:
   workflow
 }
 
+/// T3.1: generic top-level `timeout_ms` / `max_retries` on `http` and
+/// `llm` node types — siblings of `run_if`/`dependencies`, not nested
+/// inside `parameters:`. The `http` node's `url` is unreachable/fake on
+/// purpose: this fixture is only ever run with `--dry-run`, which builds
+/// the `Flow` (exercising `create_graph_node`'s new wrapping logic) but
+/// never actually executes a node.
+fn write_generic_timeout_retry_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("timeout_retry_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: CLI Generic Timeout Retry Workflow
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "Hello {{ topic }}"
+  - id: fetch
+    type: http
+    dependencies: ["render"]
+    timeout_ms: 5000
+    max_retries: 2
+    parameters:
+      url: "https://example.invalid/does-not-matter-for-dry-run"
+      method: "GET"
+  - id: summarize
+    type: llm
+    dependencies: ["fetch"]
+    timeout_ms: 10000
+    max_retries: 3
+    input_mapping:
+      prompt: "{{ nodes.render.outputs.output }}"
+    parameters:
+      model: mock-model
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
+/// T3.1: `timeout_ms`/`max_retries` wrap a single node's execution and
+/// are rejected on `while` (and `map`) node types, which execute a nested
+/// sub-flow instead — see `config::schema`'s validation for the
+/// rationale.
+fn write_while_node_with_generic_timeout_workflow(dir: &TempDir) -> std::path::PathBuf {
+  let workflow = dir.path().join("while_timeout_workflow.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: CLI While Node Rejects Generic Timeout
+nodes:
+  - id: loop
+    type: while
+    timeout_ms: 5000
+    parameters:
+      condition: "false"
+      max_iterations: 1
+      do: []
+"#,
+  )
+  .unwrap();
+  workflow
+}
+
 fn fixed_dag_multibranch_fixture() -> std::path::PathBuf {
   std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("examples/workflows/fixed_dag_multibranch.yml")
@@ -264,6 +328,40 @@ fn cli_workflow_run_dry_run_shows_execution_order_without_running_nodes() {
     .stdout(predicate::str::contains("Dry run complete"))
     .stdout(predicate::str::contains("1. render"))
     .stdout(predicate::str::contains("Final State Pool").not());
+}
+
+#[test]
+fn cli_workflow_run_dry_run_accepts_generic_timeout_ms_and_max_retries_on_http_and_llm_nodes() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_generic_timeout_retry_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap(), "--dry-run"])
+    .env("HOME", home.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Dry run complete"))
+    .stdout(predicate::str::contains("fetch"))
+    .stdout(predicate::str::contains("summarize"));
+}
+
+#[test]
+fn cli_workflow_validate_rejects_generic_timeout_ms_on_while_node() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_while_node_with_generic_timeout_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains(
+      "timeout_ms/max_retries are not supported on 'while' nodes",
+    ));
 }
 
 #[test]
