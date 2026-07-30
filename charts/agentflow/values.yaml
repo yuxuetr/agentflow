@@ -45,7 +45,21 @@ secretEnv:
 
 existingSecret: ""
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# HPA is opt-in (enabled: false) to preserve the prior single-replica
+# behavior for existing installs; enabling it ignores replicaCount.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
 
 livenessProbe:
   path: /health/live

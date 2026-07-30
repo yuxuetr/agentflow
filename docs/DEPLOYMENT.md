@@ -67,6 +67,37 @@ helm install agentflow charts/agentflow \
 
 Prefer `existingSecret` in shared environments so credentials do not live in Helm release values.
 
+### Resource requests/limits and autoscaling (T4.3)
+
+`values.yaml` ships default CPU/memory requests and limits on the
+`agentflow-server` container (`resources.requests` = 100m CPU / 128Mi
+memory, `resources.limits` = 500m CPU / 512Mi memory); override with
+`--set resources.requests.cpu=...` or a values override file for
+production sizing.
+
+A `HorizontalPodAutoscaler` template is available but disabled by
+default (`autoscaling.enabled: false`) to keep the prior single-replica
+behavior for existing installs unchanged. Enable it to scale on CPU
+(and optionally memory) utilization:
+
+```bash
+helm install agentflow charts/agentflow \
+  --set image.repository=agentflow \
+  --set image.tag=server \
+  --set existingSecret=agentflow-db \
+  --set autoscaling.enabled=true \
+  --set autoscaling.minReplicas=2 \
+  --set autoscaling.maxReplicas=5 \
+  --set autoscaling.targetCPUUtilizationPercentage=80
+```
+
+When `autoscaling.enabled` is `true`, the Deployment's `spec.replicas`
+field is omitted so the HPA is free to manage replica count without the
+chart fighting it back to `replicaCount` on every `helm upgrade`.
+`autoscaling.targetMemoryUtilizationPercentage` is unset by default; set
+it (e.g. `--set autoscaling.targetMemoryUtilizationPercentage=80`) to add
+a memory-based scaling metric alongside CPU.
+
 ## Health Checks
 
 `agentflow-server` exposes:
