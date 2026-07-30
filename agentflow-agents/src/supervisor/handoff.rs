@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput};
+use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput};
 
 use crate::react::ReActAgent;
 use crate::runtime::{
@@ -445,7 +445,7 @@ fn stopped(
 /// caller must register into the agent's [`ToolRegistry`] so the LLM can hand
 /// off; the supervisor uses the same tool instance across all agents.
 ///
-/// [`ToolRegistry`]: agentflow_tools::ToolRegistry
+/// [`ToolRegistry`]: agentflow_tool::ToolRegistry
 pub struct HandoffSupervisorBuilder {
   pending: Vec<HandoffAgentSpec>,
   initial_agent: Option<String>,
@@ -570,7 +570,7 @@ mod tests {
 
   use agentflow_llm::AgentFlow;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::ToolRegistry;
+  use agentflow_tool::ToolRegistry;
   use serde_json::json;
 
   use crate::react::{ReActAgent, ReActConfig};

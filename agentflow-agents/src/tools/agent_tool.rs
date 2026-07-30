@@ -8,13 +8,13 @@
 //!
 //! # Usage
 //! Register `AgentTool` in a parent agent's
-//! [`ToolRegistry`](agentflow_tools::ToolRegistry) just like any other tool.
+//! [`ToolRegistry`](agentflow_tool::ToolRegistry) just like any other tool.
 //! The parent LLM will call it by name with a `message` argument, and the
 //! sub-agent's final answer is returned as the tool output.
 
 use std::sync::Arc;
 
-use agentflow_tools::{Tool, ToolError, ToolOutput};
+use agentflow_tool::{Tool, ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -29,7 +29,8 @@ use crate::react::agent::ReActAgent;
 /// use agentflow_agents::tools::AgentTool;
 /// use agentflow_agents::react::{ReActAgent, ReActConfig};
 /// use agentflow_memory::SessionMemory;
-/// use agentflow_tools::{ToolRegistry, SandboxPolicy};
+/// use agentflow_tool::ToolRegistry;
+/// use agentflow_tools::sandbox::SandboxPolicy;
 /// use std::sync::Arc;
 ///
 /// let sub = ReActAgent::new(
@@ -131,7 +132,7 @@ impl Tool for AgentTool {
 mod tests {
   use super::*;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::ToolRegistry;
+  use agentflow_tool::ToolRegistry;
 
   use crate::react::{ReActAgent, ReActConfig};
 

@@ -104,7 +104,7 @@ use std::process::Stdio as StdStdio;
 
 use tokio::process::Command;
 
-use crate::capability::Capability;
+use crate::Capability;
 
 use super::{SandboxBackend, SandboxError, SandboxScope};
 

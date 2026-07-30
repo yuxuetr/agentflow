@@ -39,9 +39,14 @@ pub mod linux;
 pub mod macos;
 pub mod noop;
 
-pub use backend::{
-  SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope, SandboxStatus, default_backend,
+// T3.3: the trait + DTOs live in `agentflow-tool`; re-exported here
+// unchanged so `agentflow_tools::sandbox::SandboxBackend` etc. still
+// resolve. `default_backend()` is the one piece of `backend.rs` that
+// stayed in this crate (it names concrete backend types).
+pub use agentflow_tool::sandbox::{
+  SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope, SandboxStatus,
 };
+pub use backend::default_backend;
 pub use container::{ContainerBackend, code_exec_backend};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxSeccompBackend;

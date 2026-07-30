@@ -514,7 +514,7 @@ mod tests {
 
   use agentflow_llm::AgentFlow;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::ToolRegistry;
+  use agentflow_tool::ToolRegistry;
 
   use crate::react::{ReActAgent, ReActConfig};
 

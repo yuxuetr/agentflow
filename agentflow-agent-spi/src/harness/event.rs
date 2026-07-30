@@ -268,7 +268,7 @@ impl HarnessEvent {
 mod tests {
   use super::*;
   use crate::{ApprovalOutcome, ApprovalRisk, ApprovalScope};
-  use agentflow_tools::{ToolIdempotency, ToolPermission, ToolSource};
+  use agentflow_tool::{ToolIdempotency, ToolPermission, ToolSource};
   use chrono::TimeZone;
 
   fn ts() -> DateTime<Utc> {

@@ -156,7 +156,7 @@ contract crates everyone depends on and that depend on no implementation.
 |   value (FlowValue) · graph (Flow IR / AsyncNode)        |
 |   store-spi (MemoryStore + KnowledgeBackend)             |
 |   agent-spi (AgentRuntime + Capability)                  |
-|   async-util (retry/timeout/race) · tools (Tool contract)|
+|   async-util (retry/timeout/race) · tool (Tool contract) |
 +----------------------------------------------------------+
 ```
 

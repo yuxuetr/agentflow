@@ -15,6 +15,7 @@ members = [
   "agentflow-rag",
   "agentflow-agents",
   "agentflow-tracing",
+  "agentflow-tool",
   "agentflow-tools",
   "agentflow-memory",
   "agentflow-skills",

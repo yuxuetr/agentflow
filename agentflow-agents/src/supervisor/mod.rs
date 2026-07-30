@@ -6,7 +6,7 @@
 //! use agentflow_agents::supervisor::SupervisorBuilder;
 //! use agentflow_agents::react::{ReActAgent, ReActConfig};
 //! use agentflow_memory::SessionMemory;
-//! use agentflow_tools::ToolRegistry;
+//! use agentflow_tool::ToolRegistry;
 //! use std::sync::Arc;
 //!
 //! let sub = ReActAgent::new(
@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use agentflow_memory::SessionMemory;
-use agentflow_tools::ToolRegistry;
+use agentflow_tool::ToolRegistry;
 
 use crate::react::{ReActAgent, ReActConfig};
 use crate::tools::AgentTool;
@@ -177,7 +177,7 @@ impl SupervisorBuilder {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_tools::ToolRegistry;
+  use agentflow_tool::ToolRegistry;
 
   fn make_sub_agent() -> ReActAgent {
     ReActAgent::new(

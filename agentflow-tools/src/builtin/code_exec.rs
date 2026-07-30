@@ -34,9 +34,8 @@ use std::path::Path;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::error::ToolError;
 use crate::sandbox::{SandboxBackend, SandboxScope, SandboxStatus, code_exec_backend};
-use crate::tool::{Tool, ToolIdempotency, ToolMetadata, ToolOutput};
+use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 
 /// Resident memory cap. Must stay at or above
 /// [`crate::sandbox::container`]'s empirically-verified 200 MiB VM floor
@@ -413,7 +412,7 @@ mod tests {
     assert!(
       metadata
         .permissions
-        .allows(&crate::tool::ToolPermission::ProcessExec)
+        .allows(&crate::ToolPermission::ProcessExec)
     );
   }
 }

@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use agentflow_agents::agentflow_memory::SessionMemory;
-use agentflow_agents::agentflow_tools::{Tool, ToolError, ToolOutput, ToolRegistry};
+use agentflow_agents::agentflow_tool::{Tool, ToolError, ToolOutput, ToolRegistry};
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::{AgentContext, AgentFlow, AgentStepKind, FinalReflection};
 use async_trait::async_trait;

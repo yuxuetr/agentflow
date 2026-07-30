@@ -8,7 +8,7 @@ use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
 use agentflow_memory::{MemoryStore, Message};
-use agentflow_tools::{ToolMetadata, ToolRegistry};
+use agentflow_tool::{ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -712,7 +712,7 @@ impl PlanExecuteAgent {
         }
         Err(err) => {
           warn!(tool = %tool, error = %err, "PlanExecute tool execution failed");
-          agentflow_tools::ToolOutput::error(err.to_string())
+          agentflow_tool::ToolOutput::error(err.to_string())
         }
       };
       let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -869,7 +869,7 @@ impl PlanExecuteAgent {
     run_started_at: Instant,
     timeout_ms: Option<u64>,
     cancellation_token: Option<AgentCancellationToken>,
-  ) -> Result<agentflow_tools::ToolOutput, PlanExecuteError> {
+  ) -> Result<agentflow_tool::ToolOutput, PlanExecuteError> {
     let tool_call = self.tools.execute(tool, params);
     match (
       remaining_timeout(run_started_at, timeout_ms),
@@ -878,7 +878,7 @@ impl PlanExecuteAgent {
       (Some(remaining), Some(token)) => {
         tokio::select! {
           result = tokio::time::timeout(remaining, tool_call) => match result {
-            Ok(result) => Ok(result.unwrap_or_else(|err| agentflow_tools::ToolOutput::error(err.to_string()))),
+            Ok(result) => Ok(result.unwrap_or_else(|err| agentflow_tool::ToolOutput::error(err.to_string()))),
             Err(_) => Err(PlanExecuteError::Timeout {
               timeout_ms: timeout_ms.unwrap_or_default(),
             }),
@@ -890,7 +890,7 @@ impl PlanExecuteAgent {
       }
       (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
         Ok(result) => {
-          Ok(result.unwrap_or_else(|err| agentflow_tools::ToolOutput::error(err.to_string())))
+          Ok(result.unwrap_or_else(|err| agentflow_tool::ToolOutput::error(err.to_string())))
         }
         Err(_) => Err(PlanExecuteError::Timeout {
           timeout_ms: timeout_ms.unwrap_or_default(),
@@ -898,7 +898,7 @@ impl PlanExecuteAgent {
       },
       (None, Some(token)) => {
         tokio::select! {
-          result = tool_call => Ok(result.unwrap_or_else(|err| agentflow_tools::ToolOutput::error(err.to_string()))),
+          result = tool_call => Ok(result.unwrap_or_else(|err| agentflow_tool::ToolOutput::error(err.to_string()))),
           _ = token.cancelled() => Err(PlanExecuteError::Cancelled {
             reason: "cancellation token signalled".to_string(),
           }),
@@ -907,7 +907,7 @@ impl PlanExecuteAgent {
       (None, None) => Ok(
         tool_call
           .await
-          .unwrap_or_else(|err| agentflow_tools::ToolOutput::error(err.to_string())),
+          .unwrap_or_else(|err| agentflow_tool::ToolOutput::error(err.to_string())),
       ),
     }
   }
@@ -1127,7 +1127,7 @@ mod tests {
   use super::*;
   use crate::runtime::RuntimeLimits;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::{Tool, ToolError, ToolOutput};
+  use agentflow_tool::{Tool, ToolError, ToolOutput};
   use serde_json::json;
 
   struct EchoTool;

@@ -20,7 +20,11 @@ agentflow-value = { path = "../agentflow-value", version = "0.1" }
 agentflow-async-util = { path = "../agentflow-async-util", version = "0.1" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-mcp = { path = "../agentflow-mcp", version = "0.2" }
-agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+# T3.3: contract-only usage (Tool/ToolError/ToolOutput/ToolMetadata/
+# ToolIdempotency/ToolRegistry) — depends on the contract crate directly,
+# not the builtin-impl one. Concrete tools (`ShellTool`/`SandboxPolicy`)
+# are examples-only and pull in `agentflow-tools` as a dev-dependency below.
+agentflow-tool = { path = "../agentflow-tool", version = "0.1" }
 agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 
@@ -42,6 +46,9 @@ toml = "0.8"
 [dev-dependencies]
 # Execution-side tests build real Flows + run them via `CoreFlowRunner`.
 agentflow-core = { path = "../agentflow-core", version = "0.2" }
+# T3.3: examples only (`react_agent.rs`'s `SandboxPolicy`, `agent_tool.rs`'s
+# doc comment) — production code never needs a concrete tool.
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 tokio-test = "0.4"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

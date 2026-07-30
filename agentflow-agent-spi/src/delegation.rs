@@ -9,7 +9,7 @@
 //!
 //! [`DelegationSpec`] makes the contract structured and machine-checkable:
 //! a goal + context, an optional tool/capability narrowing (enforced via
-//! [`agentflow_tools::ToolRegistry::narrowed`], which reuses the *existing*
+//! [`agentflow_tool::ToolRegistry::narrowed`], which reuses the *existing*
 //! `EffectiveCapabilities::resolve` intersection a Skill's own
 //! `security.tool_permission_allowlist` already goes through — no new
 //! merge algorithm), an optional expected output JSON Schema
@@ -42,11 +42,11 @@ pub struct DelegationSpec {
   /// OS-level capabilities (`FsRead`/`FsWrite`/`Net`/`Exec`/`Env`) the
   /// subagent's tools may exercise. `None` inherits the parent's grant
   /// unrestricted. Enforced through
-  /// [`agentflow_tools::capability::EffectiveCapabilities::resolve`]'s
+  /// [`agentflow_tool::capability::EffectiveCapabilities::resolve`]'s
   /// existing `SkillSecurity` layer via
-  /// [`agentflow_tools::ToolRegistry::narrowed`].
+  /// [`agentflow_tool::ToolRegistry::narrowed`].
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub allowed_capabilities: Option<Vec<agentflow_tools::Capability>>,
+  pub allowed_capabilities: Option<Vec<agentflow_tool::Capability>>,
   /// JSON Schema the subagent's final answer must validate against once
   /// parsed as JSON. `None` (the default) skips validation entirely —
   /// see [`validate_output`].
@@ -88,7 +88,7 @@ impl DelegationSpec {
 
   pub fn with_allowed_capabilities(
     mut self,
-    capabilities: impl IntoIterator<Item = agentflow_tools::Capability>,
+    capabilities: impl IntoIterator<Item = agentflow_tool::Capability>,
   ) -> Self {
     self.allowed_capabilities = Some(capabilities.into_iter().collect());
     self
@@ -116,11 +116,11 @@ impl DelegationSpec {
 
   /// Narrow `parent` per this spec's `allowed_tools` / `allowed_capabilities`
   /// — a thin, self-documenting wrapper over
-  /// [`agentflow_tools::ToolRegistry::narrowed`].
+  /// [`agentflow_tool::ToolRegistry::narrowed`].
   pub fn narrow_registry(
     &self,
-    parent: &agentflow_tools::ToolRegistry,
-  ) -> agentflow_tools::ToolRegistry {
+    parent: &agentflow_tool::ToolRegistry,
+  ) -> agentflow_tool::ToolRegistry {
     parent.narrowed(
       self.allowed_tools.as_deref(),
       self.allowed_capabilities.clone(),
@@ -185,7 +185,7 @@ pub fn validate_output(spec: &DelegationSpec, answer: &str) -> SchemaValidation 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_tools::Capability;
+  use agentflow_tool::Capability;
   use serde_json::json;
 
   #[test]
@@ -225,7 +225,7 @@ mod tests {
 
   #[test]
   fn narrow_registry_delegates_to_tool_registry_narrowed() {
-    let parent = agentflow_tools::ToolRegistry::new();
+    let parent = agentflow_tool::ToolRegistry::new();
     let spec = DelegationSpec::new("goal").with_allowed_tools(["http"]);
     let narrowed = spec.narrow_registry(&parent);
     assert!(narrowed.list().is_empty(), "parent had no tools to keep");

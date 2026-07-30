@@ -39,7 +39,7 @@ use std::path::PathBuf;
 
 use tokio::process::Command;
 
-use crate::capability::Capability;
+use crate::Capability;
 
 use super::{SandboxBackend, SandboxEnforcement, SandboxError, SandboxScope};
 

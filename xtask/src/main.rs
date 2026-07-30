@@ -3820,8 +3820,10 @@ mod refresh_live_models_tests {
 //     on another surface binary crate. Surfaces = { cli, server, worker }.
 //   - kernel-isolation (RFC §7 Law 1, R1.2 2026-07-28): an L0 contract-kernel
 //     crate must not depend on anything outside the kernel set. Kernel today
-//     = { value, graph, store-spi, agent-spi, async-util, tools } — the crate
-//     list CLAUDE.md's "L0 Contract Kernel" section names. Added after an
+//     = { value, graph, store-spi, agent-spi, async-util, tool } — the crate
+//     list CLAUDE.md's "L0 Contract Kernel" section names (`tool`, not
+//     `tools`, since T3.3 2026-07-30 split the `Tool` contract out of the
+//     builtin-impl-carrying `agentflow-tools`). Added after an
 //     independent audit found `agentflow-agent-spi` depending directly on
 //     `agentflow-llm` (an L2 impl crate) for over a month with neither the
 //     allowlist nor the latent-edge map ever noticing, because until R1.2 no
@@ -3854,13 +3856,22 @@ const ARCH_SURFACE_CRATES: &[&str] = &["agentflow-cli", "agentflow-server", "age
 /// L0 contract-kernel crates (RFC §4, CLAUDE.md "L0 Contract Kernel"). A
 /// kernel crate may depend on other kernel crates (that's the narrow waist
 /// working as intended) but never on an L2/L3/L4 crate.
+///
+/// T3.3 (2026-07-30, `docs/RFC_TOOL_CONTRACT_SPLIT.md`): `agentflow-tools`
+/// replaced by `agentflow-tool` — the former bundled five concrete builtin
+/// tools + four OS-sandbox backends, which is exactly the impl-tier code a
+/// kernel crate must never hold (RFC §7 Law 1). The `Tool` contract itself
+/// (trait, `ToolRegistry`, `ToolMetadata`, `Capability`, `ToolPolicy`,
+/// `SecurityProfile`, the `SandboxBackend` trait + DTOs) now lives in the
+/// dependency-free `agentflow-tool`; `agentflow-tools` (the builtin impls)
+/// dropped out of the kernel set and re-exports the contract crate in full.
 const ARCH_KERNEL_CRATES: &[&str] = &[
   "agentflow-value",
   "agentflow-graph",
   "agentflow-store-spi",
   "agentflow-agent-spi",
   "agentflow-async-util",
-  "agentflow-tools",
+  "agentflow-tool",
 ];
 
 const LAW_RUNTIME_ISOLATION: &str = "runtime-isolation (RFC §7 Law 4/6)";
@@ -3934,14 +3945,12 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.2 — depend on store-spi MemoryStore, not the impl",
   },
-  ArchLatent {
-    from: "agentflow-agents",
-    to: "agentflow-tools",
-    becomes: "law 4 runtime→impl",
-    burndown: "P-A1.1 — depend on the tool contract; builtins injected",
-  },
+  // T3.3 (2026-07-30): `agents -> tools` PAID DOWN — `agentflow-tools`
+  // split into `agentflow-tool` (contract) + `agentflow-tools` (builtin
+  // impl), and `agentflow-agents` now depends on the contract crate only
+  // (`docs/RFC_TOOL_CONTRACT_SPLIT.md`).
   // Row 6 — `harness` carries 5 impl edges; only `harness→agents` is in the
-  // allowlist. These four remain after P-A2.1 repoints harness→agent-spi.
+  // allowlist. These three remain after P-A2.1 repoints harness→agent-spi.
   ArchLatent {
     from: "agentflow-harness",
     to: "agentflow-llm",
@@ -3954,12 +3963,9 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.2 — depend on store-spi MemoryStore",
   },
-  ArchLatent {
-    from: "agentflow-harness",
-    to: "agentflow-tools",
-    becomes: "law 4 runtime→impl",
-    burndown: "P-A2.1 — depend on the tool contract; builtins injected",
-  },
+  // T3.3 (2026-07-30): `harness -> tools` PAID DOWN alongside `agents ->
+  // tools` above — `agentflow-harness` now depends on the `agentflow-tool`
+  // contract crate only.
   ArchLatent {
     from: "agentflow-harness",
     to: "agentflow-tracing",
@@ -4498,6 +4504,37 @@ mod arch_tests {
         "{} -> {} is in BOTH ARCH_LATENT_EDGES and ARCH_ALLOWLIST",
         l.from,
         l.to
+      );
+    }
+  }
+
+  /// T3.3 regression (`docs/RFC_TOOL_CONTRACT_SPLIT.md`): `agentflow-tools`
+  /// bundled concrete builtin tools + OS-sandbox backends, which is exactly
+  /// the impl-tier code a kernel crate must never hold — it was replaced by
+  /// the dependency-free `agentflow-tool` contract crate in the kernel set,
+  /// and `agentflow-agents` / `agentflow-harness` now depend on that
+  /// contract crate directly instead of the builtin-impl one, resolving
+  /// both `law 4 runtime→impl` latent edges this test locks in as gone.
+  #[test]
+  fn tool_contract_split_removed_the_tools_kernel_membership_and_latent_edges() {
+    assert!(
+      ARCH_KERNEL_CRATES.contains(&"agentflow-tool"),
+      "agentflow-tool must be the kernel-tier contract crate"
+    );
+    assert!(
+      !ARCH_KERNEL_CRATES.contains(&"agentflow-tools"),
+      "agentflow-tools (builtin impls) must not be in the kernel set"
+    );
+    for (from, to) in [
+      ("agentflow-agents", "agentflow-tools"),
+      ("agentflow-harness", "agentflow-tools"),
+    ] {
+      assert!(
+        !ARCH_LATENT_EDGES
+          .iter()
+          .any(|l| l.from == from && l.to == to),
+        "{from} -> {to} should have been paid down by the T3.3 split, not \
+         merely reclassified"
       );
     }
   }

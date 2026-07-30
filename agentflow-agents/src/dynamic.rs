@@ -21,7 +21,7 @@ use agentflow_graph::flow::{Flow, GraphNode, NodeType};
 use agentflow_graph::{AgentFlowError, FlowRunner, FlowValue};
 use agentflow_llm::{AgentFlow, MultimodalMessage};
 use agentflow_memory::SessionMemory;
-use agentflow_tools::ToolRegistry;
+use agentflow_tool::ToolRegistry;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -590,7 +590,7 @@ pub struct DynamicWorkflowRunOutcome {
 mod tests {
   use super::*;
   use agentflow_core::CoreFlowRunner;
-  use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput};
+  use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput};
   use serde_json::json;
 
   /// Echoes its received params back as JSON `content` — lets a test trace

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentflow_graph::{Flow, FlowRunner, FlowValue, async_node::AsyncNodeInputs};
-use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
+use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput, ToolOutputPart};
 use async_trait::async_trait;
 use serde_json::Value;
 

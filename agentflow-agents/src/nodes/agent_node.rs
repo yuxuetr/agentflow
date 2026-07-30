@@ -24,7 +24,7 @@ use agentflow_graph::{
   error::AgentFlowError,
   value::FlowValue,
 };
-use agentflow_tools::{ToolIdempotency, ToolRegistry};
+use agentflow_tool::{ToolIdempotency, ToolRegistry};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -125,8 +125,8 @@ impl AgentNodeResumeContract {
   /// to `External` (i.e. `ManualRequired` on partial-resume) when no
   /// hint is present. Prefer [`Self::from_result_with_tools`] when the
   /// caller has a [`ToolRegistry`] available — tools that declared
-  /// `ToolIdempotency::Idempotent` via [`agentflow_tools::Tool::idempotency`]
-  /// or [`agentflow_tools::ToolMetadata::with_idempotency`] will then be
+  /// `ToolIdempotency::Idempotent` via [`agentflow_tool::Tool::idempotency`]
+  /// or [`agentflow_tool::ToolMetadata::with_idempotency`] will then be
   /// recognized as replay-safe without requiring an inline hint.
   pub fn from_result(
     node_name: impl Into<String>,
@@ -199,7 +199,7 @@ impl AgentNodeResumeContract {
 /// use agentflow_agents::nodes::AgentNode;
 /// use agentflow_agents::react::{ReActAgent, ReActConfig};
 /// use agentflow_memory::SessionMemory;
-/// use agentflow_tools::ToolRegistry;
+/// use agentflow_tool::ToolRegistry;
 /// use std::sync::Arc;
 ///
 /// let agent = ReActAgent::new(
@@ -495,7 +495,7 @@ mod tests {
   use super::*;
   use agentflow_core::value::FlowValue;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::ToolRegistry;
+  use agentflow_tool::ToolRegistry;
   use serde_json::json;
 
   use crate::react::{ReActAgent, ReActConfig};

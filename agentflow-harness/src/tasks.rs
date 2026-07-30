@@ -2,7 +2,7 @@
 //!
 //! Lets a Harness session spawn child agents in the background, query
 //! their status, capture their output, and cancel them — all through
-//! standard [`agentflow_tools::Tool`] implementations the agent calls
+//! standard [`agentflow_tool::Tool`] implementations the agent calls
 //! like any other tool.
 //!
 //! Design choices for v1:
@@ -40,7 +40,7 @@ use tokio::sync::Mutex;
 use agentflow_agent_spi::runtime::{
   AgentCancellationToken, AgentContext, AgentRuntime, AgentStopReason,
 };
-use agentflow_tools::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
+use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
 
 use crate::error::HarnessError;
 use crate::event::{BackgroundTaskStatus, BackgroundTaskUpdatedPayload, HarnessEventBody};
@@ -554,7 +554,7 @@ impl Tool for TaskCreateTool {
     ToolMetadata {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::default(),
-      idempotency: agentflow_tools::ToolIdempotency::NonIdempotent,
+      idempotency: agentflow_tool::ToolIdempotency::NonIdempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -631,7 +631,7 @@ impl Tool for TaskGetTool {
     ToolMetadata {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::default(),
-      idempotency: agentflow_tools::ToolIdempotency::Idempotent,
+      idempotency: agentflow_tool::ToolIdempotency::Idempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -680,7 +680,7 @@ impl Tool for TaskListTool {
     ToolMetadata {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::default(),
-      idempotency: agentflow_tools::ToolIdempotency::Idempotent,
+      idempotency: agentflow_tool::ToolIdempotency::Idempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -737,7 +737,7 @@ impl Tool for TaskStopTool {
     ToolMetadata {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::default(),
-      idempotency: agentflow_tools::ToolIdempotency::NonIdempotent,
+      idempotency: agentflow_tool::ToolIdempotency::NonIdempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }
@@ -790,7 +790,7 @@ impl Tool for TaskOutputTool {
     ToolMetadata {
       source: ToolSource::Builtin,
       permissions: ToolPermissionSet::default(),
-      idempotency: agentflow_tools::ToolIdempotency::Idempotent,
+      idempotency: agentflow_tool::ToolIdempotency::Idempotent,
       mcp_server_name: None,
       mcp_tool_name: None,
     }

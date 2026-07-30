@@ -84,7 +84,7 @@ name = "agentflow-agent-spi"
 version = "0.1.0"
 dependencies = [
  "agentflow-store-spi",
- "agentflow-tools",
+ "agentflow-tool",
  "agentflow-value",
  "async-trait",
  "chrono",
@@ -106,6 +106,7 @@ dependencies = [
  "agentflow-llm",
  "agentflow-mcp",
  "agentflow-memory",
+ "agentflow-tool",
  "agentflow-tools",
  "agentflow-value",
  "anyhow",
@@ -294,6 +295,7 @@ dependencies = [
  "agentflow-graph",
  "agentflow-llm",
  "agentflow-memory",
+ "agentflow-tool",
  "agentflow-tools",
  "agentflow-tracing",
  "async-trait",
@@ -555,9 +557,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentflow-tool"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "agentflow-tools"
 version = "0.1.0"
 dependencies = [
+ "agentflow-tool",
  "async-trait",
  "jsonschema",
  "landlock",

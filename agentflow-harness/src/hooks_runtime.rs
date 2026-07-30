@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::Mutex;
 
-use agentflow_tools::{
+use agentflow_tool::{
   Capability, SandboxStatus, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput,
   ToolRegistry,
 };
@@ -214,7 +214,7 @@ impl HookConfig {
 /// Wrap every tool already registered in `registry` with a
 /// [`HookedTool`] that runs the configured hooks + approval flow on
 /// every call. Returns the same registry (mutated in-place) so the
-/// caller can keep using the existing [`agentflow_tools::ToolPolicy`] +
+/// caller can keep using the existing [`agentflow_tool::ToolPolicy`] +
 /// capability state.
 pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegistry {
   let shared_config = Arc::new(SharedHookConfig {
@@ -740,7 +740,7 @@ mod tests {
   use super::*;
   use crate::approval_providers::{AutoAllowApprovalProvider, AutoDenyApprovalProvider};
   use crate::persistence::{HarnessEventSink, InMemoryEventSink};
-  use agentflow_tools::{ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
+  use agentflow_tool::{ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
 
   // ── Test fixtures ────────────────────────────────────────────────
 

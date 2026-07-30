@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::Notify;
 
 use agentflow_store_spi::Message;
-use agentflow_tools::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOutputPart};
+use agentflow_tool::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOutputPart};
 
 /// Runtime limits shared by agent-native execution loops.
 ///
@@ -295,7 +295,7 @@ impl AgentContext {
 ///   running on `spawn_blocking` worker threads, FFI calls in flight, or
 ///   `std::process::Child` without `kill_on_drop`. Tool authors who fan out
 ///   detached work must wire their own cancellation signal — see
-///   [`crate::AgentRuntime`] and `agentflow_tools::Tool::execute` rustdoc for
+///   [`crate::AgentRuntime`] and `agentflow_tool::Tool::execute` rustdoc for
 ///   the contract.
 ///
 /// The trade-off is intentional: a per-call `cancel()` hook on every
@@ -857,7 +857,7 @@ pub trait AgentMemoryHook: Send + Sync {
 /// work the tool has detached via `tokio::spawn` /
 /// `tokio::task::spawn_blocking` / FFI / `std::process::Child` will continue
 /// running past cancellation. See [`AgentCancellationToken`] and
-/// `agentflow_tools::Tool::execute` rustdoc for the full contract, and the
+/// `agentflow_tool::Tool::execute` rustdoc for the full contract, and the
 /// `tool_future_drop_runs_when_token_is_cancelled` /
 /// `detached_spawn_survives_cancellation_for_documentation` tests in this
 /// module for executable pins (Q3.12.1).
@@ -1160,7 +1160,7 @@ mod tests {
 
   #[test]
   fn tool_capability_decision_event_round_trips_through_serde() {
-    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+    let effective = agentflow_tool::EffectiveCapabilities::resolve(
       "shell",
       &[Capability::Exec],
       Some(&[Capability::Exec]),
@@ -1200,9 +1200,9 @@ mod tests {
 
   #[test]
   fn tool_capability_decision_includes_sandbox_when_present() {
-    use agentflow_tools::{SandboxEnforcement, SandboxStatus};
+    use agentflow_tool::{SandboxEnforcement, SandboxStatus};
 
-    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+    let effective = agentflow_tool::EffectiveCapabilities::resolve(
       "shell",
       &[Capability::Exec],
       Some(&[Capability::Exec]),
@@ -1237,12 +1237,12 @@ mod tests {
 
   #[test]
   fn tool_capability_decision_surfaces_noop_backend_in_trace() {
-    use agentflow_tools::{SandboxEnforcement, SandboxStatus};
+    use agentflow_tool::{SandboxEnforcement, SandboxStatus};
 
     // Regression: a no-op backend used to be silent. The visibility rule for
     // P1.6 is that it must appear in trace events as `disabled` so operators
     // can spot misconfigured shell/script tools.
-    let effective = agentflow_tools::EffectiveCapabilities::resolve(
+    let effective = agentflow_tool::EffectiveCapabilities::resolve(
       "shell",
       &[Capability::Exec],
       None,
@@ -1272,7 +1272,7 @@ mod tests {
   // ── Q3.12.1: cooperative cancellation contract pins ───────────────────────
   //
   // These two tests pin the documented behaviour described on
-  // `AgentCancellationToken`, `AgentRuntime`, and `agentflow_tools::Tool::execute`:
+  // `AgentCancellationToken`, `AgentRuntime`, and `agentflow_tool::Tool::execute`:
   //
   // 1. `tool_future_drop_runs_when_token_is_cancelled` — the *positive* path:
   //    when a tool composes only Drop-cancellable state, racing it against the

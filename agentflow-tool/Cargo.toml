@@ -1,0 +1,33 @@
+[package]
+name = "agentflow-tool"
+version = "0.1.0"
+description = "Tool contract for AgentFlow: the Tool trait, ToolRegistry, and sandbox-status DTOs"
+keywords = ["ai", "agents", "tools", "llm"]
+categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+jsonschema = "0.17"
+# `SandboxBackend::wrap_command` takes `&mut tokio::process::Command` — the
+# contract trait itself references this type, so `tokio` (process only; no
+# concrete backend spawns anything from this crate) is a real, non-dev
+# dependency here, not just a test convenience.
+tokio = { version = "1.0", features = ["process"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
+# NOTE (T3.3): deliberately does NOT dev-depend on `agentflow-tools` (which
+# depends on this crate) — that cyclic dev-dependency produced two distinct
+# compilations of `agentflow-tool` in the graph, so a real `ShellTool` (from
+# `agentflow-tools`) failed to satisfy this crate's own `Tool` trait in its
+# own tests. The two tests that needed a real `ShellTool` moved to
+# `agentflow-tools/tests/registry_against_real_shell_tool.rs` instead, where
+# no such cycle exists.

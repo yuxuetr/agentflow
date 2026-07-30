@@ -6,7 +6,7 @@ use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
 use agentflow_memory::{MemoryStore, Message, Role};
-use agentflow_tools::{ToolIdempotency, ToolMetadata, ToolRegistry};
+use agentflow_tool::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -386,8 +386,9 @@ impl ReActConfig {
 /// ```rust,no_run
 /// use agentflow_agents::react::{ReActAgent, ReActConfig};
 /// use agentflow_memory::SessionMemory;
-/// use agentflow_tools::{ToolRegistry, SandboxPolicy};
+/// use agentflow_tool::ToolRegistry;
 /// use agentflow_tools::builtin::ShellTool;
+/// use agentflow_tools::sandbox::SandboxPolicy;
 /// use std::sync::Arc;
 ///
 /// #[tokio::main]
@@ -736,7 +737,7 @@ impl ReActAgent {
       let execute_params = strip_agentflow_metadata(params);
       let output = match self.tools.execute(&tool, execute_params).await {
         Ok(output) => output,
-        Err(error) => agentflow_tools::ToolOutput::error(error.to_string()),
+        Err(error) => agentflow_tool::ToolOutput::error(error.to_string()),
       };
       prior.steps.push(AgentStep::new(
         next_index,
@@ -1558,7 +1559,7 @@ impl ReActAgent {
       RaceOutcome::Completed(Ok(out)) => out,
       RaceOutcome::Completed(Err(e)) => {
         warn!(tool = %tool, error = %e, "Tool execution failed");
-        agentflow_tools::ToolOutput::error(e.to_string())
+        agentflow_tool::ToolOutput::error(e.to_string())
       }
       RaceOutcome::TimedOut => {
         let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -2835,7 +2836,7 @@ impl ReActAgent {
       .filter(|&i| !matches!(prepared[i].idempotency, ToolIdempotency::Idempotent))
       .collect();
 
-    let mut outputs: Vec<Option<(agentflow_tools::ToolOutput, u64)>> =
+    let mut outputs: Vec<Option<(agentflow_tool::ToolOutput, u64)>> =
       (0..n).map(|_| None).collect();
 
     // 5a. Concurrent group.
@@ -2890,7 +2891,7 @@ impl ReActAgent {
             Ok(out) => out,
             Err(e) => {
               warn!(tool = %prepared[i].tool, error = %e, "tool execution failed");
-              agentflow_tools::ToolOutput::error(e.to_string())
+              agentflow_tool::ToolOutput::error(e.to_string())
             }
           };
           outputs[i] = Some((output, dur));
@@ -2940,7 +2941,7 @@ impl ReActAgent {
         RaceOutcome::Completed(Ok(out)) => out,
         RaceOutcome::Completed(Err(e)) => {
           warn!(tool = %prepared[i].tool, error = %e, "tool execution failed");
-          agentflow_tools::ToolOutput::error(e.to_string())
+          agentflow_tool::ToolOutput::error(e.to_string())
         }
         RaceOutcome::TimedOut => {
           emit_and_push!(
@@ -3001,7 +3002,7 @@ impl ReActAgent {
             "internal invariant violation: prepared call has no recorded output; emitting synthetic error"
           );
           (
-            agentflow_tools::ToolOutput::error(
+            agentflow_tool::ToolOutput::error(
               "internal invariant violation: tool call has no output recorded".to_string(),
             ),
             0,
@@ -3151,7 +3152,7 @@ enum LlmTurnOutcome {
 /// tool result for the rest of the `Action` arm; `Stop` carries a
 /// terminal result (timeout / cancellation).
 enum ToolExecOutcome {
-  Output(agentflow_tools::ToolOutput),
+  Output(agentflow_tool::ToolOutput),
   Stop(AgentRunResult),
 }
 
@@ -3644,7 +3645,7 @@ fn compact_memory_summary(omitted: &[Message], omitted_tokens: u32) -> String {
 mod tests {
   use super::*;
   use agentflow_memory::SessionMemory;
-  use agentflow_tools::{Tool, ToolError, ToolOutput};
+  use agentflow_tool::{Tool, ToolError, ToolOutput};
   use async_trait::async_trait;
   use serde_json::{Value, json};
   use std::fs;

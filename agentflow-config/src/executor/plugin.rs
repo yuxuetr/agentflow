@@ -27,9 +27,8 @@ use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::AgentFlowError,
 };
-use agentflow_tools::capability::Capability;
 use agentflow_tools::sandbox::{SandboxBackend, SandboxScope, default_backend};
-use agentflow_tools::{PluginPolicy, SecurityProfile};
+use agentflow_tools::{Capability, PluginPolicy, SecurityProfile};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

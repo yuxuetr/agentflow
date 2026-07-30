@@ -28,7 +28,7 @@ pub use agentflow_agent_spi::aggregation::{
 };
 pub use agentflow_agent_spi::delegation::{DelegationSpec, SchemaValidation, validate_output};
 use agentflow_memory::MemoryStore;
-use agentflow_tools::ToolRegistry;
+use agentflow_tool::ToolRegistry;
 
 use crate::react::{ReActAgent, ReActConfig, ReActError};
 use crate::runtime::{AgentContext, AgentRunResult};
@@ -115,8 +115,8 @@ pub fn subagent_answer_from_outcome(
 mod tests {
   use super::*;
   use agentflow_memory::SessionMemory;
+  use agentflow_tool::{Tool, ToolError, ToolOutput};
   use agentflow_tools::builtin::{FileTool, HttpTool};
-  use agentflow_tools::{Tool, ToolError, ToolOutput};
   use async_trait::async_trait;
   use serde_json::{Value, json};
 

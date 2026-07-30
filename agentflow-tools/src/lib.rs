@@ -1,6 +1,16 @@
 //! # agentflow-tools
 //!
-//! Unified tool abstraction and built-in tool implementations for AgentFlow agents.
+//! Built-in tool implementations for AgentFlow agents (`ShellTool`,
+//! `FileTool`, `HttpTool`, `ScriptTool`, `CodeExecTool`) and the concrete
+//! OS-level sandbox backends they run under.
+//!
+//! T3.3: the `Tool` contract itself — the trait, `ToolRegistry`,
+//! `ToolMetadata`, `Capability`, `ToolPolicy`, `SecurityProfile`, and the
+//! `SandboxBackend` trait + its DTOs — lives in `agentflow-tool` (a
+//! dependency-free L0 contract crate) and is re-exported here in full, so
+//! every existing `use agentflow_tools::{Tool, ToolRegistry, ...}` call
+//! site is unaffected. A runtime that only needs the contract (no concrete
+//! tools) should depend on `agentflow-tool` directly instead of this crate.
 //!
 //! ## Quick start
 //!
@@ -22,29 +32,20 @@
 //! ```
 
 pub mod builtin;
-pub mod capability;
-pub mod error;
-pub mod plugin_policy;
-pub mod policy;
-pub mod registry;
 pub mod sandbox;
-pub mod security_profile;
-pub mod tool;
 
-pub use capability::{Capability, CapabilityDecisionEntry, EffectiveCapabilities, GrantSource};
-pub use error::ToolError;
-pub use plugin_policy::{
-  PluginEvaluationInput, PluginNetworkPolicy, PluginPolicy, PluginPolicyDecision,
-};
-pub use policy::{ToolPolicy, ToolPolicyDecision};
-pub use registry::ToolRegistry;
-pub use sandbox::{SandboxEnforcement, SandboxPolicy, SandboxStatus};
-pub use security_profile::{
+pub use agentflow_tool::{
   AuthDefaults, CorsDefaults, CorsMode, MarketplaceInstallDefaults, PluginExecutionDefaults,
   RequestLimitDefaults, SECURITY_PROFILE_ENV, SandboxingDefaults, SecurityProfile,
   SecurityProfileDefaults, SecurityProfileError, ToolPermissionDefaults, WorkerAdmissionDefaults,
 };
-pub use tool::{
+pub use agentflow_tool::{Capability, CapabilityDecisionEntry, EffectiveCapabilities, GrantSource};
+pub use agentflow_tool::{
+  PluginEvaluationInput, PluginNetworkPolicy, PluginPolicy, PluginPolicyDecision,
+};
+pub use agentflow_tool::{
   Tool, ToolCall, ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,
   ToolPermission, ToolPermissionSet, ToolSource,
 };
+pub use agentflow_tool::{ToolError, ToolPolicy, ToolPolicyDecision, ToolRegistry};
+pub use sandbox::{SandboxEnforcement, SandboxPolicy, SandboxStatus};

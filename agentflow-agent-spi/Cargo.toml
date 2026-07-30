@@ -13,7 +13,9 @@ homepage.workspace = true
 [dependencies]
 agentflow-value = { path = "../agentflow-value", version = "0.1" }
 agentflow-store-spi = { path = "../agentflow-store-spi", version = "0.1" }
-agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+# T3.3: contract-only usage (Tool/ToolRegistry/Capability/SandboxStatus) —
+# depends on the contract crate directly, not the builtin-impl one.
+agentflow-tool = { path = "../agentflow-tool", version = "0.1" }
 async-trait = "0.1"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }

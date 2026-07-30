@@ -41,7 +41,7 @@ pub use agentflow_mcp::tools::{ToolCall, ToolRegistry as McpToolRegistry};
 
 // Re-export new Phase-1 building blocks
 pub use agentflow_memory;
-pub use agentflow_tools;
+pub use agentflow_tool;
 
 // Re-export M3 multi-agent building blocks
 pub use nodes::{

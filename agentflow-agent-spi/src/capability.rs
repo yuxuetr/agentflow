@@ -10,7 +10,7 @@
 //! runtime. The runtime forever sees only **Tool + Context + AgentRuntime** —
 //! it never knows a capability existed.
 //!
-//! Distinct from the OS-sandbox `agentflow_tools::Capability` enum (a process
+//! Distinct from the OS-sandbox `agentflow_tool::Capability` enum (a process
 //! permission like `Exec` / `Net`); this `Capability` is the higher-level
 //! "packaged ability" concept. The two never appear in the same position.
 
@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::harness::context::ContextItem;
-use agentflow_tools::Tool;
+use agentflow_tool::Tool;
 
 /// The result of lowering a [`Capability`]: the tools it contributes to the
 /// registry plus the context fragments it injects into the prompt.

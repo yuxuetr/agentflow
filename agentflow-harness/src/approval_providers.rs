@@ -312,7 +312,7 @@ fn parse_response(input: &str) -> (ApprovalOutcome, ApprovalScope, Option<String
 mod tests {
   use super::*;
   use crate::approval::ApprovalRisk;
-  use agentflow_tools::{ToolIdempotency, ToolPermission, ToolSource};
+  use agentflow_tool::{ToolIdempotency, ToolPermission, ToolSource};
   use chrono::Duration as ChronoDuration;
   use std::io::Cursor;
   use std::sync::Mutex as StdMutex;

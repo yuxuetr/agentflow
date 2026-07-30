@@ -2,15 +2,15 @@
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 22 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
+AgentFlow is a Rust workspace that supports both deterministic DAG workflows and agent-native autonomous loops, with full LLM, MCP, RAG, Skill, and tracing support. The workspace has 23 Rust crates plus 1 Web UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
 
 A narrow-waist **contract kernel** (L0) was extracted by the P-A track (`docs/RFC_CRATE_ARCHITECTURE.md`; validated by `docs/ARCHITECTURE_EVALUATION_2026-06-20.md`): the runtimes never depend on each other, only on shared contracts, enforced by `cargo xtask check-arch` (eight dependency laws). The four execution paradigms (static DAG / native loop / harness / dynamic workflow) and their three-axis mental model live in `docs/ARCHITECTURE.md` § Four Execution Paradigms.
 
 Recommended five-layer mental model:
 
-- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade / `Capability` lowering), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tools` (the `Tool` contract)
+- **L0 Contract Kernel** (narrow waist): `agentflow-value` (`FlowValue`), `agentflow-graph` (the `Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` / turn-driven façade / `Capability` lowering), `agentflow-async-util` (retry/timeout/`race_with_limits`), plus `agentflow-tool` (the `Tool` contract: trait, `ToolRegistry`, `ToolMetadata`, `Capability`, `ToolPolicy`, `SecurityProfile`, the `SandboxBackend` trait + DTOs — split out of `agentflow-tools` in T3.3, `docs/RFC_TOOL_CONTRACT_SPLIT.md`, since the latter bundles concrete builtin tools + OS-sandbox backends that don't belong in a kernel crate)
 - **L1 Execution Core** (the executor): `agentflow-core` runs the L0 `Flow` IR — scheduler, checkpoint, retry-executor, resource manager, health, events — exposed via the `FlowExt` trait (`flow.run()`). IR ≠ executor; the L0 types are re-exported under `agentflow_core::*` for compatibility.
-- **L2 Capability Adapters**: `agentflow-nodes` (tool-tier nodes), `agentflow-nodes-ai` (capability-backed nodes), `agentflow-llm`, `agentflow-tools`, `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
+- **L2 Capability Adapters**: `agentflow-nodes` (tool-tier nodes), `agentflow-nodes-ai` (capability-backed nodes), `agentflow-llm`, `agentflow-tools` (builtin tool implementations + concrete OS-sandbox backends; depends on and re-exports `agentflow-tool` in full), `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`
 - **L3 Agent / Orchestration**: `agentflow-agents` (incl. the `dynamic` module: `compile_plan_to_flow` + `DynamicWorkflowAgent`), `agentflow-skills`, `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly: YAML schema + `executor` + `diagnostics`, consumed by both `cli` and `server`), `agentflow-cli`
 - **L4 Operations / Productization**: `agentflow-tracing`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`
 
@@ -53,17 +53,19 @@ LLM provider abstraction:
 - Native `tool_calls` / `tool_choice` first-class across all 6 providers
 - W3C `traceparent` propagation through HTTP calls (via `LlmTraceContext`)
 
+#### L0 — agentflow-tool
+The `Tool` contract (T3.3, `docs/RFC_TOOL_CONTRACT_SPLIT.md`): the `Tool` trait, `ToolRegistry`, `ToolMetadata` (with `source: ToolSource::{Builtin, Script, Mcp, Workflow}`, permissions, original MCP server/tool names), `ToolIdempotency`, `ToolOutputPart::{Text, Image, Resource}`, `Capability`/`EffectiveCapabilities`, `ToolPolicy`, `SecurityProfile`, and the `SandboxBackend` trait + its DTOs (`SandboxScope`/`SandboxStatus`/`SandboxEnforcement`/`SandboxError`). Dependency-free — a genuine L0 kernel crate, unlike the crate below it split out of. Runtimes (`agentflow-agents`, `agentflow-harness`) depend on this crate directly, never on `agentflow-tools`.
+
 #### L2 — agentflow-tools
-Unified tool abstraction:
-- `Tool` trait + `ToolRegistry` + `SandboxPolicy` + `ToolPolicy`
-- `ToolMetadata` with `source: ToolSource::{Builtin, Script, Mcp, Workflow}`, permissions, original MCP server/tool names
+Built-in tool implementations + concrete OS-sandbox backends. Depends on and re-exports `agentflow-tool` in full, so every existing `use agentflow_tools::{Tool, ToolRegistry, ...}` call site is unaffected:
+- `SandboxPolicy` (the in-process allow-list `ShellTool`/`FileTool`/`HttpTool` consult)
 - Built-in `FileTool` / `HttpTool` / `ShellTool` (shell defaults to disabled)
 - `ToolOutputPart::{Text, Image, Resource}` for typed multimodal output
 - OS-level sandbox backends (macOS sandbox-exec / Linux seccomp + Landlock + cgroup v2 resource limits) for `ShellTool` / `ScriptTool`, `SecurityConfig::os_sandbox` defaults `true` (S3.4) — a skill opts a tool *out* rather than in
 - **`code_exec` (S4.2, `docs/RFC_LLM_CODE_EXECUTION.md`):** runs LLM-generated Python (v1, no other languages yet) inside `ContainerBackend` — a strongly-isolated tier shelling out to a real container engine (Apple's `container` CLI, preferred: genuine per-invocation Linux microVM; or rootless Podman) instead of the syscall-scoped OS sandbox above, since llm-generated content is adversarial by construction on every call (never author-signed like `ScriptTool`'s). Mandatory isolation — refuses to run rather than degrade when no engine is available — with a fresh ephemeral workdir per call, hardcoded resource limits (256 MiB / 30 CPU-seconds / 32 pids), zero network access (no egress allowlist proxy exists yet), and `ToolIdempotency::NonIdempotent` so harness's production-profile approval escalation applies automatically. `agentflow skill inspect --explain-permissions` and `agentflow doctor` both report the container engine's status independently from the OS-sandbox backend above.
 
 #### L2 — agentflow-mcp
-Model Context Protocol integration: client + server + transport (stdio first), JSON-RPC 2.0, retry/timeout/reconnect, latency benchmarks. The MCP→`agentflow-tools::Tool` adapter (`McpToolAdapter` + `McpClientPool`) lives in `agentflow-skills/src/mcp_tools.rs`, not in this crate — `agentflow-skills` owns the conversion because the skill builder is the entry point that knows which MCP servers a skill manifest declares.
+Model Context Protocol integration: client + server + transport (stdio first), JSON-RPC 2.0, retry/timeout/reconnect, latency benchmarks. The MCP→`agentflow-tool::Tool` adapter (`McpToolAdapter` + `McpClientPool`) lives in `agentflow-skills/src/mcp_tools.rs`, not in this crate — `agentflow-skills` owns the conversion because the skill builder is the entry point that knows which MCP servers a skill manifest declares.
 
 #### L2 — agentflow-rag
 Retrieval-Augmented Generation: document chunking, embeddings (OpenAI API or local ONNX), Qdrant vectorstore, retrieval, reranking. Sources: PDF, HTML, CSV, text (PDF/HTML loaders carry a default 50 MiB / 10 MiB size cap, override via `with_max_bytes`). Eval harness (`eval` module): JSONL dataset format (`corpus`/`queries`/`qrels`), Recall@K / MRR / nDCG@K metrics, baseline comparison with paired sign test, CLI `agentflow rag eval`. (StepFun embedding provider mentioned in earlier drafts is not implemented; only OpenAI + local ONNX exist today.) **RAG repositioning (P-A4.1):** implements the L0 `KnowledgeBackend` SPI as `Bm25KnowledgeBackend` (in-memory keyword index, bundled-files tier) + `VectorStoreKnowledgeBackend` (vector tier), and exposes `RagSearchTool` — a registry-installable `rag_search` `Tool` (idempotent, read-only) wrapping any `Arc<dyn KnowledgeBackend>`. This puts RAG on the capability/tool axis behind a Skill's `knowledge:` declaration rather than as a top-level mode.

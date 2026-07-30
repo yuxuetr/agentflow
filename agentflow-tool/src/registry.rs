@@ -498,24 +498,15 @@ mod tests {
     );
   }
 
-  #[tokio::test]
-  async fn narrowed_capability_layer_denies_a_tool_requiring_an_ungranted_capability() {
-    use crate::builtin::ShellTool;
-    use crate::sandbox::SandboxPolicy;
-
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(ShellTool::new(Arc::new(
-      SandboxPolicy::permissive(),
-    ))));
-
-    // Grant only Net — ShellTool requires Exec, so it must be denied
-    // through the SAME EffectiveCapabilities::resolve merge a Skill's
-    // own tool_permission_allowlist already goes through.
-    let narrowed = registry.narrowed(None, Some(vec![Capability::Net]));
-    let effective = narrowed.evaluate_capabilities("shell").unwrap();
-    assert!(!effective.allowed);
-    assert!(effective.denied.contains(&Capability::Exec));
-  }
+  // T3.3: `narrowed_capability_layer_denies_a_tool_requiring_an_ungranted_capability`
+  // and `evaluate_capabilities_carries_sandbox_status_for_subprocess_tools`
+  // (which exercised the registry against a real `ShellTool`) moved to
+  // `agentflow-tools/tests/registry_against_real_shell_tool.rs` — this
+  // contract crate must not dev-depend on `agentflow-tools`, which itself
+  // depends on this crate (the cyclic dev-dependency produced two distinct
+  // compilations of `agentflow-tool` in the graph, so `ShellTool: Tool`
+  // failed to resolve against this module's own `Tool` trait). See that
+  // file for the equivalent coverage using the real registry + real tool.
 
   #[test]
   fn narrowed_registry_has_its_own_independent_audit_trail() {
@@ -744,26 +735,6 @@ mod tests {
       audit[0].trace.last().map(|entry| entry.source),
       Some(crate::capability::GrantSource::CliFlag)
     );
-  }
-
-  #[tokio::test]
-  async fn evaluate_capabilities_carries_sandbox_status_for_subprocess_tools() {
-    use crate::builtin::ShellTool;
-    use crate::sandbox::{SandboxEnforcement, SandboxPolicy};
-
-    let policy = Arc::new(SandboxPolicy::permissive());
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(ShellTool::new(policy)));
-
-    let effective = registry.evaluate_capabilities("shell").unwrap();
-    let status = effective
-      .sandbox
-      .expect("shell tool must surface a sandbox status snapshot");
-    // Default ShellTool uses the no-op backend; this is the silent-fall-through
-    // case the visibility task is meant to surface. It must be Disabled, not
-    // missing.
-    assert_eq!(status.backend, "noop");
-    assert_eq!(status.enforcement, SandboxEnforcement::Disabled);
   }
 
   #[tokio::test]

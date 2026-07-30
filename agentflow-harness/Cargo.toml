@@ -20,7 +20,11 @@ agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 # P-A2.2: the harness governs a deterministic `Flow` run via the L0 graph IR +
 # the injected `FlowRunner` contract (the executor stays out — runtime→contract).
 agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
-agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
+# T3.3: contract-only usage (Tool/ToolMetadata/ToolPolicy/ToolPermission/
+# ToolSource/ToolIdempotency) — depends on the contract crate directly, not
+# the builtin-impl one. `builtin::CodeExecTool` (used only in this crate's
+# own tests) pulls in `agentflow-tools` as a dev-dependency below.
+agentflow-tool = { path = "../agentflow-tool", version = "0.1" }
 # Q1.7.2: redact secrets in `ApprovalRequest.params_summary` /
 # `ToolCallRequestedPayload.params_summary` before they hit JSONL /
 # SSE / stdout sinks.
@@ -44,6 +48,9 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+# T3.3: `hooks_runtime.rs`'s own tests exercise the production-profile
+# approval escalation against the real, shipped `code_exec` tool.
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 # P-A2.2 tests execute a real `Flow` under harness governance via the
 # executor-backed `CoreFlowRunner`.
 agentflow-core = { path = "../agentflow-core", version = "0.2" }

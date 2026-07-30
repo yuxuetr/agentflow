@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use agentflow_tools::{ToolIdempotency, ToolPermission, ToolSource};
+use agentflow_tool::{ToolIdempotency, ToolPermission, ToolSource};
 
 use crate::ApprovalRisk;
 use crate::HarnessError;
