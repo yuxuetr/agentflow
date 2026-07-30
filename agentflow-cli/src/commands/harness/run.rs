@@ -38,6 +38,7 @@ pub async fn execute(
   timeout_ms: Option<u64>,
   context_budget: Option<usize>,
   token_budget: Option<u32>,
+  cost_limit_usd: Option<f64>,
   context_refresh: bool,
   no_default_context: bool,
 ) -> Result<()> {
@@ -156,7 +157,7 @@ pub async fn execute(
     max_tool_calls,
     timeout_ms,
     token_budget,
-    ..Default::default()
+    cost_limit_usd,
   });
   if let Some(budget) = context_budget {
     options = options.with_context_token_budget(budget);

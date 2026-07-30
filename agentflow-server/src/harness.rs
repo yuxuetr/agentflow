@@ -222,6 +222,12 @@ pub struct CreateHarnessSessionRequest {
   /// Optional named skill to load.
   #[serde(default)]
   pub skill_name: Option<String>,
+  /// Maximum estimated USD cost for the session (U1.3 — CLI/API entry
+  /// point for the `RuntimeLimits::cost_limit_usd` enforcement T1.1
+  /// wired into `ReActAgent`/`PlanExecuteAgent`). Unset means no
+  /// cost-based stop condition.
+  #[serde(default)]
+  pub cost_limit_usd: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,6 +292,8 @@ pub struct HarnessSessionContext {
   pub runtime_kind: String,
   pub model: String,
   pub skill_name: Option<String>,
+  /// U1.3: see `CreateHarnessSessionRequest::cost_limit_usd`.
+  pub cost_limit_usd: Option<f64>,
   pub repos: Repositories,
   /// Forwards events to live SSE subscribers. Persisting to the DB still
   /// has to happen — use [`publish_through`] for the standard path.
@@ -474,6 +482,7 @@ pub async fn submit_harness_session(
         runtime_kind,
         model,
         skill_name: req.skill_name,
+        cost_limit_usd: req.cost_limit_usd,
         repos,
         broker,
         initial_seq: 0,
@@ -791,6 +800,14 @@ pub async fn resume_harness_session(
         runtime_kind,
         model,
         skill_name,
+        // U1.3: cost_limit_usd isn't a persisted `harness_sessions`
+        // column (unlike profile/runtime_kind/model/skill_name), so a
+        // resume can't recover the original session's limit — it
+        // restarts with no cost-based stop condition. Only the create
+        // path (`CreateHarnessSessionRequest::cost_limit_usd`) can set
+        // it today; persisting + re-applying it across resume is a
+        // follow-up if operators need it.
+        cost_limit_usd: None,
         repos,
         broker,
         initial_seq,

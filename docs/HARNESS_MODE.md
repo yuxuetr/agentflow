@@ -321,6 +321,21 @@ same `--run-dir` precedence (explicit → `AGENTFLOW_RUN_DIR` →
 `AGENTFLOW_TRACE_DIR` → `~/.agentflow/runs`) so the trace replay tools
 can find Harness logs without bespoke wiring.
 
+### Runtime-limit flags (added post-freeze; not in the Phase H1 block above)
+
+`agentflow harness run`/`chat` also accept `--max-steps`,
+`--max-tool-calls` (`run` only), `--timeout-ms` (`run` only),
+`--context-budget`, `--token-budget`, and `--cost-limit-usd` (U1.3) —
+all thin CLI entry points into `agentflow_agent_spi::runtime::
+RuntimeLimits`, threaded through `HarnessRunOptions::with_limits(...)`.
+`POST /v1/harness/sessions` mirrors `cost_limit_usd` as an optional
+request-body field (U1.3); the other `RuntimeLimits` fields have no API
+surface yet. See `docs/OPERATIONS_HANDBOOK.md` §2.2/§5.1 for the
+per-flag runtime semantics (pricing-table caveat for
+`cost_limit_usd`, memory-compaction behavior for `--context-budget`/
+`--token-budget`, etc.) — this doc covers wiring, not runtime
+behavior.
+
 ### Tracing bridge
 
 `agentflow_harness::tracing_bridge` resolves the session-log root from

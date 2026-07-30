@@ -220,6 +220,33 @@ fn harness_run_help_lists_context_engineering_flags() {
     .stdout(predicate::str::contains("context_refresh"));
 }
 
+// U1.3: `--cost-limit-usd` is the CLI entry point for the
+// `RuntimeLimits::cost_limit_usd` runtime enforcement T1.1 wired into
+// `ReActAgent`/`PlanExecuteAgent` — see `agentflow-harness/tests/
+// runtime_react_smoke.rs::harness_runtime_stops_react_agent_when_cost_limit_usd_is_exceeded`
+// for the end-to-end proof that the flag's value actually reaches and
+// trips that runtime check.
+
+#[test]
+fn harness_run_help_lists_cost_limit_flag() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "run", "--help"]);
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("--cost-limit-usd"));
+}
+
+#[test]
+fn harness_chat_help_lists_cost_limit_flag() {
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd.args(["harness", "chat", "--help"]);
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("--cost-limit-usd"));
+}
+
 #[test]
 fn harness_list_text_output_lists_sessions_under_run_dir() {
   let run_dir = TempDir::new().unwrap();

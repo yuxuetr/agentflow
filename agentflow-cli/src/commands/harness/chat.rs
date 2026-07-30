@@ -230,6 +230,7 @@ pub async fn execute(
   run_dir_override: Option<String>,
   context_budget: Option<usize>,
   token_budget: Option<u32>,
+  cost_limit_usd: Option<f64>,
   context_refresh: bool,
   max_steps: Option<usize>,
   no_default_context: bool,
@@ -440,7 +441,7 @@ pub async fn execute(
       max_tool_calls: None,
       timeout_ms: None,
       token_budget,
-      ..Default::default()
+      cost_limit_usd,
     });
     if let Some(budget) = cfg.context_budget {
       options = options.with_context_token_budget(budget);

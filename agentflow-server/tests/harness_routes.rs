@@ -145,6 +145,44 @@ async fn submit_rejects_empty_user_input() {
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// U1.3: `cost_limit_usd` is an optional field on the create-session
+/// body — the CLI/API entry point for the `RuntimeLimits::cost_limit_usd`
+/// runtime enforcement T1.1 wired into `ReActAgent`/`PlanExecuteAgent`.
+/// The `StubHarnessExecutor` used in this test file doesn't run a real
+/// agent loop, so this only proves the field parses and doesn't reject
+/// session creation — the runtime enforcement itself is proven in
+/// `agentflow-harness/tests/runtime_react_smoke.rs::
+/// harness_runtime_stops_react_agent_when_cost_limit_usd_is_exceeded`.
+#[tokio::test]
+async fn submit_accepts_optional_cost_limit_usd_field() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_accepts_optional_cost_limit_usd_field");
+    return;
+  };
+
+  let response = create_router(state)
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/v1/harness/sessions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+          serde_json::to_vec(&json!({
+            "user_input": "budget-constrained request",
+            "workspace_root": "/tmp",
+            "cost_limit_usd": 0.5,
+          }))
+          .unwrap(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = body_json(response).await;
+  assert_eq!(body["status"], "running");
+}
+
 #[tokio::test]
 async fn list_sessions_returns_newest_first() {
   let Some(state) = fresh_state().await else {

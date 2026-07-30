@@ -18,7 +18,7 @@ use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_agents::runtime::AgentStopReason;
+use agentflow_agents::runtime::{AgentStopReason, RuntimeLimits};
 use agentflow_harness::{
   ApprovalProvider, HarnessEvent, HarnessEventBody, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SeqAllocator, SinkChain,
@@ -299,6 +299,8 @@ struct RunInputs {
   runtime_kind: String,
   model: String,
   skill_name: Option<String>,
+  /// U1.3: see `HarnessSessionContext::cost_limit_usd`.
+  cost_limit_usd: Option<f64>,
   repos: Repositories,
   broker: HarnessEventBroker,
   initial_seq: u64,
@@ -313,6 +315,7 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
     runtime_kind: ctx.runtime_kind.clone(),
     model: ctx.model.clone(),
     skill_name: ctx.skill_name.clone(),
+    cost_limit_usd: ctx.cost_limit_usd,
     repos: ctx.repos.clone(),
     broker: ctx.broker.clone(),
     initial_seq: ctx.initial_seq,
@@ -455,7 +458,11 @@ async fn run_harness_inner(
   )
   .with_profile(profile)
   .with_runtime_kind(runtime_kind)
-  .with_session_id(session_id_string);
+  .with_session_id(session_id_string)
+  .with_limits(RuntimeLimits {
+    cost_limit_usd: inputs.cost_limit_usd,
+    ..Default::default()
+  });
   let options = match inputs.skill_name.as_ref() {
     Some(name) => options.with_skill_name(name.clone()),
     None => options,

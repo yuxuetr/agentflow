@@ -432,6 +432,13 @@ enum HarnessCommands {
     /// `memory_summary_added`).
     #[arg(long)]
     token_budget: Option<u32>,
+    /// Maximum estimated USD cost for the session. Runtime enforcement
+    /// was already wired into `RuntimeLimits`/`ReActAgent`/
+    /// `PlanExecuteAgent` by T1.1; this flag is the CLI entry point for
+    /// it (U1.3). The agent stops once cumulative estimated spend
+    /// reaches this value.
+    #[arg(long)]
+    cost_limit_usd: Option<f64>,
     /// Drive the agent loop turn-by-turn at the harness layer and re-run
     /// the context providers between turns, injecting refreshed workspace
     /// context when it changed (so a long-running agent perceives edits to
@@ -511,6 +518,10 @@ enum HarnessCommands {
     /// Agent prompt-memory token budget (compacts older turns mid-run)
     #[arg(long)]
     token_budget: Option<u32>,
+    /// Maximum estimated USD cost, enforced across the whole chat session
+    /// (see `harness run --help`)
+    #[arg(long)]
+    cost_limit_usd: Option<f64>,
     /// Drive turns at the harness layer + refresh workspace context between turns
     #[arg(long)]
     context_refresh: bool,
@@ -2419,6 +2430,7 @@ async fn main() {
         timeout_ms,
         context_budget,
         token_budget,
+        cost_limit_usd,
         context_refresh,
         no_default_context,
       } => {
@@ -2438,6 +2450,7 @@ async fn main() {
           timeout_ms,
           context_budget,
           token_budget,
+          cost_limit_usd,
           context_refresh,
           no_default_context,
         )
@@ -2480,6 +2493,7 @@ async fn main() {
         run_dir,
         context_budget,
         token_budget,
+        cost_limit_usd,
         context_refresh,
         max_steps,
         no_default_context,
@@ -2495,6 +2509,7 @@ async fn main() {
           run_dir,
           context_budget,
           token_budget,
+          cost_limit_usd,
           context_refresh,
           max_steps,
           no_default_context,
