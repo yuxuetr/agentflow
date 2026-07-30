@@ -369,6 +369,7 @@ dependencies = [
  "age",
  "agentflow-rag",
  "agentflow-store-spi",
+ "agentflow-tools",
  "async-trait",
  "base64 0.22.1",
  "chrono",

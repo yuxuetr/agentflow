@@ -21,6 +21,7 @@ pub mod entity_facts;
 pub mod layer;
 pub mod preference;
 pub mod preference_encrypted;
+pub mod preference_tool;
 pub mod project;
 pub mod semantic;
 pub mod session;
@@ -44,6 +45,7 @@ pub use preference::SqlitePreferenceStore;
 pub use preference_encrypted::{
   AgeEncryptedPreferenceStore, generate_identity_file, load_identity_file,
 };
+pub use preference_tool::RememberPreferenceTool;
 pub use project::{
   InMemoryProjectMemoryStore, ProjectFact, ProjectMemoryStore, SqliteProjectMemoryStore,
   project_key_for_path,

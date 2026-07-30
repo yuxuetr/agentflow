@@ -5,7 +5,7 @@ use agentflow_async_util::{RaceOutcome, race_with_limits};
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
-use agentflow_memory::{MemoryStore, Message, Role};
+use agentflow_memory::{MemoryStore, Message, PreferenceStore, Role};
 use agentflow_tool::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -436,6 +436,15 @@ pub struct ReActAgent {
   project_memory_store: Option<Arc<dyn agentflow_memory::ProjectMemoryStore>>,
   project_key: Option<String>,
   project_fact_generator: Arc<dyn crate::project_memory::ProjectFactGenerator>,
+  /// U2.2: durable per-user preferences (tone, language, opt-outs), read
+  /// fresh every turn and injected into the persona — see
+  /// `docs/MEMORY_LAYERING.md` § Precedence at prompt-assembly time.
+  /// `None` (the default) disables the feature entirely. `PreferenceStore`
+  /// requires `&mut self` to write, so it's wrapped in a `Mutex` rather
+  /// than the `Arc<dyn Trait>` shape `task_summary_store`/
+  /// `project_memory_store` use — those traits are `&self`-only.
+  preference_store: Option<Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>>,
+  preference_scope: Option<agentflow_memory::PreferenceScope>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
   /// Token counter used for every `Message::*_with_counter` call
@@ -478,6 +487,8 @@ impl ReActAgent {
       project_memory_store: None,
       project_key: None,
       project_fact_generator: Arc::new(crate::project_memory::DeterministicProjectFactGenerator),
+      preference_store: None,
+      preference_scope: None,
       session_id,
       message_counter,
       live_sink: None,
@@ -617,6 +628,21 @@ impl ReActAgent {
   ) -> Self {
     self.project_memory_store = Some(store);
     self.project_key = Some(project_key.into());
+    self
+  }
+
+  /// Enable U2.2 preference injection: read every `(key, value)` under
+  /// `scope` fresh each turn and surface it in the persona. `store` is
+  /// shared (not owned) so a caller can also register a
+  /// `agentflow_memory::RememberPreferenceTool` wrapping the same `Arc`
+  /// — writes from that tool are visible on the agent's very next turn.
+  pub fn with_preference_store(
+    mut self,
+    store: Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>,
+    scope: agentflow_memory::PreferenceScope,
+  ) -> Self {
+    self.preference_store = Some(store);
+    self.preference_scope = Some(scope);
     self
   }
 
@@ -2472,6 +2498,25 @@ impl ReActAgent {
     // Always start with the system prompt
     messages.push(MultimodalMessage::system().add_text(system_prompt).build());
 
+    // U2.2: user preferences come first among the injected context
+    // blocks — per `docs/MEMORY_LAYERING.md`'s stated precedence
+    // (Session, then Preference, then Entity facts, then Semantic),
+    // preference is "always small, always inserted into the persona."
+    // It's about the user, not any one project or session, so it's more
+    // foundational than the project-facts/task-summary blocks below.
+    if let Some(store) = &self.preference_store
+      && let Some(scope) = &self.preference_scope
+    {
+      let prefs = store.lock().await.list_preferences(scope).await?;
+      if !prefs.is_empty() {
+        messages.push(
+          MultimodalMessage::system()
+            .add_text(format_preference_for_prompt(&prefs))
+            .build(),
+        );
+      }
+    }
+
     // L3.1: project facts (if any) come right after the system prompt —
     // even more foundational than the L2.1 task summary below, since
     // they're project-wide rather than scoped to this one session.
@@ -3421,6 +3466,23 @@ fn format_task_summary_for_prompt(summary: &agentflow_memory::TaskSummary) -> St
   section("Key results:", &summary.key_results, &mut out);
   section("Open questions:", &summary.open_questions, &mut out);
   section("Next steps:", &summary.next_steps, &mut out);
+  out
+}
+
+/// U2.2: render the current user's stored preferences as a system
+/// message. Caller already checked the list is non-empty. A string value
+/// renders as bare text (`en-GB`); any other JSON shape (number, bool,
+/// object) renders as its JSON literal.
+fn format_preference_for_prompt(prefs: &[(String, agentflow_memory::PreferenceValue)]) -> String {
+  let mut out = String::from("[User Preferences — stated or implied in a prior session]\n");
+  for (key, pref) in prefs {
+    let rendered = pref
+      .value
+      .as_str()
+      .map(str::to_string)
+      .unwrap_or_else(|| pref.value.to_string());
+    out.push_str(&format!("- {key}: {rendered}\n"));
+  }
   out
 }
 
@@ -6342,6 +6404,133 @@ providers:
       .await
       .unwrap();
     assert_eq!(result.answer.as_deref(), Some("built"));
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  // ── U2.2: preference injection ──────────────────────────────────────────
+
+  #[tokio::test]
+  async fn preference_injection_surfaces_a_directly_seeded_preference() {
+    let store = Arc::new(tokio::sync::Mutex::new(
+      agentflow_memory::SqlitePreferenceStore::in_memory()
+        .await
+        .unwrap(),
+    ));
+    let scope = agentflow_memory::PreferenceScope::local("default");
+    store
+      .lock()
+      .await
+      .put_preference(&scope, "language", json!("en-GB"))
+      .await
+      .unwrap();
+
+    let agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_preference_store(store, scope);
+
+    let messages = agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("en-GB"),
+      "the agent's prompt must carry the seeded preference, got: {rendered}"
+    );
+  }
+
+  /// Without `with_preference_store`, behaviour is unchanged: no
+  /// injection, no extra store reads.
+  #[tokio::test]
+  async fn preference_is_a_no_op_when_not_configured() {
+    let agent = ReActAgent::new(
+      ReActConfig::new("mock-runtime"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    // Must not panic or error just because no preference store is
+    // configured.
+    let messages = agent.preview_llm_messages().await.unwrap();
+    assert!(!format!("{messages:?}").contains("User Preferences"));
+  }
+
+  /// The regression U2.2 exists for: `SqlitePreferenceStore` was
+  /// previously usable only "standalone" — nothing in a real
+  /// conversation could ever write to it, so a configured
+  /// `[memory.preference]` had no product-visible effect. This proves
+  /// the full round trip through the actual product surface (an LLM
+  /// tool call, not a direct store write): a first agent's real run
+  /// calls `remember_preference`, and a second, brand-new agent instance
+  /// (same store, no session in common) sees it on its very next turn —
+  /// mirrors L3.1's `second_agent_sees_project_facts_established_by_first_run`.
+  #[tokio::test]
+  async fn remember_preference_tool_write_is_visible_to_a_second_agent_instance() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-preference-{}", uuid::Uuid::new_v4());
+    let store = Arc::new(tokio::sync::Mutex::new(
+      agentflow_memory::SqlitePreferenceStore::in_memory()
+        .await
+        .unwrap(),
+    ));
+    let scope = agentflow_memory::PreferenceScope::local("default");
+
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"remember it","action":{"tool":"remember_preference","params":{"key":"language","value":"en-GB"}}}"#,
+          r#"{"thought":"done","answer":"got it"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(agentflow_memory::RememberPreferenceTool::new(
+      store.clone(),
+      scope.clone(),
+    )));
+
+    let mut first_agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    )
+    .with_preference_store(store.clone(), scope.clone());
+
+    let result = first_agent
+      .run_with_context(AgentContext::new(
+        "session-1",
+        "remember I prefer British English",
+        &model,
+      ))
+      .await
+      .unwrap();
+    assert_eq!(result.answer.as_deref(), Some("got it"));
+
+    // A second, unrelated agent instance — different session, same
+    // store + scope — must see the preference without ever calling
+    // `remember_preference` itself.
+    let second_agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+    .with_session_id("session-2")
+    .with_preference_store(store, scope);
+
+    let messages = second_agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("en-GB"),
+      "the second agent's prompt must carry the preference the first agent's tool call \
+       persisted, got: {rendered}"
+    );
 
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");

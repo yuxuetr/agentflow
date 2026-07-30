@@ -30,6 +30,10 @@ agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", default-fe
 age = "0.11"
 base64 = "0.22"
 sha2 = "0.10"
+# U2.2: `remember_preference` registry-installable Tool, mirroring how
+# `agentflow-rag` wraps `KnowledgeBackend` as `RagSearchTool` (same
+# capability-tier -> tool-tier dependency shape, already established).
+agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 
 [dev-dependencies]
 tokio-test = "0.4"

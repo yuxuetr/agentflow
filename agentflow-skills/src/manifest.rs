@@ -484,6 +484,14 @@ pub struct MemoryConfig {
   /// Supported: `"text-embedding-3-small"` (default), `"text-embedding-3-large"`,
   /// `"text-embedding-ada-002"`.
   pub embedding_model: Option<String>,
+  /// U2.2: `[memory.preference]` sub-table — durable per-user
+  /// preferences, injected into the persona at prompt-assembly time and
+  /// writable mid-conversation via the `remember_preference` tool.
+  /// Independent of `memory_type` above; can be combined with any
+  /// primary memory type (including `"none"`). See
+  /// `docs/MEMORY_LAYERING.md` § Precedence at prompt-assembly time.
+  #[serde(default)]
+  pub preference: Option<PreferenceMemoryConfig>,
 }
 
 impl MemoryConfig {
@@ -497,4 +505,21 @@ impl MemoryConfig {
       .as_deref()
       .unwrap_or("text-embedding-3-small")
   }
+}
+
+/// `[memory.preference]` sub-table (U2.2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreferenceMemoryConfig {
+  /// Defaults to `true` — presence of the `[memory.preference]` table
+  /// implies "on"; an override file can still disable it explicitly
+  /// (`enabled = false`) without deleting the table.
+  #[serde(default = "default_preference_enabled")]
+  pub enabled: bool,
+  /// Path to the SQLite database file. Supports `~` expansion. Defaults
+  /// to `~/.agentflow/memory/<skill_name>.preference.db`.
+  pub db_path: Option<String>,
+}
+
+fn default_preference_enabled() -> bool {
+  true
 }

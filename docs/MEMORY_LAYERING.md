@@ -1,8 +1,10 @@
 # Memory Layering
 
 Status: design as of `P4.5`; backend implementations closed under
-P4.7 (2026-05-24, `5098719`) — see the "Wiring status" note under
-§4/§Precedence for what remains unwired (T4.1, 2026-07-30).
+P4.7 (2026-05-24, `5098719`); Preference wiring (config, prompt
+injection, write tool) closed under U2.2 (2026-07-31) — see the
+"Wiring status" note under §Precedence for what remains unwired
+(Entity facts).
 Crate: `agentflow-memory`.
 Implements: P4.7 (backend implementations) and P-H.4 (background task
 context).
@@ -272,17 +274,28 @@ operates **before** this list: when session history overflows the
 token budget, the summary backend compacts the oldest messages into
 a single synthetic message that takes their slot.
 
-**Wiring status (T4.1, as of this writing)**: the four-layer
-precedence above is the target design for prompt assembly. The
-Preference and Entity facts *stores* exist and are usable standalone
-(construct a `SqlitePreferenceStore`/`SqliteEntityFactStore` directly,
-or manage them operationally via `agentflow memory prune`), but
-neither `ReActAgent` nor `PlanExecuteAgent` reads from them yet — no
-agent-runtime code references `PreferenceStore`/`EntityFactStore`
-today. Wiring an agent's prompt assembly to consult these two layers
-automatically (and the matching `[memory.preference]`/
-`[memory.entity_facts]` skill.toml declarations below) remains
-unscheduled future work, not part of T4.1's scope.
+**Wiring status (U2.2, 2026-07-31)**: **Preference is wired end to end.**
+`ReActAgent` reads `PreferenceStore::list_preferences` fresh every turn
+and injects it into the persona (`agentflow-agents/src/react/agent.rs`),
+and a Skill can both configure it (`[memory.preference]`, see below) and
+*write* to it mid-conversation via the new `remember_preference` tool
+(`agentflow_memory::RememberPreferenceTool`, registered automatically
+by `SkillBuilder` whenever `[memory.preference]` is enabled) — the store
+was previously usable only "standalone" (a direct Rust API call, or
+`agentflow memory prune` for retention), so nothing in a real
+conversation could ever populate it; that gap is now closed.
+`PlanExecuteAgent` does **not** get this — the precedent it would mirror
+(`task_summary_store`/`project_memory_store`) was never added there
+either, so this is a pre-existing, unrelated gap, not new to U2.2.
+
+**Entity facts remains unwired** — `EntityFactStore::get_facts` is keyed
+by a single `entity_id`, so consulting it automatically requires first
+deciding *which* entities are "named in the current turn" (real NLU-ish
+work, not just a store read); the store itself is unaffected and still
+only reachable standalone / via `agentflow memory prune`. No
+`agentflow-skills`/`agentflow-agents`/`agentflow-harness` code
+references `EntityFactStore` yet. Wiring it is unscheduled future work
+(tracked in `TODOs.md`).
 
 ## Migration path
 
@@ -297,31 +310,41 @@ Today (`v0.3.0`):
   one stability tier (Beta) before being deprecated.
 - Preference and Entity facts stores landed as new code (T4.1, P4.7,
   `5098719`) — no existing rows to back-fill.
+- Preference *wiring* (config parsing, prompt injection, the
+  `remember_preference` write tool) landed U2.2 (2026-07-31).
 
-Skill manifest impact (**not yet implemented** — `agentflow-skills`'
-`[memory]` parsing only accepts `type = "session" | "sqlite" | "none"`
-today; `semantic` and the two sub-tables below are aspirational):
+Skill manifest impact — `agentflow-skills`' `[memory]` parsing accepts
+`type = "session" | "sqlite" | "semantic" | "none"` (all four; a prior
+version of this document incorrectly said only three — `semantic` has
+been handled by `SkillBuilder::build_memory` since 2026-04-25, the gap
+was a stale validator allowlist, fixed alongside U2.2). `[memory.preference]`
+is real as of U2.2; `[memory.entity_facts]` remains proposed, not
+implemented (see the Wiring status note above for why):
 
 ```toml
 # skill.toml (existing — no change required)
 [memory]
-type = "session"  # or "sqlite"; "semantic" is not wired into SkillBuilder yet
+type = "session"  # or "sqlite" | "semantic" | "none"
 window_tokens = 12000
 
-# skill.toml (proposed, not implemented — no SkillBuilder support yet)
+# skill.toml (U2.2 — implemented)
 [memory.preference]
-type = "sqlite"
-path = "~/.agentflow/memory/{skill}.preference.db"  # optional override
+enabled = true                                  # optional, defaults to true
+db_path = "~/.agentflow/memory/my-skill.preference.db"  # optional override;
+                                                  # defaults to
+                                                  # ~/.agentflow/memory/<skill_name>.preference.db
 
+# skill.toml (proposed, not implemented — no SkillBuilder support yet)
 [memory.entity_facts]
 type = "sqlite"
 path = "~/.agentflow/memory/{skill}.facts.db"  # optional override
 ```
 
-The existing `[memory]` table is unchanged. The two new tables above
-are the proposed additive shape for when SkillBuilder wiring lands;
-until then, no skill.toml can attach a preference or facts store, and
-no agent-runtime persona section is populated from those layers.
+The existing `[memory]` table is unchanged. `[memory.preference]` is
+independent of the primary `type` above — it can be combined with any
+of `session`/`sqlite`/`semantic`/`none`. `[memory.entity_facts]` is
+still the proposed additive shape for when that layer's wiring lands;
+until then no skill.toml can attach a facts store.
 
 ## Stability
 

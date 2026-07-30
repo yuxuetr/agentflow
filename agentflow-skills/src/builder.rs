@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_memory::{MemoryStore, SemanticMemory, SessionMemory, SqliteMemory};
+use agentflow_memory::{
+  MemoryStore, PreferenceScope, RememberPreferenceTool, SemanticMemory, SessionMemory,
+  SqliteMemory, SqlitePreferenceStore,
+};
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
 use agentflow_tools::builtin::{CodeExecTool, FileTool, HttpTool, ScriptTool, ShellTool};
@@ -15,10 +18,20 @@ use crate::{
   loader::resolve_knowledge_path,
   manifest::{
     DependenciesConfig, KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig,
-    ScriptIntegrityEntry, SecurityConfig, SkillManifest, ToolConfig,
+    PreferenceMemoryConfig, ScriptIntegrityEntry, SecurityConfig, SkillManifest, ToolConfig,
   },
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
+
+/// U2.2 deliberately does not introduce a multi-user identity concept
+/// (no existing hook point for one anywhere in `agentflow-skills`/
+/// `agentflow-agents`/`agentflow-harness`) — every preference write and
+/// read uses this fixed local scope, matching the "single-tenant
+/// local-dev" default used elsewhere in the workspace (e.g.
+/// `TenantId::default_for_local()`).
+fn default_preference_scope() -> PreferenceScope {
+  PreferenceScope::local("default")
+}
 
 /// Assembles a [`ReActAgent`] from a loaded [`SkillManifest`].
 ///
@@ -70,7 +83,26 @@ impl SkillBuilder {
     // 4. Build MemoryStore
     let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
 
-    Ok(ReActAgent::new(config, memory, Arc::new(registry)))
+    // 5. U2.2: preference layer (optional). Registers `remember_preference`
+    // into the registry (the write path) and attaches the same store to
+    // the agent for prompt injection (the read path) — see
+    // `default_preference_scope`'s doc comment for why there's no
+    // per-user scoping yet.
+    let preference_config = manifest.memory.as_ref().and_then(|m| m.preference.as_ref());
+    let preference_store = build_preference_store(preference_config, &manifest.skill.name).await?;
+    if let Some(store) = &preference_store {
+      registry.register(Arc::new(RememberPreferenceTool::new(
+        store.clone(),
+        default_preference_scope(),
+      )));
+    }
+
+    let agent = ReActAgent::new(config, memory, Arc::new(registry));
+    let agent = match preference_store {
+      Some(store) => agent.with_preference_store(store, default_preference_scope()),
+      None => agent,
+    };
+    Ok(agent)
   }
 
   /// Build the tool registry for a skill without constructing an agent.
@@ -132,7 +164,27 @@ impl SkillBuilder {
     }
 
     let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
-    Ok(ReActAgent::new(config, memory, Arc::new(filtered)))
+
+    // U2.2: preference layer (optional), subject to the same admission
+    // filter as every other tool — see `build_with_extra_tools` for the
+    // unfiltered counterpart this mirrors.
+    let preference_config = manifest.memory.as_ref().and_then(|m| m.preference.as_ref());
+    let preference_store = build_preference_store(preference_config, &manifest.skill.name).await?;
+    if let Some(store) = &preference_store
+      && admit(RememberPreferenceTool::TOOL_NAME)
+    {
+      filtered.register(Arc::new(RememberPreferenceTool::new(
+        store.clone(),
+        default_preference_scope(),
+      )));
+    }
+
+    let agent = ReActAgent::new(config, memory, Arc::new(filtered));
+    let agent = match preference_store {
+      Some(store) => agent.with_preference_store(store, default_preference_scope()),
+      None => agent,
+    };
+    Ok(agent)
   }
 }
 
@@ -845,6 +897,37 @@ async fn build_memory(
     }
   }
 }
+
+// ── PreferenceStore builder (U2.2) ───────────────────────────────────────────
+
+/// `None` when `[memory.preference]` is absent or explicitly disabled —
+/// callers treat that as "feature off," not an error.
+async fn build_preference_store(
+  config: Option<&PreferenceMemoryConfig>,
+  skill_name: &str,
+) -> Result<Option<Arc<tokio::sync::Mutex<SqlitePreferenceStore>>>, SkillError> {
+  let Some(cfg) = config else {
+    return Ok(None);
+  };
+  if !cfg.enabled {
+    return Ok(None);
+  }
+  let db_path = resolve_preference_db_path(cfg.db_path.as_deref(), skill_name);
+  if let Some(parent) = db_path.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| {
+      SkillError::IoError(format!(
+        "Cannot create preference memory directory {}: {}",
+        parent.display(),
+        e
+      ))
+    })?;
+  }
+  let store = SqlitePreferenceStore::open(&db_path)
+    .await
+    .map_err(|e| SkillError::IoError(format!("Cannot open preference store: {e}")))?;
+  Ok(Some(Arc::new(tokio::sync::Mutex::new(store))))
+}
+
 /// Resolve
 /// Resolve the SQLite db path, expanding `~` and supplying a default.
 fn resolve_db_path(db_path: Option<&str>, skill_name: &str) -> PathBuf {
@@ -856,6 +939,23 @@ fn resolve_db_path(db_path: Option<&str>, skill_name: &str) -> PathBuf {
         .join(".agentflow")
         .join("memory")
         .join(format!("{}.db", skill_name))
+    }
+  }
+}
+
+/// Same shape as [`resolve_db_path`], but defaults to a distinct
+/// filename (`<skill>.preference.db`) so the preference store never
+/// collides with the primary `MemoryConfig` store when both resolve to
+/// the default directory.
+fn resolve_preference_db_path(db_path: Option<&str>, skill_name: &str) -> PathBuf {
+  match db_path {
+    Some(p) => PathBuf::from(expand_tilde(p)),
+    None => {
+      let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+      home
+        .join(".agentflow")
+        .join("memory")
+        .join(format!("{}.preference.db", skill_name))
     }
   }
 }
@@ -1697,10 +1797,103 @@ name = "shell"
       db_path: Some(db_path.to_string_lossy().into_owned()),
       window_tokens: None,
       embedding_model: None,
+      preference: None,
     });
 
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
     assert!(db_path.exists(), "SQLite db file should have been created");
+  }
+
+  // ── U2.2: preference layer ───────────────────────────────────────────
+
+  fn preference_manifest(name: &str, db_path: &std::path::Path) -> SkillManifest {
+    let mut manifest = minimal_manifest(name);
+    manifest.memory = Some(crate::manifest::MemoryConfig {
+      memory_type: "none".to_string(),
+      db_path: None,
+      window_tokens: None,
+      embedding_model: None,
+      preference: Some(PreferenceMemoryConfig {
+        enabled: true,
+        db_path: Some(db_path.to_string_lossy().into_owned()),
+      }),
+    });
+    manifest
+  }
+
+  /// `[memory.preference]` must register `remember_preference` into the
+  /// built agent's tool registry.
+  #[tokio::test]
+  async fn build_registers_remember_preference_tool_when_configured() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("prefs.db");
+    let manifest = preference_manifest("preference-skill", &db_path);
+
+    let agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    assert!(
+      agent
+        .tools()
+        .get(RememberPreferenceTool::TOOL_NAME)
+        .is_some(),
+      "remember_preference must be registered when [memory.preference] is enabled"
+    );
+  }
+
+  /// Without `[memory.preference]`, behaviour is unchanged: no tool
+  /// registered, no store opened.
+  #[tokio::test]
+  async fn build_does_not_register_remember_preference_tool_when_not_configured() {
+    let dir = TempDir::new().unwrap();
+    let manifest = minimal_manifest("no-preference-skill");
+    let agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    assert!(
+      agent
+        .tools()
+        .get(RememberPreferenceTool::TOOL_NAME)
+        .is_none()
+    );
+  }
+
+  /// The regression U2.2 exists for: a preference written in one
+  /// Skill-produced agent's "session" must be visible to a second,
+  /// brand-new Skill-produced agent — same `skill.toml` (same db path),
+  /// no session in common — without either agent needing an LLM call
+  /// (the tool is invoked directly here, the same way the real agent
+  /// loop would invoke it after the LLM decides to call it; the
+  /// mock-LLM-driven version of this same round trip is covered at the
+  /// `agentflow-agents` layer by
+  /// `react::agent::tests::remember_preference_tool_write_is_visible_to_a_second_agent_instance`).
+  #[tokio::test]
+  async fn preference_written_in_one_session_is_read_in_the_next() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("prefs.db");
+    let manifest = preference_manifest("preference-skill", &db_path);
+
+    // "Session 1": build the agent, then call the SkillBuilder-registered
+    // `remember_preference` tool exactly as the real agent loop would
+    // when the LLM decides to call it.
+    let first_agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    let tool = first_agent
+      .tools()
+      .get(RememberPreferenceTool::TOOL_NAME)
+      .expect("registered above");
+    let out = tool
+      .execute(serde_json::json!({"key": "tone", "value": "concise"}))
+      .await
+      .unwrap();
+    assert!(!out.is_error);
+
+    // "Session 2": a brand-new agent built from the same skill.toml
+    // (same db_path) must surface the preference without ever calling
+    // `remember_preference` itself.
+    let second_agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
+    let messages = second_agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("concise"),
+      "the second agent's prompt must carry the preference the first agent's tool call \
+       persisted, got: {rendered}"
+    );
   }
 
   // ── SandboxPolicy merge tests ────────────────────────────────────────

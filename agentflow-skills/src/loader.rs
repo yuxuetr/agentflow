@@ -10,7 +10,11 @@ use crate::{error::SkillError, manifest::SkillManifest, skill_md::SkillMd};
 const MANIFEST_FILE: &str = "skill.toml";
 const SKILL_MD_FILE: &str = "SKILL.md";
 const KNOWN_TOOLS: &[&str] = &["shell", "file", "http", "script", "code_exec"];
-const KNOWN_MEMORY_TYPES: &[&str] = &["session", "sqlite", "none"];
+// U2.2: "semantic" was already handled by `builder.rs::build_memory` but
+// missing here, so a valid `type = "semantic"` manifest failed validation
+// before ever reaching the builder — a real bug the U2.4 evaluation
+// finding described as a docs-only discrepancy.
+const KNOWN_MEMORY_TYPES: &[&str] = &["session", "sqlite", "semantic", "none"];
 
 /// Loads and validates a skill manifest from a skill directory.
 ///
@@ -240,6 +244,15 @@ impl SkillLoader {
       if t == "sqlite" && manifest.skill.name.trim().is_empty() {
         warnings.push(
           "[memory] type is sqlite but skill.name is empty; db path may be invalid".to_string(),
+        );
+      }
+      if let Some(pref) = &mem.preference
+        && pref.enabled
+        && manifest.skill.name.trim().is_empty()
+      {
+        warnings.push(
+          "[memory.preference] is enabled but skill.name is empty; db path may be invalid"
+            .to_string(),
         );
       }
     }
