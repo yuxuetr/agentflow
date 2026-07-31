@@ -87,6 +87,32 @@ OS-sandbox backends. `cargo xtask check-arch`'s live edge list and
 sources of truth for the current graph; this file stays a historical
 point-in-time evaluation.
 
+**Update (U2.5, 2026-07-31):** the U2.1 update above tracked
+`ProjectMemoryStore`/`ProjectFact` as the extraction needed to close
+edge #5's `agents → memory` half. That extraction is now **done** —
+mirroring the `TaskSummaryStore` split already in `agentflow-store-spi`,
+`ProjectMemoryStore` (trait) + `ProjectFact` (struct) +
+`project_key_for_path` moved to `agentflow-store-spi::project`;
+`agentflow-memory::project` keeps `InMemoryProjectMemoryStore`/
+`SqliteProjectMemoryStore` and re-exports the contract types under
+their original `agentflow_memory::{ProjectFact, ProjectMemoryStore,
+project_key_for_path}` paths, so no call site needed to change. The
+edge itself, however, **still doesn't close**: re-auditing at the time
+of this extraction found `agentflow-agents`'s `ReActAgent` also carries
+a *second*, independent concrete-type dependency on `agentflow-memory`
+— `Option<Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>>`
++ `agentflow_memory::PreferenceScope` (production fields, added by U2.2
+*after* this evaluation's baseline and *after* U2.1's re-audit). Unlike
+`ProjectMemoryStore`, `PreferenceStore`'s write methods are `&mut self`
+(U2.2's own scope decision explicitly left it off `store-spi`, since
+that shape doesn't fit this crate's `Arc<dyn Trait>` contracts without
+first redesigning it to `&self` + interior locking). So flipping
+`agentflow-agents/Cargo.toml`'s `[dependencies]` from `agentflow-memory`
+to `agentflow-store-spi` now requires *that* redesign+extraction, not
+the `ProjectMemoryStore` one — tracked as a new, still-open backlog
+item rather than closing this edge prematurely. `ARCH_LATENT_EDGES` in
+`xtask/src/main.rs` documents this in full at the `agents → memory` row.
+
 ## 1. Ground-truth dependency graph (src-confirmed, `[dependencies]` only)
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |

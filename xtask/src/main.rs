@@ -3939,11 +3939,25 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.1 — inject MCP tools via tool contract",
   },
+  // U2.5 (2026-07-31): `ProjectMemoryStore`/`ProjectFact` PAID DOWN —
+  // extracted to `agentflow-store-spi` (mirroring `TaskSummaryStore`),
+  // `agentflow-memory` keeps `InMemoryProjectMemoryStore`/
+  // `SqliteProjectMemoryStore` and re-exports the contract types under
+  // their original paths. This edge stays real (not paid down), because
+  // `ReActAgent` production code also carries a concrete-type field
+  // (`Arc<Mutex<agentflow_memory::SqlitePreferenceStore>>` +
+  // `PreferenceScope`, added U2.2) with **no** store-spi contract —
+  // `PreferenceStore`'s `&mut self` write methods don't fit this crate's
+  // `Arc<dyn Trait>` contracts the way `ProjectMemoryStore`'s `&self`
+  // methods do, so extracting it wasn't in U2.2's scope. That's now the
+  // actual remaining prerequisite for flipping `[dependencies]` to
+  // `agentflow-store-spi`, not `ProjectMemoryStore`/`ProjectFact` as
+  // originally assumed when this edge was scoped.
   ArchLatent {
     from: "agentflow-agents",
     to: "agentflow-memory",
     becomes: "law 4 runtime→impl",
-    burndown: "P-A1.2 — depend on store-spi MemoryStore, not the impl",
+    burndown: "U2.5 follow-up — extract PreferenceStore contract (needs &mut self -> &self redesign) before store-spi",
   },
   // T3.3 (2026-07-30): `agents -> tools` PAID DOWN — `agentflow-tools`
   // split into `agentflow-tool` (contract) + `agentflow-tools` (builtin
@@ -3965,12 +3979,8 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // re-exports), so `[dependencies]` now points at `agentflow-store-spi`
   // directly; `agentflow-memory` moved to `[dev-dependencies]` for
   // `SessionMemory` in this crate's own tests. `agents -> memory` (row
-  // above) stays real, not paid down — `ReActAgent` production code
-  // depends on `ProjectMemoryStore`/`ProjectFact`, which have no
-  // store-spi contract yet (unlike `MemoryStore`/`TaskSummaryStore`,
-  // which do); extracting those is the actual remaining prerequisite,
-  // tracked as a follow-up, not "default-value construction" as
-  // originally assumed when this edge was scoped.
+  // above) stays real, not paid down — see the U2.5 note on that row for
+  // the current (post-U2.2 preference wiring) reason why.
   ArchLatent {
     from: "agentflow-harness",
     to: "agentflow-tracing",

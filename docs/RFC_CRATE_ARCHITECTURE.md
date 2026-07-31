@@ -317,3 +317,15 @@ inspection, isn't the same kind of edge R5/R6 describe: `agentflow-agents`'s
 `Tool`/`agentflow-tool` split is the template), not just "inject the
 existing contract at the surface." See `docs/ARCHITECTURE_EVALUATION_
 2026-06-20.md`'s U2.1 update for the full accounting.
+
+**Status (U2.5, 2026-07-31):** the `ProjectMemoryStore`/`ProjectFact`
+contract extraction U2.1 called out is done — both now live in
+`agentflow-store-spi::project` (T3.3-shaped split, `agentflow-memory`
+re-exports the contract types and keeps the concrete stores). The
+`agents→memory` edge still doesn't close, though: `ReActAgent` also
+depends on the concrete `agentflow_memory::SqlitePreferenceStore` +
+`PreferenceScope` (added by U2.2, after U2.1's re-audit), and
+`PreferenceStore`'s `&mut self` write methods were explicitly left off
+`store-spi` in U2.2's own scope decision. That redesign+extraction is
+now the real remaining prerequisite. See `docs/ARCHITECTURE_EVALUATION_
+2026-06-20.md`'s U2.5 update for the full accounting.

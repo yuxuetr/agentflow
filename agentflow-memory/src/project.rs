@@ -1,13 +1,15 @@
-//! Project-scoped memory (L3.1): durable facts about a *project*, shared
-//! across every session that runs against it — distinct from every other
-//! layer in this crate, which is scoped to a session, user, or entity.
+//! Concrete [`ProjectMemoryStore`] implementations (L3.1).
 //!
-//! Placed here rather than `agentflow-store-spi` (unlike L2.1's
-//! `TaskSummary`, which sits on `store-spi` because `agent-spi` needs to
-//! reference it directly): `ProjectFact`/`ProjectMemoryStore` have no
-//! cross-crate consumer today, and structurally they're a closer match to
-//! this crate's existing `EntityFact`/`EntityFactStore` ("layer" contracts
-//! that already live here, not on `store-spi`) than to `TaskSummary`.
+//! The contract (`ProjectMemoryStore` trait + `ProjectFact` +
+//! `project_key_for_path`) lives in `agentflow-store-spi` (U2.5, mirroring
+//! the `TaskSummaryStore` split in that crate) and is re-exported below
+//! under its original `agentflow_memory::project::*` paths so existing call
+//! sites keep compiling.
+//!
+//! Two implementations, mirroring the session-memory split:
+//! [`InMemoryProjectMemoryStore`] (ephemeral, process-lifetime — matches
+//! [`crate::SessionMemory`]) and [`SqliteProjectMemoryStore`] (persistent —
+//! matches [`crate::SqliteMemory`]).
 //!
 //! Scope of this pass (see `TODOs.md` L3.1): a library capability —
 //! `ProjectMemoryStore` + `ProjectFactGenerator` + the two concrete stores
@@ -23,73 +25,12 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use chrono::Utc;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::MemoryError;
-
-/// A single durable fact about a project: a command observed to have been
-/// run (via the `shell` or `script` tool) during some prior session.
-///
-/// Deliberately narrow (see module docs' scope note): a deterministic
-/// extractor can safely say "this exact command ran" without guessing at
-/// its *purpose* (build vs. test vs. deploy) — that classification would
-/// need real judgment, so this type doesn't attempt it. A richer,
-/// LLM-backed [`ProjectFactGenerator`] could produce that classification
-/// later without changing this shape (it would just populate more
-/// instances, or a future variant).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProjectFact {
-  /// Tool that ran the command (`"shell"`, `"script"`, or `"code_exec"`).
-  pub tool: String,
-  /// The exact command text observed.
-  pub command: String,
-  /// When this command was first observed for this project.
-  pub first_seen: DateTime<Utc>,
-  /// When this command was most recently observed.
-  pub last_seen: DateTime<Utc>,
-  /// How many separate runs have observed this exact command.
-  pub observation_count: u32,
-}
-
-/// Persistence contract for [`ProjectFact`], keyed by a caller-computed
-/// `project_key` — a stable identifier for a project (see
-/// [`project_key_for_path`] for the recommended derivation). Recording the
-/// same `(tool, command)` pair again is an upsert: it bumps
-/// `observation_count`/`last_seen` rather than duplicating, so a command
-/// that shows up in every run doesn't grow the fact list unboundedly.
-#[async_trait]
-pub trait ProjectMemoryStore: Send + Sync {
-  /// All facts recorded for `project_key`, most-recently-seen first.
-  async fn get_project_facts(&self, project_key: &str) -> Result<Vec<ProjectFact>, MemoryError>;
-
-  /// Record an observation of `command` (run via `tool`) for `project_key`.
-  async fn record_project_fact(
-    &self,
-    project_key: &str,
-    tool: &str,
-    command: &str,
-  ) -> Result<(), MemoryError>;
-
-  /// Delete every fact recorded for `project_key`.
-  async fn clear_project_facts(&self, project_key: &str) -> Result<(), MemoryError>;
-}
-
-/// Derive a stable `project_key` from a project root path: sha256 of the
-/// canonicalized (symlink-resolved) absolute path, lowercase hex — same
-/// "sha256 of a canonical, stable input" pattern
-/// `agentflow-cli`'s MCP discovery cache already uses for content-addressed
-/// keys. Falls back to hashing the path as-given if it doesn't exist yet
-/// (canonicalize requires the path to exist) or can't be canonicalized.
-pub fn project_key_for_path(root: &Path) -> String {
-  let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-  let mut hasher = Sha256::new();
-  hasher.update(canonical.to_string_lossy().as_bytes());
-  format!("{:x}", hasher.finalize())
-}
+pub use agentflow_store_spi::{ProjectFact, ProjectMemoryStore, project_key_for_path};
 
 /// Ephemeral, process-lifetime [`ProjectMemoryStore`] — for tests and
 /// short-lived usage that doesn't need facts to survive a restart.
@@ -283,8 +224,8 @@ impl ProjectMemoryStore for SqliteProjectMemoryStore {
   }
 }
 
-fn parse_ts(s: &str) -> DateTime<Utc> {
-  DateTime::parse_from_rfc3339(s)
+fn parse_ts(s: &str) -> chrono::DateTime<Utc> {
+  chrono::DateTime::parse_from_rfc3339(s)
     .map(|dt| dt.with_timezone(&Utc))
     .unwrap_or_else(|_| Utc::now())
 }
@@ -292,25 +233,6 @@ fn parse_ts(s: &str) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn project_key_is_stable_for_the_same_path() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let key1 = project_key_for_path(dir.path());
-    let key2 = project_key_for_path(dir.path());
-    assert_eq!(key1, key2);
-    assert_eq!(key1.len(), 64, "sha256 hex digest should be 64 chars");
-  }
-
-  #[test]
-  fn project_key_differs_for_different_paths() {
-    let dir_a = tempfile::TempDir::new().unwrap();
-    let dir_b = tempfile::TempDir::new().unwrap();
-    assert_ne!(
-      project_key_for_path(dir_a.path()),
-      project_key_for_path(dir_b.path())
-    );
-  }
 
   #[tokio::test]
   async fn in_memory_store_upserts_repeated_commands() {
