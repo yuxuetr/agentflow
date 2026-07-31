@@ -3943,21 +3943,34 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // extracted to `agentflow-store-spi` (mirroring `TaskSummaryStore`),
   // `agentflow-memory` keeps `InMemoryProjectMemoryStore`/
   // `SqliteProjectMemoryStore` and re-exports the contract types under
-  // their original paths. This edge stays real (not paid down), because
-  // `ReActAgent` production code also carries a concrete-type field
-  // (`Arc<Mutex<agentflow_memory::SqlitePreferenceStore>>` +
-  // `PreferenceScope`, added U2.2) with **no** store-spi contract —
-  // `PreferenceStore`'s `&mut self` write methods don't fit this crate's
-  // `Arc<dyn Trait>` contracts the way `ProjectMemoryStore`'s `&self`
-  // methods do, so extracting it wasn't in U2.2's scope. That's now the
-  // actual remaining prerequisite for flipping `[dependencies]` to
-  // `agentflow-store-spi`, not `ProjectMemoryStore`/`ProjectFact` as
-  // originally assumed when this edge was scoped.
+  // their original paths.
+  // U2.6 (2026-08-01): `PreferenceStore` ALSO PAID DOWN — re-auditing
+  // found the `&mut self` write methods weren't actually load-bearing
+  // (`SqlitePreferenceStore` only ever touches `&self.pool`, an
+  // `Arc`-backed `sqlx::SqlitePool` that's already safe to share;
+  // `AgeEncryptedPreferenceStore` just encrypts and forwards). Redesigned
+  // the trait to `&self`, extracted it to `agentflow-store-spi` alongside
+  // `PreferenceScope`/`PreferenceValue`, and `ReActAgent`'s
+  // `preference_store` field + `RememberPreferenceTool` both dropped
+  // their `Mutex` wrapper for a bare `Arc<dyn PreferenceStore>` —
+  // matching `project_memory_store`/`task_summary_store` exactly.
+  // This edge STILL stays real (not paid down) — a third, different
+  // reason surfaced during U2.6's audit: `agentflow-agents/src/dynamic.rs`
+  // (`DynamicWorkflowAgent`, compiling an LLM-authored `agent` plan step)
+  // constructs a concrete `Box::new(SessionMemory::default_window())` as
+  // its default memory backend. `SessionMemory` has no store-spi contract
+  // *by design* (it's a concrete impl, not a missing contract, unlike
+  // `ProjectMemoryStore`/`PreferenceStore` were) — closing this edge for
+  // real would need `DynamicWorkflowAgent`'s default memory to become
+  // caller-injectable, a genuinely different (and larger) change than
+  // "extract one more contract." Not attempted in U2.6; no new item
+  // opened to track it — left as an accepted, load-bearing use of a
+  // concrete `agentflow-memory` type, not a to-do.
   ArchLatent {
     from: "agentflow-agents",
     to: "agentflow-memory",
     becomes: "law 4 runtime→impl",
-    burndown: "U2.5 follow-up — extract PreferenceStore contract (needs &mut self -> &self redesign) before store-spi",
+    burndown: "not closable via contract extraction alone — dynamic.rs's SessionMemory default needs an injectable-memory redesign",
   },
   // T3.3 (2026-07-30): `agents -> tools` PAID DOWN — `agentflow-tools`
   // split into `agentflow-tool` (contract) + `agentflow-tools` (builtin
@@ -3979,7 +3992,7 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // re-exports), so `[dependencies]` now points at `agentflow-store-spi`
   // directly; `agentflow-memory` moved to `[dev-dependencies]` for
   // `SessionMemory` in this crate's own tests. `agents -> memory` (row
-  // above) stays real, not paid down — see the U2.5 note on that row for
+  // above) stays real, not paid down — see the U2.5/U2.6 notes on that row for
   // the current (post-U2.2 preference wiring) reason why.
   ArchLatent {
     from: "agentflow-harness",

@@ -26,7 +26,7 @@ async fn cli_memory_prune_preference_removes_old_rows_and_emits_envelope() {
 
   // Seed: one row that will age past the cutoff, one fresh row.
   {
-    let mut store = SqlitePreferenceStore::open(&db)
+    let store = SqlitePreferenceStore::open(&db)
       .await
       .expect("open seed store");
     let scope = PreferenceScope::local("alice");

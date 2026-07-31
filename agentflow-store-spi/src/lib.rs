@@ -24,13 +24,22 @@
 //!   [`ProjectFact`](project::ProjectFact) + [`project_key_for_path`](project::project_key_for_path),
 //!   durable facts about a project shared across every session that runs
 //!   against it. Concrete stores (`InMemoryProjectMemoryStore` /
-//!   `SqliteProjectMemoryStore`) live in `agentflow-memory`. The sibling
-//!   preference layer (`PreferenceStore`) deliberately has **no** store-spi
-//!   contract — its `&mut self` write methods don't fit this crate's
-//!   `Arc<dyn Trait>`-shaped contracts the way `ProjectMemoryStore`'s
-//!   `&self` methods do (U2.2 scope decision) — so `agentflow-agents` still
-//!   carries a real (non-dev) `agentflow-memory` dependency for
-//!   `SqlitePreferenceStore` regardless of this extraction.
+//!   `SqliteProjectMemoryStore`) live in `agentflow-memory`.
+//! - **Preference** (U2.6) — the [`PreferenceStore`](preference::PreferenceStore)
+//!   trait + [`PreferenceScope`](preference::PreferenceScope) /
+//!   [`PreferenceValue`](preference::PreferenceValue), durable per-user
+//!   key/value storage. U2.2/U2.5 originally left this off `store-spi`
+//!   because its write methods took `&mut self`; U2.6 found that
+//!   constraint wasn't load-bearing (see `preference` module docs) and
+//!   redesigned the trait to `&self`, matching `ProjectMemoryStore` /
+//!   `TaskSummaryStore`. Concrete stores (`SqlitePreferenceStore` /
+//!   `AgeEncryptedPreferenceStore`) live in `agentflow-memory`.
+//!   `agentflow-agents` still carries a real (non-dev) `agentflow-memory`
+//!   dependency regardless of this extraction — `dynamic.rs`'s
+//!   `DynamicWorkflowAgent` constructs a concrete `SessionMemory` as the
+//!   default memory backend for LLM-authored `agent` plan steps, which
+//!   has no store-spi contract by design (it's a concrete impl, not a
+//!   contract gap).
 //!
 //! Memory was extracted from `agentflow-memory` in P-A1.2 so that runtime/agent
 //! contracts (`agentflow-agent-spi`) can depend on `Message` without depending
@@ -41,6 +50,7 @@
 
 pub mod error;
 pub mod knowledge;
+pub mod preference;
 pub mod project;
 pub mod store;
 pub mod task_summary;
@@ -48,6 +58,7 @@ pub mod types;
 
 pub use error::MemoryError;
 pub use knowledge::{KnowledgeBackend, KnowledgeChunk, KnowledgeError};
+pub use preference::{PreferenceScope, PreferenceStore, PreferenceValue};
 pub use project::{ProjectFact, ProjectMemoryStore, project_key_for_path};
 pub use store::MemoryStore;
 pub use task_summary::{TaskSummary, TaskSummaryStore};

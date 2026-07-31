@@ -180,6 +180,11 @@ pub trait SemanticMemoryStore: MemoryStore {
   ) -> Result<Vec<(Message, f32)>, MemoryError>;
 }
 
+// U2.6: moved to `agentflow-store-spi::preference` with `&self` write
+// methods (originally `&mut self`; re-auditing found that constraint
+// wasn't load-bearing — `SqlitePreferenceStore` only touches
+// `&self.pool`, an `Arc`-backed `sqlx::SqlitePool`). `agentflow-memory`
+// re-exports it under this same `PreferenceStore` path.
 #[async_trait]
 pub trait PreferenceStore: Send + Sync {
   async fn get_preference(
@@ -188,13 +193,13 @@ pub trait PreferenceStore: Send + Sync {
     key: &str,
   ) -> Result<Option<PreferenceValue>, MemoryError>;
   async fn put_preference(
-    &mut self,
+    &self,
     scope: &PreferenceScope,
     key: &str,
     value: serde_json::Value,
   ) -> Result<(), MemoryError>;
   async fn delete_preference(
-    &mut self,
+    &self,
     scope: &PreferenceScope,
     key: &str,
   ) -> Result<(), MemoryError>;
@@ -202,7 +207,7 @@ pub trait PreferenceStore: Send + Sync {
     &self,
     scope: &PreferenceScope,
   ) -> Result<Vec<(String, PreferenceValue)>, MemoryError>;
-  async fn prune_older_than(&mut self, older_than: Duration) -> Result<u64, MemoryError>;
+  async fn prune_older_than(&self, older_than: Duration) -> Result<u64, MemoryError>;
 }
 
 #[async_trait]

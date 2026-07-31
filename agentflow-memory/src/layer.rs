@@ -95,80 +95,13 @@ impl RetentionPolicy {
 }
 
 // ── Preference layer ────────────────────────────────────────────────────────
-
-/// `(tenant_id, user_id)` identity that scopes every preference write.
-///
-/// Both fields are required. For single-tenant local-dev use, pass
-/// `PreferenceScope::local(user_id)` which hard-codes `tenant_id = "default"`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PreferenceScope {
-  pub tenant_id: String,
-  pub user_id: String,
-}
-
-impl PreferenceScope {
-  pub fn new(tenant_id: impl Into<String>, user_id: impl Into<String>) -> Self {
-    Self {
-      tenant_id: tenant_id.into(),
-      user_id: user_id.into(),
-    }
-  }
-
-  /// Zero-config scope for single-tenant local-dev: tenant = `"default"`.
-  pub fn local(user_id: impl Into<String>) -> Self {
-    Self::new("default", user_id)
-  }
-}
-
-/// A stored preference value with provenance.
-///
-/// `version` increments on every `put_preference`; consumers can use it to
-/// detect concurrent writes from a different agent process.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PreferenceValue {
-  pub value: Value,
-  pub updated_at: DateTime<Utc>,
-  pub version: i64,
-}
-
-/// Durable per-user key/value store. See `docs/MEMORY_LAYERING.md` §3.
-#[async_trait]
-pub trait PreferenceStore: Send + Sync {
-  /// Fetch the value for `key` under `scope`. Returns `Ok(None)` if absent.
-  async fn get_preference(
-    &self,
-    scope: &PreferenceScope,
-    key: &str,
-  ) -> Result<Option<PreferenceValue>, MemoryError>;
-
-  /// Insert or update the value for `key` under `scope`. Increments
-  /// `version` and stamps `updated_at` server-side.
-  async fn put_preference(
-    &mut self,
-    scope: &PreferenceScope,
-    key: &str,
-    value: Value,
-  ) -> Result<(), MemoryError>;
-
-  /// Remove the value for `key`. Idempotent — succeeds if the row was
-  /// already absent.
-  async fn delete_preference(
-    &mut self,
-    scope: &PreferenceScope,
-    key: &str,
-  ) -> Result<(), MemoryError>;
-
-  /// Enumerate every `(key, value)` pair under `scope`. Used by the
-  /// agent runtime to surface "what does the agent know about me?" UX.
-  async fn list_preferences(
-    &self,
-    scope: &PreferenceScope,
-  ) -> Result<Vec<(String, PreferenceValue)>, MemoryError>;
-
-  /// Drop rows whose `updated_at` is older than `older_than`. Returns the
-  /// number of rows removed.
-  async fn prune_older_than(&mut self, older_than: Duration) -> Result<u64, MemoryError>;
-}
+//
+// The contract (`PreferenceStore` trait + `PreferenceScope` +
+// `PreferenceValue`) moved to `agentflow-store-spi::preference` (U2.6,
+// mirroring the `ProjectMemoryStore` split in U2.5) and is re-exported
+// below under its original `agentflow_memory::layer::*` paths so existing
+// call sites keep compiling.
+pub use agentflow_store_spi::{PreferenceScope, PreferenceStore, PreferenceValue};
 
 // ── Entity facts layer ──────────────────────────────────────────────────────
 
@@ -310,13 +243,6 @@ mod tests {
     let two_years = Duration::from_secs(63_115_200);
     assert_eq!(policy.keep_invalidated_for, Some(two_years));
     assert!(policy.max_age.is_none());
-  }
-
-  #[test]
-  fn preference_scope_local_uses_default_tenant() {
-    let scope = PreferenceScope::local("alice");
-    assert_eq!(scope.tenant_id, "default");
-    assert_eq!(scope.user_id, "alice");
   }
 
   #[test]

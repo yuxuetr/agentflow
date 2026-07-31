@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{
-  MemoryStore, PreferenceScope, RememberPreferenceTool, SemanticMemory, SessionMemory,
-  SqliteMemory, SqlitePreferenceStore,
+  MemoryStore, PreferenceScope, PreferenceStore, RememberPreferenceTool, SemanticMemory,
+  SessionMemory, SqliteMemory, SqlitePreferenceStore,
 };
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
@@ -905,7 +905,7 @@ async fn build_memory(
 async fn build_preference_store(
   config: Option<&PreferenceMemoryConfig>,
   skill_name: &str,
-) -> Result<Option<Arc<tokio::sync::Mutex<SqlitePreferenceStore>>>, SkillError> {
+) -> Result<Option<Arc<dyn PreferenceStore>>, SkillError> {
   let Some(cfg) = config else {
     return Ok(None);
   };
@@ -925,7 +925,7 @@ async fn build_preference_store(
   let store = SqlitePreferenceStore::open(&db_path)
     .await
     .map_err(|e| SkillError::IoError(format!("Cannot open preference store: {e}")))?;
-  Ok(Some(Arc::new(tokio::sync::Mutex::new(store))))
+  Ok(Some(Arc::new(store)))
 }
 
 /// Resolve

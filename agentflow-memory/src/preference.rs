@@ -140,7 +140,7 @@ impl PreferenceStore for SqlitePreferenceStore {
   }
 
   async fn put_preference(
-    &mut self,
+    &self,
     scope: &PreferenceScope,
     key: &str,
     value: Value,
@@ -167,11 +167,7 @@ impl PreferenceStore for SqlitePreferenceStore {
     Ok(())
   }
 
-  async fn delete_preference(
-    &mut self,
-    scope: &PreferenceScope,
-    key: &str,
-  ) -> Result<(), MemoryError> {
+  async fn delete_preference(&self, scope: &PreferenceScope, key: &str) -> Result<(), MemoryError> {
     sqlx::query(
       "DELETE FROM preferences
        WHERE tenant_id = ?1 AND user_id = ?2 AND key = ?3",
@@ -227,7 +223,7 @@ impl PreferenceStore for SqlitePreferenceStore {
     Ok(out)
   }
 
-  async fn prune_older_than(&mut self, older_than: Duration) -> Result<u64, MemoryError> {
+  async fn prune_older_than(&self, older_than: Duration) -> Result<u64, MemoryError> {
     let chrono_dur = chrono::Duration::from_std(older_than)
       .map_err(|e| MemoryError::StorageError(format!("invalid retention duration: {e}")))?;
     let cutoff = Utc::now()
@@ -253,7 +249,7 @@ mod tests {
 
   #[tokio::test]
   async fn put_get_delete_roundtrip() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("alice");
 
     assert!(
@@ -288,7 +284,7 @@ mod tests {
 
   #[tokio::test]
   async fn put_twice_increments_version() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("alice");
 
     store
@@ -311,7 +307,7 @@ mod tests {
 
   #[tokio::test]
   async fn delete_missing_key_is_idempotent() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("ghost");
     // Should not error even though the row doesn't exist.
     store.delete_preference(&scope, "nope").await.unwrap();
@@ -319,7 +315,7 @@ mod tests {
 
   #[tokio::test]
   async fn scopes_are_isolated() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let alice = PreferenceScope::local("alice");
     let bob = PreferenceScope::local("bob");
     let tenant_b_alice = PreferenceScope::new("tenant_b", "alice");
@@ -368,7 +364,7 @@ mod tests {
 
   #[tokio::test]
   async fn list_returns_all_keys_in_scope_sorted() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("alice");
 
     store
@@ -391,7 +387,7 @@ mod tests {
 
   #[tokio::test]
   async fn prune_older_than_removes_only_old_rows() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("alice");
 
     // Insert one row, then manually backdate its updated_at so prune can
@@ -437,7 +433,7 @@ mod tests {
 
   #[tokio::test]
   async fn value_preserves_complex_json() {
-    let mut store = fresh_store().await;
+    let store = fresh_store().await;
     let scope = PreferenceScope::local("alice");
     let complex = json!({
       "nested": {"a": 1, "b": [true, false, null]},

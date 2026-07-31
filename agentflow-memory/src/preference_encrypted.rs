@@ -242,7 +242,7 @@ impl<S: PreferenceStore> PreferenceStore for AgeEncryptedPreferenceStore<S> {
   }
 
   async fn put_preference(
-    &mut self,
+    &self,
     scope: &PreferenceScope,
     key: &str,
     value: Value,
@@ -254,11 +254,7 @@ impl<S: PreferenceStore> PreferenceStore for AgeEncryptedPreferenceStore<S> {
       .await
   }
 
-  async fn delete_preference(
-    &mut self,
-    scope: &PreferenceScope,
-    key: &str,
-  ) -> Result<(), MemoryError> {
+  async fn delete_preference(&self, scope: &PreferenceScope, key: &str) -> Result<(), MemoryError> {
     // No crypto involvement on delete — the inner store already keys
     // on `(tenant, user, key)` (all plaintext).
     self.inner.delete_preference(scope, key).await
@@ -284,7 +280,7 @@ impl<S: PreferenceStore> PreferenceStore for AgeEncryptedPreferenceStore<S> {
     Ok(out)
   }
 
-  async fn prune_older_than(&mut self, older_than: Duration) -> Result<u64, MemoryError> {
+  async fn prune_older_than(&self, older_than: Duration) -> Result<u64, MemoryError> {
     // Prune is a metadata-only operation (`updated_at < cutoff`); the
     // inner store handles it without needing to touch ciphertext.
     self.inner.prune_older_than(older_than).await
@@ -307,7 +303,7 @@ mod tests {
 
   #[tokio::test]
   async fn put_get_roundtrip_preserves_value() {
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     store
       .put_preference(&scope, "tone", json!("friendly"))
@@ -324,7 +320,7 @@ mod tests {
 
   #[tokio::test]
   async fn put_get_roundtrip_preserves_complex_json() {
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     let payload = json!({
       "tone": "friendly",
@@ -354,7 +350,7 @@ mod tests {
     // the marker prefix + does not contain the plaintext substring.
     let inner = SqlitePreferenceStore::in_memory().await.unwrap();
     let identity = age::x25519::Identity::generate();
-    let mut store = AgeEncryptedPreferenceStore::new(inner, identity);
+    let store = AgeEncryptedPreferenceStore::new(inner, identity);
     let scope = PreferenceScope::local("alice");
     let plaintext_marker = "EXTREMELY_DISTINCTIVE_PLAINTEXT_STRING";
     store
@@ -386,7 +382,7 @@ mod tests {
     // the inner store. Pin that the version-increment semantics
     // survive the encryption indirection (the inner row's
     // `updated_at` + `version` are not encrypted).
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     store
       .put_preference(&scope, "tone", json!("friendly"))
@@ -403,7 +399,7 @@ mod tests {
 
   #[tokio::test]
   async fn delete_then_get_returns_none() {
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     store.put_preference(&scope, "k", json!(1)).await.unwrap();
     store.delete_preference(&scope, "k").await.unwrap();
@@ -412,7 +408,7 @@ mod tests {
 
   #[tokio::test]
   async fn list_decrypts_every_row() {
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     store
       .put_preference(&scope, "a", json!("a-val"))
@@ -448,7 +444,7 @@ mod tests {
     let inner = SqlitePreferenceStore::in_memory().await.unwrap();
     let identity_a = age::x25519::Identity::generate();
     let identity_b = age::x25519::Identity::generate();
-    let mut writer = AgeEncryptedPreferenceStore::new(inner, identity_a);
+    let writer = AgeEncryptedPreferenceStore::new(inner, identity_a);
     let scope = PreferenceScope::local("alice");
     writer
       .put_preference(&scope, "k", json!("plaintext"))
@@ -484,7 +480,7 @@ mod tests {
     // encrypted-wrapper read MUST refuse — silently returning the
     // plaintext as if it were decrypted would be a security
     // regression.
-    let mut inner = SqlitePreferenceStore::in_memory().await.unwrap();
+    let inner = SqlitePreferenceStore::in_memory().await.unwrap();
     let scope = PreferenceScope::local("alice");
     inner
       .put_preference(&scope, "leaked", json!("naked-plaintext"))
@@ -504,7 +500,7 @@ mod tests {
 
   #[tokio::test]
   async fn prune_passthrough_uses_inner_store() {
-    let mut store = fresh_encrypted_store().await;
+    let store = fresh_encrypted_store().await;
     let scope = PreferenceScope::local("alice");
     store.put_preference(&scope, "k", json!("v")).await.unwrap();
     // A 0-duration cutoff prunes nothing on a row that's <1s old,

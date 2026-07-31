@@ -5,7 +5,7 @@ use agentflow_async_util::{RaceOutcome, race_with_limits};
 use agentflow_llm::{
   AgentFlow, LLMResponse, MultimodalMessage, ToolCallRequest, ToolSpec, prompt_fingerprint,
 };
-use agentflow_memory::{MemoryStore, Message, PreferenceStore, Role};
+use agentflow_memory::{MemoryStore, Message, Role};
 use agentflow_tool::{ToolIdempotency, ToolMetadata, ToolRegistry};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -439,11 +439,11 @@ pub struct ReActAgent {
   /// U2.2: durable per-user preferences (tone, language, opt-outs), read
   /// fresh every turn and injected into the persona — see
   /// `docs/MEMORY_LAYERING.md` § Precedence at prompt-assembly time.
-  /// `None` (the default) disables the feature entirely. `PreferenceStore`
-  /// requires `&mut self` to write, so it's wrapped in a `Mutex` rather
-  /// than the `Arc<dyn Trait>` shape `task_summary_store`/
-  /// `project_memory_store` use — those traits are `&self`-only.
-  preference_store: Option<Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>>,
+  /// `None` (the default) disables the feature entirely. U2.6 redesigned
+  /// `PreferenceStore` to `&self` (matching `task_summary_store`/
+  /// `project_memory_store`), so this is a bare `Arc<dyn Trait>` too —
+  /// no `Mutex` wrapper needed.
+  preference_store: Option<Arc<dyn agentflow_memory::PreferenceStore>>,
   preference_scope: Option<agentflow_memory::PreferenceScope>,
   /// Stable identifier for this agent's conversation session
   pub session_id: String,
@@ -638,7 +638,7 @@ impl ReActAgent {
   /// — writes from that tool are visible on the agent's very next turn.
   pub fn with_preference_store(
     mut self,
-    store: Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>,
+    store: Arc<dyn agentflow_memory::PreferenceStore>,
     scope: agentflow_memory::PreferenceScope,
   ) -> Self {
     self.preference_store = Some(store);
@@ -2507,7 +2507,7 @@ impl ReActAgent {
     if let Some(store) = &self.preference_store
       && let Some(scope) = &self.preference_scope
     {
-      let prefs = store.lock().await.list_preferences(scope).await?;
+      let prefs = store.list_preferences(scope).await?;
       if !prefs.is_empty() {
         messages.push(
           MultimodalMessage::system()
@@ -6414,15 +6414,13 @@ providers:
 
   #[tokio::test]
   async fn preference_injection_surfaces_a_directly_seeded_preference() {
-    let store = Arc::new(tokio::sync::Mutex::new(
+    let store: Arc<dyn agentflow_memory::PreferenceStore> = Arc::new(
       agentflow_memory::SqlitePreferenceStore::in_memory()
         .await
         .unwrap(),
-    ));
+    );
     let scope = agentflow_memory::PreferenceScope::local("default");
     store
-      .lock()
-      .await
       .put_preference(&scope, "language", json!("en-GB"))
       .await
       .unwrap();
@@ -6471,11 +6469,11 @@ providers:
   async fn remember_preference_tool_write_is_visible_to_a_second_agent_instance() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;
     let model = format!("mock-preference-{}", uuid::Uuid::new_v4());
-    let store = Arc::new(tokio::sync::Mutex::new(
+    let store: Arc<dyn agentflow_memory::PreferenceStore> = Arc::new(
       agentflow_memory::SqlitePreferenceStore::in_memory()
         .await
         .unwrap(),
-    ));
+    );
     let scope = agentflow_memory::PreferenceScope::local("default");
 
     unsafe {

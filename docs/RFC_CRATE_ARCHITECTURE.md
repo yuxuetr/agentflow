@@ -329,3 +329,17 @@ depends on the concrete `agentflow_memory::SqlitePreferenceStore` +
 `store-spi` in U2.2's own scope decision. That redesign+extraction is
 now the real remaining prerequisite. See `docs/ARCHITECTURE_EVALUATION_
 2026-06-20.md`'s U2.5 update for the full accounting.
+
+**Status (U2.6, 2026-08-01):** the `PreferenceStore` redesign+extraction
+is also done — its `&mut self` constraint turned out not to be
+load-bearing (`SqlitePreferenceStore` only touches `&self.pool`), so
+the trait moved to `agentflow-store-spi::preference` as `&self`,
+matching `ProjectMemoryStore`/`TaskSummaryStore`. The `agents→memory`
+edge *still* doesn't close: a third reason surfaced —
+`agentflow-agents/src/dynamic.rs`'s `DynamicWorkflowAgent` constructs a
+concrete `SessionMemory` as its default memory backend, which has no
+`store-spi` contract by design (not a gap to extract). Closing this
+edge for real now needs `DynamicWorkflowAgent`'s default memory to be
+made caller-injectable — accepted as-is rather than tracked as a new
+item. See `docs/ARCHITECTURE_EVALUATION_2026-06-20.md`'s U2.6 update
+for the full accounting.

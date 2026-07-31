@@ -8,28 +8,26 @@
 //! effect. [`RememberPreferenceTool`] closes that gap by wrapping a store
 //! as a registry-installable [`Tool`] the agent can call mid-conversation,
 //! mirroring how `agentflow-rag::RagSearchTool` wraps a `KnowledgeBackend`.
+//!
+//! U2.6: `PreferenceStore::put_preference` originally took `&mut self`,
+//! so this tool shared one store between itself (writes) and the agent's
+//! prompt-assembly code (reads) by wrapping it in a [`tokio::sync::Mutex`].
+//! The trait was redesigned to `&self` (see `agentflow-store-spi`'s
+//! `preference` module docs), so the tool now just holds an
+//! `Arc<dyn PreferenceStore>` directly, same as the agent's read side.
 
 use std::sync::Arc;
 
 use agentflow_tools::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 
 use crate::layer::{PreferenceScope, PreferenceStore};
-use crate::preference::SqlitePreferenceStore;
 
 /// Registry-installable tool that lets the agent persist a durable
 /// preference for the current user.
-///
-/// `PreferenceStore::put_preference` takes `&mut self` (a single-owner
-/// design, matching its original "standalone" / CLI-only usage) — this
-/// tool needs to share one store between itself (writes) and the agent's
-/// prompt-assembly code (reads), so it wraps the store in a
-/// [`tokio::sync::Mutex`] rather than requiring `PreferenceStore`'s
-/// signature to change.
 pub struct RememberPreferenceTool {
-  store: Arc<Mutex<SqlitePreferenceStore>>,
+  store: Arc<dyn PreferenceStore>,
   scope: PreferenceScope,
 }
 
@@ -39,7 +37,7 @@ impl RememberPreferenceTool {
   /// have to duplicate the string literal.
   pub const TOOL_NAME: &'static str = "remember_preference";
 
-  pub fn new(store: Arc<Mutex<SqlitePreferenceStore>>, scope: PreferenceScope) -> Self {
+  pub fn new(store: Arc<dyn PreferenceStore>, scope: PreferenceScope) -> Self {
     Self { store, scope }
   }
 }
@@ -95,8 +93,8 @@ impl Tool for RememberPreferenceTool {
         message: "missing required field `value`".to_string(),
       })?;
 
-    let mut store = self.store.lock().await;
-    store
+    self
+      .store
       .put_preference(&self.scope, key, value)
       .await
       .map_err(|e| ToolError::ExecutionFailed {
@@ -110,11 +108,11 @@ impl Tool for RememberPreferenceTool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::preference::SqlitePreferenceStore;
 
-  async fn tool() -> (RememberPreferenceTool, Arc<Mutex<SqlitePreferenceStore>>) {
-    let store = Arc::new(Mutex::new(
-      SqlitePreferenceStore::in_memory().await.unwrap(),
-    ));
+  async fn tool() -> (RememberPreferenceTool, Arc<dyn PreferenceStore>) {
+    let store: Arc<dyn PreferenceStore> =
+      Arc::new(SqlitePreferenceStore::in_memory().await.unwrap());
     let tool = RememberPreferenceTool::new(store.clone(), PreferenceScope::local("default"));
     (tool, store)
   }
@@ -137,8 +135,6 @@ mod tests {
 
     let scope = PreferenceScope::local("default");
     let stored = store
-      .lock()
-      .await
       .get_preference(&scope, "language")
       .await
       .unwrap()

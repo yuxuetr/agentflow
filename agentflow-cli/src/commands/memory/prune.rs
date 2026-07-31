@@ -51,7 +51,7 @@ pub async fn execute(
 
   let (label, removed) = match layer.as_str() {
     "preference" => {
-      let mut store = SqlitePreferenceStore::open(&db_path)
+      let store = SqlitePreferenceStore::open(&db_path)
         .await
         .with_context(|| format!("opening preference store at {}", db_path.display()))?;
       let removed = store
@@ -239,7 +239,7 @@ mod tests {
   async fn preference_prune_round_trip_removes_old_keeps_fresh() {
     use agentflow_memory::{PreferenceScope, PreferenceStore, SqlitePreferenceStore};
 
-    let mut store = SqlitePreferenceStore::in_memory().await.unwrap();
+    let store = SqlitePreferenceStore::in_memory().await.unwrap();
     let scope = PreferenceScope::local("alice");
     store
       .put_preference(&scope, "theme", serde_json::json!("dark"))

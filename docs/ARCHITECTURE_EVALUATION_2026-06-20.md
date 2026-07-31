@@ -113,6 +113,33 @@ the `ProjectMemoryStore` one — tracked as a new, still-open backlog
 item rather than closing this edge prematurely. `ARCH_LATENT_EDGES` in
 `xtask/src/main.rs` documents this in full at the `agents → memory` row.
 
+**Update (U2.6, 2026-08-01):** the `PreferenceStore` redesign+extraction
+U2.5 called for is now **done** — re-auditing found the `&mut self`
+constraint wasn't actually load-bearing: `SqlitePreferenceStore`'s
+writes only ever touch `&self.pool` (`sqlx::SqlitePool` is internally
+`Arc`-backed and already safe to share), and `AgeEncryptedPreferenceStore`
+just encrypts/forwards to its inner store. `PreferenceStore` (trait) +
+`PreferenceScope`/`PreferenceValue` moved to
+`agentflow-store-spi::preference` with `&self` write methods, matching
+`ProjectMemoryStore`/`TaskSummaryStore` exactly; `ReActAgent`'s
+`preference_store` field and `RememberPreferenceTool` both dropped their
+`Mutex` wrapper for a bare `Arc<dyn PreferenceStore>`. Despite closing
+*both* of U2.1/U2.5's tracked reasons, edge #5's `agents → memory` half
+**still doesn't close**: this pass's re-audit surfaced a *third*,
+different reason — `agentflow-agents/src/dynamic.rs`'s
+`DynamicWorkflowAgent` constructs a concrete
+`Box::new(SessionMemory::default_window())` as the default memory
+backend for LLM-authored `agent` plan steps. `SessionMemory` has no
+`store-spi` contract *by design* (a deliberate concrete-impl-only type,
+not a missing contract like the two above were), so closing this edge
+for real needs `DynamicWorkflowAgent`'s default memory to become
+caller-injectable — a materially different, larger change than
+"extract one more contract." Confirmed with the requester and left
+un-opened as a new backlog item: this is now understood as an accepted,
+load-bearing use of a concrete `agentflow-memory` type, not a to-do.
+`ARCH_LATENT_EDGES` in `xtask/src/main.rs` carries the full account at
+the `agents → memory` row.
+
 ## 1. Ground-truth dependency graph (src-confirmed, `[dependencies]` only)
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |

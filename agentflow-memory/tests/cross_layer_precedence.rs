@@ -117,7 +117,7 @@ async fn four_layers_coexist_without_aliasing() {
   }
 
   // ── Preference: exact-match per-user key/value ───────────────────────
-  let mut preferences = SqlitePreferenceStore::in_memory().await.unwrap();
+  let preferences = SqlitePreferenceStore::in_memory().await.unwrap();
   let scope = PreferenceScope::local("alice");
   preferences
     .put_preference(&scope, "tone", json!("formal"))
