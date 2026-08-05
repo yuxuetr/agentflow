@@ -451,8 +451,12 @@ nodes:
     type: file
     dependencies: ["process_data"]
     parameters:
+      operation: write
       path: "results.json"
       content: "{{ nodes.process_data.outputs.result }}"
+      # `allowed_paths` is mandatory — the default sandbox policy denies
+      # every path (V0.2).
+      allowed_paths: ["."]
 ```
 
 Checkpoints are automatically saved after each node completes successfully. If a

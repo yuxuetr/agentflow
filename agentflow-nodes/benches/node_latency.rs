@@ -37,9 +37,11 @@ use agentflow_core::value::FlowValue;
 use agentflow_nodes::nodes::conditional::{ConditionType, ConditionalNode};
 use agentflow_nodes::nodes::file::FileNode;
 use agentflow_nodes::nodes::template::TemplateNode;
+use agentflow_tools::SandboxPolicy;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -170,7 +172,12 @@ fn bench_file_read_write(c: &mut Criterion) {
   // bench MiB-scale payloads — that's a perf-of-`tokio::fs`
   // measurement, not an AgentFlow node measurement.
   let dir = TempDir::new().expect("tempdir");
-  let node = FileNode::default();
+  // V0.2: `FileNode::default()` denies every path; the bench needs an
+  // explicit allow-list scoped to its own tempdir.
+  let node = FileNode::new(Arc::new(SandboxPolicy {
+    allowed_paths: vec![dir.path().to_path_buf()],
+    ..SandboxPolicy::default()
+  }));
 
   for (label, byte_count) in [("1k", 1024_usize), ("64k", 64 * 1024)] {
     let payload: String = "x".repeat(byte_count);

@@ -771,6 +771,7 @@ nodes:
     parameters:
       operation: write
       path: "/tmp/out.txt"
+      allowed_paths: ["/tmp"]
 "#,
   )
   .unwrap();
@@ -810,9 +811,7 @@ fn cli_workflow_validate_explain_permissions_text_per_node() {
     .stdout(predicate::str::contains(
       "capabilities: [fs.read, fs.write]",
     ))
-    .stdout(predicate::str::contains(
-      "permissive: no allowed_paths constraint",
-    ));
+    .stdout(predicate::str::contains("allowed_paths: [/tmp]"));
 }
 
 #[test]
@@ -924,6 +923,39 @@ nodes:
     .assert()
     .failure()
     .stdout(predicate::str::contains("allowed_commands"));
+}
+
+/// V0.2 closure: `type: file` without `allowed_paths` fails the schema's
+/// required-param check. Avoids the permissive-by-default arbitrary
+/// filesystem read/write footgun where a workflow with a data-driven
+/// `path` (e.g. from `input_mapping`/LLM output) could reach any
+/// absolute path on the host.
+#[test]
+fn cli_workflow_validate_rejects_file_without_allowed_paths() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = work.path().join("file_no_allowlist.yml");
+  fs::write(
+    &workflow,
+    r#"
+name: File Without Allowlist
+nodes:
+  - id: write_out
+    type: file
+    parameters:
+      operation: write
+      path: "/tmp/out.txt"
+"#,
+  )
+  .unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "validate", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("allowed_paths"));
 }
 
 #[test]

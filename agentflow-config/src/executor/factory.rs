@@ -18,7 +18,7 @@ use agentflow_nodes_ai::nodes::{
   tts::TTSNode,
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
-use agentflow_tools::ToolRegistry;
+use agentflow_tools::{SandboxPolicy, ToolRegistry};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -30,6 +30,7 @@ use agentflow_nodes_ai::nodes::rag::RAGNode;
 
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // Helper to get a string parameter from the node definition, returning a default if not found.
@@ -80,7 +81,41 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "http" => Ok(NodeType::Standard(Arc::new(HttpNode::default()))),
-    "file" => Ok(NodeType::Standard(Arc::new(FileNode::default()))),
+    "file" => {
+      // V0.2 closure: `FileNode::default()` denies every path
+      // (`SandboxPolicy::default()`'s `allowed_paths` is empty), so a
+      // `file` node's `allowed_paths` is mandatory here — mirroring the
+      // `shell` node's mandatory `allowed_commands` below. Empty/missing
+      // fails at parse time rather than at run time with an opaque
+      // "sandbox policy denied" on every call.
+      let allowed_paths: Vec<PathBuf> = node_def
+        .parameters
+        .get("allowed_paths")
+        .and_then(|v| v.as_sequence())
+        .ok_or_else(|| {
+          anyhow!(
+            "file node '{}' requires 'allowed_paths' as a YAML sequence of path prefixes \
+             (e.g. ['./workspace', '/tmp/agentflow']) — empty/missing would deny every path",
+            node_def.id
+          )
+        })?
+        .iter()
+        .filter_map(|v| v.as_str().map(PathBuf::from))
+        .collect();
+
+      if allowed_paths.is_empty() {
+        return Err(anyhow!(
+          "file node '{}': 'allowed_paths' must contain at least one path prefix",
+          node_def.id
+        ));
+      }
+
+      let policy = Arc::new(SandboxPolicy {
+        allowed_paths,
+        ..SandboxPolicy::default()
+      });
+      Ok(NodeType::Standard(Arc::new(FileNode::new(policy))))
+    }
     "shell" => {
       // F-A7-2 closure: shell node wraps `agentflow_tools::ShellTool`
       // with a SandboxPolicy built from YAML params. `allowed_commands`
@@ -537,4 +572,104 @@ fn build_skill_agent_outputs(
   outputs.insert("agent_result".to_string(), FlowValue::Json(agent_result));
   outputs.insert("agent_resume".to_string(), FlowValue::Json(agent_resume));
   Ok(outputs)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn node_from_yaml(yaml: &str) -> NodeDefinitionV2 {
+    serde_yaml::from_str(yaml).expect("valid node YAML")
+  }
+
+  /// V0.2 regression: the factory must refuse to build a `file` node
+  /// without `allowed_paths` rather than falling back to
+  /// `FileNode::default()`'s (pre-V0.2 permissive, post-V0.2 deny-all)
+  /// policy silently. `GraphNode` doesn't implement `Debug`, so
+  /// `unwrap_err()` isn't available — match manually instead.
+  #[test]
+  fn file_node_without_allowed_paths_fails_at_build_time() {
+    let node = node_from_yaml(
+      r#"
+id: read_it
+type: file
+parameters:
+  operation: read
+  path: /tmp/secret.txt
+"#,
+    );
+
+    let err = match create_graph_node(&node) {
+      Err(err) => err,
+      Ok(_) => panic!("expected an error"),
+    };
+    assert!(
+      err.to_string().contains("allowed_paths"),
+      "expected an allowed_paths error, got: {err}"
+    );
+  }
+
+  /// V0.2 regression: an empty `allowed_paths` sequence is rejected the
+  /// same way a missing one is — it would otherwise build a `FileNode`
+  /// whose every call fails with an opaque "sandbox policy denied".
+  #[test]
+  fn file_node_with_empty_allowed_paths_fails_at_build_time() {
+    let node = node_from_yaml(
+      r#"
+id: read_it
+type: file
+parameters:
+  operation: read
+  path: /tmp/secret.txt
+  allowed_paths: []
+"#,
+    );
+
+    let err = match create_graph_node(&node) {
+      Err(err) => err,
+      Ok(_) => panic!("expected an error"),
+    };
+    assert!(
+      err.to_string().contains("allowed_paths"),
+      "expected an allowed_paths error, got: {err}"
+    );
+  }
+
+  /// V0.2: with `allowed_paths` declared, the factory builds a `FileNode`
+  /// whose policy actually enforces that allow-list end to end. Neither
+  /// path needs to exist on disk — the allow-list check runs (and denies
+  /// the outside path) before any filesystem I/O is attempted.
+  #[tokio::test]
+  async fn file_node_with_allowed_paths_builds_an_enforcing_node() {
+    let node = node_from_yaml(
+      r#"
+id: write_it
+type: file
+parameters:
+  operation: write
+  path: "/definitely/outside/the/allow-list.txt"
+  content: "nope"
+  allowed_paths: ["/allowed/subtree"]
+"#,
+    );
+
+    let graph_node = create_graph_node(&node).unwrap();
+    let NodeType::Standard(async_node) = graph_node.node_type else {
+      panic!("expected a Standard node");
+    };
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!("/definitely/outside/the/allow-list.txt")),
+    );
+    inputs.insert("content".to_string(), FlowValue::Json(json!("nope")));
+
+    let err = async_node.execute(&inputs).await.unwrap_err();
+    assert!(
+      err.to_string().contains("sandbox policy denied"),
+      "expected a path outside allowed_paths to be denied, got: {err}"
+    );
+  }
 }

@@ -14,11 +14,15 @@ use serde_json::json;
 /// Workflow node that reads or writes files on the local filesystem.
 ///
 /// `FileNode` defers to [`agentflow_tools::SandboxPolicy`] for path
-/// validation (Q1.3.1). The default policy is permissive — workflows
-/// that ran before the audit keep working — but the parent-dir traversal
-/// guard and symlink/hardlink check always fire regardless of policy. To
-/// pin reads/writes to a specific subtree (production deployments), wire
-/// in a stricter policy via [`FileNode::with_policy`].
+/// validation (Q1.3.1). The default policy is **deny-by-default**
+/// (V0.2): `SandboxPolicy::default()` has an empty `allowed_paths`, so
+/// every path is refused until the caller opts a subtree in via
+/// [`FileNode::new`] / [`FileNode::with_policy`]. Before V0.2 the default
+/// was `SandboxPolicy::permissive()`, which combined with the
+/// parent-dir-only traversal guard let any absolute path (e.g. one
+/// produced by `input_mapping` from LLM output) be read or written. The
+/// parent-dir traversal guard and symlink/hardlink check always fire
+/// regardless of policy.
 #[derive(Debug, Clone)]
 pub struct FileNode {
   policy: Arc<SandboxPolicy>,
@@ -39,11 +43,13 @@ impl FileNode {
 
 impl Default for FileNode {
   fn default() -> Self {
-    // Permissive baseline keeps backwards-compatibility with existing
-    // workflows; the traversal + symlink guards still run because they
-    // live below the policy check in `validate_path`.
+    // V0.2: deny-by-default — `SandboxPolicy::default()` has an empty
+    // `allowed_paths`, so every path is refused until a caller opts in
+    // via `FileNode::new`/`with_policy`. The traversal + symlink guards
+    // still run regardless of policy because they live below the policy
+    // check in `validate_path`.
     Self {
-      policy: Arc::new(SandboxPolicy::permissive()),
+      policy: Arc::new(SandboxPolicy::default()),
     }
   }
 }
@@ -207,12 +213,16 @@ mod tests {
   use tempfile::tempdir;
 
   #[tokio::test]
-  async fn write_then_read_round_trip_under_default_policy() {
+  async fn write_then_read_round_trip_under_explicit_allowed_path_policy() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test.txt");
     let file_path_str = file_path.to_str().unwrap();
+    let policy = Arc::new(SandboxPolicy {
+      allowed_paths: vec![dir.path().to_path_buf()],
+      ..SandboxPolicy::default()
+    });
 
-    let write_node = FileNode::default();
+    let write_node = FileNode::new(policy.clone());
     let mut write_inputs = AsyncNodeInputs::new();
     write_inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
     write_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
@@ -220,7 +230,7 @@ mod tests {
 
     write_node.execute(&write_inputs).await.unwrap();
 
-    let read_node = FileNode::default();
+    let read_node = FileNode::new(policy);
     let mut read_inputs = AsyncNodeInputs::new();
     read_inputs.insert("operation".to_string(), FlowValue::Json(json!("read")));
     read_inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
@@ -234,8 +244,33 @@ mod tests {
     }
   }
 
-  /// Q1.3.1 regression: parent-dir traversal is rejected even under the
-  /// permissive default policy.
+  /// V0.2 regression: the default policy denies every path — a
+  /// `FileNode::default()` (no explicit `allowed_paths`) must not be able
+  /// to read or write anywhere, including a path a caller might assume is
+  /// "safe" (a fresh tempdir).
+  #[tokio::test]
+  async fn default_policy_denies_all_paths() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test.txt");
+    let file_path_str = file_path.to_str().unwrap();
+
+    let node = FileNode::default();
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
+    inputs.insert("path".to_string(), FlowValue::Json(json!(file_path_str)));
+    inputs.insert("content".to_string(), FlowValue::Json(json!("hello world")));
+
+    let err = node.execute(&inputs).await.unwrap_err();
+    assert!(
+      err.to_string().contains("sandbox policy denied"),
+      "expected default policy to deny the write, got: {err}"
+    );
+    assert!(!file_path.exists(), "write must not have happened");
+  }
+
+  /// Q1.3.1 regression: parent-dir traversal is rejected unconditionally,
+  /// before the sandbox policy (even the default deny-all one) is
+  /// consulted.
   #[tokio::test]
   async fn rejects_parent_directory_traversal() {
     let node = FileNode::default();
@@ -301,7 +336,11 @@ mod tests {
     let link = dir.path().join("link.txt");
     symlink(&target, &link).unwrap();
 
-    let node = FileNode::default();
+    let policy = Arc::new(SandboxPolicy {
+      allowed_paths: vec![dir.path().to_path_buf()],
+      ..SandboxPolicy::default()
+    });
+    let node = FileNode::new(policy);
     let mut inputs = AsyncNodeInputs::new();
     inputs.insert("operation".to_string(), FlowValue::Json(json!("read")));
     inputs.insert(

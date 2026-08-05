@@ -353,9 +353,13 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("body", ParamType::String),
     ]),
     "file" => Some(vec![
+      // V0.2 closure: `file` node requires explicit `allowed_paths` to
+      // avoid permissive-by-default arbitrary filesystem read/write
+      // (mirrors the `shell` node's mandatory `allowed_commands` below).
       ParamSpec::required_input("operation", ParamType::String),
       ParamSpec::required_input("path", ParamType::String),
       ParamSpec::optional("content", ParamType::String),
+      ParamSpec::required("allowed_paths", ParamType::Sequence),
     ]),
     "template" => Some(vec![
       ParamSpec::required("template", ParamType::String),
@@ -586,6 +590,7 @@ nodes:
     parameters:
       operation: read
       path: /tmp/input.txt
+      allowed_paths: ["/tmp"]
   - id: request
     type: http
     parameters:

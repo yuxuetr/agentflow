@@ -790,7 +790,30 @@ async fn execute_template_payload(payload: &NodeExecutionPayload) -> AsyncNodeRe
 }
 
 async fn execute_file_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
-  FileNode::default().execute(&payload.inputs).await
+  // V0.2: `FileNode::default()` denies every path (`SandboxPolicy::
+  // default()`'s `allowed_paths` is empty). The local config factory
+  // (`agentflow-config::executor::factory`) requires the YAML `file`
+  // node to declare `allowed_paths`, and the scheduler forwards a
+  // node's `parameters` verbatim into `payload.parameters` (see
+  // `dispatch_node` in `agentflow-server::scheduler::distributed`), so
+  // read it the same way here rather than falling back to a permissive
+  // policy that would undo the factory's guarantee for distributed runs.
+  let allowed_paths: Vec<std::path::PathBuf> = payload
+    .parameters
+    .get("allowed_paths")
+    .and_then(|value| value.as_array())
+    .map(|seq| {
+      seq
+        .iter()
+        .filter_map(|v| v.as_str().map(std::path::PathBuf::from))
+        .collect()
+    })
+    .unwrap_or_default();
+  let policy = Arc::new(agentflow_tools::SandboxPolicy {
+    allowed_paths,
+    ..agentflow_tools::SandboxPolicy::default()
+  });
+  FileNode::new(policy).execute(&payload.inputs).await
 }
 
 async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> AsyncNodeResult {
@@ -1124,7 +1147,10 @@ mod tests {
     let payload = NodeExecutionPayload::new(
       "write_file",
       "file",
-      std::collections::HashMap::new(),
+      std::collections::HashMap::from([(
+        "allowed_paths".to_string(),
+        serde_json::json!([std::env::temp_dir().to_string_lossy()]),
+      )]),
       std::collections::HashMap::from([
         (
           "operation".to_string(),
@@ -1155,6 +1181,55 @@ mod tests {
     let content = tokio::fs::read_to_string(&path).await.unwrap();
     assert_eq!(content, "distributed file write");
     let _ = tokio::fs::remove_file(path).await;
+  }
+
+  /// V0.2 regression: a distributed `file` payload with no `allowed_paths`
+  /// parameter must be denied, not silently executed against a permissive
+  /// default (which is what `FileNode::default()` used to be).
+  #[tokio::test]
+  async fn run_once_denies_distributed_file_payload_without_allowed_paths() {
+    let protocol = InMemoryWorkerProtocol::new();
+    let worker_id = WorkerId::new("worker-file-denied").unwrap();
+    let run_id = Uuid::new_v4();
+    let path = std::env::temp_dir().join(format!("agentflow-worker-{}.txt", Uuid::new_v4()));
+    let payload = NodeExecutionPayload::new(
+      "write_file",
+      "file",
+      std::collections::HashMap::new(),
+      std::collections::HashMap::from([
+        (
+          "operation".to_string(),
+          FlowValue::Json(serde_json::json!("write")),
+        ),
+        (
+          "path".to_string(),
+          FlowValue::Json(serde_json::json!(path.to_string_lossy())),
+        ),
+        (
+          "content".to_string(),
+          FlowValue::Json(serde_json::json!("should never be written")),
+        ),
+      ]),
+    );
+    let task = WorkerTask::new(run_id, "write_file", serde_json::to_value(payload).unwrap());
+    let task_id = task.task_id;
+    protocol.submit_task(task).await.unwrap();
+
+    let runtime = WorkerRuntime::new(
+      protocol.clone(),
+      WorkerConfig::new(worker_id, "memory://local"),
+    );
+    runtime.run_once().await.unwrap();
+
+    let WorkerTaskResult::Failed { error, .. } = protocol.completed_result(task_id).await.unwrap()
+    else {
+      panic!("expected the sandbox-denied write to fail");
+    };
+    assert!(
+      error.contains("sandbox policy denied"),
+      "expected a sandbox denial, got: {error}"
+    );
+    assert!(!path.exists(), "file must not have been created");
   }
 
   #[tokio::test]

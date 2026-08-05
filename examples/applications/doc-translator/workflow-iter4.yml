@@ -80,6 +80,9 @@ nodes:
             path: "{{ item.read_path }}"
           parameters:
             operation: "read"
+            # V0.2: `file` node's `allowed_paths` is mandatory (deny-by-
+            # default policy) — scoped to this example's own directory.
+            allowed_paths: ["examples/applications/doc-translator"]
 
         - id: "build_prompt"
           type: "template"
@@ -117,6 +120,7 @@ nodes:
             path:    "{{ item.write_path }}"
           parameters:
             operation: "write"
+            allowed_paths: ["examples/applications/doc-translator"]
 
   - id: "report"
     type: "template"

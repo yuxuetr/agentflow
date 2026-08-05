@@ -234,6 +234,11 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
       summarize_param(&node.parameters, "operation", &mut constraints);
       summarize_param(&node.parameters, "path", &mut constraints);
       summarize_list_param(&node.parameters, "allowed_paths", &mut constraints);
+      // V0.2 closure: the schema now requires `allowed_paths` (rejected
+      // at parse time if missing/empty, mirroring `shell`'s
+      // `allowed_commands` below), so this note is no longer reachable
+      // from a validated workflow — kept as defense-in-depth in case
+      // someone bypasses validate via a custom config path.
       if !node.parameters.contains_key("allowed_paths") {
         notes.push("permissive: no allowed_paths constraint".to_string());
       }

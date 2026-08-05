@@ -89,6 +89,9 @@ nodes:
             path: "{{ item.read_path }}"
           parameters:
             operation: "read"
+            # V0.2: `file` node's `allowed_paths` is mandatory (deny-by-
+            # default policy) — scoped to this example's own directory.
+            allowed_paths: ["examples/applications/doc-translator"]
 
         # Step 2: render the per-language translation prompt with
         # the source content inlined. Tera has access to `item`
@@ -134,6 +137,7 @@ nodes:
             path:    "{{ item.write_path }}"
           parameters:
             operation: "write"
+            allowed_paths: ["examples/applications/doc-translator"]
 
   # Fan-in: simple summary so the run produces a human-readable
   # stdout line at the end. Includes results_summary from F-A6-3.
