@@ -30,6 +30,30 @@ use uuid::Uuid;
 // `FlowExt` trait at the bottom of this module.
 pub use agentflow_graph::flow::{Flow, GraphNode, NodeType};
 
+/// V1.2: reserved sibling output keys that tag a checkpoint entry's
+/// outcome. `NodeSkipped` / `NodePartialExecutionFailed` never had a
+/// checkpoint representation before V1.2 (dropped entirely, or — worse,
+/// for the partial-failure case — silently written with the exact same
+/// bare shape as a full `Ok`, so a resumed run treated a partial failure
+/// as a complete success).
+///
+/// These are injected as ordinary extra entries *inside* the node's
+/// existing flat outputs object rather than wrapping the whole value in
+/// an envelope — `agentflow-agents`' partial-resume contract, CLI
+/// tooling, and this crate's own tests all read a node's checkpointed
+/// fields directly as `checkpoint.state[node_id][output_key]` (see
+/// `agentflow-core/tests/checkpoint_recovery_test.rs`), so nesting
+/// outputs one level deeper under e.g. `{"outcome": ..., "outputs":
+/// {...}}` would silently break that established, load-bearing
+/// contract. A sibling key survives the existing flat-object decode path
+/// (`decode_outputs_object`) unmodified; `checkpoint_state_to_state_pool`
+/// only needs to look the marker up and strip it back out of the
+/// decoded map afterward.
+const CHECKPOINT_OUTCOME_KEY: &str = "__agentflow_outcome__";
+const CHECKPOINT_OUTCOME_SKIPPED: &str = "skipped";
+const CHECKPOINT_OUTCOME_PARTIAL_FAILURE: &str = "partial_failure";
+const CHECKPOINT_PARTIAL_FAILURE_MESSAGE_KEY: &str = "__agentflow_partial_failure_message__";
+
 /// Executor over a borrowed [`Flow`]. Holds all run/resume/scheduling logic as
 /// inherent methods so it can read the graph IR through the IR's accessors
 /// across the crate boundary, while the orphan rule keeps inherent methods off
@@ -184,7 +208,7 @@ impl<'f> FlowExecutor<'f> {
     initial_inputs: AsyncNodeInputs,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None, None, None)
+      .execute_with_workflow_id(None, initial_inputs, None, None, None)
       .await
   }
 
@@ -194,7 +218,7 @@ impl<'f> FlowExecutor<'f> {
     config: FlowExecutionConfig,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None, None, Some(config))
+      .execute_with_workflow_id(None, initial_inputs, None, None, Some(config))
       .await
   }
 
@@ -209,14 +233,7 @@ impl<'f> FlowExecutor<'f> {
     config: FlowExecutionConfig,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     self
-      .execute_with_workflow_id(
-        Some(workflow_id),
-        initial_inputs,
-        None,
-        None,
-        None,
-        Some(config),
-      )
+      .execute_with_workflow_id(Some(workflow_id), initial_inputs, None, None, Some(config))
       .await
   }
 
@@ -225,7 +242,6 @@ impl<'f> FlowExecutor<'f> {
     &self,
     workflow_id: Option<String>,
     initial_inputs: AsyncNodeInputs,
-    skip_until: Option<String>,
     restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
     restored_last_completed_node: Option<String>,
     execution_config: Option<FlowExecutionConfig>,
@@ -280,7 +296,6 @@ impl<'f> FlowExecutor<'f> {
     })?;
 
     if execution_config.mode == FlowExecutionMode::Concurrent
-      && skip_until.is_none()
       && restored_state_pool.is_none()
       && restored_last_completed_node.is_none()
     {
@@ -311,9 +326,6 @@ impl<'f> FlowExecutor<'f> {
         .map(|(_, node_id)| node_id)
     });
 
-    // Flag to skip nodes until we reach the checkpoint resume point
-    let mut should_skip = skip_until.is_some();
-
     for node_id in &sorted_nodes {
       if execution_config
         .cancellation_token
@@ -329,20 +341,31 @@ impl<'f> FlowExecutor<'f> {
         return Err(AgentFlowError::TaskCancelled);
       }
 
-      // Check if we should resume from this node
-      if should_skip && let Some(ref resume_node) = skip_until {
-        if node_id == resume_node {
-          should_skip = false;
-          println!("▶️  Resuming execution from node '{}'", node_id);
-        } else {
-          println!(
-            "⏭️  Skipping node '{}' (already completed in checkpoint)",
-            node_id
-          );
-          // For skipped nodes, we don't execute but mark them as complete
-          // Their outputs should be restored from checkpoint
-          continue;
-        }
+      // V1.2: a node is genuinely done (from a restored checkpoint, or
+      // from an earlier iteration of this very loop) iff `state_pool`
+      // holds an `Ok` or a benign `NodeSkipped` for it — reuse
+      // `is_genuine_failure`'s vocabulary (V0.3) rather than inventing a
+      // second notion of "resolved". This replaces a topological-index
+      // cutoff derived from a single `last_completed_node`, which is
+      // unsound once the *original* run could complete nodes out of
+      // topological order (concurrent execution): a node topologically
+      // *before* `last_completed_node` may never have actually run,
+      // while one topologically *after* it may already have. Presence
+      // (of the right kind) in `state_pool` is authoritative regardless
+      // of position. A `NodePartialExecutionFailed` entry deliberately
+      // does NOT count as done here — it must be retried (see the
+      // partial-outputs re-injection below) — matching the pre-existing
+      // agent-node partial-resume contract, which relies on the node
+      // being re-executed rather than skipped.
+      if state_pool
+        .get(node_id)
+        .is_some_and(|result| !is_genuine_failure(result))
+      {
+        println!(
+          "⏭️  Skipping node '{}' (already resolved in checkpoint)",
+          node_id
+        );
+        continue;
       }
 
       let graph_node =
@@ -391,8 +414,24 @@ impl<'f> FlowExecutor<'f> {
           // These provide loop variables and context that should be available to all nodes
           inputs.extend(initial_inputs.clone());
 
-          if let Some(Ok(restored_outputs)) = state_pool.get(node_id) {
-            inputs.extend(restored_outputs.clone());
+          // V1.2: a node being (re-)executed here was never skipped
+          // above, so any `state_pool` entry it already has can only be
+          // a genuine failure (see the skip check above) — in
+          // particular a `NodePartialExecutionFailed` restored from a
+          // checkpoint. Feed its `partial_outputs` back in as
+          // additional inputs so the node can inspect its own prior
+          // partial progress (e.g. an agent's `agent_result` /
+          // `agent_resume`) and decide what to replay vs. skip
+          // internally, exactly like the pre-V1.2 behavior did — except
+          // that behavior relied on the checkpoint round-trip bug this
+          // fix closes (a restored `NodePartialExecutionFailed` used to
+          // silently decode as `Ok`, which happened to feed the outputs
+          // back in via a bare `Ok` match; now it's explicit).
+          if let Some(Err(AgentFlowError::NodePartialExecutionFailed {
+            partial_outputs, ..
+          })) = state_pool.get(node_id)
+          {
+            inputs.extend(partial_outputs.clone());
           }
 
           println!("▶️  Executing node '{}'", node_id);
@@ -525,47 +564,51 @@ impl<'f> FlowExecutor<'f> {
     workflow_id: &str,
     checkpoint: Checkpoint,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
-    // Restore state pool from checkpoint
+    // Restore state pool from checkpoint. V1.2: this now faithfully
+    // round-trips `Ok` / `NodeSkipped` / `NodePartialExecutionFailed`
+    // (see `checkpoint_state_to_state_pool`), so "does this node hold an
+    // `Ok`/`NodeSkipped` in the restored pool" is a sound proxy for "was
+    // this node actually observed to resolve" — unlike the
+    // topological-index cutoff this replaces (see
+    // `execute_with_workflow_id`'s per-node skip check for the full
+    // rationale). A restored `NodePartialExecutionFailed` does NOT count
+    // as resolved — it must be retried, matching the pre-existing
+    // agent-node partial-resume contract.
     let state_pool = Self::checkpoint_state_to_state_pool(&checkpoint.state);
-
-    // Find the next node to execute after the checkpoint
     let sorted_nodes = self.topological_sort()?;
-    let resume_from = checkpoint.last_completed_node.clone();
 
-    // Find the next node in the execution order
-    let mut next_node_idx = None;
-    for (idx, node_id) in sorted_nodes.iter().enumerate() {
-      if node_id == &resume_from {
-        next_node_idx = Some(idx + 1);
-        break;
-      }
-    }
-
-    let next_node = match next_node_idx {
-      Some(idx) => sorted_nodes.get(idx).map(|s| s.to_string()),
-      None if resume_from.is_empty() => sorted_nodes.first().map(|s| s.to_string()),
-      None => None,
-    };
-
-    if let Some(next_node_id) = next_node {
-      // Continue execution from next node
-      self
-        .execute_with_workflow_id(
-          Some(workflow_id.to_string()),
-          HashMap::new(),
-          Some(next_node_id),
-          Some(state_pool),
-          Some(checkpoint.last_completed_node),
-          None,
-        )
-        .await
-    } else {
+    if sorted_nodes.iter().all(|node_id| {
+      state_pool
+        .get(node_id)
+        .is_some_and(|result| !is_genuine_failure(result))
+    }) {
       println!("✅ Workflow '{}' was already completed", workflow_id);
-      Ok(state_pool)
+      return Ok(state_pool);
     }
+
+    self
+      .execute_with_workflow_id(
+        Some(workflow_id.to_string()),
+        HashMap::new(),
+        Some(state_pool),
+        Some(checkpoint.last_completed_node),
+        None,
+      )
+      .await
   }
 
-  /// Convert state pool to checkpoint-compatible format
+  /// Convert state pool to checkpoint-compatible format.
+  ///
+  /// V1.2: a genuine failure (anything but `Ok` / `NodeSkipped` /
+  /// `NodePartialExecutionFailed`) is still deliberately excluded —
+  /// resume always retries those, which is the existing and desired
+  /// behavior. `Ok` keeps its pre-V1.2 bare shape (`{key: tagged
+  /// FlowValue, ...}`) unchanged for on-disk backward compatibility;
+  /// `NodeSkipped` / `NodePartialExecutionFailed` are new additions (they
+  /// were silently dropped entirely before V1.2) tagged with a reserved
+  /// marker key so `checkpoint_state_to_state_pool` can round-trip the
+  /// original outcome instead of losing the skip / upgrading the partial
+  /// failure to a full success on resume.
   fn state_pool_to_checkpoint_state(
     &self,
     state_pool: &HashMap<String, AsyncNodeResult>,
@@ -573,18 +616,37 @@ impl<'f> FlowExecutor<'f> {
     state_pool
       .iter()
       .filter_map(|(node_id, result)| {
-        Self::checkpointable_outputs(result)
-          .map(|outputs| (node_id.clone(), Self::outputs_to_json(outputs)))
+        Self::checkpointable_value(result).map(|value| (node_id.clone(), value))
       })
       .collect()
   }
 
-  fn checkpointable_outputs(result: &AsyncNodeResult) -> Option<&HashMap<String, FlowValue>> {
+  fn checkpointable_value(result: &AsyncNodeResult) -> Option<serde_json::Value> {
     match result {
-      Ok(outputs) => Some(outputs),
+      Ok(outputs) => Some(Self::outputs_to_json(outputs)),
+      Err(AgentFlowError::NodeSkipped) => {
+        let mut tagged = HashMap::new();
+        tagged.insert(
+          CHECKPOINT_OUTCOME_KEY.to_string(),
+          FlowValue::Json(serde_json::json!(CHECKPOINT_OUTCOME_SKIPPED)),
+        );
+        Some(Self::outputs_to_json(&tagged))
+      }
       Err(AgentFlowError::NodePartialExecutionFailed {
-        partial_outputs, ..
-      }) => Some(partial_outputs),
+        message,
+        partial_outputs,
+      }) => {
+        let mut tagged = partial_outputs.clone();
+        tagged.insert(
+          CHECKPOINT_OUTCOME_KEY.to_string(),
+          FlowValue::Json(serde_json::json!(CHECKPOINT_OUTCOME_PARTIAL_FAILURE)),
+        );
+        tagged.insert(
+          CHECKPOINT_PARTIAL_FAILURE_MESSAGE_KEY.to_string(),
+          FlowValue::Json(serde_json::json!(message)),
+        );
+        Some(Self::outputs_to_json(&tagged))
+      }
       Err(_) => None,
     }
   }
@@ -606,27 +668,62 @@ impl<'f> FlowExecutor<'f> {
     }
   }
 
+  /// V1.2: recognizes the `CHECKPOINT_OUTCOME_KEY` sibling entry
+  /// `state_pool_to_checkpoint_state` / `checkpointable_value` inject
+  /// for `NodeSkipped` / `NodePartialExecutionFailed` and decodes the
+  /// value back to the original `Err` variant instead of the pre-V1.2
+  /// behavior (silently dropped entirely for skips; silently decoded as
+  /// a full `Ok` for partial failures — both were forms of "resume
+  /// can't tell this apart from a real success"). A value with no such
+  /// entry takes the unchanged legacy/`Ok` path, so on-disk checkpoints
+  /// written before V1.2 (or any `Ok` entry, which never carries this
+  /// key) decode exactly as they always did.
   fn checkpoint_state_to_state_pool(
     checkpoint_state: &HashMap<String, serde_json::Value>,
   ) -> HashMap<String, AsyncNodeResult> {
     checkpoint_state
       .iter()
       .map(|(node_id, value)| {
-        let outputs = match value {
-          serde_json::Value::Object(map) => map
-            .iter()
-            .map(|(key, value)| {
-              let flow_value = decode_checkpoint_flow_value(node_id, key, value);
-              (key.clone(), flow_value)
-            })
-            .collect(),
-          other => vec![("result".to_string(), FlowValue::Json(other.clone()))]
-            .into_iter()
-            .collect(),
+        let mut outputs = Self::decode_outputs_object(node_id, value);
+        let outcome = match outputs.remove(CHECKPOINT_OUTCOME_KEY) {
+          Some(FlowValue::Json(serde_json::Value::String(tag))) => Some(tag),
+          _ => None,
         };
-        (node_id.clone(), Ok(outputs))
+        let result = match outcome.as_deref() {
+          Some(CHECKPOINT_OUTCOME_SKIPPED) => Err(AgentFlowError::NodeSkipped),
+          Some(CHECKPOINT_OUTCOME_PARTIAL_FAILURE) => {
+            let message = match outputs.remove(CHECKPOINT_PARTIAL_FAILURE_MESSAGE_KEY) {
+              Some(FlowValue::Json(serde_json::Value::String(message))) => message,
+              _ => "partial execution failure".to_string(),
+            };
+            Err(AgentFlowError::NodePartialExecutionFailed {
+              message,
+              partial_outputs: outputs,
+            })
+          }
+          // Unrecognized tag or no tag at all (legacy pre-V1.2 shape,
+          // or any `Ok` entry — those never carry this key): treat the
+          // whole decoded map as a successful node's outputs.
+          _ => Ok(outputs),
+        };
+        (node_id.clone(), result)
       })
       .collect()
+  }
+
+  fn decode_outputs_object(node_id: &str, value: &serde_json::Value) -> HashMap<String, FlowValue> {
+    match value {
+      serde_json::Value::Object(map) => map
+        .iter()
+        .map(|(key, value)| {
+          let flow_value = decode_checkpoint_flow_value(node_id, key, value);
+          (key.clone(), flow_value)
+        })
+        .collect(),
+      other => vec![("result".to_string(), FlowValue::Json(other.clone()))]
+        .into_iter()
+        .collect(),
+    }
   }
 }
 
@@ -1810,6 +1907,184 @@ mod tests {
     assert_eq!(
       outputs.get("legacy_array"),
       Some(&FlowValue::Json(json!([1, 2, 3])))
+    );
+  }
+
+  /// V1.2 regression: a benign `run_if` skip used to be dropped from the
+  /// checkpoint entirely (no entry at all), indistinguishable from "this
+  /// node never ran". It must now round-trip as `Err(NodeSkipped)`.
+  #[test]
+  fn checkpoint_state_round_trip_preserves_node_skipped() {
+    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    state_pool.insert("skipped_node".to_string(), Err(AgentFlowError::NodeSkipped));
+    let mut ok_outputs = HashMap::new();
+    ok_outputs.insert("value".to_string(), FlowValue::Json(json!("ok")));
+    state_pool.insert("ok_node".to_string(), Ok(ok_outputs));
+
+    let checkpoint_state =
+      FlowExecutor::new(&Flow::default()).state_pool_to_checkpoint_state(&state_pool);
+    assert!(
+      checkpoint_state.contains_key("skipped_node"),
+      "a skipped node must now have a checkpoint entry at all (pre-V1.2 it had none)"
+    );
+
+    let restored = FlowExecutor::checkpoint_state_to_state_pool(&checkpoint_state);
+    assert!(matches!(
+      restored.get("skipped_node"),
+      Some(Err(AgentFlowError::NodeSkipped))
+    ));
+    assert_eq!(
+      restored
+        .get("ok_node")
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .get("value"),
+      Some(&FlowValue::Json(json!("ok")))
+    );
+  }
+
+  /// V1.2 regression: `NodePartialExecutionFailed` used to be written
+  /// with the exact same bare shape as a full `Ok`, so decoding it back
+  /// silently upgraded a partial failure to a complete success. It must
+  /// now round-trip as `Err(NodePartialExecutionFailed { message,
+  /// partial_outputs })`, and the reserved tag entries injected to make
+  /// that possible must not leak into `partial_outputs`.
+  #[test]
+  fn checkpoint_state_round_trip_preserves_partial_failure_not_upgraded_to_ok() {
+    let mut partial_outputs = HashMap::new();
+    partial_outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(json!({"steps": ["observe", "tool_call"]})),
+    );
+    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    state_pool.insert(
+      "agent".to_string(),
+      Err(AgentFlowError::NodePartialExecutionFailed {
+        message: "interrupted mid-tool-call".to_string(),
+        partial_outputs,
+      }),
+    );
+
+    let checkpoint_state =
+      FlowExecutor::new(&Flow::default()).state_pool_to_checkpoint_state(&state_pool);
+    // The bare-shape contract other tooling depends on: the real output
+    // key is still directly accessible, not nested under a wrapper.
+    assert_eq!(
+      checkpoint_state["agent"]["agent_result"]["value"]["steps"][1],
+      json!("tool_call")
+    );
+
+    let restored = FlowExecutor::checkpoint_state_to_state_pool(&checkpoint_state);
+    match restored.get("agent") {
+      Some(Err(AgentFlowError::NodePartialExecutionFailed {
+        message,
+        partial_outputs,
+      })) => {
+        assert_eq!(message, "interrupted mid-tool-call");
+        assert_eq!(partial_outputs.len(), 1, "tag entries must not leak in");
+        assert!(partial_outputs.contains_key("agent_result"));
+      }
+      other => panic!("expected NodePartialExecutionFailed, got {other:?}"),
+    }
+  }
+
+  /// V1.2 regression (evaluation §六 P1-8): a checkpoint saved mid-flight
+  /// under concurrent execution only records `last_completed_node` as
+  /// whichever node happened to finish most recently in wall-clock
+  /// time — not "everything topologically before it is done". Here
+  /// `zzz_finished_first` (topologically *last*) completed and
+  /// triggered the checkpoint save while `aaa_never_ran` (topologically
+  /// *earlier*, but still in flight) had not. The old topological-index
+  /// cutoff resumed from `last_completed_node`'s index + 1 — past the
+  /// end of the node list here — and wrongly declared the whole
+  /// workflow already complete, permanently dropping `aaa_never_ran`.
+  #[tokio::test]
+  async fn resume_executes_a_topologically_earlier_node_that_never_ran_under_concurrent_execution()
+  {
+    use_writable_home();
+
+    struct StaticNode {
+      key: &'static str,
+      value: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AsyncNode for StaticNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert(self.key.to_string(), FlowValue::Json(self.value.clone()));
+        Ok(outputs)
+      }
+    }
+
+    let root = GraphNode {
+      id: "root".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("root"),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let aaa_never_ran = GraphNode {
+      id: "aaa_never_ran".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("aaa"),
+      })),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let zzz_finished_first = GraphNode {
+      id: "zzz_finished_first".to_string(),
+      node_type: NodeType::Standard(Arc::new(StaticNode {
+        key: "value",
+        value: json!("zzz"),
+      })),
+      dependencies: vec!["root".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = CheckpointConfig::default()
+      .with_checkpoint_dir(temp_dir.path())
+      .with_auto_cleanup(false);
+    let manager = CheckpointManager::new(config.clone()).unwrap();
+
+    // Hand-construct the exact checkpoint a crash mid-concurrent-run
+    // would leave: `zzz_finished_first` recorded as `last_completed_node`
+    // (it happened to finish first), `aaa_never_ran` entirely absent
+    // (never got to run).
+    let mut state = HashMap::new();
+    state.insert(
+      "root".to_string(),
+      json!({"value": {"type": "json", "value": "root"}}),
+    );
+    state.insert(
+      "zzz_finished_first".to_string(),
+      json!({"value": {"type": "json", "value": "zzz"}}),
+    );
+    manager
+      .save_checkpoint("resume-concurrent-workflow", "zzz_finished_first", &state)
+      .await
+      .unwrap();
+
+    let flow = Flow::new(vec![root, aaa_never_ran, zzz_finished_first])
+      .with_checkpointing(config)
+      .unwrap();
+    let resumed = flow.resume("resume-concurrent-workflow").await.unwrap();
+
+    assert!(
+      resumed.get("aaa_never_ran").is_some_and(|r| r.is_ok()),
+      "a node that never actually ran must be executed on resume, \
+       regardless of its topological position relative to last_completed_node: {resumed:?}"
     );
   }
 
