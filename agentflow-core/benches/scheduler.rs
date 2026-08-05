@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   flow::{Flow, GraphNode, NodeType},
-  scheduler::{FlowExecutionConfig, FlowExecutionMode},
+  scheduler::FlowExecutionConfig,
   value::FlowValue,
 };
 use async_trait::async_trait;
@@ -111,17 +111,7 @@ fn bench_linear(c: &mut Criterion) {
     group.bench_with_input(BenchmarkId::new("concurrent_8", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
         flow
-          .execute_from_inputs_with_config(
-            HashMap::new(),
-            FlowExecutionConfig {
-              mode: FlowExecutionMode::Concurrent,
-              max_concurrency: 8,
-              fail_fast: true,
-              continue_on_skip: true,
-              run_base_dir: None,
-              cancellation_token: None,
-            },
-          )
+          .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(8))
           .await
           .expect("flow ok")
       });
@@ -148,17 +138,7 @@ fn bench_fanout(c: &mut Criterion) {
     group.bench_with_input(BenchmarkId::new("concurrent_8", size), &size, |b, _| {
       b.to_async(&rt).iter(|| async {
         flow
-          .execute_from_inputs_with_config(
-            HashMap::new(),
-            FlowExecutionConfig {
-              mode: FlowExecutionMode::Concurrent,
-              max_concurrency: 8,
-              fail_fast: true,
-              continue_on_skip: true,
-              run_base_dir: None,
-              cancellation_token: None,
-            },
-          )
+          .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(8))
           .await
           .expect("flow ok")
       });

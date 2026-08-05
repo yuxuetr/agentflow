@@ -23,7 +23,10 @@ use std::time::{Duration, SystemTime};
 /// Retry policy configuration
 ///
 /// Defines how and when failed operations should be retried.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// V1.4: `PartialEq` (not `Eq` -- `RetryStrategy::ExponentialBackoff`
+// carries an `f64` multiplier) so `agentflow-core`'s `FlowExecutionConfig`
+// can embed `Option<RetryPolicy>` and keep deriving `PartialEq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
   /// Maximum number of retry attempts (0 means no retries)
   pub max_attempts: u32,
@@ -140,7 +143,7 @@ impl RetryPolicyBuilder {
 }
 
 /// Retry strategies
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RetryStrategy {
   /// Fixed delay between retries
@@ -229,7 +232,7 @@ impl RetryStrategy {
 }
 
 /// Pattern matching for retryable errors
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ErrorPattern {
   /// Match by error variant name

@@ -99,6 +99,45 @@ where
   }
 }
 
+/// V1.4: variant of [`execute_with_retry`] that invokes `on_retry` just
+/// before sleeping for each retry attempt, so a caller with its own
+/// event system (e.g. `agentflow-core::flow`'s
+/// `WorkflowEvent::RetryAttempt`) can observe every attempt as it
+/// happens, not just the final success or [`AgentFlowError::RetryExhausted`].
+/// `on_retry` receives the 1-based attempt number that just failed, the
+/// error, and the delay about to be waited before the next attempt.
+pub async fn execute_with_retry_and_hook<F, Fut, T>(
+  policy: &RetryPolicy,
+  #[allow(unused_variables)] operation_name: &str,
+  mut on_retry: impl FnMut(u32, &AgentFlowError, std::time::Duration),
+  mut operation: F,
+) -> Result<T, AgentFlowError>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = Result<T, AgentFlowError>>,
+{
+  let mut context = RetryContext::new();
+
+  loop {
+    match operation().await {
+      Ok(result) => return Ok(result),
+      Err(error) => {
+        if !context.should_retry(policy, &error) {
+          return Err(AgentFlowError::RetryExhausted {
+            attempts: context.attempt + 1,
+            last_error: Box::new(error),
+          });
+        }
+
+        let delay = policy.calculate_delay(context.attempt);
+        on_retry(context.attempt + 1, &error, delay);
+        context.record_failure(&error);
+        tokio::time::sleep(delay).await;
+      }
+    }
+  }
+}
+
 /// Execute an async operation with retry and detailed error context
 ///
 /// This variant captures more detailed error context for debugging.
@@ -304,5 +343,85 @@ mod tests {
     } else {
       panic!("Expected error with context");
     }
+  }
+
+  /// V1.4: `execute_with_retry_and_hook` must invoke `on_retry` exactly
+  /// once per failed-but-retried attempt (not on the final success, not
+  /// on a non-retried exhaustion), with the 1-based attempt number that
+  /// just failed.
+  #[tokio::test]
+  async fn execute_with_retry_and_hook_invokes_hook_once_per_retried_attempt() {
+    let policy = RetryPolicy::builder()
+      .max_attempts(5)
+      .strategy(RetryStrategy::fixed(1))
+      .build();
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let counter_clone = counter.clone();
+    let seen_attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_attempts_clone = seen_attempts.clone();
+
+    let result = execute_with_retry_and_hook(
+      &policy,
+      "test_op",
+      move |attempt, _error, _delay| {
+        seen_attempts_clone.lock().unwrap().push(attempt);
+      },
+      move || {
+        let counter = counter_clone.clone();
+        async move {
+          let call = counter.fetch_add(1, Ordering::SeqCst);
+          if call < 2 {
+            Err(AgentFlowError::NetworkError {
+              message: "connection reset".to_string(),
+            })
+          } else {
+            Ok("success".to_string())
+          }
+        }
+      },
+    )
+    .await;
+
+    assert_eq!(result.unwrap(), "success");
+    assert_eq!(
+      *seen_attempts.lock().unwrap(),
+      vec![1, 2],
+      "hook must fire once per failed attempt, with 1-based attempt numbers"
+    );
+  }
+
+  /// V1.4: the hook must not fire at all for a non-retryable error — it
+  /// only observes attempts that are actually retried. Uses
+  /// `RetryPolicy::default()` (not `builder()...build()`, whose empty
+  /// `retryable_errors` list means "retry everything" — the opposite of
+  /// what this test needs) for its real network/timeout/rate-limit-only
+  /// classification.
+  #[tokio::test]
+  async fn execute_with_retry_and_hook_does_not_fire_for_non_retryable_errors() {
+    let policy = RetryPolicy {
+      max_attempts: 5,
+      ..RetryPolicy::default()
+    };
+
+    let hook_calls = Arc::new(AtomicU32::new(0));
+    let hook_calls_clone = hook_calls.clone();
+
+    let result = execute_with_retry_and_hook(
+      &policy,
+      "test_op",
+      move |_attempt, _error, _delay| {
+        hook_calls_clone.fetch_add(1, Ordering::SeqCst);
+      },
+      || async { Err::<String, _>(AgentFlowError::ValidationError("bad input".to_string())) },
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert_eq!(
+      hook_calls.load(Ordering::SeqCst),
+      0,
+      "a non-retryable error must not trigger any hook calls"
+    );
   }
 }

@@ -7,6 +7,7 @@ use crate::{
   events::WorkflowEvent,
   expr,
   resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
+  retry_executor::execute_with_retry_and_hook,
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
   state_size::estimated_state_pool_bytes,
   value::FlowValue,
@@ -441,31 +442,15 @@ impl<'f> FlowExecutor<'f> {
             node_id: node_id.clone(),
             timestamp: node_started_at,
           });
-          let result = match &graph_node.node_type {
-            NodeType::Standard(node) => node.execute(&inputs).await,
-            NodeType::Map {
-              template,
-              parallel,
-              max_concurrent,
-            } => {
-              if *parallel {
-                self
-                  .execute_map_node_parallel(&inputs, template, *max_concurrent)
-                  .await
-              } else {
-                self.execute_map_node_sequential(&inputs, template).await
-              }
-            }
-            NodeType::While {
-              condition,
-              max_iterations,
-              template,
-            } => {
-              self
-                .execute_while_node(&inputs, condition, *max_iterations, template)
-                .await
-            }
-          };
+          let result = self
+            .execute_node_with_reliability(
+              &run_id,
+              node_id,
+              &graph_node.node_type,
+              &inputs,
+              &execution_config,
+            )
+            .await;
           (result, node_started_at)
         }
         Err(error) => (Err(error), Instant::now()),
@@ -922,9 +907,19 @@ impl<'f> FlowExecutor<'f> {
           timestamp: node_started_at,
         });
 
+        let run_id_for_task = run_id.clone();
+        let config_for_task = config.clone();
         running.push(
           async move {
-            let result = self.execute_node_type(&graph_node.node_type, &inputs).await;
+            let result = self
+              .execute_node_with_reliability(
+                &run_id_for_task,
+                &node_id,
+                &graph_node.node_type,
+                &inputs,
+                &config_for_task,
+              )
+              .await;
             (node_id, node_started_at, result)
           }
           .boxed(),
@@ -1055,6 +1050,76 @@ impl<'f> FlowExecutor<'f> {
           .execute_while_node(inputs, condition, *max_iterations, template)
           .await
       }
+    }
+  }
+
+  /// V1.4: wraps [`Self::execute_node_type`] with the Flow-wide,
+  /// opt-in reliability primitives this crate ships (`tokio::time::timeout`,
+  /// `retry_executor::execute_with_retry_and_hook`) but never applied
+  /// inside its own DAG executor before this fix — `agentflow-core`'s
+  /// `timeout`/`retry_executor` modules had no production caller inside
+  /// `Flow` itself, and `WorkflowEvent::RetryAttempt` was never emitted
+  /// anywhere in the workspace. Both `node_timeout_ms` and
+  /// `node_retry_policy` default to `None` on [`FlowExecutionConfig`],
+  /// so a workflow that doesn't opt in sees zero behavior change: this
+  /// reduces to a bare `execute_node_type` call, used identically by
+  /// both the serial and concurrent execution paths.
+  ///
+  /// This is a Flow-wide complement to (not a replacement for)
+  /// `agentflow-config`'s per-node YAML `timeout_ms`/`max_retries`
+  /// (T3.1's `TimeoutRetryNode`, which decorates an `AsyncNode` *before*
+  /// it ever reaches this executor and so has no way to emit a
+  /// `WorkflowEvent` — its retries are invisible to trace replay / the
+  /// event stream). Every attempt made here runs inside the executor
+  /// itself, where `self.emit_event` is available, so every retry is
+  /// observable.
+  async fn execute_node_with_reliability(
+    &self,
+    run_id: &str,
+    node_id: &str,
+    node_type: &NodeType,
+    inputs: &AsyncNodeInputs,
+    config: &FlowExecutionConfig,
+  ) -> AsyncNodeResult {
+    let run_once = || async {
+      match config.node_timeout_ms {
+        Some(timeout_ms) => {
+          match tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            self.execute_node_type(node_type, inputs),
+          )
+          .await
+          {
+            Ok(result) => result,
+            Err(_elapsed) => Err(AgentFlowError::TimeoutExceeded {
+              duration_ms: timeout_ms,
+            }),
+          }
+        }
+        None => self.execute_node_type(node_type, inputs).await,
+      }
+    };
+
+    match &config.node_retry_policy {
+      Some(policy) => {
+        let max_attempts = policy.max_attempts;
+        execute_with_retry_and_hook(
+          policy,
+          node_id,
+          |attempt, _error, _delay| {
+            self.emit_event(WorkflowEvent::RetryAttempt {
+              workflow_id: run_id.to_string(),
+              node_id: node_id.to_string(),
+              attempt,
+              max_attempts,
+              timestamp: Instant::now(),
+            });
+          },
+          run_once,
+        )
+        .await
+      }
+      None => run_once().await,
     }
   }
 
@@ -3097,6 +3162,164 @@ mod tests {
     assert!(
       state.get("unrelated_after").unwrap().is_ok(),
       "fail_fast: false must let serial mode keep going past the failure"
+    );
+  }
+
+  /// V1.4 regression: `FlowExecutionConfig::node_timeout_ms` (opt-in,
+  /// `None` by default) times out a node that never returns, from
+  /// *inside* the executor itself — before this fix, `agentflow-core`'s
+  /// own `timeout` module had no caller inside `Flow`'s node dispatch at
+  /// all.
+  #[tokio::test]
+  async fn serial_node_timeout_ms_times_out_a_slow_node() {
+    use_writable_home();
+
+    struct ForeverPendingNode;
+
+    #[async_trait]
+    impl AsyncNode for ForeverPendingNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        Ok(HashMap::new())
+      }
+    }
+
+    let node = GraphNode {
+      id: "slow".to_string(),
+      node_type: NodeType::Standard(Arc::new(ForeverPendingNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let config = FlowExecutionConfig::serial().with_node_timeout_ms(50);
+
+    let state = Flow::new(vec![node])
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    match state.get("slow") {
+      Some(Err(AgentFlowError::TimeoutExceeded { duration_ms })) => assert_eq!(*duration_ms, 50),
+      other => panic!("expected TimeoutExceeded, got {other:?}"),
+    }
+  }
+
+  /// Builds a single-node Flow around a node that fails with a
+  /// retryable (network-class) error the first `fail_times` calls, then
+  /// succeeds, tracking every attempt in `calls`.
+  fn flaky_node_flow(fail_times: u32, calls: Arc<std::sync::atomic::AtomicU32>) -> Vec<GraphNode> {
+    struct FlakyNode {
+      fail_times: u32,
+      calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait]
+    impl AsyncNode for FlakyNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call < self.fail_times {
+          return Err(AgentFlowError::NetworkError {
+            message: "connection reset".to_string(),
+          });
+        }
+        let mut outputs = HashMap::new();
+        outputs.insert("value".to_string(), FlowValue::Json(json!("ok")));
+        Ok(outputs)
+      }
+    }
+
+    vec![GraphNode {
+      id: "flaky".to_string(),
+      node_type: NodeType::Standard(Arc::new(FlakyNode { fail_times, calls })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    }]
+  }
+
+  /// V1.4 regression: `FlowExecutionConfig::node_retry_policy` (opt-in,
+  /// `None` by default) retries a node that fails with a transient
+  /// error, and — the actual point of this fix, since T3.1's
+  /// config-first `TimeoutRetryNode` already retried nodes without ever
+  /// telling `Flow`'s event system about it — every attempt emits a
+  /// real `WorkflowEvent::RetryAttempt` observable from outside the
+  /// executor (trace replay, the event stream), not just an eventual
+  /// `Ok`/`Err`.
+  #[tokio::test]
+  async fn serial_node_retry_policy_retries_and_emits_retry_attempt_events() {
+    use_writable_home();
+
+    let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let policy = crate::retry::RetryPolicy {
+      max_attempts: 5,
+      ..crate::retry::RetryPolicy::default()
+    };
+    let config = FlowExecutionConfig::serial().with_node_retry_policy(policy);
+
+    let state = Flow::new(flaky_node_flow(2, calls.clone()))
+      .with_event_listener(listener)
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    assert!(state.get("flaky").unwrap().is_ok());
+    assert_eq!(
+      calls.load(std::sync::atomic::Ordering::SeqCst),
+      3,
+      "2 failed attempts + 1 successful attempt"
+    );
+
+    let events = events.lock().unwrap().clone();
+    let retry_attempt_count = events.iter().filter(|e| **e == "retry.attempt").count();
+    assert_eq!(
+      retry_attempt_count, 2,
+      "expected exactly 2 RetryAttempt events (one per failed attempt), got: {events:?}"
+    );
+  }
+
+  /// V1.4: the concurrent execution path must wire the same reliability
+  /// primitives — this is the same scenario as
+  /// `serial_node_retry_policy_retries_and_emits_retry_attempt_events`
+  /// but under `FlowExecutionConfig::concurrent`, since retry/timeout
+  /// wrapping was added independently to both dispatch sites.
+  #[tokio::test]
+  async fn concurrent_node_retry_policy_retries_and_emits_retry_attempt_events() {
+    use_writable_home();
+
+    let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let policy = crate::retry::RetryPolicy {
+      max_attempts: 5,
+      ..crate::retry::RetryPolicy::default()
+    };
+    let config = FlowExecutionConfig::concurrent(2).with_node_retry_policy(policy);
+
+    let state = Flow::new(flaky_node_flow(2, calls.clone()))
+      .with_event_listener(listener)
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    assert!(state.get("flaky").unwrap().is_ok());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+    let events = events.lock().unwrap().clone();
+    let retry_attempt_count = events.iter().filter(|e| **e == "retry.attempt").count();
+    assert_eq!(
+      retry_attempt_count, 2,
+      "expected exactly 2 RetryAttempt events under concurrent execution too, got: {events:?}"
     );
   }
 

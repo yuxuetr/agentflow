@@ -76,7 +76,9 @@ pub use resume::{
   ResumeSummary, ResumeToolCall, build_resume_plan,
 };
 pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
-pub use retry_executor::{execute_with_retry, execute_with_retry_and_context};
+pub use retry_executor::{
+  execute_with_retry, execute_with_retry_and_context, execute_with_retry_and_hook,
+};
 pub use scheduler::{FlowCancellationToken, FlowExecutionConfig, FlowExecutionMode};
 pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
 pub use state_size::{StateSizeObserver, estimated_state_pool_bytes};
