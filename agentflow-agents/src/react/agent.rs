@@ -1840,7 +1840,11 @@ impl ReActAgent {
       tool_output.content.clone()
     };
 
-    info!(tool = %tool, "Observation: {}", &observation[..observation.len().min(200)]);
+    info!(
+      tool = %tool,
+      "Observation: {}",
+      truncate_str_at_char_boundary(&observation, 200)
+    );
     push_step!(
       self.live_sink,
       steps,
@@ -3063,7 +3067,7 @@ impl ReActAgent {
         tool = %prep.tool,
         "Batch observation [{}]: {}",
         i,
-        &observation[..observation.len().min(200)]
+        truncate_str_at_char_boundary(&observation, 200)
       );
       let result_step_idx = *step_index;
       *step_index += 1;
@@ -3683,6 +3687,21 @@ fn merge_resumed_result(mut prior: AgentRunResult, mut resumed: AgentRunResult) 
   prior
 }
 
+/// Byte-index slicing (`&s[..n]`) panics when `n` falls inside a multi-byte
+/// UTF-8 codepoint — tool observations and messages routinely contain CJK
+/// text or emoji, so a fixed byte budget must snap down to the nearest char
+/// boundary instead of assuming ASCII.
+fn truncate_str_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+  if s.len() <= max_bytes {
+    return s;
+  }
+  let mut idx = max_bytes;
+  while idx > 0 && !s.is_char_boundary(idx) {
+    idx -= 1;
+  }
+  &s[..idx]
+}
+
 fn compact_memory_summary(omitted: &[Message], omitted_tokens: u32) -> String {
   let mut lines = vec![format!(
     "[Memory Summary]\n{} older messages compacted (approx {} tokens):",
@@ -3692,7 +3711,8 @@ fn compact_memory_summary(omitted: &[Message], omitted_tokens: u32) -> String {
   for message in omitted.iter().take(8) {
     let mut content = message.content.replace('\n', " ");
     if content.len() > 160 {
-      content.truncate(160);
+      let cut = truncate_str_at_char_boundary(&content, 160).len();
+      content.truncate(cut);
       content.push_str("...");
     }
     lines.push(format!("- {}: {}", message.role, content));
@@ -3842,6 +3862,64 @@ providers:
     AgentFlow::init_with_config(config_path.to_str().unwrap())
       .await
       .unwrap();
+  }
+
+  #[test]
+  fn truncate_str_at_char_boundary_never_splits_a_multibyte_codepoint() {
+    // Each "测" / "试" character is 3 UTF-8 bytes; a naive `&s[..200]` byte
+    // slice lands mid-character here (200 is not a multiple of 3 past the
+    // ASCII prefix) and would panic pre-fix.
+    let s = "测试".repeat(150);
+    let truncated = truncate_str_at_char_boundary(&s, 200);
+    assert!(truncated.len() <= 200);
+    assert!(s.is_char_boundary(truncated.len()));
+    assert_eq!(&s[..truncated.len()], truncated);
+
+    // Strings at/under the budget are returned unchanged.
+    assert_eq!(truncate_str_at_char_boundary("short", 200), "short");
+    assert_eq!(truncate_str_at_char_boundary("", 200), "");
+  }
+
+  /// V0.1 regression: a >200-byte CJK tool observation must not panic the
+  /// ReAct turn when it's truncated for the "Observation: ..." log preview.
+  #[tokio::test]
+  async fn run_with_context_does_not_panic_on_multibyte_utf8_observation() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-utf8-trunc-{}", uuid::Uuid::new_v4());
+    let long_cjk = "测试".repeat(150);
+    let first_response = json!({
+      "thought": "use tool",
+      "action": {"tool": "echo", "params": {"text": long_cjk}}
+    })
+    .to_string();
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          first_response,
+          r#"{"thought":"done","answer":"final"}"#.to_string(),
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new("utf8-trunc", "say hi in chinese", &model))
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("final"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
   }
 
   #[tokio::test]
@@ -5749,6 +5827,18 @@ providers:
 
     assert!(summary.contains("1 older messages compacted"));
     assert!(summary.contains("older context about project goals"));
+  }
+
+  /// V0.1 regression: a >160-byte CJK message must not panic
+  /// `compact_memory_summary`'s per-line truncation.
+  #[test]
+  fn compact_memory_summary_truncates_multibyte_utf8_without_panicking() {
+    let mut older = Message::user("budget-session", "测试".repeat(100));
+    older.token_count = 10;
+
+    let summary = compact_memory_summary(&[older], 10);
+
+    assert!(summary.contains("..."));
   }
 
   #[tokio::test]
