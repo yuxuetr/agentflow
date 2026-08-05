@@ -86,6 +86,28 @@ pub enum LLMError {
 
 pub type Result<T> = std::result::Result<T, LLMError>;
 
+impl LLMError {
+  /// V1.5: whether this failure is transient and worth retrying with
+  /// backoff (rate limit / server overload / timeout), as opposed to a
+  /// caller mistake (bad request, auth, unsupported feature, ...) that
+  /// would fail identically on every retry. Providers surface 429/5xx
+  /// as a generic `HttpError { status_code, .. }` rather than the
+  /// pre-classified `RateLimitExceeded`/`ServiceUnavailable` variants
+  /// (those are only produced by the `From<reqwest::Error>` transport-
+  /// level mapping below), so both shapes are checked here.
+  pub fn is_retryable(&self) -> bool {
+    match self {
+      LLMError::RateLimitExceeded { .. }
+      | LLMError::ServiceUnavailable { .. }
+      | LLMError::TimeoutError { .. } => true,
+      LLMError::HttpError { status_code, .. } => {
+        *status_code == 429 || (500..=599).contains(status_code)
+      }
+      _ => false,
+    }
+  }
+}
+
 /// Convert common HTTP and network errors to LLMError
 impl From<reqwest::Error> for LLMError {
   fn from(error: reqwest::Error) -> Self {
@@ -202,6 +224,78 @@ mod tests {
     let rendered = err.to_string();
     assert!(rendered.contains("some-future-provider"));
     assert!(rendered.contains("API_KEY"));
+  }
+
+  /// V1.5: the three pre-classified transient variants must be retryable.
+  #[test]
+  fn is_retryable_true_for_preclassified_transient_variants() {
+    assert!(
+      LLMError::RateLimitExceeded {
+        provider: "openai".to_string(),
+        message: "429".to_string(),
+      }
+      .is_retryable()
+    );
+    assert!(
+      LLMError::ServiceUnavailable {
+        provider: "openai".to_string(),
+        message: "503".to_string(),
+      }
+      .is_retryable()
+    );
+    assert!(LLMError::TimeoutError { timeout_ms: 30_000 }.is_retryable());
+  }
+
+  /// V1.5: providers surface 429/5xx as a generic `HttpError` (per
+  /// their in-provider status-code branch, not the transport-level
+  /// `From<reqwest::Error>` mapping) — those status codes must also be
+  /// classified as retryable.
+  #[test]
+  fn is_retryable_true_for_http_error_with_transient_status_codes() {
+    for status_code in [429, 500, 502, 503, 504, 599] {
+      assert!(
+        LLMError::HttpError {
+          status_code,
+          message: "transient".to_string(),
+        }
+        .is_retryable(),
+        "status {status_code} should be retryable"
+      );
+    }
+  }
+
+  /// V1.5: caller-mistake errors must never be retried — retrying a bad
+  /// request or an auth failure just wastes attempts on a call that
+  /// will fail identically every time.
+  #[test]
+  fn is_retryable_false_for_non_transient_errors() {
+    assert!(
+      !LLMError::HttpError {
+        status_code: 400,
+        message: "bad request".to_string(),
+      }
+      .is_retryable()
+    );
+    assert!(
+      !LLMError::AuthenticationError {
+        provider: "openai".to_string(),
+        message: "bad key".to_string(),
+      }
+      .is_retryable()
+    );
+    assert!(
+      !LLMError::QuotaExceeded {
+        provider: "openai".to_string(),
+        message: "quota".to_string(),
+      }
+      .is_retryable()
+    );
+    assert!(
+      !LLMError::InvalidModelConfig {
+        message: "bad config".to_string(),
+      }
+      .is_retryable()
+    );
   }
 
   /// F-AF-4: every provider currently in the env-var-hint table

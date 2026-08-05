@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result, StreamingResponse,
-  config::ModelConfig,
+  config::{GlobalDefaults, ModelConfig},
   multimodal::MultimodalMessage,
   providers::ProviderRequest,
   registry::ModelRegistry,
@@ -33,6 +33,43 @@ pub fn prompt_fingerprint(text: &str) -> String {
     hash = hash.wrapping_mul(0x100000001b3);
   }
   format!("{hash:016x}")
+}
+
+/// V1.5: retry a transient provider-call failure (rate limit / 5xx /
+/// timeout) with exponential backoff, driven by the resolved model's
+/// registry-wide `defaults.max_retries` / `defaults.retry_delay_ms`
+/// (`GlobalDefaults`). `max_retries` of `None`/`0` disables retry
+/// entirely — the first failure propagates immediately, matching
+/// pre-V1.5 behavior. Non-retryable errors (bad request, auth,
+/// unsupported feature, ...) always propagate on the first attempt;
+/// see [`LLMError::is_retryable`].
+async fn retry_transient<F, Fut, T>(defaults: &GlobalDefaults, mut call: F) -> Result<T>
+where
+  F: FnMut() -> Fut,
+  Fut: std::future::Future<Output = Result<T>>,
+{
+  let max_retries = defaults.max_retries.unwrap_or(0);
+  let base_delay_ms = defaults.retry_delay_ms.unwrap_or(1000);
+  let mut attempt = 0u32;
+  loop {
+    match call().await {
+      Ok(value) => return Ok(value),
+      Err(err) if attempt < max_retries && err.is_retryable() => {
+        let delay_ms = base_delay_ms.saturating_mul(1u64 << attempt.min(20));
+        #[cfg(feature = "logging")]
+        warn!(
+          "LLM call failed with a transient error (attempt {}/{}), retrying in {}ms: {}",
+          attempt + 1,
+          max_retries,
+          delay_ms,
+          err
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        attempt += 1;
+      }
+      Err(err) => return Err(err),
+    }
+  }
 }
 
 /// Response format options for model output
@@ -137,13 +174,23 @@ impl LLMClient {
       self.tools.is_some(), // uses tools
     )?;
     let provider = registry.get_provider(&model_config.vendor)?;
+    let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, false)?;
     let provider = provider.clone();
-    let result = match self.trace_context.clone() {
-      Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await,
-      None => provider.execute(&request).await,
-    };
+    let trace_context = self.trace_context.clone();
+    let result = retry_transient(&defaults, || {
+      let provider = provider.clone();
+      let request = request.clone();
+      let trace_context = trace_context.clone();
+      async move {
+        match trace_context {
+          Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await,
+          None => provider.execute(&request).await,
+        }
+      }
+    })
+    .await;
     let duration = start_time.elapsed();
 
     let final_result = result.map(|response| response.content.to_string());
@@ -278,13 +325,23 @@ impl LLMClient {
 
     model_config.validate_request(true, has_images, false, false, false, self.tools.is_some())?;
     let provider = registry.get_provider(&model_config.vendor)?;
+    let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, false)?;
     let provider = provider.clone();
-    let provider_response = match self.trace_context.clone() {
-      Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await?,
-      None => provider.execute(&request).await?,
-    };
+    let trace_context = self.trace_context.clone();
+    let provider_response = retry_transient(&defaults, || {
+      let provider = provider.clone();
+      let request = request.clone();
+      let trace_context = trace_context.clone();
+      async move {
+        match trace_context {
+          Some(ctx) => trace_scope(ctx, async move { provider.execute(&request).await }).await,
+          None => provider.execute(&request).await,
+        }
+      }
+    })
+    .await?;
     let duration = start_time.elapsed();
 
     let content_text = provider_response.content.to_string();
@@ -330,20 +387,30 @@ impl LLMClient {
     )?;
 
     let provider = registry.get_provider(&model_config.vendor)?;
+    let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, true)?;
 
     let provider = provider.clone();
-    let result = match self.trace_context.clone() {
-      Some(ctx) => {
-        trace_scope(
-          ctx,
-          async move { provider.execute_streaming(&request).await },
-        )
-        .await
+    let trace_context = self.trace_context.clone();
+    let result = retry_transient(&defaults, || {
+      let provider = provider.clone();
+      let request = request.clone();
+      let trace_context = trace_context.clone();
+      async move {
+        match trace_context {
+          Some(ctx) => {
+            trace_scope(
+              ctx,
+              async move { provider.execute_streaming(&request).await },
+            )
+            .await
+          }
+          None => provider.execute_streaming(&request).await,
+        }
       }
-      None => provider.execute_streaming(&request).await,
-    };
+    })
+    .await;
 
     if self.enable_logging {
       #[cfg(feature = "logging")]
@@ -781,5 +848,133 @@ impl LLMClientBuilder {
 
   pub async fn execute_streaming(self) -> Result<Box<dyn StreamingResponse>> {
     self.client.execute_streaming().await
+  }
+}
+
+#[cfg(test)]
+mod retry_transient_tests {
+  use super::*;
+  use std::sync::atomic::{AtomicU32, Ordering};
+
+  fn defaults_with(max_retries: u32, retry_delay_ms: u64) -> GlobalDefaults {
+    GlobalDefaults {
+      timeout_seconds: None,
+      max_retries: Some(max_retries),
+      retry_delay_ms: Some(retry_delay_ms),
+    }
+  }
+
+  /// V1.5: a transient error (429-class) followed by success must
+  /// ultimately succeed once retries are configured, and must have
+  /// actually retried (not just gotten lucky on attempt 1).
+  #[tokio::test]
+  async fn retries_a_transient_error_then_succeeds() {
+    let attempts = AtomicU32::new(0);
+    let defaults = defaults_with(3, 1);
+
+    let result = retry_transient(&defaults, || {
+      let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        if attempt == 0 {
+          Err(LLMError::RateLimitExceeded {
+            provider: "mock".to_string(),
+            message: "429".to_string(),
+          })
+        } else {
+          Ok("ok".to_string())
+        }
+      }
+    })
+    .await;
+
+    assert_eq!(result.unwrap(), "ok");
+    assert_eq!(
+      attempts.load(Ordering::SeqCst),
+      2,
+      "must have retried exactly once after the first transient failure"
+    );
+  }
+
+  /// V1.5: exhausting `max_retries` on a persistently transient error
+  /// must surface the underlying error, not loop forever.
+  #[tokio::test]
+  async fn gives_up_and_returns_the_error_once_retries_are_exhausted() {
+    let attempts = AtomicU32::new(0);
+    let defaults = defaults_with(2, 1);
+
+    let result: Result<()> = retry_transient(&defaults, || {
+      attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        Err(LLMError::ServiceUnavailable {
+          provider: "mock".to_string(),
+          message: "503".to_string(),
+        })
+      }
+    })
+    .await;
+
+    assert!(matches!(result, Err(LLMError::ServiceUnavailable { .. })));
+    assert_eq!(
+      attempts.load(Ordering::SeqCst),
+      3,
+      "1 initial attempt + 2 retries = 3 total calls"
+    );
+  }
+
+  /// V1.5: a non-retryable error (e.g. a 4xx parameter error) must
+  /// propagate on the very first attempt, even with retries configured
+  /// — retrying a caller mistake just wastes attempts on a call that
+  /// will fail identically every time.
+  #[tokio::test]
+  async fn does_not_retry_a_non_transient_error() {
+    let attempts = AtomicU32::new(0);
+    let defaults = defaults_with(5, 1);
+
+    let result: Result<()> = retry_transient(&defaults, || {
+      attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        Err(LLMError::HttpError {
+          status_code: 400,
+          message: "bad request".to_string(),
+        })
+      }
+    })
+    .await;
+
+    assert!(matches!(
+      result,
+      Err(LLMError::HttpError {
+        status_code: 400,
+        ..
+      })
+    ));
+    assert_eq!(
+      attempts.load(Ordering::SeqCst),
+      1,
+      "a non-retryable error must not be retried"
+    );
+  }
+
+  /// V1.5: `max_retries: None`/`0` (the pre-V1.5 default, i.e. no
+  /// `defaults:` block configured) must preserve pre-V1.5 behavior —
+  /// the first transient failure propagates immediately with no retry.
+  #[tokio::test]
+  async fn max_retries_none_disables_retry_entirely() {
+    let attempts = AtomicU32::new(0);
+    let defaults = GlobalDefaults::default();
+
+    let result: Result<()> = retry_transient(&defaults, || {
+      attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        Err(LLMError::RateLimitExceeded {
+          provider: "mock".to_string(),
+          message: "429".to_string(),
+        })
+      }
+    })
+    .await;
+
+    assert!(matches!(result, Err(LLMError::RateLimitExceeded { .. })));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
   }
 }

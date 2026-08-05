@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result,
-  config::{LLMConfig, ModelConfig},
+  config::{GlobalDefaults, LLMConfig, ModelConfig},
   providers::{LLMProvider, create_provider},
 };
 use std::collections::{HashMap, HashSet};
@@ -103,6 +103,24 @@ impl ModelRegistry {
       .map_err(|_| LLMError::ModelNotFound {
         model_name: model_name.to_string(),
       })
+  }
+
+  /// V1.5: the resolved config's global retry/timeout defaults
+  /// (`defaults.max_retries` / `defaults.retry_delay_ms`), consumed by
+  /// [`crate::client::LLMClient`] to retry transient provider failures
+  /// with backoff. Returns [`GlobalDefaults::default()`] (no retry) when
+  /// no configuration has been loaded yet, rather than erroring — retry
+  /// behavior is an opt-in refinement, not a precondition for calling.
+  pub fn get_defaults(&self) -> Result<GlobalDefaults> {
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
+    Ok(
+      config_guard
+        .as_ref()
+        .map(|config| config.defaults.clone())
+        .unwrap_or_default(),
+    )
   }
 
   /// Get a provider instance by name

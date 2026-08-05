@@ -34,6 +34,11 @@ pub struct MockProvider {
   /// fallback tests to drive the typed tool-calling path without a real
   /// network round-trip.
   tool_call_queue: Arc<Mutex<VecDeque<Vec<ToolCallRequest>>>>,
+  /// V1.5: errors to return (FIFO, one per call) before falling through
+  /// to the normal response/tool-call path. Lets tests simulate a
+  /// provider that fails transiently (429/5xx) before succeeding,
+  /// exercising `LLMClient`'s retry-with-backoff path end to end.
+  error_queue: Arc<Mutex<VecDeque<LLMError>>>,
 }
 
 impl MockProvider {
@@ -52,6 +57,7 @@ impl MockProvider {
         .unwrap_or(0),
       simulate_error: false,
       tool_call_queue: Arc::new(Mutex::new(load_tool_call_queue_from_env())),
+      error_queue: Arc::new(Mutex::new(load_error_queue_from_env())),
     })
   }
 
@@ -85,6 +91,18 @@ impl MockProvider {
     self
   }
 
+  /// V1.5: queue errors to return (FIFO, one per call) before falling
+  /// through to a normal response. Used by tests to simulate a
+  /// provider recovering from a transient failure (e.g. a 429
+  /// rate-limit) so the client-level retry path can be exercised
+  /// end to end.
+  pub fn with_queued_errors(self, errors: Vec<LLMError>) -> Self {
+    if let Ok(mut queue) = self.error_queue.lock() {
+      queue.extend(errors);
+    }
+    self
+  }
+
   /// Generate a default response based on the request
   fn generate_default_response(&self, request: &ProviderRequest) -> String {
     let first_message = request
@@ -112,6 +130,30 @@ impl MockProvider {
       .response_text
       .clone()
       .unwrap_or_else(|| self.generate_default_response(request))
+  }
+}
+
+/// Load `AGENTFLOW_MOCK_ERROR_STATUS_CODES` as a queue of `HttpError`s.
+///
+/// Format: JSON array of HTTP status codes, e.g. `[429, 429]` — each
+/// consumed FIFO on subsequent requests before the mock falls through to
+/// its normal response. Mirrors `AGENTFLOW_MOCK_RESPONSES`'s env-driven
+/// pattern so registry-constructed providers (which only see the
+/// constructor, not the builder methods) can also be seeded, e.g. by an
+/// end-to-end retry test.
+fn load_error_queue_from_env() -> VecDeque<LLMError> {
+  let Ok(raw) = std::env::var("AGENTFLOW_MOCK_ERROR_STATUS_CODES") else {
+    return VecDeque::new();
+  };
+  match serde_json::from_str::<Vec<u16>>(&raw) {
+    Ok(codes) => codes
+      .into_iter()
+      .map(|status_code| LLMError::HttpError {
+        status_code,
+        message: "mock simulated transient error".to_string(),
+      })
+      .collect(),
+    Err(_) => VecDeque::new(),
   }
 }
 
@@ -188,6 +230,13 @@ impl LLMProvider for MockProvider {
       tokio::time::sleep(tokio::time::Duration::from_millis(self.delay_ms)).await;
     }
 
+    // V1.5: a queued transient error takes priority over the normal
+    // response path, one per call, so tests can simulate "fails N
+    // times then succeeds".
+    if let Some(err) = self.error_queue.lock().ok().and_then(|mut q| q.pop_front()) {
+      return Err(err);
+    }
+
     // Simulate error if configured
     if self.simulate_error {
       return Err(LLMError::ModelExecutionError {
@@ -236,6 +285,11 @@ impl LLMProvider for MockProvider {
     // Simulate network delay
     if self.delay_ms > 0 {
       tokio::time::sleep(tokio::time::Duration::from_millis(self.delay_ms)).await;
+    }
+
+    // V1.5: see the analogous check in `execute` above.
+    if let Some(err) = self.error_queue.lock().ok().and_then(|mut q| q.pop_front()) {
+      return Err(err);
     }
 
     // Simulate error if configured
@@ -408,6 +462,58 @@ mod tests {
     let response = provider.execute(&request).await.unwrap();
     assert!(response.tool_calls.is_empty());
     assert_eq!(response.stop_reason, Some(StopReason::Stop));
+  }
+
+  /// V1.5: queued errors are consumed FIFO, one per call, before the
+  /// mock falls through to its normal response — this is the exact
+  /// "fails N times then succeeds" shape the client-level retry path
+  /// needs to prove out.
+  #[tokio::test]
+  async fn with_queued_errors_are_consumed_fifo_then_falls_through_to_response() {
+    let provider = MockProvider::new("", None)
+      .unwrap()
+      .with_queued_errors(vec![
+        LLMError::HttpError {
+          status_code: 429,
+          message: "rate limited".to_string(),
+        },
+        LLMError::HttpError {
+          status_code: 503,
+          message: "unavailable".to_string(),
+        },
+      ])
+      .with_response("recovered");
+
+    let request = ProviderRequest {
+      model: "mock-model".to_string(),
+      messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+      stream: false,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+    };
+
+    let first = provider.execute(&request).await;
+    assert!(matches!(
+      first,
+      Err(LLMError::HttpError {
+        status_code: 429,
+        ..
+      })
+    ));
+
+    let second = provider.execute(&request).await;
+    assert!(matches!(
+      second,
+      Err(LLMError::HttpError {
+        status_code: 503,
+        ..
+      })
+    ));
+
+    let third = provider.execute(&request).await.unwrap();
+    assert_eq!(third.content.to_string(), "recovered");
   }
 
   #[tokio::test]
