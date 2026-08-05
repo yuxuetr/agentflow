@@ -464,12 +464,9 @@ impl<'f> FlowExecutor<'f> {
       }
     }
 
-    let workflow_failed = state_pool.values().any(Result::is_err);
+    let workflow_failed = state_pool.values().any(is_genuine_failure);
     if workflow_failed {
-      let error = state_pool
-        .values()
-        .find_map(|result| result.as_ref().err().map(ToString::to_string))
-        .unwrap_or_else(|| "workflow failed".to_string());
+      let error = representative_failure_message(&state_pool);
       self.emit_event(WorkflowEvent::WorkflowFailed {
         workflow_id: run_id.clone(),
         error,
@@ -489,10 +486,10 @@ impl<'f> FlowExecutor<'f> {
       && let Some(ref manager) = self.checkpoint_manager()
     {
       let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
-      let status = if state_pool.values().all(|r| r.is_ok()) {
-        WorkflowStatus::Completed
-      } else {
+      let status = if workflow_failed {
         WorkflowStatus::Failed
+      } else {
+        WorkflowStatus::Completed
       };
       let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
 
@@ -616,6 +613,34 @@ impl<'f> FlowExecutor<'f> {
       })
       .collect()
   }
+}
+
+/// V0.3: a benign `run_if`-skip is represented as
+/// `Err(AgentFlowError::NodeSkipped)` in the state pool — dependency-
+/// readiness checks already treat it as "as good as completed" (see the
+/// `Some(Ok(_)) | Some(Err(NodeSkipped))` match in `execute_concurrently`),
+/// and `expr::evaluate` resolves a skipped node's outputs to `Null` rather
+/// than propagating an error. Terminal-status / checkpoint-status
+/// judgments must apply the same rule: a workflow where every node either
+/// completed or was skipped is `Completed`, not `Failed`. Plain
+/// `Result::is_err()` conflated the two, so a workflow that only ever hit
+/// benign skips was reported (and checkpointed) as failed.
+fn is_genuine_failure(result: &AsyncNodeResult) -> bool {
+  !matches!(result, Ok(_) | Err(AgentFlowError::NodeSkipped))
+}
+
+/// Pick a representative error message for `WorkflowEvent::WorkflowFailed`.
+/// Must skip over benign `NodeSkipped` entries — otherwise, when a genuine
+/// failure and an unrelated skip coexist in the same state pool,
+/// `HashMap` iteration order could nondeterministically surface "Node was
+/// skipped due to a condition." as the reported failure reason instead of
+/// the actual error.
+fn representative_failure_message(state_pool: &HashMap<String, AsyncNodeResult>) -> String {
+  state_pool
+    .values()
+    .filter(|result| is_genuine_failure(result))
+    .find_map(|result| result.as_ref().err().map(ToString::to_string))
+    .unwrap_or_else(|| "workflow failed".to_string())
 }
 
 /// Decode one checkpoint output value back into a [`FlowValue`].
@@ -802,7 +827,13 @@ impl<'f> FlowExecutor<'f> {
         if pending.is_empty() {
           break;
         }
-        if state_pool.values().any(Result::is_err) {
+        // V0.3: a benign skip never blocks its dependents (see the
+        // `Some(Ok(_)) | Some(Err(NodeSkipped))` readiness match above),
+        // so pending nodes stalling with only skips (no genuine failure)
+        // in the state pool would be a real scheduler bug, not something
+        // a skip explains — fall through to the hard error below instead
+        // of silently swallowing it.
+        if state_pool.values().any(is_genuine_failure) {
           break;
         }
         return Err(AgentFlowError::FlowExecutionFailed {
@@ -845,12 +876,9 @@ impl<'f> FlowExecutor<'f> {
       }
     }
 
-    let workflow_failed = state_pool.values().any(Result::is_err) || fail_fast_triggered;
+    let workflow_failed = state_pool.values().any(is_genuine_failure) || fail_fast_triggered;
     if workflow_failed {
-      let error = state_pool
-        .values()
-        .find_map(|result| result.as_ref().err().map(ToString::to_string))
-        .unwrap_or_else(|| "workflow failed".to_string());
+      let error = representative_failure_message(&state_pool);
       self.emit_event(WorkflowEvent::WorkflowFailed {
         workflow_id: run_id.clone(),
         error,
@@ -1641,6 +1669,48 @@ mod tests {
       .unwrap()
   }
 
+  /// V0.3 regression: `is_genuine_failure` must treat a benign `run_if`
+  /// skip as non-failing while still treating every other `Err` variant
+  /// (including a partial-execution failure) as a genuine failure.
+  #[test]
+  fn is_genuine_failure_treats_only_skip_as_benign() {
+    assert!(!is_genuine_failure(&Ok(HashMap::new())));
+    assert!(!is_genuine_failure(&Err(AgentFlowError::NodeSkipped)));
+    assert!(is_genuine_failure(&Err(
+      AgentFlowError::NodeExecutionFailed {
+        message: "boom".to_string(),
+      }
+    )));
+    assert!(is_genuine_failure(&Err(
+      AgentFlowError::NodePartialExecutionFailed {
+        message: "partial".to_string(),
+        partial_outputs: HashMap::new(),
+      }
+    )));
+  }
+
+  /// V0.3 regression: when a genuine failure and an unrelated benign skip
+  /// coexist in the same state pool, the representative error message
+  /// picked for `WorkflowEvent::WorkflowFailed` must be the genuine
+  /// failure's — never the skip's "Node was skipped due to a condition."
+  /// placeholder (which `HashMap` iteration order could otherwise surface
+  /// nondeterministically).
+  #[test]
+  fn representative_failure_message_ignores_benign_skips() {
+    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    state_pool.insert("skipped".to_string(), Err(AgentFlowError::NodeSkipped));
+    state_pool.insert(
+      "failed".to_string(),
+      Err(AgentFlowError::NodeExecutionFailed {
+        message: "boom".to_string(),
+      }),
+    );
+
+    let message = representative_failure_message(&state_pool);
+    assert!(message.contains("boom"), "got: {message}");
+    assert!(!message.contains("skipped"), "got: {message}");
+  }
+
   #[test]
   fn checkpoint_state_roundtrips_flowvalue_variants() {
     let file_value = FlowValue::File {
@@ -2330,6 +2400,149 @@ mod tests {
     let events = events.lock().unwrap().clone();
     assert!(events.contains(&"node.skipped"));
     assert!(events.contains(&"workflow.failed"));
+  }
+
+  /// Builds `guard -> skipped_branch` where `skipped_branch`'s `run_if`
+  /// evaluates to `false` and nothing depends on its output — a purely
+  /// benign skip with no genuine failure anywhere in the DAG.
+  fn skip_only_dag() -> Vec<GraphNode> {
+    struct StaticNode {
+      key: &'static str,
+      value: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AsyncNode for StaticNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert(self.key.to_string(), FlowValue::Json(self.value.clone()));
+        Ok(outputs)
+      }
+    }
+
+    vec![
+      GraphNode {
+        id: "guard".to_string(),
+        node_type: NodeType::Standard(Arc::new(StaticNode {
+          key: "enabled",
+          value: json!(false),
+        })),
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      },
+      GraphNode {
+        id: "skipped_branch".to_string(),
+        node_type: NodeType::Standard(Arc::new(StaticNode {
+          key: "value",
+          value: json!("should-not-run"),
+        })),
+        dependencies: vec!["guard".to_string()],
+        input_mapping: None,
+        run_if: Some("{{ nodes.guard.outputs.enabled }}".to_string()),
+        initial_inputs: HashMap::new(),
+      },
+    ]
+  }
+
+  /// V0.3 regression: a workflow where the only "error" in the state pool
+  /// is a benign `run_if` skip must report `WorkflowCompleted`, not
+  /// `WorkflowFailed` — under the default (serial) execution config.
+  #[tokio::test]
+  async fn serial_skip_only_workflow_completes_not_failed() {
+    use_writable_home();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let state = Flow::new(skip_only_dag())
+      .with_event_listener(listener)
+      .execute_from_inputs(HashMap::new())
+      .await
+      .unwrap();
+
+    assert!(matches!(
+      state.get("skipped_branch"),
+      Some(Err(AgentFlowError::NodeSkipped))
+    ));
+
+    let events = events.lock().unwrap().clone();
+    assert!(
+      events.contains(&"workflow.completed"),
+      "expected workflow.completed, got: {events:?}"
+    );
+    assert!(
+      !events.contains(&"workflow.failed"),
+      "a benign run_if skip must not be reported as a workflow failure, got: {events:?}"
+    );
+  }
+
+  /// V0.3 regression: the concurrent execution mode must agree with serial
+  /// on the same skip-only DAG — both report `WorkflowCompleted`.
+  #[tokio::test]
+  async fn concurrent_skip_only_workflow_completes_not_failed() {
+    use_writable_home();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let state = Flow::new(skip_only_dag())
+      .with_event_listener(listener)
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .unwrap();
+
+    assert!(matches!(
+      state.get("skipped_branch"),
+      Some(Err(AgentFlowError::NodeSkipped))
+    ));
+
+    let events = events.lock().unwrap().clone();
+    assert!(
+      events.contains(&"workflow.completed"),
+      "expected workflow.completed, got: {events:?}"
+    );
+    assert!(
+      !events.contains(&"workflow.failed"),
+      "a benign run_if skip must not be reported as a workflow failure, got: {events:?}"
+    );
+  }
+
+  /// V0.3 regression: a skip-only run's final checkpoint status must be
+  /// `Completed`, not `Failed` — covering both execution modes since they
+  /// compute the checkpoint status independently.
+  #[tokio::test]
+  async fn skip_only_workflow_checkpoints_as_completed_in_both_modes() {
+    use_writable_home();
+
+    for config in [
+      FlowExecutionConfig::serial(),
+      FlowExecutionConfig::concurrent(2),
+    ] {
+      let temp_dir = TempDir::new().unwrap();
+      let checkpoint_config = CheckpointConfig::default()
+        .with_checkpoint_dir(temp_dir.path())
+        .with_auto_cleanup(false);
+
+      Flow::new(skip_only_dag())
+        .with_checkpointing(checkpoint_config)
+        .unwrap()
+        .execute_from_inputs_with_config(HashMap::new(), config)
+        .await
+        .unwrap();
+
+      let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
+      assert_eq!(
+        checkpoint.status,
+        WorkflowStatus::Completed,
+        "a benign run_if skip must not flip the checkpoint status to Failed"
+      );
+    }
   }
 
   #[tokio::test]
