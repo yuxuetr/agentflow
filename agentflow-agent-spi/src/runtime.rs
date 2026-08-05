@@ -332,9 +332,28 @@ impl AgentCancellationToken {
   }
 
   /// Resolve once the token is cancelled. Useful inside `tokio::select!`.
+  ///
+  /// V1.3: registers interest via `self.notify.notified()` *before*
+  /// checking `is_cancelled()`, per `tokio::sync::Notify`'s documented
+  /// race-free pattern. The previous `while !is_cancelled() {
+  /// notified().await }` checked the flag first and only constructed
+  /// the `Notified` future afterward — on a multi-threaded runtime, a
+  /// `cancel()` call (the `AtomicBool` store *and* the
+  /// `notify_waiters()` call) completing entirely inside that gap
+  /// would be lost: `notify_waiters()` only wakes futures that were
+  /// already constructed via `notified()`, and none had been yet, so
+  /// the loop's next `notified().await` would block forever despite
+  /// the token already being cancelled. `Notify::notified()` captures
+  /// its notification-generation snapshot at construction time (not at
+  /// first poll), so constructing it before the check closes the gap
+  /// regardless of whether `cancel()` lands before or after the check.
   pub async fn cancelled(&self) {
-    while !self.is_cancelled() {
-      self.notify.notified().await;
+    loop {
+      let notified = self.notify.notified();
+      if self.is_cancelled() {
+        return;
+      }
+      notified.await;
     }
   }
 }
@@ -932,6 +951,57 @@ mod tests {
 
     waiter.await.unwrap();
     assert!(token.is_cancelled());
+  }
+
+  /// V1.3 regression net for the missed-wakeup race fixed in
+  /// `cancelled()`.
+  ///
+  /// Honest caveat: the bug required `cancel()` (the `AtomicBool` store
+  /// *and* the `notify_waiters()` call) to complete entirely inside the
+  /// gap between the old code's `is_cancelled()` check and its
+  /// subsequent `notify.notified()` construction — a span of a handful
+  /// of non-yielding CPU instructions inside a single poll of a single
+  /// task. Reaching it requires a second OS thread to execute both of
+  /// `cancel()`'s steps in that exact window, which is true concurrent
+  /// hardware interleaving, not something `tokio::spawn` + scheduling
+  /// order can be coaxed into on demand — manual poll-stepping
+  /// (`tokio_test`, hand-rolled wakers) can't reach it either, since the
+  /// whole check-then-construct span is one synchronous stretch within
+  /// a single poll() call with no yield point to interleave at, even
+  /// single-stepped. Empirically, thousands of spawn-then-immediately-
+  /// cancel iterations (including with 64-way concurrent waiters)
+  /// against the pre-fix code never hit it in this environment either.
+  /// Deterministic coverage of this exact interleaving would need
+  /// `loom`-style exhaustive scheduling exploration, which isn't part
+  /// of this workspace's test infrastructure.
+  ///
+  /// So this test does NOT prove the race is gone — that rests on
+  /// `cancelled()` matching `tokio::sync::Notify`'s own documented
+  /// race-free pattern (a `Notified` future captures its notification
+  /// generation at *construction*, not first poll, so constructing it
+  /// before checking the flag closes the gap regardless of scheduling).
+  /// What this test does verify, at higher volume than a single
+  /// spawn-then-cancel: the basic contract — a waiter that starts after
+  /// `cancel()` (or races arbitrarily with it) always resolves promptly
+  /// — holds across many iterations and doesn't regress into some
+  /// *other*, more easily triggered hang.
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn cancelled_resolves_promptly_across_many_spawn_then_cancel_iterations() {
+    for _ in 0..500 {
+      let token = AgentCancellationToken::new();
+      let waiter = {
+        let token = token.clone();
+        tokio::spawn(async move {
+          token.cancelled().await;
+        })
+      };
+      token.cancel();
+
+      tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+        .await
+        .expect("cancelled() must not hang when a waiter races cancel()")
+        .unwrap();
+    }
   }
 
   #[test]
