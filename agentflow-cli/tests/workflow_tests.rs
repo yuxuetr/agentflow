@@ -540,7 +540,14 @@ fn cli_workflow_run_uses_env_run_artifacts_directory() {
 
   let mut cmd = Command::cargo_bin("agentflow").unwrap();
   cmd
-    .args(["workflow", "run", workflow.to_str().unwrap()])
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--input",
+      "topic",
+      "AgentFlow",
+    ])
     .env("HOME", home.path())
     .env("AGENTFLOW_RUN_DIR", &run_dir)
     .assert()
@@ -553,6 +560,54 @@ fn cli_workflow_run_uses_env_run_artifacts_directory() {
     .unwrap();
   assert_eq!(run_dirs.len(), 1);
   assert!(run_dirs[0].path().join("render_outputs.json").exists());
+}
+
+/// V1.1 regression: before this fix, `agentflow workflow run` printed
+/// "✅ Workflow completed" and exited 0 even when a node inside the
+/// workflow genuinely failed — the CLI never inspected the returned
+/// state pool for embedded per-node failures, it only ever treated a
+/// hard `Err` from the flow executor itself as a run failure. No
+/// `--input topic` is supplied here, so the template references an
+/// undefined variable and genuinely fails to render.
+#[test]
+fn cli_workflow_run_fails_when_a_node_genuinely_fails() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["workflow", "run", workflow.to_str().unwrap()])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("render"));
+}
+
+/// V1.1: the same detection must hold under `--execution-mode
+/// concurrent` too — this path has *always* returned `Ok(state)` with
+/// the failure embedded (never a hard `Err`), so before this fix a
+/// concurrent-mode run with a genuinely failing node exited 0 even
+/// more directly than the serial case above did.
+#[test]
+fn cli_workflow_run_fails_when_a_node_genuinely_fails_under_concurrent_mode() {
+  let home = TempDir::new().unwrap();
+  let work = TempDir::new().unwrap();
+  let workflow = write_template_workflow(&work);
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "run",
+      workflow.to_str().unwrap(),
+      "--execution-mode",
+      "concurrent",
+    ])
+    .env("HOME", home.path())
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("render"));
 }
 
 #[test]

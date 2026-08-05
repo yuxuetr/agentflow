@@ -436,10 +436,16 @@ fn run_dir_for_run(base_dir: &FsPath, run_id: Uuid) -> PathBuf {
   base_dir.join(run_id.to_string())
 }
 
+/// V1.1: mirrors `agentflow_core::flow`'s `is_genuine_failure` -- a
+/// benign `run_if` skip (`AgentFlowError::NodeSkipped`) is not a
+/// workflow failure. Before this fix, a run whose only "error" was a
+/// skipped node was wrongly marked `RunStatus::Failed`.
 fn first_state_error(state: &HashMap<String, AsyncNodeResult>) -> Option<String> {
-  state
-    .iter()
-    .find_map(|(node_id, result)| result.as_ref().err().map(|err| format!("{node_id}: {err}")))
+  state.iter().find_map(|(node_id, result)| match result {
+    Err(agentflow_core::error::AgentFlowError::NodeSkipped) => None,
+    Err(err) => Some(format!("{node_id}: {err}")),
+    Ok(_) => None,
+  })
 }
 
 async fn stub_execute(ctx: &RunContext) -> Result<(), agentflow_db::DbError> {
@@ -931,5 +937,47 @@ mod retention_overrides_tests {
     let parsed: RetentionOverrides = serde_json::from_str("{}").expect("empty body ok");
     assert!(parsed.events_days.is_none());
     assert!(parsed.artifacts_days.is_none());
+  }
+}
+
+#[cfg(test)]
+mod first_state_error_tests {
+  use super::first_state_error;
+  use agentflow_core::error::AgentFlowError;
+  use std::collections::HashMap;
+
+  /// V1.1 regression: a state pool whose only "error" is a benign
+  /// `run_if` skip must not be reported as a run failure.
+  #[test]
+  fn ignores_a_benign_skip() {
+    let mut state = HashMap::new();
+    state.insert("skipped".to_string(), Err(AgentFlowError::NodeSkipped));
+    state.insert("ok".to_string(), Ok(HashMap::new()));
+    assert!(first_state_error(&state).is_none());
+  }
+
+  /// A genuine failure alongside an unrelated skip is still reported,
+  /// and the message names the failing node (not the skipped one).
+  #[test]
+  fn reports_a_genuine_failure_alongside_a_skip() {
+    let mut state = HashMap::new();
+    state.insert("skipped".to_string(), Err(AgentFlowError::NodeSkipped));
+    state.insert(
+      "failed".to_string(),
+      Err(AgentFlowError::NodeExecutionFailed {
+        message: "boom".to_string(),
+      }),
+    );
+    let error = first_state_error(&state).expect("a genuine failure must be reported");
+    assert!(error.contains("failed"));
+    assert!(error.contains("boom"));
+  }
+
+  #[test]
+  fn none_when_every_node_succeeded() {
+    let mut state = HashMap::new();
+    state.insert("a".to_string(), Ok(HashMap::new()));
+    state.insert("b".to_string(), Ok(HashMap::new()));
+    assert!(first_state_error(&state).is_none());
   }
 }

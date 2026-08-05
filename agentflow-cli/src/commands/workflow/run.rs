@@ -309,7 +309,27 @@ async fn run_with_retries(
       execution_config.clone(),
     );
     match tokio::time::timeout(timeout_duration, run).await {
-      Ok(Ok(state)) => return Ok(state),
+      // V1.1: `execute_from_inputs_with_id_and_config` returning `Ok`
+      // no longer means every node succeeded -- a node can carry a
+      // genuine failure in its own state_pool entry while the function
+      // itself succeeds (true for the concurrent path all along, and
+      // now also true for serial after agentflow-core's V0.3/V1.1
+      // fixes to its terminal-status semantics). Treat that the same
+      // as a hard `Err` here so `--max-retries` and the exit code this
+      // command's caller derives from `Result::Err` behave uniformly
+      // regardless of which layer reported the failure or which
+      // execution mode ran it.
+      Ok(Ok(state)) => match first_genuine_state_error(&state) {
+        None => return Ok(state),
+        Some(error) => {
+          last_error = Some(anyhow::anyhow!(
+            "workflow attempt {}/{} failed: {}",
+            attempt,
+            attempts,
+            error
+          ));
+        }
+      },
       Ok(Err(err)) => {
         last_error = Some(
           anyhow::Error::new(err)
@@ -332,4 +352,17 @@ async fn run_with_retries(
   }
 
   Err(last_error.unwrap_or_else(|| anyhow::anyhow!("workflow execution failed")))
+}
+
+/// V1.1: mirrors `agentflow_core::flow`'s `is_genuine_failure` -- a
+/// benign `run_if` skip (`AgentFlowError::NodeSkipped`) is not a
+/// workflow failure and must not trigger a retry or a non-zero exit.
+fn first_genuine_state_error(
+  state: &std::collections::HashMap<String, agentflow_core::async_node::AsyncNodeResult>,
+) -> Option<String> {
+  state.iter().find_map(|(node_id, result)| match result {
+    Err(agentflow_core::AgentFlowError::NodeSkipped) => None,
+    Err(err) => Some(format!("{node_id}: {err}")),
+    Ok(_) => None,
+  })
 }

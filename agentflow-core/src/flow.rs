@@ -368,90 +368,78 @@ impl<'f> FlowExecutor<'f> {
         continue;
       }
 
-      let mut inputs = match &graph_node.input_mapping {
-        Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool, &initial_inputs)?,
-        None => HashMap::new(),
+      // V1.1: a `gather_inputs` failure (e.g. a required dependency was
+      // skipped, or an upstream node genuinely failed) used to
+      // propagate via `?` and abort this *entire function* — no
+      // `WorkflowFailed` event, no final checkpoint status write, and
+      // the caller got a hard `Err` instead of the per-node result the
+      // concurrent path already produces for the identical case (see
+      // `execute_concurrently`'s matching `gather_inputs` error
+      // branch, which this mirrors: a fresh `Instant::now()` stands in
+      // for `node_started_at` so a gather-input failure reports ~0
+      // duration, since no node code ever ran).
+      let inputs_result = match &graph_node.input_mapping {
+        Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool, &initial_inputs),
+        None => Ok(HashMap::new()),
       };
 
-      inputs.extend(graph_node.initial_inputs.clone());
+      let (result, node_started_at) = match inputs_result {
+        Ok(mut inputs) => {
+          inputs.extend(graph_node.initial_inputs.clone());
 
-      // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
-      // These provide loop variables and context that should be available to all nodes
-      inputs.extend(initial_inputs.clone());
+          // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
+          // These provide loop variables and context that should be available to all nodes
+          inputs.extend(initial_inputs.clone());
 
-      if let Some(Ok(restored_outputs)) = state_pool.get(node_id) {
-        inputs.extend(restored_outputs.clone());
-      }
-
-      println!("▶️  Executing node '{}'", node_id);
-      let node_started_at = Instant::now();
-      self.emit_event(WorkflowEvent::NodeStarted {
-        workflow_id: run_id.clone(),
-        node_id: node_id.clone(),
-        timestamp: node_started_at,
-      });
-      let result = match &graph_node.node_type {
-        NodeType::Standard(node) => node.execute(&inputs).await,
-        NodeType::Map {
-          template,
-          parallel,
-          max_concurrent,
-        } => {
-          if *parallel {
-            self
-              .execute_map_node_parallel(&inputs, template, *max_concurrent)
-              .await
-          } else {
-            self.execute_map_node_sequential(&inputs, template).await
+          if let Some(Ok(restored_outputs)) = state_pool.get(node_id) {
+            inputs.extend(restored_outputs.clone());
           }
+
+          println!("▶️  Executing node '{}'", node_id);
+          let node_started_at = Instant::now();
+          self.emit_event(WorkflowEvent::NodeStarted {
+            workflow_id: run_id.clone(),
+            node_id: node_id.clone(),
+            timestamp: node_started_at,
+          });
+          let result = match &graph_node.node_type {
+            NodeType::Standard(node) => node.execute(&inputs).await,
+            NodeType::Map {
+              template,
+              parallel,
+              max_concurrent,
+            } => {
+              if *parallel {
+                self
+                  .execute_map_node_parallel(&inputs, template, *max_concurrent)
+                  .await
+              } else {
+                self.execute_map_node_sequential(&inputs, template).await
+              }
+            }
+            NodeType::While {
+              condition,
+              max_iterations,
+              template,
+            } => {
+              self
+                .execute_while_node(&inputs, condition, *max_iterations, template)
+                .await
+            }
+          };
+          (result, node_started_at)
         }
-        NodeType::While {
-          condition,
-          max_iterations,
-          template,
-        } => {
-          self
-            .execute_while_node(&inputs, condition, *max_iterations, template)
-            .await
-        }
+        Err(error) => (Err(error), Instant::now()),
       };
 
       self.persist_step_result(&run_dir, node_id, &result)?;
 
-      match &result {
-        Ok(outputs) => {
-          last_completed_node = Some(node_id.clone());
-          self.emit_event(WorkflowEvent::NodeOutputCaptured {
-            workflow_id: run_id.clone(),
-            node_id: node_id.clone(),
-            output: Self::outputs_to_json(outputs),
-            timestamp: Instant::now(),
-          });
-          self.emit_event(WorkflowEvent::NodeCompleted {
-            workflow_id: run_id.clone(),
-            node_id: node_id.clone(),
-            duration: node_started_at.elapsed(),
-            timestamp: Instant::now(),
-          });
-        }
-        Err(AgentFlowError::NodeSkipped) => {
-          self.emit_event(WorkflowEvent::NodeSkipped {
-            workflow_id: run_id.clone(),
-            node_id: node_id.clone(),
-            reason: "run_if evaluated to false".to_string(),
-            timestamp: Instant::now(),
-          });
-        }
-        Err(err) => {
-          self.emit_event(WorkflowEvent::NodeFailed {
-            workflow_id: run_id.clone(),
-            node_id: node_id.clone(),
-            error: err.to_string(),
-            duration: node_started_at.elapsed(),
-            timestamp: Instant::now(),
-          });
-        }
+      if result.is_ok() {
+        last_completed_node = Some(node_id.clone());
       }
+      self.record_node_result_events(&run_id, node_id, node_started_at, &result);
+      let is_failure = is_genuine_failure(&result);
+      let is_skip = matches!(result, Err(AgentFlowError::NodeSkipped));
 
       state_pool.insert(node_id.to_string(), result);
       self.notify_state_size(&state_pool);
@@ -476,6 +464,18 @@ impl<'f> FlowExecutor<'f> {
         } else {
           println!("💾 Checkpoint saved after node '{}'", node_id);
         }
+      }
+
+      // V1.1: align with `execute_concurrently`'s fail_fast /
+      // continue_on_skip semantics instead of unconditionally running
+      // every remaining node regardless of configuration. Remaining
+      // nodes simply never get a state_pool entry, exactly like the
+      // concurrent path leaves unscheduled `pending` nodes absent.
+      if is_failure && execution_config.fail_fast {
+        break;
+      }
+      if is_skip && !execution_config.continue_on_skip {
+        break;
       }
     }
 
@@ -2639,6 +2639,192 @@ mod tests {
     );
   }
 
+  /// Builds `root -> consumer -> unrelated_after`. `consumer`'s
+  /// `input_mapping` requires an output key `root` never produces, so
+  /// `gather_inputs` genuinely fails for it (`NodeInputError`) — not a
+  /// benign skip. `unrelated_after` has a purely structural dependency
+  /// on `consumer` (no `input_mapping` referencing it) so the chain's
+  /// topological order is deterministic regardless of id sort order,
+  /// while still being a node whose own `gather_inputs` would trivially
+  /// succeed if it were ever reached.
+  fn gather_inputs_failure_dag() -> Vec<GraphNode> {
+    struct StaticNode {
+      key: &'static str,
+      value: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AsyncNode for StaticNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        outputs.insert(self.key.to_string(), FlowValue::Json(self.value.clone()));
+        Ok(outputs)
+      }
+    }
+
+    vec![
+      GraphNode {
+        id: "root".to_string(),
+        node_type: NodeType::Standard(Arc::new(StaticNode {
+          key: "other_key",
+          value: json!("value"),
+        })),
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      },
+      GraphNode {
+        id: "consumer".to_string(),
+        node_type: NodeType::Standard(Arc::new(StaticNode {
+          key: "unused",
+          value: json!(null),
+        })),
+        dependencies: vec!["root".to_string()],
+        input_mapping: Some(HashMap::from([(
+          "expected".to_string(),
+          ("root".to_string(), "expected_key".to_string()),
+        )])),
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      },
+      GraphNode {
+        id: "unrelated_after".to_string(),
+        node_type: NodeType::Standard(Arc::new(StaticNode {
+          key: "value",
+          value: json!("should-not-run-under-fail-fast"),
+        })),
+        dependencies: vec!["consumer".to_string()],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      },
+    ]
+  }
+
+  /// V1.1 regression: a `gather_inputs` failure used to propagate via
+  /// `?` and abort `execute_from_inputs` itself — no `WorkflowFailed`
+  /// event, no state_pool returned to the caller at all. It must now be
+  /// a per-node result like the concurrent path already produces, and
+  /// (with the default `fail_fast: true`) stop scheduling further
+  /// nodes.
+  #[tokio::test]
+  async fn serial_gather_inputs_failure_does_not_abort_the_whole_run() {
+    use_writable_home();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+
+    let state = Flow::new(gather_inputs_failure_dag())
+      .with_event_listener(listener)
+      .execute_from_inputs(HashMap::new())
+      .await
+      .expect("a gather_inputs failure must not abort the whole function");
+
+    assert!(state.get("root").unwrap().is_ok());
+    assert!(matches!(
+      state.get("consumer"),
+      Some(Err(AgentFlowError::NodeInputError { .. }))
+    ));
+    assert!(
+      !state.contains_key("unrelated_after"),
+      "fail_fast (default) must stop scheduling further nodes after a genuine failure"
+    );
+
+    let events = events.lock().unwrap().clone();
+    assert!(events.contains(&"workflow.failed"));
+    assert!(!events.contains(&"workflow.completed"));
+  }
+
+  /// V1.1: serial and concurrent must agree on terminal status for the
+  /// identical DAG — both `WorkflowFailed`, never one `Failed` and the
+  /// other silently `Ok`/`Completed`.
+  #[tokio::test]
+  async fn serial_and_concurrent_agree_on_terminal_status_for_a_genuine_failure() {
+    use_writable_home();
+
+    for config in [
+      FlowExecutionConfig::serial(),
+      FlowExecutionConfig::concurrent(2),
+    ] {
+      let events = Arc::new(Mutex::new(Vec::new()));
+      let listener = Arc::new(RecordingListener {
+        events: events.clone(),
+      });
+
+      let state = Flow::new(gather_inputs_failure_dag())
+        .with_event_listener(listener)
+        .execute_from_inputs_with_config(HashMap::new(), config)
+        .await
+        .expect("must not hard-abort in either mode");
+
+      assert!(matches!(
+        state.get("consumer"),
+        Some(Err(AgentFlowError::NodeInputError { .. }))
+      ));
+      let events = events.lock().unwrap().clone();
+      assert!(
+        events.contains(&"workflow.failed"),
+        "expected workflow.failed in both modes, got: {events:?}"
+      );
+      assert!(!events.contains(&"workflow.completed"));
+    }
+  }
+
+  /// V1.1 regression: before the fix, a `gather_inputs` failure aborted
+  /// the function before the final checkpoint write ever ran, leaving
+  /// the checkpoint stuck at `Running` forever. It must now reach
+  /// `Failed`.
+  #[tokio::test]
+  async fn serial_gather_inputs_failure_checkpoints_as_failed_not_stuck_running() {
+    use_writable_home();
+
+    let temp_dir = TempDir::new().unwrap();
+    let checkpoint_config = CheckpointConfig::default()
+      .with_checkpoint_dir(temp_dir.path())
+      .with_auto_cleanup(false);
+
+    Flow::new(gather_inputs_failure_dag())
+      .with_checkpointing(checkpoint_config)
+      .unwrap()
+      .execute_from_inputs(HashMap::new())
+      .await
+      .expect("must not hard-abort");
+
+    let checkpoint = load_only_latest_checkpoint(&temp_dir).await;
+    assert_eq!(checkpoint.status, WorkflowStatus::Failed);
+  }
+
+  /// V1.1: `fail_fast: false` must still let serial mode continue past
+  /// a genuine failure — the pre-fix "unconditionally run every
+  /// remaining node" behavior is preserved when explicitly configured,
+  /// it's just no longer the *only* behavior serial mode has.
+  #[tokio::test]
+  async fn serial_fail_fast_false_continues_past_a_genuine_failure() {
+    use_writable_home();
+
+    let config = FlowExecutionConfig {
+      fail_fast: false,
+      ..FlowExecutionConfig::serial()
+    };
+
+    let state = Flow::new(gather_inputs_failure_dag())
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    assert!(matches!(
+      state.get("consumer"),
+      Some(Err(AgentFlowError::NodeInputError { .. }))
+    ));
+    assert!(
+      state.get("unrelated_after").unwrap().is_ok(),
+      "fail_fast: false must let serial mode keep going past the failure"
+    );
+  }
+
   #[tokio::test]
   async fn concurrent_checkpoint_captures_successful_branch_outputs() {
     use_writable_home();
@@ -3208,21 +3394,47 @@ mod tests {
       },
     };
 
-    // gather_inputs runs BEFORE node.execute, so a missing item
-    // path errors at the sub-flow level and surfaces in state as a
-    // per-node Err on the map. (Per-node-execution errors get
-    // buried per F-A6-3, but gather-inputs failures bubble through
-    // the map's `?` and end up on the map node itself.)
+    // V1.1: a missing item path fails `gather_inputs` for the `sink`
+    // node inside the sub-flow. Before V1.1 that propagated via `?`
+    // and aborted the whole sub-flow's `execute_from_inputs`, which
+    // the map node's `.await?` then rethrew as an `Err` on the map
+    // node itself. Now the sub-flow's `execute_from_inputs` returns
+    // `Ok` (per node V1.1 fixed serial execution to match the
+    // concurrent path), so the failure is buried inside `results[0]`
+    // and tallied in `results_summary` exactly like a regular
+    // per-node execution error (F-A6-3) — `gather_inputs` failures no
+    // longer get special-cased.
     let state = Flow::new(vec![map_node]).run().await.unwrap();
-    let node_result = state.get("bad_lookup_map").unwrap();
-    let err_msg = match node_result {
-      Err(AgentFlowError::NodeInputError { message }) => message.clone(),
-      other => panic!("expected NodeInputError on the map node, got {other:?}"),
+    let map_result = state
+      .get("bad_lookup_map")
+      .unwrap()
+      .as_ref()
+      .expect("map must Ok overall (per-sub-flow Err doesn't bubble)");
+
+    let results_array = match map_result.get("results").expect("results must exist") {
+      FlowValue::Json(Value::Array(arr)) => arr,
+      other => panic!("results must be a JSON array, got {other:?}"),
     };
+    assert_eq!(results_array.len(), 1);
+    let err_msg = results_array[0]["sink"]["Err"]["NodeInputError"]["message"]
+      .as_str()
+      .expect("sink's NodeInputError message must be present");
     assert!(
       err_msg.contains("item.nope.not_here"),
       "error must name the missing item path: {err_msg}"
     );
+
+    let summary = match map_result
+      .get("results_summary")
+      .expect("results_summary must exist (F-A6-3)")
+    {
+      FlowValue::Json(s) => s,
+      other => panic!("results_summary must be JSON, got {other:?}"),
+    };
+    assert_eq!(summary["total"], 1);
+    assert_eq!(summary["ok"], 0);
+    assert_eq!(summary["err"], 1);
+    assert_eq!(summary["err_indexes"], json!([0]));
   }
 
   /// F-A6-3: when one or more sub-flows have a node-level Err in
