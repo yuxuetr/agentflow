@@ -86,6 +86,20 @@ pub enum WorkflowStatus {
   Cancelled,
 }
 
+/// V0.4: `true` when `id` is safe to embed as a single path component in a
+/// checkpoint or run-directory path — used for both `workflow_id`
+/// (this module) and `node_id` (`agentflow_core::flow`, which imports
+/// this). Neither originates from this crate: `workflow_id` can be a
+/// caller-supplied run id and `node_id` comes from a workflow author's
+/// YAML `id:` field, so both must be treated as untrusted. Rejects
+/// anything that could escape the intended directory once handed to a
+/// real filesystem call: empty strings, `.` / `..`, and any path
+/// separator (checked for both `/` and `\` regardless of host OS, since
+/// a Linux-built checkpoint dir could still be inspected on Windows).
+pub(crate) fn is_safe_path_component(id: &str) -> bool {
+  !id.is_empty() && !id.contains('/') && !id.contains('\\') && id != "." && id != ".."
+}
+
 /// Checkpoint manager
 pub struct CheckpointManager {
   config: CheckpointConfig,
@@ -145,7 +159,7 @@ impl CheckpointManager {
 
   /// Save a checkpoint structure
   pub async fn save_checkpoint_struct(&self, checkpoint: &Checkpoint) -> Result<()> {
-    let workflow_dir = self.get_workflow_dir(&checkpoint.workflow_id);
+    let workflow_dir = self.get_workflow_dir(&checkpoint.workflow_id)?;
     fs::create_dir_all(&workflow_dir)
       .await
       .map_err(|e| AgentFlowError::PersistenceError {
@@ -208,7 +222,7 @@ impl CheckpointManager {
   /// Load the latest checkpoint for a workflow
   pub async fn load_latest_checkpoint(&self, workflow_id: &str) -> Result<Option<Checkpoint>> {
     let latest_path = self
-      .get_workflow_dir(workflow_id)
+      .get_workflow_dir(workflow_id)?
       .join("checkpoint_latest.json");
 
     if !latest_path.exists() {
@@ -220,7 +234,7 @@ impl CheckpointManager {
 
   /// Load all checkpoints for a workflow (sorted by timestamp, newest first)
   pub async fn load_all_checkpoints(&self, workflow_id: &str) -> Result<Vec<Checkpoint>> {
-    let workflow_dir = self.get_workflow_dir(workflow_id);
+    let workflow_dir = self.get_workflow_dir(workflow_id)?;
 
     if !workflow_dir.exists() {
       return Ok(Vec::new());
@@ -289,7 +303,7 @@ impl CheckpointManager {
   ) -> Result<()> {
     let timestamp = created_at.format("%Y%m%d_%H%M%S_%3f");
     let filename = format!("checkpoint_{}.json", timestamp);
-    let path = self.get_workflow_dir(workflow_id).join(filename);
+    let path = self.get_workflow_dir(workflow_id)?.join(filename);
 
     if path.exists() {
       fs::remove_file(&path)
@@ -301,7 +315,7 @@ impl CheckpointManager {
 
     // If we deleted the latest checkpoint, update the latest symlink
     let latest_path = self
-      .get_workflow_dir(workflow_id)
+      .get_workflow_dir(workflow_id)?
       .join("checkpoint_latest.json");
     if latest_path.exists() {
       // Load the latest checkpoint to check if it was the one we deleted
@@ -314,7 +328,7 @@ impl CheckpointManager {
           // Update latest symlink to point to the next checkpoint
           let timestamp = newest.created_at.format("%Y%m%d_%H%M%S_%3f");
           let filename = format!("checkpoint_{}.json", timestamp);
-          let checkpoint_path = self.get_workflow_dir(workflow_id).join(filename);
+          let checkpoint_path = self.get_workflow_dir(workflow_id)?.join(filename);
 
           let _ = fs::remove_file(&latest_path).await;
           fs::copy(&checkpoint_path, &latest_path).await.ok();
@@ -330,7 +344,7 @@ impl CheckpointManager {
 
   /// Delete all checkpoints for a workflow
   pub async fn delete_all_checkpoints(&self, workflow_id: &str) -> Result<()> {
-    let workflow_dir = self.get_workflow_dir(workflow_id);
+    let workflow_dir = self.get_workflow_dir(workflow_id)?;
 
     if workflow_dir.exists() {
       fs::remove_dir_all(&workflow_dir)
@@ -399,9 +413,26 @@ impl CheckpointManager {
     Ok(cleaned_count)
   }
 
-  /// Get workflow checkpoint directory
-  fn get_workflow_dir(&self, workflow_id: &str) -> PathBuf {
-    self.config.checkpoint_dir.join(workflow_id)
+  /// Get workflow checkpoint directory.
+  ///
+  /// V0.4: fails closed if `workflow_id` isn't safe to use as a single
+  /// path component. `workflow_id` is often a caller-supplied run id
+  /// (e.g. from `Flow::execute_from_inputs_with_id_and_config`), not a
+  /// value this crate generates — `PathBuf::join` treats an absolute
+  /// `workflow_id` as replacing `checkpoint_dir` entirely, and `".."`
+  /// resolves to `checkpoint_dir`'s *parent* once handed to a real
+  /// filesystem call. `delete_all_checkpoints("..")` would otherwise
+  /// `remove_dir_all` on that parent directory.
+  fn get_workflow_dir(&self, workflow_id: &str) -> Result<PathBuf> {
+    if !is_safe_path_component(workflow_id) {
+      return Err(AgentFlowError::ConfigurationError {
+        message: format!(
+          "invalid workflow_id '{}': must be a single path segment (no '/', '\\', '.', or '..')",
+          workflow_id
+        ),
+      });
+    }
+    Ok(self.config.checkpoint_dir.join(workflow_id))
   }
 
   /// Get configuration
@@ -527,6 +558,79 @@ mod tests {
 
     let checkpoints = manager.load_all_checkpoints("test_workflow").await.unwrap();
     assert_eq!(checkpoints.len(), 0);
+  }
+
+  /// V0.4 regression: `is_safe_path_component` rejects everything that
+  /// could escape a single path segment, and accepts ordinary ids.
+  #[test]
+  fn is_safe_path_component_rejects_traversal_and_separators() {
+    assert!(is_safe_path_component("workflow-123"));
+    assert!(is_safe_path_component("node_1"));
+    assert!(!is_safe_path_component(""));
+    assert!(!is_safe_path_component("."));
+    assert!(!is_safe_path_component(".."));
+    assert!(!is_safe_path_component("../escape"));
+    assert!(!is_safe_path_component("nested/path"));
+    assert!(!is_safe_path_component("nested\\path"));
+    assert!(!is_safe_path_component("/etc/passwd"));
+  }
+
+  /// V0.4 regression: the original disaster scenario — a workflow id of
+  /// `".."` must not let `delete_all_checkpoints` reach (and
+  /// `remove_dir_all`) the checkpoint directory's *parent*. Before the
+  /// fix, `get_workflow_dir("..")` returned `checkpoint_dir.join("..")`
+  /// unchecked, which a real filesystem call resolves to the parent.
+  #[tokio::test]
+  async fn delete_all_checkpoints_rejects_parent_directory_traversal() {
+    let (manager, temp_dir) = create_test_manager();
+
+    // A sibling file in the checkpoint dir's parent that must survive.
+    let sentinel = temp_dir.path().parent().unwrap().join(format!(
+      "agentflow-checkpoint-test-sentinel-{}",
+      uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&sentinel, "must not be deleted").unwrap();
+
+    let err = manager.delete_all_checkpoints("..").await.unwrap_err();
+    assert!(
+      err.to_string().contains("invalid workflow_id"),
+      "expected an invalid-workflow_id error, got: {err}"
+    );
+    assert!(
+      sentinel.exists(),
+      "the checkpoint dir's parent must not have been touched"
+    );
+    assert!(
+      temp_dir.path().exists(),
+      "the checkpoint dir itself must still exist"
+    );
+
+    let _ = std::fs::remove_file(&sentinel);
+  }
+
+  /// V0.4 regression: every `CheckpointManager` entry point that takes a
+  /// caller-supplied `workflow_id` fails closed on an unsafe one, rather
+  /// than writing/reading/deleting outside `checkpoint_dir`.
+  #[tokio::test]
+  async fn checkpoint_operations_reject_unsafe_workflow_ids() {
+    let (manager, _temp_dir) = create_test_manager();
+    let state = HashMap::new();
+
+    assert!(
+      manager
+        .save_checkpoint("../escape", "node1", &state)
+        .await
+        .is_err()
+    );
+    assert!(manager.load_latest_checkpoint("../escape").await.is_err());
+    assert!(manager.load_all_checkpoints("../escape").await.is_err());
+    assert!(
+      manager
+        .delete_checkpoint("../escape", Utc::now())
+        .await
+        .is_err()
+    );
+    assert!(manager.delete_all_checkpoints("../escape").await.is_err());
   }
 
   #[tokio::test]

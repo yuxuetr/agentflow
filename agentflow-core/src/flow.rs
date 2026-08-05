@@ -1,6 +1,8 @@
 use crate::{
   async_node::{AsyncNodeInputs, AsyncNodeResult},
-  checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus},
+  checkpoint::{
+    Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus, is_safe_path_component,
+  },
   error::AgentFlowError,
   events::WorkflowEvent,
   expr,
@@ -229,6 +231,19 @@ impl<'f> FlowExecutor<'f> {
     execution_config: Option<FlowExecutionConfig>,
   ) -> Result<HashMap<String, AsyncNodeResult>, AgentFlowError> {
     let run_id = workflow_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    // V0.4: `run_id` may be a caller-supplied workflow id (not one this
+    // crate generated, e.g. a server-side run id), and it becomes a path
+    // component below (`run_dir`, and transitively `checkpoint_dir` via
+    // `CheckpointManager`). Reject anything that could escape the
+    // intended directory before doing any filesystem work.
+    if !is_safe_path_component(&run_id) {
+      return Err(AgentFlowError::ConfigurationError {
+        message: format!(
+          "invalid workflow id '{}': must be a single path segment (no '/', '\\', '.', or '..')",
+          run_id
+        ),
+      });
+    }
     let workflow_started_at = Instant::now();
     self.emit_event(WorkflowEvent::WorkflowStarted {
       workflow_id: run_id.clone(),
@@ -1212,6 +1227,18 @@ impl<'f> FlowExecutor<'f> {
     node_id: &str,
     result: &AsyncNodeResult,
   ) -> Result<(), AgentFlowError> {
+    // V0.4: `node_id` comes from a workflow author's YAML `id:` field,
+    // not a value this crate controls — reject anything that could
+    // escape `run_dir` (e.g. an id containing `..` or `/`) before
+    // writing to the computed path.
+    if !is_safe_path_component(node_id) {
+      return Err(AgentFlowError::ConfigurationError {
+        message: format!(
+          "invalid node id '{}': must be a single path segment (no '/', '\\', '.', or '..')",
+          node_id
+        ),
+      });
+    }
     let file_path = run_dir.join(format!("{}_outputs.json", node_id));
     let content = serde_json::to_string_pretty(result)?;
     fs::write(&file_path, content).map_err(|e| AgentFlowError::PersistenceError {
@@ -2543,6 +2570,73 @@ mod tests {
         "a benign run_if skip must not flip the checkpoint status to Failed"
       );
     }
+  }
+
+  /// V0.4 regression: a caller-supplied workflow id that could escape
+  /// `run_base_dir` (e.g. `..`) must be rejected before any filesystem
+  /// work happens, not silently place run artifacts outside it.
+  #[tokio::test]
+  async fn execute_with_unsafe_workflow_id_is_rejected_before_touching_disk() {
+    use_writable_home();
+
+    let base_dir = TempDir::new().unwrap();
+    let config = FlowExecutionConfig::serial().with_run_base_dir(base_dir.path());
+
+    let err = Flow::new(skip_only_dag())
+      .execute_from_inputs_with_id_and_config("../escape".to_string(), HashMap::new(), config)
+      .await
+      .unwrap_err();
+
+    assert!(
+      err.to_string().contains("invalid workflow id"),
+      "got: {err}"
+    );
+    let escaped = base_dir.path().parent().unwrap().join("escape");
+    assert!(
+      !escaped.exists(),
+      "run dir must not have escaped run_base_dir"
+    );
+  }
+
+  /// V0.4 regression: a node `id` that could escape `run_dir` (e.g. `..`,
+  /// from a workflow author's YAML `id:` field) must fail the run rather
+  /// than writing its per-step output outside `run_dir`.
+  #[tokio::test]
+  async fn execute_with_unsafe_node_id_is_rejected_before_touching_disk() {
+    use_writable_home();
+
+    struct NoopNode;
+
+    #[async_trait]
+    impl AsyncNode for NoopNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::new())
+      }
+    }
+
+    let malicious_node = GraphNode {
+      id: "../escape".to_string(),
+      node_type: NodeType::Standard(Arc::new(NoopNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let base_dir = TempDir::new().unwrap();
+    let config = FlowExecutionConfig::serial().with_run_base_dir(base_dir.path());
+
+    let err = Flow::new(vec![malicious_node])
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap_err();
+
+    assert!(err.to_string().contains("invalid node id"), "got: {err}");
+    let escaped = base_dir.path().parent().unwrap().join("escape");
+    assert!(
+      !escaped.exists(),
+      "node output must not have escaped run_dir"
+    );
   }
 
   #[tokio::test]
