@@ -79,15 +79,29 @@ impl<P> WorkerControl for AuthenticatedGrpcWorkerService<P>
 where
   P: WorkerProtocol + Clone + 'static,
 {
-  /// `submit_task` is gateway → server (not worker → server), so it
-  /// requires admission only if the deployment configured one. We
-  /// accept it without credentials to match the existing wire shape;
-  /// the `tonic::Request` is already constrained by the bearer
-  /// middleware applied to the parent HTTP server.
+  /// `submit_task` is gateway → server (not worker → server), so its
+  /// wire message carries no `worker_id` to check against
+  /// `allowed_workers`/`max_concurrent_tasks_per_worker` individually.
+  ///
+  /// V0.5: this endpoint used to accept every call unconditionally,
+  /// wrongly assuming the standalone worker gRPC listener
+  /// (`serve_worker_grpc`) sits behind the HTTP bearer middleware —
+  /// it binds its own independent socket and does not. Anyone who
+  /// could reach that socket could inject arbitrary `WorkerTask`s into
+  /// the queue, regardless of the configured admission policy. Now
+  /// routes through [`AuthenticatedControlPlane::admit_any`], the same
+  /// identity-agnostic check documented for every RPC in
+  /// `docs/DISTRIBUTED.md` § Worker Admission.
   async fn submit_task(
     &self,
     request: Request<pb::SubmitTaskRequest>,
   ) -> Result<Response<pb::Empty>, Status> {
+    let token = extract_admission_token(&request);
+    self
+      .authenticated
+      .admit_any(token.as_deref())
+      .await
+      .map_err(|err| Status::permission_denied(err.to_string()))?;
     let task = request
       .into_inner()
       .task

@@ -293,6 +293,125 @@ mod tests {
     server.await.unwrap().unwrap();
   }
 
+  /// V0.5 regression: before the fix, `submit_task` accepted every call
+  /// unconditionally — this reproduces the original hole end to end over
+  /// a real gRPC connection (not just the in-process `admit_any` unit
+  /// tests in `scheduler::admission`): a client with no admission token
+  /// must be rejected once the listener has a PSK configured, exactly
+  /// like `claim_task`/`heartbeat`/`report_result` already are.
+  #[tokio::test]
+  async fn submit_task_over_grpc_without_credentials_is_rejected_when_admission_is_configured() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let probe = tokio::net::TcpListener::bind(bind).await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+
+    let config = WorkerGrpcServeConfig {
+      bind: addr,
+      tls: None,
+      allowed_worker_ids: vec!["worker-a".to_string()],
+      shared_psk: Some("test-token".to_string()),
+    };
+    let plane =
+      build_worker_control_plane(&config, agentflow_tools::SecurityProfile::Local).unwrap();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve_worker_grpc(addr, plane.clone(), None, async {
+      let _ = shutdown_rx.await;
+    }));
+
+    let endpoint = format!("http://{addr}");
+    let mut client = None;
+    for _ in 0..20 {
+      if let Ok(c) = GrpcWorkerProtocol::connect(&endpoint).await {
+        client = Some(c);
+        break;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    // Deliberately no `.with_admission_token(...)` — an anonymous caller.
+    let client = client.expect("worker gRPC listener never became ready");
+
+    use agentflow_worker_proto::WorkerProtocol;
+    let run_id = Uuid::new_v4();
+    let err = client
+      .submit_task(WorkerTask::new(
+        run_id,
+        "node-a",
+        serde_json::json!({"input": 1}),
+      ))
+      .await
+      .unwrap_err();
+    assert!(
+      err.to_string().contains("PermissionDenied"),
+      "expected a permission-denied rejection, got: {err}"
+    );
+
+    // The task must never have reached the queue.
+    assert!(plane.inner().run_snapshot(run_id).await.is_none());
+
+    let _ = shutdown_tx.send(());
+    server.await.unwrap().unwrap();
+  }
+
+  /// V0.5: the fix must not break the legitimate path — a client that
+  /// presents the configured PSK can still submit a task over gRPC.
+  #[tokio::test]
+  async fn submit_task_over_grpc_with_valid_credentials_succeeds() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let probe = tokio::net::TcpListener::bind(bind).await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+
+    let config = WorkerGrpcServeConfig {
+      bind: addr,
+      tls: None,
+      allowed_worker_ids: vec!["worker-a".to_string()],
+      shared_psk: Some("test-token".to_string()),
+    };
+    let plane =
+      build_worker_control_plane(&config, agentflow_tools::SecurityProfile::Local).unwrap();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve_worker_grpc(addr, plane.clone(), None, async {
+      let _ = shutdown_rx.await;
+    }));
+
+    let endpoint = format!("http://{addr}");
+    let mut client = None;
+    for _ in 0..20 {
+      if let Ok(c) = GrpcWorkerProtocol::connect(&endpoint).await {
+        client = Some(c);
+        break;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let client = client
+      .expect("worker gRPC listener never became ready")
+      .with_admission_token("test-token");
+
+    use agentflow_worker_proto::WorkerProtocol;
+    let run_id = Uuid::new_v4();
+    client
+      .submit_task(WorkerTask::new(
+        run_id,
+        "node-a",
+        serde_json::json!({"input": 1}),
+      ))
+      .await
+      .unwrap();
+
+    let snapshot = plane
+      .inner()
+      .run_snapshot(run_id)
+      .await
+      .expect("submitted task must show up in the run snapshot");
+    assert_eq!(snapshot.queued_tasks, 1);
+
+    let _ = shutdown_tx.send(());
+    server.await.unwrap().unwrap();
+  }
+
   #[tokio::test]
   async fn production_profile_rejects_worker_grpc_with_no_credentials_configured() {
     let config = WorkerGrpcServeConfig {

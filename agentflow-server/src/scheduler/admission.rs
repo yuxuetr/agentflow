@@ -210,6 +210,55 @@ impl WorkerAdmissionPolicy {
     Ok(self)
   }
 
+  /// V0.5: check whether `token` proves membership in the trusted fleet
+  /// for **some** configured identity, without pinning to one specific
+  /// `WorkerId`. Used by `submit_task` (gateway → server, not
+  /// worker → server): its wire message carries no worker identity to
+  /// check against [`Self::allowed_workers`] individually, but
+  /// `docs/DISTRIBUTED.md` § Worker Admission documents that "every RPC
+  /// carries `authorization: Bearer <token>` ... verified against the
+  /// active `WorkerAdmissionPolicy` before the call proceeds" — this
+  /// closes the gap between that documented contract and the
+  /// implementation for the one RPC that didn't check it.
+  ///
+  /// When no credential mechanism is configured at all (the fully-open
+  /// dev/local default), any caller is accepted, matching every other
+  /// admission-gated call's default. When one *is* configured (mandatory
+  /// under [`SecurityProfile::Production`] per [`Self::for_profile`]),
+  /// `token` must match at least one configured PSK across any worker,
+  /// or verify against the JWT policy for at least one `jwt_workers` id.
+  pub fn check_any(&self, token: Option<&str>) -> Result<(), AdmissionError> {
+    if !self.has_credential_config() {
+      return Ok(());
+    }
+    let Some(token) = token else {
+      return Err(AdmissionError::MissingCredential {
+        worker_id: "<submitter>".to_string(),
+      });
+    };
+    let psk_matches = self.pre_shared_keys.values().any(|keys| {
+      keys
+        .iter()
+        .any(|key| constant_time_eq(key.as_bytes(), token.as_bytes()))
+    });
+    if psk_matches {
+      return Ok(());
+    }
+    if let Some(jwt_policy) = &self.jwt {
+      let now_secs = chrono::Utc::now().timestamp();
+      let verifies_for_any_jwt_worker = self.jwt_workers.iter().any(|worker_id| {
+        verify_worker_jwt_for_check(token, jwt_policy, &worker_id.0, now_secs).is_ok()
+      });
+      if verifies_for_any_jwt_worker {
+        return Ok(());
+      }
+    }
+    Err(AdmissionError::InvalidCredential {
+      worker_id: "<submitter>".to_string(),
+      reason: "token did not match any configured worker credential".to_string(),
+    })
+  }
+
   /// Check whether the worker may make admission-gated calls.
   ///
   /// `currently_active` is the count of distinct workers the control
@@ -411,6 +460,15 @@ where
     // not incremented.
     crate::metrics::observe_workers_admitted(state.admitted.len());
     Ok(())
+  }
+
+  /// V0.5: identity-agnostic admission check for `submit_task` — see
+  /// [`WorkerAdmissionPolicy::check_any`] for the rationale. Unlike
+  /// [`Self::admit`], this doesn't mark any worker as admitted (there's
+  /// no worker identity here to admit) and doesn't touch the
+  /// `max_workers` / in-flight bookkeeping.
+  pub async fn admit_any(&self, token: Option<&str>) -> Result<(), AdmissionError> {
+    self.policy.check_any(token)
   }
 
   /// Admission-gated heartbeat. Marks the worker admitted on first
@@ -646,6 +704,78 @@ mod tests {
         )
         .is_ok()
     );
+  }
+
+  /// V0.5 regression: `check_any` (used by `submit_task`, which has no
+  /// worker identity to check against `allowed_workers`) is open when no
+  /// credential mechanism is configured at all — same default as every
+  /// other admission-gated call.
+  #[test]
+  fn check_any_admits_anyone_under_the_open_policy() {
+    let policy = WorkerAdmissionPolicy::open();
+    assert!(policy.check_any(None).is_ok());
+    assert!(policy.check_any(Some("anything")).is_ok());
+  }
+
+  /// V0.5 regression: once a PSK is configured for *any* worker,
+  /// `check_any` requires a token and it must match — this is the fix
+  /// for the original hole (`submit_task` accepted every call
+  /// unconditionally regardless of the configured admission policy).
+  #[test]
+  fn check_any_requires_a_matching_psk_once_any_worker_has_one() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["good".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check_any(None),
+      Err(AdmissionError::MissingCredential { .. })
+    ));
+    assert!(matches!(
+      policy.check_any(Some("bad")),
+      Err(AdmissionError::InvalidCredential { .. })
+    ));
+    assert!(policy.check_any(Some("good")).is_ok());
+  }
+
+  /// V0.5: `check_any` isn't pinned to one worker — a token that
+  /// matches *any* configured worker's PSK is accepted, since
+  /// `submit_task`'s wire message carries no identity to disambiguate.
+  #[test]
+  fn check_any_matches_a_psk_belonging_to_any_configured_worker() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["a-secret".to_string()]));
+    psks.insert(worker("b"), HashSet::from(["b-secret".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(policy.check_any(Some("a-secret")).is_ok());
+    assert!(policy.check_any(Some("b-secret")).is_ok());
+    assert!(policy.check_any(Some("neither")).is_err());
+  }
+
+  /// V0.5: a policy that only configures `allowed_workers` (no PSK, no
+  /// JWT) still counts as "credential config present" per
+  /// `has_credential_config`, so `check_any` fails closed rather than
+  /// silently admitting everyone just because there's no PSK/JWT to
+  /// check the token against.
+  #[test]
+  fn check_any_fails_closed_when_only_an_allowlist_is_configured() {
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some([worker("a")].into_iter().collect()),
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check_any(None),
+      Err(AdmissionError::MissingCredential { .. })
+    ));
+    assert!(matches!(
+      policy.check_any(Some("anything")),
+      Err(AdmissionError::InvalidCredential { .. })
+    ));
   }
 
   #[test]
