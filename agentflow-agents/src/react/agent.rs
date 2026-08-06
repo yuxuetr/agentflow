@@ -3753,11 +3753,24 @@ impl<'a> ReActLoopSession<'a> {
   /// drive, or [`ReActTurn::Finished`] once the agent reaches a terminal state.
   pub async fn next_turn(mut self) -> Result<ReActTurn<'a>, ReActError> {
     match self.agent.run_one_turn(&mut self.state).await {
-      Ok(TurnStep::Continue) => Ok(ReActTurn::Continued(Box::new(self))),
-      Ok(TurnStep::Stop(result)) => Ok(ReActTurn::Finished {
-        result,
-        agent: self.agent,
-      }),
+      Ok(TurnStep::Continue) => {
+        // V2.4: same per-turn checkpoint hook as `run_with_context` — a
+        // caller driving the loop under `--context-refresh` must not get
+        // silently worse checkpoint coverage than the batteries-included
+        // path.
+        self.agent.save_loop_checkpoint(&self.state).await;
+        Ok(ReActTurn::Continued(Box::new(self)))
+      }
+      Ok(TurnStep::Stop(result)) => {
+        self
+          .agent
+          .clear_loop_checkpoint_if_terminal(&result.stop_reason)
+          .await;
+        Ok(ReActTurn::Finished {
+          result,
+          agent: self.agent,
+        })
+      }
       Err(e) => Err(e),
     }
   }
@@ -4730,6 +4743,97 @@ providers:
     // Successful completion clears the checkpoint (FinalAnswer is in the
     // "keep = false" i.e. clear bucket of `should_clear_checkpoint`).
     assert_eq!(checkpointer.load("loop-ckpt-session").await.unwrap(), None);
+  }
+
+  /// V2.4: the turn-driven seam (`begin_turn_driven`/`ReActLoopSession::
+  /// next_turn`, used under `--context-refresh`) must get the same
+  /// checkpoint coverage as `run_with_context` — this pins that a caller
+  /// simply *not calling* `next_turn` again (no cancellation trickery
+  /// needed here, unlike the `run_with_context` variant above, since the
+  /// caller genuinely owns when the next turn happens) leaves a usable
+  /// checkpoint behind, and that `resume_from_loop_checkpoint` continues
+  /// from it correctly regardless of which loop-owner produced the
+  /// interruption.
+  #[tokio::test]
+  async fn turn_driven_session_checkpoints_after_each_turn_and_resumes_correctly() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+
+    let turn1 = r#"{"thought":"step one","action":{"tool":"echo","params":{"text":"a"}}}"#;
+    let turn2 = r#"{"thought":"done","answer":"turn-driven-final-answer"}"#;
+
+    let interrupted_model = format!("mock-loop-ckpt-td-interrupted-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![turn1]).unwrap(),
+      );
+    }
+    init_mock_model(&interrupted_model).await;
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let shared_memory = Arc::new(SessionMemory::default_window());
+    let mut interrupted_agent = ReActAgent::new(
+      ReActConfig::new(&interrupted_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory.clone())),
+      Arc::new(registry),
+    );
+
+    let checkpointer = RecordingCheckpointer::new();
+    let checkpointer_handle: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer> =
+      Arc::new(checkpointer.clone());
+    let context = AgentContext::new(
+      "loop-ckpt-td-session",
+      "do the one-step task",
+      &interrupted_model,
+    )
+    .with_loop_checkpointer(checkpointer_handle.clone());
+
+    let session = interrupted_agent.begin_turn_driven(context).await.unwrap();
+    match session.next_turn().await.unwrap() {
+      ReActTurn::Continued(_next_session) => {
+        // "Process death": the boxed session (and the one scripted
+        // response's tool-call turn it already consumed) is simply
+        // dropped here — no further `next_turn` call happens.
+      }
+      ReActTurn::Finished { .. } => panic!("expected the run to still be mid-loop"),
+    }
+    assert_eq!(checkpointer.saves.load(Ordering::SeqCst), 1);
+
+    let checkpoint = checkpointer
+      .load("loop-ckpt-td-session")
+      .await
+      .unwrap()
+      .expect("a checkpoint must have been saved after the first turn");
+    assert_eq!(checkpoint.tool_calls, 1);
+
+    let resume_model = format!("mock-loop-ckpt-td-resume-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![turn2]).unwrap(),
+      );
+    }
+    init_mock_model(&resume_model).await;
+    let mut resume_registry = ToolRegistry::new();
+    resume_registry.register(Arc::new(EchoTool));
+    let mut resumed_agent = ReActAgent::new(
+      ReActConfig::new(&resume_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory)),
+      Arc::new(resume_registry),
+    );
+    let resume_context = AgentContext::new("loop-ckpt-td-session", "", &resume_model)
+      .with_loop_checkpointer(checkpointer_handle);
+    let resumed_result = resumed_agent
+      .resume_from_loop_checkpoint(resume_context, checkpoint)
+      .await
+      .unwrap();
+
+    assert_eq!(
+      resumed_result.answer.as_deref(),
+      Some("turn-driven-final-answer")
+    );
+    assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
   }
 
   #[tokio::test]
