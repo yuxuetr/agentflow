@@ -149,6 +149,50 @@ into the `token_delta` `HarnessEvent` kind (see `docs/HARNESS_MODE.md`);
 `agentflow harness chat` / `run --output text` and the Web UI render it as
 an in-place typing indicator.
 
+**Agent-loop-level persistent checkpoint (V2.4).** Distinct from the
+DAG-level `Flow` checkpoint (`agentflow-core`), which treats an embedded
+agent run as one opaque, all-or-nothing unit — and distinct from
+`resume_with_context`'s post-hoc unresolved-tool-call replay, which
+restores conversation memory and starts an entirely fresh loop. The
+contract (`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint` +
+`AgentLoopCheckpointer`) captures a snapshot of in-flight loop progress —
+recorded `steps`/`events`, step/iteration counters, tool-call history,
+verification/schema-retry counters (ReAct), or the frozen plan +
+step cursor (PlanExecute) — after every completed turn (ReAct) or plan
+step (PlanExecute), when a checkpointer is attached via
+`AgentContext::with_loop_checkpointer(...)`. Process-local fields
+(cancellation token, turn-start clock, between-turn hook) and run
+*configuration* (limits, model) are deliberately excluded and
+reconstructed fresh from the resuming call's `AgentContext` — a resume
+can legitimately be handed different limits than the original run.
+
+`ReActAgent::resume_from_loop_checkpoint(context, checkpoint)` and
+`PlanExecuteAgent::resume_from_loop_checkpoint(context, checkpoint)`
+splice the restored state directly back into the turn loop / execute
+loop instead of restarting: ReAct re-enters `run_one_turn` at the
+checkpointed step (still needs the LLM for remaining turns);
+PlanExecute needs no further LLM call at all — the plan was already
+frozen into the checkpoint — and just resumes tool execution at
+`plan_position`. `should_clear_checkpoint` (shared by both runtimes,
+`agentflow-agents::checkpoint`) is an exhaustive match over
+`AgentStopReason`: checkpoints clear on genuine completion
+(`FinalAnswer`/`StopCondition`/`Error`) and survive every other stop
+reason, including the case this feature targets — the process dies with
+no stop reason produced at all, so the last-written checkpoint simply
+sits on disk untouched.
+
+`agentflow-agents::FileLoopCheckpointer` is the concrete file-based
+implementation (atomic write-then-rename, one JSON file per session,
+sibling to `agentflow_harness::default_session_dir`'s convention).
+`agentflow-harness`'s `HarnessRunOptions::with_loop_checkpointer(...)`
+forwards a checkpointer into the inner agent's context; `agentflow
+harness run` attaches one by default whenever a run-dir is available.
+`agentflow harness resume-loop <session_id>` (distinct from `resume`,
+which only re-prints the persisted JSONL event log) rebuilds the agent
+and calls `resume_from_loop_checkpoint` to genuinely continue execution
+— a minimal CLI surface; full `HarnessRuntime`-level resume wiring
+(live event stream, approval-gate re-wrapping) is a follow-up.
+
 `ReActAgent::query_memory(...)` and `query_session_memory(...)` expose the
 runtime memory query boundary. The active `MemoryStore` owns retrieval behavior:
 `SemanticMemory` performs vector search with keyword fallback, while simpler

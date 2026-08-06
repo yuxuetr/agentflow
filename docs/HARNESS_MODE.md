@@ -335,6 +335,24 @@ same `--run-dir` precedence (explicit → `AGENTFLOW_RUN_DIR` →
 `AGENTFLOW_TRACE_DIR` → `~/.agentflow/runs`) so the trace replay tools
 can find Harness logs without bespoke wiring.
 
+### Agent-loop checkpoint resume (V2.4, post-freeze)
+
+`agentflow harness run` attaches an
+`agentflow_agent_spi::checkpoint::AgentLoopCheckpointer` by default
+(unconditional, no opt-in flag) whenever a run-dir is available; the
+inner `ReActAgent`/`PlanExecuteAgent` saves an `AgentLoopCheckpoint`
+after every completed turn/plan-step (`<run-dir>/harness/
+loop_checkpoints/<session_id>.json`). `agentflow harness resume-loop
+<session_id> [--model <model> | --skill <path>]` rebuilds the agent the
+same way `run` does and calls `resume_from_loop_checkpoint` to
+genuinely continue execution from the checkpointed step — distinct from
+`resume` above, which only re-prints the persisted JSONL event log and
+never re-enters the agent loop. See `docs/AGENT_RUNTIME.md`'s
+"Agent-loop-level persistent checkpoint (V2.4)" section for the
+contract and resume semantics; this is a minimal CLI surface (no live
+event stream, no approval-gate re-wrapping) — full `HarnessRuntime`
+resume wiring is a follow-up.
+
 ### Runtime-limit flags (added post-freeze; not in the Phase H1 block above)
 
 `agentflow harness run`/`chat` also accept `--max-steps`,
