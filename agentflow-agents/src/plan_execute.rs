@@ -41,6 +41,17 @@ pub enum PlanExecuteError {
   /// Compiling or executing the plan as a `Flow` failed (P-A2.2 `run_as_flow`).
   #[error("Flow execution error: {0}")]
   Flow(#[from] AgentFlowError),
+
+  /// V2.1: `output_schema` was configured but the final answer still
+  /// failed validation after `max_schema_correction_attempts` retries of
+  /// the whole plan-and-execute cycle. A schema is a caller-declared hard
+  /// contract — hard error rather than silently returning non-conformant
+  /// output.
+  #[error("Final answer did not match output_schema after {attempts} attempt(s): {errors:?}")]
+  SchemaValidationFailed {
+    errors: Vec<String>,
+    attempts: usize,
+  },
 }
 
 /// Configuration for a [`PlanExecuteAgent`].
@@ -59,6 +70,19 @@ pub struct PlanExecuteConfig {
   /// call costs $0) — reuses `agentflow-agents::eval::pricing` rather
   /// than a second pricing representation.
   pub pricing_table: crate::eval::PricingTable,
+
+  /// V2.1: JSON Schema the final answer must validate against once parsed
+  /// as JSON. `None` (the default) disables structured-output enforcement
+  /// entirely — byte-identical behaviour to before this existed. See
+  /// [`PlanExecuteAgent::run_with_context`]'s doc comment for how a
+  /// mismatch is retried.
+  pub output_schema: Option<Value>,
+
+  /// Maximum number of times the whole plan-and-execute cycle may be
+  /// retried after an `output_schema` mismatch before the run gives up
+  /// with [`PlanExecuteError::SchemaValidationFailed`]. Only relevant when
+  /// `output_schema` is `Some`.
+  pub max_schema_correction_attempts: usize,
 }
 
 impl Default for PlanExecuteConfig {
@@ -69,6 +93,8 @@ impl Default for PlanExecuteConfig {
       max_steps: 8,
       cost_limit_usd: None,
       pricing_table: crate::eval::PricingTable::default(),
+      output_schema: None,
+      max_schema_correction_attempts: 2,
     }
   }
 }
@@ -101,6 +127,20 @@ impl PlanExecuteConfig {
   /// [`PlanExecuteConfig::pricing_table`].
   pub fn with_pricing_table(mut self, table: crate::eval::PricingTable) -> Self {
     self.pricing_table = table;
+    self
+  }
+
+  /// Require the final answer to validate against `schema` (V2.1). See
+  /// [`PlanExecuteConfig::output_schema`].
+  pub fn with_output_schema(mut self, schema: Value) -> Self {
+    self.output_schema = Some(schema);
+    self
+  }
+
+  /// Configure the schema-correction retry budget. See
+  /// [`PlanExecuteConfig::max_schema_correction_attempts`].
+  pub fn with_max_schema_correction_attempts(mut self, attempts: usize) -> Self {
+    self.max_schema_correction_attempts = attempts;
     self
   }
 }
@@ -236,7 +276,62 @@ impl PlanExecuteAgent {
   /// [`AgentStopReason::Error`].
   ///
   /// Surfaces inject `agentflow_core::CoreFlowRunner` (typically `concurrent(n)`).
+  ///
+  /// V2.1: validates the final answer against
+  /// [`PlanExecuteConfig::output_schema`] when configured, retrying the
+  /// whole plan-and-execute cycle on a mismatch — see
+  /// [`Self::run_with_context`]'s doc comment for the rationale (shared
+  /// verbatim between the two entry points).
   pub async fn run_as_flow(
+    &mut self,
+    context: AgentContext,
+    runner: Arc<dyn FlowRunner>,
+  ) -> Result<AgentRunResult, PlanExecuteError> {
+    let Some(schema) = self.config.output_schema.clone() else {
+      return self.run_as_flow_once(context, runner).await;
+    };
+
+    let mut attempt = 0usize;
+    let mut current_input = context.input.clone();
+    loop {
+      let mut this_context = context.clone();
+      this_context.input = current_input;
+      let result = self.run_as_flow_once(this_context, runner.clone()).await?;
+
+      if !matches!(result.stop_reason, AgentStopReason::FinalAnswer) {
+        return Ok(result);
+      }
+      let Some(answer) = result.answer.clone() else {
+        return Ok(result);
+      };
+      match agentflow_agent_spi::validate_json_str_against_schema(&schema, &answer) {
+        Ok(()) => return Ok(result),
+        Err(errors) => {
+          attempt += 1;
+          if attempt > self.config.max_schema_correction_attempts {
+            return Err(PlanExecuteError::SchemaValidationFailed {
+              errors,
+              attempts: attempt,
+            });
+          }
+          warn!(
+            attempt,
+            max_attempts = self.config.max_schema_correction_attempts,
+            "PlanExecute (flow mode) final_answer failed output_schema validation; retrying"
+          );
+          current_input = format!(
+            "Your previous final_answer did not match the required output schema: {}. \
+             The previous answer was: {}. Correct it and provide the final answer again, \
+             matching the schema exactly.",
+            errors.join("; "),
+            answer
+          );
+        }
+      }
+    }
+  }
+
+  async fn run_as_flow_once(
     &mut self,
     context: AgentContext,
     runner: Arc<dyn FlowRunner>,
@@ -454,7 +549,70 @@ impl PlanExecuteAgent {
     Ok(self.stopped_result(answer, AgentStopReason::FinalAnswer, steps, events))
   }
 
+  /// Plan with the LLM, execute the plan sequentially, and validate the
+  /// final answer against [`PlanExecuteConfig::output_schema`] (V2.1) when
+  /// configured — retrying the whole plan-and-execute cycle (not just the
+  /// answer) up to [`PlanExecuteConfig::max_schema_correction_attempts`]
+  /// times on a schema mismatch before hard-erroring with
+  /// [`PlanExecuteError::SchemaValidationFailed`].
+  ///
+  /// Unlike `ReActAgent`'s `output_schema` support (a genuine mid-loop
+  /// retry within one run — see that type's doc comment), `PlanExecuteAgent`
+  /// plans in a single LLM call per attempt; there's no iterative loop to
+  /// hook a retry into internally. So a schema mismatch here retries the
+  /// *whole* cycle via [`Self::run_with_context_once`], which is the
+  /// architecturally honest equivalent for a "plan once, execute" runtime.
+  /// Byte-identical to the pre-V2.1 single-call behaviour when
+  /// `output_schema` is `None`.
   pub async fn run_with_context(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<AgentRunResult, PlanExecuteError> {
+    let Some(schema) = self.config.output_schema.clone() else {
+      return self.run_with_context_once(context).await;
+    };
+
+    let mut attempt = 0usize;
+    let mut current_input = context.input.clone();
+    loop {
+      let mut this_context = context.clone();
+      this_context.input = current_input;
+      let result = self.run_with_context_once(this_context).await?;
+
+      if !matches!(result.stop_reason, AgentStopReason::FinalAnswer) {
+        return Ok(result);
+      }
+      let Some(answer) = result.answer.clone() else {
+        return Ok(result);
+      };
+      match agentflow_agent_spi::validate_json_str_against_schema(&schema, &answer) {
+        Ok(()) => return Ok(result),
+        Err(errors) => {
+          attempt += 1;
+          if attempt > self.config.max_schema_correction_attempts {
+            return Err(PlanExecuteError::SchemaValidationFailed {
+              errors,
+              attempts: attempt,
+            });
+          }
+          warn!(
+            attempt,
+            max_attempts = self.config.max_schema_correction_attempts,
+            "PlanExecute final_answer failed output_schema validation; retrying"
+          );
+          current_input = format!(
+            "Your previous final_answer did not match the required output schema: {}. \
+             The previous answer was: {}. Correct it and provide the final answer again, \
+             matching the schema exactly.",
+            errors.join("; "),
+            answer
+          );
+        }
+      }
+    }
+  }
+
+  async fn run_with_context_once(
     &mut self,
     context: AgentContext,
   ) -> Result<AgentRunResult, PlanExecuteError> {
@@ -1211,6 +1369,152 @@ mod tests {
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
     );
+  }
+
+  // ── V2.1: output_schema ─────────────────────────────────────────────
+
+  fn answer_schema() -> Value {
+    serde_json::json!({
+      "type": "object",
+      "properties": {"answer": {"type": "string"}},
+      "required": ["answer"]
+    })
+  }
+
+  /// The V2.1 test bar applied to `PlanExecuteAgent`: a schema mismatch on
+  /// the first attempt's `final_answer` retries the whole plan-and-execute
+  /// cycle (not just the answer — there's no mid-loop retry point here),
+  /// and the run eventually succeeds once the model self-corrects.
+  #[tokio::test]
+  async fn run_with_context_output_schema_mismatch_retries_whole_cycle_and_succeeds() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-pe-schema-correct-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          // Attempt 1: `final_answer` violates the schema (missing `answer`).
+          r#"{"plan":[],"final_answer":"{\"wrong_field\":1}"}"#,
+          // Attempt 2: conforms.
+          r#"{"plan":[],"final_answer":"{\"answer\":\"42\"}"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(
+      &model,
+      "unused — AGENTFLOW_MOCK_RESPONSES queue drives this test",
+    )
+    .await;
+
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new(&model).with_output_schema(answer_schema()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "pe-schema-correct-session",
+        "answer please",
+        &model,
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(result.answer.as_deref(), Some(r#"{"answer":"42"}"#));
+
+    // SAFETY: cleanup of the dedicated mock env var after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// When the model never produces a conforming `final_answer` within the
+  /// correction budget, the run hard-errors rather than returning a
+  /// non-conformant answer labelled as final.
+  #[tokio::test]
+  async fn run_with_context_output_schema_exhausted_attempts_returns_hard_error() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-pe-schema-exhaust-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"plan":[],"final_answer":"{}"}"#,
+          r#"{"plan":[],"final_answer":"{}"}"#,
+          r#"{"plan":[],"final_answer":"{}"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(
+      &model,
+      "unused — AGENTFLOW_MOCK_RESPONSES queue drives this test",
+    )
+    .await;
+
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new(&model)
+        .with_output_schema(answer_schema())
+        .with_max_schema_correction_attempts(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let err = agent
+      .run_with_context(AgentContext::new(
+        "pe-schema-exhaust-session",
+        "answer please",
+        &model,
+      ))
+      .await
+      .expect_err("schema-exhausted run must hard-error");
+    match err {
+      PlanExecuteError::SchemaValidationFailed { attempts, .. } => assert_eq!(attempts, 3),
+      other => panic!("expected SchemaValidationFailed, got {other:?}"),
+    }
+
+    // SAFETY: cleanup of the dedicated mock env var after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// Without `output_schema`, behaviour is byte-identical to before V2.1 —
+  /// a single planner call, no retry machinery engaged.
+  #[tokio::test]
+  async fn run_with_context_without_output_schema_is_unaffected() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model(
+      "mock-pe-no-schema",
+      r#"{"plan":[],"final_answer":"whatever, not JSON-schema-checked"}"#,
+    )
+    .await;
+
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-pe-no-schema"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "pe-no-schema-session",
+        "answer please",
+        "mock-pe-no-schema",
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.answer.as_deref(),
+      Some("whatever, not JSON-schema-checked")
+    );
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
   }
 
   // ── T1.1: production cost-limit enforcement ───────────────────────────
