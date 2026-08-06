@@ -3,7 +3,10 @@ use crate::{
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{
     ContentType, LLMProvider, ProviderRequest, ProviderResponse,
-    openai::{parse_openai_tool_calls, tool_choice_to_openai_value, tool_spec_to_openai_value},
+    openai::{
+      parse_openai_tool_calls, response_format_to_openai_value, tool_choice_to_openai_value,
+      tool_spec_to_openai_value,
+    },
   },
   tool_calling::StopReason,
 };
@@ -80,6 +83,9 @@ impl MoonshotProvider {
     }
     if let Some(choice) = &request.tool_choice {
       body["tool_choice"] = tool_choice_to_openai_value(choice);
+    }
+    if let Some(format) = &request.response_format {
+      body["response_format"] = response_format_to_openai_value(format);
     }
 
     body
@@ -435,6 +441,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -458,6 +465,7 @@ mod tests {
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Auto),
       thinking: None,
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     let tools = body["tools"].as_array().expect("tools array");

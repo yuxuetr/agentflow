@@ -120,6 +120,7 @@ fn provider_request(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 

@@ -1,5 +1,5 @@
 use crate::{
-  LLMError, Result,
+  LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   thinking::ThinkingConfig,
@@ -125,6 +125,28 @@ impl GoogleProvider {
       && let Some(block) = thinking_config_to_google_value(thinking)
     {
       generation_config["thinkingConfig"] = block;
+    }
+
+    // V2.1: Gemini natively supports structured output via
+    // `generationConfig.responseMimeType` + `.responseSchema`, but only
+    // when no real `tools` are requested — combining function-calling and
+    // structured-output modes in one request isn't a combination this
+    // adapter has verified, so (mirroring Anthropic's same caution) skip
+    // native wiring and fall back to prompt-only constraint whenever
+    // `tools` is present.
+    if request.tools.is_none()
+      && let Some(format) = &request.response_format
+    {
+      match format {
+        ResponseFormat::JsonObject => {
+          generation_config["responseMimeType"] = json!("application/json");
+        }
+        ResponseFormat::JsonSchema { schema, .. } => {
+          generation_config["responseMimeType"] = json!("application/json");
+          generation_config["responseSchema"] = schema.clone();
+        }
+        ResponseFormat::Text => {}
+      }
     }
 
     // `generation_config` is always a JSON object (constructed from
@@ -680,6 +702,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Medium),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert_eq!(
@@ -699,6 +722,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Auto),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     // Google uses -1 as the "auto / dynamic" budget signal.
@@ -719,12 +743,98 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Disabled),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert_eq!(
       body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
       0
     );
+  }
+
+  /// V2.1: a `JsonSchema` format with no real tools requested maps
+  /// natively to `generationConfig.responseMimeType` + `.responseSchema`.
+  #[test]
+  fn build_request_body_emits_response_schema_for_json_schema_without_tools() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-2.5-flash".to_string(),
+      messages: vec![json!({"role": "user", "content": "answer please"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(ResponseFormat::JsonSchema {
+        name: "final_answer".to_string(),
+        schema: json!({
+          "type": "object",
+          "properties": {"answer": {"type": "string"}},
+          "required": ["answer"]
+        }),
+        strict: Some(true),
+      }),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(
+      body["generationConfig"]["responseMimeType"],
+      "application/json"
+    );
+    assert_eq!(body["generationConfig"]["responseSchema"]["type"], "object");
+  }
+
+  /// `JsonObject` maps to `responseMimeType` alone (Gemini has no separate
+  /// "any valid JSON, no schema" knob beyond the mime type).
+  #[test]
+  fn build_request_body_emits_response_mime_type_for_json_object() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "gemini-2.5-flash".to_string(),
+      messages: vec![json!({"role": "user", "content": "answer please"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(ResponseFormat::JsonObject),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(
+      body["generationConfig"]["responseMimeType"],
+      "application/json"
+    );
+    assert!(body["generationConfig"].get("responseSchema").is_none());
+  }
+
+  /// When real tools are already requested, native structured-output
+  /// wiring is skipped entirely — falls back to prompt-only constraint
+  /// rather than sending an unverified tools+responseSchema combination.
+  #[test]
+  fn build_request_body_skips_response_schema_when_tools_present() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather",
+      json!({"type": "object"}),
+    );
+    let request = ProviderRequest {
+      model: "gemini-2.5-flash".to_string(),
+      messages: vec![json!({"role": "user", "content": "weather?"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(ResponseFormat::JsonSchema {
+        name: "final_answer".to_string(),
+        schema: json!({"type": "object"}),
+        strict: Some(true),
+      }),
+    };
+    let body = provider.build_request_body(&request);
+    assert!(body["generationConfig"].get("responseMimeType").is_none());
+    assert!(body["generationConfig"].get("responseSchema").is_none());
+    assert!(body.get("tools").is_some());
   }
 
   #[test]
@@ -795,6 +905,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -838,6 +949,7 @@ mod tests {
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -979,6 +1091,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);

@@ -1,5 +1,5 @@
 use crate::{
-  LLMError, Result, StreamingResponse,
+  LLMError, ResponseFormat, Result, StreamingResponse,
   thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
@@ -95,6 +95,35 @@ pub struct ProviderRequest {
   /// `reasoning_effort`, Google `thinkingConfig`).
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub thinking: Option<ThinkingConfig>,
+  /// Structured-output constraint (V2.1).
+  ///
+  /// Travels as a typed field rather than via `parameters` for the same
+  /// reason `thinking` does above: Anthropic and Google whitelist keys in
+  /// their `parameters` map and would otherwise silently drop a
+  /// `response_format` key with no error at all — the exact "I set X but
+  /// didn't get X" bug class `thinking` was already promoted to fix.
+  ///
+  /// Native mapping per provider (each adapter owns its own encoding):
+  ///  - **OpenAI / Moonshot / StepFun** (OpenAI-compatible): `response_format`
+  ///    request field, unconditionally — these APIs support it alongside
+  ///    `tools` in the same request.
+  ///  - **Anthropic**: no native `response_format` field exists. When no
+  ///    real `tools` are requested (and the request isn't streaming), a
+  ///    `JsonSchema` format is emulated by forcing a single synthetic tool
+  ///    call whose `input_schema` is the requested schema, then unwrapping
+  ///    that tool call's arguments back into `ProviderResponse::content` as
+  ///    plain JSON text — transparent to callers. When real `tools` are
+  ///    also requested, forcing a tool choice would break the caller's own
+  ///    tool-calling turn, so this is skipped and the request falls back to
+  ///    prompt-only constraint.
+  ///  - **Google**: `generationConfig.responseMimeType` +
+  ///    `.responseSchema`, only when no real `tools` are requested (Gemini's
+  ///    function-calling and structured-output modes are not verified to
+  ///    compose reliably; same conservative skip-when-tools-present rule as
+  ///    Anthropic).
+  ///  - **Mock**: ignored (scripted responses don't consult the request).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub response_format: Option<ResponseFormat>,
 }
 
 impl ProviderRequest {
@@ -108,6 +137,7 @@ impl ProviderRequest {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     }
   }
 }

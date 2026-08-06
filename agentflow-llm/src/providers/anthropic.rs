@@ -1,5 +1,5 @@
 use crate::{
-  LLMError, Result,
+  LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   thinking::ThinkingConfig,
@@ -134,6 +134,30 @@ impl AnthropicProvider {
       body["thinking"] = block;
     }
 
+    // V2.1: Anthropic has no native `response_format` field. Emulate a
+    // `JsonSchema` constraint by forcing a single synthetic tool call whose
+    // `input_schema` is the requested schema — `execute()` unwraps that
+    // tool call's arguments back into plain-text `content` so callers see
+    // schema-conformant JSON exactly as if it had come back as normal text.
+    //
+    // Only when no real `tools`/`tool_choice` were requested and the call
+    // isn't streaming: forcing a tool choice here would hijack the
+    // caller's own tool-calling turn (they'd never be able to call their
+    // real tools), and unwrapping a forced tool call out of a streamed
+    // response isn't implemented.
+    if !request.stream
+      && request.tools.is_none()
+      && request.tool_choice.is_none()
+      && let Some(ResponseFormat::JsonSchema { name, schema, .. }) = &request.response_format
+    {
+      body["tools"] = json!([{
+        "name": name,
+        "description": "Return the final structured response.",
+        "input_schema": schema,
+      }]);
+      body["tool_choice"] = json!({ "type": "tool", "name": name });
+    }
+
     body
   }
 }
@@ -264,7 +288,7 @@ impl LLMProvider for AnthropicProvider {
       .collect::<Vec<_>>()
       .join("");
 
-    let content = ContentType::Text(content_text);
+    let mut content = ContentType::Text(content_text);
 
     let usage = anthropic_response
       .usage
@@ -275,7 +299,23 @@ impl LLMProvider for AnthropicProvider {
         total_tokens: Some(u.input_tokens + u.output_tokens),
       });
 
-    let tool_calls = parse_anthropic_tool_use_blocks(&anthropic_response.content);
+    let mut tool_calls = parse_anthropic_tool_use_blocks(&anthropic_response.content);
+
+    // V2.1: unwind `build_request_body`'s synthetic-tool-call schema
+    // emulation — if this request forced the schema tool (no real tools
+    // requested, non-streaming, JsonSchema format), pull its arguments
+    // back out as plain-text JSON content instead of surfacing it as a
+    // tool call the caller never asked for.
+    if request.tools.is_none()
+      && let Some(ResponseFormat::JsonSchema {
+        name: schema_name, ..
+      }) = &request.response_format
+      && let Some(pos) = tool_calls.iter().position(|call| &call.name == schema_name)
+    {
+      let call = tool_calls.remove(pos);
+      content = ContentType::Text(serde_json::to_string(&call.arguments).unwrap_or_default());
+    }
+
     let stop_reason = anthropic_response
       .stop_reason
       .as_deref()
@@ -659,6 +699,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -690,6 +731,7 @@ mod tests {
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -816,6 +858,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Medium),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert_eq!(body["thinking"]["type"], "enabled");
@@ -833,6 +876,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Disabled),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert_eq!(body["thinking"]["type"], "disabled");
@@ -850,6 +894,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert!(
@@ -885,6 +930,95 @@ mod tests {
       text: "no reasoning here".to_string(),
     }];
     assert!(parse_anthropic_thinking_blocks(&content).is_none());
+  }
+
+  fn json_schema_format() -> ResponseFormat {
+    ResponseFormat::JsonSchema {
+      name: "final_answer".to_string(),
+      schema: json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"]
+      }),
+      strict: Some(true),
+    }
+  }
+
+  /// V2.1: with no real tools requested, a `JsonSchema` format forces a
+  /// single synthetic tool call whose `input_schema` is the requested
+  /// schema — Anthropic's only way to constrain output shape natively.
+  #[test]
+  fn build_request_body_forces_synthetic_tool_for_json_schema_without_tools() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![json!({"role": "user", "content": "answer please"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(json_schema_format()),
+    };
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "final_answer");
+    assert_eq!(tools[0]["input_schema"]["type"], "object");
+    assert_eq!(
+      body["tool_choice"],
+      json!({"type": "tool", "name": "final_answer"})
+    );
+  }
+
+  /// When real tools are already requested, forcing a tool choice would
+  /// hijack the caller's own tool-calling turn — the schema emulation must
+  /// stay out of the way and leave the real tools/tool_choice untouched.
+  #[test]
+  fn build_request_body_skips_synthetic_tool_when_real_tools_present() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather",
+      json!({"type": "object"}),
+    );
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![json!({"role": "user", "content": "weather?"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: Some(vec![tool]),
+      tool_choice: Some(ToolChoice::Auto),
+      thinking: None,
+      response_format: Some(json_schema_format()),
+    };
+    let body = provider.build_request_body(&request);
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "get_weather");
+    assert_eq!(body["tool_choice"], json!({"type": "auto"}));
+  }
+
+  /// Streamed requests never get the synthetic-tool treatment — unwrapping
+  /// a forced tool call out of an SSE stream isn't implemented, so a
+  /// streaming `JsonSchema` request must fall back to prompt-only
+  /// constraint rather than silently breaking the stream.
+  #[test]
+  fn build_request_body_skips_synthetic_tool_when_streaming() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![json!({"role": "user", "content": "answer please"})],
+      stream: true,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(json_schema_format()),
+    };
+    let body = provider.build_request_body(&request);
+    assert!(body.get("tools").is_none());
+    assert!(body.get("tool_choice").is_none());
   }
 
   #[test]

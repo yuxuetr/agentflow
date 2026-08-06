@@ -292,6 +292,7 @@ fn provider_request(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -319,6 +320,7 @@ fn glm_provider_request(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -364,6 +366,7 @@ fn provider_tool_request(model: &str) -> ProviderRequest {
       name: "get_weather".to_string(),
     }),
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -396,6 +399,7 @@ fn glm_provider_tool_request(model: &str) -> ProviderRequest {
     )]),
     tool_choice: Some(ToolChoice::Auto),
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -425,6 +429,7 @@ fn provider_vision_request(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 

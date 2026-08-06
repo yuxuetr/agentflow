@@ -1,5 +1,5 @@
 use crate::{
-  LLMError, Result,
+  LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   thinking::ThinkingConfig,
@@ -90,7 +90,34 @@ impl OpenAIProvider {
       body["reasoning_effort"] = Value::String(effort.to_string());
     }
 
+    if let Some(format) = &request.response_format {
+      body["response_format"] = response_format_to_openai_value(format);
+    }
+
     body
+  }
+}
+
+/// Encode a [`ResponseFormat`] as OpenAI's `response_format` request field.
+/// Shared verbatim by Moonshot/StepFun, which speak the identical
+/// OpenAI-compatible wire shape and support it alongside `tools` in the
+/// same request (unlike Anthropic/Google — see `ProviderRequest::
+/// response_format`'s doc comment).
+pub(crate) fn response_format_to_openai_value(format: &ResponseFormat) -> Value {
+  match format {
+    ResponseFormat::Text => json!({ "type": "text" }),
+    ResponseFormat::JsonObject => json!({ "type": "json_object" }),
+    ResponseFormat::JsonSchema {
+      name,
+      schema,
+      strict,
+    } => {
+      let mut json_schema = json!({ "name": name, "schema": schema });
+      if let Some(strict_val) = strict {
+        json_schema["strict"] = Value::Bool(*strict_val);
+      }
+      json!({ "type": "json_schema", "json_schema": json_schema })
+    }
   }
 }
 
@@ -581,6 +608,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::High),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert_eq!(body["reasoning_effort"], "high");
@@ -597,6 +625,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: Some(ThinkingConfig::Disabled),
+      response_format: None,
     };
     let body = provider.build_request_body(&request);
     assert!(body.get("reasoning_effort").is_none());
@@ -745,6 +774,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -776,6 +806,7 @@ mod tests {
       tools: Some(vec![tool]),
       tool_choice: Some(ToolChoice::Required),
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);
@@ -800,6 +831,7 @@ mod tests {
         name: "x".to_string(),
       }),
       thinking: None,
+      response_format: None,
     };
 
     let body = provider.build_request_body(&request);

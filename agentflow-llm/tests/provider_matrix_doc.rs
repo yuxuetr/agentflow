@@ -31,7 +31,7 @@ fn matrix_doc() -> String {
 /// [`ProviderRequest`] fields. Destructuring a struct with unhandled
 /// fields is a build error, not a warning, so the type's authoritative
 /// field set is whatever this function names.
-fn provider_request_field_names() -> [&'static str; 7] {
+fn provider_request_field_names() -> [&'static str; 8] {
   // Type-system check: if a field is added or renamed on
   // ProviderRequest, the destructure stops compiling and CI fails
   // before the runtime assertion below ever runs. The closure is
@@ -45,6 +45,7 @@ fn provider_request_field_names() -> [&'static str; 7] {
       tools: _,
       tool_choice: _,
       thinking: _,
+      response_format: _,
     } = req;
   };
   // Keep alphabetical so the test failure message is stable.
@@ -52,6 +53,7 @@ fn provider_request_field_names() -> [&'static str; 7] {
     "messages",
     "model",
     "parameters",
+    "response_format",
     "stream",
     "thinking",
     "tool_choice",

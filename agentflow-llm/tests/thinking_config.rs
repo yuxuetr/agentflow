@@ -107,6 +107,7 @@ fn provider_request_carries_thinking_as_typed_field() {
     tools: None,
     tool_choice: None,
     thinking: Some(ThinkingConfig::Low),
+    response_format: None,
   };
   match req.thinking {
     Some(ThinkingConfig::Low) => {}

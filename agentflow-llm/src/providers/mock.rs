@@ -346,6 +346,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -369,6 +370,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -390,6 +392,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let result = provider.execute(&request).await;
@@ -411,6 +414,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let start = std::time::Instant::now();
@@ -439,6 +443,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let response = provider.execute(&request).await.unwrap();
@@ -458,6 +463,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
     let response = provider.execute(&request).await.unwrap();
     assert!(response.tool_calls.is_empty());
@@ -492,6 +498,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let first = provider.execute(&request).await;
@@ -533,6 +540,7 @@ mod tests {
       tools: None,
       tool_choice: None,
       thinking: None,
+      response_format: None,
     };
 
     let _stream = provider.execute_streaming(&request).await.unwrap();

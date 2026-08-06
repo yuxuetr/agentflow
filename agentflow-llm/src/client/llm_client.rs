@@ -486,44 +486,13 @@ impl LLMClient {
       }
     }
 
-    // Note: tools / tool_choice are no longer dropped into `parameters`. They
-    // travel as typed fields on `ProviderRequest::tools` / `tool_choice`, and
-    // each provider serialises them to its own native wire format
-    // (OpenAI/Moonshot/StepFun/Mock pass through; Anthropic / Google adapt).
-
-    // Add response format
-    if let Some(format) = &self.response_format {
-      match format {
-        ResponseFormat::Text => {
-          // Default, no parameter needed
-        }
-        ResponseFormat::JsonObject => {
-          params.insert(
-            "response_format".to_string(),
-            serde_json::json!({
-              "type": "json_object"
-            }),
-          );
-        }
-        ResponseFormat::JsonSchema {
-          name,
-          schema,
-          strict,
-        } => {
-          let mut format_obj = serde_json::json!({
-            "type": "json_schema",
-            "json_schema": {
-              "name": name,
-              "schema": schema
-            }
-          });
-          if let Some(strict_val) = strict {
-            format_obj["json_schema"]["strict"] = Value::Bool(*strict_val);
-          }
-          params.insert("response_format".to_string(), format_obj);
-        }
-      }
-    }
+    // Note: tools / tool_choice / response_format are no longer dropped into
+    // `parameters`. They travel as typed fields on `ProviderRequest::tools` /
+    // `tool_choice` / `response_format`, and each provider serialises them to
+    // its own native wire format (OpenAI/Moonshot/StepFun pass through;
+    // Anthropic/Google adapt or conditionally skip — see
+    // `ProviderRequest::response_format`'s doc comment for the exact rules;
+    // Mock ignores them).
 
     // Override with user-provided params
     for (key, value) in &self.additional_params {
@@ -564,6 +533,7 @@ impl LLMClient {
       tools: self.tools.clone(),
       tool_choice: self.tool_choice.clone(),
       thinking: self.thinking.clone(),
+      response_format: self.response_format.clone(),
     })
   }
 

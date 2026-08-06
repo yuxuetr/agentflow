@@ -32,6 +32,7 @@ fn make_request(message_count: usize) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 

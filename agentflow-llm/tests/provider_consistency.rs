@@ -40,6 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentflow_llm::LLMError;
+use agentflow_llm::ResponseFormat;
 use agentflow_llm::client::StreamingResponse;
 use agentflow_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
@@ -154,6 +155,7 @@ fn provider_request(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -180,6 +182,32 @@ fn provider_request_with_tools(model: &str) -> ProviderRequest {
     tools: Some(vec![weather_tool]),
     tool_choice: Some(ToolChoice::Required),
     thinking: None,
+    response_format: None,
+  }
+}
+
+/// Build a `ProviderRequest` with a `JsonSchema` `response_format` and no
+/// `tools` — the "final answer only" shape V2.1's structured-output support
+/// actually sends (see `agentflow-agents`' `ReActAgent`/`PlanExecuteAgent`
+/// `output_schema` wiring).
+fn provider_request_with_json_schema(model: &str) -> ProviderRequest {
+  ProviderRequest {
+    model: model.to_string(),
+    messages: vec![json!({"role": "user", "content": "answer please"})],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+    thinking: None,
+    response_format: Some(ResponseFormat::JsonSchema {
+      name: "final_answer".to_string(),
+      schema: json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"]
+      }),
+      strict: Some(true),
+    }),
   }
 }
 
@@ -437,6 +465,137 @@ async fn stepfun_maps_401_to_http_error() {
 }
 
 // -----------------------------------------------------------------------------
+// response_format / json_schema consistency (V2.1)
+//
+// Confirms `ProviderRequest::response_format` reaches the wire in each
+// provider's native shape, and — for Anthropic, which has no native
+// `response_format` field — that the synthetic-tool-call emulation round
+// trips: the forced tool call in the *response* fixture is unwrapped back
+// into plain-text JSON `content`, transparent to callers.
+// -----------------------------------------------------------------------------
+
+const OPENAI_JSON_SCHEMA_SUCCESS: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"{\"answer\":\"42\"}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"#;
+const ANTHROPIC_JSON_SCHEMA_TOOL_USE: &str = r#"{"id":"msg_test","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"tool_use","id":"toolu_final","name":"final_answer","input":{"answer":"42"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":1}}"#;
+const GOOGLE_JSON_SCHEMA_SUCCESS: &str = r#"{"candidates":[{"content":{"parts":[{"text":"{\"answer\":\"42\"}"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_json_schema_request_sets_native_response_format() {
+  let (base_url, captured) = spawn_mock_server(200, OPENAI_JSON_SCHEMA_SUCCESS.to_string()).await;
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let response = provider
+    .execute(&provider_request_with_json_schema("gpt-4o-mini"))
+    .await
+    .expect("ok");
+  assert_text(&response.content, "42");
+  let sent = captured.lock().await.clone().expect("request captured");
+  assert!(
+    sent.contains("\"type\":\"json_schema\"") && sent.contains("\"name\":\"final_answer\""),
+    "expected native response_format in request body, got: {sent}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_json_schema_request_sets_native_response_format() {
+  let (base_url, captured) = spawn_mock_server(200, MOONSHOT_SUCCESS.to_string()).await;
+  let provider =
+    MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  provider
+    .execute(&provider_request_with_json_schema("moonshot-v1-8k"))
+    .await
+    .expect("ok");
+  let sent = captured.lock().await.clone().expect("request captured");
+  assert!(
+    sent.contains("\"type\":\"json_schema\""),
+    "expected native response_format in request body, got: {sent}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_json_schema_request_sets_native_response_format() {
+  let (base_url, captured) = spawn_mock_server(200, STEPFUN_SUCCESS.to_string()).await;
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  provider
+    .execute(&provider_request_with_json_schema("step-1-8k"))
+    .await
+    .expect("ok");
+  let sent = captured.lock().await.clone().expect("request captured");
+  assert!(
+    sent.contains("\"type\":\"json_schema\""),
+    "expected native response_format in request body, got: {sent}"
+  );
+}
+
+/// The one case where the "native path" and "prompt-fallback path" genuinely
+/// diverge in wire shape: Anthropic has no `response_format` field, so this
+/// exercises the full synthetic-tool-call round trip — request forces a
+/// tool choice, response fixture returns a `tool_use` block, and the parsed
+/// `ProviderResponse.content` comes back as plain JSON text with zero
+/// `tool_calls`, exactly like every other provider's native path above.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_json_schema_request_forces_synthetic_tool_and_unwraps_response() {
+  let (base_url, captured) =
+    spawn_mock_server(200, ANTHROPIC_JSON_SCHEMA_TOOL_USE.to_string()).await;
+  let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
+    .expect("provider");
+  let response = provider
+    .execute(&provider_request_with_json_schema("claude-3-5-sonnet"))
+    .await
+    .expect("ok");
+  assert_text(&response.content, "42");
+  assert!(
+    response.tool_calls.is_empty(),
+    "the synthetic schema tool call must not leak into tool_calls, got: {:?}",
+    response.tool_calls
+  );
+  let sent = captured.lock().await.clone().expect("request captured");
+  // serde_json (no `preserve_order` feature in this workspace) serialises
+  // object keys alphabetically, so `tool_choice`'s two fields land as
+  // `{"name":...,"type":...}` — assert on the individual k:v pairs rather
+  // than a literal whole-object substring.
+  assert!(
+    sent.contains("\"tool_choice\":{")
+      && sent.contains("\"type\":\"tool\"")
+      && sent.contains("\"name\":\"final_answer\""),
+    "expected forced tool_choice in request body, got: {sent}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_json_schema_request_sets_native_response_schema() {
+  let (base_url, captured) = spawn_mock_server(200, GOOGLE_JSON_SCHEMA_SUCCESS.to_string()).await;
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let response = provider
+    .execute(&provider_request_with_json_schema("gemini-1.5-pro"))
+    .await
+    .expect("ok");
+  assert_text(&response.content, "42");
+  let sent = captured.lock().await.clone().expect("request captured");
+  assert!(
+    sent.contains("\"responseMimeType\":\"application/json\"")
+      && sent.contains("\"responseSchema\""),
+    "expected native responseSchema in request body, got: {sent}"
+  );
+}
+
+/// Mock ignores `response_format` entirely (scripted responses don't
+/// consult the request) — confirms setting it never breaks the mock path
+/// callers rely on for tests, same "consistent no-op" contract every
+/// unwired field already has there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mock_ignores_json_schema_response_format() {
+  use agentflow_llm::providers::MockProvider;
+  let provider = MockProvider::new("test-key", None).expect("provider");
+  let response = provider
+    .execute(&provider_request_with_json_schema("mock-model"))
+    .await
+    .expect("ok");
+  assert!(matches!(response.content, ContentType::Text(_)));
+}
+
+// -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
@@ -527,6 +686,7 @@ fn provider_request_streaming(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -797,6 +957,7 @@ fn provider_request_multimodal_openai_style(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -822,6 +983,7 @@ fn provider_request_multimodal_anthropic_style(model: &str) -> ProviderRequest {
     tools: None,
     tool_choice: None,
     thinking: None,
+    response_format: None,
   }
 }
 
@@ -1122,6 +1284,7 @@ fn provider_request_with_choice(model: &str, choice: ToolChoice) -> ProviderRequ
     tools: Some(vec![weather_tool]),
     tool_choice: Some(choice),
     thinking: None,
+    response_format: None,
   }
 }
 
