@@ -84,12 +84,26 @@ The frozen kind set (Phase H0):
 | `approval_requested` | embedded `ApprovalRequest` | policy or hook gated the call |
 | `approval_decided` | embedded `ApprovalDecision` | provider returned a decision |
 | `tool_call_completed` | step_index, tool, is_error, duration_ms, source, output_summary | tool returned |
+| `token_delta` | step_index, delta | raw model output chunk arrived (V2.2, live-only) |
 | `background_task_updated` | task_id, status, summary, error | managed task state change |
 | `memory_summary_added` | layer, summary, token_estimate | memory compaction appended a summary |
 | `stopped` | reason, final_answer, error | session terminating |
 
 The enum is **closed**. New kinds are additive AgentFlow releases.
 Trace replay tooling depends on the closed surface.
+
+`token_delta` (V2.2) is **live-only**: `HarnessAgentEventBridge` emits it
+while translating a live `AgentEvent::TokenDelta` stream from a
+streaming-aware runtime (`ReActAgent`), but it is never reconstructed by
+the post-hoc `translate_inner_events` fallback and never appears in
+`AgentRunResult.events` or the `/events/history` route — a per-token
+event embedded in every stored trace/checkpoint forever would bloat them
+for a signal whose value is being observed live. `delta` is the
+provider's raw streamed text verbatim (a JSON-envelope fragment for a
+ReAct turn, not necessarily clean prose); `agentflow harness chat` and
+`agentflow harness run --output text` render it as an in-place "typing"
+line on stderr, and the Web UI accumulates it into a separate live-text
+region above the event timeline instead of the discrete event list.
 
 ## Approval protocol
 

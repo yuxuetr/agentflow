@@ -124,6 +124,31 @@ wire variants); the gate runs before verification, since there is no reason
 to run a domain verification strategy against an answer that does not even
 conform to the caller's declared shape.
 
+**Token-level streaming (V2.2).** Every `ReActAgent` LLM call now streams
+(`LLMClientBuilder::execute_streaming_collected`) rather than calling
+`execute_full`, so a provider configured `requires_streaming: true` can
+actually be used, and every chunk is forwarded live as
+`AgentEvent::TokenDelta { session_id, step_index, delta, is_final,
+timestamp }` through `self.live_sink`. `delta` is whatever text the
+provider streamed for that chunk verbatim — for a ReAct turn this is a
+fragment of the turn's JSON envelope (or a native tool-call's arguments),
+not necessarily clean prose; extracting a human-readable partial answer
+would need a genuine incremental JSON parser, which is out of scope here.
+`TokenDelta` is deliberately *not* accumulated into `AgentRunResult.events`
+(unlike every other `AgentEvent` variant) — a per-token event embedded in
+every stored trace or checkpoint forever would bloat them for a signal
+whose entire value is being observed live; only a `live_sink` attached via
+`AgentContext::with_event_sink(...)` ever sees it.
+`collect_streaming_response` (`agentflow-llm`) reconstructs the same
+`LLMResponse` shape `execute_full` used to hand back (content
+concatenation, `tool_calls` reassembled from `tool_call_deltas` grouped by
+index, best-effort `stop_reason`/`usage`), so tool-call dispatch, JSON
+parsing, and usage/cost accounting downstream of the call are unchanged.
+`agentflow-harness`'s `HarnessAgentEventBridge` translates the live stream
+into the `token_delta` `HarnessEvent` kind (see `docs/HARNESS_MODE.md`);
+`agentflow harness chat` / `run --output text` and the Web UI render it as
+an in-place typing indicator.
+
 `ReActAgent::query_memory(...)` and `query_session_memory(...)` expose the
 runtime memory query boundary. The active `MemoryStore` owns retrieval behavior:
 `SemanticMemory` performs vector search with keyword fallback, while simpler
