@@ -60,8 +60,8 @@ pub use error::HarnessError;
 pub use event::{
   ApprovalDecidedPayload, ApprovalRequestedPayload, BackgroundTaskStatus,
   BackgroundTaskUpdatedPayload, HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload,
-  SessionStartedPayload, StepStartedPayload, StopReason, StoppedPayload, ToolCallCompletedPayload,
-  ToolCallRequestedPayload,
+  SessionStartedPayload, StepStartedPayload, StopReason, StoppedPayload, TokenDeltaPayload,
+  ToolCallCompletedPayload, ToolCallRequestedPayload,
 };
 pub use flow_run::{FlowRunOutcome, HarnessFlowRunOptions, HarnessFlowRunResult};
 pub use hooks::{CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook};

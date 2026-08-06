@@ -72,12 +72,18 @@ type ApprovalAsk = (ApprovalRequest, oneshot::Sender<ApprovalDecision>);
 /// so progress lines stack cleanly above the eventual answer.
 struct ChatProgressSink {
   enabled: bool,
+  /// V2.2: accumulates the in-flight step's `token_delta` text so it
+  /// renders as a single line that grows in place (a typing indicator)
+  /// instead of one stacked line per chunk. Reset on the next
+  /// `step_started` or whenever a discrete progress line is printed.
+  typing: std::sync::Mutex<String>,
 }
 
 impl ChatProgressSink {
   fn new() -> Self {
     Self {
       enabled: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+      typing: std::sync::Mutex::new(String::new()),
     }
   }
 
@@ -85,6 +91,18 @@ impl ChatProgressSink {
     use std::io::Write;
     eprint!("\r\x1b[K{text}\n");
     std::io::stderr().flush().ok();
+  }
+
+  fn typing(&self, delta: &str) {
+    use std::io::Write;
+    let mut buf = self.typing.lock().unwrap();
+    buf.push_str(delta);
+    eprint!("\r\x1b[K💭 {buf}");
+    std::io::stderr().flush().ok();
+  }
+
+  fn reset_typing(&self) {
+    self.typing.lock().unwrap().clear();
   }
 }
 
@@ -98,8 +116,15 @@ impl HarnessEventSink for ChatProgressSink {
     if !self.enabled {
       return Ok(());
     }
-    if let Some(text) = progress_line(&event.body) {
-      self.line(&text);
+    match &event.body {
+      HarnessEventBody::TokenDelta(payload) => self.typing(&payload.delta),
+      HarnessEventBody::StepStarted(_) => self.reset_typing(),
+      _ => {
+        if let Some(text) = progress_line(&event.body) {
+          self.reset_typing();
+          self.line(&text);
+        }
+      }
     }
     Ok(())
   }
@@ -689,6 +714,76 @@ mod tests {
       context_token_estimate: 0,
     }));
     assert_eq!(started, None);
+  }
+
+  fn sample_event(body: HarnessEventBody) -> HarnessEvent {
+    HarnessEvent::new(0, "sess-1", body)
+  }
+
+  #[tokio::test]
+  async fn chat_progress_sink_accumulates_token_deltas_and_resets_on_step_boundary() {
+    let sink = ChatProgressSink {
+      enabled: true,
+      typing: std::sync::Mutex::new(String::new()),
+    };
+
+    sink
+      .write(&sample_event(HarnessEventBody::TokenDelta(
+        agentflow_harness::TokenDeltaPayload {
+          step_index: 0,
+          delta: "Hel".into(),
+        },
+      )))
+      .await
+      .unwrap();
+    sink
+      .write(&sample_event(HarnessEventBody::TokenDelta(
+        agentflow_harness::TokenDeltaPayload {
+          step_index: 0,
+          delta: "lo".into(),
+        },
+      )))
+      .await
+      .unwrap();
+    assert_eq!(*sink.typing.lock().unwrap(), "Hello");
+
+    sink
+      .write(&sample_event(HarnessEventBody::StepStarted(
+        agentflow_harness::StepStartedPayload {
+          step_index: 1,
+          step_type: "plan".into(),
+        },
+      )))
+      .await
+      .unwrap();
+    assert_eq!(*sink.typing.lock().unwrap(), "");
+
+    sink
+      .write(&sample_event(HarnessEventBody::TokenDelta(
+        agentflow_harness::TokenDeltaPayload {
+          step_index: 1,
+          delta: "next".into(),
+        },
+      )))
+      .await
+      .unwrap();
+    assert_eq!(*sink.typing.lock().unwrap(), "next");
+
+    // A discrete progress-line event also clears the in-flight typing buffer.
+    sink
+      .write(&sample_event(HarnessEventBody::ToolCallRequested(
+        ToolCallRequestedPayload {
+          step_index: 1,
+          tool: "search".into(),
+          source: None,
+          permissions: vec![],
+          idempotency: None,
+          params_summary: serde_json::Value::Null,
+        },
+      )))
+      .await
+      .unwrap();
+    assert_eq!(*sink.typing.lock().unwrap(), "");
   }
 
   fn sample_request(id: &str) -> ApprovalRequest {

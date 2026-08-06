@@ -21,6 +21,55 @@ use agentflow_tools::ToolRegistry;
 
 use super::{OutputFormat, parse_profile, resolve_approve_default, resolve_run_dir};
 
+/// V2.2: `Text` output's only prior live feedback was the `🚀 Harness run
+/// starting` header — this renders the in-flight step's `token_delta`
+/// stream as a single line that grows in place, TTY-gated the same way
+/// `harness chat`'s `ChatProgressSink` is (stderr only, so it never
+/// pollutes the authoritative stdout final-answer print in `Text` mode).
+struct TypingProgressSink {
+  enabled: bool,
+  typing: std::sync::Mutex<String>,
+}
+
+impl TypingProgressSink {
+  fn new() -> Self {
+    Self {
+      enabled: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+      typing: std::sync::Mutex::new(String::new()),
+    }
+  }
+}
+
+#[async_trait::async_trait]
+impl HarnessEventSink for TypingProgressSink {
+  fn name(&self) -> &str {
+    "run-typing-progress"
+  }
+
+  async fn write(
+    &self,
+    event: &agentflow_harness::HarnessEvent,
+  ) -> Result<(), agentflow_harness::HarnessError> {
+    use std::io::Write;
+    if !self.enabled {
+      return Ok(());
+    }
+    match &event.body {
+      agentflow_harness::HarnessEventBody::TokenDelta(payload) => {
+        let mut buf = self.typing.lock().unwrap();
+        buf.push_str(&payload.delta);
+        eprint!("\r\x1b[K💭 {buf}");
+        std::io::stderr().flush().ok();
+      }
+      agentflow_harness::HarnessEventBody::StepStarted(_) => {
+        self.typing.lock().unwrap().clear();
+      }
+      _ => {}
+    }
+    Ok(())
+  }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
   user_input: String,
@@ -140,6 +189,9 @@ pub async fn execute(
   }
   if let Some(sink) = stdout_sink.as_ref() {
     runtime = runtime.with_event_sink(sink.clone());
+  }
+  if matches!(output, OutputFormat::Text) {
+    runtime = runtime.with_event_sink(Arc::new(TypingProgressSink::new()));
   }
   // Phase 2a: when a context budget is set, compact over-budget context
   // into a summary (deterministic, replay-safe) instead of dropping it.
