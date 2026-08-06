@@ -6,6 +6,7 @@
 //! ## ReAct Agent (Phase 1)
 //! Use [`react::ReActAgent`] for autonomous Thought/Action/Observation loops.
 
+pub mod checkpoint;
 pub mod citation;
 pub mod common;
 pub mod delegation;
@@ -28,6 +29,7 @@ pub mod tools;
 pub mod traits;
 
 // Re-export common types and utilities
+pub use checkpoint::FileLoopCheckpointer;
 pub use common::*;
 pub use traits::*;
 
