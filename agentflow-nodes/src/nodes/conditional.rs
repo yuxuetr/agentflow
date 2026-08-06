@@ -160,10 +160,13 @@ impl AsyncNode for ConditionalNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     let condition_result = self.evaluate_condition(inputs)?;
 
-    println!("🔧 Conditional Node '{}' prepared:", self.name);
-    println!("   Condition: {}", self.condition);
-    println!("   Type: {:?}", self.condition_type);
-    println!("   Result: {}", condition_result);
+    tracing::debug!(
+      name = %self.name,
+      condition = %self.condition,
+      condition_type = ?self.condition_type,
+      result = condition_result,
+      "conditional node prepared"
+    );
 
     let result = if condition_result {
       self.true_value.clone().unwrap_or(Value::Bool(true))
@@ -171,7 +174,7 @@ impl AsyncNode for ConditionalNode {
       self.false_value.clone().unwrap_or(Value::Bool(false))
     };
 
-    println!("✅ Conditional result: {}", result);
+    tracing::debug!(%result, "conditional node result");
 
     let mut outputs = HashMap::new();
     outputs.insert("output".to_string(), FlowValue::Json(result));

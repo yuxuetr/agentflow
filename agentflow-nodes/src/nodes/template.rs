@@ -81,7 +81,7 @@ impl AsyncNode for TemplateNode {
       context.insert(key, &tera_value);
     }
 
-    println!("📝 Rendering template for node '{}'", self.name);
+    tracing::debug!(name = %self.name, "rendering template");
 
     // Q3.8.2: avoid the `.lock().unwrap()` panic on a poisoned mutex.
     // A poisoned Tera mutex means a previous render panicked mid-flight;
@@ -94,8 +94,8 @@ impl AsyncNode for TemplateNode {
     // is best-effort and a stale entry is acceptable).
     let rendered = {
       let mut tera_guard = tera.lock().unwrap_or_else(|poisoned| {
-        eprintln!(
-          "[agentflow-nodes:template] Tera template engine mutex was poisoned by a prior panic; recovering and continuing"
+        tracing::warn!(
+          "Tera template engine mutex was poisoned by a prior panic; recovering and continuing"
         );
         poisoned.into_inner()
       });
@@ -109,16 +109,13 @@ impl AsyncNode for TemplateNode {
     // Parse result based on output format
     match self.output_format.as_str() {
       "json" => {
-        println!(
-          "📝 Attempting to parse rendered template as JSON: {}",
-          rendered
-        );
+        tracing::debug!(rendered = %rendered, "attempting to parse rendered template as JSON");
         match serde_json::from_str::<Value>(&rendered) {
           Ok(Value::Object(map)) => {
             // When output format is JSON and it's an object, unpack fields into separate outputs
-            println!(
-              "✅ Template rendered successfully (JSON object unpacked with {} fields)",
-              map.len()
+            tracing::debug!(
+              field_count = map.len(),
+              "template rendered successfully (JSON object unpacked)"
             );
             let mut outputs = HashMap::new();
             for (key, value) in map {
@@ -128,15 +125,18 @@ impl AsyncNode for TemplateNode {
           }
           Ok(json) => {
             // Non-object JSON, keep as single output
-            println!("✅ Template rendered successfully (non-object JSON)");
+            tracing::debug!("template rendered successfully (non-object JSON)");
             let mut outputs = HashMap::new();
             outputs.insert(self.output_key.clone(), FlowValue::Json(json));
             Ok(outputs)
           }
           Err(e) => {
             // Invalid JSON, treat as string
-            println!("⚠️  Template rendered but JSON parsing failed: {}", e);
-            println!("    Rendered content: {}", rendered);
+            tracing::warn!(
+              error = %e,
+              rendered = %rendered,
+              "template rendered but JSON parsing failed"
+            );
             let mut outputs = HashMap::new();
             outputs.insert(
               self.output_key.clone(),
@@ -170,16 +170,16 @@ impl AsyncNode for TemplateNode {
         if matches!(first_char, Some('[') | Some('{'))
           && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
         {
-          println!(
-            "✅ Template rendered successfully (auto-detected JSON {} via leading '{}')",
-            if parsed.is_array() { "array" } else { "object" },
-            first_char.unwrap_or('?')
+          tracing::debug!(
+            kind = if parsed.is_array() { "array" } else { "object" },
+            leading_char = %first_char.unwrap_or('?'),
+            "template rendered successfully (auto-detected JSON)"
           );
           let mut outputs = HashMap::new();
           outputs.insert(self.output_key.clone(), FlowValue::Json(parsed));
           return Ok(outputs);
         }
-        println!("✅ Template rendered successfully");
+        tracing::debug!("template rendered successfully");
         let mut outputs = HashMap::new();
         outputs.insert(
           self.output_key.clone(),

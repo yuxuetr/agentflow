@@ -80,6 +80,14 @@ async-trait = "0.1"
 thiserror = "1.0"
 anyhow = "1.0"
 
+# V1.7: structured logging for node execution — replaces ad-hoc println!/
+# eprintln! (see agentflow-core's `observability` feature for why that
+# crate keeps tracing optional; agentflow-nodes has no such constraint, and
+# tracing's macros are free no-ops without a registered subscriber, so a
+# plain hard dependency is simplest here, matching agentflow-skills/
+# agentflow-tools elsewhere in the workspace).
+tracing = "0.1"
+
 # Utilities
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

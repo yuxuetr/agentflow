@@ -147,9 +147,10 @@ impl AsyncNode for ArxivNode {
         }
         Err(e) => {
           // Paper doesn't have LaTeX source available, insert empty strings
-          println!(
-            "⚠️  Warning: Could not fetch LaTeX source for paper {}: {}",
-            paper_info.paper_id, e
+          tracing::warn!(
+            paper_id = %paper_info.paper_id,
+            error = %e,
+            "could not fetch LaTeX source for paper"
           );
           outputs.insert(
             "simple_latex_content".to_string(),

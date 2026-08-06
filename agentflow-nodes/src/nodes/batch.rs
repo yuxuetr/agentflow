@@ -144,11 +144,14 @@ impl AsyncNode for BatchNode {
       }
     };
 
-    println!("🔧 Batch Node '{}' prepared:", self.name);
-    println!("   Items key: {}", self.items_key);
-    println!("   Item count: {}", items.len());
-    println!("   Batch size: {}", self.batch_size);
-    println!("   Max concurrent: {}", self.max_concurrent);
+    tracing::debug!(
+      name = %self.name,
+      items_key = %self.items_key,
+      item_count = items.len(),
+      batch_size = self.batch_size,
+      max_concurrent = self.max_concurrent,
+      "batch node prepared"
+    );
 
     let mut all_results = Vec::new();
     for batch in items.chunks(self.batch_size) {
@@ -156,9 +159,9 @@ impl AsyncNode for BatchNode {
       all_results.extend(batch_results);
     }
 
-    println!(
-      "✅ Batch processing complete. {} results",
-      all_results.len()
+    tracing::debug!(
+      result_count = all_results.len(),
+      "batch processing complete"
     );
 
     // Flatten the Vec<FlowValue> into a plain JSON array — the custom
