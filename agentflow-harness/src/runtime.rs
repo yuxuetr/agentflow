@@ -71,6 +71,12 @@ pub struct HarnessRunOptions {
   /// (e.g. memory compaction) mid-run. Stored as the `Debug`-able handle
   /// so `HarnessRunOptions` keeps deriving `Debug` / `Clone`.
   pub between_turn_hook: Option<agentflow_agent_spi::runtime::BetweenTurnHookHandle>,
+  /// V2.4: optional agent-loop checkpointer forwarded to the inner
+  /// agent's context. When set, the inner agent (`ReActAgent` /
+  /// `PlanExecuteAgent`) saves an `AgentLoopCheckpoint` after every
+  /// completed turn/plan-step, so a process restart can resume mid-loop
+  /// instead of restarting from scratch.
+  pub loop_checkpointer: Option<agentflow_agent_spi::checkpoint::LoopCheckpointerHandle>,
 }
 
 impl HarnessRunOptions {
@@ -93,6 +99,7 @@ impl HarnessRunOptions {
       metadata: serde_json::Value::Null,
       cancellation_token: None,
       between_turn_hook: None,
+      loop_checkpointer: None,
     }
   }
 
@@ -156,6 +163,18 @@ impl HarnessRunOptions {
     hook: Arc<dyn agentflow_agent_spi::runtime::BetweenTurnHook>,
   ) -> Self {
     self.between_turn_hook = Some(agentflow_agent_spi::runtime::BetweenTurnHookHandle(hook));
+    self
+  }
+
+  /// V2.4: attach an agent-loop checkpointer forwarded to the inner
+  /// agent's context. See [`Self::loop_checkpointer`].
+  pub fn with_loop_checkpointer(
+    mut self,
+    checkpointer: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer>,
+  ) -> Self {
+    self.loop_checkpointer = Some(agentflow_agent_spi::checkpoint::LoopCheckpointerHandle(
+      checkpointer,
+    ));
     self
   }
 }
@@ -495,6 +514,12 @@ impl HarnessRuntime {
     // calls it before each turn for caller-owned context engineering.
     if let Some(hook) = options.between_turn_hook.clone() {
       agent_context.between_turn_hook = Some(hook);
+    }
+    // V2.4: forward the optional loop checkpointer. Covers both the
+    // `InnerRuntime::Opaque` and `InnerRuntime::TurnDriven` paths for
+    // free — both consume this same `agent_context` value.
+    if let Some(checkpointer) = options.loop_checkpointer.clone() {
+      agent_context.loop_checkpointer = Some(checkpointer);
     }
 
     // Phase 1 (RFC_HARNESS_LOOP_OWNERSHIP): attach the live event bridge
@@ -1273,6 +1298,35 @@ mod tests {
           handle.0.emit(ev).await;
         }
       }
+      // V2.4: simulate a real ReActAgent saving a loop checkpoint, so a
+      // test can prove `HarnessRunOptions::with_loop_checkpointer` really
+      // reaches the inner agent's context rather than just being stored
+      // on `HarnessRunOptions` and dropped.
+      if let Some(handle) = &context.loop_checkpointer {
+        let checkpoint = agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+          schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+          session_id: context.session_id.clone(),
+          runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::React,
+          created_at: chrono::Utc::now(),
+          steps: Vec::new(),
+          events: Vec::new(),
+          step_index: 1,
+          iteration: 0,
+          tool_calls: 0,
+          verification_attempts: 0,
+          schema_correction_attempts: 0,
+          last_tool_call: None,
+          recent_tool_calls: std::collections::VecDeque::new(),
+          cumulative_cost_usd: 0.0,
+          system_prompt: String::new(),
+          user_input: context.input.clone(),
+          trace_context: None,
+          plan_steps: serde_json::Value::Null,
+          plan_position: 0,
+          observations: Vec::new(),
+        };
+        handle.0.save(&checkpoint).await.ok();
+      }
       let mut steps = vec![AgentStep::new(
         0,
         AgentStepKind::Observe {
@@ -1346,6 +1400,64 @@ mod tests {
     let mut sorted = seqs.clone();
     sorted.sort();
     assert_eq!(seqs, sorted, "seqs must be monotonic increasing");
+  }
+
+  /// V2.4: in-memory test double proving
+  /// `HarnessRunOptions::with_loop_checkpointer` reaches the inner
+  /// agent's `AgentContext` rather than being dropped on the floor.
+  #[derive(Default, Clone)]
+  struct RecordingCheckpointer {
+    saved: Arc<tokio::sync::Mutex<Vec<agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>>>,
+  }
+
+  #[async_trait]
+  impl agentflow_agent_spi::checkpoint::AgentLoopCheckpointer for RecordingCheckpointer {
+    async fn save(
+      &self,
+      checkpoint: &agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      self.saved.lock().await.push(checkpoint.clone());
+      Ok(())
+    }
+    async fn load(
+      &self,
+      _session_id: &str,
+    ) -> Result<
+      Option<agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>,
+      agentflow_agent_spi::checkpoint::AgentLoopCheckpointError,
+    > {
+      Ok(None)
+    }
+    async fn clear(
+      &self,
+      _session_id: &str,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      Ok(())
+    }
+  }
+
+  #[tokio::test]
+  async fn runtime_forwards_loop_checkpointer_into_inner_agent_context() {
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let inner = Box::new(make_runtime("hi there", captured.clone()));
+    let mut runtime = HarnessRuntime::new(inner);
+    let dir = tempfile::tempdir().unwrap();
+    let checkpointer = RecordingCheckpointer::default();
+
+    let result = runtime
+      .run(
+        HarnessRunOptions::new("hello", dir.path(), "mock")
+          .with_runtime_kind(HarnessRuntimeKind::React)
+          .with_session_id("loop-ckpt-forward-session")
+          .with_loop_checkpointer(Arc::new(checkpointer.clone())),
+      )
+      .await
+      .unwrap();
+    assert_eq!(result.answer.as_deref(), Some("hi there"));
+
+    let saved = checkpointer.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].session_id, "loop-ckpt-forward-session");
   }
 
   #[tokio::test]
