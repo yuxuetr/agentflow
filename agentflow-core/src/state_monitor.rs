@@ -229,8 +229,9 @@ impl StateMonitor {
           Ok(guard) => guard,
           Err(_) => {
             // If lock is poisoned, fall back to non-detailed tracking
-            eprintln!(
-              "Warning: Lock poisoned in record_allocation, falling back to non-detailed tracking"
+            #[cfg(feature = "observability")]
+            tracing::warn!(
+              "Lock poisoned in record_allocation, falling back to non-detailed tracking"
             );
             return false;
           }
@@ -302,7 +303,8 @@ impl StateMonitor {
         match lock_mutex_monitor(&self.allocations, "record_allocation::value_count") {
           Ok(guard) => guard,
           Err(_) => {
-            eprintln!("Warning: Lock poisoned when updating value count");
+            #[cfg(feature = "observability")]
+            tracing::warn!("Lock poisoned when updating value count");
             return false;
           }
         };
@@ -353,7 +355,8 @@ impl StateMonitor {
         match lock_mutex_monitor(&self.allocations, "record_deallocation::allocations") {
           Ok(guard) => guard,
           Err(_) => {
-            eprintln!("Warning: Lock poisoned in record_deallocation");
+            #[cfg(feature = "observability")]
+            tracing::warn!("Lock poisoned in record_deallocation");
             return;
           }
         };
