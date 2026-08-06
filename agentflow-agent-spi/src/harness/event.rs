@@ -63,6 +63,13 @@ pub struct HarnessEvent {
 /// - `background_task_updated`
 /// - `memory_summary_added`
 /// - `stopped`
+///
+/// `token_delta` was added post-H0 (`P-V2.2`) as an additive,
+/// live-bridge-only kind: it is only ever emitted while translating a
+/// live [`crate::AgentEvent::TokenDelta`] stream, never reconstructed by
+/// the post-hoc `translate_inner_events` fallback. Per `docs/STABILITY.md`
+/// this keeps the envelope on wire version `harness/1` (additive kinds do
+/// not bump the wire version).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum HarnessEventBody {
@@ -81,6 +88,9 @@ pub enum HarnessEventBody {
   ApprovalDecided(ApprovalDecidedPayload),
   /// The tool call returned (success or failure).
   ToolCallCompleted(ToolCallCompletedPayload),
+  /// A raw token-level delta from the underlying LLM stream. Live-bridge
+  /// only; see the enum-level doc comment.
+  TokenDelta(TokenDeltaPayload),
   /// A managed background task changed state.
   BackgroundTaskUpdated(BackgroundTaskUpdatedPayload),
   /// The memory subsystem appended a summary entry.
@@ -175,6 +185,16 @@ pub struct ToolCallCompletedPayload {
   /// Optional structured output summary.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub output_summary: Option<serde_json::Value>,
+}
+
+/// Payload for [`HarnessEventBody::TokenDelta`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenDeltaPayload {
+  /// Step the delta belongs to.
+  pub step_index: usize,
+  /// Raw text fragment as emitted by the provider stream, forwarded
+  /// verbatim without reconstruction or normalization.
+  pub delta: String,
 }
 
 /// Lifecycle state of a managed background task. Mirrors the eventual

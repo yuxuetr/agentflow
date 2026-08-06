@@ -28,7 +28,7 @@ use crate::context::{
 use crate::error::HarnessError;
 use crate::event::{
   HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload, SessionStartedPayload,
-  StepStartedPayload, StopReason, StoppedPayload, ToolCallCompletedPayload,
+  StepStartedPayload, StopReason, StoppedPayload, TokenDeltaPayload, ToolCallCompletedPayload,
   ToolCallRequestedPayload,
 };
 use crate::persistence::{HarnessEventSink, SinkChain};
@@ -1045,6 +1045,26 @@ impl AgentEventSink for HarnessAgentEventBridge {
           )
           .await;
         self.emitted_step_started.fetch_add(1, Ordering::SeqCst);
+      }
+      // V2.2: forwarded verbatim, live-only — see `HarnessEventBody::TokenDelta`'s
+      // doc comment. `is_final` is not carried onto the wire payload: it is an
+      // internal bookkeeping flag for the LLM client's chunk reconstruction,
+      // not part of the Harness envelope contract.
+      AgentEvent::TokenDelta {
+        step_index,
+        delta,
+        timestamp,
+        ..
+      } => {
+        self
+          .dispatch_body(
+            HarnessEventBody::TokenDelta(TokenDeltaPayload {
+              step_index: *step_index,
+              delta: delta.clone(),
+            }),
+            *timestamp,
+          )
+          .await;
       }
       // Other events (RunStarted/Stopped, policy/capability decisions, LLM-call
       // accounting, multi-agent ops) are not part of the Harness envelope's
@@ -2072,6 +2092,48 @@ mod tests {
   /// secrets out of `params_summary` before they hit the event sink.
   /// Pre-fix the raw params (which may include API keys / passwords)
   /// were copied straight into the JSONL log.
+  #[tokio::test]
+  async fn bridge_translates_agent_event_token_delta_into_harness_token_delta() {
+    use crate::persistence::InMemoryEventSink;
+
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let bridge = HarnessAgentEventBridge::new("sess-1".into(), sinks, SeqAllocator::new());
+
+    bridge
+      .emit(&AgentEvent::TokenDelta {
+        session_id: "sess-1".into(),
+        step_index: 2,
+        delta: "hel".into(),
+        is_final: false,
+        timestamp: Utc::now(),
+      })
+      .await;
+    bridge
+      .emit(&AgentEvent::TokenDelta {
+        session_id: "sess-1".into(),
+        step_index: 2,
+        delta: "lo".into(),
+        is_final: true,
+        timestamp: Utc::now(),
+      })
+      .await;
+
+    let events = sink.snapshot().await;
+    let deltas: Vec<&TokenDeltaPayload> = events
+      .iter()
+      .filter_map(|e| match &e.body {
+        HarnessEventBody::TokenDelta(p) => Some(p),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(deltas.len(), 2);
+    assert_eq!(deltas[0].step_index, 2);
+    assert_eq!(deltas[0].delta, "hel");
+    assert_eq!(deltas[1].delta, "lo");
+    assert_eq!(bridge.emitted(), 2);
+  }
+
   #[tokio::test]
   async fn tool_call_requested_redacts_sensitive_params_before_emit() {
     use crate::persistence::InMemoryEventSink;

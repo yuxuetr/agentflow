@@ -116,6 +116,7 @@ fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
     HarnessEventBody::ApprovalRequested(_) => "approval_requested",
     HarnessEventBody::ApprovalDecided(_) => "approval_decided",
     HarnessEventBody::ToolCallCompleted(_) => "tool_call_completed",
+    HarnessEventBody::TokenDelta(_) => "token_delta",
     HarnessEventBody::BackgroundTaskUpdated(_) => "background_task_updated",
     HarnessEventBody::MemorySummaryAdded(_) => "memory_summary_added",
     HarnessEventBody::Stopped(_) => "stopped",

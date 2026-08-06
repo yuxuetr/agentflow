@@ -88,6 +88,7 @@ fn event_kind_str(body: &HarnessEventBody) -> &'static str {
     HarnessEventBody::ApprovalRequested(_) => "approval_requested",
     HarnessEventBody::ApprovalDecided(_) => "approval_decided",
     HarnessEventBody::ToolCallCompleted(_) => "tool_call_completed",
+    HarnessEventBody::TokenDelta(_) => "token_delta",
     HarnessEventBody::BackgroundTaskUpdated(_) => "background_task_updated",
     HarnessEventBody::MemorySummaryAdded(_) => "memory_summary_added",
     HarnessEventBody::Stopped(_) => "stopped",
@@ -268,6 +269,9 @@ fn format_event_line(event: &HarnessEvent) -> String {
       "{} err={} dur={}ms",
       payload.tool, payload.is_error, payload.duration_ms
     ),
+    HarnessEventBody::TokenDelta(payload) => {
+      format!("step={} delta={:?}", payload.step_index, payload.delta)
+    }
     HarnessEventBody::BackgroundTaskUpdated(payload) => {
       format!("task={} status={:?}", payload.task_id, payload.status)
     }

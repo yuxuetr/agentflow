@@ -111,6 +111,10 @@ fn format_event_line(event: &agentflow_harness::HarnessEvent) -> String {
       "tool_call_completed {} err={} dur={}ms",
       payload.tool, payload.is_error, payload.duration_ms
     ),
+    HarnessEventBody::TokenDelta(payload) => format!(
+      "token_delta step={} delta={:?}",
+      payload.step_index, payload.delta
+    ),
     HarnessEventBody::BackgroundTaskUpdated(payload) => format!(
       "background_task_updated task={} status={:?}",
       payload.task_id, payload.status
