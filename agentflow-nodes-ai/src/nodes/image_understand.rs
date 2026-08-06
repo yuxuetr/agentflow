@@ -44,7 +44,7 @@ impl ImageUnderstandNode {
 #[async_trait]
 impl AsyncNode for ImageUnderstandNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    println!("🔍 Executing ImageUnderstandNode: {}", self.name);
+    tracing::debug!(name = %self.name, "executing ImageUnderstandNode");
 
     AgentFlow::init()
       .await
@@ -86,7 +86,7 @@ impl AsyncNode for ImageUnderstandNode {
         message: format!("LLM execution failed: {}", e),
       })?;
 
-    println!("✅ ImageUnderstandNode execution successful.");
+    tracing::debug!("ImageUnderstandNode execution successful");
     let mut outputs = HashMap::new();
     outputs.insert(
       self.output_key.clone(),

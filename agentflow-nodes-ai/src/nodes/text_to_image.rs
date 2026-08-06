@@ -272,10 +272,12 @@ impl TextToImageNode {
       .and_then(|s| s.as_str())
       .unwrap_or("1024x1024");
 
-    println!("🎨 Executing Text-to-Image request via modality dispatcher:");
-    println!("   Model: {}", model);
-    println!("   Prompt: {}", prompt);
-    println!("   Size: {}", size);
+    tracing::debug!(
+      model = %model,
+      prompt = %prompt,
+      size = %size,
+      "executing text-to-image request via modality dispatcher"
+    );
 
     let provider =
       AgentFlow::text2image_for(&model)
@@ -340,11 +342,11 @@ impl TextToImageNode {
       }
     };
 
-    println!(
-      "✅ Image Generation via '{}': size {} format {}",
-      provider.name(),
-      size,
-      response_format
+    tracing::debug!(
+      provider = %provider.name(),
+      size = %size,
+      format = %response_format,
+      "image generation complete"
     );
     Ok(result)
   }
@@ -364,9 +366,10 @@ impl AsyncNode for TextToImageNode {
       && let Some(FlowValue::Json(Value::String(cond))) = inputs.get(condition)
       && cond != "true"
     {
-      println!(
-        "⏭️  Skipping TextToImage node '{}' due to condition: {}",
-        self.name, cond
+      tracing::debug!(
+        name = %self.name,
+        condition = %cond,
+        "skipping TextToImage node due to condition"
       );
       return Ok(HashMap::new());
     }
@@ -374,12 +377,13 @@ impl AsyncNode for TextToImageNode {
     let enriched_prompt = self.resolve_prompt(inputs)?;
     let config = self.create_image_config(&enriched_prompt, inputs)?;
 
-    println!("🔧 TextToImage Node '{}' prepared:", self.name);
-    println!("   Model: {}", self.model);
-    println!("   Prompt: {}", enriched_prompt);
-    if let Some(ref size) = self.size {
-      println!("   Size: {}", size);
-    }
+    tracing::debug!(
+      name = %self.name,
+      model = %self.model,
+      prompt = %enriched_prompt,
+      size = ?self.size,
+      "TextToImage node prepared"
+    );
 
     // Q1.3.3: previously, an upstream API failure silently fell back to a
     // 1x1 mock PNG so the workflow saw `Ok(...)` carrying a placeholder

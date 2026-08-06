@@ -76,7 +76,7 @@ impl TTSNode {
 #[async_trait]
 impl AsyncNode for TTSNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    println!("🗣️ Executing TTSNode: {}", self.name);
+    tracing::debug!(name = %self.name, "executing TTSNode");
 
     AgentFlow::init()
       .await
@@ -116,10 +116,7 @@ impl AsyncNode for TTSNode {
       sample_rate: None,
     };
 
-    println!(
-      "   Synthesizing speech via provider '{}'...",
-      provider.name()
-    );
+    tracing::debug!(provider = %provider.name(), "synthesizing speech via provider");
     let tts_response =
       provider
         .synthesize(request)
@@ -131,7 +128,7 @@ impl AsyncNode for TTSNode {
     let base64_data = STANDARD.encode(&tts_response.audio);
     let data_uri = format!("data:{};base64,{}", tts_response.mime_type, base64_data);
 
-    println!("✅ TTSNode execution successful.");
+    tracing::debug!("TTSNode execution successful");
     let mut outputs = HashMap::new();
     outputs.insert(
       self.output_key.clone(),

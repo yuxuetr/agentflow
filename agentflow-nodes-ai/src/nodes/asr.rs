@@ -47,7 +47,7 @@ impl ASRNode {
 #[async_trait]
 impl AsyncNode for ASRNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    println!("🎤 Executing ASRNode: {}", self.name);
+    tracing::debug!(name = %self.name, "executing ASRNode");
 
     AgentFlow::init()
       .await
@@ -94,10 +94,7 @@ impl AsyncNode for ASRNode {
       prompt: None,
     };
 
-    println!(
-      "   Transcribing audio via provider '{}'...",
-      provider.name()
-    );
+    tracing::debug!(provider = %provider.name(), "transcribing audio via provider");
     let asr_response =
       provider
         .transcribe(request)
@@ -107,7 +104,7 @@ impl AsyncNode for ASRNode {
         })?;
     let transcript = asr_response.text;
 
-    println!("✅ ASRNode execution successful.");
+    tracing::debug!("ASRNode execution successful");
     let mut outputs = HashMap::new();
     outputs.insert(
       self.output_key.clone(),

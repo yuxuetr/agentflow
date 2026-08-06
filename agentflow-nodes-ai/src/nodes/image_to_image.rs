@@ -54,7 +54,7 @@ impl ImageToImageNode {
 #[async_trait]
 impl AsyncNode for ImageToImageNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    println!("🎨 Executing ImageToImageNode: {}", self.name);
+    tracing::debug!(name = %self.name, "executing ImageToImageNode");
 
     let mut resolved_prompt = self.prompt.clone();
     for key in &self.input_keys {
@@ -89,7 +89,7 @@ impl AsyncNode for ImageToImageNode {
       cfg_scale: self.cfg_scale,
     };
 
-    println!("   Transforming via provider '{}'...", provider.name());
+    tracing::debug!(provider = %provider.name(), "transforming via provider");
     let response =
       provider
         .transform(request)
@@ -115,7 +115,7 @@ impl AsyncNode for ImageToImageNode {
       });
     };
 
-    println!("✅ ImageToImageNode execution successful.");
+    tracing::debug!("ImageToImageNode execution successful");
     let mut outputs = HashMap::new();
     outputs.insert(
       self.output_key.clone(),

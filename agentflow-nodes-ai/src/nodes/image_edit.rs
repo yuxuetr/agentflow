@@ -48,7 +48,7 @@ impl ImageEditNode {
 #[async_trait]
 impl AsyncNode for ImageEditNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    println!("🎨 Executing ImageEditNode: {}", self.name);
+    tracing::debug!(name = %self.name, "executing ImageEditNode");
 
     let mut resolved_prompt = self.prompt.clone();
     for key in &self.input_keys {
@@ -83,7 +83,7 @@ impl AsyncNode for ImageEditNode {
       response_format: self.response_format.clone(),
     };
 
-    println!("   Editing image via provider '{}'...", provider.name());
+    tracing::debug!(provider = %provider.name(), "editing image via provider");
     let response =
       provider
         .edit(request)
@@ -109,7 +109,7 @@ impl AsyncNode for ImageEditNode {
       });
     };
 
-    println!("✅ ImageEditNode execution successful.");
+    tracing::debug!("ImageEditNode execution successful");
     let mut outputs = HashMap::new();
     outputs.insert(
       self.output_key.clone(),

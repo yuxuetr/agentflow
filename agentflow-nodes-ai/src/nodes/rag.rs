@@ -128,10 +128,7 @@ impl AsyncNode for RAGNode {
       });
     }
 
-    println!(
-      "🔍 RAG Operation: {} on collection '{}'",
-      operation, collection
-    );
+    tracing::debug!(operation = %operation, collection = %collection, "RAG operation");
 
     match operation {
       "search" => self.execute_search(inputs, qdrant_url, collection).await,
@@ -189,7 +186,7 @@ impl RAGNode {
         message: format!("Failed to connect to Qdrant: {}", e),
       })?;
 
-    println!("   📊 Search type: {}, top_k: {}", search_type, top_k);
+    tracing::debug!(search_type = %search_type, top_k, "RAG search");
 
     // Perform search based on type
     let results = match search_type {
@@ -244,7 +241,7 @@ impl RAGNode {
       }
     };
 
-    println!("   ✅ Found {} results", results.len());
+    tracing::debug!(result_count = results.len(), "RAG search complete");
 
     // Convert results to JSON
     let results_json =
@@ -295,7 +292,7 @@ impl RAGNode {
       });
     };
 
-    println!("   📝 Indexing {} documents...", documents.len());
+    tracing::debug!(document_count = documents.len(), "indexing documents");
 
     // Create embedding provider
     let embedding_model =
@@ -322,7 +319,7 @@ impl RAGNode {
         message: format!("Failed to index documents: {}", e),
       })?;
 
-    println!("   ✅ Indexed {} documents", ids.len());
+    tracing::debug!(indexed_count = ids.len(), "documents indexed");
 
     let mut outputs = HashMap::new();
     outputs.insert("ids".to_string(), FlowValue::Json(json!(ids)));
@@ -340,7 +337,7 @@ impl RAGNode {
   ) -> AsyncNodeResult {
     use std::sync::Arc;
 
-    println!("   🆕 Creating collection '{}'...", collection);
+    tracing::debug!(collection = %collection, "creating collection");
 
     // Get collection parameters
     let dimension = get_optional_usize_input(inputs, "dimension")?.unwrap_or(1536); // OpenAI default
@@ -389,7 +386,7 @@ impl RAGNode {
         message: format!("Failed to create collection: {}", e),
       })?;
 
-    println!("   ✅ Collection '{}' created", collection);
+    tracing::debug!(collection = %collection, "collection created");
 
     let mut outputs = HashMap::new();
     outputs.insert("success".to_string(), FlowValue::Json(json!(true)));
@@ -407,7 +404,7 @@ impl RAGNode {
   ) -> AsyncNodeResult {
     use std::sync::Arc;
 
-    println!("   🗑️  Deleting collection '{}'...", collection);
+    tracing::debug!(collection = %collection, "deleting collection");
 
     // Create a minimal embedder just for connection
     let embedder = Arc::new(OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
@@ -429,7 +426,7 @@ impl RAGNode {
         message: format!("Failed to delete collection: {}", e),
       })?;
 
-    println!("   ✅ Collection '{}' deleted", collection);
+    tracing::debug!(collection = %collection, "collection deleted");
 
     let mut outputs = HashMap::new();
     outputs.insert("success".to_string(), FlowValue::Json(json!(true)));
@@ -446,7 +443,7 @@ impl RAGNode {
   ) -> AsyncNodeResult {
     use std::sync::Arc;
 
-    println!("   📊 Getting stats for collection '{}'...", collection);
+    tracing::debug!(collection = %collection, "getting collection stats");
 
     let embedder = Arc::new(OpenAIEmbedding::new(&self.embedding_model).map_err(|e| {
       AgentFlowError::ConfigurationError {
@@ -466,9 +463,10 @@ impl RAGNode {
       }
     })?;
 
-    println!(
-      "   ✅ Collection has {} documents, dimension {}",
-      stats.document_count, stats.dimension
+    tracing::debug!(
+      document_count = stats.document_count,
+      dimension = stats.dimension,
+      "collection stats"
     );
 
     let stats_json = json!({

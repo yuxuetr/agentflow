@@ -114,7 +114,7 @@ impl AsyncNode for MCPNode {
       _ => self.tool_params.clone(),
     };
 
-    println!("🔌 Connecting to MCP server: {:?}", server_command);
+    tracing::debug!(server_command = ?server_command, "connecting to MCP server");
 
     // 2. Build MCP client with configuration
     let mut client_builder = ClientBuilder::new().with_stdio(server_command);
@@ -151,13 +151,10 @@ impl AsyncNode for MCPNode {
         message: format!("Failed to connect to MCP server: {}", e),
       })?;
 
-    println!("✅ Connected to MCP server");
+    tracing::debug!("connected to MCP server");
 
     // 4. Call the tool
-    println!(
-      "🔧 Calling tool: {} with params: {}",
-      tool_name, tool_params
-    );
+    tracing::debug!(tool = %tool_name, params = %tool_params, "calling MCP tool");
 
     let result = client
       .call_tool(&tool_name, tool_params)
@@ -166,14 +163,14 @@ impl AsyncNode for MCPNode {
         message: format!("MCP tool call failed: {}", e),
       })?;
 
-    println!("✅ Tool call completed");
+    tracing::debug!("MCP tool call completed");
 
     // 5. Disconnect gracefully
     client
       .disconnect()
       .await
       .map_err(|e| {
-        eprintln!("⚠️  Warning: Failed to disconnect MCP client: {}", e);
+        tracing::warn!(error = %e, "failed to disconnect MCP client");
       })
       .ok();
 

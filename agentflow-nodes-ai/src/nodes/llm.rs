@@ -36,14 +36,14 @@ impl AsyncNode for LlmNode {
       request = request.max_tokens(max_tokens as u32);
     }
 
-    println!("🤖 Executing LLM request...");
+    tracing::debug!("executing LLM request");
     let response = request
       .execute()
       .await
       .map_err(|e| AgentFlowError::AsyncExecutionError {
         message: format!("LLM execution failed: {}", e),
       })?;
-    println!("✅ LLM Response received.");
+    tracing::debug!("LLM response received");
 
     let mut outputs = HashMap::new();
     outputs.insert(
