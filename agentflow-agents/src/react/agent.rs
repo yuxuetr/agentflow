@@ -105,6 +105,12 @@ pub enum ReActError {
     errors: Vec<String>,
     attempts: usize,
   },
+
+  /// V2.4: [`ReActAgent::resume_from_loop_checkpoint`] was handed a
+  /// checkpoint that isn't a valid resume target for this agent — e.g. a
+  /// `PlanExecute` checkpoint, or one with an unsupported schema version.
+  #[error("cannot resume from loop checkpoint: {message}")]
+  InvalidCheckpoint { message: String },
 }
 
 /// Input passed to a pluggable memory summary backend.
@@ -526,6 +532,12 @@ pub struct ReActAgent {
   /// the governance events that fire during tool execution. `None` keeps
   /// behavior byte-identical to a runtime with no observer.
   live_sink: Option<crate::runtime::EventSinkHandle>,
+  /// V2.4: optional agent-loop checkpointer captured from
+  /// `AgentContext::loop_checkpointer` at the start of a run. When set,
+  /// the loop saves an `AgentLoopCheckpoint` after every completed turn
+  /// so a process restart can resume mid-loop via
+  /// [`ReActAgent::resume_from_loop_checkpoint`] instead of restarting.
+  live_checkpointer: Option<agentflow_agent_spi::checkpoint::LoopCheckpointerHandle>,
 }
 
 impl ReActAgent {
@@ -555,6 +567,7 @@ impl ReActAgent {
       session_id,
       message_counter,
       live_sink: None,
+      live_checkpointer: None,
     }
   }
 
@@ -789,6 +802,58 @@ impl ReActAgent {
     Ok(merge_resumed_result(prior, resumed))
   }
 
+  /// V2.4: resume a loop interrupted by a process restart from a saved
+  /// [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`], continuing
+  /// from the checkpointed step instead of restarting the loop from
+  /// scratch.
+  ///
+  /// Distinct from [`Self::resume_with_context`], which answers a
+  /// different question: "the run stopped with one unresolved tool call —
+  /// replay it, then start a *fresh* loop." This method answers "the
+  /// process died with no clean stop at all — skip `init_run` entirely and
+  /// splice a *restored* loop state directly back into the turn loop."
+  ///
+  /// Does **not** re-add the user message to memory (unlike `init_run`) —
+  /// the memory store is expected to already hold it from the
+  /// pre-interruption run. This means loop-checkpoint resume requires the
+  /// underlying `MemoryStore` to also be durable and keyed by the same
+  /// `session_id` (e.g. `SqliteMemory`, not the in-process `SessionMemory`)
+  /// — an in-memory store won't have survived the same process restart the
+  /// checkpoint did.
+  pub async fn resume_from_loop_checkpoint(
+    &mut self,
+    context: AgentContext,
+    checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+  ) -> Result<AgentRunResult, ReActError> {
+    if checkpoint.runtime_kind != agentflow_agent_spi::checkpoint::LoopRuntimeKind::React {
+      return Err(ReActError::InvalidCheckpoint {
+        message: format!(
+          "expected a React loop checkpoint, found {:?}",
+          checkpoint.runtime_kind
+        ),
+      });
+    }
+    self.apply_context(&context);
+    self.live_sink = context.event_sink.clone();
+    self.live_checkpointer = context.loop_checkpointer.clone();
+
+    let mut st = LoopState::from_checkpoint(&context, &self.config, &checkpoint);
+    loop {
+      match self.run_one_turn(&mut st).await? {
+        TurnStep::Continue => {
+          self.save_loop_checkpoint(&st).await;
+        }
+        TurnStep::Stop(result) => {
+          self
+            .clear_loop_checkpoint_if_terminal(&result.stop_reason)
+            .await;
+          self.record_project_facts(&result.steps).await?;
+          return Ok(result);
+        }
+      }
+    }
+  }
+
   async fn replay_resume_safe_unresolved_tool_calls(
     &self,
     prior: &mut AgentRunResult,
@@ -872,12 +937,45 @@ impl ReActAgent {
     let mut st = self.init_run(&context).await?;
     loop {
       match self.run_one_turn(&mut st).await? {
-        TurnStep::Continue => {}
+        TurnStep::Continue => {
+          self.save_loop_checkpoint(&st).await;
+        }
         TurnStep::Stop(result) => {
+          self
+            .clear_loop_checkpoint_if_terminal(&result.stop_reason)
+            .await;
           self.record_project_facts(&result.steps).await?;
           return Ok(result);
         }
       }
+    }
+  }
+
+  /// V2.4: save an [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`]
+  /// for the current loop state, if a checkpointer is configured. A save
+  /// failure is logged and swallowed — observability/durability must
+  /// never abort an otherwise-successful turn (mirrors the DAG-level
+  /// checkpoint's non-fatal posture).
+  async fn save_loop_checkpoint(&self, st: &LoopState) {
+    let Some(checkpointer) = self.live_checkpointer.as_ref() else {
+      return;
+    };
+    let checkpoint = st.to_checkpoint(&self.session_id);
+    if let Err(e) = checkpointer.0.save(&checkpoint).await {
+      warn!(session = %self.session_id, error = %e, "agent loop checkpoint save failed");
+    }
+  }
+
+  /// V2.4: clear the loop checkpoint (if any) when `reason` represents a
+  /// genuine completion — see [`should_clear_checkpoint`].
+  async fn clear_loop_checkpoint_if_terminal(&self, reason: &AgentStopReason) {
+    let Some(checkpointer) = self.live_checkpointer.as_ref() else {
+      return;
+    };
+    if should_clear_checkpoint(reason)
+      && let Err(e) = checkpointer.0.clear(&self.session_id).await
+    {
+      warn!(session = %self.session_id, error = %e, "agent loop checkpoint clear failed");
     }
   }
 
@@ -910,6 +1008,8 @@ impl ReActAgent {
     self.apply_context(context);
     // Phase 1: capture the optional live event observer for this run.
     self.live_sink = context.event_sink.clone();
+    // V2.4: capture the optional loop checkpointer for this run.
+    self.live_checkpointer = context.loop_checkpointer.clone();
     info!(
         session = %self.session_id,
         model = %self.config.model,
@@ -3498,6 +3598,109 @@ struct LoopState {
   user_input: String,
 }
 
+impl LoopState {
+  /// V2.4: snapshot this loop state's plain-data fields into a durable
+  /// [`AgentLoopCheckpoint`]. Excludes `cancellation_token`/
+  /// `run_started_at`/`between_turn_hook` (process-local handles,
+  /// reconstructed fresh on resume from the resuming call's
+  /// `AgentContext`) and the run-configuration fields (`max_iterations`/
+  /// `max_tool_calls`/`timeout_ms`/`budget_tokens`/`cost_limit_usd`/
+  /// `loop_detection` — a resume re-derives these from the fresh context
+  /// rather than replaying stale limits).
+  fn to_checkpoint(
+    &self,
+    session_id: &str,
+  ) -> agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+    agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+      schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+      session_id: session_id.to_string(),
+      runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::React,
+      created_at: chrono::Utc::now(),
+      steps: self.steps.clone(),
+      events: self.events.clone(),
+      step_index: self.step_index,
+      iteration: self.iteration,
+      tool_calls: self.tool_calls,
+      verification_attempts: self.verification_attempts,
+      schema_correction_attempts: self.schema_correction_attempts,
+      last_tool_call: self.last_tool_call.clone(),
+      recent_tool_calls: self.recent_tool_calls.clone(),
+      cumulative_cost_usd: self.cumulative_cost_usd,
+      system_prompt: self.system_prompt.clone(),
+      user_input: self.user_input.clone(),
+      trace_context: self.trace_context.clone(),
+      plan_steps: serde_json::Value::Null,
+      plan_position: 0,
+      observations: Vec::new(),
+    }
+  }
+
+  /// V2.4: reconstruct a `LoopState` from a checkpoint, restoring loop
+  /// progress while sourcing every process-local/config field fresh from
+  /// `context` — the inverse of [`Self::to_checkpoint`]'s exclusions.
+  /// Caller (`resume_from_loop_checkpoint`) has already validated
+  /// `checkpoint.runtime_kind == LoopRuntimeKind::React`.
+  fn from_checkpoint(
+    context: &AgentContext,
+    config: &ReActConfig,
+    checkpoint: &agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+  ) -> Self {
+    Self {
+      steps: checkpoint.steps.clone(),
+      events: checkpoint.events.clone(),
+      step_index: checkpoint.step_index,
+      iteration: checkpoint.iteration,
+      tool_calls: checkpoint.tool_calls,
+      verification_attempts: checkpoint.verification_attempts,
+      schema_correction_attempts: checkpoint.schema_correction_attempts,
+      last_tool_call: checkpoint.last_tool_call.clone(),
+      recent_tool_calls: checkpoint.recent_tool_calls.clone(),
+      loop_detection: config.loop_detection,
+      max_iterations: context.limits.max_steps.unwrap_or(config.max_iterations),
+      max_tool_calls: context.limits.max_tool_calls,
+      timeout_ms: context.limits.timeout_ms,
+      budget_tokens: context.limits.token_budget.or(config.budget_tokens),
+      cost_limit_usd: context.limits.cost_limit_usd.or(config.cost_limit_usd),
+      cumulative_cost_usd: checkpoint.cumulative_cost_usd,
+      cancellation_token: context.cancellation_token.clone(),
+      run_started_at: Instant::now(),
+      system_prompt: checkpoint.system_prompt.clone(),
+      trace_context: checkpoint.trace_context.clone(),
+      between_turn_hook: context.between_turn_hook.clone(),
+      user_input: checkpoint.user_input.clone(),
+    }
+  }
+}
+
+/// V2.4: whether a checkpoint should be cleared once the loop stops for
+/// `reason`. Exhaustive over every [`AgentStopReason`] variant — the enum
+/// is deliberately NOT `#[non_exhaustive]` so every consumer (e.g.
+/// `agentflow-harness`'s `StoppedPayload` translation) is forced to
+/// handle new variants explicitly; this follows the same convention
+/// rather than risking a new variant silently falling into the wrong
+/// bucket via a wildcard.
+///
+/// `true` (clear) for genuine completions: the run is done, a stale
+/// checkpoint would only confuse a later reused `session_id`. `false`
+/// (keep) for interruptions that are legitimately resumable — including
+/// the crash-simulation scenario this feature targets, where the process
+/// dies with no stop reason at all and this function never even runs
+/// (the last-written checkpoint simply survives untouched on disk).
+fn should_clear_checkpoint(reason: &AgentStopReason) -> bool {
+  match reason {
+    AgentStopReason::FinalAnswer => true,
+    AgentStopReason::StopCondition { .. } => true,
+    AgentStopReason::Error { .. } => true,
+    AgentStopReason::MaxSteps { .. } => false,
+    AgentStopReason::MaxToolCalls { .. } => false,
+    AgentStopReason::Timeout { .. } => false,
+    AgentStopReason::Cancelled { .. } => false,
+    AgentStopReason::TokenBudgetExceeded { .. } => false,
+    AgentStopReason::CostLimitExceeded { .. } => false,
+    AgentStopReason::LoopDetected { .. } => false,
+  }
+}
+
 /// A **live** turn-driven ReAct session (RFC_HARNESS_LOOP_OWNERSHIP §6 step 6).
 ///
 /// Obtain one from [`ReActAgent::begin_turn_driven`], then drive it a turn at a
@@ -3973,6 +4176,7 @@ fn compact_memory_summary(omitted: &[Message], omitted_tokens: u32) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use agentflow_agent_spi::checkpoint::AgentLoopCheckpointer as _;
   use agentflow_memory::SessionMemory;
   use agentflow_tool::{Tool, ToolError, ToolOutput};
   use async_trait::async_trait;
@@ -4249,6 +4453,283 @@ providers:
         .count(),
       4
     );
+  }
+
+  /// V2.4: delegates to a shared `SessionMemory` so a checkpoint-resumed
+  /// `ReActAgent` (a fresh instance, not the interrupted one) sees the
+  /// same conversation history the interrupted run wrote — mirroring how
+  /// a real resume needs a durable, session-id-keyed `MemoryStore`
+  /// (`SqliteMemory`) rather than each agent owning a private in-process
+  /// one. `SessionMemory` itself owns its map directly (no internal
+  /// `Arc`), so two independent instances never see each other's writes —
+  /// this wrapper is what lets two separate `ReActAgent`s share one.
+  struct SharedSessionMemory(Arc<SessionMemory>);
+
+  #[async_trait]
+  impl MemoryStore for SharedSessionMemory {
+    async fn add_message(&self, message: Message) -> Result<(), agentflow_memory::MemoryError> {
+      self.0.add_message(message).await
+    }
+    async fn get_history(
+      &self,
+      session_id: &str,
+      limit: usize,
+    ) -> Result<Vec<Message>, agentflow_memory::MemoryError> {
+      self.0.get_history(session_id, limit).await
+    }
+    async fn get_all(
+      &self,
+      session_id: &str,
+    ) -> Result<Vec<Message>, agentflow_memory::MemoryError> {
+      self.0.get_all(session_id).await
+    }
+    async fn search(
+      &self,
+      session_id: &str,
+      query: &str,
+      limit: usize,
+    ) -> Result<Vec<Message>, agentflow_memory::MemoryError> {
+      self.0.search(session_id, query, limit).await
+    }
+    async fn clear_session(&self, session_id: &str) -> Result<(), agentflow_memory::MemoryError> {
+      self.0.clear_session(session_id).await
+    }
+    async fn session_token_count(
+      &self,
+      session_id: &str,
+    ) -> Result<u32, agentflow_memory::MemoryError> {
+      self.0.session_token_count(session_id).await
+    }
+  }
+
+  /// V2.4: test-double `AgentLoopCheckpointer` backed by an in-process map
+  /// (no real file I/O — `FileLoopCheckpointer`'s own round-trip is
+  /// covered separately in `agentflow-agents::checkpoint`'s unit tests).
+  /// `cancel_after` optionally simulates "the process died mid-loop": once
+  /// `save` has been called that many times, it fires the paired
+  /// cancellation token, which `run_one_turn`'s pre-LLM check picks up on
+  /// the *next* turn — deterministically stopping the loop with
+  /// `AgentStopReason::Cancelled` before it can consume the next scripted
+  /// LLM response, without any real process being killed.
+  #[derive(Clone)]
+  struct RecordingCheckpointer {
+    store: Arc<
+      Mutex<
+        std::collections::HashMap<String, agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>,
+      >,
+    >,
+    saves: Arc<AtomicUsize>,
+    cancel_after: Option<(usize, AgentCancellationToken)>,
+  }
+
+  impl RecordingCheckpointer {
+    fn new() -> Self {
+      Self {
+        store: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        saves: Arc::new(AtomicUsize::new(0)),
+        cancel_after: None,
+      }
+    }
+
+    fn with_cancel_after(mut self, count: usize, token: AgentCancellationToken) -> Self {
+      self.cancel_after = Some((count, token));
+      self
+    }
+  }
+
+  #[async_trait]
+  impl agentflow_agent_spi::checkpoint::AgentLoopCheckpointer for RecordingCheckpointer {
+    async fn save(
+      &self,
+      checkpoint: &agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      self
+        .store
+        .lock()
+        .unwrap()
+        .insert(checkpoint.session_id.clone(), checkpoint.clone());
+      let count = self.saves.fetch_add(1, Ordering::SeqCst) + 1;
+      if let Some((target, token)) = &self.cancel_after
+        && count >= *target
+      {
+        token.cancel();
+      }
+      Ok(())
+    }
+
+    async fn load(
+      &self,
+      session_id: &str,
+    ) -> Result<
+      Option<agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>,
+      agentflow_agent_spi::checkpoint::AgentLoopCheckpointError,
+    > {
+      Ok(self.store.lock().unwrap().get(session_id).cloned())
+    }
+
+    async fn clear(
+      &self,
+      session_id: &str,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      self.store.lock().unwrap().remove(session_id);
+      Ok(())
+    }
+  }
+
+  /// V2.4 acceptance scenario: a ReAct loop is "interrupted" (simulated
+  /// process death via forced cancellation right after a checkpoint save,
+  /// not a real process kill — see `RecordingCheckpointer`) after 2 tool-
+  /// call turns; resuming from the saved checkpoint with a brand-new
+  /// `ReActAgent` instance continues from turn 3 and reaches the same
+  /// final answer an uninterrupted control run produces, having made
+  /// exactly one more LLM call (not three) — proving no completed turn is
+  /// re-executed.
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_continues_a_cancelled_run_to_the_same_answer_as_a_control_run()
+   {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+
+    let turn1 = r#"{"thought":"step one","action":{"tool":"echo","params":{"text":"a"}}}"#;
+    let turn2 = r#"{"thought":"step two","action":{"tool":"echo","params":{"text":"b"}}}"#;
+    let turn3 = r#"{"thought":"done","answer":"control-final-answer"}"#;
+
+    // ── Control run: full 3-turn script, uninterrupted. ──
+    let control_model = format!("mock-loop-ckpt-control-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![turn1, turn2, turn3]).unwrap(),
+      );
+    }
+    init_mock_model(&control_model).await;
+    let mut control_registry = ToolRegistry::new();
+    control_registry.register(Arc::new(EchoTool));
+    let mut control_agent = ReActAgent::new(
+      ReActConfig::new(&control_model).with_max_iterations(6),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(control_registry),
+    );
+    let control_result = control_agent
+      .run_with_context(AgentContext::new(
+        "loop-ckpt-session",
+        "do the two-step task",
+        &control_model,
+      ))
+      .await
+      .unwrap();
+    assert_eq!(
+      control_result.answer.as_deref(),
+      Some("control-final-answer")
+    );
+    assert_eq!(control_result.stop_reason, AgentStopReason::FinalAnswer);
+
+    // ── Interrupted run: only the first 2 turns scripted; a checkpointer
+    // wired to trigger cancellation right after the 2nd save. ──
+    let interrupted_model = format!("mock-loop-ckpt-interrupted-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![turn1, turn2]).unwrap(),
+      );
+    }
+    init_mock_model(&interrupted_model).await;
+    let mut interrupted_registry = ToolRegistry::new();
+    interrupted_registry.register(Arc::new(EchoTool));
+    // Shared memory stands in for a durable, session-id-keyed store
+    // (SqliteMemory in production) that survives the "process restart" —
+    // both the interrupted and resumed agent instances read/write it.
+    let shared_memory = Arc::new(SessionMemory::default_window());
+    let mut interrupted_agent = ReActAgent::new(
+      ReActConfig::new(&interrupted_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory.clone())),
+      Arc::new(interrupted_registry),
+    );
+
+    let cancel_token = AgentCancellationToken::new();
+    let checkpointer = RecordingCheckpointer::new().with_cancel_after(2, cancel_token.clone());
+    let checkpointer_handle: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer> =
+      Arc::new(checkpointer.clone());
+
+    let interrupted_context = AgentContext::new(
+      "loop-ckpt-session",
+      "do the two-step task",
+      &interrupted_model,
+    )
+    .with_cancellation_token(cancel_token)
+    .with_loop_checkpointer(checkpointer_handle.clone());
+    let interrupted_result = interrupted_agent
+      .run_with_context(interrupted_context)
+      .await
+      .unwrap();
+    assert!(
+      matches!(
+        interrupted_result.stop_reason,
+        AgentStopReason::Cancelled { .. }
+      ),
+      "expected Cancelled, got {:?}",
+      interrupted_result.stop_reason
+    );
+    assert_eq!(checkpointer.saves.load(Ordering::SeqCst), 2);
+
+    let checkpoint = checkpointer
+      .load("loop-ckpt-session")
+      .await
+      .unwrap()
+      .expect("a checkpoint must have been saved before cancellation");
+    assert_eq!(checkpoint.tool_calls, 2);
+    assert_eq!(
+      checkpoint
+        .steps
+        .iter()
+        .filter(|s| matches!(s.kind, AgentStepKind::ToolCall { .. }))
+        .count(),
+      2
+    );
+
+    // ── Resume: a brand-new ReActAgent instance, only the remaining
+    // 1-turn script available. If resume incorrectly restarted the loop
+    // from scratch, it would need 3 calls against a 1-item queue and
+    // fail (or fall back to an unparseable default response) instead of
+    // reaching the control run's answer. ──
+    let resume_model = format!("mock-loop-ckpt-resume-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![turn3]).unwrap(),
+      );
+    }
+    init_mock_model(&resume_model).await;
+    let mut resume_registry = ToolRegistry::new();
+    resume_registry.register(Arc::new(EchoTool));
+    let mut resumed_agent = ReActAgent::new(
+      ReActConfig::new(&resume_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory)),
+      Arc::new(resume_registry),
+    );
+    let resume_context = AgentContext::new("loop-ckpt-session", "", &resume_model)
+      .with_loop_checkpointer(checkpointer_handle);
+    let resumed_result = resumed_agent
+      .resume_from_loop_checkpoint(resume_context, checkpoint.clone())
+      .await
+      .unwrap();
+
+    assert_eq!(
+      resumed_result.answer.as_deref(),
+      Some("control-final-answer")
+    );
+    assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(resumed_result.answer, control_result.answer);
+    // Continuity: the resumed result's steps/events carry the checkpoint's
+    // history forward rather than starting a fresh run at step 0.
+    assert!(resumed_result.steps.len() > checkpoint.steps.len());
+    assert_eq!(
+      resumed_result.steps[..checkpoint.steps.len()],
+      checkpoint.steps[..]
+    );
+    // Successful completion clears the checkpoint (FinalAnswer is in the
+    // "keep = false" i.e. clear bucket of `should_clear_checkpoint`).
+    assert_eq!(checkpointer.load("loop-ckpt-session").await.unwrap(), None);
   }
 
   #[tokio::test]
