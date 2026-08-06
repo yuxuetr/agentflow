@@ -94,6 +94,17 @@ pub enum ReActError {
 
   #[error("Memory summary error: {message}")]
   MemorySummary { message: String },
+
+  /// V2.1: `output_schema` was configured but the candidate final answer
+  /// still failed validation after `max_schema_correction_attempts`
+  /// retries. Unlike `VerificationStrategy` rejection (which force-accepts
+  /// on exhaustion), a schema is a caller-declared hard contract — hard
+  /// error rather than silently returning non-conformant output.
+  #[error("Final answer did not match output_schema after {attempts} attempt(s): {errors:?}")]
+  SchemaValidationFailed {
+    errors: Vec<String>,
+    attempts: usize,
+  },
 }
 
 /// Input passed to a pluggable memory summary backend.
@@ -240,6 +251,35 @@ pub struct ReActConfig {
   /// real per-model prices — reuses `agentflow-agents::eval::pricing`
   /// rather than a second pricing representation.
   pub pricing_table: PricingTable,
+
+  /// V2.1: JSON Schema the final answer must validate against once parsed
+  /// as JSON. `None` (the default) disables structured-output enforcement
+  /// entirely — byte-identical behaviour to before this existed.
+  ///
+  /// When set: (1) the LLM call additionally offers a synthetic
+  /// `final_answer` tool (name: [`FINAL_ANSWER_TOOL_NAME`]) whose
+  /// `input_schema` is this schema, so providers with native tool calling
+  /// (all six today) can enforce the shape directly instead of relying on
+  /// prompt-only constraint — calling it is recognised as the agent's final
+  /// answer rather than a real tool dispatch; (2) a candidate answer that
+  /// fails to parse as JSON or fails schema validation is rejected with the
+  /// validation errors fed back into memory and the loop continues for
+  /// another attempt, bounded by [`Self::max_schema_correction_attempts`].
+  /// Unlike [`VerificationStrategy`] rejection (which force-accepts once
+  /// [`Self::max_verification_attempts`] is exhausted), exhausting the
+  /// schema-correction budget is a hard [`ReActError::SchemaValidationFailed`]
+  /// — a schema is a caller-declared hard contract, not an advisory
+  /// critique, so returning a non-conformant answer labelled as final would
+  /// silently break that contract.
+  pub output_schema: Option<Value>,
+
+  /// Maximum number of times a candidate final answer may fail
+  /// [`Self::output_schema`] validation before the run gives up with
+  /// [`ReActError::SchemaValidationFailed`]. Only relevant when
+  /// `output_schema` is `Some`. Mirrors [`Self::max_verification_attempts`]'s
+  /// shape but is tracked independently — schema correction and domain
+  /// verification are separate gates with separate budgets.
+  pub max_schema_correction_attempts: usize,
 }
 
 /// See [`ReActConfig::loop_detection`].
@@ -291,6 +331,8 @@ impl Default for ReActConfig {
       loop_detection: Some(LoopDetectionConfig::default()),
       cost_limit_usd: None,
       pricing_table: PricingTable::default(),
+      output_schema: None,
+      max_schema_correction_attempts: 2,
     }
   }
 }
@@ -372,7 +414,28 @@ impl ReActConfig {
     self.pricing_table = table;
     self
   }
+
+  /// Require the final answer to validate against `schema` (V2.1). See
+  /// [`ReActConfig::output_schema`].
+  pub fn with_output_schema(mut self, schema: Value) -> Self {
+    self.output_schema = Some(schema);
+    self
+  }
+
+  /// Configure the schema-correction retry budget. See
+  /// [`ReActConfig::max_schema_correction_attempts`].
+  pub fn with_max_schema_correction_attempts(mut self, attempts: usize) -> Self {
+    self.max_schema_correction_attempts = attempts;
+    self
+  }
 }
+
+/// Name of the synthetic native tool a [`ReActConfig::output_schema`]-
+/// configured agent offers alongside its real tools. Calling it is
+/// recognised as the agent's final answer (its arguments become the
+/// answer, validated against `output_schema`) rather than a real tool
+/// dispatch — see `run_one_turn`'s tool-call parsing.
+pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
 
 /// An autonomous ReAct (Reasoning + Acting) agent.
 ///
@@ -879,6 +942,7 @@ impl ReActAgent {
       iteration: 0,
       tool_calls: 0,
       verification_attempts: 0,
+      schema_correction_attempts: 0,
       last_tool_call: None,
       recent_tool_calls: std::collections::VecDeque::new(),
       loop_detection: self.config.loop_detection,
@@ -1003,40 +1067,57 @@ impl ReActAgent {
       return Ok(TurnStep::Stop(result));
     }
 
-    // Multi-call batch path (P-H.3): >=2 native tool calls in one
-    // response dispatch as a batch (concurrent for idempotent, serial
-    // otherwise) in LLM-returned order.
-    if llm_response.tool_calls.len() >= 2 {
-      match self
-        .dispatch_native_tool_calls_batch(
-          &llm_response.tool_calls,
-          &raw_response,
-          &mut st.steps,
-          &mut st.events,
-          &mut st.step_index,
-          &mut st.tool_calls,
-          &mut st.recent_tool_calls,
-          st.loop_detection,
-          st.max_tool_calls,
-          st.run_started_at,
-          st.timeout_ms,
-          st.cancellation_token.as_ref(),
-        )
-        .await?
-      {
-        BatchOutcome::Continue => {
-          st.iteration += 1;
-          return Ok(TurnStep::Continue);
-        }
-        BatchOutcome::Stop(result) => return Ok(TurnStep::Stop(*result)),
+    // V2.1: a `final_answer` native tool call is the agent's schema-
+    // constrained final answer, not a real tool dispatch — intercept
+    // before the batch/single dispatch paths below so it's recognised as
+    // an answer even if the model (incorrectly) batches it alongside real
+    // tool calls.
+    let parsed = if self.config.output_schema.is_some()
+      && let Some(call) = llm_response
+        .tool_calls
+        .iter()
+        .find(|call| call.name == FINAL_ANSWER_TOOL_NAME)
+    {
+      AgentResponse::Answer {
+        thought: String::new(),
+        answer: serde_json::to_string(&call.arguments).unwrap_or_default(),
       }
-    }
-
-    // Parse response: prefer native tool_calls when present.
-    let parsed = if let Some(call) = llm_response.tool_calls.first() {
-      native_tool_call_to_agent_response(call)
     } else {
-      AgentResponse::parse(&raw_response)
+      // Multi-call batch path (P-H.3): >=2 native tool calls in one
+      // response dispatch as a batch (concurrent for idempotent, serial
+      // otherwise) in LLM-returned order.
+      if llm_response.tool_calls.len() >= 2 {
+        match self
+          .dispatch_native_tool_calls_batch(
+            &llm_response.tool_calls,
+            &raw_response,
+            &mut st.steps,
+            &mut st.events,
+            &mut st.step_index,
+            &mut st.tool_calls,
+            &mut st.recent_tool_calls,
+            st.loop_detection,
+            st.max_tool_calls,
+            st.run_started_at,
+            st.timeout_ms,
+            st.cancellation_token.as_ref(),
+          )
+          .await?
+        {
+          BatchOutcome::Continue => {
+            st.iteration += 1;
+            return Ok(TurnStep::Continue);
+          }
+          BatchOutcome::Stop(result) => return Ok(TurnStep::Stop(*result)),
+        }
+      }
+
+      // Parse response: prefer native tool_calls when present.
+      if let Some(call) = llm_response.tool_calls.first() {
+        native_tool_call_to_agent_response(call)
+      } else {
+        AgentResponse::parse(&raw_response)
+      }
     };
 
     // Store the assistant turn.
@@ -1119,6 +1200,9 @@ impl ReActAgent {
             &mut st.events,
           )
           .await?;
+        if self.gate_schema_answer(&answer, st).await? {
+          return Ok(TurnStep::Continue);
+        }
         if self.gate_candidate_answer(&answer, st).await? {
           return Ok(TurnStep::Continue);
         }
@@ -1153,6 +1237,9 @@ impl ReActAgent {
             &mut st.events,
           )
           .await?;
+        if self.gate_schema_answer(&text, st).await? {
+          return Ok(TurnStep::Continue);
+        }
         if self.gate_candidate_answer(&text, st).await? {
           return Ok(TurnStep::Continue);
         }
@@ -1166,6 +1253,94 @@ impl ReActAgent {
         )))
       }
     }
+  }
+
+  /// Validate a candidate final answer against `config.output_schema`
+  /// (V2.1), if configured. Returns `true` when `run_one_turn` should loop
+  /// back around for another attempt instead of stopping.
+  ///
+  /// Structural (does this even parse as JSON matching the schema) rather
+  /// than semantic, so it runs *before* [`Self::gate_candidate_answer`] —
+  /// no point running a domain `VerificationStrategy` against an answer
+  /// that doesn't even conform to the caller's declared shape. Tracked with
+  /// its own attempt budget
+  /// ([`ReActConfig::max_schema_correction_attempts`]), independent of
+  /// `verification_attempts`: unlike verification rejection (which
+  /// force-accepts on exhaustion), exhausting the schema budget is a hard
+  /// [`ReActError::SchemaValidationFailed`] — see `output_schema`'s doc
+  /// comment for why. Reuses the existing `AgentStepKind::Verify`/
+  /// `AgentEvent::VerificationCompleted` shapes rather than adding new
+  /// variants (`AgentStepKind`'s doc comment asks custom runtimes to reuse
+  /// existing variants rather than fork the enum); the feedback text
+  /// itself makes the schema origin unambiguous to trace readers.
+  async fn gate_schema_answer(
+    &mut self,
+    answer: &str,
+    st: &mut LoopState,
+  ) -> Result<bool, ReActError> {
+    let Some(schema) = self.config.output_schema.clone() else {
+      return Ok(false);
+    };
+
+    let attempt = st.schema_correction_attempts + 1;
+    let validation = agentflow_agent_spi::validate_json_str_against_schema(&schema, answer);
+    let approved = validation.is_ok();
+
+    let current_step = st.step_index;
+    let feedback = validation.as_ref().err().map(|errors| {
+      format!(
+        "Your final answer did not match the required output schema: {}. \
+         Correct it and provide the final answer again.",
+        errors.join("; ")
+      )
+    });
+    push_step!(
+      self.live_sink,
+      st.steps,
+      st.events,
+      self.session_id,
+      current_step,
+      AgentStepKind::Verify {
+        approved,
+        feedback: feedback.clone(),
+        attempt,
+      }
+    );
+    st.events.push(AgentEvent::VerificationCompleted {
+      session_id: self.session_id.clone(),
+      step_index: current_step,
+      approved,
+      timestamp: Utc::now(),
+    });
+    st.step_index += 1;
+
+    let Err(errors) = validation else {
+      return Ok(false);
+    };
+
+    if attempt > self.config.max_schema_correction_attempts {
+      warn!(
+        attempt,
+        max_attempts = self.config.max_schema_correction_attempts,
+        "schema correction attempts exhausted"
+      );
+      return Err(ReActError::SchemaValidationFailed {
+        errors,
+        attempts: attempt,
+      });
+    }
+
+    self
+      .add_memory_message(Message::tool_result_with_counter(
+        &self.session_id,
+        "schema_validator",
+        feedback.unwrap_or_default(),
+        &*self.message_counter,
+      ))
+      .await?;
+    st.schema_correction_attempts = attempt;
+    st.iteration += 1;
+    Ok(true)
   }
 
   /// Run the attached `VerificationStrategy` (if any) against a candidate
@@ -2236,12 +2411,25 @@ impl ReActAgent {
   /// the LLM as a native `tools` field. Returns an empty vector when no
   /// tools are registered, in which case the LLM call is unchanged.
   fn collect_tool_specs(&self) -> Vec<ToolSpec> {
-    self
+    let mut specs: Vec<ToolSpec> = self
       .tools
       .list()
       .into_iter()
       .map(|tool| ToolSpec::new(tool.name(), tool.description(), tool.parameters_schema()))
-      .collect()
+      .collect();
+    // V2.1: offer the schema-constrained final-answer tool alongside real
+    // tools whenever `output_schema` is configured, so providers with
+    // native tool calling enforce the shape directly instead of relying on
+    // prompt-only constraint. See `FINAL_ANSWER_TOOL_NAME`'s doc comment.
+    if let Some(schema) = &self.config.output_schema {
+      specs.push(ToolSpec::new(
+        FINAL_ANSWER_TOOL_NAME,
+        "Call this with your final answer once you have all the information you need. \
+         The answer must match the required schema.",
+        schema.clone(),
+      ));
+    }
+    specs
   }
 
   async fn restore_trace_memory(&mut self, prior: &AgentRunResult) -> Result<(), ReActError> {
@@ -2455,13 +2643,33 @@ impl ReActAgent {
       String::new()
     };
 
+    // V2.1: when `output_schema` is configured, `collect_tool_specs` (used
+    // for the native LLM tool-calling channel) offers the `final_answer`
+    // tool alongside real tools — providers with native tool calling
+    // enforce the shape directly there. This section is the prompt-only
+    // fallback: it still applies when a provider doesn't honour native
+    // tool calling (e.g. `MockProvider`, or a provider outage), so the
+    // textual `answer` JSON convention below stays schema-aware too.
+    let schema_section = if let Some(schema) = &self.config.output_schema {
+      format!(
+        "\n\nYour final answer must conform to this JSON Schema:\n{}\n\
+                Prefer calling the `{}` tool with your answer. If no tool-calling channel is \
+                available, use the JSON convention below but make `answer` a JSON-encoded \
+                string of a value matching this schema.\n",
+        serde_json::to_string_pretty(schema).unwrap_or_default(),
+        FINAL_ANSWER_TOOL_NAME,
+      )
+    } else {
+      String::new()
+    };
+
     format!(
-      "{}{}\n\
+      "{}{}{}\n\
             To give a final answer, respond ONLY with this JSON:\n\
             {{\"thought\": \"<your final reasoning>\", \"answer\": \"<your answer>\"}}\n\n\
             Respond ONLY with valid JSON matching one of the formats above. \
             No additional text, no markdown, no explanation outside the JSON.",
-      persona, tools_section
+      persona, tools_section, schema_section
     )
   }
 
@@ -3225,6 +3433,9 @@ struct LoopState {
   iteration: usize,
   tool_calls: usize,
   verification_attempts: usize,
+  /// V2.1: independent budget from `verification_attempts` — see
+  /// `ReActConfig::max_schema_correction_attempts`.
+  schema_correction_attempts: usize,
   last_tool_call: Option<(String, serde_json::Value)>,
   /// L1.2: the last `loop_detection.window` (tool, params) signatures
   /// dispatched, oldest first — fed from both the single-call and batch
@@ -4446,6 +4657,165 @@ providers:
     unsafe {
       std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
       std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  // ── V2.1: output_schema ──────────────────────────────────────────────
+
+  fn answer_schema() -> Value {
+    json!({
+      "type": "object",
+      "properties": {"answer": {"type": "string"}},
+      "required": ["answer"]
+    })
+  }
+
+  /// `collect_tool_specs` must offer the synthetic `final_answer` tool
+  /// alongside real tools whenever `output_schema` is configured, and must
+  /// not offer it at all otherwise.
+  #[test]
+  fn collect_tool_specs_includes_final_answer_tool_only_when_output_schema_set() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+
+    let without_schema = ReActAgent::new(
+      ReActConfig::new("gpt-4o"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    assert!(
+      !without_schema
+        .collect_tool_specs()
+        .iter()
+        .any(|spec| spec.name == FINAL_ANSWER_TOOL_NAME)
+    );
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let with_schema = ReActAgent::new(
+      ReActConfig::new("gpt-4o").with_output_schema(answer_schema()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let specs = with_schema.collect_tool_specs();
+    let final_answer_spec = specs
+      .iter()
+      .find(|spec| spec.name == FINAL_ANSWER_TOOL_NAME)
+      .expect("final_answer tool must be offered when output_schema is set");
+    assert_eq!(final_answer_spec.parameters, answer_schema());
+    // The real tool must still be offered alongside it.
+    assert!(specs.iter().any(|spec| spec.name == "echo"));
+  }
+
+  /// The exact V2.1 test bar: a schema mismatch on the first candidate
+  /// answer triggers a correction turn (the loop continues, feeding the
+  /// validation errors back), and the run eventually produces a compliant
+  /// output once the model self-corrects.
+  #[tokio::test]
+  async fn output_schema_mismatch_triggers_correction_turn_and_eventually_succeeds() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-schema-correct-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          // Iteration 0: violates the schema (`answer` is missing).
+          vec![serde_json::json!({
+            "id": "call_0",
+            "name": FINAL_ANSWER_TOOL_NAME,
+            "arguments": {"wrong_field": "oops"}
+          })],
+          // Iteration 1: conforms.
+          vec![serde_json::json!({
+            "id": "call_1",
+            "name": FINAL_ANSWER_TOOL_NAME,
+            "arguments": {"answer": "42"}
+          })],
+        ])
+        .unwrap(),
+      );
+    }
+    let _tool_calls_guard = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    init_mock_model(&model).await;
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(4)
+        .with_output_schema(answer_schema()),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "session-schema-correct",
+        "answer please",
+        &model,
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(result.answer.as_deref(), Some(r#"{"answer":"42"}"#));
+    let verify_steps: Vec<_> = result
+      .steps
+      .iter()
+      .filter_map(|step| match &step.kind {
+        AgentStepKind::Verify { approved, .. } => Some(*approved),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(
+      verify_steps,
+      vec![false, true],
+      "expected one rejected schema check then one approved, got: {verify_steps:?}"
+    );
+  }
+
+  /// When the model never produces a conforming answer within the
+  /// correction budget, the run must hard-error rather than silently
+  /// returning a non-conformant answer labelled as final (unlike
+  /// `VerificationStrategy`'s force-accept-on-exhaustion).
+  #[tokio::test]
+  async fn output_schema_exhausted_attempts_returns_hard_error() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-schema-exhaust-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![
+          vec![serde_json::json!({"id": "c0", "name": FINAL_ANSWER_TOOL_NAME, "arguments": {}})],
+          vec![serde_json::json!({"id": "c1", "name": FINAL_ANSWER_TOOL_NAME, "arguments": {}})],
+          vec![serde_json::json!({"id": "c2", "name": FINAL_ANSWER_TOOL_NAME, "arguments": {}})],
+        ])
+        .unwrap(),
+      );
+    }
+    let _tool_calls_guard = EnvVarGuard("AGENTFLOW_MOCK_TOOL_CALLS");
+    init_mock_model(&model).await;
+
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model)
+        .with_max_iterations(6)
+        .with_output_schema(answer_schema())
+        .with_max_schema_correction_attempts(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    let err = agent
+      .run_with_context(AgentContext::new(
+        "session-schema-exhaust",
+        "answer please",
+        &model,
+      ))
+      .await
+      .expect_err("schema-exhausted run must hard-error");
+    match err {
+      ReActError::SchemaValidationFailed { attempts, .. } => assert_eq!(attempts, 3),
+      other => panic!("expected SchemaValidationFailed, got {other:?}"),
     }
   }
 
