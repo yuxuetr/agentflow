@@ -93,6 +93,37 @@ strategy that never approves cannot hang a run. Disabling verification with
 `ReActConfig::with_verification_enabled(false)` skips the gate entirely, even
 with a strategy attached — no `Verify` step or event is recorded.
 
+**Structured output (V2.1).** `ReActConfig::with_output_schema(schema)`
+requires the final answer to validate against a caller-supplied JSON Schema.
+When set, `collect_tool_specs` additionally offers a synthetic `final_answer`
+tool (`react::agent::FINAL_ANSWER_TOOL_NAME`) alongside the agent's real
+tools, whose `input_schema` is the caller's schema — providers with native
+tool calling (all six supported today) enforce the shape directly there
+rather than relying on prompt-only constraint; calling it is recognised as
+the agent's final answer, not a real tool dispatch. This is deliberately
+*not* built on `LLMClient::json_schema(...)`/`response_format`: that
+mechanism can't coexist with the agent's own `tools` on Anthropic/Google (see
+`docs/LLM_PROVIDERS_MATRIX.md`), and even where it can, a top-level
+`response_format` schema can't represent ReAct's inherent "either take an
+action or give this answer" polymorphism — native tool calling already
+solves exactly that.
+
+A candidate answer that fails to parse as JSON or fails schema validation is
+rejected: the validation errors are fed back into memory as the next
+observation and the loop continues for another attempt, mirroring
+verification's retry shape but tracked by its own budget
+(`ReActConfig::with_max_schema_correction_attempts(...)`, default `2`,
+independent of `max_verification_attempts`). Unlike verification rejection,
+which force-accepts once its budget is exhausted, exhausting the schema
+budget is a hard `ReActError::SchemaValidationFailed` — a schema is a
+caller-declared hard contract, not an advisory critique, so returning
+non-conformant output labelled "final" would silently break that contract.
+Both the schema gate and verification reuse the existing
+`AgentStepKind::Verify`/`AgentEvent::VerificationCompleted` shapes (no new
+wire variants); the gate runs before verification, since there is no reason
+to run a domain verification strategy against an answer that does not even
+conform to the caller's declared shape.
+
 `ReActAgent::query_memory(...)` and `query_session_memory(...)` expose the
 runtime memory query boundary. The active `MemoryStore` owns retrieval behavior:
 `SemanticMemory` performs vector search with keyword fallback, while simpler
@@ -226,6 +257,22 @@ It reuses:
 - `AgentMemoryHook` for memory read/write observability.
 - `AgentCancellationToken`, timeout, max steps, max tool call, token budget,
   and (T1.1) cost budget guards.
+
+**Structured output (V2.1).** `PlanExecuteConfig::with_output_schema(schema)`
+mirrors `ReActConfig`'s option, but the retry shape differs: `PlanExecuteAgent`
+plans in a single LLM call per attempt, so there is no per-turn loop to hook a
+mid-run retry into. A `final_answer` that fails schema validation instead
+retries the *whole* plan-and-execute cycle (`run_with_context`/`run_as_flow`
+keep their public names and stay byte-identical when `output_schema` is
+`None`; their previous bodies became private `*_once` methods called by a
+thin retry wrapper). The rejected answer and the validation errors become the
+next attempt's `context.input`, so the retry's own prologue records them as a
+fresh user turn — the model sees what went wrong through the same
+session-scoped memory continuity `ReActAgent` gets from its live loop, just
+implemented as independent attempts rather than an internal loop. Bounded by
+`PlanExecuteConfig::with_max_schema_correction_attempts(...)` (default `2`);
+exhausting it is a hard `PlanExecuteError::SchemaValidationFailed`, matching
+`ReActAgent`'s no-force-accept contract for a caller-declared schema.
 
 Run the mock example with:
 
