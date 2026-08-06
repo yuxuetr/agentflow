@@ -361,6 +361,19 @@ impl LLMClient {
     Ok(response)
   }
 
+  /// V2.2: execute via the streaming path but reconstruct the same
+  /// aggregate [`LLMResponse`] [`Self::execute_full`] returns, while
+  /// invoking `on_chunk` for every [`crate::client::streaming::StreamChunk`]
+  /// as it arrives — see [`crate::client::streaming::collect_streaming_response`]
+  /// for the exact reconstruction contract and its documented limitations.
+  pub async fn execute_streaming_collected(
+    &self,
+    on_chunk: impl FnMut(&crate::client::streaming::StreamChunk),
+  ) -> Result<LLMResponse> {
+    let stream = self.execute_streaming().await?;
+    crate::client::streaming::collect_streaming_response(stream, on_chunk).await
+  }
+
   /// Execute the request and return a streaming response
   pub async fn execute_streaming(&self) -> Result<Box<dyn StreamingResponse>> {
     if self.enable_logging {
@@ -818,6 +831,14 @@ impl LLMClientBuilder {
 
   pub async fn execute_streaming(self) -> Result<Box<dyn StreamingResponse>> {
     self.client.execute_streaming().await
+  }
+
+  /// See [`LLMClient::execute_streaming_collected`].
+  pub async fn execute_streaming_collected(
+    self,
+    on_chunk: impl FnMut(&crate::client::streaming::StreamChunk),
+  ) -> Result<LLMResponse> {
+    self.client.execute_streaming_collected(on_chunk).await
   }
 }
 

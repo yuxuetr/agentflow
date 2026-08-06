@@ -8,7 +8,7 @@
 //! - Development without network connectivity
 
 use super::{ContentType, LLMProvider, ProviderRequest, ProviderResponse, TokenUsage};
-use crate::client::streaming::{StreamChunk, StreamingResponse};
+use crate::client::streaming::{StreamChunk, StreamingResponse, ToolCallDelta};
 use crate::tool_calling::{StopReason, ToolCallRequest};
 use crate::{LLMError, Result};
 use async_trait::async_trait;
@@ -184,17 +184,40 @@ fn load_tool_call_queue_from_env() -> VecDeque<Vec<ToolCallRequest>> {
   }
 }
 
-/// Mock streaming response
+/// Mock streaming response.
+///
+/// V2.2: splits `content` into multiple small chunks instead of a single
+/// `is_final: true` chunk, so tests exercise a genuine multi-delta
+/// sequence (the whole point of streaming) rather than a degenerate
+/// one-chunk stream. Also surfaces any queued tool calls (mirroring
+/// `MockProvider::execute`'s `tool_call_queue` consumption) — required
+/// once a caller's only LLM entry point is the streaming path.
 pub struct MockStreamingResponse {
-  content: String,
-  sent: bool,
+  chunks: VecDeque<String>,
+  tool_calls: Vec<ToolCallRequest>,
+  usage: TokenUsage,
+  final_sent: bool,
 }
 
 impl MockStreamingResponse {
-  fn new(content: String) -> Self {
+  /// Chunk granularity, in characters (not bytes, so multi-byte UTF-8
+  /// content is never split mid-codepoint). Concatenating every chunk's
+  /// `content` in order reconstructs the original string exactly — unlike
+  /// a naive `split_whitespace` scheme, no whitespace is lost or
+  /// normalized.
+  const CHARS_PER_CHUNK: usize = 4;
+
+  fn new(content: String, tool_calls: Vec<ToolCallRequest>, usage: TokenUsage) -> Self {
+    let chars: Vec<char> = content.chars().collect();
+    let chunks = chars
+      .chunks(Self::CHARS_PER_CHUNK)
+      .map(|piece| piece.iter().collect::<String>())
+      .collect();
     Self {
-      content,
-      sent: false,
+      chunks,
+      tool_calls,
+      usage,
+      final_sent: false,
     }
   }
 }
@@ -202,19 +225,51 @@ impl MockStreamingResponse {
 #[async_trait]
 impl StreamingResponse for MockStreamingResponse {
   async fn next_chunk(&mut self) -> Result<Option<StreamChunk>> {
-    if self.sent {
-      Ok(None)
-    } else {
-      self.sent = true;
-      Ok(Some(StreamChunk {
-        content: self.content.clone(),
-        is_final: true,
+    if let Some(piece) = self.chunks.pop_front() {
+      return Ok(Some(StreamChunk {
+        content: piece,
+        is_final: false,
         metadata: None,
         usage: None,
         content_type: Some("text".to_string()),
         tool_call_deltas: Vec::new(),
-      }))
+      }));
     }
+
+    if self.final_sent {
+      return Ok(None);
+    }
+    self.final_sent = true;
+
+    let tool_call_deltas = self
+      .tool_calls
+      .iter()
+      .enumerate()
+      .map(|(index, call)| ToolCallDelta {
+        index: index as u32,
+        id: Some(call.id.clone()),
+        name: Some(call.name.clone()),
+        arguments_delta: Some(call.arguments.to_string()),
+      })
+      .collect();
+
+    // `StreamChunk::usage` and `providers::TokenUsage` (what `self.usage`
+    // and `execute()`'s `ProviderResponse::usage` both use) are distinct
+    // types with the same shape — convert.
+    let usage = crate::client::streaming::TokenUsage {
+      prompt_tokens: self.usage.prompt_tokens,
+      completion_tokens: self.usage.completion_tokens,
+      total_tokens: self.usage.total_tokens,
+    };
+
+    Ok(Some(StreamChunk {
+      content: String::new(),
+      is_final: true,
+      metadata: None,
+      usage: Some(usage),
+      content_type: Some("text".to_string()),
+      tool_call_deltas,
+    }))
   }
 }
 
@@ -300,8 +355,22 @@ impl LLMProvider for MockProvider {
     }
 
     let content = self.next_response(request);
+    let word_count = content.split_whitespace().count() as u32;
+    let tool_calls = self
+      .tool_call_queue
+      .lock()
+      .ok()
+      .and_then(|mut q| q.pop_front())
+      .unwrap_or_default();
+    let usage = TokenUsage {
+      prompt_tokens: Some(50),
+      completion_tokens: Some(word_count),
+      total_tokens: Some(50 + word_count),
+    };
 
-    Ok(Box::new(MockStreamingResponse::new(content)))
+    Ok(Box::new(MockStreamingResponse::new(
+      content, tool_calls, usage,
+    )))
   }
 
   async fn validate_config(&self) -> Result<()> {
@@ -545,5 +614,89 @@ mod tests {
 
     let _stream = provider.execute_streaming(&request).await.unwrap();
     // Note: Testing actual stream consumption would require more complex setup
+  }
+
+  /// V2.2: the mock streaming path must emit a genuine multi-chunk
+  /// sequence (not a single `is_final: true` chunk) so tests that switch
+  /// to streaming exercise real delta forwarding, and concatenating every
+  /// chunk's `content` must reconstruct the original response exactly.
+  #[tokio::test]
+  async fn streaming_response_splits_into_multiple_chunks_that_concatenate_exactly() {
+    let provider = MockProvider::new("", None)
+      .unwrap()
+      .with_response("this is a longer streaming response for testing");
+
+    let request = ProviderRequest {
+      model: "mock-model".to_string(),
+      messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+      stream: true,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let mut stream = provider.execute_streaming(&request).await.unwrap();
+    let mut chunk_count = 0;
+    let mut reconstructed = String::new();
+    let mut saw_final = false;
+    while let Some(chunk) = stream.next_chunk().await.unwrap() {
+      chunk_count += 1;
+      reconstructed.push_str(&chunk.content);
+      if chunk.is_final {
+        saw_final = true;
+        assert!(chunk.usage.is_some(), "final chunk must carry usage");
+      }
+    }
+
+    assert!(
+      chunk_count > 1,
+      "expected more than one chunk, got {chunk_count}"
+    );
+    assert!(saw_final, "expected exactly one is_final chunk");
+    assert_eq!(
+      reconstructed,
+      "this is a longer streaming response for testing"
+    );
+  }
+
+  /// The streaming path must surface queued tool calls exactly like the
+  /// non-streaming `execute()` path does — every ReAct/Plan-Execute test
+  /// scripting `AGENTFLOW_MOCK_TOOL_CALLS` depends on this.
+  #[tokio::test]
+  async fn streaming_response_surfaces_queued_tool_calls() {
+    let call = ToolCallRequest {
+      id: "call_0".to_string(),
+      name: "get_weather".to_string(),
+      arguments: serde_json::json!({"city": "Tokyo"}),
+    };
+    let provider = MockProvider::new("", None)
+      .unwrap()
+      .with_tool_calls(vec![call.clone()]);
+
+    let request = ProviderRequest {
+      model: "mock-model".to_string(),
+      messages: vec![serde_json::json!({"role": "user", "content": "weather?"})],
+      stream: true,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let mut stream = provider.execute_streaming(&request).await.unwrap();
+    let mut deltas = Vec::new();
+    while let Some(chunk) = stream.next_chunk().await.unwrap() {
+      deltas.extend(chunk.tool_call_deltas);
+    }
+
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].id.as_deref(), Some("call_0"));
+    assert_eq!(deltas[0].name.as_deref(), Some("get_weather"));
+    let reassembled: serde_json::Value =
+      serde_json::from_str(deltas[0].arguments_delta.as_deref().unwrap()).unwrap();
+    assert_eq!(reassembled, serde_json::json!({"city": "Tokyo"}));
   }
 }
