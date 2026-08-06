@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result};
 
+use agentflow_agents::FileLoopCheckpointer;
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
 use agentflow_harness::{
@@ -221,6 +222,20 @@ pub async fn execute(
   if let Some(budget) = context_budget {
     options = options.with_context_token_budget(budget);
   }
+  // V2.4: on by default whenever a run-dir is available — a small JSON
+  // write per turn is cheap (matches the DAG-level checkpoint's own
+  // unconditional-after-every-node precedent), and most long runs
+  // benefit from the safety net without having to know to opt in.
+  let loop_checkpoint_dir = FileLoopCheckpointer::default_dir(&run_root);
+  let loop_checkpointer = Arc::new(
+    FileLoopCheckpointer::new(&loop_checkpoint_dir).with_context(|| {
+      format!(
+        "could not create loop checkpoint dir {}",
+        loop_checkpoint_dir.display()
+      )
+    })?,
+  );
+  options = options.with_loop_checkpointer(loop_checkpointer);
 
   let started = std::time::Instant::now();
   if matches!(output, OutputFormat::Text) {

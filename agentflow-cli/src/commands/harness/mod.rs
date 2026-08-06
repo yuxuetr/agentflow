@@ -11,6 +11,7 @@ pub mod inspect;
 pub mod list;
 pub mod replay;
 pub mod resume;
+pub mod resume_loop;
 pub mod run;
 pub mod run_flow;
 

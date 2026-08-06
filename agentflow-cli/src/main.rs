@@ -549,6 +549,34 @@ enum HarnessCommands {
     #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
   },
+  /// Resume a ReAct agent loop from its last saved checkpoint (V2.4),
+  /// continuing from the interrupted turn instead of restarting the
+  /// session from scratch. Distinct from `resume` (JSONL replay-only,
+  /// prints the persisted event log) — this actually re-enters the agent
+  /// loop and keeps executing. Requires `harness run` to have been
+  /// invoked earlier against the same `--run-dir` (loop checkpointing is
+  /// on by default there) and a checkpoint to still exist (cleared
+  /// automatically once a session finishes normally).
+  ResumeLoop {
+    /// Session id whose checkpoint should be resumed
+    session_id: String,
+    /// Path to a skill directory to load (optional) — must match the
+    /// interrupted run's `--skill`/`--model`.
+    #[arg(long)]
+    skill: Option<String>,
+    /// Model id (required when no --skill is supplied)
+    #[arg(long)]
+    model: Option<String>,
+    /// Workspace root (default: current working directory)
+    #[arg(long)]
+    workspace: Option<String>,
+    /// Override the run-dir (must match the interrupted run's)
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Output format
+    #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
+    output: String,
+  },
   /// List persisted Harness session logs
   List {
     /// Override the run-dir
@@ -2506,6 +2534,16 @@ async fn main() {
         run_dir,
         output,
       } => harness::resume::execute(session_id, run_dir, output).await,
+      HarnessCommands::ResumeLoop {
+        session_id,
+        skill,
+        model,
+        workspace,
+        run_dir,
+        output,
+      } => {
+        harness::resume_loop::execute(session_id, skill, model, workspace, run_dir, output).await
+      }
       HarnessCommands::List { run_dir, output } => harness::list::execute(run_dir, output).await,
       HarnessCommands::Inspect {
         session_id,

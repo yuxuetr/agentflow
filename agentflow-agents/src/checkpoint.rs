@@ -11,7 +11,11 @@
 
 use std::path::{Path, PathBuf};
 
-use agentflow_agent_spi::checkpoint::{
+// Re-exported (not just `use`d) so downstream crates that depend on
+// `agentflow-agents` but not directly on `agentflow-agent-spi` (e.g.
+// `agentflow-cli`) can reach the contract through this module too,
+// alongside the concrete `FileLoopCheckpointer` below.
+pub use agentflow_agent_spi::checkpoint::{
   AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION, AgentLoopCheckpoint, AgentLoopCheckpointError,
   AgentLoopCheckpointer,
 };
