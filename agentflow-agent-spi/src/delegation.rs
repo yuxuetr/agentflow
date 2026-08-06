@@ -156,29 +156,9 @@ pub fn validate_output(spec: &DelegationSpec, answer: &str) -> SchemaValidation 
   let Some(schema) = &spec.expected_output_schema else {
     return SchemaValidation::NotRequired;
   };
-  let parsed: Value = match serde_json::from_str(answer) {
-    Ok(v) => v,
-    Err(e) => {
-      return SchemaValidation::Invalid {
-        errors: vec![format!("answer is not valid JSON: {e}")],
-      };
-    }
-  };
-  let compiled = match jsonschema::JSONSchema::options().compile(schema) {
-    Ok(c) => c,
-    Err(e) => {
-      return SchemaValidation::Invalid {
-        errors: vec![format!(
-          "expected_output_schema is not valid JSON Schema: {e}"
-        )],
-      };
-    }
-  };
-  match compiled.validate(&parsed) {
+  match crate::schema_validation::validate_json_str_against_schema(schema, answer) {
     Ok(()) => SchemaValidation::Valid,
-    Err(errors) => SchemaValidation::Invalid {
-      errors: errors.map(|e| e.to_string()).collect(),
-    },
+    Err(errors) => SchemaValidation::Invalid { errors },
   }
 }
 

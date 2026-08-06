@@ -28,6 +28,7 @@ pub mod capability;
 pub mod delegation;
 pub mod harness;
 pub mod runtime;
+pub mod schema_validation;
 pub mod turn;
 
 pub use aggregation::{AggregationReport, AnswerGroup, SubagentAnswer, aggregate_answers};
@@ -35,4 +36,5 @@ pub use capability::{Capability, CapabilityError, Lowered};
 pub use delegation::{DelegationSpec, SchemaValidation, validate_output};
 pub use harness::*;
 pub use runtime::*;
+pub use schema_validation::{validate_json_against_schema, validate_json_str_against_schema};
 pub use turn::*;
