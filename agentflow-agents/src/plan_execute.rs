@@ -612,7 +612,27 @@ impl PlanExecuteAgent {
     }
   }
 
+  /// V2.4: thin wrapper around [`Self::run_plan_execute_loop`] that clears
+  /// the loop checkpoint on genuine completion, uniformly across every
+  /// exit path inside the loop (cancellation, timeout, budget limits,
+  /// success) without threading a clear-call through each individual
+  /// early return.
   async fn run_with_context_once(
+    &mut self,
+    context: AgentContext,
+  ) -> Result<AgentRunResult, PlanExecuteError> {
+    let checkpointer = context.loop_checkpointer.clone();
+    let result = self.run_plan_execute_loop(context).await?;
+    if let Some(checkpointer) = checkpointer
+      && crate::checkpoint::should_clear_checkpoint(&result.stop_reason)
+      && let Err(e) = checkpointer.0.clear(&self.session_id).await
+    {
+      warn!(session = %self.session_id, error = %e, "agent loop checkpoint clear failed");
+    }
+    Ok(result)
+  }
+
+  async fn run_plan_execute_loop(
     &mut self,
     context: AgentContext,
   ) -> Result<AgentRunResult, PlanExecuteError> {
@@ -755,7 +775,16 @@ impl PlanExecuteAgent {
 
     let mut observations = Vec::new();
     let mut tool_calls = 0usize;
-    for planned_step in plan.plan {
+    // V2.4: the frozen plan (both `.plan` and `.final_answer` — the
+    // latter matters when the planner answers directly without needing
+    // every step executed) + the planner call's cost estimate, both
+    // constant across every checkpoint saved this run (no further LLM
+    // calls happen during the sequential execute loop below). Captured
+    // before the loop moves `plan.plan` out.
+    let plan_steps_json = serde_json::to_value(&plan).unwrap_or(Value::Null);
+    let planner_cost_usd = self.cost_for_response(&planner_response);
+    let system_prompt = self.system_prompt();
+    for (plan_position, planned_step) in plan.plan.into_iter().enumerate() {
       if is_cancelled(&cancellation_token) {
         return Ok(self.cancelled_result("cancellation token signalled", steps, events));
       }
@@ -765,6 +794,21 @@ impl PlanExecuteAgent {
 
       let Some(tool) = planned_step.tool else {
         observations.push(planned_step.description);
+        self
+          .save_plan_execute_checkpoint(
+            &context,
+            &plan_steps_json,
+            plan_position + 1,
+            &steps,
+            &events,
+            step_index,
+            tool_calls,
+            &observations,
+            &system_prompt,
+            &context.input,
+            planner_cost_usd,
+          )
+          .await;
         continue;
       };
 
@@ -908,6 +952,21 @@ impl PlanExecuteAgent {
         ))
         .await?;
       observations.push(output.content);
+      self
+        .save_plan_execute_checkpoint(
+          &context,
+          &plan_steps_json,
+          plan_position + 1,
+          &steps,
+          &events,
+          step_index,
+          tool_calls,
+          &observations,
+          &system_prompt,
+          &context.input,
+          planner_cost_usd,
+        )
+        .await;
     }
 
     let answer = plan.final_answer.unwrap_or_else(|| {
@@ -932,6 +991,327 @@ impl PlanExecuteAgent {
     ));
 
     Ok(self.stopped_result(Some(answer), AgentStopReason::FinalAnswer, steps, events))
+  }
+
+  /// V2.4: save an [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`]
+  /// after a completed plan step (tool call or pure-reasoning), if a
+  /// checkpointer is configured. A save failure is logged and swallowed —
+  /// mirrors `ReActAgent`'s non-fatal checkpoint posture.
+  #[allow(clippy::too_many_arguments)]
+  async fn save_plan_execute_checkpoint(
+    &self,
+    context: &AgentContext,
+    plan_steps_json: &Value,
+    plan_position: usize,
+    steps: &[AgentStep],
+    events: &[AgentEvent],
+    step_index: usize,
+    tool_calls: usize,
+    observations: &[String],
+    system_prompt: &str,
+    user_input: &str,
+    cumulative_cost_usd: f64,
+  ) {
+    let Some(checkpointer) = context.loop_checkpointer.as_ref() else {
+      return;
+    };
+    let checkpoint = agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+      schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+      session_id: self.session_id.clone(),
+      runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::PlanExecute,
+      created_at: Utc::now(),
+      steps: steps.to_vec(),
+      events: events.to_vec(),
+      step_index,
+      iteration: 0,
+      tool_calls,
+      verification_attempts: 0,
+      schema_correction_attempts: 0,
+      last_tool_call: None,
+      recent_tool_calls: std::collections::VecDeque::new(),
+      cumulative_cost_usd,
+      system_prompt: system_prompt.to_string(),
+      user_input: user_input.to_string(),
+      trace_context: context.trace_context.clone(),
+      plan_steps: plan_steps_json.clone(),
+      plan_position,
+      observations: observations.to_vec(),
+    };
+    if let Err(e) = checkpointer.0.save(&checkpoint).await {
+      warn!(session = %self.session_id, error = %e, "agent loop checkpoint save failed");
+    }
+  }
+
+  /// V2.4: resume a loop interrupted by a process restart from a saved
+  /// [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`], continuing
+  /// plan execution from the checkpointed step instead of re-planning.
+  /// Simpler than `ReActAgent::resume_from_loop_checkpoint`: no LLM
+  /// re-call is needed at all — the plan was already frozen into the
+  /// checkpoint, so this skips the planner call entirely and re-enters
+  /// the execute loop at `plan_position`.
+  ///
+  /// Unlike `ReActAgent`'s equivalent, this never reads conversation
+  /// memory back (the checkpoint itself carries every field the resumed
+  /// loop needs — plan, steps, events, observations), so there is no
+  /// hard durability requirement on the `MemoryStore` for *correctness*.
+  /// It does still *write* new tool-result / final-answer messages as
+  /// execution continues; pointing it at the same durable, session-id-
+  /// keyed store the pre-interruption run used (e.g. `SqliteMemory`)
+  /// keeps the overall conversation record contiguous rather than
+  /// fragmenting it across two stores.
+  pub async fn resume_from_loop_checkpoint(
+    &mut self,
+    context: AgentContext,
+    checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+  ) -> Result<AgentRunResult, PlanExecuteError> {
+    if checkpoint.runtime_kind != agentflow_agent_spi::checkpoint::LoopRuntimeKind::PlanExecute {
+      return Err(PlanExecuteError::PlanParse {
+        message: format!(
+          "expected a PlanExecute loop checkpoint, found {:?}",
+          checkpoint.runtime_kind
+        ),
+      });
+    }
+    self.apply_context(&context);
+
+    let plan: PlanExecutePlan =
+      serde_json::from_value(checkpoint.plan_steps.clone()).map_err(|e| {
+        PlanExecuteError::PlanParse {
+          message: format!("failed to deserialize checkpointed plan: {e}"),
+        }
+      })?;
+
+    let mut steps = checkpoint.steps.clone();
+    let mut events = checkpoint.events.clone();
+    let mut step_index = checkpoint.step_index;
+    let mut tool_calls = checkpoint.tool_calls;
+    let mut observations = checkpoint.observations.clone();
+    let max_tool_calls = context.limits.max_tool_calls;
+    let timeout_ms = context.limits.timeout_ms;
+    let cancellation_token = context.cancellation_token.clone();
+    let run_started_at = Instant::now();
+    let plan_steps_json = checkpoint.plan_steps.clone();
+    let system_prompt = checkpoint.system_prompt.clone();
+
+    for (plan_position, planned_step) in plan
+      .plan
+      .into_iter()
+      .enumerate()
+      .skip(checkpoint.plan_position)
+    {
+      if is_cancelled(&cancellation_token) {
+        return Ok(self.cancelled_result("cancellation token signalled", steps, events));
+      }
+      if timed_out(run_started_at, timeout_ms) {
+        return Ok(self.timeout_result(timeout_ms, steps, events));
+      }
+
+      let Some(tool) = planned_step.tool else {
+        observations.push(planned_step.description);
+        self
+          .save_plan_execute_checkpoint(
+            &context,
+            &plan_steps_json,
+            plan_position + 1,
+            &steps,
+            &events,
+            step_index,
+            tool_calls,
+            &observations,
+            &system_prompt,
+            &checkpoint.user_input,
+            checkpoint.cumulative_cost_usd,
+          )
+          .await;
+        continue;
+      };
+
+      if let Some(max_tool_calls) = max_tool_calls
+        && tool_calls >= max_tool_calls
+      {
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::MaxToolCalls { max_tool_calls },
+          steps,
+          events,
+        ));
+      }
+
+      let params = planned_step.params;
+      let tool_step_index = step_index;
+      let metadata = self.tools.tool_metadata(&tool);
+      let (tool_source, tool_permissions) = tool_event_metadata(metadata.as_ref());
+      if let Ok(decision) = self.tools.evaluate_policy(&tool, &params) {
+        events.push(AgentEvent::ToolPolicyDecision {
+          session_id: self.session_id.clone(),
+          step_index: tool_step_index,
+          tool: tool.clone(),
+          allowed: decision.allowed,
+          matched_rule: decision.matched_rule,
+          deny_reason: decision.deny_reason,
+          source: decision.source,
+          permissions: decision.permissions,
+          params_summary: decision.params_summary,
+          timestamp: Utc::now(),
+        });
+      }
+      if let Ok(effective) = self.tools.evaluate_capabilities(&tool) {
+        events.push(AgentEvent::ToolCapabilityDecision {
+          session_id: self.session_id.clone(),
+          step_index: tool_step_index,
+          tool: tool.clone(),
+          allowed: effective.allowed,
+          required: effective.required,
+          effective: effective.effective,
+          denied: effective.denied,
+          deny_reason: effective.deny_reason,
+          trace: effective.trace,
+          sandbox: effective.sandbox,
+          timestamp: Utc::now(),
+        });
+      }
+      events.push(AgentEvent::ToolCallStarted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        params: params.clone(),
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      });
+      steps.push(AgentStep::new(
+        tool_step_index,
+        AgentStepKind::ToolCall {
+          tool: tool.clone(),
+          params: params.clone(),
+        },
+      ));
+      step_index += 1;
+
+      let started_at = Instant::now();
+      let output = match self
+        .execute_tool(
+          &tool,
+          params,
+          run_started_at,
+          timeout_ms,
+          cancellation_token.clone(),
+        )
+        .await
+      {
+        Ok(output) => output,
+        Err(PlanExecuteError::Cancelled { reason }) => {
+          events.push(AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            is_error: true,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
+            timestamp: Utc::now(),
+          });
+          return Ok(self.cancelled_result(reason, steps, events));
+        }
+        Err(PlanExecuteError::Timeout { timeout_ms }) => {
+          events.push(AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            is_error: true,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
+            timestamp: Utc::now(),
+          });
+          return Ok(self.timeout_result(Some(timeout_ms), steps, events));
+        }
+        Err(err) => {
+          warn!(tool = %tool, error = %err, "PlanExecute tool execution failed");
+          agentflow_tool::ToolOutput::error(err.to_string())
+        }
+      };
+      let duration_ms = started_at.elapsed().as_millis() as u64;
+      events.push(AgentEvent::ToolCallCompleted {
+        session_id: self.session_id.clone(),
+        step_index: tool_step_index,
+        tool: tool.clone(),
+        is_error: output.is_error,
+        duration_ms,
+        source: tool_source.clone(),
+        permissions: tool_permissions.clone(),
+        timestamp: Utc::now(),
+      });
+      steps.push(
+        AgentStep::new(
+          step_index,
+          AgentStepKind::ToolResult {
+            tool: tool.clone(),
+            content: output.content.clone(),
+            is_error: output.is_error,
+            parts: output.parts.clone(),
+          },
+        )
+        .with_duration_ms(duration_ms),
+      );
+      step_index += 1;
+      tool_calls += 1;
+
+      self
+        .add_memory_message(Message::tool_result_with_counter(
+          &self.session_id,
+          &tool,
+          &output.content,
+          &*self.message_counter,
+        ))
+        .await?;
+      observations.push(output.content);
+      self
+        .save_plan_execute_checkpoint(
+          &context,
+          &plan_steps_json,
+          plan_position + 1,
+          &steps,
+          &events,
+          step_index,
+          tool_calls,
+          &observations,
+          &system_prompt,
+          &checkpoint.user_input,
+          checkpoint.cumulative_cost_usd,
+        )
+        .await;
+    }
+
+    let answer = plan.final_answer.unwrap_or_else(|| {
+      if observations.is_empty() {
+        "Plan completed with no tool observations.".to_string()
+      } else {
+        observations.join("\n")
+      }
+    });
+    self
+      .add_memory_message(Message::assistant_with_counter(
+        &self.session_id,
+        &answer,
+        &*self.message_counter,
+      ))
+      .await?;
+    steps.push(AgentStep::new(
+      step_index,
+      AgentStepKind::FinalAnswer {
+        answer: answer.clone(),
+      },
+    ));
+
+    let result = self.stopped_result(Some(answer), AgentStopReason::FinalAnswer, steps, events);
+    if let Some(checkpointer) = context.loop_checkpointer.as_ref()
+      && crate::checkpoint::should_clear_checkpoint(&result.stop_reason)
+      && let Err(e) = checkpointer.0.clear(&self.session_id).await
+    {
+      warn!(session = %self.session_id, error = %e, "agent loop checkpoint clear failed");
+    }
+    Ok(result)
   }
 
   /// T1.1: estimate the USD cost of the planner call from its reported
@@ -1284,9 +1664,11 @@ fn tool_event_metadata(metadata: Option<&ToolMetadata>) -> (Option<String>, Vec<
 mod tests {
   use super::*;
   use crate::runtime::RuntimeLimits;
+  use agentflow_agent_spi::checkpoint::AgentLoopCheckpointer as _;
   use agentflow_memory::SessionMemory;
   use agentflow_tool::{Tool, ToolError, ToolOutput};
   use serde_json::json;
+  use std::sync::Mutex;
 
   struct EchoTool;
 
@@ -1769,6 +2151,202 @@ mod tests {
       result.stop_reason,
       AgentStopReason::Cancelled { .. }
     ));
+  }
+
+  // ── V2.4: agent-loop checkpoint ──────────────────────────────────────
+
+  /// Test-double `AgentLoopCheckpointer`, mirroring the one in
+  /// `react::agent`'s test module (not shared across files — each is
+  /// small and self-contained). `cancel_after` simulates "the process
+  /// died mid-loop" by firing a cancellation token once `save` has been
+  /// called that many times, which the next loop iteration's
+  /// `is_cancelled` check picks up before touching the next plan step.
+  #[derive(Clone)]
+  struct RecordingCheckpointer {
+    store: Arc<
+      Mutex<
+        std::collections::HashMap<String, agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>,
+      >,
+    >,
+    saves: Arc<std::sync::atomic::AtomicUsize>,
+    cancel_after: Option<(usize, AgentCancellationToken)>,
+  }
+
+  impl RecordingCheckpointer {
+    fn new() -> Self {
+      Self {
+        store: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        saves: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        cancel_after: None,
+      }
+    }
+
+    fn with_cancel_after(mut self, count: usize, token: AgentCancellationToken) -> Self {
+      self.cancel_after = Some((count, token));
+      self
+    }
+  }
+
+  #[async_trait]
+  impl agentflow_agent_spi::checkpoint::AgentLoopCheckpointer for RecordingCheckpointer {
+    async fn save(
+      &self,
+      checkpoint: &agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      self
+        .store
+        .lock()
+        .unwrap()
+        .insert(checkpoint.session_id.clone(), checkpoint.clone());
+      let count = self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+      if let Some((target, token)) = &self.cancel_after
+        && count >= *target
+      {
+        token.cancel();
+      }
+      Ok(())
+    }
+
+    async fn load(
+      &self,
+      session_id: &str,
+    ) -> Result<
+      Option<agentflow_agent_spi::checkpoint::AgentLoopCheckpoint>,
+      agentflow_agent_spi::checkpoint::AgentLoopCheckpointError,
+    > {
+      Ok(self.store.lock().unwrap().get(session_id).cloned())
+    }
+
+    async fn clear(
+      &self,
+      session_id: &str,
+    ) -> Result<(), agentflow_agent_spi::checkpoint::AgentLoopCheckpointError> {
+      self.store.lock().unwrap().remove(session_id);
+      Ok(())
+    }
+  }
+
+  /// V2.4 acceptance scenario for `PlanExecuteAgent`: a 3-step plan is
+  /// interrupted (simulated process death via deterministic cancellation
+  /// timed off the 2nd checkpoint save) after 2 tool steps; resuming with
+  /// a brand-new `PlanExecuteAgent` instance — no further planner call
+  /// needed at all, the checkpoint carries the frozen plan — executes
+  /// only the 1 remaining step and reaches the same final answer an
+  /// uninterrupted control run produces.
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_continues_after_interrupted_plan_execution() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+
+    let plan_json = r#"{"plan":[
+      {"id":"1","description":"step one","tool":"echo","params":{"text":"a"}},
+      {"id":"2","description":"step two","tool":"echo","params":{"text":"b"}},
+      {"id":"3","description":"step three","tool":"echo","params":{"text":"c"}}
+    ]}"#;
+
+    // ── Control run: uninterrupted. ──
+    init_mock_model("mock-plan-ckpt-control", plan_json).await;
+    let mut control_registry = ToolRegistry::new();
+    control_registry.register(Arc::new(EchoTool));
+    let mut control_agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ckpt-control"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(control_registry),
+    );
+    let control_result = control_agent
+      .run_with_context(AgentContext::new(
+        "plan-ckpt-session",
+        "do the three-step task",
+        "mock-plan-ckpt-control",
+      ))
+      .await
+      .unwrap();
+    assert_eq!(
+      control_result.answer.as_deref(),
+      Some("echo: a\necho: b\necho: c")
+    );
+    assert_eq!(control_result.stop_reason, AgentStopReason::FinalAnswer);
+
+    // ── Interrupted run: cancel right after the 2nd checkpoint save (2
+    // tool steps completed, 1 remaining). ──
+    init_mock_model("mock-plan-ckpt-interrupted", plan_json).await;
+    let mut interrupted_registry = ToolRegistry::new();
+    interrupted_registry.register(Arc::new(EchoTool));
+    // A fresh, independent memory store is fine here (unlike ReActAgent's
+    // resume, PlanExecuteAgent's resume never reads history back — see
+    // `resume_from_loop_checkpoint`'s doc comment).
+    let mut interrupted_agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ckpt-interrupted"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(interrupted_registry),
+    );
+
+    let cancel_token = AgentCancellationToken::new();
+    let checkpointer = RecordingCheckpointer::new().with_cancel_after(2, cancel_token.clone());
+    let checkpointer_handle: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer> =
+      Arc::new(checkpointer.clone());
+
+    let interrupted_context = AgentContext::new(
+      "plan-ckpt-session",
+      "do the three-step task",
+      "mock-plan-ckpt-interrupted",
+    )
+    .with_cancellation_token(cancel_token)
+    .with_loop_checkpointer(checkpointer_handle.clone());
+    let interrupted_result = interrupted_agent
+      .run_with_context(interrupted_context)
+      .await
+      .unwrap();
+    assert!(
+      matches!(
+        interrupted_result.stop_reason,
+        AgentStopReason::Cancelled { .. }
+      ),
+      "expected Cancelled, got {:?}",
+      interrupted_result.stop_reason
+    );
+    assert_eq!(
+      checkpointer.saves.load(std::sync::atomic::Ordering::SeqCst),
+      2
+    );
+
+    let checkpoint = checkpointer
+      .load("plan-ckpt-session")
+      .await
+      .unwrap()
+      .expect("a checkpoint must have been saved before cancellation");
+    assert_eq!(checkpoint.tool_calls, 2);
+    assert_eq!(checkpoint.plan_position, 2);
+
+    // ── Resume: a brand-new PlanExecuteAgent instance, no planner call
+    // needed — the checkpoint carries the frozen plan. If resume
+    // incorrectly re-planned or restarted from step 0, the answer would
+    // include duplicated or missing observations instead of matching the
+    // control run exactly. ──
+    let mut resume_registry = ToolRegistry::new();
+    resume_registry.register(Arc::new(EchoTool));
+    let mut resumed_agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ckpt-resume-unused"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(resume_registry),
+    );
+    let resume_context = AgentContext::new("plan-ckpt-session", "", "mock-plan-ckpt-resume-unused")
+      .with_loop_checkpointer(checkpointer_handle);
+    let resumed_result = resumed_agent
+      .resume_from_loop_checkpoint(resume_context, checkpoint.clone())
+      .await
+      .unwrap();
+
+    assert_eq!(resumed_result.answer, control_result.answer);
+    assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
+    // Continuity: the resumed result's steps carry the checkpoint's
+    // history forward rather than starting a fresh run at step 0.
+    assert!(resumed_result.steps.len() > checkpoint.steps.len());
+    assert_eq!(
+      resumed_result.steps[..checkpoint.steps.len()],
+      checkpoint.steps[..]
+    );
+    // Successful completion clears the checkpoint.
+    assert_eq!(checkpointer.load("plan-ckpt-session").await.unwrap(), None);
   }
 
   async fn init_mock_model(model: &str, response: &str) {

@@ -15,7 +15,40 @@ use agentflow_agent_spi::checkpoint::{
   AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION, AgentLoopCheckpoint, AgentLoopCheckpointError,
   AgentLoopCheckpointer,
 };
+use agentflow_agent_spi::runtime::AgentStopReason;
 use async_trait::async_trait;
+
+/// V2.4: whether a loop checkpoint should be cleared once the loop stops
+/// for `reason`. Shared by `ReActAgent` and `PlanExecuteAgent` so the two
+/// runtimes agree on which stop reasons represent a genuine completion
+/// (checkpoint no longer useful, clear it so a later reused `session_id`
+/// doesn't get confused by stale progress) versus a legitimately
+/// resumable interruption (keep it).
+///
+/// Exhaustive over every [`AgentStopReason`] variant — the enum is
+/// deliberately NOT `#[non_exhaustive]` so every consumer (e.g.
+/// `agentflow-harness`'s `StoppedPayload` translation) is forced to
+/// handle new variants explicitly; this follows the same convention
+/// rather than risking a new variant silently falling into the wrong
+/// bucket via a wildcard.
+///
+/// For the crash-simulation scenario this feature targets — the process
+/// dies with no stop reason produced at all — this function never even
+/// runs; the last-written checkpoint simply survives untouched on disk.
+pub(crate) fn should_clear_checkpoint(reason: &AgentStopReason) -> bool {
+  match reason {
+    AgentStopReason::FinalAnswer => true,
+    AgentStopReason::StopCondition { .. } => true,
+    AgentStopReason::Error { .. } => true,
+    AgentStopReason::MaxSteps { .. } => false,
+    AgentStopReason::MaxToolCalls { .. } => false,
+    AgentStopReason::Timeout { .. } => false,
+    AgentStopReason::Cancelled { .. } => false,
+    AgentStopReason::TokenBudgetExceeded { .. } => false,
+    AgentStopReason::CostLimitExceeded { .. } => false,
+    AgentStopReason::LoopDetected { .. } => false,
+  }
+}
 
 /// `session_id` is externally supplied (CLI `--session`, server-generated
 /// UUID) and becomes part of a file path — reject anything that could

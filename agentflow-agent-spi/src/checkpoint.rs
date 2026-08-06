@@ -95,9 +95,12 @@ pub struct AgentLoopCheckpoint {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub trace_context: Option<agentflow_value::LlmTraceContext>,
 
-  /// PlanExecute only: the original generated plan, frozen at planning
-  /// time (`serde_json::to_value(&plan.plan)`). `agent-spi` cannot import
-  /// `agentflow_agents::PlanExecuteStep` (runtimes never depend on each
+  /// PlanExecute only: the original generated plan — both the step list
+  /// *and* the planner's `final_answer` (set when the planner answers
+  /// directly without needing every step executed) — frozen at planning
+  /// time (`serde_json::to_value(&plan)`, the whole `PlanExecutePlan`,
+  /// despite the field's name). `agent-spi` cannot import
+  /// `agentflow_agents::PlanExecutePlan` (runtimes never depend on each
   /// other), so this stays generic; `PlanExecuteAgent` owns the
   /// serialize/deserialize round-trip at both boundary points. Empty
   /// (`Value::Null`) for ReAct checkpoints.

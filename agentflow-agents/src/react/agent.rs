@@ -967,12 +967,12 @@ impl ReActAgent {
   }
 
   /// V2.4: clear the loop checkpoint (if any) when `reason` represents a
-  /// genuine completion — see [`should_clear_checkpoint`].
+  /// genuine completion — see [`crate::checkpoint::should_clear_checkpoint`].
   async fn clear_loop_checkpoint_if_terminal(&self, reason: &AgentStopReason) {
     let Some(checkpointer) = self.live_checkpointer.as_ref() else {
       return;
     };
-    if should_clear_checkpoint(reason)
+    if crate::checkpoint::should_clear_checkpoint(reason)
       && let Err(e) = checkpointer.0.clear(&self.session_id).await
     {
       warn!(session = %self.session_id, error = %e, "agent loop checkpoint clear failed");
@@ -3669,35 +3669,6 @@ impl LoopState {
       between_turn_hook: context.between_turn_hook.clone(),
       user_input: checkpoint.user_input.clone(),
     }
-  }
-}
-
-/// V2.4: whether a checkpoint should be cleared once the loop stops for
-/// `reason`. Exhaustive over every [`AgentStopReason`] variant — the enum
-/// is deliberately NOT `#[non_exhaustive]` so every consumer (e.g.
-/// `agentflow-harness`'s `StoppedPayload` translation) is forced to
-/// handle new variants explicitly; this follows the same convention
-/// rather than risking a new variant silently falling into the wrong
-/// bucket via a wildcard.
-///
-/// `true` (clear) for genuine completions: the run is done, a stale
-/// checkpoint would only confuse a later reused `session_id`. `false`
-/// (keep) for interruptions that are legitimately resumable — including
-/// the crash-simulation scenario this feature targets, where the process
-/// dies with no stop reason at all and this function never even runs
-/// (the last-written checkpoint simply survives untouched on disk).
-fn should_clear_checkpoint(reason: &AgentStopReason) -> bool {
-  match reason {
-    AgentStopReason::FinalAnswer => true,
-    AgentStopReason::StopCondition { .. } => true,
-    AgentStopReason::Error { .. } => true,
-    AgentStopReason::MaxSteps { .. } => false,
-    AgentStopReason::MaxToolCalls { .. } => false,
-    AgentStopReason::Timeout { .. } => false,
-    AgentStopReason::Cancelled { .. } => false,
-    AgentStopReason::TokenBudgetExceeded { .. } => false,
-    AgentStopReason::CostLimitExceeded { .. } => false,
-    AgentStopReason::LoopDetected { .. } => false,
   }
 }
 
