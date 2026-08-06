@@ -864,6 +864,19 @@ h1 {
   letter-spacing: 0.5px;
 }
 
+.harness-live-typing {
+  margin: 0 0 12px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(99, 179, 237, 0.08);
+  border: 1px dashed rgba(99, 179, 237, 0.35);
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .harness-summary dl {
   display: grid;
   grid-template-columns: max-content 1fr;

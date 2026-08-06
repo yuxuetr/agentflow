@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { apiFetch, parseSseChunk } from '../lib/api';
 import {
+  extractTokenDelta,
   harnessStatusTone,
   isHarnessTerminal,
   type ApprovalOutcome,
@@ -60,6 +61,10 @@ export function HarnessSessionDetail({
   const [tenant] = useState<string>(() => readTenantFromUrl());
   const [session, setSession] = useState<HarnessSession | null>(null);
   const [events, setEvents] = useState<HarnessEvent[]>([]);
+  // V2.2: `token_delta` is a live-only kind (never in `/events/history`,
+  // never persisted) — it accumulates here instead of joining the
+  // discrete `events` timeline, and resets on the next `step_started`.
+  const [liveTyping, setLiveTyping] = useState('');
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +75,16 @@ export function HarnessSessionDetail({
   const [resumeMode, setResumeMode] = useState<'rerun' | 'append'>('rerun');
 
   const mergeEvent = (incoming: HarnessEvent) => {
+    if (incoming.kind === 'token_delta') {
+      const delta = extractTokenDelta(incoming.payload);
+      if (delta) {
+        setLiveTyping((prior) => prior + delta);
+      }
+      return;
+    }
+    if (incoming.kind === 'step_started') {
+      setLiveTyping('');
+    }
     setEvents((prior) => {
       // Idempotent merge: if we already have this seq, keep the
       // earlier copy (DB rows are immutable). SSE backfill + DB
@@ -83,6 +98,7 @@ export function HarnessSessionDetail({
 
   const replaceEvents = (incoming: HarnessEvent[]) => {
     setEvents([...incoming].sort((a, b) => a.seq - b.seq));
+    setLiveTyping('');
   };
 
   const fetchSession = async () => {
@@ -584,6 +600,11 @@ export function HarnessSessionDetail({
 
         <section className="harness-timeline" aria-label="Event timeline">
           <h2>Timeline ({events.length})</h2>
+          {liveTyping ? (
+            <p className="harness-live-typing" data-testid="harness-live-typing">
+              💭 {liveTyping}
+            </p>
+          ) : null}
           {events.length === 0 ? (
             <p className="harness-timeline-empty">No events yet.</p>
           ) : (

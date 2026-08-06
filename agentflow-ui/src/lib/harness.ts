@@ -63,3 +63,19 @@ export const HARNESS_PROFILES: HarnessProfileChoice[] = ['dev', 'local', 'produc
 
 export type HarnessRuntimeChoice = 'react' | 'plan_execute';
 export const HARNESS_RUNTIMES: HarnessRuntimeChoice[] = ['react', 'plan_execute'];
+
+// ── V2.2: live token_delta streaming ─────────────────────────────────
+
+/**
+ * Pull the `delta` string out of a `token_delta` event's payload.
+ * Live-only kind (never persisted to `/events/history`), so this only
+ * ever runs against SSE frames — payload is `unknown` at the schema
+ * level, so this is a defensive narrow rather than a trusted parse.
+ */
+export const extractTokenDelta = (payload: unknown): string | null => {
+  if (payload && typeof payload === 'object' && 'delta' in payload) {
+    const delta = (payload as { delta?: unknown }).delta;
+    return typeof delta === 'string' ? delta : null;
+  }
+  return null;
+};
