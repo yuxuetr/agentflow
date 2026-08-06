@@ -111,6 +111,15 @@ pub struct AgentContext {
   /// because a hook is a process-local handle.
   #[serde(skip)]
   pub between_turn_hook: Option<BetweenTurnHookHandle>,
+  /// V2.4: optional agent-loop-level checkpointer. When set, the runtime
+  /// saves an [`crate::checkpoint::AgentLoopCheckpoint`] after every
+  /// completed turn (ReAct) / plan step (PlanExecute), so a process
+  /// restart can resume mid-loop via `resume_from_loop_checkpoint`
+  /// instead of restarting from scratch. `None` (default) is a no-op.
+  /// `#[serde(skip)]` because a checkpointer is a process-local handle,
+  /// like `event_sink` / `between_turn_hook`.
+  #[serde(skip)]
+  pub loop_checkpointer: Option<crate::checkpoint::LoopCheckpointerHandle>,
 }
 
 /// Cloneable handle wrapping an [`AgentEventSink`] so [`AgentContext`] can
@@ -213,6 +222,7 @@ impl AgentContext {
       trace_context: None,
       event_sink: None,
       between_turn_hook: None,
+      loop_checkpointer: None,
     }
   }
 
@@ -263,6 +273,16 @@ impl AgentContext {
   /// LLM call, for caller-owned between-turn context engineering.
   pub fn with_between_turn_hook(mut self, hook: Arc<dyn BetweenTurnHook>) -> Self {
     self.between_turn_hook = Some(BetweenTurnHookHandle(hook));
+    self
+  }
+
+  /// V2.4: attach an [`crate::checkpoint::AgentLoopCheckpointer`] the
+  /// runtime saves loop progress to after every turn/plan-step.
+  pub fn with_loop_checkpointer(
+    mut self,
+    checkpointer: Arc<dyn crate::checkpoint::AgentLoopCheckpointer>,
+  ) -> Self {
+    self.loop_checkpointer = Some(crate::checkpoint::LoopCheckpointerHandle(checkpointer));
     self
   }
 }

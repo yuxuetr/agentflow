@@ -22,9 +22,17 @@
 //! / context-provider / sink traits), moved here in P-A1.1 step 2/2 so the
 //! operations crates depend on the contract rather than the `agentflow-harness`
 //! runtime. `agentflow-harness` re-exports them under their original paths.
+//!
+//! The [`checkpoint`] module holds the agent-loop-level persistent
+//! checkpoint contract (V2.4): [`checkpoint::AgentLoopCheckpoint`] +
+//! [`checkpoint::AgentLoopCheckpointer`], distinct from the DAG-level `Flow`
+//! checkpoint in `agentflow-core`. `agentflow-agents` provides the concrete
+//! file-based implementation and wires it into `ReActAgent` /
+//! `PlanExecuteAgent`.
 
 pub mod aggregation;
 pub mod capability;
+pub mod checkpoint;
 pub mod delegation;
 pub mod harness;
 pub mod runtime;
@@ -33,6 +41,7 @@ pub mod turn;
 
 pub use aggregation::{AggregationReport, AnswerGroup, SubagentAnswer, aggregate_answers};
 pub use capability::{Capability, CapabilityError, Lowered};
+pub use checkpoint::*;
 pub use delegation::{DelegationSpec, SchemaValidation, validate_output};
 pub use harness::*;
 pub use runtime::*;
