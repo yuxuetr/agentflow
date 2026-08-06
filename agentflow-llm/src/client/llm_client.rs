@@ -366,10 +366,11 @@ impl LLMClient {
   /// invoking `on_chunk` for every [`crate::client::streaming::StreamChunk`]
   /// as it arrives — see [`crate::client::streaming::collect_streaming_response`]
   /// for the exact reconstruction contract and its documented limitations.
-  pub async fn execute_streaming_collected(
-    &self,
-    on_chunk: impl FnMut(&crate::client::streaming::StreamChunk),
-  ) -> Result<LLMResponse> {
+  pub async fn execute_streaming_collected<F, Fut>(&self, on_chunk: F) -> Result<LLMResponse>
+  where
+    F: FnMut(&crate::client::streaming::StreamChunk) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+  {
     let stream = self.execute_streaming().await?;
     crate::client::streaming::collect_streaming_response(stream, on_chunk).await
   }
@@ -834,10 +835,11 @@ impl LLMClientBuilder {
   }
 
   /// See [`LLMClient::execute_streaming_collected`].
-  pub async fn execute_streaming_collected(
-    self,
-    on_chunk: impl FnMut(&crate::client::streaming::StreamChunk),
-  ) -> Result<LLMResponse> {
+  pub async fn execute_streaming_collected<F, Fut>(self, on_chunk: F) -> Result<LLMResponse>
+  where
+    F: FnMut(&crate::client::streaming::StreamChunk) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+  {
     self.client.execute_streaming_collected(on_chunk).await
   }
 }

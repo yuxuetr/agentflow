@@ -706,6 +706,30 @@ pub enum AgentEvent {
     duration_ms: u64,
     timestamp: DateTime<Utc>,
   },
+  /// V2.2: one incremental chunk of raw model output arrived during an
+  /// in-flight LLM call. `delta` is whatever text the provider streamed
+  /// for this chunk verbatim — for a ReAct turn this is a fragment of the
+  /// turn's JSON envelope (or of a native tool-call's arguments), *not*
+  /// necessarily clean prose; extracting a human-readable partial answer
+  /// out of that would need a genuine incremental JSON parser, which is
+  /// out of scope here (see `docs/AGENT_RUNTIME.md`).
+  ///
+  /// Live-only: unlike every other `AgentEvent` variant, this is *not*
+  /// accumulated into `AgentRunResult.events` (`ReActAgent` emits it
+  /// directly to `live_sink`, bypassing the `emit_and_push!` macro) — a
+  /// per-token event pushed into every stored/replayed trace forever
+  /// would bloat `AgentRunResult` and any workflow checkpoint that embeds
+  /// it, for a signal whose entire value is being observed *live*.
+  /// `step_index` correlates each delta with the turn's eventual `Plan`/
+  /// `ToolCall`/`FinalAnswer` step so a live consumer can associate the
+  /// stream with the turn it belongs to.
+  TokenDelta {
+    session_id: String,
+    step_index: usize,
+    delta: String,
+    is_final: bool,
+    timestamp: DateTime<Utc>,
+  },
   RunStopped {
     session_id: String,
     reason: AgentStopReason,

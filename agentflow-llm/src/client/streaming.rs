@@ -99,6 +99,12 @@ pub trait StreamingResponse: Send {
 /// as it arrives, so callers can forward live per-chunk updates (e.g. a
 /// `ReActAgent` turn emitting `AgentEvent::TokenDelta`) without losing the
 /// aggregate contract every existing `LLMResponse` consumer expects.
+/// `on_chunk` is async and awaited before draining the next chunk (not
+/// fired-and-forgotten via e.g. `tokio::spawn`) so a caller that forwards
+/// chunks to an ordering-sensitive sink — a live event bridge with a
+/// monotonic `seq` counter, say — sees them arrive in the same order they
+/// were produced; spawning concurrent tasks per chunk would not give that
+/// guarantee.
 ///
 /// `stop_reason` is a best-effort reconstruction (`ToolCalls` when any tool
 /// call was produced, else `Stop`) rather than a per-provider-normalized
@@ -111,10 +117,14 @@ pub trait StreamingResponse: Send {
 /// `thinking` is always `None` (no provider streams a typed thinking
 /// delta today) and `raw_metadata` is whichever chunk's `metadata` arrived
 /// last, both best-effort for the same reason.
-pub async fn collect_streaming_response(
+pub async fn collect_streaming_response<F, Fut>(
   mut response: Box<dyn StreamingResponse>,
-  mut on_chunk: impl FnMut(&StreamChunk),
-) -> Result<crate::tool_calling::LLMResponse> {
+  mut on_chunk: F,
+) -> Result<crate::tool_calling::LLMResponse>
+where
+  F: FnMut(&StreamChunk) -> Fut,
+  Fut: std::future::Future<Output = ()>,
+{
   use crate::tool_calling::{LLMResponse, StopReason, ToolCallRequest};
   use std::collections::HashMap;
 
@@ -125,7 +135,7 @@ pub async fn collect_streaming_response(
   let mut tool_call_acc: HashMap<u32, (Option<String>, Option<String>, String)> = HashMap::new();
 
   while let Some(chunk) = response.next_chunk().await? {
-    on_chunk(&chunk);
+    on_chunk(&chunk).await;
     content.push_str(&chunk.content);
     if chunk.usage.is_some() {
       usage = chunk.usage.clone();
@@ -267,10 +277,12 @@ mod collect_streaming_response_tests {
     ])));
 
     let mut forwarded: Vec<String> = Vec::new();
-    let response =
-      collect_streaming_response(stream, |chunk| forwarded.push(chunk.content.clone()))
-        .await
-        .unwrap();
+    let response = collect_streaming_response(stream, |chunk| {
+      forwarded.push(chunk.content.clone());
+      async {}
+    })
+    .await
+    .unwrap();
 
     assert_eq!(forwarded, vec!["Hel", "lo, ", "wor", "ld!"]);
     assert_eq!(response.content, "Hello, world!");
@@ -316,7 +328,9 @@ mod collect_streaming_response_tests {
       },
     ])));
 
-    let response = collect_streaming_response(stream, |_| {}).await.unwrap();
+    let response = collect_streaming_response(stream, |_| async {})
+      .await
+      .unwrap();
 
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].id, "call_0");
@@ -351,9 +365,12 @@ mod collect_streaming_response_tests {
       }])));
 
     let mut forwarded_count = 0;
-    let response = collect_streaming_response(stream, |_| forwarded_count += 1)
-      .await
-      .unwrap();
+    let response = collect_streaming_response(stream, |_| {
+      forwarded_count += 1;
+      async {}
+    })
+    .await
+    .unwrap();
 
     assert_eq!(forwarded_count, 1);
     assert_eq!(response.content, "the whole answer at once");

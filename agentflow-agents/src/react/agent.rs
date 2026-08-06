@@ -1583,7 +1583,43 @@ impl ReActAgent {
       builder = builder.tools(tool_specs);
     }
     let llm_call_started = std::time::Instant::now();
-    let llm_call = builder.execute_full();
+    // V2.2: every ReActAgent LLM call streams now (not just when a Harness
+    // caller wants token-level events) — one call path to reason about and
+    // test, and it closes a latent gap where a model config with
+    // `requires_streaming: true` (no non-streaming mode) could never
+    // actually be used via `execute_full`. Each chunk is forwarded live as
+    // `AgentEvent::TokenDelta` (see that variant's doc comment for why it's
+    // live-only, not accumulated into `events`); `collect_streaming_response`
+    // still reconstructs the same aggregate `LLMResponse` shape
+    // `execute_full` used to hand back, so everything downstream of this
+    // call (tool-call dispatch, JSON parsing, usage/cost accounting) is
+    // unchanged.
+    let delta_session_id = self.session_id.clone();
+    let delta_live_sink = self.live_sink.clone();
+    let delta_step_index = *step_index;
+    let llm_call = builder.execute_streaming_collected(move |chunk| {
+      let delta = chunk.content.clone();
+      let is_final = chunk.is_final;
+      let session_id = delta_session_id.clone();
+      let live_sink = delta_live_sink.clone();
+      async move {
+        if delta.is_empty() {
+          return;
+        }
+        if let Some(handle) = &live_sink {
+          handle
+            .0
+            .emit(&AgentEvent::TokenDelta {
+              session_id,
+              step_index: delta_step_index,
+              delta,
+              is_final,
+              timestamp: chrono::Utc::now(),
+            })
+            .await;
+        }
+      }
+    });
     // Race the model round-trip against the wall-clock budget and the
     // cancellation token (the per-outcome handling — reflection on timeout,
     // cancelled-result on cancel — is what differs per call site).
@@ -6286,6 +6322,88 @@ providers:
         .iter()
         .any(|e| matches!(e, AgentEvent::MemorySummaryAdded { .. })),
       "mid-run compaction must emit MemorySummaryAdded; got {events:?}"
+    );
+  }
+
+  /// V2.2 test bar: every delta the mock streaming provider produces is
+  /// forwarded live, in order — concatenating them reconstructs the raw
+  /// model output exactly. Also confirms `TokenDelta` is live-only: it
+  /// must never appear in the recorded `AgentRunResult.events` (unlike
+  /// every other live-emitted event, which is also pushed there).
+  #[tokio::test]
+  async fn run_with_context_emits_token_delta_events_in_order_matching_the_response() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-token-delta-{}", uuid::Uuid::new_v4());
+    let raw_response = r#"{"thought":"done","answer":"the quick brown fox jumps"}"#;
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![raw_response]).unwrap(),
+      );
+    }
+    let _responses_guard = EnvVarGuard("AGENTFLOW_MOCK_RESPONSES");
+    init_mock_model(&model).await;
+
+    use crate::runtime::AgentEventSink;
+    use std::sync::Mutex as StdMutex;
+
+    struct RecordingSink {
+      events: Arc<StdMutex<Vec<AgentEvent>>>,
+    }
+    #[async_trait]
+    impl AgentEventSink for RecordingSink {
+      async fn emit(&self, event: &AgentEvent) {
+        self.events.lock().unwrap().push(event.clone());
+      }
+    }
+
+    let recorded = Arc::new(StdMutex::new(Vec::new()));
+    let sink = Arc::new(RecordingSink {
+      events: recorded.clone(),
+    });
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(2),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+
+    // `init_run` overwrites `self.live_sink` from `context.event_sink` at
+    // the top of every run, so the sink must be attached via the context
+    // (not by pre-setting the field, which only works for tests that call
+    // a lower-level helper directly, bypassing `init_run`).
+    let context = AgentContext::new("token-delta-session", "hi", &model)
+      .with_event_sink(sink as Arc<dyn AgentEventSink>);
+    let result = agent.run_with_context(context).await.unwrap();
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+
+    let deltas: Vec<String> = recorded
+      .lock()
+      .unwrap()
+      .iter()
+      .filter_map(|e| match e {
+        AgentEvent::TokenDelta { delta, .. } => Some(delta.clone()),
+        _ => None,
+      })
+      .collect();
+
+    assert!(
+      deltas.len() > 1,
+      "expected a genuine multi-delta sequence, got {} delta(s)",
+      deltas.len()
+    );
+    assert_eq!(
+      deltas.concat(),
+      raw_response,
+      "concatenating every forwarded delta in order must reconstruct the raw model output exactly"
+    );
+
+    assert!(
+      !result
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TokenDelta { .. })),
+      "TokenDelta must be live-only, never accumulated into AgentRunResult.events"
     );
   }
 
