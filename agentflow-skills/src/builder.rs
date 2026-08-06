@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use agentflow_agents::react::{ReActAgent, ReActConfig};
 use agentflow_memory::{
-  MemoryStore, PreferenceScope, PreferenceStore, RememberPreferenceTool, SemanticMemory,
-  SessionMemory, SqliteMemory, SqlitePreferenceStore,
+  MemoryStore, PreferenceScope, PreferenceStore, ProjectMemoryStore, RememberPreferenceTool,
+  SemanticMemory, SessionMemory, SqliteMemory, SqlitePreferenceStore, SqliteProjectMemoryStore,
+  project_key_for_path,
 };
 use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
@@ -18,7 +19,8 @@ use crate::{
   loader::resolve_knowledge_path,
   manifest::{
     DependenciesConfig, KnowledgeBackendKind, KnowledgeConfig, McpServerConfig, MemoryConfig,
-    PreferenceMemoryConfig, ScriptIntegrityEntry, SecurityConfig, SkillManifest, ToolConfig,
+    PreferenceMemoryConfig, ProjectMemoryConfig, ScriptIntegrityEntry, SecurityConfig,
+    SkillManifest, ToolConfig,
   },
   mcp_tools::{McpClientPool, McpToolAdapter},
 };
@@ -56,6 +58,36 @@ impl SkillBuilder {
     manifest: &SkillManifest,
     skill_dir: &Path,
     extra_tools: Vec<Arc<dyn Tool>>,
+  ) -> Result<ReActAgent, SkillError> {
+    Self::build_core(manifest, skill_dir, extra_tools, None).await
+  }
+
+  /// Same as [`Self::build`], but also wires up `[memory.project]` (L3.1)
+  /// against `project_root` when both are present — durable, per-project
+  /// facts observed from `shell`/`script`/`code_exec` tool calls, injected
+  /// into the persona on every subsequent turn (fully automatic; no tool
+  /// call involved, unlike the preference layer).
+  ///
+  /// `project_root` is `None` for every `SkillBuilder` call site except
+  /// `agentflow harness run`/`chat` (which share one `build_agent` helper):
+  /// those are the only callers with a real "what directory is this agent
+  /// working in" concept today. Multi-agent participants, the eval harness,
+  /// and DAG `agent` nodes have no such concept, so `[memory.project]` is a
+  /// no-op for them even if a skill declares it — same graceful-no-op
+  /// pattern as `[memory.preference]` being absent.
+  pub async fn build_with_project_root(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+    project_root: Option<&Path>,
+  ) -> Result<ReActAgent, SkillError> {
+    Self::build_core(manifest, skill_dir, Vec::new(), project_root).await
+  }
+
+  async fn build_core(
+    manifest: &SkillManifest,
+    skill_dir: &Path,
+    extra_tools: Vec<Arc<dyn Tool>>,
+    project_root: Option<&Path>,
   ) -> Result<ReActAgent, SkillError> {
     info!(
         skill = %manifest.skill.name,
@@ -97,9 +129,20 @@ impl SkillBuilder {
       )));
     }
 
+    // 6. L3.1/V1.6: project memory layer (optional, requires project_root).
+    // Fully automatic on both ends — no tool to register, unlike
+    // preference above.
+    let project_config = manifest.memory.as_ref().and_then(|m| m.project.as_ref());
+    let project_memory =
+      build_project_memory_store(project_config, &manifest.skill.name, project_root).await?;
+
     let agent = ReActAgent::new(config, memory, Arc::new(registry));
     let agent = match preference_store {
       Some(store) => agent.with_preference_store(store, default_preference_scope()),
+      None => agent,
+    };
+    let agent = match project_memory {
+      Some((store, project_key)) => agent.with_project_memory(store, project_key),
       None => agent,
     };
     Ok(agent)
@@ -928,6 +971,46 @@ async fn build_preference_store(
   Ok(Some(Arc::new(store)))
 }
 
+// ── ProjectMemoryStore builder (L3.1/V1.6) ───────────────────────────────────
+
+/// `None` when `[memory.project]` is absent, explicitly disabled, or
+/// `project_root` wasn't supplied — the last case is the common one: most
+/// `SkillBuilder` call sites have no project-root concept at all, so a
+/// skill declaring `[memory.project]` is a no-op there rather than an
+/// error (see `SkillBuilder::build_with_project_root`'s doc comment).
+/// Returns the opened store paired with its derived `project_key` so the
+/// caller can attach both to the agent via `ReActAgent::with_project_memory`.
+async fn build_project_memory_store(
+  config: Option<&ProjectMemoryConfig>,
+  skill_name: &str,
+  project_root: Option<&Path>,
+) -> Result<Option<(Arc<dyn ProjectMemoryStore>, String)>, SkillError> {
+  let Some(cfg) = config else {
+    return Ok(None);
+  };
+  if !cfg.enabled {
+    return Ok(None);
+  }
+  let Some(project_root) = project_root else {
+    return Ok(None);
+  };
+  let db_path = resolve_project_db_path(cfg.db_path.as_deref(), skill_name);
+  if let Some(parent) = db_path.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| {
+      SkillError::IoError(format!(
+        "Cannot create project memory directory {}: {}",
+        parent.display(),
+        e
+      ))
+    })?;
+  }
+  let store = SqliteProjectMemoryStore::open(&db_path)
+    .await
+    .map_err(|e| SkillError::IoError(format!("Cannot open project memory store: {e}")))?;
+  let project_key = project_key_for_path(project_root);
+  Ok(Some((Arc::new(store), project_key)))
+}
+
 /// Resolve
 /// Resolve the SQLite db path, expanding `~` and supplying a default.
 fn resolve_db_path(db_path: Option<&str>, skill_name: &str) -> PathBuf {
@@ -956,6 +1039,23 @@ fn resolve_preference_db_path(db_path: Option<&str>, skill_name: &str) -> PathBu
         .join(".agentflow")
         .join("memory")
         .join(format!("{}.preference.db", skill_name))
+    }
+  }
+}
+
+/// Same shape as [`resolve_db_path`], but defaults to a distinct
+/// filename (`<skill>.project.db`) so the project-memory store never
+/// collides with the primary or preference `MemoryConfig` stores when all
+/// three resolve to the default directory.
+fn resolve_project_db_path(db_path: Option<&str>, skill_name: &str) -> PathBuf {
+  match db_path {
+    Some(p) => PathBuf::from(expand_tilde(p)),
+    None => {
+      let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+      home
+        .join(".agentflow")
+        .join("memory")
+        .join(format!("{}.project.db", skill_name))
     }
   }
 }
@@ -1798,6 +1898,7 @@ name = "shell"
       window_tokens: None,
       embedding_model: None,
       preference: None,
+      project: None,
     });
 
     let _agent = SkillBuilder::build(&manifest, dir.path()).await.unwrap();
@@ -1817,6 +1918,7 @@ name = "shell"
         enabled: true,
         db_path: Some(db_path.to_string_lossy().into_owned()),
       }),
+      project: None,
     });
     manifest
   }
@@ -1893,6 +1995,112 @@ name = "shell"
       rendered.contains("concise"),
       "the second agent's prompt must carry the preference the first agent's tool call \
        persisted, got: {rendered}"
+    );
+  }
+
+  // ── L3.1/V1.6: project memory layer ──────────────────────────────────
+
+  fn project_manifest(name: &str, project_db_path: &std::path::Path) -> SkillManifest {
+    let mut manifest = minimal_manifest(name);
+    manifest.memory = Some(crate::manifest::MemoryConfig {
+      memory_type: "none".to_string(),
+      db_path: None,
+      window_tokens: None,
+      embedding_model: None,
+      preference: None,
+      project: Some(ProjectMemoryConfig {
+        enabled: true,
+        db_path: Some(project_db_path.to_string_lossy().into_owned()),
+      }),
+    });
+    manifest
+  }
+
+  /// Without a `project_root`, `[memory.project]` is a no-op even when
+  /// enabled — no db file is created. This is the common case: most
+  /// `SkillBuilder` call sites have no project-root concept at all (see
+  /// `build_with_project_root`'s doc comment), so a skill declaring
+  /// `[memory.project]` must not error or leave stray files for them.
+  #[tokio::test]
+  async fn build_with_project_root_none_does_not_open_project_store() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("project.db");
+    let manifest = project_manifest("project-skill", &db_path);
+
+    let _agent = SkillBuilder::build_with_project_root(&manifest, dir.path(), None)
+      .await
+      .unwrap();
+    assert!(
+      !db_path.exists(),
+      "project memory db must not be created when project_root is None"
+    );
+  }
+
+  /// The regression this exists for (the follow-up scope note in
+  /// `agentflow-memory/src/project.rs`'s module doc comment): a project
+  /// fact recorded under one `project_root` must be visible to a second,
+  /// brand-new agent built against the *same* `project_root` — without
+  /// either agent needing an LLM call (the store is written directly
+  /// here, standing in for `ReActAgent::record_project_facts` firing
+  /// after a real turn; that end-to-end extraction path is already
+  /// covered at the `agentflow-agents` layer).
+  #[tokio::test]
+  async fn project_fact_recorded_for_one_root_is_read_by_a_second_agent_for_the_same_root() {
+    let dir = TempDir::new().unwrap();
+    let project_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let db_path = dir.path().join("project.db");
+    let manifest = project_manifest("project-skill", &db_path);
+
+    // Resolve the same db path + project_key the builder would use, and
+    // record a fact directly.
+    let store = SqliteProjectMemoryStore::open(&db_path).await.unwrap();
+    let project_key = project_key_for_path(&project_root);
+    store
+      .record_project_fact(&project_key, "shell", "cargo test --workspace")
+      .await
+      .unwrap();
+
+    let agent = SkillBuilder::build_with_project_root(&manifest, dir.path(), Some(&project_root))
+      .await
+      .unwrap();
+    let messages = agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("cargo test --workspace"),
+      "the agent's prompt must carry the project fact recorded for the same \
+       project_root, got: {rendered}"
+    );
+  }
+
+  /// A different `project_root` (different `project_key` hash) must not
+  /// leak facts into an unrelated project's agent — mirrors
+  /// `project_facts_are_isolated_by_project_key` at the `agentflow-agents`
+  /// layer.
+  #[tokio::test]
+  async fn project_fact_is_isolated_by_project_root() {
+    let dir = TempDir::new().unwrap();
+    let project_a = dir.path().join("a");
+    let project_b = dir.path().join("b");
+    std::fs::create_dir_all(&project_a).unwrap();
+    std::fs::create_dir_all(&project_b).unwrap();
+    let db_path = dir.path().join("project.db");
+    let manifest = project_manifest("project-skill", &db_path);
+
+    let store = SqliteProjectMemoryStore::open(&db_path).await.unwrap();
+    store
+      .record_project_fact(&project_key_for_path(&project_a), "shell", "make build")
+      .await
+      .unwrap();
+
+    let agent_b = SkillBuilder::build_with_project_root(&manifest, dir.path(), Some(&project_b))
+      .await
+      .unwrap();
+    let messages = agent_b.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      !rendered.contains("make build"),
+      "a different project_root must not see another project's facts, got: {rendered}"
     );
   }
 

@@ -10,6 +10,7 @@ pub fn apply_memory_override(manifest: &mut SkillManifest, memory: Option<&str>)
     window_tokens: None,
     embedding_model: None,
     preference: None,
+    project: None,
   });
 }
 

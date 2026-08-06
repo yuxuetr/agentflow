@@ -74,10 +74,14 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
-  let (mut agent, model, skill_name) =
-    build_agent(skill_dir.as_deref(), model_override.as_deref(), &memory_db)
-      .await
-      .context("failed to construct the inner Harness agent")?;
+  let (mut agent, model, skill_name) = build_agent(
+    skill_dir.as_deref(),
+    model_override.as_deref(),
+    &memory_db,
+    &workspace,
+  )
+  .await
+  .context("failed to construct the inner Harness agent")?;
 
   // Persist every session as JSONL. Stream-json mode additionally fans
   // out the same envelope to stdout.
@@ -294,6 +298,7 @@ pub(super) async fn build_agent(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
   memory_db: &std::path::Path,
+  workspace: &std::path::Path,
 ) -> Result<(ReActAgent, String, Option<String>)> {
   if let Some(dir) = skill_dir {
     let dir_path = std::path::Path::new(dir);
@@ -306,7 +311,13 @@ pub(super) async fn build_agent(
       SkillLoader::validate(&manifest, dir_path).with_context(|| "skill validation failed")?;
     let model = manifest.model.resolved_model().to_owned();
     let skill_name = manifest.skill.name.clone();
-    let agent = SkillBuilder::build(&manifest, dir_path)
+    // V1.6: `harness run`/`chat` are the only `SkillBuilder` call sites
+    // with a real "what directory is this agent working in" concept
+    // (`--workspace`, defaulting to CWD) — wires `[memory.project]`
+    // against it when the skill declares that table. See
+    // `SkillBuilder::build_with_project_root`'s doc comment for why the
+    // other call sites stay on plain `build`.
+    let agent = SkillBuilder::build_with_project_root(&manifest, dir_path, Some(workspace))
       .await
       .with_context(|| "failed to build agent from skill manifest")?;
     Ok((agent, model, Some(skill_name)))
@@ -411,7 +422,7 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agentflow_memory::Message;
+  use agentflow_memory::{Message, ProjectMemoryStore};
 
   /// Resume contract: `build_agent` (the `--model` path) backs the agent
   /// with a persistent SQLite store at the run-dir path, keyed by
@@ -423,9 +434,12 @@ mod tests {
   async fn build_agent_persists_memory_for_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let db = tmp.path().join("memory.sqlite");
+    let workspace = tmp.path();
 
     // First "run": construct the agent and record a turn for a session.
-    let (agent1, _model, _skill) = build_agent(None, Some("mock"), &db).await.unwrap();
+    let (agent1, _model, _skill) = build_agent(None, Some("mock"), &db, workspace)
+      .await
+      .unwrap();
     agent1
       .memory_ref()
       .add_message(Message::user("sess-resume", "remember the secret token"))
@@ -434,13 +448,86 @@ mod tests {
     drop(agent1);
 
     // Second "run" (resume): same DB + same session id sees the message.
-    let (agent2, _model, _skill) = build_agent(None, Some("mock"), &db).await.unwrap();
+    let (agent2, _model, _skill) = build_agent(None, Some("mock"), &db, workspace)
+      .await
+      .unwrap();
     let history = agent2.memory_ref().get_all("sess-resume").await.unwrap();
     assert!(
       history
         .iter()
         .any(|m| m.content.contains("remember the secret token")),
       "resume must restore the prior conversation from the persistent store"
+    );
+  }
+
+  /// V1.6: `build_agent`'s `--skill` branch passes `workspace` through as
+  /// `[memory.project]`'s `project_root` — a fact recorded for that
+  /// workspace before the agent is built must already be visible in its
+  /// first prompt (confirms the CLI-layer plumbing, not just the
+  /// `SkillBuilder`-layer wiring covered by
+  /// `agentflow_skills::builder::tests::project_fact_recorded_for_one_root_is_read_by_a_second_agent_for_the_same_root`).
+  #[tokio::test]
+  async fn build_agent_wires_project_memory_against_the_workspace_for_skill_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let skill_dir = tmp.path().join("skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let project_db = tmp.path().join("project.sqlite");
+    std::fs::write(
+      skill_dir.join("skill.toml"),
+      format!(
+        r#"
+[skill]
+name = "project-memory-skill"
+version = "0.1"
+description = "test"
+
+[persona]
+role = "You are a test agent."
+
+[model]
+name = "mock"
+
+[memory]
+type = "none"
+
+[memory.project]
+enabled = true
+db_path = "{}"
+"#,
+        project_db.to_string_lossy().replace('\\', "\\\\")
+      ),
+    )
+    .unwrap();
+
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let memory_db = tmp.path().join("memory.sqlite");
+
+    let store = agentflow_memory::SqliteProjectMemoryStore::open(&project_db)
+      .await
+      .unwrap();
+    let project_key = agentflow_memory::project_key_for_path(&workspace);
+    store
+      .record_project_fact(&project_key, "shell", "cargo build --workspace")
+      .await
+      .unwrap();
+
+    let (agent, _model, skill_name) = build_agent(
+      Some(skill_dir.to_str().unwrap()),
+      None,
+      &memory_db,
+      &workspace,
+    )
+    .await
+    .unwrap();
+    assert_eq!(skill_name.as_deref(), Some("project-memory-skill"));
+
+    let messages = agent.preview_llm_messages().await.unwrap();
+    let rendered = format!("{messages:?}");
+    assert!(
+      rendered.contains("cargo build --workspace"),
+      "expected the project fact recorded for `workspace` to appear in the \
+       agent's first prompt, got: {rendered}"
     );
   }
 }

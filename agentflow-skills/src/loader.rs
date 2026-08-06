@@ -255,6 +255,14 @@ impl SkillLoader {
             .to_string(),
         );
       }
+      if let Some(proj) = &mem.project
+        && proj.enabled
+        && manifest.skill.name.trim().is_empty()
+      {
+        warnings.push(
+          "[memory.project] is enabled but skill.name is empty; db path may be invalid".to_string(),
+        );
+      }
     }
 
     // ── validator (P4.4 follow-up step 3) ──────────────────────────────

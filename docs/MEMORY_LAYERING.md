@@ -2,9 +2,11 @@
 
 Status: design as of `P4.5`; backend implementations closed under
 P4.7 (2026-05-24, `5098719`); Preference wiring (config, prompt
-injection, write tool) closed under U2.2 (2026-07-31) — see the
-"Wiring status" note under §Precedence for what remains unwired
-(Entity facts).
+injection, write tool) closed under U2.2 (2026-07-31); Project memory
+`SkillBuilder`/`skill.toml` wiring (scoped to `harness run`/`chat`)
+closed under V1.6 — see the "Wiring status" notes under §Precedence
+for what remains unwired (Entity facts) or partially wired (Project
+memory, elsewhere).
 Crate: `agentflow-memory`.
 Implements: P4.7 (backend implementations) and P-H.4 (background task
 context).
@@ -26,7 +28,8 @@ four kinds so that:
 
 Four mutually exclusive layers. Each implementation declares which
 layer it serves; an agent runtime may attach at most one store per
-layer.
+layer. (A fifth, additive layer — **Project memory** — exists outside
+this table; see its own Wiring status note under §Precedence.)
 
 | Layer | Lifetime | Keyed by | Primary read API | Retention default |
 | --- | --- | --- | --- | --- |
@@ -302,6 +305,24 @@ only reachable standalone / via `agentflow memory prune`. No
 references `EntityFactStore` yet. Wiring it is unscheduled future work
 (tracked in `TODOs.md`).
 
+**Project memory (L3.1) is a fifth, additive layer — not one of the four
+above.** It's keyed by `project_key` (a hash of a filesystem project
+root, `project_key_for_path`) rather than `session_id`/user/entity, and
+is fully automatic on both ends: `ReActAgent::record_project_facts`
+extracts `shell`/`script`/`code_exec` tool-call params after every turn
+and persists them via `ProjectMemoryStore`, with no LLM tool call
+involved (unlike preference's `remember_preference`). **Wiring status
+(V1.6, see TODOs.md)**: wired into `ReActAgent` since L3.1; wired into
+`SkillBuilder`/`skill.toml` (`[memory.project]`, see below) since V1.6,
+but *only* for callers that resolve a real `project_root` and build via
+`SkillBuilder::build_with_project_root` instead of plain `build` —
+today that's `agentflow harness run`/`chat` alone (both resolve
+`--workspace`, defaulting to CWD). Multi-agent participants, the eval
+harness, and DAG `agent` nodes have no "what directory is this agent
+working in" concept, so `[memory.project]` is a no-op for them even if
+a skill declares it — same graceful-no-op pattern as `[memory.preference]`
+being absent.
+
 ## Migration path
 
 Today (`v0.3.0`):
@@ -339,17 +360,27 @@ db_path = "~/.agentflow/memory/my-skill.preference.db"  # optional override;
                                                   # defaults to
                                                   # ~/.agentflow/memory/<skill_name>.preference.db
 
+# skill.toml (V1.6 — implemented, but only takes effect for callers that
+# build via SkillBuilder::build_with_project_root with a real project_root;
+# see the Wiring status note above)
+[memory.project]
+enabled = true                              # optional, defaults to true
+db_path = "~/.agentflow/memory/my-skill.project.db"  # optional override;
+                                              # defaults to
+                                              # ~/.agentflow/memory/<skill_name>.project.db
+
 # skill.toml (proposed, not implemented — no SkillBuilder support yet)
 [memory.entity_facts]
 type = "sqlite"
 path = "~/.agentflow/memory/{skill}.facts.db"  # optional override
 ```
 
-The existing `[memory]` table is unchanged. `[memory.preference]` is
-independent of the primary `type` above — it can be combined with any
-of `session`/`sqlite`/`semantic`/`none`. `[memory.entity_facts]` is
-still the proposed additive shape for when that layer's wiring lands;
-until then no skill.toml can attach a facts store.
+The existing `[memory]` table is unchanged. `[memory.preference]` and
+`[memory.project]` are both independent of the primary `type` above —
+either can be combined with any of `session`/`sqlite`/`semantic`/`none`.
+`[memory.entity_facts]` is still the proposed additive shape for when
+that layer's wiring lands; until then no skill.toml can attach a facts
+store.
 
 ## Stability
 

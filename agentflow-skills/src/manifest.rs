@@ -492,6 +492,15 @@ pub struct MemoryConfig {
   /// `docs/MEMORY_LAYERING.md` § Precedence at prompt-assembly time.
   #[serde(default)]
   pub preference: Option<PreferenceMemoryConfig>,
+  /// L3.1/V1.6: `[memory.project]` sub-table — durable, per-project facts
+  /// observed from `shell`/`script`/`code_exec` tool calls, injected into
+  /// the persona at prompt-assembly time. Fully automatic on both ends (no
+  /// tool the LLM calls to write it, unlike `preference` above). Only takes
+  /// effect for callers that resolve a `project_root` and build via
+  /// `SkillBuilder::build_with_project_root` — see that method's doc
+  /// comment for why most `SkillBuilder` call sites don't have one.
+  #[serde(default)]
+  pub project: Option<ProjectMemoryConfig>,
 }
 
 impl MemoryConfig {
@@ -521,5 +530,22 @@ pub struct PreferenceMemoryConfig {
 }
 
 fn default_preference_enabled() -> bool {
+  true
+}
+
+/// `[memory.project]` sub-table (L3.1/V1.6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMemoryConfig {
+  /// Defaults to `true` — presence of the `[memory.project]` table
+  /// implies "on"; an override file can still disable it explicitly
+  /// (`enabled = false`) without deleting the table.
+  #[serde(default = "default_project_enabled")]
+  pub enabled: bool,
+  /// Path to the SQLite database file. Supports `~` expansion. Defaults
+  /// to `~/.agentflow/memory/<skill_name>.project.db`.
+  pub db_path: Option<String>,
+}
+
+fn default_project_enabled() -> bool {
   true
 }

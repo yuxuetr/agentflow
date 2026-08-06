@@ -52,6 +52,10 @@ struct ChatConfig {
   seq_allocator: SeqAllocator,
   memory_db: PathBuf,
   session_id: String,
+  /// V1.6: passed to `SkillBuilder::build_with_project_root` so a
+  /// `[memory.project]`-declaring skill gets its project-memory layer
+  /// wired against the chat's real working directory.
+  workspace: PathBuf,
 }
 
 /// A pending approval handed to the REPL: the request + a one-shot channel to
@@ -289,6 +293,7 @@ pub async fn execute(
     seq_allocator: SeqAllocator::new(),
     memory_db,
     session_id: session.unwrap_or_else(|| format!("chat-{}", uuid::Uuid::new_v4().simple())),
+    workspace: workspace.clone(),
   };
 
   // Current agent source — switched at runtime by /model and /skill.
@@ -516,9 +521,10 @@ async fn build_chat_runtime(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
 ) -> Result<(HarnessRuntime, String, Option<String>)> {
-  let (mut agent, model, skill_name) = build_agent(skill_dir, model_override, &cfg.memory_db)
-    .await
-    .context("failed to construct the inner Harness agent")?;
+  let (mut agent, model, skill_name) =
+    build_agent(skill_dir, model_override, &cfg.memory_db, &cfg.workspace)
+      .await
+      .context("failed to construct the inner Harness agent")?;
 
   // H.2.1: prefer the REPL-routed approval provider when present (interactive
   // `--approve cli` in chat); otherwise fall back to the mode's default.
