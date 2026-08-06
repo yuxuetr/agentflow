@@ -544,11 +544,28 @@ fn row_to_message(row: &SqliteRow) -> Result<Message, MemoryError> {
     .try_get("token_count")
     .map_err(|e| MemoryError::StorageError(e.to_string()))?;
 
-  let id = uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4());
+  // Q2.10.1: pre-fix the `unwrap_or_else` fallbacks silently minted a
+  // fresh UUID and a `now()` timestamp every time a row failed to
+  // parse — making the same row return different ids/timestamps on
+  // each read and breaking the `AgentNodeResumeContract` key
+  // invariant (the resume contract assumes message ids are stable
+  // across reads). Surface the parse failure as `StorageError` so
+  // the caller can decide whether to repair, skip, or abort. This
+  // mirrors the fix already applied to `sqlite.rs::row_to_message`,
+  // which this file's copy had drifted from (V1.6).
+  let id = uuid::Uuid::parse_str(&id_str).map_err(|err| {
+    MemoryError::StorageError(format!(
+      "corrupt row: invalid UUID '{id_str}' in messages.id: {err}"
+    ))
+  })?;
   let role = Role::from(role_str.as_str());
   let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
     .map(|dt| dt.with_timezone(&chrono::Utc))
-    .unwrap_or_else(|_| chrono::Utc::now());
+    .map_err(|err| {
+      MemoryError::StorageError(format!(
+        "corrupt row (id={id}): invalid RFC3339 timestamp '{ts_str}': {err}"
+      ))
+    })?;
 
   Ok(Message {
     id,
@@ -723,6 +740,41 @@ mod tests {
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].content, "Hello, world!");
     assert_eq!(all[1].content, "Hi there!");
+  }
+
+  /// V1.6 regression: a row with a malformed UUID returns `StorageError`
+  /// instead of silently minting a fresh `Uuid::new_v4()` — this file's
+  /// copy of `row_to_message` had drifted from the fix already applied to
+  /// `sqlite.rs` under Q2.10.1 (same bug class: pre-fix, the same corrupt
+  /// row produced a different message id on every read, breaking
+  /// `AgentNodeResumeContract`'s message-id key).
+  #[tokio::test]
+  async fn row_to_message_returns_err_on_corrupt_uuid() {
+    let mem = in_mem(4).await;
+    sqlx::query(
+      "INSERT INTO messages (id, session_id, role, content, timestamp, tool_name, token_count)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind("not-a-uuid")
+    .bind("sess-corrupt")
+    .bind("user")
+    .bind("hello")
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind::<Option<String>>(None)
+    .bind(1_i64)
+    .execute(&mem.pool)
+    .await
+    .unwrap();
+
+    let err = mem
+      .get_all("sess-corrupt")
+      .await
+      .expect_err("corrupt row must surface as error");
+    let msg = err.to_string();
+    assert!(
+      msg.contains("invalid UUID") || msg.contains("corrupt row"),
+      "expected corrupt-row error, got: {msg}"
+    );
   }
 
   #[tokio::test]
