@@ -166,14 +166,16 @@ step (PlanExecute), when a checkpointer is attached via
 reconstructed fresh from the resuming call's `AgentContext` — a resume
 can legitimately be handed different limits than the original run.
 
-`ReActAgent::resume_from_loop_checkpoint(context, checkpoint)` and
-`PlanExecuteAgent::resume_from_loop_checkpoint(context, checkpoint)`
-splice the restored state directly back into the turn loop / execute
-loop instead of restarting: ReAct re-enters `run_one_turn` at the
-checkpointed step (still needs the LLM for remaining turns);
+`ReActAgent::resume_from_loop_checkpoint(context, checkpoint, answer)`
+and `PlanExecuteAgent::resume_from_loop_checkpoint(context, checkpoint,
+answer)` splice the restored state directly back into the turn loop /
+execute loop instead of restarting: ReAct re-enters `run_one_turn` at
+the checkpointed step (still needs the LLM for remaining turns);
 PlanExecute needs no further LLM call at all — the plan was already
 frozen into the checkpoint — and just resumes tool execution at
-`plan_position`. `should_clear_checkpoint` (shared by both runtimes,
+`plan_position`. (The `answer` parameter is V2.3 — see below; it is
+`None` for every checkpoint that isn't paused on a question.)
+`should_clear_checkpoint` (shared by both runtimes,
 `agentflow-agents::checkpoint`) is an exhaustive match over
 `AgentStopReason`: checkpoints clear on genuine completion
 (`FinalAnswer`/`StopCondition`/`Error`) and survive every other stop
@@ -191,7 +193,56 @@ harness run` attaches one by default whenever a run-dir is available.
 which only re-prints the persisted JSONL event log) rebuilds the agent
 and calls `resume_from_loop_checkpoint` to genuinely continue execution
 — a minimal CLI surface; full `HarnessRuntime`-level resume wiring
-(live event stream, approval-gate re-wrapping) is a follow-up.
+(live event stream, approval-gate re-wrapping) is `HarnessRuntime::
+resume_from_interrupt`, part of V2.3 below.
+
+**General HITL interrupt/resume (V2.3).** Built on top of the V2.4
+checkpoint machinery above: the agent asks the user a question mid-run,
+the loop pauses (`AgentStopReason::AwaitingInput { question }`), and
+once the user replies the run resumes carrying their answer — distinct
+from the approval mechanism (`agentflow-harness`'s hook pipeline), which
+gates whether one specific tool call proceeds rather than pausing the
+whole loop for an open-ended answer. `ReActAgent` exposes this as an
+always-registered synthetic tool, `ASK_USER_TOOL_NAME = "ask_user"`
+(mirrors `final_answer`'s interception mechanism — unconditionally
+registered, unlike `final_answer`, since `ask_user` needs no
+`output_schema` to be safe to expose). `PlanExecuteAgent` has no
+mid-loop LLM re-entry point at all, so it treats the same name as a
+reserved pseudo-tool intercepted inside a plan step, before real tool
+dispatch, in both `run_plan_execute_loop` and
+`resume_from_loop_checkpoint` (the step loop body is duplicated across
+the two).
+
+The checkpoint saved at the interception point is explicit, not
+inherited from the ordinary per-turn/per-step save above — that save is
+one full turn/step stale by the time `ask_user` fires and would not yet
+carry the question — and sets the new `AgentLoopCheckpoint.
+pending_question: Option<String>` field (`None` for every other stop
+reason). `resume_from_loop_checkpoint`'s `answer: Option<String>`
+parameter is validated in both directions: a checkpoint with
+`pending_question: Some(_)` requires `answer: Some(_)` and vice versa,
+mismatches are a hard `InvalidCheckpoint` error. ReAct writes the answer
+back into memory as a user message before re-entering the turn loop;
+PlanExecute treats it as the paused step's synthetic tool result,
+pushed into `observations` exactly like a real tool's output would be,
+and resumes at `plan_position + 1`.
+
+`HarnessRuntime::resume_from_interrupt(options, checkpoint, answer)` is
+the harness-layer entry point (does not re-run `HarnessRuntime::run`
+wholesale — no fresh `session_started`, no context-provider
+re-assembly — just reattaches the live event bridge, stamps
+`interrupt_answered`, and dispatches through `AgentRuntime::
+resume_from_loop_checkpoint`). `agentflow-db`'s `DbLoopCheckpointer`
+is the server-side `AgentLoopCheckpointer`, attached to every
+`LiveHarnessExecutor` session by default; `POST /v1/harness/sessions/
+{id}/interrupt/answer` is the HTTP entry point. `agentflow harness
+resume-loop` gained `--runtime react|plan_execute` (a checkpoint is
+only resumable by the runtime kind that produced it) and `--answer
+<text>` (falls back to an interactive stdin prompt when omitted and the
+checkpoint is paused); `agentflow harness run`/`chat` handle
+`AwaitingInput` inline (TTY-gated prompt for `run`, next-REPL-line for
+`chat`). See `docs/HARNESS_MODE.md`'s "Interrupt protocol (V2.3)"
+section for the wire-level contract.
 
 `ReActAgent::query_memory(...)` and `query_session_memory(...)` expose the
 runtime memory query boundary. The active `MemoryStore` owns retrieval behavior:

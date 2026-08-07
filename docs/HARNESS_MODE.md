@@ -85,6 +85,8 @@ The frozen kind set (Phase H0):
 | `approval_decided` | embedded `ApprovalDecision` | provider returned a decision |
 | `tool_call_completed` | step_index, tool, is_error, duration_ms, source, output_summary | tool returned |
 | `token_delta` | step_index, delta | raw model output chunk arrived (V2.2, live-only) |
+| `interrupt_requested` | step_index, question | agent called the `ask_user` synthetic tool / pseudo-tool and the loop paused (V2.3) |
+| `interrupt_answered` | step_index, answer | the paused loop resumed with the user's answer (V2.3) |
 | `background_task_updated` | task_id, status, summary, error | managed task state change |
 | `memory_summary_added` | layer, summary, token_estimate | memory compaction appended a summary |
 | `stopped` | reason, final_answer, error | session terminating |
@@ -144,6 +146,61 @@ Rules:
 - `expires_at` is honored by the provider; a missed deadline produces
   `HarnessError::ApprovalTimeout`, never an implicit allow
   (HARNESS_MODE_EVOLUTION Risk 2).
+
+## Interrupt protocol (V2.3)
+
+General HITL "the agent asks the user a question, the loop pauses, the
+user's answer resumes it" — distinct from the approval protocol above,
+which gates whether one specific tool call proceeds rather than pausing
+the whole loop for an open-ended answer. `ReActAgent` exposes this as an
+always-registered synthetic tool (`ASK_USER_TOOL_NAME = "ask_user"`,
+mirrors `final_answer`'s mechanism); `PlanExecuteAgent` (no mid-loop LLM
+re-entry point) treats the same name as a reserved pseudo-tool
+intercepted inside a plan step, before real tool dispatch.
+
+```rust
+// agentflow_agent_spi::runtime::AgentStopReason
+AwaitingInput { question: String }
+
+// agentflow_agent_spi::checkpoint::AgentLoopCheckpoint
+pending_question: Option<String>  // None for every stop reason but AwaitingInput
+
+// agentflow_agent_spi::runtime::AgentRuntime
+async fn resume_from_loop_checkpoint(
+  &mut self, context: AgentContext, checkpoint: AgentLoopCheckpoint, answer: Option<String>,
+) -> Result<AgentRunResult, AgentRuntimeError>;
+```
+
+Rules:
+
+- At most one question can be pending per session — the whole loop is
+  stopped, not one gated call mid-batch like a tool-call approval, so
+  there is no request id / list structure on this side.
+- `resume_from_loop_checkpoint`'s `answer` is validated in both
+  directions: a checkpoint with `pending_question: Some(_)` requires
+  `answer: Some(_)`, and vice versa — mismatches are a hard
+  `InvalidCheckpoint` error rather than a silently-ignored no-op.
+- A checkpoint saved at the `ask_user` interception point is explicit,
+  not inherited from the prior turn's ordinary per-turn checkpoint save
+  (V2.4) — that save is one full turn stale by the time `ask_user` is
+  intercepted and would not yet carry `pending_question`.
+- A delegated sub-agent's `AwaitingInput` surfaces as an error to its
+  parent rather than bubbling to the top-level user — nested HITL
+  through delegation is out of scope.
+
+`HarnessRuntime::resume_from_interrupt(options, checkpoint, answer)` is
+the harness-layer entry point: it does not re-run `HarnessRuntime::run`
+wholesale (no fresh `session_started`, no context-provider
+re-assembly), just reattaches the live event bridge, stamps
+`interrupt_answered` first, and dispatches through
+`AgentRuntime::resume_from_loop_checkpoint`. Only `InnerRuntime::Opaque`
+is supported today — a `--context-refresh` (`InnerRuntime::TurnDriven`)
+session cannot hit this path, since `TurnDrivenRuntime` has no
+equivalent resume method (its whole point is the caller owning turn
+pacing). In practice this only affects `ReActAgent`: `--context-refresh`
+combined with `--runtime plan_execute` is already rejected at the CLI
+layer, since `PlanExecuteAgent` never implements `TurnDrivenRuntime` in
+the first place.
 
 ## Hook traits
 
@@ -353,6 +410,28 @@ contract and resume semantics; this is a minimal CLI surface (no live
 event stream, no approval-gate re-wrapping) — full `HarnessRuntime`
 resume wiring is a follow-up.
 
+### `ask_user` interrupt / resume (V2.3, post-freeze)
+
+`agentflow harness run` and `agentflow harness chat` handle
+`AgentStopReason::AwaitingInput` inline: `run` prompts on a real TTY
+(stdin and stdout both interactive) and resumes in the same process;
+otherwise it prints the question and exits `0` (not a failure — the
+session is legitimately paused), pointing at `resume-loop --answer` as
+the follow-up. `chat`'s REPL prints the question and treats the next
+line the user types as the answer, resuming through
+`HarnessRuntime::resume_from_interrupt` instead of starting a fresh
+turn — this needed `chat` to attach a `FileLoopCheckpointer` by default
+for the first time (it previously ran with none, since nothing before
+V2.3 needed to resume a `chat` session's loop).
+
+`agentflow harness resume-loop <session_id>` (V2.4) gains two flags for
+this: `--runtime react|plan_execute` (a checkpoint is only resumable by
+the runtime kind that produced it — the two use different loop-state
+shapes) and `--answer <text>` (resolves a pending `ask_user` question;
+omit it and the command reads one line from stdin instead, when the
+loaded checkpoint has `pending_question` set — an unpaused checkpoint
+rejects `--answer` outright).
+
 ### Runtime-limit flags (added post-freeze; not in the Phase H1 block above)
 
 `agentflow harness run`/`chat` also accept `--max-steps`,
@@ -437,6 +516,39 @@ between two semantics:
 
 Both flavours echo the applied `mode` in the response body so callers
 that omit the field can confirm the default.
+
+V2.3 adds the interrupt/resume surface, backed by a Postgres
+`DbLoopCheckpointer` (`agentflow-db`'s `harness_loop_checkpoints` table
++ nullable `pending_question`/`pending_question_step_index` columns on
+`harness_sessions`) that `LiveHarnessExecutor` attaches to every
+session by default:
+
+```text
+GET  /v1/harness/sessions/{id}/interrupt         # V2.3
+POST /v1/harness/sessions/{id}/interrupt/answer  # V2.3
+```
+
+`GET .../interrupt` reads `pending_question*` straight off the session
+row (`{"pending": null}` or `{"pending": {"question": ..., "step_index":
+...}}`) — at most one question can ever be pending per session, so this
+is a nullable object rather than a list like `/approvals`.
+`POST .../interrupt/answer` 400s unless the session's status is
+`awaiting_input` (a new, deliberately non-terminal `HarnessSessionStatus`
+variant — `is_terminal()` returns `false` for it, since the point is
+resuming via this route rather than restarting via `:resume`, which
+requires `is_terminal() == true`); on success it clears the pending
+columns, flips the row to `running`, and `tokio::spawn`s the resume
+through `HarnessRuntime::resume_from_interrupt` in the background,
+returning the refreshed row immediately — the same fire-and-forget
+dispatch pattern as `:resume`. The executor contract
+(`HarnessSessionExecutor`) gained a matching `resume_interrupt` method
+with a default implementation that fails the session outright, so
+`StubHarnessExecutor` (which never runs a real agent loop, and so never
+produces an `awaiting_input` session) doesn't need a no-op override.
+
+The Web UI's `InterruptCard` (structurally identical to `ApprovalCard`)
+polls `GET .../interrupt` on the same 2 s cadence as the session row and
+approvals, and posts to `.../interrupt/answer` on submit.
 
 `POST /v1/harness/sessions/{id}:cancel` and
 `POST /v1/harness/sessions/{id}:resume` share one Axum POST handler
