@@ -629,14 +629,11 @@ fn harness_run_prints_question_when_non_interactive_then_resume_loop_answer_cont
       .to_string(),
     )
     .env("AGENTFLOW_MOCK_RESPONSES", json!([""]).to_string());
-  first
-    .assert()
-    .success()
-    .stderr(
-      predicate::str::contains("awaiting input")
-        .and(predicate::str::contains("resume-loop"))
-        .and(predicate::str::contains("Which file should I edit?")),
-    );
+  first.assert().success().stderr(
+    predicate::str::contains("awaiting input")
+      .and(predicate::str::contains("resume-loop"))
+      .and(predicate::str::contains("Which file should I edit?")),
+  );
 
   // `resume-loop` is a fresh process — its `mock` provider queues start
   // over at index 0, and this run makes exactly one more LLM call (the

@@ -32,7 +32,13 @@ selection into:
   non-empty value (either satisfies the requirement — see
   [DEPLOYMENT.md § Multi-tenant deployments](DEPLOYMENT.md#multi-tenant-deployments-bind-tokens-to-tenants-u11)
   for the token→tenant binding that closes cross-tenant header spoofing,
-  U1.1).
+  U1.1). **V3.1:** the "Unauthenticated loopback allowed" row above is
+  now actually enforced, not just documented — under every profile
+  (including `dev`/`local`), a missing token only starts the gateway
+  when the bind address is loopback (`127.0.0.1`/`::1`); a non-loopback
+  bind (e.g. `0.0.0.0`, what the `PORT` env var always produces) with
+  no token refuses to start regardless of the nominal profile. See
+  [DEPLOYMENT.md § PORT and PaaS-style public binding](DEPLOYMENT.md#port-and-paas-style-public-binding-v31).
 - `agentflow doctor`: reports the selected profile, effective defaults, and
   invalid profile warnings in text and JSON output.
 

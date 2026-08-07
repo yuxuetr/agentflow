@@ -39,12 +39,23 @@ Compose sets:
 
 - `DATABASE_URL=postgres://agentflow:agentflow@postgres:5432/agentflow`
 - `PORT=3000`
+- `AGENTFLOW_API_TOKEN=local-dev-change-me` (V3.1 — see below)
 - `AGENTFLOW_RUN_DIR=/data/runs` can be set to control workflow artifact storage.
 - `RUST_LOG=info`
 
 `AGENTFLOW_SECURITY_PROFILE` is left unset (defaults to `local`) — see
 [§ Security profile](#security-profile-u12) below for what that means
 and what to set for anything beyond local development.
+
+**V3.1:** because `PORT` makes the container bind `0.0.0.0` (never
+loopback-only), the gateway now refuses to start under *any* profile
+if no bearer token is configured — see [§ PORT and PaaS-style public
+binding](#port-and-paas-style-public-binding-v31). The shipped
+`AGENTFLOW_API_TOKEN` value above is a well-known placeholder, not a
+secret; it exists only so `docker compose up --build` keeps working
+out of the box for a local trial. Replace it with a private value
+before this stack (or its published `3000:3000` port) is reachable by
+anyone else.
 
 ## Helm
 
@@ -74,15 +85,41 @@ Prefer `existingSecret` in shared environments so credentials do not live in Hel
 ### Security profile (U1.2)
 
 `values.yaml` ships `securityProfile: local` by default so existing
-installs keep their current behavior across `helm upgrade`. **This is
-not a production-safe default** — under `local`, a missing
-`AGENTFLOW_API_TOKEN` does not fail startup, the gateway just starts
-open with no bearer auth (a warning is logged, but it's easy to miss
-in aggregated logs). Setting `AGENTFLOW_API_TOKEN` still enforces it
-under `local` too — the profile only controls whether it's *required*.
+installs keep their current behavior across `helm upgrade`.
 
-Any Helm install reachable by users or hosts you don't fully trust
-must set `production` explicitly:
+**V3.1:** a missing `AGENTFLOW_API_TOKEN` now fails startup
+(`CrashLoopBackOff`) under *every* profile, not just `production` — a
+pod's `containerPort` is never loopback-only, so an unauthenticated
+gateway is refused regardless of `securityProfile`. Set a token before
+installing, the same way `DATABASE_URL` is already wired:
+
+```bash
+kubectl create secret generic agentflow-db \
+  --from-literal=DATABASE_URL='postgres://user:password@postgres:5432/agentflow' \
+  --from-literal=AGENTFLOW_API_TOKEN='replace-with-a-real-secret'
+
+helm install agentflow charts/agentflow \
+  --set image.repository=agentflow \
+  --set image.tag=server \
+  --set existingSecret=agentflow-db
+```
+
+Or, for local development only, let Helm create the secret from values
+(same caveat as `secretEnv.DATABASE_URL` — prefer `existingSecret` in
+shared environments so credentials don't live in Helm release values):
+
+```bash
+helm install agentflow charts/agentflow \
+  --set image.repository=agentflow \
+  --set image.tag=server \
+  --set secretEnv.DATABASE_URL='postgres://user:password@postgres:5432/agentflow' \
+  --set secretEnv.AGENTFLOW_API_TOKEN='replace-with-a-real-secret'
+```
+
+A configured token satisfies the new startup check under every
+profile, but any Helm install reachable by users or hosts you don't
+fully trust should still set `production` explicitly for the rest of
+its fail-closed posture, which the token check alone does not cover:
 
 ```bash
 helm install agentflow charts/agentflow \
@@ -92,17 +129,39 @@ helm install agentflow charts/agentflow \
   --set securityProfile=production
 ```
 
-Under `production`: a missing bearer token fails startup instead of
-running open; CORS defaults to an explicit origin allow-list instead
-of permissive (see `AGENTFLOW_CORS_ALLOWED_ORIGINS` above); and if you
-also enable the worker gRPC control plane (T1.2, `--worker-grpc`),
-worker admission becomes fail-closed. See `docs/SECURITY_PROFILES.md`
-for the full per-profile defaults table. This chart does not yet wire
-`AGENTFLOW_API_TOKEN` through a dedicated Kubernetes `Secret` (only
-`DATABASE_URL` has that); until it does, set it via `--set
-env.AGENTFLOW_API_TOKEN=...` (plaintext in the Helm release, so prefer
-a values override file with restricted access over a bare CLI flag)
-or patch the Deployment post-install to source it from a `Secret`.
+Under `production`: CORS defaults to an explicit origin allow-list
+instead of permissive (see `AGENTFLOW_CORS_ALLOWED_ORIGINS` above);
+and if you also enable the worker gRPC control plane (T1.2,
+`--worker-grpc`), worker admission becomes fail-closed. See
+`docs/SECURITY_PROFILES.md` for the full per-profile defaults table.
+
+### PORT and PaaS-style public binding (V3.1)
+
+The server binary's `resolve_bind()` gives the `PORT` env var
+unconditional priority, always binding `0.0.0.0:$PORT` when it's set —
+the standard convention PaaS platforms (Heroku/Render/Railway/Cloud Run
+and similar) use to tell a process which port to listen on for public
+traffic. Because that bind is never loopback-only, the gateway now
+refuses to start (exit code 2, or a `Fail` readiness under `agentflow
+serve --check`) if no bearer token is configured, **regardless of
+`AGENTFLOW_SECURITY_PROFILE`** — `local`/`dev`'s historical
+no-token-required posture only ever excused a missing token when the
+socket was loopback-only (`127.0.0.1`/`::1`), and that exemption never
+applied to a public bind in the first place; it just wasn't enforced
+before V3.1. To satisfy the check: set `AGENTFLOW_API_TOKEN` (or
+`AGENTFLOW_API_TOKEN_TENANTS`), bind to a loopback address instead
+(unset `PORT`, set `AGENTFLOW_SERVE_BIND=127.0.0.1:<port>`), or set
+`AGENTFLOW_SECURITY_PROFILE=production` with a token configured.
+
+Caveat: `agentflow-cli`'s `agentflow serve --bind <addr>` spawns the
+`agentflow-server` binary as a child process and sets
+`AGENTFLOW_SERVE_BIND` on it, but does not clear an `PORT` inherited
+from the parent shell — since `resolve_bind()` checks `PORT` first,
+an inherited `PORT` still wins over an explicit `--bind 127.0.0.1:...`
+flag. If you're launching `agentflow serve` from an environment that
+already has `PORT` set (common when a process manager or PaaS buildpack
+exports it globally), unset it first or rely on `AGENTFLOW_SERVE_BIND`
+being what you actually want bound.
 
 ### Resource requests/limits and autoscaling (T4.3)
 

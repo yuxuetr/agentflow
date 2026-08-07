@@ -2,13 +2,16 @@
 # `local` so existing installs keep their current (permissive) behavior
 # on `helm upgrade`.
 #
-# PRODUCTION DEPLOYMENTS MUST SET THIS TO `production` EXPLICITLY
-# (`--set securityProfile=production`), otherwise:
-#   - a missing bearer token does NOT fail startup — the gateway just
-#     starts open with no auth (a warning is logged, but that's easy
-#     to miss). Setting env.AGENTFLOW_API_TOKEN still enforces it under
-#     `local` too; this chart has no dedicated secret wiring for the
-#     token yet — see docs/DEPLOYMENT.md § Security profile;
+# V3.1: a missing bearer token now fails startup (CrashLoopBackOff)
+# under EVERY profile, not just `production` — a pod's containerPort is
+# never loopback-only, so the gateway refuses to run unauthenticated
+# regardless of `securityProfile`. Set `secretEnv.AGENTFLOW_API_TOKEN`
+# (or `existingSecret` with an `AGENTFLOW_API_TOKEN` key) below before
+# installing; see docs/DEPLOYMENT.md § Security profile.
+#
+# PRODUCTION DEPLOYMENTS SHOULD STILL SET THIS TO `production` EXPLICITLY
+# (`--set securityProfile=production`) for the rest of its fail-closed
+# posture, which the token check alone does not cover:
 #   - CORS stays permissive instead of an explicit origin allow-list;
 #   - if you also enable a worker gRPC control plane, worker admission
 #     policy is NOT fail-closed under `local`.
@@ -60,6 +63,10 @@ env:
 
 secretEnv:
   DATABASE_URL: ""
+  # V3.1: required unless `existingSecret` supplies an
+  # AGENTFLOW_API_TOKEN key instead — see the `securityProfile` comment
+  # above.
+  AGENTFLOW_API_TOKEN: ""
 
 existingSecret: ""
 

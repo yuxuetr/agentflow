@@ -26,20 +26,23 @@ services:
       PORT: "3000"
       RUST_LOG: info
       # U1.2: AGENTFLOW_SECURITY_PROFILE defaults to `local` when unset.
-      # Under `local`, AGENTFLOW_API_TOKEN below is *optional* — if you
-      # forget to set it, the server just starts open with no auth
-      # (a warning is logged, but startup does not fail). Set this to
-      # `production` for any deployment reachable by other users/hosts so
-      # a missing token fails startup instead of silently running open,
-      # CORS defaults to an explicit origin allow-list instead of
-      # permissive, and (if you also run a worker gRPC control plane)
-      # worker admission becomes fail-closed. See docs/DEPLOYMENT.md §
-      # Security profile / docs/SECURITY_PROFILES.md.
+      # Set this to `production` for any deployment reachable by other
+      # users/hosts: CORS defaults to an explicit origin allow-list
+      # instead of permissive, and (if you also run a worker gRPC
+      # control plane) worker admission becomes fail-closed. See
+      # docs/DEPLOYMENT.md § Security profile / docs/SECURITY_PROFILES.md.
       # AGENTFLOW_SECURITY_PROFILE: "production"
-      # Bearer auth for /v1/* routes. Enforced whenever this is set,
-      # regardless of profile; only *required* (fails startup if unset)
-      # under `production`. Leave unset for local dev; set in production.
-      # AGENTFLOW_API_TOKEN: "<replace-me>"
+      # V3.1: bearer auth for /v1/* routes. Because PORT above makes the
+      # container bind 0.0.0.0 (never loopback-only), the gateway now
+      # *refuses to start* under every profile — not just `production`
+      # — if this is unset: an unauthenticated server that isn't
+      # loopback-only is never an accepted default here. The value
+      # below is a well-known placeholder, not a secret — it exists so
+      # `docker compose up --build` works out of the box for a
+      # zero-config local trial. Replace it with a real, private value
+      # before this compose stack (or its published `3000:3000` port)
+      # is reachable by anyone but you.
+      AGENTFLOW_API_TOKEN: "local-dev-change-me"
       # Path to a skills.index.toml on the container's filesystem. Mount
       # the host directory under /skills if you want skill listing /
       # invocation. Leaving this unset just means GET /v1/skills returns [].

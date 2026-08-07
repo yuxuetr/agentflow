@@ -55,6 +55,18 @@ spec:
                 secretKeyRef:
                   name: {{ default (include "agentflow.fullname" .) .Values.existingSecret }}
                   key: DATABASE_URL
+            {{- if or .Values.secretEnv.AGENTFLOW_API_TOKEN .Values.existingSecret }}
+            # V3.1: conditional (unlike DATABASE_URL above, which is
+            # always structurally required) — rendered only when a
+            # token source is actually configured, so a chart install
+            # that hasn't set one yet, or is transitioning off no-auth,
+            # doesn't reference a secret key that doesn't exist.
+            - name: AGENTFLOW_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "agentflow.fullname" .) .Values.existingSecret }}
+                  key: AGENTFLOW_API_TOKEN
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}

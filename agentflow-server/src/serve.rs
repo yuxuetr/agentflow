@@ -1,14 +1,16 @@
 //! Programmatic entry points for booting the AgentFlow Gateway.
 //!
 //! `agentflow_server::run(config)` and `agentflow_server::run_check(config)`
-//! are the two public bootstrap functions used by:
-//!
-//! - `agentflow-server`'s own `main.rs` (binary entry point), and
-//! - `agentflow-cli`'s `agentflow serve` command (P2.1).
-//!
-//! The CLI wraps `run` for the binding path and `run_check` for the
-//! non-binding readiness diagnostics. Both share [`ServeConfig`] so
-//! the two surfaces never drift.
+//! are the two public bootstrap functions, both called from
+//! `agentflow-server`'s own `main.rs` (binary entry point) — `run` for
+//! the real `--bind`/`PORT` boot path, `run_check` under `--check` for
+//! non-binding readiness diagnostics. `agentflow-cli`'s `agentflow
+//! serve` command (P2.1) does not link this crate; it spawns the
+//! `agentflow-server` executable as a child process instead (avoids a
+//! `agentflow-cli` ↔ `agentflow-server` dependency cycle), so both of
+//! its subcommands ultimately go through this same `main.rs` dispatch,
+//! just out of process. Either way [`ServeConfig`] is the one funnel
+//! both entry points share, so the two surfaces never drift.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -125,6 +127,21 @@ pub enum ServeError {
     bind: SocketAddr,
     #[source]
     source: std::io::Error,
+  },
+  /// V3.1: `{profile}`'s `allow_unauthenticated_loopback` only excuses
+  /// a missing token when the socket is loopback-only — a non-loopback
+  /// `bind` (e.g. `0.0.0.0`, which is what `PORT` always produces) with
+  /// no token configured is refused outright rather than silently
+  /// starting an unauthenticated gateway reachable off-host.
+  #[error(
+    "no bearer auth is configured (${auth_token_env} / AGENTFLOW_API_TOKEN_TENANTS both unset) \
+     but the gateway is bound to {bind}, which is not loopback-only — set one of those env vars, \
+     bind to 127.0.0.1/::1, or set AGENTFLOW_SECURITY_PROFILE=production"
+  )]
+  UnauthenticatedPublicBind {
+    bind: SocketAddr,
+    profile: SecurityProfile,
+    auth_token_env: String,
   },
   #[error("server runtime error: {0}")]
   Runtime(String),
@@ -270,6 +287,19 @@ pub async fn build_startup_report(config: &ServeConfig) -> StartupReport {
     errors.push(format!(
       "{} profile requires bearer auth but neither ${} nor $AGENTFLOW_API_TOKEN_TENANTS is set",
       config.security_profile, config.auth_token_env
+    ));
+    readiness.promote(ServeReadiness::Fail);
+  } else if !any_token_present && !allows_unauthenticated_bind(config.security_profile, config.bind)
+  {
+    // V3.1: a non-loopback bind (e.g. `0.0.0.0`, what `PORT` always
+    // produces) always needs a token regardless of the nominal
+    // profile — `allow_unauthenticated_loopback` only excuses a
+    // missing token when the socket is loopback-only.
+    errors.push(format!(
+      "no bearer auth is configured but the gateway would bind to {} (not loopback-only) — \
+       set ${} (or $AGENTFLOW_API_TOKEN_TENANTS), bind to a loopback address, or set \
+       AGENTFLOW_SECURITY_PROFILE=production",
+      config.bind, config.auth_token_env
     ));
     readiness.promote(ServeReadiness::Fail);
   } else if !require_token && !any_token_present {
@@ -435,7 +465,14 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
   info!("Using '{}' security profile", config.security_profile);
 
   let auth = resolve_auth_config_from_env(config.security_profile).map_err(ServeError::Auth)?;
-  if auth.is_none() && !security_defaults.auth.require_api_token {
+  if auth.is_none() {
+    if !allows_unauthenticated_bind(config.security_profile, config.bind) {
+      return Err(ServeError::UnauthenticatedPublicBind {
+        bind: config.bind,
+        profile: config.security_profile,
+        auth_token_env: config.auth_token_env.clone(),
+      });
+    }
     warn!(
       "{} is not set; the gateway is running without bearer auth.",
       config.auth_token_env
@@ -580,6 +617,18 @@ fn database_host(url: &str) -> Option<String> {
   Some(host_with_port.to_string())
 }
 
+/// V3.1: whether `profile` tolerates a missing auth token for `bind`.
+/// `SecurityProfile::defaults().auth.allow_unauthenticated_loopback`
+/// (Dev/Local: `true`, Production: `false`) only ever excuses a missing
+/// token when the socket is loopback-only — a non-loopback bind (e.g.
+/// `0.0.0.0`, what the `PORT` env var always produces) always needs a
+/// token regardless of the nominal profile. Shared by `run()` (real
+/// boot — refuses to start) and `build_startup_report()` (`--check` —
+/// reports `Fail`) so the two enforcement paths never drift.
+fn allows_unauthenticated_bind(profile: SecurityProfile, bind: SocketAddr) -> bool {
+  profile.defaults().auth.allow_unauthenticated_loopback && bind.ip().is_loopback()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -713,6 +762,89 @@ mod tests {
         .errors
         .iter()
         .any(|e| e.contains("requires bearer auth"))
+    );
+  }
+
+  // ── V3.1: no-token + non-loopback bind fail-closed ─────────────────
+
+  #[tokio::test]
+  async fn run_check_local_profile_no_token_non_loopback_bind_fails() {
+    // `_guard`: this test needs AGENTFLOW_API_TOKEN_TENANTS reliably
+    // unset (any_token_present must be false for the new branch to
+    // fire), so it serializes against every other test in this binary
+    // that touches that var — same convention as
+    // `tenant_tokens_env_lock`'s doc comment describes.
+    let _guard = tenant_tokens_env_lock().lock().await;
+    let mut cfg = ServeConfig::defaults();
+    cfg.security_profile = SecurityProfile::Local;
+    cfg.bind = "0.0.0.0:8080".parse().unwrap();
+    cfg.auth_token_env = "AGENTFLOW_API_TOKEN_TEST_MISSING_3".into();
+    // SAFETY: dedicated env var name; AGENTFLOW_API_TOKEN_TENANTS
+    // cleared under `_guard` above.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TEST_MISSING_3");
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TENANTS");
+    }
+    let report = run_check(cfg).await.unwrap();
+    assert_eq!(report.readiness, ServeReadiness::Fail);
+    assert!(
+      report
+        .errors
+        .iter()
+        .any(|e| e.contains("0.0.0.0:8080") && e.contains("not loopback-only")),
+      "expected a bind-address-specific error, got: {:?}",
+      report.errors
+    );
+  }
+
+  #[tokio::test]
+  async fn run_check_local_profile_no_token_loopback_bind_is_warn_only() {
+    // Regression guard: today's default (loopback) bind must stay a
+    // Warn, not escalate to Fail — the new check only fires for a
+    // non-loopback bind.
+    let mut cfg = ServeConfig::defaults();
+    cfg.security_profile = SecurityProfile::Local;
+    cfg.auth_token_env = "AGENTFLOW_API_TOKEN_TEST_MISSING_4".into();
+    // SAFETY: dedicated env var name, no cross-test interference.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TEST_MISSING_4");
+    }
+    let report = run_check(cfg).await.unwrap();
+    assert_ne!(report.readiness, ServeReadiness::Fail);
+    assert!(report.readiness >= ServeReadiness::Warn);
+  }
+
+  #[tokio::test]
+  async fn run_check_production_no_token_non_loopback_bind_still_uses_missing_token_message() {
+    // Regression guard: Production's pre-existing "requires bearer
+    // auth" Fail branch must still win and its message must not be
+    // shadowed by the new bind-address branch.
+    let _guard = tenant_tokens_env_lock().lock().await;
+    let mut cfg = ServeConfig::defaults();
+    cfg.security_profile = SecurityProfile::Production;
+    cfg.bind = "0.0.0.0:8080".parse().unwrap();
+    cfg.auth_token_env = "AGENTFLOW_API_TOKEN_TEST_MISSING_5".into();
+    // SAFETY: `_guard` serializes this against every other test in this
+    // binary that touches AGENTFLOW_API_TOKEN_TENANTS (U1.1).
+    unsafe {
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TEST_MISSING_5");
+      std::env::remove_var("AGENTFLOW_API_TOKEN_TENANTS");
+    }
+    let report = run_check(cfg).await.unwrap();
+    assert_eq!(report.readiness, ServeReadiness::Fail);
+    assert!(
+      report
+        .errors
+        .iter()
+        .any(|e| e.contains("requires bearer auth"))
+    );
+    assert!(
+      !report
+        .errors
+        .iter()
+        .any(|e| e.contains("not loopback-only")),
+      "Production's message must not be shadowed by the new bind-address branch: {:?}",
+      report.errors
     );
   }
 }
