@@ -260,6 +260,7 @@ dependencies = [
 name = "agentflow-db"
 version = "0.1.0"
 dependencies = [
+ "agentflow-agent-spi",
  "async-trait",
  "chrono",
  "serde",

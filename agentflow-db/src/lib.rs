@@ -1,10 +1,12 @@
 pub mod database;
 pub mod error;
+pub mod loop_checkpoint;
 pub mod models;
 pub mod repo;
 
 pub use database::Database;
 pub use error::DbError;
+pub use loop_checkpoint::DbLoopCheckpointer;
 pub use models::{
   Artifact, Event, HarnessSession, HarnessSessionEvent, HarnessSessionStatus, McpSession,
   NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep,
