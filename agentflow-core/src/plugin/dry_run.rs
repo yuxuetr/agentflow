@@ -265,6 +265,7 @@ mod tests {
         nodes: vec![],
         capabilities: Capabilities::default(),
         dry_run: None,
+        signature: None,
       },
     };
     let outcome = run_dry_run(&manifest, Path::new(".")).await;

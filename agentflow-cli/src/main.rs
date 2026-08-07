@@ -1538,10 +1538,15 @@ enum PluginCommands {
     /// `production` always refuses this flag).
     #[arg(long)]
     allow_unsandboxed_plugin: bool,
-    /// Treat the plugin archive as signature-verified (`production`
-    /// profile requires this).
+    /// Directory of `<key_id>.pub` Ed25519 public keys used to verify
+    /// a manifest `[plugin.signature]` block, if present (default:
+    /// `~/.agentflow/marketplace-keys/`, shared with `agentflow
+    /// marketplace install/verify`). Whether an unsigned plugin is
+    /// accepted is a `production`-profile policy decision, not a
+    /// flag — see `--allow-unsandboxed-plugin` for the sandbox
+    /// equivalent.
     #[arg(long)]
-    signed: bool,
+    keys_dir: Option<String>,
     /// Output format: text (default) or json-envelope (canonical
     /// `CliJsonEnvelope` — `agentflow.cli/1` wire schema)
     #[arg(long, default_value = "text", value_parser = ["text", "json-envelope"])]
@@ -2604,7 +2609,7 @@ async fn main() {
         dir,
         force,
         allow_unsandboxed_plugin,
-        signed,
+        keys_dir,
         format,
       } => {
         plugin::install::execute(
@@ -2612,7 +2617,7 @@ async fn main() {
           dir,
           force,
           allow_unsandboxed_plugin,
-          signed,
+          keys_dir,
           format,
         )
         .await

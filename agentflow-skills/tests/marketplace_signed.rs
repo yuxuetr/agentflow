@@ -17,13 +17,27 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use agentflow_skills::{
-  MarketplacePackageType, MarketplaceSignature, MarketplaceSource, RemoteMarketplaceCache,
-  RemoteMarketplaceEntry,
+  ChecksumSha256SignatureVerifier, MarketplacePackageType, MarketplaceSignature, MarketplaceSource,
+  RemoteMarketplaceCache, RemoteMarketplaceClient, RemoteMarketplaceEntry,
 };
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use tempfile::TempDir;
+
+/// V3.5: `RemoteMarketplaceCache::new()` now defaults to
+/// `Ed25519SignatureVerifier`. This file's fixtures are all
+/// self-signed with a `checksum-sha256` algorithm (the bootstrap
+/// flow documented above), so every cache here must be built with
+/// `ChecksumSha256SignatureVerifier` explicitly.
+fn checksum_cache(root: impl Into<PathBuf>) -> RemoteMarketplaceCache {
+  RemoteMarketplaceCache::with_client_and_verifier(
+    root,
+    RemoteMarketplaceClient::new(),
+    Arc::new(ChecksumSha256SignatureVerifier),
+  )
+}
 
 /// Source files for one fixture archive, keyed on POSIX path.
 type ArchiveFiles = BTreeMap<String, Vec<u8>>;
@@ -147,7 +161,7 @@ fn signed_skill_strict_path_succeeds() {
   let entry = signed_entry(MarketplacePackageType::Skill, "rust-expert", &bytes, true);
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let cached = cache
     .cache_artifact_bytes(&entry, &bytes)
     .expect("strict signed cache write");
@@ -169,7 +183,7 @@ fn unsigned_skill_non_strict_path_succeeds() {
   let entry = signed_entry(MarketplacePackageType::Skill, "rust-expert", &bytes, false);
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let cached = cache
     .cache_artifact_bytes(&entry, &bytes)
     .expect("non-strict cache write");
@@ -193,7 +207,7 @@ fn signed_skill_strict_path_rejects_tampered_signature() {
     "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface".to_string();
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let err = cache
     .cache_artifact_bytes(&entry, &bytes)
     .expect_err("tampered signature must be rejected");
@@ -219,7 +233,7 @@ fn signed_skill_strict_path_rejects_tampered_artifact() {
   tampered[last] ^= 0xff;
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let err = cache
     .cache_artifact_bytes(&entry, &tampered)
     .expect_err("artifact tampering must be rejected");
@@ -243,7 +257,7 @@ fn signed_plugin_strict_path_succeeds() {
   let entry = signed_entry(MarketplacePackageType::Plugin, "echo-plugin", &bytes, true);
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let cached = cache
     .cache_artifact_bytes(&entry, &bytes)
     .expect("strict signed cache write (plugin)");
@@ -258,7 +272,7 @@ fn unsigned_plugin_non_strict_path_succeeds() {
   let entry = signed_entry(MarketplacePackageType::Plugin, "echo-plugin", &bytes, false);
 
   let tmp = TempDir::new().unwrap();
-  let cache = RemoteMarketplaceCache::new(tmp.path());
+  let cache = checksum_cache(tmp.path());
   let cached = cache
     .cache_artifact_bytes(&entry, &bytes)
     .expect("non-strict cache write (plugin)");

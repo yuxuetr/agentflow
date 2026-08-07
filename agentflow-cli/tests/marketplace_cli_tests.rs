@@ -2,13 +2,32 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 
+use agentflow_skills::{
+  ChecksumSha256SignatureVerifier, RemoteMarketplaceCache, RemoteMarketplaceClient,
+  RemoteMarketplaceEntry,
+};
 use agentflow_skills::{MarketplacePackageType, MarketplaceSignature, MarketplaceSource};
-use agentflow_skills::{RemoteMarketplaceCache, RemoteMarketplaceEntry};
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// V3.5: `RemoteMarketplaceCache::new()` now defaults to
+/// `Ed25519SignatureVerifier`. Every fixture in this file that
+/// pre-populates the on-disk cache directly (bypassing the CLI's own
+/// `cache_from_dir` verifier selection, which is what several of
+/// these tests actually exercise via `Command::cargo_bin`) uses a
+/// `checksum-sha256`-algorithm signature, so the pre-population cache
+/// must be built with `ChecksumSha256SignatureVerifier` explicitly.
+fn checksum_cache(root: impl Into<PathBuf>) -> RemoteMarketplaceCache {
+  RemoteMarketplaceCache::with_client_and_verifier(
+    root,
+    RemoteMarketplaceClient::new(),
+    Arc::new(ChecksumSha256SignatureVerifier),
+  )
+}
 
 fn write_marketplace(path: &Path, checksum: &str) {
   fs::write(
@@ -244,7 +263,7 @@ fn install_cached_skill_package_asserts_failure(package: &[u8], expected_stderr:
   let install_dir = work.path().join("skills");
   let entry = entry_for_bytes(package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, package)
     .unwrap();
 
@@ -474,7 +493,7 @@ fn marketplace_verify_checks_cached_artifact() {
   let bytes = b"verified package";
   let entry = entry_for_bytes(bytes);
   write_marketplace(&marketplace, &entry.source.checksum_sha256);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, bytes)
     .unwrap();
 
@@ -507,7 +526,7 @@ fn marketplace_verify_strict_rejects_unsigned_artifact() {
   let mut entry = entry_for_bytes(bytes);
   entry.signature = None;
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, bytes)
     .unwrap();
 
@@ -553,7 +572,7 @@ Review Rust code.
   )]);
   let entry = entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -602,7 +621,7 @@ description: Rust review skill
   )]);
   let entry = entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -721,7 +740,7 @@ description = "Echo node"
   ]);
   let entry = plugin_entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -805,7 +824,7 @@ allowed-tools: file
   )]);
   let entry = entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -858,7 +877,7 @@ allowed-tools: file
   )]);
   let entry = entry_for_bytes(&package_v1);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package_v1)
     .unwrap();
   Command::cargo_bin("agentflow")
@@ -896,7 +915,7 @@ allowed-tools: file
   write_marketplace_for_entry(&marketplace, &entry_v2);
   // Cache the v2 bytes under the v2 entry. The cache key is per-version,
   // so v1 stays on disk; v2 is what install reads.
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry_v2, &package_v2)
     .unwrap();
   Command::cargo_bin("agentflow")
@@ -959,7 +978,7 @@ allowed-tools: file
   )]);
   let entry = entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -1019,7 +1038,7 @@ description = "Echo node"
   )]);
   let entry = plugin_entry_for_bytes(&package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 
@@ -1131,7 +1150,7 @@ fn marketplace_verify_remote_registry_rejects_unsigned_by_default() {
   let mut entry = entry_for_bytes(bytes);
   entry.signature = None;
   let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, bytes)
     .unwrap();
 
@@ -1162,7 +1181,7 @@ fn marketplace_verify_remote_registry_rejects_checksum_only_signature_by_default
   let bytes = b"checksum-signed remote package";
   let entry = entry_for_bytes(bytes);
   let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, bytes)
     .unwrap();
 
@@ -1190,7 +1209,7 @@ fn marketplace_verify_remote_registry_allow_unsigned_falls_back_to_checksum() {
   let bytes = b"checksum-signed remote package, opted out";
   let entry = entry_for_bytes(bytes);
   let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, bytes)
     .unwrap();
 
@@ -1231,9 +1250,11 @@ fn marketplace_verify_remote_registry_accepts_valid_ed25519_signature_by_default
   let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
 
   // Populate the cache directly on disk (bypassing any verifier) to
-  // simulate "already downloaded" — the default `ChecksumSha256`-backed
-  // cache would itself reject an `ed25519`-algorithm signature block.
-  let probe_cache = RemoteMarketplaceCache::new(&cache_dir);
+  // simulate "already downloaded" — `artifact_path()` only computes a
+  // filesystem path from the entry, it never invokes the cache's
+  // verifier, so which verifier `checksum_cache` picks here is
+  // irrelevant to this test.
+  let probe_cache = checksum_cache(&cache_dir);
   let artifact_path = probe_cache.artifact_path(&entry).unwrap();
   fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
   fs::write(&artifact_path, bytes).unwrap();
@@ -1279,7 +1300,7 @@ description: Rust review skill
   let mut entry = entry_for_bytes(&package);
   entry.signature = None;
   let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, &package)
     .unwrap();
 

@@ -78,7 +78,7 @@ pub use remote_marketplace::{
   DEFAULT_REMOTE_MARKETPLACE_SCHEMA_VERSION, Ed25519SignatureVerifier, MarketplacePackageType,
   MarketplaceSignature, MarketplaceSignatureVerifier, MarketplaceSource, RemoteMarketplaceCache,
   RemoteMarketplaceClient, RemoteMarketplaceEntry, RemoteMarketplaceManifest,
-  SignatureVerificationKind,
+  SignatureVerificationKind, load_ed25519_public_key, verify_ed25519_detached,
 };
 pub use skill_md::SkillMd;
 pub use validator::{

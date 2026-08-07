@@ -260,11 +260,18 @@ network     = []                  # empty = no outbound network
 processes   = []
 env_vars    = ["TESSDATA_PREFIX"]
 
-# Optional: signature (P2 #16 territory; wired but not enforced in v1.0-rc)
+# Optional: signature (V3.5). When present, `agentflow plugin install`
+# verifies a real Ed25519 detached signature over the resolved
+# entrypoint file's bytes, loading the public key from
+# `<keys_dir>/<key_id>.pub` (--keys-dir, default
+# ~/.agentflow/marketplace-keys/, shared with `agentflow marketplace
+# install/verify`). A present-but-invalid signature is a hard install
+# failure. Absent => unsigned; `production` profile denies unsigned
+# installs (PluginPolicy::require_signature).
 [plugin.signature]
-algorithm   = "ed25519"
-public_key  = "..."
-signature   = "..."
+algorithm = "ed25519"
+key_id    = "publisher-a"
+value     = "<base64 detached signature>"
 
 # Optional (P3.4-PR.1): dry-run smoke invocation. When present, lets
 # `agentflow doctor` verify the entrypoint binary at least starts
@@ -467,7 +474,7 @@ manifest format and protocol surface, then add WASM without an SDK breakage.
 | 1 | Plugin → tool registration | A plugin should also be able to declare `[[plugin.tools]]` and have them flow into `ToolRegistry`. Out of PoC scope; design slot reserved in manifest. |
 | 2 | Streaming outputs | Some node types (LLM-like) want to stream tokens. JSON-RPC doesn't natively stream. Path: `node/execute_streaming` returns a notification stream `node/output_chunk` until `node/output_done`. Defer until a streaming built-in node exists. |
 | 3 | Hot reload | Plugin SIGHUP → re-read manifest, restart child. Useful for plugin authors; not v1.0 critical. |
-| 4 | Marketplace + signatures | Owned by P2 #16. Manifest already has `[plugin.signature]` slot. |
+| 4 | Marketplace + signatures | ~~Owned by P2 #16.~~ Closed (V3.5): `[plugin.signature]` is a real, enforced Ed25519 verification over the entrypoint bytes at `agentflow plugin install` time — see `docs/TOOL_PERMISSIONS.md` and the schema example in §6.2 above. |
 | 5 | Plugin-to-plugin calls | Forbidden in v1.0. All inter-plugin coordination goes through workflow DAG edges. |
 
 ---

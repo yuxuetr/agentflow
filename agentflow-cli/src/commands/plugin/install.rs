@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use agentflow_core::plugin::PluginManifest;
+use agentflow_skills::{load_ed25519_public_key, verify_ed25519_detached};
 use agentflow_tools::sandbox::{SandboxEnforcement, default_backend};
 use agentflow_tools::{PluginEvaluationInput, PluginPolicy, SecurityProfile};
 
@@ -20,7 +21,7 @@ pub async fn execute(
   target_dir: Option<String>,
   force: bool,
   allow_unsandboxed_plugin: bool,
-  has_signature: bool,
+  keys_dir: Option<String>,
   format: String,
 ) -> Result<()> {
   let source = Path::new(&source_dir);
@@ -49,6 +50,55 @@ pub async fn execute(
       manifest_path.display()
     )
   })?;
+
+  let resolved_entrypoint = manifest.resolve_entrypoint(source);
+
+  // V3.5: `has_signature` is now derived from a real Ed25519
+  // verification against the resolved entrypoint's bytes, not an
+  // operator-supplied `--signed` flag. A present-but-invalid
+  // signature is a hard install failure — it never silently
+  // downgrades to "unsigned and proceeds".
+  let has_signature = match &manifest.plugin.signature {
+    None => false,
+    Some(signature) => {
+      let algorithm = signature.algorithm.trim().to_ascii_lowercase();
+      if algorithm != "ed25519" {
+        anyhow::bail!(
+          "plugin '{}' declares unsupported signature algorithm '{}' (only 'ed25519' is supported)",
+          manifest.plugin.name,
+          signature.algorithm
+        );
+      }
+      let keys_dir = keys_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(agentflow_skills::Ed25519SignatureVerifier::default_keys_dir);
+      let entrypoint_bytes = fs::read(&resolved_entrypoint).with_context(|| {
+        format!(
+          "plugin '{}' declares a [plugin.signature] block, but its entrypoint '{}' could not \
+           be read to verify it",
+          manifest.plugin.name,
+          resolved_entrypoint.display()
+        )
+      })?;
+      let public_key =
+        load_ed25519_public_key(&keys_dir, &signature.key_id).with_context(|| {
+          format!(
+            "plugin '{}' signature verification failed",
+            manifest.plugin.name
+          )
+        })?;
+      let context = format!("plugin '{}'", manifest.plugin.name);
+      verify_ed25519_detached(&public_key, &entrypoint_bytes, &signature.value, &context)
+        .with_context(|| {
+          format!(
+            "plugin '{}' signature verification failed",
+            manifest.plugin.name
+          )
+        })?;
+      true
+    }
+  };
 
   // Plugin policy gate (P1.8). Evaluate before any filesystem write so
   // a denied install never half-installs.
@@ -88,7 +138,6 @@ pub async fn execute(
     );
   }
 
-  let resolved_entrypoint = manifest.resolve_entrypoint(source);
   if !resolved_entrypoint.exists() {
     eprintln!(
       "⚠  Plugin manifest at '{}' declares entrypoint '{}', but the file is missing in the source tree.",

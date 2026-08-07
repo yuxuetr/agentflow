@@ -26,14 +26,27 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use agentflow_skills::{
-  MarketplacePackageType, MarketplaceSignature, MarketplaceSource, RemoteMarketplaceCache,
-  RemoteMarketplaceEntry,
+  ChecksumSha256SignatureVerifier, MarketplacePackageType, MarketplaceSignature, MarketplaceSource,
+  RemoteMarketplaceCache, RemoteMarketplaceClient, RemoteMarketplaceEntry,
 };
 
 fn sha256_hex(bytes: &[u8]) -> String {
   let mut hasher = Sha256::new();
   hasher.update(bytes);
   format!("{:x}", hasher.finalize())
+}
+
+/// V3.5: `RemoteMarketplaceCache::new()` now defaults to
+/// `Ed25519SignatureVerifier`. This file's fixtures (`entry_for_bytes`)
+/// all use a `checksum-sha256`-algorithm signature, so the
+/// pre-population cache must be built with
+/// `ChecksumSha256SignatureVerifier` explicitly.
+fn checksum_cache(root: impl Into<std::path::PathBuf>) -> RemoteMarketplaceCache {
+  RemoteMarketplaceCache::with_client_and_verifier(
+    root,
+    RemoteMarketplaceClient::new(),
+    std::sync::Arc::new(ChecksumSha256SignatureVerifier),
+  )
 }
 
 fn entry_for_bytes(bytes: &[u8]) -> RemoteMarketplaceEntry {
@@ -133,7 +146,7 @@ fn install_skill_package(package: &[u8]) -> (TempDir, std::path::PathBuf) {
   let install_dir = work.path().join("skills");
   let entry = entry_for_bytes(package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, package)
     .unwrap();
 
@@ -167,7 +180,7 @@ fn assert_install_failure(package: &[u8], expected_stderr: &'static str) {
   let install_dir = work.path().join("skills");
   let entry = entry_for_bytes(package);
   write_marketplace_for_entry(&marketplace, &entry);
-  RemoteMarketplaceCache::new(&cache_dir)
+  checksum_cache(&cache_dir)
     .cache_artifact_bytes(&entry, package)
     .unwrap();
 

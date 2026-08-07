@@ -56,6 +56,47 @@ env_vars = ["DEMO_VAR"]
   plugin_root
 }
 
+/// V3.5: same fixture as `write_source_plugin`, but with a
+/// `[plugin.signature]` block that's a real Ed25519 detached
+/// signature over the entrypoint file's bytes, plus the matching
+/// public key written to `<keys_dir>/<key_id>.pub`. Returns
+/// `(plugin_source_dir, keys_dir)`.
+fn write_signed_source_plugin(
+  dir: &Path,
+  name: &str,
+  key_id: &str,
+  sk: &ed25519_dalek::SigningKey,
+) -> (PathBuf, PathBuf) {
+  use base64::Engine;
+  use ed25519_dalek::Signer;
+
+  let plugin_root = write_source_plugin(dir, name);
+  let entrypoint = plugin_root.join("bin").join(format!("{name}-entry"));
+  let entrypoint_bytes = fs::read(&entrypoint).unwrap();
+  let signature = sk.sign(&entrypoint_bytes);
+  let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+  let manifest_path = plugin_root.join("plugin.toml");
+  let mut manifest = fs::read_to_string(&manifest_path).unwrap();
+  manifest.push_str(&format!(
+    "\n[plugin.signature]\nalgorithm = \"ed25519\"\nkey_id = \"{key_id}\"\nvalue = \"{signature_b64}\"\n"
+  ));
+  fs::write(&manifest_path, manifest).unwrap();
+
+  let keys_dir = dir.join("keys");
+  fs::create_dir_all(&keys_dir).unwrap();
+  let pub_b64 = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+  fs::write(keys_dir.join(format!("{key_id}.pub")), pub_b64).unwrap();
+
+  (plugin_root, keys_dir)
+}
+
+fn test_signing_key() -> ed25519_dalek::SigningKey {
+  // Deterministic 32-byte seed — different from any real key.
+  let seed: [u8; 32] = *b"agentflow-cli-test-key-32-bytes!";
+  ed25519_dalek::SigningKey::from_bytes(&seed)
+}
+
 #[test]
 fn plugin_install_list_inspect_uninstall_round_trip() {
   let work = TempDir::new().unwrap();
@@ -298,7 +339,6 @@ fn plugin_install_production_profile_refuses_allow_unsandboxed_opt_in() {
       "--dir",
       plugins_dir.to_str().unwrap(),
       "--allow-unsandboxed-plugin",
-      "--signed",
     ])
     .env("AGENTFLOW_SECURITY_PROFILE", "production")
     .assert()
@@ -316,7 +356,95 @@ fn plugin_install_help_lists_p18_flags() {
     .assert()
     .success()
     .stdout(predicate::str::contains("--allow-unsandboxed-plugin"))
-    .stdout(predicate::str::contains("--signed"));
+    .stdout(predicate::str::contains("--keys-dir"));
+}
+
+#[test]
+fn plugin_install_production_profile_accepts_a_validly_signed_plugin() {
+  let work = TempDir::new().unwrap();
+  let plugins_dir = work.path().join("plugins");
+  let sk = test_signing_key();
+  let (source, keys_dir) =
+    write_signed_source_plugin(work.path(), "prod-signed", "publisher-a", &sk);
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      source.to_str().unwrap(),
+      "--dir",
+      plugins_dir.to_str().unwrap(),
+      "--keys-dir",
+      keys_dir.to_str().unwrap(),
+    ])
+    .env("AGENTFLOW_SECURITY_PROFILE", "production")
+    .assert()
+    .success();
+  assert!(plugins_dir.join("prod-signed").exists());
+}
+
+#[test]
+fn plugin_install_rejects_a_tampered_signature() {
+  let work = TempDir::new().unwrap();
+  let plugins_dir = work.path().join("plugins");
+  let sk = test_signing_key();
+  let (source, keys_dir) =
+    write_signed_source_plugin(work.path(), "tampered-plugin", "publisher-a", &sk);
+
+  // Flip the signature to a still-valid-base64-but-wrong value.
+  let manifest_path = source.join("plugin.toml");
+  let manifest = fs::read_to_string(&manifest_path).unwrap();
+  let value_line = manifest.lines().find(|l| l.starts_with("value =")).unwrap();
+  let tampered = manifest.replacen(
+    value_line,
+    "value = \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
+    1,
+  );
+  fs::write(&manifest_path, tampered).unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      source.to_str().unwrap(),
+      "--dir",
+      plugins_dir.to_str().unwrap(),
+      "--keys-dir",
+      keys_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("signature verification failed"));
+  assert!(!plugins_dir.join("tampered-plugin").exists());
+}
+
+#[test]
+fn plugin_install_rejects_an_unknown_key_id() {
+  let work = TempDir::new().unwrap();
+  let plugins_dir = work.path().join("plugins");
+  let sk = test_signing_key();
+  // Sign with `sk` but never write its public key to `keys_dir`.
+  let (source, keys_dir) =
+    write_signed_source_plugin(work.path(), "unknown-key-plugin", "nobody", &sk);
+  fs::remove_file(keys_dir.join("nobody.pub")).unwrap();
+
+  Command::cargo_bin("agentflow")
+    .unwrap()
+    .args([
+      "plugin",
+      "install",
+      source.to_str().unwrap(),
+      "--dir",
+      plugins_dir.to_str().unwrap(),
+      "--keys-dir",
+      keys_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("signature verification failed"));
+  assert!(!plugins_dir.join("unknown-key-plugin").exists());
 }
 
 #[test]

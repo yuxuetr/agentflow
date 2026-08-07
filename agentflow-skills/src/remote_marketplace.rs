@@ -251,10 +251,24 @@ pub struct RemoteMarketplaceCache {
 
 impl RemoteMarketplaceCache {
   pub fn new(root: impl Into<PathBuf>) -> Self {
+    // V3.5: default to real Ed25519 verification instead of a
+    // self-computed checksum re-hash (which only proves the manifest
+    // and artifact agree, not that either came from a trusted
+    // publisher). `with_require_signature(false)` preserves this
+    // constructor's existing "no [signature] block => Unsigned, Ok"
+    // behavior — callers that want to *require* every entry to be
+    // signed still opt in explicitly via
+    // `with_client_and_verifier(..., Ed25519SignatureVerifier::new(..))`
+    // (the default `require_signature: true`), same as
+    // `agentflow-cli`'s `cache_from_dir` already does for remote
+    // registries.
     Self::with_client_and_verifier(
       root,
       RemoteMarketplaceClient::new(),
-      Arc::new(ChecksumSha256SignatureVerifier),
+      Arc::new(
+        Ed25519SignatureVerifier::new(Ed25519SignatureVerifier::default_keys_dir())
+          .with_require_signature(false),
+      ),
     )
   }
 
@@ -542,51 +556,94 @@ impl Ed25519SignatureVerifier {
   }
 
   fn load_public_key(&self, key_id: &str) -> Result<ed25519_dalek::VerifyingKey, SkillError> {
-    use std::io::Read;
-
-    // Q1.10.2-adjacent guard: `key_id` is used as a filename, so
-    // refuse anything with `..` or path separators.
-    if key_id.contains("..") || key_id.contains('/') || key_id.contains('\\') || key_id.is_empty() {
-      return Err(validation_error(format!(
-        "marketplace key_id '{}' is not a valid filename component",
-        key_id
-      )));
-    }
-    let path = self.keys_dir.join(format!("{}.pub", key_id));
-    let mut file = fs::File::open(&path).map_err(|err| {
-      validation_error(format!(
-        "marketplace public key '{}' not found at {}: {}",
-        key_id,
-        path.display(),
-        err
-      ))
-    })?;
-    let mut content = String::new();
-    file.read_to_string(&mut content).map_err(|err| {
-      validation_error(format!(
-        "failed to read marketplace public key {}: {}",
-        path.display(),
-        err
-      ))
-    })?;
-    let bytes = base64_decode(content.trim())?;
-    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
-      bytes.as_slice().try_into().map_err(|_| {
-        validation_error(format!(
-          "marketplace public key {} must be exactly {} bytes, got {}",
-          path.display(),
-          ed25519_dalek::PUBLIC_KEY_LENGTH,
-          bytes.len()
-        ))
-      })?;
-    ed25519_dalek::VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
-      validation_error(format!(
-        "marketplace public key {} is malformed: {}",
-        path.display(),
-        err
-      ))
-    })
+    load_ed25519_public_key(&self.keys_dir, key_id)
   }
+}
+
+/// V3.5: shared Ed25519 key-loading logic, extracted from
+/// [`Ed25519SignatureVerifier::load_public_key`] so
+/// `agentflow-cli`'s plugin-signing path (a different manifest type,
+/// `agentflow_core::plugin::manifest::PluginSignature`, not
+/// [`MarketplaceSignature`]) can reuse the exact same key-file
+/// format/validation instead of duplicating it.
+pub fn load_ed25519_public_key(
+  keys_dir: &Path,
+  key_id: &str,
+) -> Result<ed25519_dalek::VerifyingKey, SkillError> {
+  use std::io::Read;
+
+  // Q1.10.2-adjacent guard: `key_id` is used as a filename, so
+  // refuse anything with `..` or path separators.
+  if key_id.contains("..") || key_id.contains('/') || key_id.contains('\\') || key_id.is_empty() {
+    return Err(validation_error(format!(
+      "'{}' is not a valid filename component for a key_id",
+      key_id
+    )));
+  }
+  let path = keys_dir.join(format!("{}.pub", key_id));
+  let mut file = fs::File::open(&path).map_err(|err| {
+    validation_error(format!(
+      "public key '{}' not found at {}: {}",
+      key_id,
+      path.display(),
+      err
+    ))
+  })?;
+  let mut content = String::new();
+  file.read_to_string(&mut content).map_err(|err| {
+    validation_error(format!(
+      "failed to read public key {}: {}",
+      path.display(),
+      err
+    ))
+  })?;
+  let bytes = base64_decode(content.trim())?;
+  let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+    bytes.as_slice().try_into().map_err(|_| {
+      validation_error(format!(
+        "public key {} must be exactly {} bytes, got {}",
+        path.display(),
+        ed25519_dalek::PUBLIC_KEY_LENGTH,
+        bytes.len()
+      ))
+    })?;
+  ed25519_dalek::VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+    validation_error(format!(
+      "public key {} is malformed: {}",
+      path.display(),
+      err
+    ))
+  })
+}
+
+/// V3.5: shared Ed25519 signature-verification logic, extracted from
+/// [`Ed25519SignatureVerifier::verify`] for the same reason as
+/// [`load_ed25519_public_key`] above. `context` is used only to
+/// produce a readable error message (e.g. `"plugin 'x'"` or
+/// `"marketplace entry 'y@1.0.0'"`).
+pub fn verify_ed25519_detached(
+  public_key: &ed25519_dalek::VerifyingKey,
+  artifact: &[u8],
+  signature_b64: &str,
+  context: &str,
+) -> Result<(), SkillError> {
+  use ed25519_dalek::Verifier;
+
+  let sig_bytes = base64_decode(signature_b64.trim())?;
+  let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+    sig_bytes.as_slice().try_into().map_err(|_| {
+      validation_error(format!(
+        "Ed25519 signature for {context} must be exactly {} bytes, got {}",
+        ed25519_dalek::SIGNATURE_LENGTH,
+        sig_bytes.len()
+      ))
+    })?;
+  let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+  public_key.verify(artifact, &sig).map_err(|err| {
+    validation_error(format!(
+      "Ed25519 signature verification failed for {context}: {err}"
+    ))
+  })
 }
 
 impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
@@ -595,8 +652,6 @@ impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
     entry: &RemoteMarketplaceEntry,
     artifact: &[u8],
   ) -> Result<SignatureVerificationKind, SkillError> {
-    use ed25519_dalek::Verifier;
-
     let Some(signature) = &entry.signature else {
       if self.require_signature {
         return Err(validation_error(format!(
@@ -614,24 +669,8 @@ impl MarketplaceSignatureVerifier for Ed25519SignatureVerifier {
       )));
     }
     let public_key = self.load_public_key(&signature.key_id)?;
-    let sig_bytes = base64_decode(signature.value.trim())?;
-    let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
-      sig_bytes.as_slice().try_into().map_err(|_| {
-        validation_error(format!(
-          "Ed25519 signature for '{}@{}' must be exactly {} bytes, got {}",
-          entry.name,
-          entry.version,
-          ed25519_dalek::SIGNATURE_LENGTH,
-          sig_bytes.len()
-        ))
-      })?;
-    let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
-    public_key.verify(artifact, &sig).map_err(|err| {
-      validation_error(format!(
-        "Ed25519 signature verification failed for '{}@{}': {}",
-        entry.name, entry.version, err
-      ))
-    })?;
+    let context = format!("'{}@{}'", entry.name, entry.version);
+    verify_ed25519_detached(&public_key, artifact, &signature.value, &context)?;
     Ok(SignatureVerificationKind::CryptographicSignature)
   }
 }
@@ -841,6 +880,27 @@ impl MarketplaceSignature {
   }
 }
 
+/// V3.5: is `value` an `http://` (or `https://`) URL whose host is a
+/// loopback address? Used to allow local dev/test registries
+/// (`127.0.0.1`, `::1`, `localhost`) to keep using plain `http://`
+/// while rejecting it for any real host — a non-loopback `http://`
+/// registry/artifact/checksum fetch is a live MITM vector (an
+/// on-path attacker can rewrite the manifest, the artifact bytes, or
+/// the checksum it's checked against, in transit).
+fn is_loopback_http_host(value: &str) -> bool {
+  let Ok(parsed) = reqwest::Url::parse(value) else {
+    return false;
+  };
+  match parsed.host_str() {
+    Some("localhost") => true,
+    Some(host) => host
+      .parse::<std::net::IpAddr>()
+      .map(|ip| ip.is_loopback())
+      .unwrap_or(false),
+    None => false,
+  }
+}
+
 fn validate_http_url(field: &str, entry_name: &str, value: &str) -> Result<(), SkillError> {
   let value = value.trim();
   if value.is_empty() {
@@ -849,13 +909,24 @@ fn validate_http_url(field: &str, entry_name: &str, value: &str) -> Result<(), S
       entry_name, field
     )));
   }
-  if !(value.starts_with("https://") || value.starts_with("http://")) {
+  if value.starts_with("https://") {
+    return Ok(());
+  }
+  if !value.starts_with("http://") {
     return Err(validation_error(format!(
       "Marketplace entry '{}' source.{} must be an http(s) URL",
       entry_name, field
     )));
   }
-  Ok(())
+  if is_loopback_http_host(value) {
+    return Ok(());
+  }
+  Err(validation_error(format!(
+    "Marketplace entry '{}' source.{} uses a non-loopback http:// URL — only https:// or \
+     loopback http:// (127.0.0.1 / ::1 / localhost) is allowed; a non-loopback http:// URL \
+     is vulnerable to MITM rewriting of the manifest/artifact/checksum",
+    entry_name, field
+  )))
 }
 
 fn validate_registry_url(value: &str) -> Result<(), SkillError> {
@@ -865,12 +936,23 @@ fn validate_registry_url(value: &str) -> Result<(), SkillError> {
       "Remote marketplace registry URL must not be empty".to_string(),
     ));
   }
-  if !(value.starts_with("https://") || value.starts_with("http://")) {
+  if value.starts_with("https://") {
+    return Ok(());
+  }
+  if !value.starts_with("http://") {
     return Err(validation_error(
       "Remote marketplace registry URL must be an http(s) URL".to_string(),
     ));
   }
-  Ok(())
+  if is_loopback_http_host(value) {
+    return Ok(());
+  }
+  Err(validation_error(
+    "Remote marketplace registry URL uses a non-loopback http:// URL — only https:// or \
+     loopback http:// (127.0.0.1 / ::1 / localhost) is allowed; a non-loopback http:// URL \
+     is vulnerable to MITM rewriting of the manifest/artifact/checksum"
+      .to_string(),
+  ))
 }
 
 fn normalize_sha256(value: &str) -> Result<String, SkillError> {
@@ -1110,6 +1192,56 @@ value = "abc"
     assert!(err.to_string().contains("must be an http(s) URL"));
   }
 
+  #[test]
+  fn validate_http_url_rejects_non_loopback_http() {
+    let mut manifest = valid_manifest();
+    manifest.entries[0].source.artifact_url = "http://evil.example.com/pkg.tar.gz".into();
+
+    let err = manifest.validate().unwrap_err();
+    assert!(
+      err.to_string().contains("non-loopback http:// URL"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn validate_http_url_accepts_loopback_http() {
+    let mut manifest = valid_manifest();
+    manifest.entries[0].source.artifact_url = "http://127.0.0.1:8080/pkg.tar.gz".into();
+    manifest.entries[0].source.registry_url = "http://localhost:8080/marketplace.toml".into();
+
+    assert!(manifest.validate().is_ok());
+  }
+
+  #[test]
+  fn validate_registry_url_rejects_non_loopback_http() {
+    let err = validate_registry_url("http://evil.example.com/marketplace.toml").unwrap_err();
+    assert!(
+      err.to_string().contains("non-loopback http:// URL"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn remote_marketplace_cache_new_defaults_to_ed25519_and_rejects_checksum_signature() {
+    // V3.5: `RemoteMarketplaceCache::new()` must default to real
+    // Ed25519 verification, not a self-computed checksum re-hash.
+    // Proof: an entry signed with the (weaker) `checksum-sha256`
+    // algorithm is rejected outright by the default constructor,
+    // where it used to be silently accepted.
+    let dir = TempDir::new().unwrap();
+    let cache = RemoteMarketplaceCache::new(dir.path());
+    let entry = signed_entry_for_bytes(b"expected");
+
+    let err = cache.cache_artifact_bytes(&entry, b"expected").unwrap_err();
+    assert!(
+      err
+        .to_string()
+        .contains("Ed25519 verifier rejected algorithm"),
+      "got: {err}"
+    );
+  }
+
   #[tokio::test]
   async fn remote_marketplace_client_fetches_read_only_manifest() {
     let (url, server) =
@@ -1145,10 +1277,24 @@ value = "abc"
     assert!(err.to_string().contains("must be an http(s) URL"));
   }
 
+  /// V3.5: `RemoteMarketplaceCache::new()` now defaults to
+  /// `Ed25519SignatureVerifier` (see its constructor's doc comment),
+  /// so tests that specifically exercise `ChecksumSha256SignatureVerifier`
+  /// semantics (via `signed_entry_for_bytes`'s `checksum-sha256`-algorithm
+  /// signature) must build their cache with that verifier explicitly
+  /// rather than relying on the default.
+  fn checksum_cache(root: impl Into<PathBuf>) -> RemoteMarketplaceCache {
+    RemoteMarketplaceCache::with_client_and_verifier(
+      root,
+      RemoteMarketplaceClient::new(),
+      Arc::new(ChecksumSha256SignatureVerifier),
+    )
+  }
+
   #[test]
   fn remote_marketplace_cache_writes_verified_artifact() {
     let dir = TempDir::new().unwrap();
-    let cache = RemoteMarketplaceCache::new(dir.path());
+    let cache = checksum_cache(dir.path());
     let bytes = b"package bytes";
     let entry = signed_entry_for_bytes(bytes);
 
@@ -1170,7 +1316,7 @@ value = "abc"
   #[test]
   fn remote_marketplace_cache_rejects_checksum_mismatch() {
     let dir = TempDir::new().unwrap();
-    let cache = RemoteMarketplaceCache::new(dir.path());
+    let cache = checksum_cache(dir.path());
     let mut entry = signed_entry_for_bytes(b"expected");
     entry.source.checksum_sha256 = sha256_bytes(b"different");
 
@@ -1181,7 +1327,7 @@ value = "abc"
   #[test]
   fn remote_marketplace_cache_rejects_signature_mismatch() {
     let dir = TempDir::new().unwrap();
-    let cache = RemoteMarketplaceCache::new(dir.path());
+    let cache = checksum_cache(dir.path());
     let mut entry = signed_entry_for_bytes(b"expected");
     entry.signature.as_mut().unwrap().value = sha256_bytes(b"different");
 
@@ -1192,7 +1338,7 @@ value = "abc"
   #[test]
   fn remote_marketplace_cache_rejects_unsupported_signature_algorithm() {
     let dir = TempDir::new().unwrap();
-    let cache = RemoteMarketplaceCache::new(dir.path());
+    let cache = checksum_cache(dir.path());
     let mut entry = signed_entry_for_bytes(b"expected");
     entry.signature.as_mut().unwrap().algorithm = "minisign".into();
 
@@ -1332,7 +1478,7 @@ value = "abc"
   #[test]
   fn remote_marketplace_cache_verifies_existing_artifact() {
     let dir = TempDir::new().unwrap();
-    let cache = RemoteMarketplaceCache::new(dir.path());
+    let cache = checksum_cache(dir.path());
     let bytes = b"package bytes";
     let entry = signed_entry_for_bytes(bytes);
     cache.cache_artifact_bytes(&entry, bytes).unwrap();

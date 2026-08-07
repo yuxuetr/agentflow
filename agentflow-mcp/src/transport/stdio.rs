@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -95,13 +95,17 @@ pub struct StdioTransport {
   /// out-of-band JSON-RPC traffic) for `receive_message` consumers.
   /// Receiver lives behind an async Mutex so multiple callers can
   /// share the surface; the producer side is held by the reader
-  /// task. Unbounded because notification volume is low and we'd
-  /// rather buffer than block the reader on a slow consumer.
-  notifications_rx: Arc<AsyncMutex<mpsc::UnboundedReceiver<Value>>>,
+  /// task. V3.5: bounded (was unbounded) — a flooding server can no
+  /// longer queue unlimited `Value`s in-process; once the channel is
+  /// full, the reader task's `.send().await` blocks, which in turn
+  /// stops it pulling more bytes off the child's stdout, applying
+  /// real backpressure all the way back to the child's own `write()`
+  /// calls. Capacity is `notification_channel_capacity`.
+  notifications_rx: Arc<AsyncMutex<mpsc::Receiver<Value>>>,
   /// Sender end of the notifications channel. Kept on the struct
   /// so disconnect can drop it cleanly even if the reader task
   /// has already exited.
-  notifications_tx: mpsc::UnboundedSender<Value>,
+  notifications_tx: mpsc::Sender<Value>,
   /// Q3.2.2: reader task spawned at connect(). Reads each line
   /// from stdout, parses, dispatches to either an inflight oneshot
   /// (by id) or the notifications channel. Aborted on disconnect.
@@ -119,6 +123,10 @@ pub struct StdioTransport {
   timeout: Duration,
   /// Maximum message size (for safety)
   max_message_size: usize,
+  /// V3.5: capacity of the notifications channel. Kept on the struct
+  /// so `with_notification_channel_capacity` can rebuild the channel
+  /// (`mpsc::channel` capacity is fixed at construction).
+  notification_channel_capacity: usize,
 }
 
 impl StdioTransport {
@@ -127,6 +135,14 @@ impl StdioTransport {
 
   /// Default maximum message size (10 MB)
   pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
+  /// Default notifications channel capacity (V3.5). Bounds how many
+  /// server-initiated messages can queue in-process before the
+  /// reader task's `.send().await` starts applying backpressure —
+  /// generous enough that normal notification bursts never block,
+  /// small enough that a flooding/misbehaving server can't grow an
+  /// unbounded in-process queue.
+  pub const DEFAULT_NOTIFICATION_CHANNEL_CAPACITY: usize = 1024;
 
   /// Create a new stdio transport
   ///
@@ -145,7 +161,8 @@ impl StdioTransport {
   /// ]);
   /// ```
   pub fn new(command: Vec<String>) -> Self {
-    let (notifications_tx, notifications_rx) = mpsc::unbounded_channel();
+    let notification_channel_capacity = Self::DEFAULT_NOTIFICATION_CHANNEL_CAPACITY;
+    let (notifications_tx, notifications_rx) = mpsc::channel(notification_channel_capacity);
     Self {
       command,
       env: HashMap::new(),
@@ -160,6 +177,7 @@ impl StdioTransport {
       connected: Arc::new(AtomicBool::new(false)),
       timeout: Duration::from_millis(Self::DEFAULT_TIMEOUT_MS),
       max_message_size: Self::DEFAULT_MAX_MESSAGE_SIZE,
+      notification_channel_capacity,
     }
   }
 
@@ -204,6 +222,17 @@ impl StdioTransport {
     self
   }
 
+  /// V3.5: set the notifications channel capacity. Rebuilds the
+  /// channel (must be called before `connect()` — there's nothing
+  /// queued yet to lose).
+  pub fn with_notification_channel_capacity(mut self, capacity: usize) -> Self {
+    self.notification_channel_capacity = capacity;
+    let (notifications_tx, notifications_rx) = mpsc::channel(capacity);
+    self.notifications_tx = notifications_tx;
+    self.notifications_rx = Arc::new(AsyncMutex::new(notifications_rx));
+    self
+  }
+
   /// Q3.2.2: shared write path used by `send_message` /
   /// `send_notification`. Takes the writer-mutex briefly per call;
   /// stdin line ordering is preserved because the lock serializes
@@ -244,6 +273,26 @@ fn request_id_key(value: &Value) -> Option<String> {
   serde_json::to_string(id).ok()
 }
 
+/// V3.5: shared cleanup for every reader-task termination path (EOF,
+/// oversized/malformed line, I/O error) — drop the writer half so
+/// pending `send_message` calls fail-fast on the writer mutex's
+/// `as_mut()` check, flip `connected = false`, and fail every
+/// still-in-flight request by dropping its oneshot `Sender` (the
+/// receiver gets `RecvError`, which `send_message` translates to a
+/// connection error).
+async fn terminate_reader(
+  inflight: &std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>,
+  writer: &AsyncMutex<Option<BufWriter<ChildStdin>>>,
+  connected: &AtomicBool,
+) {
+  connected.store(false, Ordering::SeqCst);
+  let mut guard = writer.lock().await;
+  *guard = None;
+  if let Ok(mut map) = inflight.lock() {
+    map.clear();
+  }
+}
+
 /// Q3.2.2: the reader task spawned at `connect()`. Reads each line
 /// from stdout, parses, and routes:
 /// - Response (has `id`): pop the matching oneshot from `inflight`
@@ -256,44 +305,64 @@ fn request_id_key(value: &Value) -> Option<String> {
 /// the task and is communicated by closing the writer side (so the
 /// next `send_message` will fail-fast with a connection error
 /// instead of waiting the full timeout).
+///
+/// V3.5: the read itself is capped via `AsyncReadExt::take`, not just
+/// discarded after the fact — a bare `read_line` on an unbounded
+/// `BufReader` will keep growing its buffer for as long as the child
+/// keeps writing with no `\n`, before any post-hoc size check gets a
+/// chance to run. Once `Take` cuts a read off mid-line (limit hit, no
+/// terminator) the remainder of that line is still sitting unread in
+/// the pipe, so we can no longer safely resync and keep parsing —
+/// that (and the symmetric "child exited mid-line, no terminator"
+/// case) terminates the connection, same as any other fatal read
+/// condition.
 async fn run_reader_task(
-  mut stdout: BufReader<ChildStdout>,
+  stdout: BufReader<ChildStdout>,
   inflight: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
-  notifications_tx: mpsc::UnboundedSender<Value>,
+  notifications_tx: mpsc::Sender<Value>,
   writer: Arc<AsyncMutex<Option<BufWriter<ChildStdin>>>>,
   connected: Arc<AtomicBool>,
   max_message_size: usize,
 ) {
-  let mut line = String::new();
+  let limit = max_message_size as u64;
+  let mut stdout = stdout.take(limit);
+  let mut buf: Vec<u8> = Vec::new();
   loop {
-    line.clear();
-    match stdout.read_line(&mut line).await {
+    buf.clear();
+    stdout.set_limit(limit);
+    match stdout.read_until(b'\n', &mut buf).await {
       Ok(0) => {
-        // EOF — child process exited. Drop the writer half so
-        // pending send_message calls fail-fast on the writer
-        // mutex's `as_mut()` check, and flip connected = false.
-        connected.store(false, Ordering::SeqCst);
-        let mut guard = writer.lock().await;
-        *guard = None;
-        // Fail every still-in-flight request by dropping its
-        // oneshot Sender (the receiver gets `RecvError`, which
-        // send_message translates to a connection error).
-        if let Ok(mut map) = inflight.lock() {
-          map.clear();
-        }
+        // True EOF — child process exited cleanly between lines.
+        terminate_reader(&inflight, &writer, &connected).await;
         return;
       }
       Ok(n) => {
-        if n > max_message_size {
+        if buf.last() != Some(&b'\n') {
+          // Either the `Take` limit was hit with no terminator (line
+          // too large) or the child exited mid-line (partial write,
+          // no `\n`). Both leave the stream unsafe to keep reading.
           tracing::warn!(
             target = "agentflow_mcp::stdio",
             bytes = n,
             max = max_message_size,
-            "stdio message exceeds max_message_size; skipping"
+            "stdio line exceeded max_message_size or ended without a terminator; \
+             terminating connection"
           );
-          continue;
+          terminate_reader(&inflight, &writer, &connected).await;
+          return;
         }
-        let trimmed = line.trim();
+        let trimmed = match std::str::from_utf8(&buf) {
+          Ok(s) => s.trim(),
+          Err(err) => {
+            tracing::warn!(
+              target = "agentflow_mcp::stdio",
+              error = %err,
+              "stdio line was not valid UTF-8; terminating connection"
+            );
+            terminate_reader(&inflight, &writer, &connected).await;
+            return;
+          }
+        };
         if trimmed.is_empty() {
           continue;
         }
@@ -324,7 +393,12 @@ async fn run_reader_task(
           }
         } else {
           // Notification — forward to the receive_message channel.
-          let _ = notifications_tx.send(value);
+          // V3.5: bounded `Sender::send` — awaiting here is the
+          // actual backpressure mechanism (see the struct field doc
+          // comment on `notifications_rx`). A closed receiver just
+          // means nobody's listening anymore; nothing to do but
+          // keep reading so `send_message` responses still flow.
+          let _ = notifications_tx.send(value).await;
         }
       }
       Err(err) => {
@@ -333,7 +407,7 @@ async fn run_reader_task(
           error = %err,
           "stdio read failed; terminating reader task"
         );
-        connected.store(false, Ordering::SeqCst);
+        terminate_reader(&inflight, &writer, &connected).await;
         return;
       }
     }
@@ -614,14 +688,27 @@ impl Drop for StdioTransport {
 /// the loop terminates.
 fn spawn_stderr_drain(stderr: ChildStderr) -> JoinHandle<()> {
   tokio::spawn(async move {
-    let mut reader = BufReader::new(stderr);
-    let mut line = String::new();
+    // V3.5: cap the read the same way `run_reader_task` does, so a
+    // server that floods stderr with a huge, unterminated chunk can't
+    // grow this buffer unbounded either. Unlike the JSON-RPC stdout
+    // path, hitting the cap here isn't fatal — stderr isn't a
+    // structured protocol, it's free text for human consumption via
+    // `tracing::warn!`, so a huge "line" just gets logged in
+    // `DEFAULT_MAX_MESSAGE_SIZE`-sized chunks instead of one giant
+    // one. Lossy UTF-8 conversion (vs. the strict stdout path) is
+    // fine for the same reason — this is diagnostic output, not
+    // something downstream parses.
+    let limit = StdioTransport::DEFAULT_MAX_MESSAGE_SIZE as u64;
+    let mut reader = BufReader::new(stderr).take(limit);
+    let mut buf: Vec<u8> = Vec::new();
     loop {
-      line.clear();
-      match reader.read_line(&mut line).await {
+      buf.clear();
+      reader.set_limit(limit);
+      match reader.read_until(b'\n', &mut buf).await {
         Ok(0) => break, // EOF
         Ok(_) => {
-          let trimmed = line.trim_end_matches(['\r', '\n']);
+          let text = String::from_utf8_lossy(&buf);
+          let trimmed = text.trim_end_matches(['\r', '\n']);
           if !trimmed.is_empty() {
             tracing::warn!(target = "agentflow_mcp::stdio::stderr", "{trimmed}");
           }
@@ -1021,6 +1108,77 @@ mod tests {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 7});
+    let response = transport.send_message(request.clone()).await.unwrap();
+    assert_eq!(response, request);
+
+    transport.disconnect().await.unwrap();
+  }
+
+  #[tokio::test]
+  #[cfg(unix)]
+  async fn stdout_flood_with_no_newline_terminates_the_connection() {
+    // V3.5: write well past a small max_message_size with no
+    // trailing newline. The bounded read must cut this off instead
+    // of growing an unbounded buffer, and the connection must
+    // terminate rather than hang or silently resync mid-stream.
+    let mut transport = StdioTransport::new(vec![
+      "sh".to_string(),
+      "-c".to_string(),
+      "yes x | tr -d '\\n' | head -c 200000".to_string(),
+    ])
+    .with_max_message_size(64 * 1024)
+    .with_timeout(Duration::from_secs(5));
+    transport.connect().await.unwrap();
+
+    // Give the flood + termination a beat to land.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+      !transport.is_connected(),
+      "transport must disconnect after an oversized/unterminated line"
+    );
+    transport.disconnect().await.unwrap();
+  }
+
+  #[tokio::test]
+  #[cfg(unix)]
+  async fn notifications_channel_applies_backpressure_without_unbounded_growth() {
+    // V3.5: emit far more notifications than a small channel
+    // capacity before the test starts draining. If backpressure
+    // works, none of them are lost — the reader just blocks (via
+    // `.send().await`) until the consumer catches up.
+    let mut transport = StdioTransport::new(vec![
+      "sh".to_string(),
+      "-c".to_string(),
+      "for i in $(seq 1 50); do \
+         printf '{\"jsonrpc\":\"2.0\",\"method\":\"tick\",\"params\":{\"i\":%d}}\\n' \"$i\"; \
+       done; \
+       while read line; do echo \"$line\"; done"
+        .to_string(),
+    ])
+    .with_notification_channel_capacity(4)
+    .with_timeout(Duration::from_secs(5));
+    transport.connect().await.unwrap();
+
+    // Give the burst a beat to fill the channel and hit backpressure
+    // (capacity 4, well under the 50 notifications emitted).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut received = 0;
+    while received < 50 {
+      match transport.receive_message().await.unwrap() {
+        Some(_) => received += 1,
+        None => break, // timeout — nothing left to drain
+      }
+    }
+    assert_eq!(
+      received, 50,
+      "all notifications must eventually be delivered, none dropped by backpressure"
+    );
+
+    // The echo loop after the notification burst should still work,
+    // proving the reader task kept making forward progress.
+    let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 1});
     let response = transport.send_message(request.clone()).await.unwrap();
     assert_eq!(response, request);
 

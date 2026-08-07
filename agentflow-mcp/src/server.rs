@@ -37,7 +37,7 @@ use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 /// MCP protocol version this server speaks. Returned by the
 /// `initialize` method's `protocolVersion` field. Bumping this
@@ -74,6 +74,12 @@ pub struct MCPServer {
 }
 
 impl MCPServer {
+  /// V3.5: same rationale/value as `StdioTransport::DEFAULT_MAX_MESSAGE_SIZE`
+  /// — this is the server's own inbound direction (a client talking
+  /// to us over stdin), which had no size cap at all before this fix,
+  /// not even a post-hoc one.
+  pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
   pub fn new(handler: Box<dyn MCPServerHandler>) -> Self {
     Self { handler }
   }
@@ -82,18 +88,41 @@ impl MCPServer {
   pub async fn run_stdio(&self) -> MCPResult<()> {
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin);
-    let mut line = String::new();
+    let limit = Self::DEFAULT_MAX_MESSAGE_SIZE as u64;
+    let mut reader = BufReader::new(stdin).take(limit);
+    let mut buf: Vec<u8> = Vec::new();
 
     loop {
-      line.clear();
-      let bytes_read = reader.read_line(&mut line).await?;
+      buf.clear();
+      reader.set_limit(limit);
+      let bytes_read = reader.read_until(b'\n', &mut buf).await?;
 
       if bytes_read == 0 {
         break; // EOF
       }
 
-      let request: Value = match serde_json::from_str(line.trim()) {
+      // V3.5: a bounded read that didn't find a `\n` within the cap
+      // means either the line exceeded `DEFAULT_MAX_MESSAGE_SIZE` or
+      // the client closed mid-line — either way the stream can't be
+      // safely resynced, so stop reading rather than misparse
+      // whatever comes next as a new message.
+      if buf.last() != Some(&b'\n') {
+        tracing::error!(
+          bytes = bytes_read,
+          max = Self::DEFAULT_MAX_MESSAGE_SIZE,
+          "stdio request exceeded max message size or ended without a terminator; stopping"
+        );
+        break;
+      }
+
+      let text = match std::str::from_utf8(&buf) {
+        Ok(s) => s,
+        Err(e) => {
+          tracing::error!("stdio request was not valid UTF-8: {}", e);
+          continue;
+        }
+      };
+      let request: Value = match serde_json::from_str(text.trim()) {
         Ok(req) => req,
         Err(e) => {
           tracing::error!("Failed to parse request: {}", e);

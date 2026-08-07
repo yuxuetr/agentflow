@@ -366,10 +366,16 @@ Behavioral rules:
   intent. Under `production` the flag is recorded as a deny reason
   even when the sandbox backend happens to be active, so misuse is
   detected before it can land on a host that lacks the sandbox.
-- `--signed` tells the install command that the plugin archive
-  carried a verified signature (this is the same signal the
-  marketplace install path produces). `production` denies any
-  install that does not set it.
+- Whether a plugin "has a verified signature" (the same signal the
+  marketplace install path produces) is derived at install time from
+  a real Ed25519 verification (V3.5), not operator self-attestation:
+  if the manifest declares a `[plugin.signature]` block, the install
+  command verifies a detached signature over the resolved entrypoint
+  file's bytes against a public key loaded from `--keys-dir` (default
+  `~/.agentflow/marketplace-keys/`, shared with `agentflow marketplace
+  install/verify`). A present-but-invalid signature is a hard install
+  failure. No `[plugin.signature]` block ⇒ unsigned; `production`
+  denies any unsigned install.
 - A non-empty `[plugin.capabilities].network` array containing
   `*` or an empty string is treated as a wildcard / non-explicit
   grant — `production` rejects it.

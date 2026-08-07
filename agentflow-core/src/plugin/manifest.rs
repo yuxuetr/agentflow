@@ -62,6 +62,57 @@ pub struct PluginSection {
   /// Present ⇒ doctor runs the smoke and surfaces pass / fail.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub dry_run: Option<DryRunSpec>,
+  /// Optional `[plugin.signature]` sub-table (V3.5). When present,
+  /// `agentflow plugin install` verifies an Ed25519 detached signature
+  /// over the resolved entrypoint file's bytes before letting the
+  /// install proceed — see `agentflow-cli/src/commands/plugin/install.rs`.
+  /// Absent ⇒ the plugin is treated as unsigned; whether that's
+  /// acceptable is a `PluginPolicy::require_signature` (profile-driven)
+  /// decision, not a manifest-schema one.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub signature: Option<PluginSignature>,
+}
+
+/// `[plugin.signature]` — same shape as `agentflow-skills`'s
+/// `MarketplaceSignature`, since both describe a detached signature
+/// over some artifact bytes verified against a named public key.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginSignature {
+  /// Signature scheme. Only `"ed25519"` is currently supported.
+  pub algorithm: String,
+  /// Identifies which public key file (`<key_id>.pub`) in the
+  /// configured keys directory to verify against.
+  pub key_id: String,
+  /// Base64-encoded detached signature over the resolved entrypoint
+  /// file's raw bytes.
+  pub value: String,
+}
+
+impl PluginSignature {
+  /// Structural validation only — non-empty fields. Cryptographic
+  /// verification needs a keys directory and the entrypoint bytes,
+  /// neither of which is available at generic `PluginManifest::validate()`
+  /// time (called from several contexts, e.g. `agentflow plugin list`,
+  /// that don't have a keys directory configured); that happens
+  /// separately in `agentflow-cli/src/commands/plugin/install.rs`.
+  pub fn validate(&self) -> Result<(), ManifestError> {
+    if self.algorithm.trim().is_empty() {
+      return Err(ManifestError::InvalidSignature(
+        "[plugin.signature].algorithm must not be empty".to_string(),
+      ));
+    }
+    if self.key_id.trim().is_empty() {
+      return Err(ManifestError::InvalidSignature(
+        "[plugin.signature].key_id must not be empty".to_string(),
+      ));
+    }
+    if self.value.trim().is_empty() {
+      return Err(ManifestError::InvalidSignature(
+        "[plugin.signature].value must not be empty".to_string(),
+      ));
+    }
+    Ok(())
+  }
 }
 
 /// `[plugin.dry_run]` configuration.
@@ -272,6 +323,8 @@ pub enum ManifestError {
   },
   #[error("invalid [plugin.dry_run] configuration: {0}")]
   InvalidDryRun(String),
+  #[error("invalid [plugin.signature] configuration: {0}")]
+  InvalidSignature(String),
 }
 
 impl PluginManifest {
@@ -305,6 +358,9 @@ impl PluginManifest {
     }
     if let Some(dry_run) = &self.plugin.dry_run {
       dry_run.validate()?;
+    }
+    if let Some(signature) = &self.plugin.signature {
+      signature.validate()?;
     }
     Ok(())
   }
@@ -343,6 +399,56 @@ description = "A demo node."
     // Default — no `[plugin.dry_run]` section means doctor smoke
     // is opt-in, not silently enabled.
     assert!(manifest.plugin.dry_run.is_none());
+    // Default — no `[plugin.signature]` section means unsigned.
+    assert!(manifest.plugin.signature.is_none());
+  }
+
+  #[test]
+  fn parses_manifest_with_signature_section() {
+    let raw = r#"
+[plugin]
+name = "signed-demo"
+version = "0.1.0"
+entrypoint = "bin/demo"
+
+[plugin.signature]
+algorithm = "ed25519"
+key_id = "publisher-a"
+value = "c29tZS1zaWduYXR1cmU="
+"#;
+    let mut manifest: PluginManifest = toml::from_str(raw).unwrap();
+    manifest.plugin.protocol = SUPPORTED_PROTOCOL_VERSION.to_string();
+    let signature = manifest
+      .plugin
+      .signature
+      .as_ref()
+      .expect("signature parsed");
+    assert_eq!(signature.algorithm, "ed25519");
+    assert_eq!(signature.key_id, "publisher-a");
+    assert_eq!(signature.value, "c29tZS1zaWduYXR1cmU=");
+    assert!(signature.validate().is_ok());
+    assert!(manifest.validate().is_ok());
+  }
+
+  #[test]
+  fn manifest_validate_rejects_empty_signature_fields() {
+    let raw = r#"
+[plugin]
+name = "bad-signature"
+version = "0.1.0"
+entrypoint = "bin/demo"
+
+[plugin.signature]
+algorithm = "ed25519"
+key_id = ""
+value = "c29tZS1zaWduYXR1cmU="
+"#;
+    let mut manifest: PluginManifest = toml::from_str(raw).unwrap();
+    manifest.plugin.protocol = SUPPORTED_PROTOCOL_VERSION.to_string();
+    assert!(matches!(
+      manifest.validate(),
+      Err(ManifestError::InvalidSignature(_))
+    ));
   }
 
   #[test]
@@ -402,6 +508,7 @@ args = ["--version"]
           timeout_ms: 1000,
           expected_exit: 0,
         }),
+        signature: None,
       },
     };
     assert!(matches!(
@@ -422,6 +529,7 @@ args = ["--version"]
         nodes: vec![],
         capabilities: Capabilities::default(),
         dry_run: None,
+        signature: None,
       },
     };
     assert!(matches!(
@@ -444,6 +552,7 @@ args = ["--version"]
         nodes: vec![],
         capabilities: Capabilities::default(),
         dry_run: None,
+        signature: None,
       },
     };
     assert!(matches!(
@@ -464,6 +573,7 @@ args = ["--version"]
         nodes: vec![],
         capabilities: Capabilities::default(),
         dry_run: None,
+        signature: None,
       },
     };
     assert_eq!(
