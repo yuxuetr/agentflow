@@ -1,4 +1,8 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+  net::{IpAddr, SocketAddr},
+  sync::Arc,
+  time::Duration,
+};
 
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode, Url, header::LOCATION, redirect::Policy};
@@ -23,39 +27,49 @@ const CLOUD_METADATA_IPS: &[IpAddr] = &[
 
 /// Make HTTP GET / POST requests with domain sandbox enforcement.
 pub struct HttpTool {
-  client: Client,
   policy: Arc<SandboxPolicy>,
   /// Maximum response body size to return (truncate beyond this).
   max_response_chars: usize,
+  user_agent: String,
+  timeout: Duration,
+  no_proxy: bool,
 }
 
 impl HttpTool {
-  /// Build a default reqwest client (30 s timeout, no auto-redirects,
-  /// AgentFlow user-agent). Q1.2.2: returns the build error instead of
-  /// panicking — TLS init failures, OS resource exhaustion, or a
-  /// fingerprint-cert load problem should never abort the host process.
+  /// Build the tool (30 s timeout, no auto-redirects, AgentFlow
+  /// user-agent — the actual `reqwest::Client` used for each request is
+  /// built lazily per redirect hop, see [`Self::build_pinned_client`]).
+  /// Q1.2.2: returns the build error instead of panicking — TLS init
+  /// failures, OS resource exhaustion, or a fingerprint-cert load
+  /// problem should never abort the host process. Validated eagerly
+  /// here via a throwaway build so that contract still holds even
+  /// though the real per-request clients are built later.
   pub fn new(policy: Arc<SandboxPolicy>) -> Result<Self, ToolError> {
-    let client = Client::builder()
-      .timeout(std::time::Duration::from_secs(30))
-      .redirect(Policy::none())
-      .user_agent("AgentFlow/0.1")
+    let tool = Self {
+      policy,
+      max_response_chars: 8_000,
+      user_agent: "AgentFlow/0.1".to_string(),
+      timeout: Duration::from_secs(30),
+      no_proxy: false,
+    };
+    tool
+      .base_client_builder()
       .build()
       .map_err(|err| ToolError::ExecutionFailed {
         message: format!("failed to build reqwest client for HttpTool: {err}"),
       })?;
-    Ok(Self::with_client(client, policy))
+    Ok(tool)
   }
 
-  /// Inject a pre-built reqwest client. Used by tests that need
-  /// `.no_proxy()` to talk to loopback servers (Q1.2.3), and by
-  /// production callers that want a shared connection pool or custom
-  /// TLS pinning.
-  pub fn with_client(client: Client, policy: Arc<SandboxPolicy>) -> Self {
-    Self {
-      client,
-      policy,
-      max_response_chars: 8_000,
-    }
+  /// Route every request through no proxy, bypassing any
+  /// `HTTP_PROXY`/`HTTPS_PROXY`/system proxy configuration. Used by
+  /// tests that need to reach loopback servers directly (Q1.2.3) — a
+  /// system HTTP proxy (Clash / V2Ray / corporate proxy) would
+  /// otherwise route `127.0.0.1:<port>` through the proxy and turn test
+  /// failures into confusing `IncompleteMessage` errors.
+  pub fn with_no_proxy(mut self) -> Self {
+    self.no_proxy = true;
+    self
   }
 
   /// Override the maximum response size returned in the tool output.
@@ -70,13 +84,41 @@ impl HttpTool {
     Self::new(Arc::new(SandboxPolicy::default()))
   }
 
-  fn extract_host(url: &str) -> Option<String> {
-    url::Url::parse(url)
-      .ok()
-      .and_then(|u| u.host_str().map(String::from))
+  fn base_client_builder(&self) -> reqwest::ClientBuilder {
+    let mut builder = Client::builder()
+      .timeout(self.timeout)
+      .redirect(Policy::none())
+      .user_agent(self.user_agent.clone());
+    if self.no_proxy {
+      builder = builder.no_proxy();
+    }
+    builder
   }
 
-  async fn validate_url_allowed(&self, url: &Url) -> Result<(), ToolError> {
+  /// V3.3: a fresh client, DNS-pinned to exactly the `addrs` that
+  /// [`Self::validate_url_allowed`] just validated for `host` — closes
+  /// the DNS-rebinding TOCTOU where `reqwest` would otherwise
+  /// independently re-resolve `host` at connect time, potentially
+  /// landing on a different (attacker-controlled) address than the one
+  /// actually checked against the sandbox policy. `reqwest` only
+  /// exposes DNS overrides at `ClientBuilder` time
+  /// (`resolve`/`resolve_to_addrs`/`dns_resolver`), not per-request, so
+  /// this rebuilds a client (and pays a fresh TLS/connection-pool setup
+  /// cost) on every redirect hop rather than reusing one pooled client
+  /// across calls — acceptable here since `HttpTool` isn't a
+  /// high-throughput hot path, and a shared resolver would need
+  /// per-request scoping that `reqwest::dns::Resolve` has no hook for.
+  fn build_pinned_client(&self, host: &str, addrs: &[SocketAddr]) -> Result<Client, ToolError> {
+    self
+      .base_client_builder()
+      .resolve_to_addrs(host, addrs)
+      .build()
+      .map_err(|err| ToolError::ExecutionFailed {
+        message: format!("failed to build pinned reqwest client for host '{host}': {err}"),
+      })
+  }
+
+  async fn validate_url_allowed(&self, url: &Url) -> Result<Vec<SocketAddr>, ToolError> {
     match url.scheme() {
       "http" | "https" => {}
       scheme => {
@@ -107,8 +149,8 @@ impl HttpTool {
     }
 
     let addresses = resolve_host_ips(url, host).await?;
-    for address in addresses {
-      for class in classify_network_address(address) {
+    for address in &addresses {
+      for class in classify_network_address(address.ip()) {
         if !self.policy.is_network_address_class_allowed(class) {
           return Err(ToolError::SandboxViolation {
             message: format!(
@@ -120,7 +162,7 @@ impl HttpTool {
       }
     }
 
-    Ok(())
+    Ok(addresses)
   }
 }
 
@@ -190,23 +232,28 @@ impl Tool for HttpTool {
       message: format!("Invalid URL '{}': {}", url, error),
     })?;
 
-    let host = Self::extract_host(url).ok_or_else(|| ToolError::InvalidParams {
-      message: format!("Cannot parse host from URL: {}", url),
-    })?;
-    drop(host);
-
     let method = params["method"].as_str().unwrap_or("GET");
 
     for redirect_count in 0..=MAX_REDIRECTS {
-      self.validate_url_allowed(&current_url).await?;
+      let validated_addrs = self.validate_url_allowed(&current_url).await?;
+      // V3.3: a redirect hop can land on a different host entirely, so
+      // the pinned client is rebuilt fresh every iteration from this
+      // iteration's own validated addresses — never hoisted out of the
+      // loop or reused across hops.
+      let host = current_url
+        .host_str()
+        .ok_or_else(|| ToolError::InvalidParams {
+          message: format!("Cannot parse host from URL: {}", current_url),
+        })?;
+      let client = self.build_pinned_client(host, &validated_addrs)?;
 
       let mut builder = match method.to_uppercase().as_str() {
-        "GET" => self.client.get(current_url.clone()),
-        "POST" => self.client.post(current_url.clone()),
-        "PUT" => self.client.put(current_url.clone()),
-        "DELETE" => self.client.delete(current_url.clone()),
-        "PATCH" => self.client.patch(current_url.clone()),
-        "HEAD" => self.client.head(current_url.clone()),
+        "GET" => client.get(current_url.clone()),
+        "POST" => client.post(current_url.clone()),
+        "PUT" => client.put(current_url.clone()),
+        "DELETE" => client.delete(current_url.clone()),
+        "PATCH" => client.patch(current_url.clone()),
+        "HEAD" => client.head(current_url.clone()),
         other => {
           return Err(ToolError::InvalidParams {
             message: format!(
@@ -307,23 +354,27 @@ fn is_redirect(status: StatusCode) -> bool {
   )
 }
 
-async fn resolve_host_ips(url: &Url, host: &str) -> Result<Vec<IpAddr>, ToolError> {
-  if let Ok(address) = host.parse::<IpAddr>() {
-    return Ok(vec![address]);
-  }
-
+async fn resolve_host_ips(url: &Url, host: &str) -> Result<Vec<SocketAddr>, ToolError> {
   let port = url
     .port_or_known_default()
     .ok_or_else(|| ToolError::InvalidParams {
       message: format!("Cannot infer port for URL: {}", url),
     })?;
 
+  if let Ok(address) = host.parse::<IpAddr>() {
+    return Ok(vec![SocketAddr::new(address, port)]);
+  }
+
+  // V3.3: the port is kept on the resolved addresses (previously
+  // dropped via `.ip()`) so the caller can pin `reqwest` to exactly
+  // these `SocketAddr`s via `ClientBuilder::resolve_to_addrs` — closing
+  // the DNS-rebinding TOCTOU between this validation lookup and
+  // reqwest's own independent connect-time resolution.
   let resolved = tokio::net::lookup_host((host, port))
     .await
     .map_err(|error| ToolError::HttpError {
       message: format!("Failed to resolve host '{}': {}", host, error),
     })?
-    .map(|socket_addr| socket_addr.ip())
     .collect::<Vec<_>>();
 
   if resolved.is_empty() {
@@ -343,6 +394,21 @@ fn is_cloud_metadata_host(host: &str) -> bool {
 }
 
 fn classify_network_address(address: IpAddr) -> Vec<NetworkAddressClass> {
+  // V3.3: normalize IPv4-mapped IPv6 (`::ffff:a.b.c.d`, RFC 4291
+  // §2.5.5.2) to its IPv4 form first. Left un-normalized, an address
+  // like `::ffff:169.254.169.254` falls into the `V6` match arm below,
+  // which has no `CLOUD_METADATA_IPS`-equivalent check and whose range
+  // checks don't cover this form either (its first segment is `0000`,
+  // not the `fe80::/10` or `fc00::/7` prefixes) — classification comes
+  // back empty and the cloud-metadata request is allowed through.
+  let address = match address {
+    IpAddr::V6(v6) => v6
+      .to_ipv4_mapped()
+      .map(IpAddr::V4)
+      .unwrap_or(IpAddr::V6(v6)),
+    v4 => v4,
+  };
+
   let mut classes = Vec::new();
 
   if CLOUD_METADATA_IPS.contains(&address) {
@@ -385,24 +451,15 @@ mod tests {
     net::TcpListener,
   };
 
-  /// Build the reqwest client we use in tests. `.no_proxy()` is required
-  /// because a developer or CI runner with a system HTTP proxy
-  /// (Clash / V2Ray / corporate proxy) would otherwise route
-  /// `127.0.0.1:<port>` through the proxy and turn the test failures
-  /// into confusing `IncompleteMessage` errors. See CLAUDE.md's
-  /// "Rust HTTP Testing Guidelines" — Q1.2.3.
-  fn test_client() -> Client {
-    Client::builder()
-      .timeout(std::time::Duration::from_secs(30))
-      .redirect(Policy::none())
-      .user_agent("AgentFlow/0.1-test")
-      .no_proxy()
-      .build()
-      .expect("test reqwest client must build")
-  }
-
+  /// `.with_no_proxy()` is required because a developer or CI runner
+  /// with a system HTTP proxy (Clash / V2Ray / corporate proxy) would
+  /// otherwise route `127.0.0.1:<port>` through the proxy and turn the
+  /// test failures into confusing `IncompleteMessage` errors. See
+  /// CLAUDE.md's "Rust HTTP Testing Guidelines" — Q1.2.3.
   fn test_tool(policy: Arc<SandboxPolicy>) -> HttpTool {
-    HttpTool::with_client(test_client(), policy)
+    HttpTool::new(policy)
+      .expect("test reqwest client must build")
+      .with_no_proxy()
   }
 
   fn test_tool_default_policy() -> HttpTool {
@@ -464,6 +521,79 @@ mod tests {
     assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
     let message = result.unwrap_err().to_string();
     assert!(message.contains("CloudMetadata") || message.contains("LinkLocal"));
+  }
+
+  // ── V3.3: SSRF hardening ────────────────────────────────────────────
+
+  #[test]
+  fn classify_network_address_normalizes_ipv4_mapped_ipv6_cloud_metadata() {
+    let address: IpAddr = "::ffff:169.254.169.254".parse().unwrap();
+    let classes = classify_network_address(address);
+    assert!(
+      classes.contains(&NetworkAddressClass::CloudMetadata),
+      "expected CloudMetadata, got {classes:?}"
+    );
+  }
+
+  #[test]
+  fn classify_network_address_normalizes_ipv4_mapped_ipv6_private() {
+    let address: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
+    let classes = classify_network_address(address);
+    assert!(
+      classes.contains(&NetworkAddressClass::Private),
+      "expected Private, got {classes:?}"
+    );
+  }
+
+  #[test]
+  fn classify_network_address_still_handles_native_ipv6_ranges() {
+    // Regression guard: normalization must not swallow genuine (non
+    // IPv4-mapped) IPv6 addresses — a real IPv6 loopback/link-local/ULA
+    // address should classify exactly as it did before this change.
+    let loopback: IpAddr = "::1".parse().unwrap();
+    assert!(classify_network_address(loopback).contains(&NetworkAddressClass::Loopback));
+
+    let link_local: IpAddr = "fe80::1".parse().unwrap();
+    assert!(classify_network_address(link_local).contains(&NetworkAddressClass::LinkLocal));
+
+    let unique_local: IpAddr = "fd00::1".parse().unwrap();
+    assert!(classify_network_address(unique_local).contains(&NetworkAddressClass::Private));
+
+    let public: IpAddr = "2001:4860:4860::8888".parse().unwrap();
+    assert!(classify_network_address(public).is_empty());
+  }
+
+  #[tokio::test]
+  async fn pinned_client_ignores_real_dns_and_connects_to_the_pinned_address() {
+    // Proves the core rebinding-defeating property directly: a client
+    // built via `build_pinned_client` never independently re-resolves
+    // the host it was pinned for, no matter what real DNS says about
+    // it. `example.com` is a real, unrelated domain deliberately chosen
+    // here — if pinning didn't work, this request would either hang or
+    // hit the real example.com, not our local listener.
+    let (url, server_task) =
+      spawn_one_response_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+    let server_addr: SocketAddr = url
+      .strip_prefix("http://")
+      .expect("server url is http")
+      .parse()
+      .expect("server url is host:port");
+
+    let policy = Arc::new(SandboxPolicy::default());
+    let tool = HttpTool::new(policy).unwrap().with_no_proxy();
+    let client = tool
+      .build_pinned_client("example.com", &[server_addr])
+      .expect("pinned client builds");
+
+    let pinned_url = format!("http://example.com:{}/", server_addr.port());
+    let response = client
+      .get(&pinned_url)
+      .send()
+      .await
+      .expect("request reaches the pinned address, not real DNS for example.com");
+    assert!(response.status().is_success());
+
+    server_task.await.unwrap();
   }
 
   #[tokio::test]
