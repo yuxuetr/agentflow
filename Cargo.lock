@@ -476,6 +476,7 @@ dependencies = [
 name = "agentflow-server"
 version = "0.1.0"
 dependencies = [
+ "agentflow-agent-spi",
  "agentflow-agents",
  "agentflow-config",
  "agentflow-core",

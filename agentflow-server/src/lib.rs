@@ -56,12 +56,14 @@ pub use events_stream::{
   publish_through, stream_events,
 };
 pub use harness::{
-  CancelHarnessSessionResponse, CreateHarnessSessionRequest, CreateHarnessSessionResponse,
-  HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor,
-  HarnessSessionResponse, ListHarnessSessionsQuery, ListHarnessSessionsResponse,
-  ResumeHarnessSessionRequest, ResumeHarnessSessionResponse, StreamedHarnessEvent,
-  StubHarnessExecutor, cancel_harness_session, default_harness_executor, get_harness_session,
-  list_harness_events, list_harness_sessions, post_harness_session_action, resume_harness_session,
+  AnswerInterruptRequest, AnswerInterruptResponse, CancelHarnessSessionResponse,
+  CreateHarnessSessionRequest, CreateHarnessSessionResponse, HarnessEventBroker,
+  HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor, HarnessSessionResponse,
+  ListHarnessSessionsQuery, ListHarnessSessionsResponse, PendingInterrupt,
+  PendingInterruptResponse, ResumeHarnessSessionRequest, ResumeHarnessSessionResponse,
+  StreamedHarnessEvent, StubHarnessExecutor, answer_interrupt, cancel_harness_session,
+  default_harness_executor, get_harness_session, get_pending_interrupt, list_harness_events,
+  list_harness_sessions, post_harness_session_action, resume_harness_session,
   stream_harness_events, submit_harness_session,
 };
 pub use harness_approval::{
@@ -532,6 +534,14 @@ pub fn create_router(state: AppState) -> Router {
     .route(
       "/v1/harness/sessions/:id/approvals/:request_id",
       post(decide_approval),
+    )
+    .route(
+      "/v1/harness/sessions/:id/interrupt",
+      get(get_pending_interrupt),
+    )
+    .route(
+      "/v1/harness/sessions/:id/interrupt/answer",
+      post(answer_interrupt),
     )
     .route("/v1/diagnostics", get(diagnostics::get_diagnostics))
     .route(

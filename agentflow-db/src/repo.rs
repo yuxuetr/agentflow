@@ -147,6 +147,21 @@ pub trait HarnessSessionRepo: Send + Sync {
   /// from 0. The caller is responsible for supplying the correct
   /// initial seq to the executor.
   async fn reset_for_append_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError>;
+  /// V2.3: transition the session to `awaiting_input`, recording the
+  /// question the loop paused on. Called by the live executor the moment
+  /// the inner agent's stop reason resolves to `AwaitingInput`.
+  async fn set_pending_question(
+    &self,
+    id: Uuid,
+    question: &str,
+    step_index: i64,
+  ) -> Result<(), DbError>;
+  /// V2.3: the counterpart to [`Self::set_pending_question`] — flips the
+  /// row back to `running` and clears the pending-question columns.
+  /// Called right before the server spawns the resume-with-answer
+  /// executor call, mirroring how [`Self::reset_for_resume`] prepares the
+  /// row before a fresh executor run.
+  async fn clear_pending_question_for_resume(&self, id: Uuid) -> Result<(), DbError>;
 }
 
 /// Harness session event log persistence (P-H.5).
@@ -550,7 +565,7 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, tenant_id, status, user_input, workspace_root, profile,
                    runtime_kind, model, skill_name, started_at, finished_at,
-                   final_answer, error"#,
+                   final_answer, error, pending_question, pending_question_step_index"#,
     )
     .bind(session.id)
     .bind(&session.tenant_id)
@@ -570,7 +585,7 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
     let row = sqlx::query_as::<_, HarnessSession>(
       r#"SELECT id, tenant_id, status, user_input, workspace_root, profile,
                 runtime_kind, model, skill_name, started_at, finished_at,
-                final_answer, error
+                final_answer, error, pending_question, pending_question_step_index
          FROM harness_sessions
          WHERE id = $1"#,
     )
@@ -584,7 +599,7 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
     let rows = sqlx::query_as::<_, HarnessSession>(
       r#"SELECT id, tenant_id, status, user_input, workspace_root, profile,
                 runtime_kind, model, skill_name, started_at, finished_at,
-                final_answer, error
+                final_answer, error, pending_question, pending_question_step_index
          FROM harness_sessions
          WHERE tenant_id = $1
          ORDER BY started_at DESC
@@ -675,6 +690,53 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
     )
     .bind(id)
     .bind(new_user_input)
+    .execute(&self.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+      return Err(DbError::NotFound {
+        entity_type: "harness_session",
+        id: id.to_string(),
+      });
+    }
+    Ok(())
+  }
+
+  async fn set_pending_question(
+    &self,
+    id: Uuid,
+    question: &str,
+    step_index: i64,
+  ) -> Result<(), DbError> {
+    let result = sqlx::query(
+      r#"UPDATE harness_sessions
+         SET status = 'awaiting_input',
+             pending_question = $2,
+             pending_question_step_index = $3
+         WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(question)
+    .bind(step_index)
+    .execute(&self.pool)
+    .await?;
+    if result.rows_affected() == 0 {
+      return Err(DbError::NotFound {
+        entity_type: "harness_session",
+        id: id.to_string(),
+      });
+    }
+    Ok(())
+  }
+
+  async fn clear_pending_question_for_resume(&self, id: Uuid) -> Result<(), DbError> {
+    let result = sqlx::query(
+      r#"UPDATE harness_sessions
+         SET status = 'running',
+             pending_question = NULL,
+             pending_question_step_index = NULL
+         WHERE id = $1"#,
+    )
+    .bind(id)
     .execute(&self.pool)
     .await?;
     if result.rows_affected() == 0 {

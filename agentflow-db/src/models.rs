@@ -271,6 +271,14 @@ pub struct HarnessSession {
   pub finished_at: Option<DateTime<Utc>>,
   pub final_answer: Option<String>,
   pub error: Option<String>,
+  /// V2.3: the question the loop is paused on when `status ==
+  /// "awaiting_input"`. `None` otherwise. Read directly by
+  /// `GET /v1/harness/sessions/{id}/interrupt` without needing to
+  /// deserialize the full loop checkpoint payload.
+  pub pending_question: Option<String>,
+  /// V2.3: the `AgentStep` index the paused question belongs to.
+  /// Meaningless when `pending_question` is `None`.
+  pub pending_question_step_index: Option<i64>,
 }
 
 /// Input for creating a new harness session via

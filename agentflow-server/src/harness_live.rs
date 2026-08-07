@@ -17,8 +17,12 @@ use async_trait::async_trait;
 use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 
+use agentflow_agent_spi::checkpoint::{
+  AgentLoopCheckpoint, AgentLoopCheckpointer, LoopRuntimeKind,
+};
+use agentflow_agents::plan_execute::{PlanExecuteAgent, PlanExecuteConfig};
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_agents::runtime::{AgentStopReason, RuntimeLimits};
+use agentflow_agents::runtime::{AgentRuntime, AgentStopReason, RuntimeLimits};
 use agentflow_harness::{
   ApprovalProvider, HarnessEvent, HarnessEventBody, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SeqAllocator, SinkChain,
@@ -29,7 +33,8 @@ use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
 use agentflow_tools::ToolRegistry;
 
 use agentflow_db::{
-  HarnessEventRepo, HarnessSessionRepo, HarnessSessionStatus, NewHarnessSessionEvent, Repositories,
+  DbLoopCheckpointer, HarnessEventRepo, HarnessSessionRepo, HarnessSessionStatus,
+  NewHarnessSessionEvent, Repositories,
 };
 
 use crate::events_stream::broker_finalize_grace;
@@ -192,53 +197,76 @@ impl std::fmt::Debug for LiveHarnessExecutor {
 #[async_trait]
 impl HarnessSessionExecutor for LiveHarnessExecutor {
   async fn execute(&self, ctx: HarnessSessionContext) {
-    // Q3.4.3: acquire the per-process concurrency permit before
-    // spawning the OS thread that runs this session. Without this gate
-    // a flood of `POST /v1/harness/sessions` would spawn one OS thread
-    // per request — `spawn_blocking` doesn't bound thread count by
-    // itself. Permit is dropped when the future resolves, freeing the
-    // slot for the next session.
-    let permit = match self.concurrency_limit.clone().acquire_owned().await {
-      Ok(permit) => permit,
-      Err(_closed) => {
-        // Semaphore is permanently closed — collector shutdown.
-        warn!(session_id = %ctx.session_id, "harness concurrency semaphore closed; rejecting session");
-        return;
-      }
+    let Some(_permit_guard) = self.acquire_permit(&ctx).await else {
+      return;
     };
-    let _permit_guard = permit; // released on drop
     if let Err(err) = live_execute(self, &ctx).await {
-      let err_msg = err.to_string();
-      error!(session_id = %ctx.session_id, error = %err_msg, "live harness executor failed");
-      let _ = ctx
-        .repos
-        .harness_sessions
-        .update_status(
-          ctx.session_id,
-          HarnessSessionStatus::Failed,
-          None,
-          Some(&err_msg),
-        )
-        .await;
-      // Emit a terminal `stopped` event so SSE subscribers and event-log
-      // consumers see the H0 contract's required close signal. Two
-      // failure shapes need this:
-      //   1. `live_execute` errored before `HarnessRuntime::run` could
-      //      start (e.g. LLM init / model resolution failed), so the
-      //      runtime never wrote anything but `session_started` —
-      //      sometimes not even that.
-      //   2. `HarnessRuntime::run` errored mid-way (inner agent failed)
-      //      and the runtime itself does not currently emit `stopped`
-      //      on its error path.
-      // Both leave the broker open and the event history missing a
-      // terminal kind, which the closed kind set documented in
-      // `docs/HARNESS_MODE.md` promises is always present.
-      emit_failure_stopped_event(&ctx, &err_msg).await;
-      ctx
-        .broker
-        .finalise_with_grace(ctx.session_id, broker_finalize_grace());
+      handle_live_failure(&ctx, &err).await;
     }
   }
+
+  async fn resume_interrupt(&self, ctx: HarnessSessionContext, answer: String) {
+    let Some(_permit_guard) = self.acquire_permit(&ctx).await else {
+      return;
+    };
+    if let Err(err) = live_resume_interrupt(self, &ctx, answer).await {
+      handle_live_failure(&ctx, &err).await;
+    }
+  }
+}
+
+impl LiveHarnessExecutor {
+  /// Q3.4.3: acquire the per-process concurrency permit before spawning
+  /// the OS thread that runs a session. Without this gate a flood of
+  /// `POST /v1/harness/sessions` (or `.../interrupt/answer`) would spawn
+  /// one OS thread per request — `spawn_blocking` doesn't bound thread
+  /// count by itself. `None` means the semaphore is permanently closed
+  /// (collector shutdown); the caller should bail out without running.
+  async fn acquire_permit(
+    &self,
+    ctx: &HarnessSessionContext,
+  ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    match self.concurrency_limit.clone().acquire_owned().await {
+      Ok(permit) => Some(permit),
+      Err(_closed) => {
+        warn!(session_id = %ctx.session_id, "harness concurrency semaphore closed; rejecting session");
+        None
+      }
+    }
+  }
+}
+
+/// Shared failure path for [`LiveHarnessExecutor::execute`] and
+/// [`LiveHarnessExecutor::resume_interrupt`]: mark the session `Failed`
+/// and emit a terminal `stopped` event so SSE subscribers and event-log
+/// consumers see the H0 contract's required close signal. Two failure
+/// shapes need this:
+///   1. the live call errored before `HarnessRuntime` could start (e.g.
+///      LLM init / checkpoint load failed), so nothing but
+///      `session_started` (or nothing at all) was ever written.
+///   2. `HarnessRuntime` errored mid-way (inner agent failed) and does
+///      not itself emit `stopped` on its error path.
+///
+/// Both leave the broker open and the event history missing a terminal
+/// kind, which the closed kind set documented in `docs/HARNESS_MODE.md`
+/// promises is always present.
+async fn handle_live_failure(ctx: &HarnessSessionContext, err: &LiveExecutorError) {
+  let err_msg = err.to_string();
+  error!(session_id = %ctx.session_id, error = %err_msg, "live harness executor failed");
+  let _ = ctx
+    .repos
+    .harness_sessions
+    .update_status(
+      ctx.session_id,
+      HarnessSessionStatus::Failed,
+      None,
+      Some(&err_msg),
+    )
+    .await;
+  emit_failure_stopped_event(ctx, &err_msg).await;
+  ctx
+    .broker
+    .finalise_with_grace(ctx.session_id, broker_finalize_grace());
 }
 
 /// Persist + publish a synthetic `stopped` event with
@@ -449,6 +477,14 @@ async fn run_harness_inner(
   let memory = build_harness_memory().await?;
   let agent = ReActAgent::new(react_config, memory, Arc::new(registry));
 
+  // V2.3: attach the Postgres-backed checkpointer unconditionally — same
+  // "on by default" posture the CLI's `harness run` already established.
+  // A session has to be continuously checkpointed for `resume_interrupt`
+  // to ever have something to load, once the loop pauses on `ask_user`.
+  let checkpointer: Arc<dyn AgentLoopCheckpointer> = Arc::new(DbLoopCheckpointer::new(
+    inputs.repos.harness_sessions.pool.clone(),
+  ));
+
   let mut runtime = HarnessRuntime::new(Box::new(agent))
     .with_event_sink(server_sink.clone())
     .with_context_providers(default_providers())
@@ -462,6 +498,7 @@ async fn run_harness_inner(
   .with_profile(profile)
   .with_runtime_kind(runtime_kind)
   .with_session_id(session_id_string)
+  .with_loop_checkpointer(checkpointer)
   .with_limits(RuntimeLimits {
     cost_limit_usd: inputs.cost_limit_usd,
     ..Default::default()
@@ -475,12 +512,168 @@ async fn run_harness_inner(
   Ok(result)
 }
 
+/// V2.3: like [`run_harness_blocking`] but resumes a session paused on
+/// [`AgentStopReason::AwaitingInput`] with the user's `answer`, instead of
+/// starting a fresh run.
+async fn run_harness_resume_blocking(
+  executor: LiveHarnessExecutor,
+  inputs: RunInputs,
+  checkpoint: AgentLoopCheckpoint,
+  answer: String,
+) -> Result<agentflow_harness::HarnessRunResult, LiveExecutorError> {
+  let join = tokio::task::spawn_blocking(move || -> Result<_, LiveExecutorError> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .map_err(|err| {
+        LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+          "failed to build inner runtime: {err}"
+        )))
+      })?;
+    rt.block_on(run_harness_resume_inner(
+      executor, inputs, checkpoint, answer,
+    ))
+  });
+  match join.await {
+    Ok(result) => result,
+    Err(err) => Err(LiveExecutorError::Harness(
+      agentflow_harness::HarnessError::Other(format!("harness task panicked: {err}")),
+    )),
+  }
+}
+
+/// V2.3: rebuild the inner agent matching `checkpoint.runtime_kind` (the
+/// checkpoint is self-describing — it is not derived from `inputs.runtime_kind`,
+/// since a checkpoint always records the runtime that actually produced it)
+/// and dispatch through [`HarnessRuntime::resume_from_interrupt`].
+async fn run_harness_resume_inner(
+  executor: LiveHarnessExecutor,
+  inputs: RunInputs,
+  checkpoint: AgentLoopCheckpoint,
+  answer: String,
+) -> Result<agentflow_harness::HarnessRunResult, LiveExecutorError> {
+  let session_id_string = inputs.session_id.to_string();
+  let profile = parse_profile(&inputs.profile);
+
+  let server_sink: Arc<dyn HarnessEventSink> = Arc::new(ServerHarnessEventSink::new(
+    inputs.repos.clone(),
+    inputs.broker.clone(),
+  ));
+  let sinks = SinkChain::new().push(server_sink.clone());
+  let seq_allocator = SeqAllocator::with_initial(inputs.initial_seq);
+
+  let approval_provider: Arc<dyn ApprovalProvider> = Arc::new(ServerApprovalProvider::new(
+    executor.approval_registry.clone(),
+    executor.approval_timeout,
+  ));
+
+  let hook_config = HookConfig::new(session_id_string.clone(), approval_provider, sinks.clone())
+    .with_profile(profile)
+    .with_seq_allocator(seq_allocator.clone())
+    .with_approval_timeout(executor.approval_timeout);
+
+  let registry = Arc::new(wrap_registry(ToolRegistry::new(), hook_config));
+  let memory = build_harness_memory().await?;
+
+  let checkpointer: Arc<dyn AgentLoopCheckpointer> = Arc::new(DbLoopCheckpointer::new(
+    inputs.repos.harness_sessions.pool.clone(),
+  ));
+
+  let inner_agent: Box<dyn AgentRuntime> = match checkpoint.runtime_kind {
+    LoopRuntimeKind::React => {
+      let react_config = ReActConfig::new(&inputs.model).with_max_iterations(4);
+      Box::new(ReActAgent::new(react_config, memory, registry))
+    }
+    LoopRuntimeKind::PlanExecute => {
+      let plan_config = PlanExecuteConfig::new(&inputs.model);
+      Box::new(PlanExecuteAgent::new(plan_config, memory, registry))
+    }
+  };
+
+  let mut runtime = HarnessRuntime::new(inner_agent)
+    .with_event_sink(server_sink.clone())
+    .with_seq_allocator(seq_allocator.clone());
+
+  let options = HarnessRunOptions::new(
+    inputs.user_input,
+    PathBuf::from(&inputs.workspace_root),
+    inputs.model,
+  )
+  .with_loop_checkpointer(checkpointer)
+  .with_limits(RuntimeLimits {
+    cost_limit_usd: inputs.cost_limit_usd,
+    ..Default::default()
+  });
+
+  let result = runtime
+    .resume_from_interrupt(options, checkpoint, answer)
+    .await?;
+  Ok(result)
+}
+
 async fn live_execute(
   executor: &LiveHarnessExecutor,
   ctx: &HarnessSessionContext,
 ) -> Result<(), LiveExecutorError> {
   ensure_llm_initialized().await?;
   let result = run_harness_blocking(executor.clone(), clone_run_inputs(ctx)).await?;
+  finish_live_result(ctx, &result).await
+}
+
+/// V2.3: resume a session paused on `awaiting_input` with the user's
+/// `answer`. Loads the loop checkpoint the pause saved, rebuilds the
+/// matching agent (`checkpoint.runtime_kind`), and dispatches through
+/// `HarnessRuntime::resume_from_interrupt`.
+async fn live_resume_interrupt(
+  executor: &LiveHarnessExecutor,
+  ctx: &HarnessSessionContext,
+  answer: String,
+) -> Result<(), LiveExecutorError> {
+  ensure_llm_initialized().await?;
+  let checkpointer = DbLoopCheckpointer::new(ctx.repos.harness_sessions.pool.clone());
+  let checkpoint = checkpointer
+    .load(&ctx.session_id.to_string())
+    .await?
+    .ok_or_else(|| {
+      LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+        "no loop checkpoint found for session {}",
+        ctx.session_id
+      )))
+    })?;
+  let result =
+    run_harness_resume_blocking(executor.clone(), clone_run_inputs(ctx), checkpoint, answer)
+      .await?;
+  finish_live_result(ctx, &result).await
+}
+
+/// Persist the outcome of a fresh run or an interrupt resume, shared by
+/// [`live_execute`] and [`live_resume_interrupt`].
+///
+/// `AgentStopReason::AwaitingInput` is a non-terminal pause, not a
+/// terminal status transition like every other variant — it records the
+/// question onto the session row's `pending_question*` columns via
+/// `set_pending_question` instead of `update_status`, and returns early
+/// without finalising the broker channel (the session isn't done; a
+/// later `POST .../interrupt/answer` reuses the same channel).
+async fn finish_live_result(
+  ctx: &HarnessSessionContext,
+  result: &agentflow_harness::HarnessRunResult,
+) -> Result<(), LiveExecutorError> {
+  if let AgentStopReason::AwaitingInput { question } = &result.stop_reason {
+    let step_index = result
+      .inner
+      .steps
+      .last()
+      .map(|step| step.index as i64)
+      .unwrap_or(0);
+    ctx
+      .repos
+      .harness_sessions
+      .set_pending_question(ctx.session_id, question, step_index)
+      .await?;
+    info!(session_id = %ctx.session_id, "live harness executor paused awaiting input");
+    return Ok(());
+  }
 
   // Map the inner agent's stop reason back to the session row's
   // terminal state. The closed `AgentStopReason` enum keeps the match
@@ -535,10 +728,8 @@ async fn live_execute(
       None,
       Some(format!("agent_error:{message}")),
     ),
-    // V2.3: not a terminal state — the question text is persisted onto
-    // the session row separately (`pending_question*` columns) by the
-    // caller before this function is reached; no error string here.
-    AgentStopReason::AwaitingInput { .. } => (HarnessSessionStatus::AwaitingInput, None, None),
+    // Handled by the early return above.
+    AgentStopReason::AwaitingInput { .. } => unreachable!("AwaitingInput handled above"),
   };
   ctx
     .repos
@@ -581,6 +772,8 @@ enum LiveExecutorError {
   Harness(#[from] agentflow_harness::HarnessError),
   #[error(transparent)]
   Db(#[from] agentflow_db::DbError),
+  #[error(transparent)]
+  Checkpoint(#[from] agentflow_agent_spi::checkpoint::AgentLoopCheckpointError),
 }
 
 #[cfg(test)]

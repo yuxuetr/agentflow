@@ -280,6 +280,31 @@ pub struct HarnessEventsQuery {
 #[async_trait]
 pub trait HarnessSessionExecutor: Send + Sync {
   async fn execute(&self, ctx: HarnessSessionContext);
+
+  /// V2.3: resume a session paused on `AwaitingInput` with the user's
+  /// `answer`. Default fails the session outright — an executor that
+  /// never produces an `awaiting_input` session (like
+  /// [`StubHarnessExecutor`], which never runs a real agent loop) never
+  /// has a checkpoint to resume from, so this path should be
+  /// unreachable for it; the default exists purely so the trait stays
+  /// object-safe for both impls without forcing a no-op override.
+  async fn resume_interrupt(&self, ctx: HarnessSessionContext, answer: String) {
+    let _ = answer;
+    error!(session_id = %ctx.session_id, "resume_interrupt called on an executor that does not support it");
+    let _ = ctx
+      .repos
+      .harness_sessions
+      .update_status(
+        ctx.session_id,
+        HarnessSessionStatus::Failed,
+        None,
+        Some("this executor does not support interrupt resume"),
+      )
+      .await;
+    ctx
+      .broker
+      .finalise_with_grace(ctx.session_id, broker_finalize_grace());
+  }
 }
 
 /// Everything an executor needs to do its job. Owns its own copies of the
@@ -827,6 +852,154 @@ pub async fn resume_harness_session(
     session,
     resumed: true,
     mode: body.mode,
+  }))
+}
+
+/// A pending `ask_user` question, as surfaced by
+/// `GET /v1/harness/sessions/{id}/interrupt`.
+#[derive(Debug, Serialize)]
+pub struct PendingInterrupt {
+  pub question: String,
+  pub step_index: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingInterruptResponse {
+  /// `None` when the session has no question pending — at most one can
+  /// ever be pending per session (the whole loop is stopped, not one
+  /// gated call mid-batch, unlike tool-call approvals), so this is a
+  /// nullable object rather than a list.
+  pub pending: Option<PendingInterrupt>,
+}
+
+/// `GET /v1/harness/sessions/{id}/interrupt` — read the question the
+/// session is currently paused on, if any. Reads straight off the
+/// `pending_question*` columns on the session row rather than loading
+/// and deserializing the full loop checkpoint.
+pub async fn get_pending_interrupt(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path(session_id): Path<Uuid>,
+) -> Result<Json<PendingInterruptResponse>, ApiError> {
+  let session = state
+    .repos
+    .harness_sessions
+    .get(session_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  // P2.6 tenant boundary: 404 cross-tenant access so the pending
+  // question doesn't leak to another tenant.
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
+
+  let pending = session.pending_question.map(|question| PendingInterrupt {
+    question,
+    step_index: session.pending_question_step_index.unwrap_or(0),
+  });
+  Ok(Json(PendingInterruptResponse { pending }))
+}
+
+/// Body for `POST /v1/harness/sessions/{id}/interrupt/answer`.
+#[derive(Debug, Deserialize)]
+pub struct AnswerInterruptRequest {
+  pub answer: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnswerInterruptResponse {
+  #[serde(flatten)]
+  pub session: HarnessSession,
+  pub resumed: bool,
+}
+
+/// `POST /v1/harness/sessions/{id}/interrupt/answer` — answer a pending
+/// question and resume the paused loop.
+///
+/// 400s when the session isn't currently `awaiting_input` (mirrors
+/// `:resume`'s `is_terminal()` guard, just for the opposite state).
+/// Otherwise flips the row back to `running`, clears the pending-question
+/// columns, and spawns the resume through
+/// [`HarnessSessionExecutor::resume_interrupt`] in the background —
+/// fire-and-forget, matching `:resume`'s async-dispatch pattern. The seq
+/// series continues at `MAX(existing seq) + 1` (this is a continuation of
+/// the same session's event log, not a fresh run, so it always behaves
+/// like the `:resume` route's append flavour).
+pub async fn answer_interrupt(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path(session_id): Path<Uuid>,
+  JsonReq(body): JsonReq<AnswerInterruptRequest>,
+) -> Result<Json<AnswerInterruptResponse>, ApiError> {
+  let session = state
+    .repos
+    .harness_sessions
+    .get(session_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  if session.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!(
+      "harness session {} not found",
+      session_id
+    )));
+  }
+
+  if HarnessSessionStatus::parse(&session.status) != Some(HarnessSessionStatus::AwaitingInput) {
+    return Err(ApiError::BadRequest(format!(
+      "harness session {} is {}; nothing pending to answer",
+      session_id, session.status
+    )));
+  }
+
+  let answer = body.answer.trim();
+  if answer.is_empty() {
+    return Err(ApiError::BadRequest("answer must not be empty".into()));
+  }
+
+  state
+    .repos
+    .harness_sessions
+    .clear_pending_question_for_resume(session_id)
+    .await?;
+
+  let max_seq = state.repos.harness_events.max_seq(session_id).await?;
+  let initial_seq = max_seq.map(|m| (m as u64) + 1).unwrap_or(0);
+
+  let executor = state.harness_executor.clone();
+  let repos = state.repos.clone();
+  let broker = state.harness_broker.clone();
+  let ctx = HarnessSessionContext {
+    session_id,
+    user_input: session.user_input.clone(),
+    workspace_root: session.workspace_root.clone(),
+    profile: session.profile.clone(),
+    runtime_kind: session.runtime_kind.clone(),
+    model: session.model.clone(),
+    skill_name: session.skill_name.clone(),
+    cost_limit_usd: None,
+    repos,
+    broker,
+    initial_seq,
+  };
+  let answer_owned = answer.to_string();
+  tokio::spawn(async move {
+    executor.resume_interrupt(ctx, answer_owned).await;
+  });
+
+  // Refetch so the response reflects the freshly-cleared row (status
+  // `running`, `pending_question*` cleared).
+  let session = state
+    .repos
+    .harness_sessions
+    .get(session_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("harness session {} not found", session_id)))?;
+  Ok(Json(AnswerInterruptResponse {
+    session,
+    resumed: true,
   }))
 }
 

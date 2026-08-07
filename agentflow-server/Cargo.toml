@@ -63,6 +63,7 @@ agentflow-tracing = { path = "../agentflow-tracing", version = "0.1" }
 agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 agentflow-harness = { path = "../agentflow-harness", version = "0.1" }
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
+agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 
