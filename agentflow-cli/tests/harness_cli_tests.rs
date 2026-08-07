@@ -1,10 +1,13 @@
 //! End-to-end CLI tests for `agentflow harness …`.
 //!
-//! `run` requires a working LLM provider, so the live invocation path is
-//! exercised in `agentflow-harness/tests/runtime_react_smoke.rs`. Here
-//! we cover the persistence-side subcommands that operate on a JSONL
-//! session log without ever calling out to an LLM: `list`, `inspect`,
-//! `resume`, plus argument validation on `run`.
+//! `run` against a *real* LLM provider is exercised in
+//! `agentflow-harness/tests/runtime_react_smoke.rs`. Here we cover the
+//! persistence-side subcommands that operate on a JSONL session log
+//! without ever calling out to an LLM (`list`, `inspect`, `resume`, plus
+//! argument validation on `run`), plus `run`/`chat`/`resume-loop`
+//! end-to-end against the offline `mock` provider — including the V2.3
+//! `ask_user` interrupt/resume round trip, which needs a real (if
+//! canned) turn-by-turn LLM exchange to exercise honestly.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -512,4 +515,155 @@ nodes:
     2,
     "one step_started per node"
   );
+}
+
+// ── V2.3: ask_user interrupt / resume, end to end against `mock` ──────
+
+/// `--model mock` alone resolves nothing — `mock` isn't a built-in
+/// registry entry (unlike what a bare `--model mock` flag might
+/// suggest), it has to be declared in a `~/.agentflow/models.yml`-shaped
+/// config, same as `skill_cli_tests.rs::write_mock_models_config`. Point
+/// `HOME` at a tempdir carrying this file so `AgentFlow::init()` picks
+/// it up without touching the real `~/.agentflow`.
+fn write_mock_models_config(home: &std::path::Path) {
+  let config_dir = home.join(".agentflow");
+  fs::create_dir_all(&config_dir).unwrap();
+  fs::write(
+    config_dir.join("models.yml"),
+    r#"
+models:
+  mock-model:
+    vendor: mock
+    type: text
+    model_id: mock-model
+providers:
+  mock:
+    api_key_env: MOCK_API_KEY
+"#,
+  )
+  .unwrap();
+}
+
+/// Queues for the `mock` LLM provider: first call requests `ask_user`,
+/// second call (post-resume) answers plainly with no tool calls — the
+/// ordinary ReAct final-answer shape. `AGENTFLOW_MOCK_RESPONSES` and
+/// `AGENTFLOW_MOCK_TOOL_CALLS` both advance one entry per LLM call, so
+/// both queues need an entry per call even though only one of the two
+/// matters each time (mock.rs pops both unconditionally).
+fn mock_ask_user_then_final_answer(question: &str, final_answer: &str) -> (String, String) {
+  let tool_calls = json!([
+    [{ "id": "call_1", "name": "ask_user", "arguments": { "question": question } }],
+    [],
+  ]);
+  let responses = json!(["", final_answer]);
+  (tool_calls.to_string(), responses.to_string())
+}
+
+/// `harness chat`'s REPL: a turn that pauses on `ask_user` prints the
+/// question and treats the *next* line the user types as the answer,
+/// resuming through `HarnessRuntime::resume_from_interrupt` instead of
+/// starting a fresh turn — this is the inline interactive path from
+/// V2.3 step 8.
+#[test]
+fn harness_chat_pauses_on_ask_user_and_resumes_with_the_next_repl_line() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let tmp = TempDir::new().unwrap();
+  let run_dir = tmp.path().join("run");
+  let (tool_calls, responses) =
+    mock_ask_user_then_final_answer("Which file should I edit?", "Editing src/main.rs. Done!");
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args(["harness", "chat", "--model", "mock-model", "--run-dir"])
+    .arg(&run_dir)
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_TOOL_CALLS", tool_calls)
+    .env("AGENTFLOW_MOCK_RESPONSES", responses)
+    .write_stdin("please make a change\nsrc/main.rs\nexit\n");
+
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Editing src/main.rs. Done!"))
+    .stderr(predicate::str::contains("Which file should I edit?"));
+}
+
+/// `harness run`'s non-interactive fallback: under `assert_cmd`, stdin
+/// and stdout are pipes, never a TTY, so a paused session must print the
+/// question and exit 0 (not block forever on a stdin that will never
+/// produce a line) — then `resume-loop --answer` picks the session back
+/// up from its checkpoint and reaches the same final answer a
+/// non-interrupted run would.
+#[test]
+fn harness_run_prints_question_when_non_interactive_then_resume_loop_answer_continues() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let tmp = TempDir::new().unwrap();
+  let run_dir = tmp.path().join("run");
+  let session_id = "v2-3-smoke-session";
+
+  // `harness run` is its own fresh process and makes exactly one LLM
+  // call before pausing on `ask_user` — a single-entry queue, not the
+  // two-call sequence a single continuous process (like the chat test
+  // above) would consume.
+  let mut first = Command::cargo_bin("agentflow").unwrap();
+  first
+    .args([
+      "harness",
+      "run",
+      "please make a change",
+      "--model",
+      "mock-model",
+      "--session",
+      session_id,
+      "--run-dir",
+    ])
+    .arg(&run_dir)
+    .env("HOME", home.path())
+    .env(
+      "AGENTFLOW_MOCK_TOOL_CALLS",
+      json!([[
+        { "id": "call_1", "name": "ask_user", "arguments": { "question": "Which file should I edit?" } },
+      ]])
+      .to_string(),
+    )
+    .env("AGENTFLOW_MOCK_RESPONSES", json!([""]).to_string());
+  first
+    .assert()
+    .success()
+    .stderr(
+      predicate::str::contains("awaiting input")
+        .and(predicate::str::contains("resume-loop"))
+        .and(predicate::str::contains("Which file should I edit?")),
+    );
+
+  // `resume-loop` is a fresh process — its `mock` provider queues start
+  // over at index 0, and this run makes exactly one more LLM call (the
+  // continuation after the answer is injected into memory), so the
+  // queues here hold only that one entry, not the original two-call
+  // sequence `first` consumed.
+  let mut resume = Command::cargo_bin("agentflow").unwrap();
+  resume
+    .args([
+      "harness",
+      "resume-loop",
+      session_id,
+      "--model",
+      "mock-model",
+      "--run-dir",
+    ])
+    .arg(&run_dir)
+    .arg("--answer")
+    .arg("src/main.rs")
+    .env("HOME", home.path())
+    .env("AGENTFLOW_MOCK_TOOL_CALLS", json!([[]]).to_string())
+    .env(
+      "AGENTFLOW_MOCK_RESPONSES",
+      json!(["Editing src/main.rs. Done!"]).to_string(),
+    );
+  resume
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Editing src/main.rs. Done!"));
 }
