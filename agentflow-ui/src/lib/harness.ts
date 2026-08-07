@@ -20,6 +20,11 @@ export const harnessStatusTone = (status: string): 'pending' | 'success' | 'dang
   switch (status) {
     case 'running':
       return 'pending';
+    // V2.3: paused waiting for an `ask_user` answer — an active,
+    // non-terminal state like `running`, just blocked on the user
+    // rather than the agent.
+    case 'awaiting_input':
+      return 'pending';
     case 'completed':
       return 'success';
     case 'failed':

@@ -132,6 +132,23 @@ export const PendingApprovalSchema = z
 export type PendingApproval = z.infer<typeof PendingApprovalSchema>;
 export const PendingApprovalArraySchema = z.array(PendingApprovalSchema);
 
+// V2.3: at most one question can be pending per session (the whole loop
+// is stopped, not one gated call mid-batch like approvals) — a nullable
+// object, not a list.
+export const PendingInterruptSchema = z
+  .object({
+    question: z.string(),
+    step_index: z.number(),
+  })
+  .loose();
+export type PendingInterrupt = z.infer<typeof PendingInterruptSchema>;
+
+export const PendingInterruptResponseSchema = z
+  .object({
+    pending: PendingInterruptSchema.nullable(),
+  })
+  .loose();
+
 // ── Diagnostics report ───────────────────────────────────────────────
 
 const DiagnosticsStatusSchema = z.enum(['ok', 'warning', 'fail']);

@@ -819,10 +819,15 @@ h1 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-areas:
+    'interrupt interrupt'
     'summary approvals'
     'timeline payload';
   gap: 16px;
   margin-top: 16px;
+}
+
+.harness-interrupt {
+  grid-area: interrupt;
 }
 
 .harness-summary {
@@ -997,6 +1002,54 @@ h1 {
   cursor: pointer;
 }
 
+/* V2.3 — pending `ask_user` question card. Blue accent (matches the
+   live-typing indicator's palette) to read as "waiting on you" rather
+   than the amber "risky tool call" tone of an approval card. */
+.harness-interrupt-card {
+  border: 1px solid rgba(99, 179, 237, 0.4);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(99, 179, 237, 0.06);
+}
+
+.harness-interrupt-card header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.harness-interrupt-meta {
+  font-size: 12px;
+  color: #95a0b6;
+}
+
+.harness-interrupt-question {
+  margin: 4px 0 10px 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.harness-interrupt-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.harness-interrupt-controls textarea {
+  width: 100%;
+  background: #1c2233;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 8px;
+  color: #ecedf2;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
 .harness-btn-allow {
   background: #2f8b4d;
   color: #fff;
@@ -1097,6 +1150,7 @@ h1 {
   .harness-detail-grid {
     grid-template-columns: 1fr;
     grid-template-areas:
+      'interrupt'
       'summary'
       'approvals'
       'timeline'

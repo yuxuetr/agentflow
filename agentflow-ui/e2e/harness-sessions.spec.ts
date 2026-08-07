@@ -61,6 +61,9 @@ test.describe('P-H.5 slice 3 — /ui/harness/sessions', () => {
     // the contract under test is "form → detail page renders".
     await expect(page.getByText('Status')).toBeVisible();
     await expect(page.getByTestId('harness-approvals-section')).toBeVisible();
+    // V2.3: the interrupt card only mounts when a question is actually
+    // pending — a fresh session has nothing to answer yet.
+    await expect(page.getByTestId('harness-interrupt-section')).not.toBeVisible();
   });
 
   test('list page links back to detail rows', async ({ page }) => {

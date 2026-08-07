@@ -18,10 +18,12 @@ import {
   HarnessEventSchema,
   HarnessSessionSchema,
   PendingApprovalArraySchema,
+  PendingInterruptResponseSchema,
   parseJsonResponse,
   type HarnessEvent,
   type HarnessSession,
   type PendingApproval,
+  type PendingInterrupt,
 } from '../schemas';
 
 type ConnectionState = 'idle' | 'loading' | 'streaming' | 'reconnecting' | 'closed' | 'error';
@@ -66,6 +68,8 @@ export function HarnessSessionDetail({
   // discrete `events` timeline, and resets on the next `step_started`.
   const [liveTyping, setLiveTyping] = useState('');
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
+  const [interruptBusy, setInterruptBusy] = useState(false);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -173,6 +177,32 @@ export function HarnessSessionDetail({
     }
   };
 
+  // V2.3: at most one question can be pending per session — same
+  // poll-cadence pattern as `fetchApprovals`, just a nullable object
+  // instead of a list.
+  const fetchInterrupt = async () => {
+    try {
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}/interrupt`,
+        apiToken,
+        {},
+        tenant,
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`interrupt fetch failed: HTTP ${response.status} ${text}`);
+      }
+      const body = await parseJsonResponse(
+        PendingInterruptResponseSchema,
+        response,
+        `GET /v1/harness/sessions/${sessionId}/interrupt`,
+      );
+      setPendingInterrupt(body.pending);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   // SSE wires the event timeline to the gateway's broker. The session
   // row + pending approvals still poll on a slower cadence since
   // EventSource only covers the event stream — approvals are a
@@ -180,6 +210,7 @@ export function HarnessSessionDetail({
   useEffect(() => {
     void fetchSession();
     void fetchApprovals();
+    void fetchInterrupt();
     // Seed once via the history route so the timeline doesn't appear
     // empty before the first SSE frame arrives.
     void fetchEventsFallback();
@@ -294,7 +325,7 @@ export function HarnessSessionDetail({
         return;
       }
       sessionInFlight = true;
-      void Promise.all([fetchSession(), fetchApprovals()]).finally(() => {
+      void Promise.all([fetchSession(), fetchApprovals(), fetchInterrupt()]).finally(() => {
         sessionInFlight = false;
       });
     }, 2000);
@@ -343,6 +374,44 @@ export function HarnessSessionDetail({
       void fetchApprovals();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // V2.3: answer a pending `ask_user` question. Fire-and-forget on the
+  // server side (the row already reflects `running` in the response),
+  // so refresh the session + interrupt state immediately rather than
+  // waiting for the next poll tick — mirrors `decide`'s pattern.
+  const answerInterrupt = async (answer: string) => {
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      setError('Answer must not be empty');
+      return;
+    }
+    setError(null);
+    setInfo(null);
+    setInterruptBusy(true);
+    try {
+      const response = await apiFetch(
+        `/v1/harness/sessions/${sessionId}/interrupt/answer`,
+        apiToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answer: trimmed }),
+        },
+        tenant,
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`answer failed: HTTP ${response.status} ${text}`);
+      }
+      setInfo('Answer submitted — session resuming.');
+      setPendingInterrupt(null);
+      void fetchSession();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInterruptBusy(false);
     }
   };
 
@@ -575,6 +644,20 @@ export function HarnessSessionDetail({
           )}
         </section>
 
+        {pendingInterrupt ? (
+          <section
+            className="harness-interrupt"
+            aria-label="Pending question"
+            data-testid="harness-interrupt-section"
+          >
+            <InterruptCard
+              pending={pendingInterrupt}
+              busy={interruptBusy}
+              onAnswer={(answer) => void answerInterrupt(answer)}
+            />
+          </section>
+        ) : null}
+
         <section
           className="harness-approvals"
           aria-label="Pending approvals"
@@ -700,5 +783,52 @@ function ApprovalCard({
         </button>
       </div>
     </li>
+  );
+}
+
+function InterruptCard({
+  pending,
+  busy,
+  onAnswer,
+}: {
+  pending: PendingInterrupt;
+  busy: boolean;
+  onAnswer: (answer: string) => void;
+}) {
+  const [answer, setAnswer] = useState('');
+  const submit = () => {
+    if (!answer.trim() || busy) {
+      return;
+    }
+    onAnswer(answer);
+    setAnswer('');
+  };
+  return (
+    <div className="harness-interrupt-card" data-testid="harness-interrupt-card">
+      <header>
+        <strong>❓ Question</strong>
+        <span className="harness-interrupt-meta">step #{pending.step_index}</span>
+      </header>
+      <p className="harness-interrupt-question">{pending.question}</p>
+      <div className="harness-interrupt-controls">
+        <textarea
+          data-testid="harness-interrupt-answer"
+          value={answer}
+          onChange={(event) => setAnswer(event.target.value)}
+          placeholder="Type your answer…"
+          rows={3}
+          disabled={busy}
+        />
+        <button
+          data-testid="harness-interrupt-submit"
+          type="button"
+          className="harness-btn harness-btn-allow"
+          onClick={submit}
+          disabled={busy || !answer.trim()}
+        >
+          {busy ? 'Submitting…' : 'Submit answer'}
+        </button>
+      </div>
+    </div>
   );
 }
