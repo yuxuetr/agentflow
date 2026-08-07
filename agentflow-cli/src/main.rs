@@ -573,6 +573,19 @@ enum HarnessCommands {
     /// Override the run-dir (must match the interrupted run's)
     #[arg(long)]
     run_dir: Option<String>,
+    /// Agent runtime that produced the checkpoint — must match the
+    /// interrupted run's `--runtime` (V2.3: `react` and `plan_execute`
+    /// checkpoints use different loop-state shapes and are not
+    /// interchangeable). Only these two are constructible via `--skill`
+    /// / `--model` today, unlike `run`/`chat`'s broader `--runtime` list.
+    #[arg(long, default_value = "react", value_parser = ["react", "plan_execute", "plan-execute"])]
+    runtime: String,
+    /// V2.3: answer to a pending `AgentStopReason::AwaitingInput` question
+    /// (the checkpoint's `pending_question`). Required when the
+    /// checkpoint is paused on a question, and rejected otherwise. When
+    /// omitted on a paused checkpoint, reads one line from stdin.
+    #[arg(long)]
+    answer: Option<String>,
     /// Output format
     #[arg(long, default_value = "text", value_parser = ["text", "json", "stream-json", "json-envelope"])]
     output: String,
@@ -2540,9 +2553,14 @@ async fn main() {
         model,
         workspace,
         run_dir,
+        runtime,
+        answer,
         output,
       } => {
-        harness::resume_loop::execute(session_id, skill, model, workspace, run_dir, output).await
+        harness::resume_loop::execute(
+          session_id, skill, model, workspace, run_dir, runtime, answer, output,
+        )
+        .await
       }
       HarnessCommands::List { run_dir, output } => harness::list::execute(run_dir, output).await,
       HarnessCommands::Inspect {

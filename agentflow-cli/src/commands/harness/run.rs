@@ -7,13 +7,18 @@ use std::sync::atomic::AtomicU64;
 use anyhow::{Context, Result};
 
 use agentflow_agents::FileLoopCheckpointer;
+use agentflow_agents::checkpoint::AgentLoopCheckpointer as _;
+use agentflow_agents::plan_execute::{PlanExecuteAgent, PlanExecuteConfig};
 use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
+use agentflow_agents::runtime::{
+  AgentCancellationToken, AgentContext, AgentStopReason, RuntimeLimits,
+};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
   CliApprovalProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessRunOptions,
-  HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink, RoadmapMdProvider, SinkChain,
-  StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider, default_session_dir, wrap_registry,
+  HarnessRunResult, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
+  RoadmapMdProvider, SinkChain, StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider,
+  default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SqliteMemory;
@@ -124,11 +129,24 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
+  // V2.3: PlanExecute has no mid-loop LLM re-entry point at all, so it
+  // cannot implement `TurnDrivenRuntime` — `--context-refresh` combined
+  // with `--runtime plan_execute` has no meaning. Reject up front rather
+  // than silently ignoring the flag (matches how `build_agent` below now
+  // rejects `--skill` + `--runtime plan_execute`).
+  if context_refresh && matches!(runtime_kind, HarnessRuntimeKind::PlanExecute) {
+    anyhow::bail!(
+      "--context-refresh is not supported with --runtime plan_execute (PlanExecute has no \
+       turn-by-turn re-entry point)"
+    );
+  }
+
   let (mut agent, model, skill_name) = build_agent(
     skill_dir.as_deref(),
     model_override.as_deref(),
     &memory_db,
     &workspace,
+    runtime_kind,
   )
   .await
   .context("failed to construct the inner Harness agent")?;
@@ -175,10 +193,15 @@ pub async fn execute(
   // §6: `--context-refresh` drives the agent turn-by-turn at the harness
   // layer (ReActAgent implements `TurnDrivenRuntime`) and re-runs the
   // context providers between turns; otherwise the agent owns iteration.
+  // `context_refresh && plan_execute` was already rejected above, so
+  // reaching the turn-driven branch means `agent` is always `React`.
   let mut runtime = if context_refresh {
-    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
+    let BuiltHarnessAgent::React(react_agent) = agent else {
+      unreachable!("--context-refresh + --runtime plan_execute was rejected above");
+    };
+    HarnessRuntime::new_turn_driven(react_agent).with_context_refresh()
   } else {
-    HarnessRuntime::new(Box::new(agent))
+    HarnessRuntime::new(agent.into_runtime_box())
   };
   runtime = runtime.with_event_sink(jsonl_sink.clone());
   if !no_default_context {
@@ -235,6 +258,10 @@ pub async fn execute(
       )
     })?,
   );
+  // Kept alongside `options` (which moves the `Arc` into
+  // `HarnessRunOptions`) so the V2.3 awaiting-input loop below can load
+  // the checkpoint a pause just wrote without re-parsing `run_root`.
+  let checkpointer_handle = loop_checkpointer.clone();
   options = options.with_loop_checkpointer(loop_checkpointer);
 
   let started = std::time::Instant::now();
@@ -248,24 +275,45 @@ pub async fn execute(
     eprintln!("   session log: {}", session_dir.display());
   }
 
-  // Q3.1.2: race the harness session against SIGINT/SIGTERM. On signal
-  // we trip the cancellation token (the inner ReAct/plan-execute loop
-  // notices on its next iteration and exits with `AgentStopReason::Cancelled`),
-  // give the agent a bounded drain window to surface the terminal
-  // `stopped` event through the sink chain, then exit 130.
-  let run_future = runtime.run(options);
-  tokio::pin!(run_future);
-  let result = tokio::select! {
-    biased;
-    res = &mut run_future => res.context("Harness session failed")?,
-    _ = crate::shutdown::shutdown_signal() => {
-      eprintln!("\n🛑 Cancelled (received SIGINT/SIGTERM)");
-      cancel_token.cancel();
-      const CANCEL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-      let _ = tokio::time::timeout(CANCEL_DRAIN_TIMEOUT, &mut run_future).await;
-      std::process::exit(crate::shutdown::SIGINT_EXIT_CODE);
-    }
-  };
+  let mut result = race_with_shutdown(runtime.run(options.clone()), &cancel_token).await?;
+
+  // V2.3: a session can pause on `ask_user` any number of times before
+  // reaching a final answer. TTY-gated the same way `CliApprovalProvider`
+  // is interactive-only: with a real terminal, prompt inline and keep
+  // the process running; otherwise print the question and hand off to
+  // `resume-loop --answer` rather than blocking on stdin that will never
+  // produce a line.
+  while let AgentStopReason::AwaitingInput { question } = &result.stop_reason {
+    let question = question.clone();
+    let Some(answer) = prompt_for_answer(&question) else {
+      eprintln!("❓ {question}");
+      eprintln!(
+        "Harness session {} is awaiting input (no interactive terminal available).",
+        result.session_id
+      );
+      eprintln!(
+        "Resume with: agentflow harness resume-loop {} --answer '<answer>' --runtime {} [--skill <dir> | --model <model>]",
+        result.session_id,
+        runtime_kind.as_str(),
+      );
+      return Ok(());
+    };
+    let checkpoint = checkpointer_handle
+      .load(&result.session_id)
+      .await
+      .context("failed to load loop checkpoint to resume the awaiting-input session")?
+      .with_context(|| {
+        format!(
+          "no loop checkpoint found for session '{}' despite AwaitingInput",
+          result.session_id
+        )
+      })?;
+    result = race_with_shutdown(
+      runtime.resume_from_interrupt(options.clone(), checkpoint, answer),
+      &cancel_token,
+    )
+    .await?;
+  }
   let elapsed = started.elapsed();
 
   match output {
@@ -361,13 +409,100 @@ pub async fn execute(
   Ok(())
 }
 
+/// V2.3: the concrete agent `build_agent` constructed, before it is
+/// boxed into the `HarnessRuntime`'s type-erased `Box<dyn AgentRuntime>`.
+///
+/// Kept concrete (not `Box<dyn AgentRuntime>`) up through the
+/// approval-gate wrapping step, since that step needs each agent's
+/// concrete `.tools()`/`.with_tools()` accessors (not part of the
+/// `AgentRuntime` trait) — mirrors why `HarnessRuntime` itself only
+/// erases the type at the very end, in `HarnessRuntime::new`.
+pub(super) enum BuiltHarnessAgent {
+  React(Box<ReActAgent>),
+  PlanExecute(Box<PlanExecuteAgent>),
+}
+
+impl BuiltHarnessAgent {
+  pub(super) fn tools(&self) -> &Arc<ToolRegistry> {
+    match self {
+      Self::React(agent) => agent.tools(),
+      Self::PlanExecute(agent) => agent.tools(),
+    }
+  }
+
+  pub(super) fn with_tools(self, tools: Arc<ToolRegistry>) -> Self {
+    match self {
+      Self::React(agent) => Self::React(Box::new(agent.with_tools(tools))),
+      Self::PlanExecute(agent) => Self::PlanExecute(Box::new(agent.with_tools(tools))),
+    }
+  }
+
+  /// Erase to `Box<dyn AgentRuntime>` for `HarnessRuntime::new`. Not
+  /// usable for `HarnessRuntime::new_turn_driven` — only `ReActAgent`
+  /// implements `TurnDrivenRuntime` (PlanExecute has no mid-loop LLM
+  /// re-entry point), so callers must reject `--context-refresh` +
+  /// `--runtime plan_execute` before reaching this, then unwrap the
+  /// `React` variant directly for the turn-driven path.
+  pub(super) fn into_runtime_box(self) -> Box<dyn agentflow_agents::runtime::AgentRuntime> {
+    match self {
+      Self::React(agent) => agent,
+      Self::PlanExecute(agent) => agent,
+    }
+  }
+
+  /// Resume the agent's own loop checkpoint (V2.4/V2.3), dispatching to
+  /// whichever concrete runtime built this agent. Used by
+  /// `harness resume-loop`, which bypasses `HarnessRuntime` entirely (see
+  /// that command's module doc comment) so it can't go through the
+  /// `AgentRuntime` trait object either.
+  pub(super) async fn resume_from_loop_checkpoint(
+    self,
+    context: AgentContext,
+    checkpoint: agentflow_agents::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
+  ) -> Result<HarnessRunResult> {
+    let inner_result = match self {
+      Self::React(mut agent) => agent
+        .resume_from_loop_checkpoint(context, checkpoint, answer)
+        .await
+        .context("Harness loop resume failed")?,
+      Self::PlanExecute(mut agent) => agent
+        .resume_from_loop_checkpoint(context, checkpoint, answer)
+        .await
+        .context("Harness loop resume failed")?,
+    };
+    Ok(HarnessRunResult {
+      session_id: inner_result.session_id.clone(),
+      answer: inner_result.answer.clone(),
+      stop_reason: inner_result.stop_reason.clone(),
+      final_event_seq: 0,
+      context_items_admitted: 0,
+      context_items_dropped: 0,
+      context_items_truncated: 0,
+      inner: inner_result,
+    })
+  }
+}
+
 pub(super) async fn build_agent(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
   memory_db: &std::path::Path,
   workspace: &std::path::Path,
-) -> Result<(ReActAgent, String, Option<String>)> {
+  runtime_kind: HarnessRuntimeKind,
+) -> Result<(BuiltHarnessAgent, String, Option<String>)> {
   if let Some(dir) = skill_dir {
+    // V2.3: `SkillBuilder` only ever constructs a `ReActAgent` — skill
+    // manifests declare persona/tools/knowledge but not a runtime
+    // pattern. Rather than silently ignoring `--runtime plan_execute`
+    // (the pre-existing bug this fixes), reject the combination
+    // explicitly.
+    if !matches!(runtime_kind, HarnessRuntimeKind::React) {
+      anyhow::bail!(
+        "--skill only supports the react runtime today (skill manifests don't declare a \
+         runtime pattern) — pass --model instead of --skill to use --runtime {runtime_kind:?}"
+      );
+    }
     let dir_path = std::path::Path::new(dir);
     let mut manifest =
       SkillLoader::load(dir_path).with_context(|| format!("failed to load skill from '{dir}'"))?;
@@ -387,7 +522,11 @@ pub(super) async fn build_agent(
     let agent = SkillBuilder::build_with_project_root(&manifest, dir_path, Some(workspace))
       .await
       .with_context(|| "failed to build agent from skill manifest")?;
-    Ok((agent, model, Some(skill_name)))
+    Ok((
+      BuiltHarnessAgent::React(Box::new(agent)),
+      model,
+      Some(skill_name),
+    ))
   } else {
     let model = model_override
       .context("--model is required when no --skill is provided")?
@@ -401,11 +540,25 @@ pub(super) async fn build_agent(
         memory_db.display()
       )
     })?;
-    let agent = ReActAgent::new(
-      ReActConfig::new(&model),
-      Box::new(memory),
-      Arc::new(ToolRegistry::new()),
-    );
+    let agent = match runtime_kind {
+      HarnessRuntimeKind::PlanExecute => {
+        BuiltHarnessAgent::PlanExecute(Box::new(PlanExecuteAgent::new(
+          PlanExecuteConfig::new(&model),
+          Box::new(memory),
+          Arc::new(ToolRegistry::new()),
+        )))
+      }
+      // V2.3: `handoff`/`blackboard`/`debate`/`flow` have no
+      // `build_agent`-constructible equivalent yet (multi-agent
+      // supervisors and Flow governance are separate execution paths
+      // entirely) — unchanged pre-existing behaviour of defaulting to
+      // react for those, only `react` vs `plan_execute` dispatch is new.
+      _ => BuiltHarnessAgent::React(Box::new(ReActAgent::new(
+        ReActConfig::new(&model),
+        Box::new(memory),
+        Arc::new(ToolRegistry::new()),
+      ))),
+    };
     Ok((agent, model, None))
   }
 }
@@ -487,6 +640,60 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
   }
 }
 
+/// V2.3: race a Harness run/resume future against SIGINT/SIGTERM.
+/// Shared by the initial `runtime.run(...)` call and every subsequent
+/// `runtime.resume_from_interrupt(...)` call in the awaiting-input loop
+/// below — the cancellation behaviour (trip the token, give the agent a
+/// bounded drain window to surface the terminal `stopped` event, exit
+/// 130) is identical either way.
+pub(super) async fn race_with_shutdown(
+  fut: impl std::future::Future<Output = Result<HarnessRunResult, agentflow_harness::HarnessError>>,
+  cancel_token: &AgentCancellationToken,
+) -> Result<HarnessRunResult> {
+  tokio::pin!(fut);
+  tokio::select! {
+    biased;
+    res = &mut fut => res.context("Harness session failed"),
+    _ = crate::shutdown::shutdown_signal() => {
+      eprintln!("\n🛑 Cancelled (received SIGINT/SIGTERM)");
+      cancel_token.cancel();
+      const CANCEL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+      let _ = tokio::time::timeout(CANCEL_DRAIN_TIMEOUT, &mut fut).await;
+      std::process::exit(crate::shutdown::SIGINT_EXIT_CODE);
+    }
+  }
+}
+
+/// V2.3: prompt for an `ask_user` answer on stderr and read one non-empty
+/// line from stdin. TTY-gated on both stdin and stdout (mirrors
+/// `CliApprovalProvider`'s interactivity assumption) — a piped/non-TTY
+/// process has no one to prompt, so callers should fall back to printing
+/// the question and pointing at `resume-loop --answer` instead of
+/// blocking on a stdin that will never produce a line. Returns `None` on
+/// EOF as well as on a non-interactive stdin/stdout.
+pub(super) fn prompt_for_answer(question: &str) -> Option<String> {
+  use std::io::Write;
+  if !std::io::IsTerminal::is_terminal(&std::io::stdin())
+    || !std::io::IsTerminal::is_terminal(&std::io::stdout())
+  {
+    return None;
+  }
+  loop {
+    eprintln!("\n❓ {question}");
+    eprint!("> ");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+      return None;
+    }
+    let trimmed = line.trim();
+    if !trimmed.is_empty() {
+      return Some(trimmed.to_string());
+    }
+    eprintln!("   (answer must not be empty)");
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -505,9 +712,18 @@ mod tests {
     let workspace = tmp.path();
 
     // First "run": construct the agent and record a turn for a session.
-    let (agent1, _model, _skill) = build_agent(None, Some("mock"), &db, workspace)
-      .await
-      .unwrap();
+    let (agent1, _model, _skill) = build_agent(
+      None,
+      Some("mock"),
+      &db,
+      workspace,
+      HarnessRuntimeKind::React,
+    )
+    .await
+    .unwrap();
+    let BuiltHarnessAgent::React(agent1) = agent1 else {
+      unreachable!("--model path with HarnessRuntimeKind::React always builds React");
+    };
     agent1
       .memory_ref()
       .add_message(Message::user("sess-resume", "remember the secret token"))
@@ -516,15 +732,119 @@ mod tests {
     drop(agent1);
 
     // Second "run" (resume): same DB + same session id sees the message.
-    let (agent2, _model, _skill) = build_agent(None, Some("mock"), &db, workspace)
-      .await
-      .unwrap();
+    let (agent2, _model, _skill) = build_agent(
+      None,
+      Some("mock"),
+      &db,
+      workspace,
+      HarnessRuntimeKind::React,
+    )
+    .await
+    .unwrap();
+    let BuiltHarnessAgent::React(agent2) = agent2 else {
+      unreachable!("--model path with HarnessRuntimeKind::React always builds React");
+    };
     let history = agent2.memory_ref().get_all("sess-resume").await.unwrap();
     assert!(
       history
         .iter()
         .any(|m| m.content.contains("remember the secret token")),
       "resume must restore the prior conversation from the persistent store"
+    );
+  }
+
+  /// V2.3 regression test for the pre-existing bug this work fixes:
+  /// `harness run --runtime plan_execute` used to silently still build a
+  /// `ReActAgent` (`build_agent` never consulted `runtime_kind` at all).
+  /// Asserts the `--model` path now genuinely dispatches to
+  /// `PlanExecuteAgent` when asked.
+  #[tokio::test]
+  async fn build_agent_dispatches_plan_execute_runtime_kind_to_plan_execute_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("memory.sqlite");
+    let workspace = tmp.path();
+
+    let (agent, _model, _skill) = build_agent(
+      None,
+      Some("mock"),
+      &db,
+      workspace,
+      HarnessRuntimeKind::PlanExecute,
+    )
+    .await
+    .unwrap();
+    assert!(
+      matches!(agent, BuiltHarnessAgent::PlanExecute(_)),
+      "--runtime plan_execute must build a PlanExecuteAgent, not silently fall back to React"
+    );
+  }
+
+  /// The `--model` path still defaults to React when no `--runtime` is
+  /// given (or an unimplemented multi-agent kind is requested) — only
+  /// `plan_execute` gets real dispatch, matching the scoped fix.
+  #[tokio::test]
+  async fn build_agent_defaults_to_react_for_react_runtime_kind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("memory.sqlite");
+    let workspace = tmp.path();
+
+    let (agent, _model, _skill) = build_agent(
+      None,
+      Some("mock"),
+      &db,
+      workspace,
+      HarnessRuntimeKind::React,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(agent, BuiltHarnessAgent::React(_)));
+  }
+
+  /// `SkillBuilder` only ever constructs a `ReActAgent` — skill manifests
+  /// don't declare a runtime pattern. `--skill` + `--runtime
+  /// plan_execute` must be rejected with a clear error instead of
+  /// silently building React anyway (the same bug class this fix
+  /// closes, just for the skill path).
+  #[tokio::test]
+  async fn build_agent_rejects_skill_dir_with_plan_execute_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let skill_dir = tmp.path().join("skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+      skill_dir.join("skill.toml"),
+      r#"
+[skill]
+name = "plain-skill"
+version = "0.1"
+description = "test"
+
+[persona]
+role = "You are a test agent."
+
+[model]
+name = "mock"
+"#,
+    )
+    .unwrap();
+    let db = tmp.path().join("memory.sqlite");
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let err = match build_agent(
+      Some(skill_dir.to_str().unwrap()),
+      None,
+      &db,
+      &workspace,
+      HarnessRuntimeKind::PlanExecute,
+    )
+    .await
+    {
+      Ok(_) => panic!("expected --skill + --runtime plan_execute to be rejected"),
+      Err(err) => err,
+    };
+    assert!(
+      format!("{err:#}").contains("only supports the react runtime"),
+      "unexpected error message: {err:#}"
     );
   }
 
@@ -585,10 +905,14 @@ db_path = "{}"
       None,
       &memory_db,
       &workspace,
+      HarnessRuntimeKind::React,
     )
     .await
     .unwrap();
     assert_eq!(skill_name.as_deref(), Some("project-memory-skill"));
+    let BuiltHarnessAgent::React(agent) = agent else {
+      unreachable!("--skill path always builds React");
+    };
 
     let messages = agent.preview_llm_messages().await.unwrap();
     let rendered = format!("{messages:?}");

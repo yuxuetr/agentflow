@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use agentflow_agents::runtime::{AgentCancellationToken, RuntimeLimits};
+use agentflow_agents::FileLoopCheckpointer;
+use agentflow_agents::checkpoint::AgentLoopCheckpointer as _;
+use agentflow_agents::runtime::{AgentCancellationToken, AgentStopReason, RuntimeLimits};
 use agentflow_harness::{
   AgentsMdProvider, ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
   ApprovalScope, DeterministicContextSummarizer, HarnessError, HarnessEvent, HarnessEventBody,
@@ -51,6 +53,11 @@ struct ChatConfig {
   jsonl: Arc<dyn HarnessEventSink>,
   seq_allocator: SeqAllocator,
   memory_db: PathBuf,
+  /// V2.3: on by default (mirrors `harness run`'s own posture) so a
+  /// turn that pauses on `ask_user` has a checkpoint to resume from —
+  /// without this, `AwaitingInput` in chat would have no way back into
+  /// the loop at all.
+  loop_checkpointer: Arc<FileLoopCheckpointer>,
   session_id: String,
   /// V1.6: passed to `SkillBuilder::build_with_project_root` so a
   /// `[memory.project]`-declaring skill gets its project-memory layer
@@ -303,6 +310,16 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
+  let loop_checkpoint_dir = FileLoopCheckpointer::default_dir(&run_root);
+  let loop_checkpointer = Arc::new(
+    FileLoopCheckpointer::new(&loop_checkpoint_dir).with_context(|| {
+      format!(
+        "could not create loop checkpoint dir {}",
+        loop_checkpoint_dir.display()
+      )
+    })?,
+  );
+
   let mut cfg = ChatConfig {
     profile,
     approve_mode,
@@ -317,6 +334,7 @@ pub async fn execute(
     // (Q1.7.1 + P-A3.4) and across rebuilds.
     seq_allocator: SeqAllocator::new(),
     memory_db,
+    loop_checkpointer,
     session_id: session.unwrap_or_else(|| format!("chat-{}", uuid::Uuid::new_v4().simple())),
     workspace: workspace.clone(),
   };
@@ -336,6 +354,11 @@ pub async fn execute(
   // fallback when piped (tests). The same reader feeds the H.2.1 approval prompt
   // so input stays consistent.
   let mut reader = LineReader::new();
+  // V2.3: set when the previous turn stopped on `ask_user` — the next
+  // non-command line is treated as the answer (resume-with-answer)
+  // instead of a fresh turn. Cleared whenever a `/` command runs, since
+  // none of them are meant to answer a pending question.
+  let mut pending_question: Option<String> = None;
   'repl: loop {
     let input = match reader.read_line("› ").await? {
       ReadLine::Line(line) => line,
@@ -361,6 +384,9 @@ pub async fn execute(
 
     // ── REPL commands (lines starting with `/`) ──
     if let Some(cmd) = input.strip_prefix('/') {
+      // A `/` command line was never an answer to a pending question —
+      // abandon it rather than leaving stale state.
+      pending_question = None;
       let (name, arg) = cmd.split_once(char::is_whitespace).unwrap_or((cmd, ""));
       let arg = arg.trim();
       match name {
@@ -465,7 +491,8 @@ pub async fn execute(
       .with_runtime_kind(cfg.runtime_kind)
       .with_profile(cfg.profile)
       .with_session_id(cfg.session_id.clone())
-      .with_cancellation_token(cancel.clone());
+      .with_cancellation_token(cancel.clone())
+      .with_loop_checkpointer(cfg.loop_checkpointer.clone());
     if let Some(name) = skill_name.as_ref() {
       options = options.with_skill_name(name.clone());
     }
@@ -489,44 +516,80 @@ pub async fn execute(
       std::io::stderr().flush().ok();
     }
 
-    let run_future = runtime.run(options);
-    tokio::pin!(run_future);
-    // Drive the turn, servicing interactive approval requests (H.2.1) as they
-    // arrive — the approval provider blocks the tool call until we answer here,
-    // reading the decision from the same stdin reader.
-    let result = loop {
-      tokio::select! {
-        biased;
-        r = &mut run_future => break r,
-        Some((req, resp_tx)) = approval_rx.recv() => {
-          if tty {
-            // Clear the "thinking…" line before the prompt.
-            use std::io::Write;
-            eprint!("\r\x1b[K");
-            std::io::stderr().flush().ok();
-          }
-          let decision = prompt_and_read_decision(&req, &mut reader).await;
-          let _ = resp_tx.send(decision);
+    // V2.3: if the previous turn paused on `ask_user`, this line is the
+    // user's answer — resume the paused loop instead of starting a
+    // fresh turn. Otherwise a normal fresh turn.
+    let outcome = if let Some(question) = pending_question.take() {
+      match cfg.loop_checkpointer.load(&cfg.session_id).await {
+        Ok(Some(checkpoint)) => {
+          drive_chat_turn(
+            runtime.resume_from_interrupt(options, checkpoint, input.to_string()),
+            &cancel,
+            &mut approval_rx,
+            tty,
+            &mut reader,
+          )
+          .await
         }
-        _ = crate::shutdown::shutdown_signal() => {
-          cancel.cancel();
-          let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut run_future).await;
-          eprintln!("\n🛑 turn cancelled");
-          continue 'repl;
+        Ok(None) => {
+          eprintln!(
+            "⚠️  no loop checkpoint found for session {} — the paused question ('{question}') \
+             can't be answered; starting a fresh turn instead.",
+            cfg.session_id
+          );
+          drive_chat_turn(
+            runtime.run(options),
+            &cancel,
+            &mut approval_rx,
+            tty,
+            &mut reader,
+          )
+          .await
+        }
+        Err(err) => {
+          eprintln!("⚠️  failed to load loop checkpoint: {err:#} — starting a fresh turn instead.");
+          drive_chat_turn(
+            runtime.run(options),
+            &cancel,
+            &mut approval_rx,
+            tty,
+            &mut reader,
+          )
+          .await
         }
       }
+    } else {
+      drive_chat_turn(
+        runtime.run(options),
+        &cancel,
+        &mut approval_rx,
+        tty,
+        &mut reader,
+      )
+      .await
     };
+
     if tty {
       // Clear the "thinking…" line (CR + erase-to-EOL).
       eprint!("\r\x1b[K");
       use std::io::Write;
       std::io::stderr().flush().ok();
     }
+
+    let result = match outcome {
+      ChatTurnOutcome::Cancelled => continue 'repl,
+      ChatTurnOutcome::Ready(r) => *r,
+    };
     match result {
       Ok(res) => {
-        println!("{}", res.answer.as_deref().unwrap_or("(no answer)"));
-        if !res.stop_reason.is_success() {
-          eprintln!("   (stopped early: {:?})", res.stop_reason);
+        if let AgentStopReason::AwaitingInput { question } = &res.stop_reason {
+          eprintln!("\n❓ {question}");
+          pending_question = Some(question.clone());
+        } else {
+          println!("{}", res.answer.as_deref().unwrap_or("(no answer)"));
+          if !res.stop_reason.is_success() {
+            eprintln!("   (stopped early: {:?})", res.stop_reason);
+          }
         }
       }
       Err(err) => eprintln!("⚠️  turn failed: {err:#}"),
@@ -535,6 +598,53 @@ pub async fn execute(
   }
 
   Ok(())
+}
+
+/// Outcome of one [`drive_chat_turn`] call: either the turn ran to
+/// completion (or errored), or SIGINT/SIGTERM cancelled it mid-flight —
+/// distinguished so the REPL loop can `continue 'repl` on cancellation
+/// without re-checking a sentinel `Result` value.
+enum ChatTurnOutcome {
+  Ready(Box<Result<agentflow_harness::HarnessRunResult>>),
+  Cancelled,
+}
+
+/// Drive one Harness turn — a fresh `runtime.run(options)` or a V2.3
+/// `runtime.resume_from_interrupt(...)`, both of which produce the same
+/// `Result<HarnessRunResult, HarnessError>` future shape — servicing
+/// interactive approval requests (H.2.1) as they arrive on `approval_rx`
+/// and racing SIGINT/SIGTERM. Generic over the future so both the "fresh
+/// turn" and "resume with answer" call sites share the exact same
+/// approval-and-cancellation plumbing.
+async fn drive_chat_turn(
+  fut: impl std::future::Future<Output = Result<agentflow_harness::HarnessRunResult, HarnessError>>,
+  cancel: &AgentCancellationToken,
+  approval_rx: &mut mpsc::UnboundedReceiver<ApprovalAsk>,
+  tty: bool,
+  reader: &mut LineReader,
+) -> ChatTurnOutcome {
+  tokio::pin!(fut);
+  loop {
+    tokio::select! {
+      biased;
+      r = &mut fut => return ChatTurnOutcome::Ready(Box::new(r.context("Harness turn failed"))),
+      Some((req, resp_tx)) = approval_rx.recv() => {
+        if tty {
+          use std::io::Write;
+          eprint!("\r\x1b[K");
+          std::io::stderr().flush().ok();
+        }
+        let decision = prompt_and_read_decision(&req, reader).await;
+        let _ = resp_tx.send(decision);
+      }
+      _ = crate::shutdown::shutdown_signal() => {
+        cancel.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut fut).await;
+        eprintln!("\n🛑 turn cancelled");
+        return ChatTurnOutcome::Cancelled;
+      }
+    }
+  }
 }
 
 /// Build (or rebuild) the chat's `HarnessRuntime` for the given agent
@@ -546,10 +656,25 @@ async fn build_chat_runtime(
   skill_dir: Option<&str>,
   model_override: Option<&str>,
 ) -> Result<(HarnessRuntime, String, Option<String>)> {
-  let (mut agent, model, skill_name) =
-    build_agent(skill_dir, model_override, &cfg.memory_db, &cfg.workspace)
-      .await
-      .context("failed to construct the inner Harness agent")?;
+  // V2.3: PlanExecute has no mid-loop LLM re-entry point at all, so it
+  // cannot implement `TurnDrivenRuntime` — mirrors the same guard in
+  // `harness run`.
+  if cfg.context_refresh && matches!(cfg.runtime_kind, HarnessRuntimeKind::PlanExecute) {
+    anyhow::bail!(
+      "--context-refresh is not supported with --runtime plan_execute (PlanExecute has no \
+       turn-by-turn re-entry point)"
+    );
+  }
+
+  let (mut agent, model, skill_name) = build_agent(
+    skill_dir,
+    model_override,
+    &cfg.memory_db,
+    &cfg.workspace,
+    cfg.runtime_kind,
+  )
+  .await
+  .context("failed to construct the inner Harness agent")?;
 
   // H.2.1: prefer the REPL-routed approval provider when present (interactive
   // `--approve cli` in chat); otherwise fall back to the mode's default.
@@ -572,10 +697,15 @@ async fn build_chat_runtime(
     agent = agent.with_tools(Arc::new(wrap_registry(snapshot, hook_config)));
   }
 
+  // `context_refresh && plan_execute` was already rejected above, so
+  // reaching the turn-driven branch means `agent` is always `React`.
   let mut runtime = if cfg.context_refresh {
-    HarnessRuntime::new_turn_driven(Box::new(agent)).with_context_refresh()
+    let super::run::BuiltHarnessAgent::React(react_agent) = agent else {
+      unreachable!("--context-refresh + --runtime plan_execute was rejected above");
+    };
+    HarnessRuntime::new_turn_driven(react_agent).with_context_refresh()
   } else {
-    HarnessRuntime::new(Box::new(agent))
+    HarnessRuntime::new(agent.into_runtime_box())
   };
   runtime = runtime
     .with_event_sink(cfg.jsonl.clone())

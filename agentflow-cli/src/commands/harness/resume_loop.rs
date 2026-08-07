@@ -1,21 +1,30 @@
-//! `agentflow harness resume-loop` — resume a ReAct agent loop from its
-//! last saved [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`]
-//! (V2.4), continuing from the interrupted turn instead of restarting the
+//! `agentflow harness resume-loop` — resume a ReAct or Plan-Execute agent
+//! loop from its last saved
+//! [`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint`] (V2.4),
+//! continuing from the interrupted turn instead of restarting the
 //! session from scratch.
 //!
 //! Distinct from `agentflow harness resume`, which is JSONL-replay-only
 //! (it re-prints the persisted event log and never touches the agent
 //! loop). This command rebuilds the agent exactly as `harness run` does
 //! (same [`super::run::build_agent`] helper, so tool registry / memory /
-//! skill wiring stay identical), loads the checkpoint `harness run`
-//! wrote by default, and calls `ReActAgent::resume_from_loop_checkpoint`
-//! to genuinely continue execution.
+//! skill wiring stay identical, and `--runtime` selects the same
+//! `ReActAgent` / `PlanExecuteAgent` dispatch), loads the checkpoint
+//! `harness run` wrote by default, and dispatches to the matching
+//! runtime's `resume_from_loop_checkpoint` to genuinely continue
+//! execution.
+//!
+//! V2.3: also resolves an answer to a pending
+//! [`agentflow_agent_spi::runtime::AgentStopReason::AwaitingInput`]
+//! question — from `--answer`, or an interactive stdin prompt when the
+//! checkpoint is paused and `--answer` is omitted.
 //!
 //! Minimal surface deliberately: this bypasses the full
 //! `HarnessRuntime`/`HarnessRunOptions` envelope (no live event stream,
 //! no approval-gate re-wrapping) — it proves loop-continuation
-//! correctness, which is V2.4's scope. Full `HarnessRuntime`-level
-//! resume wiring is a natural follow-up, likely folded into V2.3.
+//! correctness. The full `HarnessRuntime`-level equivalent is
+//! `agentflow-server`'s `POST .../interrupt/answer` route
+//! (`HarnessRuntime::resume_from_interrupt`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,17 +36,22 @@ use agentflow_agents::checkpoint::AgentLoopCheckpointer as _;
 use agentflow_agents::runtime::AgentContext;
 use agentflow_llm::AgentFlow;
 
+use super::run::{parse_runtime_kind, prompt_for_answer};
 use super::{OutputFormat, resolve_run_dir};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
   session_id: String,
   skill_dir: Option<String>,
   model_override: Option<String>,
   workspace: Option<String>,
   run_dir_override: Option<String>,
+  runtime: String,
+  answer: Option<String>,
   output: String,
 ) -> Result<()> {
   let output = OutputFormat::parse(&output)?;
+  let runtime_kind = parse_runtime_kind(&runtime)?;
 
   if skill_dir.is_none() && model_override.is_none() {
     anyhow::bail!("either --skill or --model is required");
@@ -62,11 +76,12 @@ pub async fn execute(
     .await
     .context("failed to initialise AgentFlow LLM config — is your API key configured?")?;
 
-  let (mut agent, model, skill_name) = super::run::build_agent(
+  let (agent, model, skill_name) = super::run::build_agent(
     skill_dir.as_deref(),
     model_override.as_deref(),
     &memory_db,
     &workspace,
+    runtime_kind,
   )
   .await
   .context("failed to construct the inner Harness agent")?;
@@ -105,11 +120,31 @@ pub async fn execute(
     eprintln!("   from step_index: {}", checkpoint.step_index);
   }
 
-  // TODO(V2.3 step 8): thread a real --answer flag through here.
+  // V2.3: resolve the answer to a pending `ask_user` question, if any.
+  // Two-directional: a paused checkpoint requires an answer (from
+  // `--answer`, or an interactive stdin prompt as a fallback); an
+  // unpaused checkpoint rejects one (mirrors the agent-level validation
+  // in `ReActAgent`/`PlanExecuteAgent::resume_from_loop_checkpoint`, just
+  // with a clearer CLI-facing message before spending an LLM call).
+  let answer = match (&checkpoint.pending_question, answer) {
+    (Some(_), Some(answer)) => Some(answer),
+    (Some(question), None) => Some(prompt_for_answer(question).with_context(|| {
+      format!(
+        "session '{session_id}' is awaiting an answer to: {question:?} — pass --answer '<text>' \
+         (no interactive terminal available to prompt for one)"
+      )
+    })?),
+    (None, Some(_)) => {
+      anyhow::bail!(
+        "--answer was given but session '{session_id}' has no pending question to answer"
+      );
+    }
+    (None, None) => None,
+  };
+
   let result = agent
-    .resume_from_loop_checkpoint(context, checkpoint, None)
-    .await
-    .context("Harness loop resume failed")?;
+    .resume_from_loop_checkpoint(context, checkpoint, answer)
+    .await?;
   let elapsed = started.elapsed();
 
   match output {

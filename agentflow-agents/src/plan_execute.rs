@@ -228,6 +228,21 @@ impl PlanExecuteAgent {
     self
   }
 
+  /// Read-only view of the agent's tool registry. Mirrors
+  /// `ReActAgent::tools` (V2.3: needed so `agentflow-cli`'s
+  /// `harness run`/`chat` can snapshot + re-wrap the registry with the
+  /// approval-gate pipeline regardless of which runtime the CLI built).
+  pub fn tools(&self) -> &Arc<ToolRegistry> {
+    &self.tools
+  }
+
+  /// Replace the agent's tool registry (builder-style setter). Mirrors
+  /// `ReActAgent::with_tools`.
+  pub fn with_tools(mut self, tools: Arc<ToolRegistry>) -> Self {
+    self.tools = tools;
+    self
+  }
+
   /// Compile a plan's tool steps into an executable [`Flow`] (P-A2.2) — the
   /// "emit a `Flow`" path that lets a Plan-and-Execute plan run on the
   /// deterministic graph engine (inheriting retry / checkpoint / timeout /
