@@ -960,7 +960,7 @@ impl ReActAgent {
     let Some(checkpointer) = self.live_checkpointer.as_ref() else {
       return;
     };
-    let checkpoint = st.to_checkpoint(&self.session_id);
+    let checkpoint = st.to_checkpoint(&self.session_id, None);
     if let Err(e) = checkpointer.0.save(&checkpoint).await {
       warn!(session = %self.session_id, error = %e, "agent loop checkpoint save failed");
     }
@@ -2754,6 +2754,15 @@ impl ReActAgent {
         tool: "runtime".to_string(),
         message,
       }),
+      // V2.3: a delegated sub-agent has no user to ask — nested HITL
+      // through delegation is out of scope; surface as an error to the
+      // parent rather than silently bubbling the question up.
+      AgentStopReason::AwaitingInput { question } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message: format!(
+          "delegated sub-agent asked a question but delegation does not support HITL: {question}"
+        ),
+      }),
     }
   }
 
@@ -3610,6 +3619,7 @@ impl LoopState {
   fn to_checkpoint(
     &self,
     session_id: &str,
+    pending_question: Option<String>,
   ) -> agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
     agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
       schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
@@ -3632,6 +3642,7 @@ impl LoopState {
       plan_steps: serde_json::Value::Null,
       plan_position: 0,
       observations: Vec::new(),
+      pending_question,
     }
   }
 

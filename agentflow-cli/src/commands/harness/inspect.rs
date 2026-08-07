@@ -117,6 +117,8 @@ fn summarise(events: &[agentflow_harness::HarnessEvent]) -> Summary {
       HarnessEventBody::ApprovalDecided(_) => "approval_decided",
       HarnessEventBody::ToolCallCompleted(_) => "tool_call_completed",
       HarnessEventBody::TokenDelta(_) => "token_delta",
+      HarnessEventBody::InterruptRequested(_) => "interrupt_requested",
+      HarnessEventBody::InterruptAnswered(_) => "interrupt_answered",
       HarnessEventBody::BackgroundTaskUpdated(_) => "background_task_updated",
       HarnessEventBody::MemorySummaryAdded(_) => "memory_summary_added",
       HarnessEventBody::Stopped(payload) => {

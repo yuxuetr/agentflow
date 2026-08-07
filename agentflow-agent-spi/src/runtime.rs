@@ -431,6 +431,18 @@ pub enum AgentStopReason {
   Error {
     message: String,
   },
+  /// V2.3: the loop paused because the agent asked the user a question
+  /// (e.g. via the `ask_user` synthetic tool) and is waiting for their
+  /// answer. Unlike every other variant, this is resumable in the
+  /// fullest sense — `resume_from_loop_checkpoint`'s `answer` parameter
+  /// exists specifically to continue a run stopped this way. Distinct
+  /// from the tool-call approval mechanism (`ApprovalRequest`/
+  /// `ApprovalDecision`), which gates *whether a specific tool call
+  /// proceeds*, not a general information request from the agent to the
+  /// user.
+  AwaitingInput {
+    question: String,
+  },
 }
 
 impl AgentStopReason {
@@ -750,6 +762,20 @@ pub enum AgentEvent {
     is_final: bool,
     timestamp: DateTime<Utc>,
   },
+  /// V2.3: the agent asked the user a question (e.g. via the `ask_user`
+  /// synthetic tool) and the loop is about to stop with
+  /// [`AgentStopReason::AwaitingInput`]. Bridged live by
+  /// `agentflow-harness`'s `HarnessAgentEventBridge` into the
+  /// `interrupt_requested` `HarnessEvent` kind. Unlike `TokenDelta` this
+  /// *is* accumulated into `AgentRunResult.events` — it is a one-time,
+  /// low-frequency signal (at most once per turn), not a per-token
+  /// firehose, so there's no bloat concern.
+  InterruptRequested {
+    session_id: String,
+    step_index: usize,
+    question: String,
+    timestamp: DateTime<Utc>,
+  },
   RunStopped {
     session_id: String,
     reason: AgentStopReason,
@@ -936,6 +962,36 @@ pub trait AgentRuntime: Send {
 
   /// Stable, machine-readable runtime identifier (e.g. `"react"`).
   fn runtime_name(&self) -> &'static str;
+
+  /// V2.3/V2.4: resume a run from a saved
+  /// [`crate::checkpoint::AgentLoopCheckpoint`], optionally carrying a
+  /// user's `answer` when the checkpoint's
+  /// [`crate::checkpoint::AgentLoopCheckpoint::pending_question`] is set
+  /// (i.e. the run stopped with [`AgentStopReason::AwaitingInput`]).
+  ///
+  /// Defaulted (not required) rather than added as a breaking change to
+  /// every `AgentRuntime` implementor — the multi-agent supervisors and
+  /// any `Flow`-driven runtime have no loop checkpoint to resume from.
+  /// This default is what a caller sees for those; `ReActAgent` and
+  /// `PlanExecuteAgent` override it to delegate to their own
+  /// `resume_from_loop_checkpoint` inherent methods. This is also the
+  /// mechanism that lets `agentflow-harness`'s `HarnessRuntime` (which
+  /// stores the inner agent as a type-erased `Box<dyn AgentRuntime>`)
+  /// dispatch a resume-with-answer without downcasting.
+  async fn resume_from_loop_checkpoint(
+    &mut self,
+    context: AgentContext,
+    checkpoint: crate::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
+  ) -> Result<AgentRunResult, AgentRuntimeError> {
+    let _ = (context, checkpoint, answer);
+    Err(AgentRuntimeError::ExecutionFailed {
+      message: format!(
+        "{} does not support loop-checkpoint resume",
+        self.runtime_name()
+      ),
+    })
+  }
 }
 
 /// Errors raised before a runtime can return a structured stop reason.

@@ -213,6 +213,13 @@ pub enum HarnessSessionStatus {
   Completed,
   Failed,
   Cancelled,
+  /// V2.3: paused waiting for the user to answer a question the agent
+  /// asked (`AgentStopReason::AwaitingInput`). Deliberately NOT terminal
+  /// — `is_terminal()` returns `false` for it — since the whole point is
+  /// that the session resumes via `POST .../interrupt/answer` rather
+  /// than being restarted via the existing `:resume` route (which
+  /// requires `is_terminal() == true`).
+  AwaitingInput,
 }
 
 impl HarnessSessionStatus {
@@ -222,6 +229,7 @@ impl HarnessSessionStatus {
       Self::Completed => "completed",
       Self::Failed => "failed",
       Self::Cancelled => "cancelled",
+      Self::AwaitingInput => "awaiting_input",
     }
   }
 
@@ -235,6 +243,7 @@ impl HarnessSessionStatus {
       "completed" => Self::Completed,
       "failed" => Self::Failed,
       "cancelled" => Self::Cancelled,
+      "awaiting_input" => Self::AwaitingInput,
       _ => return None,
     })
   }

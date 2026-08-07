@@ -115,6 +115,14 @@ fn format_event_line(event: &agentflow_harness::HarnessEvent) -> String {
       "token_delta step={} delta={:?}",
       payload.step_index, payload.delta
     ),
+    HarnessEventBody::InterruptRequested(payload) => format!(
+      "interrupt_requested step={} question={:?}",
+      payload.step_index, payload.question
+    ),
+    HarnessEventBody::InterruptAnswered(payload) => format!(
+      "interrupt_answered step={} answer={:?}",
+      payload.step_index, payload.answer
+    ),
     HarnessEventBody::BackgroundTaskUpdated(payload) => format!(
       "background_task_updated task={} status={:?}",
       payload.task_id, payload.status

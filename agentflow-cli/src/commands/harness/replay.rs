@@ -89,6 +89,8 @@ fn event_kind_str(body: &HarnessEventBody) -> &'static str {
     HarnessEventBody::ApprovalDecided(_) => "approval_decided",
     HarnessEventBody::ToolCallCompleted(_) => "tool_call_completed",
     HarnessEventBody::TokenDelta(_) => "token_delta",
+    HarnessEventBody::InterruptRequested(_) => "interrupt_requested",
+    HarnessEventBody::InterruptAnswered(_) => "interrupt_answered",
     HarnessEventBody::BackgroundTaskUpdated(_) => "background_task_updated",
     HarnessEventBody::MemorySummaryAdded(_) => "memory_summary_added",
     HarnessEventBody::Stopped(_) => "stopped",
@@ -271,6 +273,15 @@ fn format_event_line(event: &HarnessEvent) -> String {
     ),
     HarnessEventBody::TokenDelta(payload) => {
       format!("step={} delta={:?}", payload.step_index, payload.delta)
+    }
+    HarnessEventBody::InterruptRequested(payload) => {
+      format!(
+        "step={} question={:?}",
+        payload.step_index, payload.question
+      )
+    }
+    HarnessEventBody::InterruptAnswered(payload) => {
+      format!("step={} answer={:?}", payload.step_index, payload.answer)
     }
     HarnessEventBody::BackgroundTaskUpdated(payload) => {
       format!("task={} status={:?}", payload.task_id, payload.status)

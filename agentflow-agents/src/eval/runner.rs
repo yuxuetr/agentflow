@@ -487,6 +487,7 @@ fn stop_reason_label(reason: &AgentStopReason) -> String {
     AgentStopReason::CostLimitExceeded { .. } => "cost_limit_exceeded".to_string(),
     AgentStopReason::LoopDetected { .. } => "loop_detected".to_string(),
     AgentStopReason::Error { .. } => "error".to_string(),
+    AgentStopReason::AwaitingInput { .. } => "awaiting_input".to_string(),
   }
 }
 

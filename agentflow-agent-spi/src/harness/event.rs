@@ -70,6 +70,17 @@ pub struct HarnessEvent {
 /// the post-hoc `translate_inner_events` fallback. Per `docs/STABILITY.md`
 /// this keeps the envelope on wire version `harness/1` (additive kinds do
 /// not bump the wire version).
+///
+/// `interrupt_requested` / `interrupt_answered` were added post-H0
+/// (`P-V2.3`), also additive, mirroring the shape of
+/// `approval_requested`/`approval_decided`: a general "the agent asked
+/// the user a question" pair, distinct from the tool-call approval gate.
+/// `interrupt_requested` is bridged live from
+/// [`crate::AgentEvent::InterruptRequested`]; `interrupt_answered` has no
+/// agent-loop-level event counterpart (the answer arrives from outside
+/// the loop entirely) and is stamped directly by the resume-with-answer
+/// path, the same split `approval_requested`/`approval_decided` already
+/// use for the same reason.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum HarnessEventBody {
@@ -86,6 +97,11 @@ pub enum HarnessEventBody {
   ApprovalRequested(ApprovalRequestedPayload),
   /// The approval round-trip finished.
   ApprovalDecided(ApprovalDecidedPayload),
+  /// The agent asked the user a question and the loop paused. V2.3,
+  /// additive — see the enum-level doc comment.
+  InterruptRequested(InterruptRequestedPayload),
+  /// The user's answer arrived and the loop is resuming. V2.3, additive.
+  InterruptAnswered(InterruptAnsweredPayload),
   /// The tool call returned (success or failure).
   ToolCallCompleted(ToolCallCompletedPayload),
   /// A raw token-level delta from the underlying LLM stream. Live-bridge
@@ -166,6 +182,25 @@ pub struct ApprovalRequestedPayload {
 pub struct ApprovalDecidedPayload {
   /// The decision returned by the [`crate::ApprovalProvider`].
   pub decision: ApprovalDecision,
+}
+
+/// Payload for [`HarnessEventBody::InterruptRequested`] (V2.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InterruptRequestedPayload {
+  /// Step that asked the question.
+  pub step_index: usize,
+  /// The question text, verbatim from the agent.
+  pub question: String,
+}
+
+/// Payload for [`HarnessEventBody::InterruptAnswered`] (V2.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InterruptAnsweredPayload {
+  /// Step the answer resumes (matches the triggering
+  /// [`InterruptRequestedPayload::step_index`]).
+  pub step_index: usize,
+  /// The user's answer, verbatim.
+  pub answer: String,
 }
 
 /// Payload for [`HarnessEventBody::ToolCallCompleted`].
@@ -256,6 +291,11 @@ pub enum StopReason {
   ApprovalDenied,
   /// Unrecoverable runtime error.
   Failed,
+  /// V2.3: paused waiting for the user to answer a question the agent
+  /// asked. Resumable via `POST .../interrupt/answer`; the question
+  /// text itself lives on the preceding `InterruptRequested` event, not
+  /// duplicated here.
+  AwaitingInput,
 }
 
 /// Payload for [`HarnessEventBody::Stopped`].
@@ -375,6 +415,59 @@ mod tests {
     };
     let parsed = roundtrip(&event);
     assert_eq!(parsed, event);
+  }
+
+  #[test]
+  fn interrupt_requested_round_trips() {
+    let event = HarnessEvent {
+      seq: 9,
+      session_id: "sess-1".into(),
+      ts: ts(),
+      body: HarnessEventBody::InterruptRequested(InterruptRequestedPayload {
+        step_index: 3,
+        question: "which deploy target?".into(),
+      }),
+    };
+    let parsed = roundtrip(&event);
+    assert_eq!(parsed, event);
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["kind"], "interrupt_requested");
+    assert_eq!(json["payload"]["question"], "which deploy target?");
+  }
+
+  #[test]
+  fn interrupt_answered_round_trips() {
+    let event = HarnessEvent {
+      seq: 10,
+      session_id: "sess-1".into(),
+      ts: ts(),
+      body: HarnessEventBody::InterruptAnswered(InterruptAnsweredPayload {
+        step_index: 3,
+        answer: "staging".into(),
+      }),
+    };
+    let parsed = roundtrip(&event);
+    assert_eq!(parsed, event);
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["kind"], "interrupt_answered");
+  }
+
+  #[test]
+  fn stopped_payload_awaiting_input_round_trips() {
+    let event = HarnessEvent {
+      seq: 11,
+      session_id: "sess-1".into(),
+      ts: ts(),
+      body: HarnessEventBody::Stopped(StoppedPayload {
+        reason: StopReason::AwaitingInput,
+        final_answer: None,
+        error: None,
+      }),
+    };
+    let parsed = roundtrip(&event);
+    assert_eq!(parsed, event);
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["payload"]["reason"], "awaiting_input");
   }
 
   #[test]

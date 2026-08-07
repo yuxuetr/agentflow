@@ -116,6 +116,16 @@ pub struct AgentLoopCheckpoint {
   /// through the execute loop. Empty for ReAct checkpoints.
   #[serde(default)]
   pub observations: Vec<String>,
+
+  /// V2.3: set when this checkpoint was saved because the loop is
+  /// paused waiting for a user's answer
+  /// ([`crate::runtime::AgentStopReason::AwaitingInput`]), so a
+  /// checkpoint alone is self-describing without inspecting `steps`
+  /// history for the question. `None` for every other checkpoint,
+  /// including the ordinary per-turn/per-step saves from V2.4's
+  /// crash-resume story.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub pending_question: Option<String>,
 }
 
 /// Error surface for [`AgentLoopCheckpointer`] implementations.
@@ -206,6 +216,7 @@ mod tests {
       plan_steps: serde_json::Value::Null,
       plan_position: 0,
       observations: vec![],
+      pending_question: None,
     }
   }
 
@@ -225,6 +236,28 @@ mod tests {
     let json = serde_json::to_string(&checkpoint).expect("serialize");
     let parsed: AgentLoopCheckpoint = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed, checkpoint);
+  }
+
+  #[test]
+  fn pending_question_round_trips_when_set() {
+    let mut checkpoint = sample_checkpoint();
+    checkpoint.pending_question = Some("what's the deploy target?".into());
+    let json = serde_json::to_string(&checkpoint).expect("serialize");
+    assert!(json.contains("pending_question"));
+    let parsed: AgentLoopCheckpoint = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, checkpoint);
+  }
+
+  /// V2.3: `pending_question` is additive (`#[serde(default)]`) — a
+  /// checkpoint serialized by a pre-V2.3 build (no `pending_question`
+  /// key at all) must still deserialize cleanly as `None`, not fail.
+  #[test]
+  fn checkpoint_json_without_pending_question_key_deserializes_as_none() {
+    let checkpoint = sample_checkpoint();
+    let mut json = serde_json::to_value(&checkpoint).expect("serialize");
+    json.as_object_mut().unwrap().remove("pending_question");
+    let parsed: AgentLoopCheckpoint = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(parsed.pending_question, None);
   }
 
   #[test]

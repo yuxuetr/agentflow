@@ -117,6 +117,8 @@ fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
     HarnessEventBody::ApprovalDecided(_) => "approval_decided",
     HarnessEventBody::ToolCallCompleted(_) => "tool_call_completed",
     HarnessEventBody::TokenDelta(_) => "token_delta",
+    HarnessEventBody::InterruptRequested(_) => "interrupt_requested",
+    HarnessEventBody::InterruptAnswered(_) => "interrupt_answered",
     HarnessEventBody::BackgroundTaskUpdated(_) => "background_task_updated",
     HarnessEventBody::MemorySummaryAdded(_) => "memory_summary_added",
     HarnessEventBody::Stopped(_) => "stopped",
@@ -533,6 +535,10 @@ async fn live_execute(
       None,
       Some(format!("agent_error:{message}")),
     ),
+    // V2.3: not a terminal state — the question text is persisted onto
+    // the session row separately (`pending_question*` columns) by the
+    // caller before this function is reached; no error string here.
+    AgentStopReason::AwaitingInput { .. } => (HarnessSessionStatus::AwaitingInput, None, None),
   };
   ctx
     .repos

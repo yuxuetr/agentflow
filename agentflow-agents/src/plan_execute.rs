@@ -807,6 +807,7 @@ impl PlanExecuteAgent {
             &system_prompt,
             &context.input,
             planner_cost_usd,
+            None,
           )
           .await;
         continue;
@@ -965,6 +966,7 @@ impl PlanExecuteAgent {
           &system_prompt,
           &context.input,
           planner_cost_usd,
+          None,
         )
         .await;
     }
@@ -1011,6 +1013,7 @@ impl PlanExecuteAgent {
     system_prompt: &str,
     user_input: &str,
     cumulative_cost_usd: f64,
+    pending_question: Option<String>,
   ) {
     let Some(checkpointer) = context.loop_checkpointer.as_ref() else {
       return;
@@ -1036,6 +1039,7 @@ impl PlanExecuteAgent {
       plan_steps: plan_steps_json.clone(),
       plan_position,
       observations: observations.to_vec(),
+      pending_question,
     };
     if let Err(e) = checkpointer.0.save(&checkpoint).await {
       warn!(session = %self.session_id, error = %e, "agent loop checkpoint save failed");
@@ -1121,6 +1125,7 @@ impl PlanExecuteAgent {
             &system_prompt,
             &checkpoint.user_input,
             checkpoint.cumulative_cost_usd,
+            None,
           )
           .await;
         continue;
@@ -1279,6 +1284,7 @@ impl PlanExecuteAgent {
           &system_prompt,
           &checkpoint.user_input,
           checkpoint.cumulative_cost_usd,
+          None,
         )
         .await;
     }

@@ -1261,6 +1261,13 @@ fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> Stopp
       final_answer: None,
       error: Some(message.clone()),
     },
+    // V2.3: the question text lives on the preceding `InterruptRequested`
+    // event, not duplicated here.
+    AgentStopReason::AwaitingInput { .. } => StoppedPayload {
+      reason: StopReason::AwaitingInput,
+      final_answer: None,
+      error: None,
+    },
   }
 }
 
@@ -1324,6 +1331,7 @@ mod tests {
           plan_steps: serde_json::Value::Null,
           plan_position: 0,
           observations: Vec::new(),
+          pending_question: None,
         };
         handle.0.save(&checkpoint).await.ok();
       }

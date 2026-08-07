@@ -202,6 +202,15 @@ impl HarnessEventSink for ExecutionTraceSink {
                   .unwrap_or_else(|| format!("harness session stopped: {:?}", payload.reason)),
               }
             }
+            // V2.3: paused, not done — the closest existing bucket is
+            // `Cancelled` (interrupted without failing), not `Failed`.
+            // A resume later re-enters the loop under a fresh trace
+            // rather than reopening this one, matching the granularity
+            // `translate_inner_events`/`HarnessAgentEventBridge` already
+            // use elsewhere in this bridge.
+            StopReason::AwaitingInput => TraceStatus::Cancelled {
+              reason: "awaiting user input".to_string(),
+            },
           };
           drop(traces);
           self

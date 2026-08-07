@@ -51,6 +51,10 @@ pub(crate) fn should_clear_checkpoint(reason: &AgentStopReason) -> bool {
     AgentStopReason::TokenBudgetExceeded { .. } => false,
     AgentStopReason::CostLimitExceeded { .. } => false,
     AgentStopReason::LoopDetected { .. } => false,
+    // V2.3: the single most resumable interruption there is — the
+    // checkpoint's `pending_question` is exactly what a resume-with-
+    // answer call needs.
+    AgentStopReason::AwaitingInput { .. } => false,
   }
 }
 
@@ -194,6 +198,7 @@ mod tests {
       plan_steps: serde_json::Value::Null,
       plan_position: 0,
       observations: vec![],
+      pending_question: None,
     }
   }
 
