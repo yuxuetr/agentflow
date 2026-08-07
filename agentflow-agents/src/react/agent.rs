@@ -443,6 +443,16 @@ impl ReActConfig {
 /// dispatch — see `run_one_turn`'s tool-call parsing.
 pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
 
+/// V2.3: name of the synthetic native tool every `ReActAgent` offers
+/// (unconditionally, unlike [`FINAL_ANSWER_TOOL_NAME`] which needs
+/// `output_schema` to know what shape to validate — `ask_user` needs no
+/// config to be safe, it's one inert extra tool spec until the model
+/// chooses to call it). Calling it pauses the loop with
+/// [`AgentStopReason::AwaitingInput`] instead of dispatching a real
+/// tool — see `run_one_turn`'s interception, checked *before* the
+/// `final_answer` scan so a model batching both stops cleanly.
+pub const ASK_USER_TOOL_NAME: &str = "ask_user";
+
 /// An autonomous ReAct (Reasoning + Acting) agent.
 ///
 /// On each call to [`ReActAgent::run`], the agent:
@@ -820,10 +830,27 @@ impl ReActAgent {
   /// `session_id` (e.g. `SqliteMemory`, not the in-process `SessionMemory`)
   /// — an in-memory store won't have survived the same process restart the
   /// checkpoint did.
+  ///
+  /// V2.3: `answer` carries the user's reply when
+  /// `checkpoint.pending_question` is set (the run stopped with
+  /// [`AgentStopReason::AwaitingInput`]). Exactly one of
+  /// `checkpoint.pending_question` / `answer` being `Some` is a hard
+  /// error — resuming past an unanswered question, or supplying an
+  /// answer nothing asked for, would silently corrupt loop semantics.
+  /// When both are `Some`, the answer is written to memory as a user
+  /// turn (formalizing the seam `init_run` uses for the original user
+  /// message, via the same [`Self::memory_ref`] the caller could already
+  /// reach — this makes it a correct-by-construction parameter instead
+  /// of a caller-must-know-the-trick precondition) before the turn loop
+  /// resumes, so the next LLM call sees it as context. A `ToolResult`
+  /// step for the paused `ask_user` call is also pushed, keeping the
+  /// `ToolCall`/`ToolResult` pairing trace replay expects even though no
+  /// real tool executed.
   pub async fn resume_from_loop_checkpoint(
     &mut self,
     context: AgentContext,
     checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
   ) -> Result<AgentRunResult, ReActError> {
     if checkpoint.runtime_kind != agentflow_agent_spi::checkpoint::LoopRuntimeKind::React {
       return Err(ReActError::InvalidCheckpoint {
@@ -833,11 +860,47 @@ impl ReActAgent {
         ),
       });
     }
+    match (&checkpoint.pending_question, &answer) {
+      (Some(_), None) => {
+        return Err(ReActError::InvalidCheckpoint {
+          message: "checkpoint is paused on a question but no answer was supplied".to_string(),
+        });
+      }
+      (None, Some(_)) => {
+        return Err(ReActError::InvalidCheckpoint {
+          message: "an answer was supplied but the checkpoint has no pending question".to_string(),
+        });
+      }
+      _ => {}
+    }
     self.apply_context(&context);
     self.live_sink = context.event_sink.clone();
     self.live_checkpointer = context.loop_checkpointer.clone();
 
     let mut st = LoopState::from_checkpoint(&context, &self.config, &checkpoint);
+    if let Some(answer) = answer {
+      push_step!(
+        self.live_sink,
+        st.steps,
+        st.events,
+        self.session_id,
+        st.step_index,
+        AgentStepKind::ToolResult {
+          tool: ASK_USER_TOOL_NAME.to_string(),
+          content: answer.clone(),
+          is_error: false,
+          parts: Vec::new(),
+        }
+      );
+      st.step_index += 1;
+      self
+        .add_memory_message(Message::user_with_counter(
+          &self.session_id,
+          &answer,
+          &*self.message_counter,
+        ))
+        .await?;
+    }
     loop {
       match self.run_one_turn(&mut st).await? {
         TurnStep::Continue => {
@@ -1165,6 +1228,73 @@ impl ReActAgent {
       .await?
     {
       return Ok(TurnStep::Stop(result));
+    }
+
+    // V2.3: an `ask_user` native tool call pauses the loop, asking the
+    // user a question — checked before the `final_answer` scan so a
+    // model batching both in one response stops cleanly (asking wins).
+    if let Some(call) = llm_response
+      .tool_calls
+      .iter()
+      .find(|call| call.name == ASK_USER_TOOL_NAME)
+    {
+      let question = call
+        .arguments
+        .get("question")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+      self
+        .add_memory_message(Message::assistant_with_counter(
+          &self.session_id,
+          &raw_response,
+          &*self.message_counter,
+        ))
+        .await?;
+      let ask_step_index = st.step_index;
+      // Recorded as a `ToolCall` step (reusing the existing variant per
+      // `AgentStepKind`'s doc comment — it IS a native tool call from
+      // the model's perspective) with no matching `ToolResult` until
+      // resume supplies the answer.
+      push_step!(
+        self.live_sink,
+        st.steps,
+        st.events,
+        self.session_id,
+        st.step_index,
+        AgentStepKind::ToolCall {
+          tool: ASK_USER_TOOL_NAME.to_string(),
+          params: call.arguments.clone(),
+        }
+      );
+      st.step_index += 1;
+      let interrupt_event = AgentEvent::InterruptRequested {
+        session_id: self.session_id.clone(),
+        step_index: ask_step_index,
+        question: question.clone(),
+        timestamp: Utc::now(),
+      };
+      if let Some(handle) = self.live_sink.as_ref() {
+        handle.0.emit(&interrupt_event).await;
+      }
+      st.events.push(interrupt_event);
+      // Explicit save (not the ordinary per-turn `save_loop_checkpoint`
+      // called by this turn's caller on `TurnStep::Continue`) — that
+      // checkpoint would be one full turn stale and wouldn't contain
+      // this question or the `ToolCall` step just pushed above.
+      if let Some(checkpointer) = self.live_checkpointer.as_ref() {
+        let checkpoint = st.to_checkpoint(&self.session_id, Some(question.clone()));
+        if let Err(e) = checkpointer.0.save(&checkpoint).await {
+          warn!(session = %self.session_id, error = %e, "agent loop checkpoint save failed");
+        }
+      }
+      return Ok(TurnStep::Stop(Self::stopped_result(
+        &self.session_id,
+        None,
+        AgentStopReason::AwaitingInput { question },
+        std::mem::take(&mut st.steps),
+        std::mem::take(&mut st.events),
+      )));
     }
 
     // V2.1: a `final_answer` native tool call is the agent's schema-
@@ -2565,6 +2695,21 @@ impl ReActAgent {
         schema.clone(),
       ));
     }
+    // V2.3: unconditional — see ASK_USER_TOOL_NAME's doc comment for why
+    // this doesn't need an opt-in config flag the way `final_answer` does.
+    specs.push(ToolSpec::new(
+      ASK_USER_TOOL_NAME,
+      "Call this to ask the user a question when you need information only \
+       they can provide, then wait for their answer before continuing. Do \
+       not use this for information you can find yourself.",
+      serde_json::json!({
+        "type": "object",
+        "properties": {
+          "question": {"type": "string", "description": "The question to ask the user."}
+        },
+        "required": ["question"]
+      }),
+    ));
     specs
   }
 
@@ -3889,6 +4034,20 @@ impl AgentRuntime for ReActAgent {
   fn runtime_name(&self) -> &'static str {
     "react"
   }
+
+  async fn resume_from_loop_checkpoint(
+    &mut self,
+    context: AgentContext,
+    checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
+  ) -> Result<AgentRunResult, AgentRuntimeError> {
+    self
+      .resume_from_loop_checkpoint(context, checkpoint, answer)
+      .await
+      .map_err(|err| AgentRuntimeError::ExecutionFailed {
+        message: err.to_string(),
+      })
+  }
 }
 
 /// L2.1: render a persisted [`agentflow_memory::TaskSummary`] as a system
@@ -4705,7 +4864,7 @@ providers:
     let resume_context = AgentContext::new("loop-ckpt-session", "", &resume_model)
       .with_loop_checkpointer(checkpointer_handle);
     let resumed_result = resumed_agent
-      .resume_from_loop_checkpoint(resume_context, checkpoint.clone())
+      .resume_from_loop_checkpoint(resume_context, checkpoint.clone(), None)
       .await
       .unwrap();
 
@@ -4807,7 +4966,7 @@ providers:
     let resume_context = AgentContext::new("loop-ckpt-td-session", "", &resume_model)
       .with_loop_checkpointer(checkpointer_handle);
     let resumed_result = resumed_agent
-      .resume_from_loop_checkpoint(resume_context, checkpoint)
+      .resume_from_loop_checkpoint(resume_context, checkpoint, None)
       .await
       .unwrap();
 
@@ -4816,6 +4975,225 @@ providers:
       Some("turn-driven-final-answer")
     );
     assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
+  }
+
+  // ── V2.3: ask_user / HITL interrupt-resume ───────────────────────────
+
+  /// V2.3 acceptance scenario: an `ask_user` native tool call pauses the
+  /// loop with `AwaitingInput`, the checkpoint records the question, and
+  /// resuming with a fresh `ReActAgent` instance + the caller's answer
+  /// reaches the same final answer a control run (which never needed to
+  /// ask) would.
+  #[tokio::test]
+  async fn run_with_context_stops_with_awaiting_input_on_ask_user_and_resumes_with_answer() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+
+    // ── Control run: never asks, answers directly. ──
+    let control_model = format!("mock-ask-user-control-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"done","answer":"deploy complete: staging"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&control_model).await;
+    let mut control_registry = ToolRegistry::new();
+    control_registry.register(Arc::new(EchoTool));
+    let mut control_agent = ReActAgent::new(
+      ReActConfig::new(&control_model).with_max_iterations(6),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(control_registry),
+    );
+    let control_result = control_agent
+      .run_with_context(AgentContext::new(
+        "ask-user-session",
+        "deploy the app",
+        &control_model,
+      ))
+      .await
+      .unwrap();
+    assert_eq!(
+      control_result.answer.as_deref(),
+      Some("deploy complete: staging")
+    );
+
+    // ── Interrupted run: the model asks a question via the ask_user
+    // native tool instead of dispatching a real tool or answering. ──
+    let interrupted_model = format!("mock-ask-user-interrupted-{}", uuid::Uuid::new_v4());
+    let question = "what's the deploy target?";
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![vec![serde_json::json!({
+          "id": "call_0",
+          "name": ASK_USER_TOOL_NAME,
+          "arguments": {"question": question}
+        })]])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused — native tool call)"]).unwrap(),
+      );
+    }
+    init_mock_model(&interrupted_model).await;
+    let mut interrupted_registry = ToolRegistry::new();
+    interrupted_registry.register(Arc::new(EchoTool));
+    let shared_memory = Arc::new(SessionMemory::default_window());
+    let mut interrupted_agent = ReActAgent::new(
+      ReActConfig::new(&interrupted_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory.clone())),
+      Arc::new(interrupted_registry),
+    );
+    let checkpointer = RecordingCheckpointer::new();
+    let checkpointer_handle: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer> =
+      Arc::new(checkpointer.clone());
+    let interrupted_result = interrupted_agent
+      .run_with_context(
+        AgentContext::new("ask-user-session", "deploy the app", &interrupted_model)
+          .with_loop_checkpointer(checkpointer_handle.clone()),
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      interrupted_result.stop_reason,
+      AgentStopReason::AwaitingInput {
+        question: question.to_string()
+      }
+    );
+    assert!(interrupted_result.steps.iter().any(
+      |s| matches!(&s.kind, AgentStepKind::ToolCall { tool, .. } if tool == ASK_USER_TOOL_NAME)
+    ));
+
+    let checkpoint = checkpointer
+      .load("ask-user-session")
+      .await
+      .unwrap()
+      .expect("a checkpoint must have been saved when the loop paused");
+    assert_eq!(checkpoint.pending_question.as_deref(), Some(question));
+
+    // ── Resume: a brand-new ReActAgent instance, answer supplied. ──
+    let resume_model = format!("mock-ask-user-resume-{}", uuid::Uuid::new_v4());
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec![
+          r#"{"thought":"done","answer":"deploy complete: staging"}"#,
+        ])
+        .unwrap(),
+      );
+    }
+    init_mock_model(&resume_model).await;
+    let mut resume_registry = ToolRegistry::new();
+    resume_registry.register(Arc::new(EchoTool));
+    let mut resumed_agent = ReActAgent::new(
+      ReActConfig::new(&resume_model).with_max_iterations(6),
+      Box::new(SharedSessionMemory(shared_memory.clone())),
+      Arc::new(resume_registry),
+    );
+    let resume_context = AgentContext::new("ask-user-session", "", &resume_model)
+      .with_loop_checkpointer(checkpointer_handle);
+    let resumed_result = resumed_agent
+      .resume_from_loop_checkpoint(resume_context, checkpoint, Some("staging".to_string()))
+      .await
+      .unwrap();
+
+    assert_eq!(resumed_result.answer, control_result.answer);
+    assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
+    // The answer must have been written to memory before the resumed
+    // turn, and a ToolResult step pushed for the paused ask_user call.
+    let history = shared_memory.get_all("ask-user-session").await.unwrap();
+    assert!(history.iter().any(|m| m.content.contains("staging")));
+    assert!(
+      resumed_result
+        .steps
+        .iter()
+        .any(|s| matches!(&s.kind, AgentStepKind::ToolResult { tool, content, .. } if tool == ASK_USER_TOOL_NAME && content == "staging"))
+    );
+    // Successful completion clears the checkpoint.
+    assert_eq!(checkpointer.load("ask-user-session").await.unwrap(), None);
+
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// Minimal, otherwise-valid React checkpoint for the two validation
+  /// tests below — only `pending_question` varies between them.
+  fn bare_react_checkpoint(
+    pending_question: Option<String>,
+  ) -> agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+    agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+      schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+      session_id: "s".into(),
+      runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::React,
+      created_at: Utc::now(),
+      steps: vec![],
+      events: vec![],
+      step_index: 1,
+      iteration: 0,
+      tool_calls: 0,
+      verification_attempts: 0,
+      schema_correction_attempts: 0,
+      last_tool_call: None,
+      recent_tool_calls: std::collections::VecDeque::new(),
+      cumulative_cost_usd: 0.0,
+      system_prompt: String::new(),
+      user_input: "hello".into(),
+      trace_context: None,
+      plan_steps: serde_json::Value::Null,
+      plan_position: 0,
+      observations: vec![],
+      pending_question,
+    }
+  }
+
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_rejects_answer_without_pending_question() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-ask-user-validate-{}", uuid::Uuid::new_v4());
+    init_mock_model(&model).await;
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let err = agent
+      .resume_from_loop_checkpoint(
+        AgentContext::new("s", "", &model),
+        bare_react_checkpoint(None),
+        Some("unsolicited answer".to_string()),
+      )
+      .await
+      .unwrap_err();
+    assert!(matches!(err, ReActError::InvalidCheckpoint { .. }));
+  }
+
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_rejects_missing_answer_when_pending_question_set() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-ask-user-validate2-{}", uuid::Uuid::new_v4());
+    init_mock_model(&model).await;
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let err = agent
+      .resume_from_loop_checkpoint(
+        AgentContext::new("s", "", &model),
+        bare_react_checkpoint(Some("what now?".to_string())),
+        None,
+      )
+      .await
+      .unwrap_err();
+    assert!(matches!(err, ReActError::InvalidCheckpoint { .. }));
   }
 
   #[tokio::test]

@@ -105,8 +105,9 @@ pub async fn execute(
     eprintln!("   from step_index: {}", checkpoint.step_index);
   }
 
+  // TODO(V2.3 step 8): thread a real --answer flag through here.
   let result = agent
-    .resume_from_loop_checkpoint(context, checkpoint)
+    .resume_from_loop_checkpoint(context, checkpoint, None)
     .await
     .context("Harness loop resume failed")?;
   let elapsed = started.elapsed();
