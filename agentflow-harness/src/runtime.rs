@@ -27,9 +27,9 @@ use crate::context::{
 };
 use crate::error::HarnessError;
 use crate::event::{
-  HarnessEvent, HarnessEventBody, MemorySummaryAddedPayload, SessionStartedPayload,
-  StepStartedPayload, StopReason, StoppedPayload, TokenDeltaPayload, ToolCallCompletedPayload,
-  ToolCallRequestedPayload,
+  HarnessEvent, HarnessEventBody, InterruptAnsweredPayload, InterruptRequestedPayload,
+  MemorySummaryAddedPayload, SessionStartedPayload, StepStartedPayload, StopReason, StoppedPayload,
+  TokenDeltaPayload, ToolCallCompletedPayload, ToolCallRequestedPayload,
 };
 use crate::persistence::{HarnessEventSink, SinkChain};
 use crate::seq::SeqAllocator;
@@ -591,6 +591,111 @@ impl HarnessRuntime {
       }
     };
 
+    self
+      .finish_inner_result(
+        session_id,
+        inner_result,
+        &bridge,
+        items.len(),
+        dropped,
+        truncated,
+      )
+      .await
+  }
+
+  /// V2.3: resume a session paused on [`AgentStopReason::AwaitingInput`]
+  /// (a loop checkpoint with `pending_question` set) with the user's
+  /// `answer`, dispatching through the new
+  /// [`AgentRuntime::resume_from_loop_checkpoint`] trait method rather
+  /// than [`Self::run`] wholesale — this does **not** re-assemble
+  /// context providers or emit a fresh `session_started` (the session
+  /// already has one); it reattaches the live event bridge (so SSE
+  /// keeps working) and stamps `InterruptAnswered` as the first thing
+  /// it does.
+  ///
+  /// Only supports [`InnerRuntime::Opaque`] today — a
+  /// [`InnerRuntime::TurnDriven`]-wrapped runtime is type-erased behind
+  /// [`TurnDrivenRuntime`], which has no equivalent resume method (that
+  /// trait's whole point is the caller owning turn pacing, which
+  /// doesn't compose with a one-shot resume call); `--context-refresh`
+  /// sessions can't hit `AwaitingInput` via this path today as a
+  /// consequence. Flagged as a known gap rather than silently
+  /// mishandled.
+  pub async fn resume_from_interrupt(
+    &mut self,
+    options: HarnessRunOptions,
+    checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    answer: String,
+  ) -> Result<HarnessRunResult, HarnessError> {
+    let session_id = checkpoint.session_id.clone();
+
+    self
+      .seq_allocator
+      .stamp(
+        &self.sinks,
+        &session_id,
+        Utc::now(),
+        HarnessEventBody::InterruptAnswered(InterruptAnsweredPayload {
+          step_index: checkpoint.step_index,
+          answer: answer.clone(),
+        }),
+      )
+      .await?;
+
+    let mut agent_context =
+      AgentContext::new(&session_id, "", &options.model).with_limits(options.limits.clone());
+    if let Some(token) = options.cancellation_token.clone() {
+      agent_context = agent_context.with_cancellation_token(token);
+    }
+    if let Some(hook) = options.between_turn_hook.clone() {
+      agent_context.between_turn_hook = Some(hook);
+    }
+    if let Some(checkpointer) = options.loop_checkpointer.clone() {
+      agent_context.loop_checkpointer = Some(checkpointer);
+    }
+
+    let bridge = Arc::new(HarnessAgentEventBridge::new(
+      session_id.clone(),
+      self.sinks.clone(),
+      self.seq_allocator.clone(),
+    ));
+    agent_context = agent_context.with_event_sink(bridge.clone());
+
+    let inner_result = match &mut self.inner {
+      InnerRuntime::None => {
+        return Err(HarnessError::Other(
+          "HarnessRuntime::resume_from_interrupt called on a Flow-governance runtime".to_string(),
+        ));
+      }
+      InnerRuntime::TurnDriven(_) => {
+        return Err(HarnessError::Other(
+          "resume_from_interrupt does not support turn-driven (--context-refresh) runtimes yet"
+            .to_string(),
+        ));
+      }
+      InnerRuntime::Opaque(agent) => agent
+        .resume_from_loop_checkpoint(agent_context, checkpoint, Some(answer))
+        .await
+        .map_err(|err| HarnessError::Other(format!("inner agent resume failed: {err}")))?,
+    };
+
+    self
+      .finish_inner_result(session_id, inner_result, &bridge, 0, 0, 0)
+      .await
+  }
+
+  /// Shared tail of [`Self::run`] / [`Self::resume_from_interrupt`]:
+  /// reconcile live-vs-post-hoc event translation, stamp the terminal
+  /// `Stopped` event, and build the [`HarnessRunResult`].
+  async fn finish_inner_result(
+    &self,
+    session_id: String,
+    inner_result: AgentRunResult,
+    bridge: &HarnessAgentEventBridge,
+    context_items_admitted: usize,
+    context_items_dropped: usize,
+    context_items_truncated: usize,
+  ) -> Result<HarnessRunResult, HarnessError> {
     // If the bridge emitted anything, the inner runtime is live-aware and
     // already streamed the tool events; otherwise (a runtime that ignores
     // `event_sink`) reconstruct the full set for backward compatibility.
@@ -632,9 +737,9 @@ impl HarnessRuntime {
       answer: inner_result.answer.clone(),
       stop_reason: stop_reason_clone,
       final_event_seq: stopped_seq.get(),
-      context_items_admitted: items.len(),
-      context_items_dropped: dropped,
-      context_items_truncated: truncated,
+      context_items_admitted,
+      context_items_dropped,
+      context_items_truncated,
       inner: inner_result,
     })
   }
@@ -1091,6 +1196,26 @@ impl AgentEventSink for HarnessAgentEventBridge {
           )
           .await;
       }
+      // V2.3: forwarded verbatim, live-only from ReActAgent's ask_user
+      // interception. PlanExecuteAgent has no live_sink at all, so its
+      // ask_user pauses only reach the harness via the post-hoc
+      // `translate_inner_events` fallback below, not this bridge.
+      AgentEvent::InterruptRequested {
+        step_index,
+        question,
+        timestamp,
+        ..
+      } => {
+        self
+          .dispatch_body(
+            HarnessEventBody::InterruptRequested(InterruptRequestedPayload {
+              step_index: *step_index,
+              question: question.clone(),
+            }),
+            *timestamp,
+          )
+          .await;
+      }
       // Other events (RunStarted/Stopped, policy/capability decisions, LLM-call
       // accounting, multi-agent ops) are not part of the Harness envelope's
       // live tool/approval narrative.
@@ -1293,6 +1418,10 @@ mod tests {
     /// each of these to `context.event_sink` as the run executes, in
     /// addition to returning them in `extra_events`.
     live_events: Vec<AgentEvent>,
+    /// V2.3: captures the `answer` a `resume_from_interrupt` call passed
+    /// through to `resume_from_loop_checkpoint`, so a test can assert on
+    /// it without needing a real agent.
+    received_answer: Option<Arc<tokio::sync::Mutex<Option<String>>>>,
   }
 
   #[async_trait]
@@ -1360,6 +1489,30 @@ mod tests {
     fn runtime_name(&self) -> &'static str {
       "scripted"
     }
+
+    async fn resume_from_loop_checkpoint(
+      &mut self,
+      context: AgentContext,
+      _checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+      answer: Option<String>,
+    ) -> Result<AgentRunResult, AgentRuntimeError> {
+      if let Some(cell) = &self.received_answer {
+        *cell.lock().await = answer.clone();
+      }
+      let steps = vec![AgentStep::new(
+        0,
+        AgentStepKind::FinalAnswer {
+          answer: self.answer.clone(),
+        },
+      )];
+      Ok(AgentRunResult {
+        session_id: context.session_id,
+        answer: Some(self.answer.clone()),
+        stop_reason: AgentStopReason::FinalAnswer,
+        steps,
+        events: Vec::new(),
+      })
+    }
   }
 
   fn make_runtime(
@@ -1373,6 +1526,7 @@ mod tests {
       extra_events: Vec::new(),
       captured_persona: captured,
       live_events: Vec::new(),
+      received_answer: None,
     }
   }
 
@@ -1466,6 +1620,91 @@ mod tests {
     let saved = checkpointer.saved.lock().await;
     assert_eq!(saved.len(), 1);
     assert_eq!(saved[0].session_id, "loop-ckpt-forward-session");
+  }
+
+  fn bare_checkpoint(
+    session_id: &str,
+    question: &str,
+  ) -> agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+    agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+      schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+      session_id: session_id.to_string(),
+      runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::React,
+      created_at: chrono::Utc::now(),
+      steps: Vec::new(),
+      events: Vec::new(),
+      step_index: 2,
+      iteration: 0,
+      tool_calls: 0,
+      verification_attempts: 0,
+      schema_correction_attempts: 0,
+      last_tool_call: None,
+      recent_tool_calls: std::collections::VecDeque::new(),
+      cumulative_cost_usd: 0.0,
+      system_prompt: String::new(),
+      user_input: "hello".into(),
+      trace_context: None,
+      plan_steps: serde_json::Value::Null,
+      plan_position: 0,
+      observations: Vec::new(),
+      pending_question: Some(question.to_string()),
+    }
+  }
+
+  /// V2.3: `resume_from_interrupt` dispatches through
+  /// `AgentRuntime::resume_from_loop_checkpoint` (not `run`), stamps
+  /// `InterruptAnswered` first, and its `HarnessRunResult` reflects the
+  /// inner agent's resumed answer.
+  #[tokio::test]
+  async fn resume_from_interrupt_stamps_interrupt_answered_and_dispatches_to_resume() {
+    use crate::persistence::InMemoryEventSink;
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let received_answer = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("resumed answer", captured.clone());
+    inner.received_answer = Some(received_answer.clone());
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+
+    let checkpoint = bare_checkpoint("interrupt-session", "what now?");
+    let options =
+      HarnessRunOptions::new("unused", dir.path(), "mock").with_session_id("interrupt-session");
+    let result = runtime
+      .resume_from_interrupt(options, checkpoint, "go ahead".to_string())
+      .await
+      .unwrap();
+
+    assert_eq!(result.answer.as_deref(), Some("resumed answer"));
+    assert_eq!(result.stop_reason, AgentStopReason::FinalAnswer);
+    assert_eq!(
+      received_answer.lock().await.as_deref(),
+      Some("go ahead"),
+      "the answer must reach the inner agent's resume_from_loop_checkpoint call"
+    );
+
+    let events = sink.snapshot().await;
+    let interrupt_answered = events
+      .iter()
+      .find(|e| matches!(e.body, HarnessEventBody::InterruptAnswered(_)));
+    assert!(
+      interrupt_answered.is_some(),
+      "InterruptAnswered must be stamped"
+    );
+    if let Some(event) = interrupt_answered
+      && let HarnessEventBody::InterruptAnswered(payload) = &event.body
+    {
+      assert_eq!(payload.answer, "go ahead");
+    }
+    // InterruptAnswered must be the first event of the resumed sequence
+    // (before Stopped), not tacked on at the end.
+    let stopped_seq = events
+      .iter()
+      .find(|e| matches!(e.body, HarnessEventBody::Stopped(_)))
+      .map(|e| e.seq)
+      .unwrap();
+    assert!(interrupt_answered.unwrap().seq < stopped_seq);
   }
 
   #[tokio::test]
