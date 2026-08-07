@@ -52,6 +52,13 @@ pub enum PlanExecuteError {
     errors: Vec<String>,
     attempts: usize,
   },
+
+  /// V2.3: [`PlanExecuteAgent::resume_from_loop_checkpoint`] was handed
+  /// a checkpoint/answer pair that don't agree — e.g. a checkpoint
+  /// with no pending question but an answer was supplied anyway, or
+  /// the reverse. Mirrors `ReActError::InvalidCheckpoint`.
+  #[error("cannot resume from loop checkpoint: {message}")]
+  InvalidCheckpoint { message: String },
 }
 
 /// Configuration for a [`PlanExecuteAgent`].
@@ -813,6 +820,60 @@ impl PlanExecuteAgent {
         continue;
       };
 
+      // V2.3: a reserved pseudo-tool name in the plan pauses the loop
+      // to ask the user a question, rather than dispatching a real
+      // tool — PlanExecuteAgent has no mid-loop LLM re-entry point to
+      // intercept the way ReActAgent's `ask_user` native tool call
+      // does, so the planner emits this as a plan step instead. Checked
+      // before the `max_tool_calls` budget — asking a question isn't a
+      // tool call and shouldn't consume it.
+      if tool == crate::react::agent::ASK_USER_TOOL_NAME {
+        let question = planned_step
+          .params
+          .get("question")
+          .and_then(Value::as_str)
+          .unwrap_or_default()
+          .to_string();
+        events.push(AgentEvent::InterruptRequested {
+          session_id: self.session_id.clone(),
+          step_index,
+          question: question.clone(),
+          timestamp: Utc::now(),
+        });
+        steps.push(AgentStep::new(
+          step_index,
+          AgentStepKind::ToolCall {
+            tool: tool.clone(),
+            params: planned_step.params.clone(),
+          },
+        ));
+        step_index += 1;
+        // `plan_position` (not `+1`) — this step is not yet complete;
+        // resume must still "finish" it with the answer.
+        self
+          .save_plan_execute_checkpoint(
+            &context,
+            &plan_steps_json,
+            plan_position,
+            &steps,
+            &events,
+            step_index,
+            tool_calls,
+            &observations,
+            &system_prompt,
+            &context.input,
+            planner_cost_usd,
+            Some(question.clone()),
+          )
+          .await;
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::AwaitingInput { question },
+          steps,
+          events,
+        ));
+      }
+
       if let Some(max_tool_calls) = max_tool_calls
         && tool_calls >= max_tool_calls
       {
@@ -1067,6 +1128,7 @@ impl PlanExecuteAgent {
     &mut self,
     context: AgentContext,
     checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
   ) -> Result<AgentRunResult, PlanExecuteError> {
     if checkpoint.runtime_kind != agentflow_agent_spi::checkpoint::LoopRuntimeKind::PlanExecute {
       return Err(PlanExecuteError::PlanParse {
@@ -1075,6 +1137,19 @@ impl PlanExecuteAgent {
           checkpoint.runtime_kind
         ),
       });
+    }
+    match (&checkpoint.pending_question, &answer) {
+      (Some(_), None) => {
+        return Err(PlanExecuteError::InvalidCheckpoint {
+          message: "checkpoint is paused on a question but no answer was supplied".to_string(),
+        });
+      }
+      (None, Some(_)) => {
+        return Err(PlanExecuteError::InvalidCheckpoint {
+          message: "an answer was supplied but the checkpoint has no pending question".to_string(),
+        });
+      }
+      _ => {}
     }
     self.apply_context(&context);
 
@@ -1097,11 +1172,31 @@ impl PlanExecuteAgent {
     let plan_steps_json = checkpoint.plan_steps.clone();
     let system_prompt = checkpoint.system_prompt.clone();
 
-    for (plan_position, planned_step) in plan
-      .plan
-      .into_iter()
-      .enumerate()
-      .skip(checkpoint.plan_position)
+    // V2.3: when an answer is supplied, it's the paused `ask_user`
+    // step's synthetic tool result — exactly mirrors how a real tool's
+    // output would have entered `observations`. The step is now
+    // complete, so resume past it (`+ 1`); otherwise resume at the
+    // checkpointed position unchanged (V2.4's plain crash-resume case).
+    let resume_plan_position = if let Some(answer) = &answer {
+      let question = checkpoint.pending_question.as_deref().unwrap_or("question");
+      steps.push(AgentStep::new(
+        step_index,
+        AgentStepKind::ToolResult {
+          tool: crate::react::agent::ASK_USER_TOOL_NAME.to_string(),
+          content: answer.clone(),
+          is_error: false,
+          parts: Vec::new(),
+        },
+      ));
+      step_index += 1;
+      observations.push(format!("{question}: {answer}"));
+      checkpoint.plan_position + 1
+    } else {
+      checkpoint.plan_position
+    };
+
+    for (plan_position, planned_step) in
+      plan.plan.into_iter().enumerate().skip(resume_plan_position)
     {
       if is_cancelled(&cancellation_token) {
         return Ok(self.cancelled_result("cancellation token signalled", steps, events));
@@ -1130,6 +1225,53 @@ impl PlanExecuteAgent {
           .await;
         continue;
       };
+
+      // V2.3: see the identical branch in `run_plan_execute_loop` — a
+      // resumed plan can contain further `ask_user` steps.
+      if tool == crate::react::agent::ASK_USER_TOOL_NAME {
+        let question = planned_step
+          .params
+          .get("question")
+          .and_then(Value::as_str)
+          .unwrap_or_default()
+          .to_string();
+        events.push(AgentEvent::InterruptRequested {
+          session_id: self.session_id.clone(),
+          step_index,
+          question: question.clone(),
+          timestamp: Utc::now(),
+        });
+        steps.push(AgentStep::new(
+          step_index,
+          AgentStepKind::ToolCall {
+            tool: tool.clone(),
+            params: planned_step.params.clone(),
+          },
+        ));
+        step_index += 1;
+        self
+          .save_plan_execute_checkpoint(
+            &context,
+            &plan_steps_json,
+            plan_position,
+            &steps,
+            &events,
+            step_index,
+            tool_calls,
+            &observations,
+            &system_prompt,
+            &checkpoint.user_input,
+            checkpoint.cumulative_cost_usd,
+            Some(question.clone()),
+          )
+          .await;
+        return Ok(self.stopped_result(
+          None,
+          AgentStopReason::AwaitingInput { question },
+          steps,
+          events,
+        ));
+      }
 
       if let Some(max_tool_calls) = max_tool_calls
         && tool_calls >= max_tool_calls
@@ -1590,6 +1732,20 @@ impl AgentRuntime for PlanExecuteAgent {
 
   fn runtime_name(&self) -> &'static str {
     "plan_execute"
+  }
+
+  async fn resume_from_loop_checkpoint(
+    &mut self,
+    context: AgentContext,
+    checkpoint: agentflow_agent_spi::checkpoint::AgentLoopCheckpoint,
+    answer: Option<String>,
+  ) -> Result<AgentRunResult, AgentRuntimeError> {
+    self
+      .resume_from_loop_checkpoint(context, checkpoint, answer)
+      .await
+      .map_err(|err| AgentRuntimeError::ExecutionFailed {
+        message: err.to_string(),
+      })
   }
 }
 
@@ -2338,7 +2494,7 @@ mod tests {
     let resume_context = AgentContext::new("plan-ckpt-session", "", "mock-plan-ckpt-resume-unused")
       .with_loop_checkpointer(checkpointer_handle);
     let resumed_result = resumed_agent
-      .resume_from_loop_checkpoint(resume_context, checkpoint.clone())
+      .resume_from_loop_checkpoint(resume_context, checkpoint.clone(), None)
       .await
       .unwrap();
 
@@ -2353,6 +2509,149 @@ mod tests {
     );
     // Successful completion clears the checkpoint.
     assert_eq!(checkpointer.load("plan-ckpt-session").await.unwrap(), None);
+  }
+
+  // ── V2.3: ask_user / HITL interrupt-resume ───────────────────────────
+
+  /// V2.3 acceptance scenario for `PlanExecuteAgent`: a plan containing
+  /// an `ask_user` step pauses with `AwaitingInput` at the unadvanced
+  /// step; resuming with a fresh instance + an answer needs no further
+  /// planner call at all (the plan was already frozen into the
+  /// checkpoint) and completes the remaining step.
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_continues_after_ask_user_step_with_answer() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+
+    let plan_json = r#"{"plan":[
+      {"id":"1","description":"ask","tool":"ask_user","params":{"question":"what's the deploy target?"}},
+      {"id":"2","description":"step two","tool":"echo","params":{"text":"b"}}
+    ]}"#;
+
+    init_mock_model("mock-plan-ask-user-interrupted", plan_json).await;
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ask-user-interrupted"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+    let checkpointer = RecordingCheckpointer::new();
+    let checkpointer_handle: Arc<dyn agentflow_agent_spi::checkpoint::AgentLoopCheckpointer> =
+      Arc::new(checkpointer.clone());
+    let result = agent
+      .run_with_context(
+        AgentContext::new(
+          "plan-ask-user-session",
+          "deploy the app",
+          "mock-plan-ask-user-interrupted",
+        )
+        .with_loop_checkpointer(checkpointer_handle.clone()),
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::AwaitingInput {
+        question: "what's the deploy target?".to_string()
+      }
+    );
+    assert!(
+      result
+        .steps
+        .iter()
+        .any(|s| matches!(&s.kind, AgentStepKind::ToolCall { tool, .. } if tool == crate::react::agent::ASK_USER_TOOL_NAME))
+    );
+
+    let checkpoint = checkpointer
+      .load("plan-ask-user-session")
+      .await
+      .unwrap()
+      .expect("a checkpoint must have been saved when the loop paused");
+    assert_eq!(
+      checkpoint.pending_question.as_deref(),
+      Some("what's the deploy target?")
+    );
+    // Unadvanced — the ask_user step is not yet complete.
+    assert_eq!(checkpoint.plan_position, 0);
+
+    // ── Resume: a brand-new PlanExecuteAgent instance, no planner call
+    // needed — the checkpoint carries the frozen plan. ──
+    let mut resume_registry = ToolRegistry::new();
+    resume_registry.register(Arc::new(EchoTool));
+    let mut resumed_agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ask-user-resume-unused"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(resume_registry),
+    );
+    let resume_context = AgentContext::new(
+      "plan-ask-user-session",
+      "",
+      "mock-plan-ask-user-resume-unused",
+    )
+    .with_loop_checkpointer(checkpointer_handle);
+    let resumed_result = resumed_agent
+      .resume_from_loop_checkpoint(resume_context, checkpoint, Some("staging".to_string()))
+      .await
+      .unwrap();
+
+    assert_eq!(resumed_result.stop_reason, AgentStopReason::FinalAnswer);
+    let answer = resumed_result.answer.expect("must have an answer");
+    assert!(answer.contains("what's the deploy target?: staging"));
+    assert!(answer.contains("echo: b"));
+    assert!(
+      resumed_result
+        .steps
+        .iter()
+        .any(|s| matches!(&s.kind, AgentStepKind::ToolResult { tool, content, .. } if tool == crate::react::agent::ASK_USER_TOOL_NAME && content == "staging"))
+    );
+    // Successful completion clears the checkpoint.
+    assert_eq!(
+      checkpointer.load("plan-ask-user-session").await.unwrap(),
+      None
+    );
+  }
+
+  #[tokio::test]
+  async fn resume_from_loop_checkpoint_rejects_answer_without_pending_question() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model("mock-plan-ask-user-validate", "{}").await;
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-ask-user-validate"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let checkpoint = agentflow_agent_spi::checkpoint::AgentLoopCheckpoint {
+      schema_version: agentflow_agent_spi::checkpoint::AGENT_LOOP_CHECKPOINT_SCHEMA_VERSION,
+      session_id: "s".into(),
+      runtime_kind: agentflow_agent_spi::checkpoint::LoopRuntimeKind::PlanExecute,
+      created_at: chrono::Utc::now(),
+      steps: vec![],
+      events: vec![],
+      step_index: 1,
+      iteration: 0,
+      tool_calls: 0,
+      verification_attempts: 0,
+      schema_correction_attempts: 0,
+      last_tool_call: None,
+      recent_tool_calls: std::collections::VecDeque::new(),
+      cumulative_cost_usd: 0.0,
+      system_prompt: String::new(),
+      user_input: "hello".into(),
+      trace_context: None,
+      plan_steps: serde_json::json!({"plan": [], "final_answer": null}),
+      plan_position: 0,
+      observations: vec![],
+      pending_question: None,
+    };
+    let err = agent
+      .resume_from_loop_checkpoint(
+        AgentContext::new("s", "", "mock-plan-ask-user-validate"),
+        checkpoint,
+        Some("unsolicited".to_string()),
+      )
+      .await
+      .unwrap_err();
+    assert!(matches!(err, PlanExecuteError::InvalidCheckpoint { .. }));
   }
 
   async fn init_mock_model(model: &str, response: &str) {
