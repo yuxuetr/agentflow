@@ -316,7 +316,7 @@ async fn metrics_endpoint_emits_scrape_time_process_inspectors() {
   metrics::observe_health_status("system", true);
   metrics::observe_health_status("database", false);
   metrics::observe_memory_usage_bytes(1024 * 1024 * 256);
-  metrics::observe_workflow_runs_active("default", 4);
+  metrics::observe_workflow_runs_active(4);
   let app = create_router(lazy_state());
   let body = fetch_metrics_body(app).await;
   assert!(
@@ -338,9 +338,10 @@ async fn metrics_endpoint_emits_scrape_time_process_inspectors() {
     body.contains("agentflow_workflow_runs_active"),
     "active-runs gauge must appear; got:\n{body}"
   );
+  // V3.4: `/metrics` is unauthenticated — no per-tenant label.
   assert!(
-    body.contains("tenant=\"default\""),
-    "tenant label must appear; got:\n{body}"
+    !body.contains("tenant=\""),
+    "must not leak a per-tenant label; got:\n{body}"
   );
 }
 
@@ -361,13 +362,16 @@ async fn metrics_endpoint_emits_system_health_one_on_every_scrape() {
 }
 
 #[tokio::test]
-async fn metrics_endpoint_emits_state_size_gauge_per_active_run_id() {
-  // P10.14.2-FU6 — when the executor registers a state-size
-  // sample in the live-state registry, the scrape-time helper
-  // should render it as `agentflow_state_size_bytes{run_id="..."}`.
-  // We bypass the real executor here by writing directly through
-  // an observer (the same path the executor uses internally) so
-  // the test is hermetic — no real workflow / Postgres needed.
+async fn metrics_endpoint_emits_aggregate_state_size_gauge() {
+  // P10.14.2-FU6 / V3.4 — when the executor registers state-size
+  // samples in the live-state registry, the scrape-time helper
+  // renders their *sum* as a single unlabeled
+  // `agentflow_state_size_bytes` gauge, not one series per
+  // `run_id` (that would leak active run IDs through the
+  // unauthenticated `/metrics` route). We bypass the real
+  // executor here by writing directly through an observer (the
+  // same path the executor uses internally) so the test is
+  // hermetic — no real workflow / Postgres needed.
   use uuid::Uuid;
   let _ = metrics::init_recorder();
   let state = lazy_state();
@@ -382,16 +386,12 @@ async fn metrics_endpoint_emits_state_size_gauge_per_active_run_id() {
   let app = create_router(state);
   let body = fetch_metrics_body(app).await;
   assert!(
-    body.contains("agentflow_state_size_bytes"),
-    "state-size gauge must appear; got:\n{body}"
+    body.contains("agentflow_state_size_bytes 20480"),
+    "aggregate gauge must sum both runs' bytes; got:\n{body}"
   );
   assert!(
-    body.contains(&format!("run_id=\"{run_a}\"")),
-    "first run_id label must appear; got:\n{body}"
-  );
-  assert!(
-    body.contains(&format!("run_id=\"{run_b}\"")),
-    "second run_id label must appear; got:\n{body}"
+    !body.contains("run_id=\""),
+    "must not leak a per-run_id label; got:\n{body}"
   );
 }
 

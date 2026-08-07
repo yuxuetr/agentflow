@@ -232,23 +232,30 @@ pub fn observe_memory_usage_bytes(bytes: u64) {
   metrics::gauge!(names::MEMORY_USAGE_BYTES).set(bytes as f64);
 }
 
-/// Record per-tenant active workflow runs (P10.14.2-FU5).
-/// "Active" = queued + running, NOT terminal. Sourced at
-/// scrape time from a single `GROUP BY` against the read
-/// pool so the gauge cost is one indexed query per
-/// `/metrics` poll.
-pub fn observe_workflow_runs_active(tenant: &str, count: u64) {
-  metrics::gauge!(names::WORKFLOW_RUNS_ACTIVE, "tenant" => tenant.to_string()).set(count as f64);
+/// Record total active workflow runs across all tenants
+/// (P10.14.2-FU5). "Active" = queued + running, NOT terminal.
+/// Sourced at scrape time from a single `GROUP BY` against the
+/// read pool so the gauge cost is one indexed query per
+/// `/metrics` poll. V3.4: emits a single unlabeled aggregate
+/// (summed across the `GROUP BY tenant_id` rows) instead of one
+/// series per `tenant` label — `/metrics` is deliberately
+/// unauthenticated, so a per-tenant label would let any caller
+/// enumerate active tenant IDs by scraping it.
+pub fn observe_workflow_runs_active(count: u64) {
+  metrics::gauge!(names::WORKFLOW_RUNS_ACTIVE).set(count as f64);
 }
 
-/// Record one in-flight workflow's live state-pool size
-/// (P10.14.2-FU6). `bytes` is the estimated serialized size
-/// of the `Flow::context.state_pool`, snapshotted by the
-/// executor after every node completes and held in the
-/// `LiveStateRegistry` for scrape-time reads. Called once
-/// per active run per scrape from the `/metrics` handler.
-pub fn observe_state_size_bytes(run_id: &str, bytes: u64) {
-  metrics::gauge!(names::STATE_SIZE_BYTES, "run_id" => run_id.to_string()).set(bytes as f64);
+/// Record the total live state-pool size across all in-flight
+/// workflows (P10.14.2-FU6). `total_bytes` is the sum of the
+/// estimated serialized size of every active run's
+/// `Flow::context.state_pool`, snapshotted by the executor after
+/// every node completes and held in the `LiveStateRegistry` for
+/// scrape-time reads. Called once per scrape from the `/metrics`
+/// handler. V3.4: emits a single unlabeled aggregate instead of
+/// one series per `run_id` label, for the same unauthenticated-route
+/// reason as `observe_workflow_runs_active` above.
+pub fn observe_state_size_bytes(total_bytes: u64) {
+  metrics::gauge!(names::STATE_SIZE_BYTES).set(total_bytes as f64);
 }
 
 #[cfg(test)]
@@ -397,22 +404,19 @@ mod tests {
   }
 
   #[test]
-  fn observe_workflow_runs_active_emits_per_tenant_label() {
+  fn observe_workflow_runs_active_emits_an_aggregate_gauge() {
     let _ = init_recorder();
-    observe_workflow_runs_active("default", 4);
-    observe_workflow_runs_active("acme-corp", 17);
+    observe_workflow_runs_active(21);
     let text = render_text();
     assert!(
       text.contains("agentflow_workflow_runs_active"),
       "active-runs gauge must appear; got: {text}"
     );
+    // V3.4: `/metrics` is unauthenticated — a `tenant` label would let
+    // any caller enumerate active tenant IDs by scraping it.
     assert!(
-      text.contains("tenant=\"default\""),
-      "default tenant label must appear; got: {text}"
-    );
-    assert!(
-      text.contains("tenant=\"acme-corp\""),
-      "explicit tenant label must appear; got: {text}"
+      !text.contains("tenant=\""),
+      "must not leak a per-tenant label; got: {text}"
     );
   }
 
@@ -477,24 +481,19 @@ mod tests {
   }
 
   #[test]
-  fn observe_state_size_bytes_emits_per_run_id_label() {
+  fn observe_state_size_bytes_emits_an_aggregate_gauge() {
     let _ = init_recorder();
-    let run_a = "00000000-0000-0000-0000-000000000001";
-    let run_b = "00000000-0000-0000-0000-000000000002";
-    observe_state_size_bytes(run_a, 1024);
-    observe_state_size_bytes(run_b, 8192);
+    observe_state_size_bytes(1024 + 8192);
     let text = render_text();
     assert!(
       text.contains("agentflow_state_size_bytes"),
       "state size gauge must appear; got: {text}"
     );
+    // V3.4: `/metrics` is unauthenticated — a `run_id` label would let
+    // any caller enumerate active run IDs by scraping it.
     assert!(
-      text.contains(&format!("run_id=\"{run_a}\"")),
-      "first run_id label must appear; got: {text}"
-    );
-    assert!(
-      text.contains(&format!("run_id=\"{run_b}\"")),
-      "second run_id label must appear; got: {text}"
+      !text.contains("run_id=\""),
+      "must not leak a per-run_id label; got: {text}"
     );
   }
 }

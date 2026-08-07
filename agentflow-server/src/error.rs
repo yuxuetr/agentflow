@@ -81,6 +81,13 @@ pub enum ApiError {
   /// `BadRequest` so clients can branch on the size-limit cause.
   #[error("Payload too large: {0}")]
   PayloadTooLarge(String),
+
+  /// V3.4: the tenant's concurrent-run cap or run-submission rate limit
+  /// was exceeded. Surfaced through the unified envelope (HTTP 429)
+  /// instead of being collapsed into `BadRequest` so clients can branch
+  /// on the admission-control cause (and back off).
+  #[error("Too many requests: {0}")]
+  TooManyRequests(String),
 }
 
 impl ApiError {
@@ -94,6 +101,7 @@ impl ApiError {
       ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
       ApiError::Forbidden | ApiError::TenantMismatch(_) => StatusCode::FORBIDDEN,
       ApiError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+      ApiError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
     }
   }
 
@@ -108,6 +116,7 @@ impl ApiError {
       ApiError::TenantMismatch(_) => "tenant_mismatch",
       ApiError::Misconfigured(_) => "server_misconfigured",
       ApiError::PayloadTooLarge(_) => "payload_too_large",
+      ApiError::TooManyRequests(_) => "too_many_requests",
     }
   }
 }

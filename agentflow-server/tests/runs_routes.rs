@@ -660,3 +660,56 @@ async fn list_runs_returns_recent_rows_for_tenant() {
 // was removed alongside the `/v1/runs/{id}/graph` endpoint when
 // the `agentflow-viz` crate was deleted. See `docs/ROADMAP_v2.md`
 // Theme D for the decision rationale.)
+
+/// V3.4: a tenant that submits more runs than
+/// `max_run_submissions_per_minute_per_tenant` within the fixed window
+/// gets a 429, not an unbounded queue of background executor tasks.
+/// A different tenant is unaffected (the limit is per-tenant, not
+/// global).
+#[tokio::test]
+async fn submit_run_rejects_over_the_per_tenant_rate_limit() {
+  let Some(mut state) = fresh_state().await else {
+    eprintln!("skipping submit_run_rejects_over_the_per_tenant_rate_limit");
+    return;
+  };
+  let mut defaults = agentflow_tools::SecurityProfile::Local.defaults();
+  defaults.run_admission.max_concurrent_runs_per_tenant = 100;
+  defaults
+    .run_admission
+    .max_run_submissions_per_minute_per_tenant = 1;
+  state = state.with_security_defaults(defaults);
+  let app = create_router(state);
+
+  let submit = |app: axum::Router, tenant: &'static str| {
+    let body = json!({"workflow": FIXED_DAG_WORKFLOW}).to_string();
+    async move {
+      app
+        .oneshot(
+          Request::builder()
+            .method("POST")
+            .uri("/v1/runs")
+            .header(CONTENT_TYPE, "application/json")
+            .header("X-Agentflow-Tenant", tenant)
+            .body(Body::from(body))
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+  };
+
+  let first = submit(app.clone(), "tenant-rate-a").await;
+  assert_eq!(first.status(), StatusCode::OK);
+
+  let second = submit(app.clone(), "tenant-rate-a").await;
+  assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+  let bytes = axum::body::to_bytes(second.into_body(), 4096)
+    .await
+    .unwrap();
+  let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(parsed["error"]["code"], "too_many_requests");
+
+  // A different tenant still has its own untouched quota.
+  let other_tenant = submit(app, "tenant-rate-b").await;
+  assert_eq!(other_tenant.status(), StatusCode::OK);
+}

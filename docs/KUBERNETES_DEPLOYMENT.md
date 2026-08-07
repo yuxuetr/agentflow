@@ -530,9 +530,8 @@ workflow series from FU1
 counters from FU2, the two worker-fleet gauges from FU3, the
 two harness session gauges from FU4, three scrape-time process
 inspectors from FU5 (`agentflow_health_status{component}`,
-`agentflow_memory_usage_bytes`,
-`agentflow_workflow_runs_active{tenant}`), and the per-run
-live-state gauge from FU6 (`agentflow_state_size_bytes{run_id}`).
+`agentflow_memory_usage_bytes`, `agentflow_workflow_runs_active`),
+and the live-state gauge from FU6 (`agentflow_state_size_bytes`).
 The scrape-time gauges are computed via
 `refresh_scrape_time_gauges(&state)` which runs before every
 render; DB query failures are logged and swallowed (fail-soft)
@@ -541,8 +540,12 @@ reporting is Linux-specific (`/proc/self/statm`); non-Linux
 deployments emit `0`. The live-state gauge is sourced from an
 in-process `LiveStateRegistry` that the DAG executor writes
 to via `Flow::StateSizeObserver` after every node completes
-and deregisters from on terminal transitions, so the label
-cardinality only tracks runs that are actually in flight.
+and deregisters from on terminal transitions. **V3.4:** both
+`agentflow_workflow_runs_active` and `agentflow_state_size_bytes`
+emit a single unlabeled aggregate (summed across tenants / active
+runs) rather than one series per `tenant` / `run_id` — `/metrics`
+is deliberately unauthenticated (see below), so per-identity labels
+would let any scraper enumerate active tenant IDs and run IDs.
 
 Key metrics to monitor:
 

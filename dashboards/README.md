@@ -37,14 +37,14 @@ in [`docs/KUBERNETES_DEPLOYMENT.md`](../docs/KUBERNETES_DEPLOYMENT.md)
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
 | `agentflow_health_status` | gauge | `component` | 1 = up, 0 = down. Status panel. |
-| `agentflow_workflow_runs_active` | gauge | `tenant` | Queued + running runs. Active-runs timeseries. |
+| `agentflow_workflow_runs_active` | gauge | — | Queued + running runs, summed across all tenants (V3.4: unlabeled — `/metrics` is unauthenticated, a `tenant` label would leak tenant IDs). |
 | `agentflow_workflow_completed_total` | counter | `status` | Terminal-status throughput. `status ∈ {succeeded, failed, cancelled}`. |
 | `agentflow_workflow_duration_seconds` | histogram | — | Full-run wall clock. Drives p50/p95/p99 panel. |
 | `agentflow_nodes_failed_total` | counter | `node_type` | Per-node-type failure rate; the canonical "what broke" signal. |
 | `agentflow_workers_admitted` | gauge | — | Currently-admitted worker count (per `WorkerAdmissionPolicy`). |
 | `agentflow_worker_tasks_inflight` | gauge | `worker_id` | Per-worker in-flight task count. |
 | `agentflow_memory_usage_bytes` | gauge | — | Server process resident memory. |
-| `agentflow_state_size_bytes` | gauge | `run_id` | Per-run `FlowValue` state size. |
+| `agentflow_state_size_bytes` | gauge | — | Total `FlowValue` state size, summed across active runs (V3.4: unlabeled, same rationale as `agentflow_workflow_runs_active`). |
 | `agentflow_cleanup_runs_deleted_total` | counter | — | Retention sweep — `runs` rows reaped. |
 | `agentflow_cleanup_events_deleted_total` | counter | — | Retention sweep — `events` rows reaped. |
 | `agentflow_cleanup_artifacts_deleted_total` | counter | — | Retention sweep — `artifacts` rows reaped. |
@@ -75,8 +75,8 @@ Live series:
 | `agentflow_harness_approvals_pending` | ✅ live | scrape-time `PendingApprovalRegistry::pending_count()` (FU4) |
 | `agentflow_health_status{component}` | ✅ live | scrape-time inspector — `system=1` always; `database=1\|0` from `SELECT 1` (FU5) |
 | `agentflow_memory_usage_bytes` | ✅ live | scrape-time `/proc/self/statm` on Linux; `0` fallback elsewhere (FU5) |
-| `agentflow_workflow_runs_active{tenant}` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')` (FU5) |
-| `agentflow_state_size_bytes{run_id}` | ✅ live | `LiveStateRegistry` snapshot at scrape time; `Flow::StateSizeObserver` writes per-run entries after every node completes; executor deregisters on terminal transitions to keep cardinality bounded (FU6) |
+| `agentflow_workflow_runs_active` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')`, summed across rows before emission (FU5, unlabeled since V3.4) |
+| `agentflow_state_size_bytes` | ✅ live | `LiveStateRegistry` snapshot at scrape time; `Flow::StateSizeObserver` writes per-run entries after every node completes, executor deregisters on terminal transitions; summed across entries before emission (FU6, unlabeled since V3.4) |
 
 All 14 contracted series are live. The dashboard JSON is the
 operator-side source of truth; the metric names module

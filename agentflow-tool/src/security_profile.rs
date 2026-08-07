@@ -90,6 +90,10 @@ impl SecurityProfile {
         worker_admission: WorkerAdmissionDefaults {
           require_credential_config: false,
         },
+        run_admission: RunAdmissionDefaults {
+          max_concurrent_runs_per_tenant: 64,
+          max_run_submissions_per_minute_per_tenant: 1000,
+        },
       },
       Self::Local => SecurityProfileDefaults {
         profile: self,
@@ -140,6 +144,10 @@ impl SecurityProfile {
         worker_admission: WorkerAdmissionDefaults {
           require_credential_config: false,
         },
+        run_admission: RunAdmissionDefaults {
+          max_concurrent_runs_per_tenant: 32,
+          max_run_submissions_per_minute_per_tenant: 300,
+        },
       },
       Self::Production => SecurityProfileDefaults {
         profile: self,
@@ -176,6 +184,10 @@ impl SecurityProfile {
         },
         worker_admission: WorkerAdmissionDefaults {
           require_credential_config: true,
+        },
+        run_admission: RunAdmissionDefaults {
+          max_concurrent_runs_per_tenant: 10,
+          max_run_submissions_per_minute_per_tenant: 60,
         },
       },
     }
@@ -221,6 +233,7 @@ pub struct SecurityProfileDefaults {
   pub plugins: PluginExecutionDefaults,
   pub marketplace: MarketplaceInstallDefaults,
   pub worker_admission: WorkerAdmissionDefaults,
+  pub run_admission: RunAdmissionDefaults,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +297,18 @@ pub struct MarketplaceInstallDefaults {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerAdmissionDefaults {
   pub require_credential_config: bool,
+}
+
+/// V3.4: per-tenant admission limits for `POST /v1/runs`. Bounds both
+/// how many in-process executor tasks a tenant can have running at
+/// once (`max_concurrent_runs_per_tenant`) and how fast a tenant can
+/// submit new runs (`max_run_submissions_per_minute_per_tenant`) — an
+/// unbounded tenant (or a buggy client retry loop) could otherwise
+/// spawn unlimited `tokio::spawn`'d executor tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunAdmissionDefaults {
+  pub max_concurrent_runs_per_tenant: u32,
+  pub max_run_submissions_per_minute_per_tenant: u32,
 }
 
 #[cfg(test)]
@@ -358,6 +383,23 @@ mod tests {
         .defaults()
         .worker_admission
         .require_credential_config
+    );
+  }
+
+  #[test]
+  fn run_admission_defaults_tighten_from_dev_to_production() {
+    let dev = SecurityProfile::Dev.defaults().run_admission;
+    let local = SecurityProfile::Local.defaults().run_admission;
+    let production = SecurityProfile::Production.defaults().run_admission;
+    assert!(dev.max_concurrent_runs_per_tenant > local.max_concurrent_runs_per_tenant);
+    assert!(local.max_concurrent_runs_per_tenant > production.max_concurrent_runs_per_tenant);
+    assert!(
+      dev.max_run_submissions_per_minute_per_tenant
+        > local.max_run_submissions_per_minute_per_tenant
+    );
+    assert!(
+      local.max_run_submissions_per_minute_per_tenant
+        > production.max_run_submissions_per_minute_per_tenant
     );
   }
 

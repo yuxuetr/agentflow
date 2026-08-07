@@ -74,9 +74,9 @@ pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
 pub use live_state_registry::LiveStateRegistry;
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
-  ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunCancellationRegistry, RunContext,
-  RunExecutor, RunResponse, StubExecutor, cancel_run, default_executor, get_run,
-  get_run_resume_plan, list_runs, submit_run,
+  ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunAdmissionError, RunAdmissionGuard,
+  RunAdmissionRegistry, RunCancellationRegistry, RunContext, RunExecutor, RunResponse,
+  StubExecutor, cancel_run, default_executor, get_run, get_run_resume_plan, list_runs, submit_run,
 };
 pub use scheduler::{
   AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,
@@ -101,6 +101,8 @@ pub const CORS_ALLOWED_ORIGINS_ENV: &str = "AGENTFLOW_CORS_ALLOWED_ORIGINS";
 pub const MAX_REQUEST_BODY_BYTES_ENV: &str = "AGENTFLOW_MAX_REQUEST_BODY_BYTES";
 pub const MAX_WORKFLOW_SUBMIT_BYTES_ENV: &str = "AGENTFLOW_MAX_WORKFLOW_SUBMIT_BYTES";
 pub const MAX_SKILL_RUN_BYTES_ENV: &str = "AGENTFLOW_MAX_SKILL_RUN_BYTES";
+pub const MAX_CONCURRENT_RUNS_PER_TENANT_ENV: &str = "AGENTFLOW_MAX_CONCURRENT_RUNS_PER_TENANT";
+pub const RUN_SUBMIT_RATE_LIMIT_PER_MINUTE_ENV: &str = "AGENTFLOW_RUN_SUBMIT_RATE_LIMIT_PER_MINUTE";
 
 /// Server-wide state injected into every handler.
 #[derive(Clone)]
@@ -142,6 +144,11 @@ pub struct AppState {
   /// Active security profile and documented defaults. Enforcement is rolled
   /// out by the follow-up P1 tasks without changing local behavior here.
   pub security: SecurityProfileDefaults,
+  /// Process-local per-tenant admission control for `POST /v1/runs`
+  /// (V3.4). Kept in sync with `security.run_admission` — rebuilt
+  /// whenever `with_security_profile`/`with_security_defaults` sets a
+  /// new profile.
+  pub run_admission_registry: RunAdmissionRegistry,
 }
 
 impl std::fmt::Debug for AppState {
@@ -153,6 +160,7 @@ impl std::fmt::Debug for AppState {
       .field("skills", &self.skills)
       .field("executor", &"<dyn RunExecutor>")
       .field("cancellation_registry", &self.cancellation_registry)
+      .field("run_admission_registry", &"<RunAdmissionRegistry>")
       .field("harness_executor", &"<dyn HarnessSessionExecutor>")
       .field("harness_broker", &self.harness_broker)
       .field("security", &self.security)
@@ -179,6 +187,7 @@ impl AppState {
       approval_registry: PendingApprovalRegistry::new(),
       live_state_registry: live_state_registry::LiveStateRegistry::new(),
       security: SecurityProfile::default().defaults(),
+      run_admission_registry: run_admission_registry_for(&SecurityProfile::default().defaults()),
     }
   }
 
@@ -214,6 +223,7 @@ impl AppState {
   /// Attach the active security profile defaults.
   pub fn with_security_profile(mut self, profile: SecurityProfile) -> Self {
     self.security = profile.defaults();
+    self.run_admission_registry = run_admission_registry_for(&self.security);
     self
   }
 
@@ -221,8 +231,22 @@ impl AppState {
   /// overrides for CORS origins and request body limits.
   pub fn with_security_defaults(mut self, defaults: SecurityProfileDefaults) -> Self {
     self.security = defaults;
+    self.run_admission_registry = run_admission_registry_for(&self.security);
     self
   }
+}
+
+/// Build a fresh [`RunAdmissionRegistry`] from a [`SecurityProfileDefaults`]'s
+/// `run_admission` sub-struct (V3.4). Kept as a free function so both
+/// `AppState::new` and the `with_security_*` builders stay in sync
+/// without duplicating the limit lookup.
+fn run_admission_registry_for(defaults: &SecurityProfileDefaults) -> RunAdmissionRegistry {
+  RunAdmissionRegistry::new(
+    defaults.run_admission.max_concurrent_runs_per_tenant,
+    defaults
+      .run_admission
+      .max_run_submissions_per_minute_per_tenant,
+  )
 }
 
 pub fn server_security_defaults_from_env(
@@ -243,6 +267,14 @@ pub fn server_security_defaults_from_env(
   if let Some(limit) = u64_env(MAX_SKILL_RUN_BYTES_ENV)? {
     defaults.request_limits.max_skill_run_bytes = limit;
   }
+  if let Some(limit) = u32_env(MAX_CONCURRENT_RUNS_PER_TENANT_ENV)? {
+    defaults.run_admission.max_concurrent_runs_per_tenant = limit;
+  }
+  if let Some(limit) = u32_env(RUN_SUBMIT_RATE_LIMIT_PER_MINUTE_ENV)? {
+    defaults
+      .run_admission
+      .max_run_submissions_per_minute_per_tenant = limit;
+  }
 
   Ok(defaults)
 }
@@ -257,6 +289,8 @@ pub enum ServerHttpConfigError {
   },
   #[error("{name} must be a positive integer byte count, got '{value}'")]
   InvalidByteLimit { name: &'static str, value: String },
+  #[error("{name} must be a positive integer, got '{value}'")]
+  InvalidCount { name: &'static str, value: String },
 }
 
 fn comma_separated_env(name: &'static str) -> Option<Vec<String>> {
@@ -283,6 +317,23 @@ fn u64_env(name: &'static str) -> Result<Option<u64>, ServerHttpConfigError> {
     })?;
   if limit == 0 {
     return Err(ServerHttpConfigError::InvalidByteLimit { name, value });
+  }
+  Ok(Some(limit))
+}
+
+fn u32_env(name: &'static str) -> Result<Option<u32>, ServerHttpConfigError> {
+  let Some(value) = std::env::var(name).ok() else {
+    return Ok(None);
+  };
+  let limit: u32 = value
+    .trim()
+    .parse()
+    .map_err(|_| ServerHttpConfigError::InvalidCount {
+      name,
+      value: value.clone(),
+    })?;
+  if limit == 0 {
+    return Err(ServerHttpConfigError::InvalidCount { name, value });
   }
   Ok(Some(limit))
 }
@@ -414,11 +465,14 @@ async fn refresh_scrape_time_gauges(state: &AppState) {
     metrics::observe_memory_usage_bytes(0);
   }
 
-  // P10.14.2-FU5 — active runs per tenant. `active` = queued
-  // + running, never terminal. One indexed query against the
-  // read pool. Same fail-soft pattern as the harness session
+  // P10.14.2-FU5 — active runs across all tenants. `active` =
+  // queued + running, never terminal. One indexed query against
+  // the read pool. Same fail-soft pattern as the harness session
   // refresh — a query error skips this gauge but doesn't block
-  // the rest of the scrape.
+  // the rest of the scrape. V3.4: summed into a single unlabeled
+  // gauge instead of one series per `tenant` — `/metrics` is
+  // unauthenticated, so a per-tenant label would leak tenant IDs
+  // to any scraper.
   match sqlx::query_as::<_, (String, i64)>(
     "SELECT tenant_id, COUNT(*)::BIGINT FROM runs \
        WHERE status IN ('queued', 'running') GROUP BY tenant_id",
@@ -427,9 +481,8 @@ async fn refresh_scrape_time_gauges(state: &AppState) {
   .await
   {
     Ok(rows) => {
-      for (tenant, count) in rows {
-        metrics::observe_workflow_runs_active(&tenant, count.max(0) as u64);
-      }
+      let total: i64 = rows.iter().map(|(_, count)| (*count).max(0)).sum();
+      metrics::observe_workflow_runs_active(total as u64);
     }
     Err(err) => {
       tracing::debug!(
@@ -439,14 +492,20 @@ async fn refresh_scrape_time_gauges(state: &AppState) {
     }
   }
 
-  // P10.14.2-FU6 — live state-pool size per active run. Pure
-  // in-process registry read: no DB, no syscall. The DAG executor
-  // is responsible for deregistering on terminal transitions, so
-  // the snapshot here only contains currently-running runs and
-  // gauge cardinality stays bounded.
-  for (run_id, bytes) in state.live_state_registry.snapshot() {
-    metrics::observe_state_size_bytes(&run_id.to_string(), bytes);
-  }
+  // P10.14.2-FU6 — total live state-pool size across active runs.
+  // Pure in-process registry read: no DB, no syscall. The DAG
+  // executor is responsible for deregistering on terminal
+  // transitions, so the snapshot here only contains currently-
+  // running runs. V3.4: summed into a single unlabeled gauge
+  // instead of one series per `run_id`, for the same
+  // unauthenticated-route reason as workflow_runs_active above.
+  let total_state_bytes: u64 = state
+    .live_state_registry
+    .snapshot()
+    .into_iter()
+    .map(|(_, bytes)| bytes)
+    .sum();
+  metrics::observe_state_size_bytes(total_state_bytes);
 }
 
 /// Best-effort process resident-memory probe (P10.14.2-FU5).

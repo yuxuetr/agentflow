@@ -229,6 +229,150 @@ impl RunCancellationRegistry {
   }
 }
 
+/// V3.4: per-tenant admission control for `POST /v1/runs`. Bounds how
+/// many in-process executor tasks a tenant can have running at once
+/// (a non-blocking `try_acquire_owned` — rejects rather than queues,
+/// unlike the harness's `.await`-based semaphore in
+/// `LiveHarnessExecutor::acquire_permit`) and how fast a tenant can
+/// submit new runs (a fixed-window counter). Both limits are
+/// per-tenant, not global — one noisy tenant can't starve another.
+#[derive(Clone)]
+pub struct RunAdmissionRegistry {
+  inner: Arc<Mutex<HashMap<String, Arc<TenantAdmissionState>>>>,
+  max_concurrent_per_tenant: u32,
+  max_submissions_per_minute: u32,
+  window: Duration,
+}
+
+struct TenantAdmissionState {
+  semaphore: Arc<tokio::sync::Semaphore>,
+  window: Mutex<RateWindow>,
+}
+
+struct RateWindow {
+  started_at: std::time::Instant,
+  count: u32,
+}
+
+/// Held for the lifetime of an admitted run's background task. Dropping
+/// it releases the tenant's concurrency slot — no manual `.complete()`
+/// call needed, unlike [`RunCancellationRegistry`].
+#[derive(Debug)]
+pub struct RunAdmissionGuard {
+  _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+/// Distinct from [`crate::scheduler::AdmissionError`] (the distributed
+/// worker gRPC control plane's admission policy) — this is the
+/// separate, unrelated `POST /v1/runs` in-process admission path.
+#[derive(Debug, Clone)]
+pub enum RunAdmissionError {
+  ConcurrencyLimitExceeded {
+    tenant: String,
+    limit: u32,
+  },
+  RateLimited {
+    tenant: String,
+    limit_per_minute: u32,
+  },
+}
+
+impl std::fmt::Display for RunAdmissionError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      RunAdmissionError::ConcurrencyLimitExceeded { tenant, limit } => write!(
+        f,
+        "tenant '{tenant}' has reached the concurrent-run limit ({limit})"
+      ),
+      RunAdmissionError::RateLimited {
+        tenant,
+        limit_per_minute,
+      } => write!(
+        f,
+        "tenant '{tenant}' has exceeded the run submission rate limit ({limit_per_minute}/min)"
+      ),
+    }
+  }
+}
+
+impl RunAdmissionRegistry {
+  pub fn new(max_concurrent_per_tenant: u32, max_submissions_per_minute: u32) -> Self {
+    Self {
+      inner: Arc::new(Mutex::new(HashMap::new())),
+      max_concurrent_per_tenant,
+      max_submissions_per_minute,
+      window: Duration::from_secs(60),
+    }
+  }
+
+  /// Test-only knob: a real 60s window makes rate-limit tests either
+  /// slow or flaky. Production always uses the default 60s window.
+  pub fn with_window(mut self, window: Duration) -> Self {
+    self.window = window;
+    self
+  }
+
+  /// Same poison-recovery pattern as [`RunCancellationRegistry::lock_inner`].
+  fn lock_inner(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<TenantAdmissionState>>> {
+    match self.inner.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    }
+  }
+
+  fn tenant_state(&self, tenant: &str) -> Arc<TenantAdmissionState> {
+    let mut entries = self.lock_inner();
+    entries
+      .entry(tenant.to_string())
+      .or_insert_with(|| {
+        Arc::new(TenantAdmissionState {
+          semaphore: Arc::new(tokio::sync::Semaphore::new(
+            self.max_concurrent_per_tenant as usize,
+          )),
+          window: Mutex::new(RateWindow {
+            started_at: std::time::Instant::now(),
+            count: 0,
+          }),
+        })
+      })
+      .clone()
+  }
+
+  pub fn try_admit(&self, tenant: &str) -> Result<RunAdmissionGuard, RunAdmissionError> {
+    let state = self.tenant_state(tenant);
+
+    let permit = state.semaphore.clone().try_acquire_owned().map_err(|_| {
+      RunAdmissionError::ConcurrencyLimitExceeded {
+        tenant: tenant.to_string(),
+        limit: self.max_concurrent_per_tenant,
+      }
+    })?;
+
+    let mut window = match state.window.lock() {
+      Ok(g) => g,
+      Err(poisoned) => poisoned.into_inner(),
+    };
+    let now = std::time::Instant::now();
+    if now.duration_since(window.started_at) >= self.window {
+      window.started_at = now;
+      window.count = 0;
+    }
+    if window.count >= self.max_submissions_per_minute {
+      // Give the concurrency slot back — this admission attempt failed
+      // on the rate-limit check, not the concurrency check.
+      drop(permit);
+      return Err(RunAdmissionError::RateLimited {
+        tenant: tenant.to_string(),
+        limit_per_minute: self.max_submissions_per_minute,
+      });
+    }
+    window.count += 1;
+    drop(window);
+
+    Ok(RunAdmissionGuard { _permit: permit })
+  }
+}
+
 /// Default no-op executor used until the real Flow runner lands. Marks runs
 /// as `running` then `succeeded` and writes two synthetic events so SSE
 /// subscribers see something flow through. Tests use this to verify the
@@ -539,6 +683,14 @@ pub async fn submit_run(
       "request body tenant_id '{body_tenant}' does not match authenticated tenant '{tenant_id}'"
     )));
   }
+
+  // V3.4: admission control before the run row is even created — an
+  // inadmissible request shouldn't leave a `queued` row behind.
+  let admission_guard = state
+    .run_admission_registry
+    .try_admit(&tenant_id)
+    .map_err(|err| ApiError::TooManyRequests(err.to_string()))?;
+
   let run_id = Uuid::new_v4();
   let run_base_dir = run_base_dir_for_request();
   let run_dir = run_dir_for_run(&run_base_dir, run_id);
@@ -567,6 +719,9 @@ pub async fn submit_run(
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
+    // Held until the task completes — releases the tenant's admission
+    // slot on drop (V3.4).
+    let _admission_guard = admission_guard;
     executor
       .execute(RunContext {
         run_id,
@@ -937,6 +1092,60 @@ mod retention_overrides_tests {
     let parsed: RetentionOverrides = serde_json::from_str("{}").expect("empty body ok");
     assert!(parsed.events_days.is_none());
     assert!(parsed.artifacts_days.is_none());
+  }
+}
+
+#[cfg(test)]
+mod run_admission_registry_tests {
+  use super::{RunAdmissionError, RunAdmissionRegistry};
+  use std::time::Duration;
+
+  #[test]
+  fn try_admit_allows_up_to_the_concurrency_limit_then_rejects() {
+    let registry = RunAdmissionRegistry::new(2, 1000);
+    let _g1 = registry.try_admit("tenant-a").expect("first admit ok");
+    let _g2 = registry.try_admit("tenant-a").expect("second admit ok");
+    let err = registry
+      .try_admit("tenant-a")
+      .expect_err("third admit over the concurrency limit must be rejected");
+    assert!(matches!(
+      err,
+      RunAdmissionError::ConcurrencyLimitExceeded { .. }
+    ));
+
+    // A different tenant has its own independent slot.
+    let _g3 = registry
+      .try_admit("tenant-b")
+      .expect("a different tenant is unaffected");
+  }
+
+  #[test]
+  fn try_admit_releases_the_slot_when_the_guard_drops() {
+    let registry = RunAdmissionRegistry::new(1, 1000);
+    let guard = registry.try_admit("tenant-a").expect("first admit ok");
+    assert!(registry.try_admit("tenant-a").is_err());
+    drop(guard);
+    assert!(
+      registry.try_admit("tenant-a").is_ok(),
+      "dropping the guard must release the concurrency slot"
+    );
+  }
+
+  #[test]
+  fn try_admit_rejects_over_the_rate_limit_within_the_window() {
+    let registry = RunAdmissionRegistry::new(100, 2).with_window(Duration::from_millis(50));
+    let _g1 = registry.try_admit("tenant-a").expect("first submit ok");
+    let _g2 = registry.try_admit("tenant-a").expect("second submit ok");
+    let err = registry
+      .try_admit("tenant-a")
+      .expect_err("third submit within the window must be rate-limited");
+    assert!(matches!(err, RunAdmissionError::RateLimited { .. }));
+
+    std::thread::sleep(Duration::from_millis(75));
+    assert!(
+      registry.try_admit("tenant-a").is_ok(),
+      "a new window must reset the submission count"
+    );
   }
 }
 

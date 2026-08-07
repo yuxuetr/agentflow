@@ -89,7 +89,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Active workflow runs (queued + running) per tenant. Adds `agentflow_workflow_runs_active{tenant=}` to the dashboard pre-emission for forward compatibility.",
+      "description": "Total active workflow runs (queued + running) across all tenants. `agentflow_workflow_runs_active` is a single unlabeled aggregate (V3.4) — `/metrics` is unauthenticated, so a per-tenant label would leak tenant IDs to any scraper.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -109,12 +109,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum by (tenant) (agentflow_workflow_runs_active)",
-          "legendFormat": "{{tenant}}",
+          "expr": "agentflow_workflow_runs_active",
+          "legendFormat": "active runs",
           "refId": "A"
         }
       ],
-      "title": "Active workflow runs (by tenant)",
+      "title": "Active workflow runs (total)",
       "type": "timeseries"
     },
     {

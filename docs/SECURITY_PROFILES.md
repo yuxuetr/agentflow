@@ -19,6 +19,7 @@ operators through `agentflow doctor` and server startup logs.
 | OS sandbox | Optional; no-op backend allowed. | Optional; no-op backend allowed. | Required; no-op backend is not acceptable. |
 | Plugin execution | Subprocess plugins allowed; sandbox opt-in. | Subprocess plugins allowed; sandbox opt-in. | Subprocess plugins disabled by default; OS sandbox required for future opt-in paths. |
 | Marketplace installs | Remote installs allowed; signatures optional for fast iteration. | Remote installs allowed; signatures required; unsigned local fixtures allowed. | Remote installs allowed; signatures required; unsigned local fixtures rejected. |
+| Run admission (V3.4) | 64 concurrent runs/tenant, 1000 submissions/min/tenant. | 32 concurrent runs/tenant, 300 submissions/min/tenant. | 10 concurrent runs/tenant, 60 submissions/min/tenant. |
 
 ## Current Wiring
 
@@ -50,6 +51,16 @@ Server startup also accepts explicit HTTP policy overrides:
 - `AGENTFLOW_MAX_WORKFLOW_SUBMIT_BYTES`: max JSON body for `POST /v1/runs`.
 - `AGENTFLOW_MAX_SKILL_RUN_BYTES`: max JSON body for
   `POST /v1/skills/{name}:run`.
+- `AGENTFLOW_MAX_CONCURRENT_RUNS_PER_TENANT` (V3.4): overrides
+  `run_admission.max_concurrent_runs_per_tenant` — the number of
+  in-process executor tasks a single tenant may have running at once
+  via `POST /v1/runs`. A submission over the limit is rejected
+  immediately (HTTP 429), not queued.
+- `AGENTFLOW_RUN_SUBMIT_RATE_LIMIT_PER_MINUTE` (V3.4): overrides
+  `run_admission.max_run_submissions_per_minute_per_tenant` — a
+  fixed-window (60s) cap on how many runs a tenant may submit per
+  minute. Both limits are per-tenant, not global; one noisy tenant
+  can't starve another's quota.
 
 The follow-up P1 tasks continue turning these defaults into enforcement:
 
