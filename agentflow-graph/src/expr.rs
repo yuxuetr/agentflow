@@ -567,9 +567,17 @@ fn expect_arity(name: &str, args: &[Expr], expected: usize, col: usize) -> Resul
   }
 }
 
+/// Maximum nesting depth (parens, unary chains, nested function calls) a
+/// `run_if`/`while` expression may reach. Bounds the recursive-descent
+/// parser's own call-stack growth against a maliciously deep expression
+/// submitted in workflow YAML — well above anything a hand-written
+/// condition would ever need.
+const MAX_EXPR_DEPTH: usize = 64;
+
 struct Parser<'a> {
   chars: Vec<char>,
   pos: usize,
+  depth: usize,
   _marker: std::marker::PhantomData<&'a str>,
 }
 
@@ -579,8 +587,25 @@ impl<'a> Parser<'a> {
     Self {
       chars: input.chars().collect(),
       pos: 0,
+      depth: 0,
       _marker: std::marker::PhantomData,
     }
+  }
+
+  fn enter_depth(&mut self) -> Result<(), ExprError> {
+    self.depth += 1;
+    if self.depth > MAX_EXPR_DEPTH {
+      self.depth -= 1;
+      return Err(ExprError::new(
+        self.col(),
+        "expression is too deeply nested",
+      ));
+    }
+    Ok(())
+  }
+
+  fn exit_depth(&mut self) {
+    self.depth -= 1;
   }
 
   fn parse(mut self) -> Result<Expr, ExprError> {
@@ -593,6 +618,7 @@ impl<'a> Parser<'a> {
   }
 
   fn parse_or(&mut self) -> Result<Expr, ExprError> {
+    self.enter_depth()?;
     let mut expr = self.parse_and()?;
     while self.consume("||") {
       let col = self.col().saturating_sub(2);
@@ -604,6 +630,7 @@ impl<'a> Parser<'a> {
         col,
       };
     }
+    self.exit_depth();
     Ok(expr)
   }
 
@@ -715,9 +742,11 @@ impl<'a> Parser<'a> {
   }
 
   fn parse_unary(&mut self) -> Result<Expr, ExprError> {
+    self.enter_depth()?;
     if self.consume("!") {
       let col = self.col().saturating_sub(1);
       let expr = self.parse_unary()?;
+      self.exit_depth();
       return Ok(Expr::Unary {
         op: UnaryOp::Not,
         expr: Box::new(expr),
@@ -727,13 +756,16 @@ impl<'a> Parser<'a> {
     if self.consume("-") {
       let col = self.col().saturating_sub(1);
       let expr = self.parse_unary()?;
+      self.exit_depth();
       return Ok(Expr::Unary {
         op: UnaryOp::Negate,
         expr: Box::new(expr),
         col,
       });
     }
-    self.parse_primary()
+    let result = self.parse_primary();
+    self.exit_depth();
+    result
   }
 
   fn parse_primary(&mut self) -> Result<Expr, ExprError> {
@@ -986,5 +1018,34 @@ mod tests {
     let error = compile("lenn(nodes.search.outputs.items)").unwrap_err();
     assert_eq!(error.col, 1);
     assert!(error.message.contains("unknown function 'lenn'"));
+  }
+
+  #[test]
+  fn rejects_deeply_nested_unary_chain() {
+    let expr = format!("{}true", "!".repeat(10_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_nested_parens() {
+    let expr = format!("{}1{}", "(".repeat(10_000), ")".repeat(10_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_nested_function_calls() {
+    let expr = format!("{}1{}", "len(".repeat(10_000), ")".repeat(10_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn accepts_moderately_nested_expression() {
+    let unary = format!("{}true", "!".repeat(20));
+    assert!(compile(&unary).is_ok());
+    let parens = format!("{}1{}", "(".repeat(20), ")".repeat(20));
+    assert!(compile(&parens).is_ok());
   }
 }
