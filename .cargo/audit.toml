@@ -1,0 +1,36 @@
+# V4.3 (2026-08-08): cargo-audit wired into CI (`.github/workflows/quality.yml`'s
+# `cargo-audit` job). Every entry below is a RUSTSEC advisory that was already
+# present in Cargo.lock when this file was created and is NOT safely fixable
+# in this pass — this file starts CI green from day one while `cargo audit`
+# still catches any NEW advisory on every future PR. Six other advisories
+# present at the same time (bytes/RUSTSEC-2026-0007, crossbeam-epoch/
+# RUSTSEC-2026-0204, quinn-proto/RUSTSEC-2026-0185+0037, rustls-webpki/
+# RUSTSEC-2026-0104+0098+0099+0049, tar/RUSTSEC-2026-0068+0067,
+# tracing-subscriber/RUSTSEC-2025-0055) were fixed directly via targeted
+# `cargo update -p <crate>` bumps instead of being ignored here — each
+# verified individually against `agentflow-worker`'s real mTLS gRPC test
+# suite before being kept. A blanket workspace-wide `cargo update` was tried
+# first and discarded: it silently rebalanced the `rustls` crypto-provider
+# feature-unification across the workspace and broke that same test suite
+# with a `CryptoProvider::install_default()` panic — a real regression in a
+# security-relevant path, not something to ship as a drive-by dependency
+# bump. The two entries below remain because neither has a safe fix path.
+[advisories]
+ignore = [
+  # lopdf 0.34.0 (pulled in only by agentflow-rag's optional `pdf` feature,
+  # via pdf-extract): stack-overflow DoS on deeply nested PDF objects.
+  # RustSec's fix requires lopdf >=0.42.0, a breaking 0.34 -> 0.42 bump that
+  # pdf-extract's own Cargo.toml would need to allow first — needs its own
+  # dedicated compatibility pass against pdf-extract's API surface, not a
+  # plain `cargo update`.
+  "RUSTSEC-2026-0187",
+  # rsa 0.9.9 (pulled in only by sqlx-mysql's auth handshake — this
+  # workspace never enables sqlx's `mysql` feature; sqlx-mysql itself is
+  # unreachable from any workspace crate but still resolved into
+  # Cargo.lock by cargo's feature unification): Marvin Attack timing
+  # side-channel. RustSec's own advisory states "No fixed upgrade is
+  # available!" as of this writing — cannot be resolved by any version
+  # bump; would need dropping the mysql feature at the source (unclear
+  # what currently causes sqlx to unify it in) or waiting on upstream.
+  "RUSTSEC-2023-0071",
+]

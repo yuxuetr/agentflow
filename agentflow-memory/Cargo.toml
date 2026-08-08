@@ -28,7 +28,7 @@ agentflow-rag = { path = "../agentflow-rag", version = "0.3.0-alpha", default-fe
 # X25519 identity, no cloud KMS dependency. Pinned at 0.11 (current
 # stable as of 2026-05).
 age = "0.11"
-base64 = "0.22"
+base64 = "0.21"
 sha2 = "0.10"
 # U2.2: `remember_preference` registry-installable Tool, mirroring how
 # `agentflow-rag` wraps `KnowledgeBackend` as `RagSearchTool` (same

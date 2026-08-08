@@ -173,6 +173,24 @@ jobs:
             exit 1
           fi
 
+  cargo-audit:
+    # V4.3 (2026-08-08): supply-chain hygiene — cargo-audit was not
+    # installed anywhere in CI before this, so known RUSTSEC CVEs in
+    # Cargo.lock went unverified indefinitely. Fails on any advisory not
+    # explicitly listed in `.cargo/audit.toml`'s ignore list (see that
+    # file's header comment for the rationale behind each currently
+    # ignored entry, and why a blanket dependency-version bump was tried
+    # and discarded in favor of individually-verified targeted updates).
+    name: cargo audit (known CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+
   linux-sandbox-check:
     # P7.4-FU1: the Linux seccomp backend in agentflow-tools/src/sandbox/linux.rs
     # is `#[cfg(target_os = "linux")]`-gated, so macOS dev builds skip it. This
@@ -535,6 +553,7 @@ jobs:
       - clippy-lib-deny
       - redaction-lint
       - println-lint
+      - cargo-audit
       - linux-sandbox-check
       - proto-validate
       - test
@@ -555,6 +574,7 @@ jobs:
           echo "clippy-lib-deny: ${{ needs.clippy-lib-deny.result }}"
           echo "redaction-lint: ${{ needs.redaction-lint.result }}"
           echo "println-lint: ${{ needs.println-lint.result }}"
+          echo "cargo-audit: ${{ needs.cargo-audit.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "proto-validate: ${{ needs.proto-validate.result }}"
           echo "test: ${{ needs.test.result }}"
@@ -571,6 +591,7 @@ jobs:
           test "${{ needs.clippy-lib-deny.result }}" = "success"
           test "${{ needs.redaction-lint.result }}" = "success"
           test "${{ needs.println-lint.result }}" = "success"
+          test "${{ needs.cargo-audit.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.proto-validate.result }}" = "success"
           test "${{ needs.test.result }}" = "success"

@@ -17,9 +17,3 @@ pub enum MemoryError {
   #[error("Embedding error: {0}")]
   EmbeddingError(String),
 }
-
-impl From<sqlx::Error> for MemoryError {
-  fn from(e: sqlx::Error) -> Self {
-    MemoryError::StorageError(e.to_string())
-  }
-}
