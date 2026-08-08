@@ -384,7 +384,19 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
 
   let mut input_mapping = HashMap::new();
   for (k, v) in &node_def.input_mapping {
-    let path = v.trim_start_matches("{{ ").trim_end_matches(" }}");
+    // V4.4: match schema.rs's `parse_mapping_source_node` exactly — trim
+    // the outer whitespace, then the literal `{{`/`}}` tokens (not the
+    // 3-char `"{{ "`/`" }}"` sequences this used to strip), then the
+    // interior whitespace again. The old exact-space-count matching let
+    // an `input_mapping` entry pass schema validation (which already used
+    // the tolerant form below) while silently resolving to no input at
+    // all here — or, worse, a corrupted field name — the moment the YAML
+    // author's spacing didn't match the canonical single-space style.
+    let path = v
+      .trim()
+      .trim_start_matches("{{")
+      .trim_end_matches("}}")
+      .trim();
     let parts: Vec<&str> = path.split('.').collect();
     if parts.len() == 4 && parts[0] == "nodes" && parts[2] == "outputs" {
       input_mapping.insert(k.clone(), (parts[1].to_string(), parts[3].to_string()));
@@ -671,5 +683,65 @@ parameters:
       err.to_string().contains("sandbox policy denied"),
       "expected a path outside allowed_paths to be denied, got: {err}"
     );
+  }
+
+  /// V4.4 regression: `input_mapping` values with non-canonical spacing
+  /// around the `{{ }}` template braces used to pass schema validation
+  /// (which already tolerated any whitespace) but resolve to no mapping
+  /// at all here — a silently misconfigured node with no error anywhere.
+  /// Covers zero, one (canonical), and multiple spaces on both sides.
+  #[test]
+  fn input_mapping_tolerates_non_canonical_brace_whitespace() {
+    let node = node_from_yaml(
+      r#"
+id: consume
+type: template
+input_mapping:
+  zero: "{{nodes.producer.outputs.field}}"
+  one: "{{ nodes.producer.outputs.field }}"
+  many: "{{   nodes.producer.outputs.field   }}"
+"#,
+    );
+
+    let graph_node = create_graph_node(&node).unwrap();
+    let mapping = graph_node
+      .input_mapping
+      .expect("mapping should be populated");
+    for key in ["zero", "one", "many"] {
+      assert_eq!(
+        mapping.get(key),
+        Some(&("producer".to_string(), "field".to_string())),
+        "input_mapping[\"{key}\"] did not resolve to (producer, field)"
+      );
+    }
+  }
+
+  /// V4.4 regression: the specific asymmetric case (space before `}}`
+  /// but none after `{{`, or vice versa) used to silently corrupt the
+  /// resolved field name (e.g. trailing `"}}"`  characters left attached)
+  /// instead of either working or failing loudly.
+  #[test]
+  fn input_mapping_tolerates_asymmetric_brace_whitespace() {
+    let node = node_from_yaml(
+      r#"
+id: consume
+type: template
+input_mapping:
+  leading_only: "{{ nodes.producer.outputs.field}}"
+  trailing_only: "{{nodes.producer.outputs.field }}"
+"#,
+    );
+
+    let graph_node = create_graph_node(&node).unwrap();
+    let mapping = graph_node
+      .input_mapping
+      .expect("mapping should be populated");
+    for key in ["leading_only", "trailing_only"] {
+      assert_eq!(
+        mapping.get(key),
+        Some(&("producer".to_string(), "field".to_string())),
+        "input_mapping[\"{key}\"] did not resolve to (producer, field)"
+      );
+    }
   }
 }

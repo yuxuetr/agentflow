@@ -3119,7 +3119,7 @@ providers:
       tokens_per_minute: 40000
   google:
     api_key_env: GEMINI_API_KEY
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    base_url: https://generativelanguage.googleapis.com
     timeout_seconds: 60
     rate_limit:
       requests_per_minute: 1000

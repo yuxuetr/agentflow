@@ -389,6 +389,108 @@ async fn sweep_run_dir(
   Ok((deleted, skipped))
 }
 
+/// V4.4: DB-free run_dir sweep for operators who only ever run
+/// `agentflow workflow run` locally and never stand up `agentflow-server`
+/// and Postgres at all. The CLI's own default run root
+/// (`~/.agentflow/runs`) is exactly this case, and it grows unboundedly
+/// on a long-running machine with no cleanup path available, since
+/// [`cleanup_expired`] hard-requires a DB connection before it runs
+/// anything (including the filesystem-only sweeps). Unlike
+/// [`sweep_run_dir`], there is no `runs` table to consult for an
+/// "is this still active" check, so this relies purely on directory
+/// mtime, the same trade-off [`sweep_trace_dir`] already makes for
+/// trace files, and a reasonable one here too: an actively-running
+/// workflow continuously writes checkpoints/outputs into its run dir,
+/// so its mtime stays recent; only a genuinely finished (or abandoned)
+/// run's directory goes untouched long enough to cross the retention
+/// window.
+async fn sweep_run_dir_local(root: &Path, days: i64, dry_run: bool) -> Result<u64, CleanupError> {
+  if !root.exists() {
+    return Ok(0);
+  }
+  let mut deleted = 0u64;
+  let entries = std::fs::read_dir(root).map_err(|err| CleanupError::Filesystem {
+    path: root.to_path_buf(),
+    source: err,
+  })?;
+  let cutoff = Utc::now() - chrono::Duration::days(days);
+
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if !path.is_dir() {
+      continue;
+    }
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    if Uuid::parse_str(name).is_err() {
+      // Skip directories that don't look like a run UUID.
+      continue;
+    }
+    let modified = entry
+      .metadata()
+      .map_err(|err| CleanupError::Filesystem {
+        path: path.clone(),
+        source: err,
+      })
+      .and_then(|m| {
+        m.modified().map_err(|err| CleanupError::Filesystem {
+          path: path.clone(),
+          source: err,
+        })
+      })
+      .ok()
+      .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+      .map(|d| DateTime::<Utc>::from_timestamp(d.as_secs() as i64, 0).unwrap_or(cutoff));
+    let too_young = modified.is_some_and(|m| m > cutoff);
+    if too_young {
+      continue;
+    }
+    if !dry_run {
+      std::fs::remove_dir_all(&path).map_err(|err| CleanupError::Filesystem {
+        path: path.clone(),
+        source: err,
+      })?;
+    }
+    deleted += 1;
+  }
+  Ok(deleted)
+}
+
+/// V4.4: filesystem-only counterpart to [`cleanup_expired`] for callers
+/// with no Postgres connection at all — sweeps `run_dir_root` (via
+/// [`sweep_run_dir_local`]'s mtime-only heuristic) and `trace_dir_root`
+/// (via the already-DB-free [`sweep_trace_dir`]), skipping every
+/// DB-backed sweep (`runs`/`events`/`artifacts`) entirely. The returned
+/// [`CleanupReport`]'s DB-related counters stay at their `Default::default()`
+/// zero rather than lying about work that was never attempted.
+pub async fn cleanup_expired_local(
+  run_dir_root: Option<&Path>,
+  trace_dir_root: Option<&Path>,
+  config: &CleanupConfig,
+) -> Result<CleanupReport, CleanupError> {
+  let started_at = Utc::now();
+  let mut report = CleanupReport {
+    dry_run: config.dry_run,
+    started_at,
+    finished_at: started_at,
+    ..Default::default()
+  };
+
+  if let Some(root) = run_dir_root {
+    report.run_dirs_deleted =
+      sweep_run_dir_local(root, config.run_dir_retention_days as i64, config.dry_run).await?;
+  }
+
+  if let Some(root) = trace_dir_root {
+    report.trace_files_deleted =
+      sweep_trace_dir(root, config.runs_retention_days as i64, config.dry_run).await?;
+  }
+
+  report.finished_at = Utc::now();
+  Ok(report)
+}
+
 /// Q2.3.4: delete `<workflow_id>.json` trace files older than `days`
 /// from the file-backed trace dir. Files keep no run-state index, so
 /// unlike `sweep_run_dir` we have no "active" check — but the trace
@@ -530,6 +632,106 @@ mod tests {
     let missing = tmp.path().join("does-not-exist");
     let deleted = sweep_trace_dir(&missing, 30, false).await.unwrap();
     assert_eq!(deleted, 0);
+  }
+
+  // V4.4: DB-free run_dir sweep — no Postgres pool involved at all, so
+  // this is a genuine end-to-end test (unlike `sweep_run_dir_*`'s tests
+  // above, which can only check the pre-DB-call guards).
+  #[tokio::test]
+  async fn sweep_run_dir_local_deletes_old_uuid_dirs_by_mtime_only() {
+    use std::time::{Duration as StdDur, SystemTime};
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let old_mtime = SystemTime::now() - StdDur::from_secs(60 * 60 * 24 * 100);
+
+    // Old run dir (should be deleted — no DB to protect it either way).
+    let old_run = root.join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&old_run).unwrap();
+    filetime::set_file_mtime(&old_run, filetime::FileTime::from_system_time(old_mtime)).ok();
+
+    // Young run dir (should stay).
+    let young_run = root.join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&young_run).unwrap();
+
+    // Non-UUID directory (should stay regardless of age).
+    let other_dir = root.join("not-a-run-id");
+    fs::create_dir_all(&other_dir).unwrap();
+    filetime::set_file_mtime(&other_dir, filetime::FileTime::from_system_time(old_mtime)).ok();
+
+    let deleted = sweep_run_dir_local(root, 30, false).await.unwrap();
+    assert_eq!(deleted, 1, "only the old UUID-named dir should be deleted");
+    assert!(!old_run.exists(), "old run dir must be gone");
+    assert!(young_run.exists(), "young run dir must stay");
+    assert!(other_dir.exists(), "non-UUID dir must stay");
+  }
+
+  #[tokio::test]
+  async fn sweep_run_dir_local_dry_run_deletes_nothing() {
+    use std::time::{Duration as StdDur, SystemTime};
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let old_run = root.join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&old_run).unwrap();
+    let old_mtime = SystemTime::now() - StdDur::from_secs(60 * 60 * 24 * 100);
+    filetime::set_file_mtime(&old_run, filetime::FileTime::from_system_time(old_mtime)).ok();
+
+    let deleted = sweep_run_dir_local(root, 30, true).await.unwrap();
+    assert_eq!(deleted, 1, "dry-run still reports what would be deleted");
+    assert!(
+      old_run.exists(),
+      "dry-run must not actually delete anything"
+    );
+  }
+
+  #[tokio::test]
+  async fn sweep_run_dir_local_returns_zero_when_root_missing() {
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("does-not-exist");
+    let deleted = sweep_run_dir_local(&missing, 30, false).await.unwrap();
+    assert_eq!(deleted, 0);
+  }
+
+  #[tokio::test]
+  async fn cleanup_expired_local_sweeps_both_dirs_and_leaves_db_counters_zero() {
+    use std::time::{Duration as StdDur, SystemTime};
+
+    let run_tmp = TempDir::new().unwrap();
+    let trace_tmp = TempDir::new().unwrap();
+    let old_mtime = SystemTime::now() - StdDur::from_secs(60 * 60 * 24 * 100);
+
+    let old_run = run_tmp.path().join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&old_run).unwrap();
+    filetime::set_file_mtime(&old_run, filetime::FileTime::from_system_time(old_mtime)).ok();
+
+    let old_trace = trace_tmp.path().join("wf-old.json");
+    fs::write(&old_trace, "{}").unwrap();
+    filetime::set_file_mtime(&old_trace, filetime::FileTime::from_system_time(old_mtime)).ok();
+
+    let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
+    let report = cleanup_expired_local(Some(run_tmp.path()), Some(trace_tmp.path()), &cfg)
+      .await
+      .unwrap();
+
+    assert_eq!(report.run_dirs_deleted, 1);
+    assert_eq!(report.trace_files_deleted, 1);
+    // No DB was ever touched — these must stay at their zero default,
+    // not silently claim work that was never attempted.
+    assert_eq!(report.runs_deleted, 0);
+    assert_eq!(report.events_deleted, 0);
+    assert_eq!(report.artifacts_deleted, 0);
+    assert_eq!(report.run_dirs_skipped_active, 0);
+    assert!(!old_run.exists());
+    assert!(!old_trace.exists());
+  }
+
+  #[tokio::test]
+  async fn cleanup_expired_local_handles_no_dirs_configured() {
+    let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
+    let report = cleanup_expired_local(None, None, &cfg).await.unwrap();
+    assert_eq!(report.run_dirs_deleted, 0);
+    assert_eq!(report.trace_files_deleted, 0);
   }
 
   #[test]

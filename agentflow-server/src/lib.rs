@@ -49,6 +49,7 @@ pub use auth::{
 };
 pub use cleanup::{
   CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
+  cleanup_expired_local,
 };
 pub use error::{ApiError, JsonReq};
 pub use events_stream::{

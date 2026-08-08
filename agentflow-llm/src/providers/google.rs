@@ -929,6 +929,48 @@ mod tests {
     assert!(streaming_endpoint.contains("streamGenerateContent"));
   }
 
+  /// V4.4 regression: every prior endpoint test constructed `GoogleProvider`
+  /// with `base_url: None` (the correct hardcoded fallback) or a synthetic
+  /// mock-server URL — never the real value shipped in
+  /// `templates/default_models.yml`. That shipped value used to be
+  /// `https://generativelanguage.googleapis.com/v1beta/openai` (the
+  /// OpenAI-compatibility endpoint prefix), which `get_model_endpoint`'s
+  /// native-format concatenation (`{base_url}/v1beta/models/{model}:{method}`)
+  /// turned into a malformed double-`/v1beta/` URL with a stray `/openai`
+  /// segment — invisible to every existing test because none of them
+  /// exercised the real config value. Parse the actual embedded YAML (the
+  /// same `include_str!` production code reads) and build a real
+  /// `GoogleProvider` from it, so a future re-introduction of this bug in
+  /// either the config value or the endpoint-building code fails here.
+  #[test]
+  fn model_endpoint_from_the_real_shipped_config_is_well_formed() {
+    let config = crate::config::model_config::LLMConfig::from_yaml(include_str!(
+      "../../templates/default_models.yml"
+    ))
+    .expect("default_models.yml parses");
+    let base_url = config
+      .get_provider("google")
+      .and_then(|p| p.base_url.clone())
+      .expect("google provider has a base_url in the shipped config");
+
+    let provider = GoogleProvider::new("test-key", Some(base_url)).unwrap();
+    let endpoint = provider.get_model_endpoint("gemini-1.5-pro", false);
+
+    assert_eq!(
+      endpoint,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent"
+    );
+    assert!(
+      !endpoint.contains("/v1beta/openai"),
+      "endpoint carries a stray OpenAI-compat path segment: {endpoint}"
+    );
+    assert_eq!(
+      endpoint.matches("/v1beta/").count(),
+      1,
+      "endpoint has a duplicated /v1beta/ segment: {endpoint}"
+    );
+  }
+
   #[test]
   fn build_request_body_serialises_tools() {
     let provider = GoogleProvider::new("test-key", None).unwrap();

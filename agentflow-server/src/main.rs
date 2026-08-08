@@ -161,22 +161,60 @@ async fn run_cleanup_once(
   config: &ServeConfig,
   dry_run: bool,
 ) -> Result<agentflow_server::CleanupReport, Box<dyn std::error::Error>> {
-  let db_url = config
-    .database_url
-    .as_ref()
-    .ok_or("DATABASE_URL is required for cleanup")?;
-  let db = Database::connect_and_migrate(db_url, 4).await?;
   let cleanup_cfg = CleanupConfig::for_profile(config.security_profile).with_dry_run(dry_run);
-  let run_root: Option<PathBuf> = config.run_dir.clone();
-  let trace_root: Option<PathBuf> = config.trace_dir.clone();
-  let report = cleanup_expired(
-    &db,
-    run_root.as_deref(),
-    trace_root.as_deref(),
-    &cleanup_cfg,
-  )
-  .await?;
-  Ok(report)
+  // V4.4: fall back to the same `~/.agentflow/{runs,traces}` defaults
+  // `agentflow workflow run`/`agentflow trace *` use when the CLI's own
+  // `--run-dir`/`--trace-dir`/env vars are unset — otherwise `agentflow
+  // cleanup` with no flags silently sweeps nothing on exactly the
+  // no-configuration setup it's meant to help (a long-running machine
+  // that only ever ran `agentflow workflow run` locally and never set
+  // AGENTFLOW_RUN_DIR).
+  let run_root: Option<PathBuf> = config
+    .run_dir
+    .clone()
+    .or_else(default_agentflow_subdir("runs"));
+  let trace_root: Option<PathBuf> = config
+    .trace_dir
+    .clone()
+    .or_else(default_agentflow_subdir("traces"));
+
+  match config.database_url.as_ref() {
+    Some(db_url) => {
+      let db = Database::connect_and_migrate(db_url, 4).await?;
+      let report = cleanup_expired(
+        &db,
+        run_root.as_deref(),
+        trace_root.as_deref(),
+        &cleanup_cfg,
+      )
+      .await?;
+      Ok(report)
+    }
+    // V4.4: no DATABASE_URL configured — this used to hard-fail before
+    // touching the filesystem at all, so a purely local CLI user (never
+    // ran `agentflow serve`, no Postgres anywhere) had no way to reap
+    // `~/.agentflow/runs`/`~/.agentflow/traces` short of standing up a
+    // database just to run a cleanup sweep. Fall back to the DB-free
+    // filesystem-only sweep instead — it skips the `runs`/`events`/
+    // `artifacts` table sweeps (nothing to skip when there's no DB) but
+    // still reaps stale run/trace directories by mtime.
+    None => {
+      let report = agentflow_server::cleanup_expired_local(
+        run_root.as_deref(),
+        trace_root.as_deref(),
+        &cleanup_cfg,
+      )
+      .await?;
+      Ok(report)
+    }
+  }
+}
+
+/// `Some(~/.agentflow/<tail>)`, or `None` when the home directory can't
+/// be resolved (matches the CLI's own `dirs::home_dir()`-based fallback
+/// convention for `--run-dir`/`--trace-dir`).
+fn default_agentflow_subdir(tail: &str) -> impl FnOnce() -> Option<PathBuf> + '_ {
+  move || dirs::home_dir().map(|home| home.join(".agentflow").join(tail))
 }
 
 fn resolve_bind() -> Result<SocketAddr, std::net::AddrParseError> {
