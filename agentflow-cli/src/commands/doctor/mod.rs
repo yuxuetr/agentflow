@@ -7,6 +7,8 @@
 //! top-level MCP probe that reads the CLI's `mcp.toml` config format — and
 //! re-exports the diagnostics surface under the original `doctor::*` paths.
 
+pub mod cli;
+
 use anyhow::Result;
 
 pub use agentflow_config::diagnostics::*;

@@ -3,6 +3,8 @@
 //! `agentflow-server` binary in `--cleanup` mode so the CLI does not
 //! need to link the server crate (cyclic dep with `agentflow-cli`).
 
+pub mod cli;
+
 use std::path::PathBuf;
 use std::process::Command;
 

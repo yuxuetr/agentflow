@@ -7,6 +7,7 @@
 //! - `inspect` — summarise a single session log.
 
 pub mod chat;
+pub mod cli;
 pub mod inspect;
 pub mod list;
 pub mod replay;

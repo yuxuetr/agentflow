@@ -1,3 +1,5 @@
+pub mod cli;
+
 use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
 use std::collections::BTreeSet;

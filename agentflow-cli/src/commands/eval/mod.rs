@@ -3,6 +3,8 @@
 //! See `docs/AGENT_EVAL_FORMAT.md` for the dataset format and the JSON
 //! envelope this command emits. Slice 3 of `P4.4`.
 
+pub mod cli;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -5,6 +5,7 @@
 //! `feature = "plugin"` so default builds stay free of the subprocess
 //! plugin runtime dependency footprint.
 
+pub mod cli;
 pub mod generate;
 pub mod inspect;
 pub mod install;

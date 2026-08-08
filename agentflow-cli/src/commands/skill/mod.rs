@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod cli;
 mod error_context;
 pub mod index;
 pub mod init;

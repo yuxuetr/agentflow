@@ -34,6 +34,8 @@
 //!   probe up front; we surface "tool not found" with the exact
 //!   apt-get / brew install line the operator needs.
 
+pub mod cli;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;

@@ -7,4 +7,5 @@
 //! retention-based prune; they're out of scope for this slice but
 //! can join the surface once the trait gains a matching method.
 
+pub mod cli;
 pub mod prune;

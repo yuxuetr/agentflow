@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+pub mod cli;
 pub mod replay;
 pub mod tui;
 

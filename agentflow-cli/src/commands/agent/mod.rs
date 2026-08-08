@@ -6,4 +6,5 @@
 //! shape) and from `trace` (workflow-scoped ExecutionTrace JSON) — see
 //! `docs/HARNESS_MODE.md` for the boundary.
 
+pub mod cli;
 pub mod replay;

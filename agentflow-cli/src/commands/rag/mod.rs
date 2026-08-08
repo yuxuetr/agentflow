@@ -1,4 +1,6 @@
 #[cfg(feature = "rag")]
+pub mod cli;
+#[cfg(feature = "rag")]
 pub mod collections;
 #[cfg(feature = "rag")]
 pub mod eval;

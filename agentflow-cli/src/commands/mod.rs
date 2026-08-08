@@ -5,6 +5,8 @@ pub mod cleanup;
 pub mod config;
 pub mod doctor;
 pub mod eval;
+#[cfg(any(not(feature = "plugin"), not(feature = "rag")))]
+pub mod feature_unavailable;
 pub mod harness;
 pub mod image;
 pub mod llm;

@@ -15,6 +15,8 @@
 //! `--check` runs the server's non-binding readiness diagnostic which
 //! does not require Postgres.
 
+pub mod cli;
+
 use std::path::PathBuf;
 use std::process::Command;
 

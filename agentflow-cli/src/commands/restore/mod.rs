@@ -21,6 +21,8 @@
 //! - In-Rust tar / pg_restore, for the same reasons `agentflow backup`
 //!   shells out rather than reimplementing either tool.
 
+pub mod cli;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
