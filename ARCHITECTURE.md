@@ -1,5 +1,11 @@
 # AgentFlow V2 Architecture
 
+> Historical reference: this document captured the early V2 refactor's
+> design intent (layered SDK/CLI/plugin vision) before most of the
+> workspace existed. For the current five-layer contract-kernel
+> architecture (L0–L4, `cargo xtask check-arch`), see `docs/ARCHITECTURE.md`
+> and `CLAUDE.md`; for current status, see `docs/CURRENT_STATUS.md`.
+
 This document outlines the core architectural principles and design of AgentFlow V2. It serves as the foundational guide for the refactoring and future development of the framework.
 
 ## 1. Core Philosophy: A Layered, Extensible Framework

@@ -1,5 +1,11 @@
 # AgentFlow V1 to V2 Migration Guide
 
+> Historical reference: this guide covers the long-completed V1→V2
+> migration (a single-crate prototype to the early layered workspace).
+> There is no V1 in the current codebase to migrate from. For the
+> current architecture, see `docs/ARCHITECTURE.md` and `CLAUDE.md`; for
+> current status, see `docs/CURRENT_STATUS.md`.
+
 This guide provides instructions for migrating your workflows and custom nodes from AgentFlow V1 to the new V2 architecture.
 
 ## Key Architectural Changes

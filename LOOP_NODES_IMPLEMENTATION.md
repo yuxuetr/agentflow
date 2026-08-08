@@ -1,5 +1,10 @@
 # 循环节点功能实现总结
 
+> Historical reference：本文档记录的是 Map/While 循环节点最初落地时的
+> 实现总结（早期版本快照）。Map/While 早已是 `agentflow-core` 的稳定
+> 生产能力，细节以当前源码与 `CLAUDE.md` 为准；当前项目状态见
+> `docs/CURRENT_STATUS.md`。
+
 ## 概述
 
 AgentFlow 现已完全支持两种循环节点类型：**Map 节点**（批量处理）和 **While 节点**（条件循环）。

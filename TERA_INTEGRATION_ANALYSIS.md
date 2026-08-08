@@ -1,5 +1,10 @@
 # Tera 模板引擎集成分析
 
+> Historical reference：本文档记录的是集成前的差距分析（"未使用 Tera，
+> 靠字符串替换"），Tera 早已完成集成并稳定运行至今。当前使用指南见
+> `TERA_TEMPLATE_GUIDE.md`；集成过程见 `TERA_INTEGRATION_COMPLETE.md`
+> （同为历史参考）；当前项目状态见 `docs/CURRENT_STATUS.md`。
+
 ## 当前状态
 
 - **Tera 依赖**: ✅ 已在 `agentflow-cli/Cargo.toml` 中添加 (v1.19)

@@ -1,8 +1,9 @@
 # Current Project Status
 
-Last updated: 2026-07-28 (R2.3: added the S/L track summaries below, which
-closed after this file's previous 2026-06-21 update and had gone
-unmentioned here since — see `TODOs.md`'s R2.3 entry)
+Last updated: 2026-08-08 (V4.1: refreshed the Active Work section, which
+had gone stale since the 2026-07-28 update — H / P-A / S / L / R / T / U
+have all since closed and archived, and the active segment is now **V**,
+the 2026-08-05 production-readiness remediation — see `TODOs.md`)
 
 This is the current authoritative status entrypoint for AgentFlow. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
@@ -107,16 +108,27 @@ contracts.
 
 The short-term execution queue remains in [`TODOs.md`](../TODOs.md). As of
 this update, the H (Harness follow-ups), P-A (contract kernel), S (sandbox
-hardening), and L (long-horizon/RAG) segments have all closed and been
-archived to `docs/archive/`. The active segment is **R (2026-07-28
-engineering-readiness remediation)** — findings from an independent audit
-that cross-checked this project's documentation against the actual code/CI
-state: a real `agentflow-rag` panic bug, a CI test-matrix coverage gap, a
-contract-kernel dependency leak `check-arch` wasn't catching, and several
-stale/self-contradicting docs (including this file's own staleness, which
-R2.3 fixes).
+hardening), L (long-horizon/RAG), R (2026-07-28 engineering-readiness),
+T (2026-07-29 architecture-evaluation), and U (2026-07-30 re-review)
+segments have all closed and been archived to `docs/archive/`. The active
+segment is **V (2026-08-05 production-readiness remediation)** — findings
+from six independent parallel sub-agents that each read one architecture
+layer (L0 contract kernel / L1 execution core / L2 capability adapters /
+L3 agent orchestration / L4 platform), cross-checked by the orchestrator
+running `cargo test/clippy/fmt/tree` locally. V0 (blocking correctness/
+security bugs), V1 (core execution/agent robustness), V2 (structured
+output, token streaming, generic HITL interrupt/resume, agent-loop
+checkpoint), and V3 (fail-closed defaults, execution-side sandbox
+enforcement, SSRF hardening, run admission control, supply-chain
+tightening, expr recursion-depth limit) have all closed. **V4
+(documentation and engineering hygiene)** is the remaining segment —
+regenerating this project's stale agent-facing docs (this update is part
+of that), splitting `agentflow-cli/src/main.rs`, wiring `cargo-audit` into
+CI, and a handful of completeness follow-ups (Semantic chunker factory
+exposure, `input_mapping` whitespace drift, a Gemini `base_url` fix, and a
+`~/.agentflow/runs` retention policy).
 
-The next active cleanup is documentation convergence:
+The ongoing documentation-convergence convention:
 
 - keep this file as the current status entrypoint;
 - keep `RoadMap.md` focused on future direction;
@@ -125,8 +137,12 @@ The next active cleanup is documentation convergence:
 
 ## Historical References
 
+- [`PROJECT_EVALUATION_2026-08-05.md`](PROJECT_EVALUATION_2026-08-05.md):
+  most recent evaluation (6 parallel layer sub-agents + orchestrator
+  cross-check), B+/A- composite, production-readiness C+; drove the
+  active V segment above.
 - [`PROJECT_EVALUATION_2026-05-19.md`](archive/PROJECT_EVALUATION_2026-05-19.md):
-  most recent module-by-module evaluation (A overall, v1.0.0-rc.1 candidate).
+  prior module-by-module evaluation (A overall, v1.0.0-rc.1 candidate).
 - [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):
   prior evaluation that informed the P6/P7/P-H/M segment additions.
 - [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):

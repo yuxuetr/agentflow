@@ -1,5 +1,9 @@
 # Tera 模板引擎集成完成报告
 
+> Historical reference：本报告记录的是 Tera 集成完成时（早期版本）的
+> 快照，其中的测试数量等细节早已被后续开发超越。当前使用指南见
+> `TERA_TEMPLATE_GUIDE.md`；当前项目状态见 `docs/CURRENT_STATUS.md`。
+
 ## 🎉 集成成功！
 
 Tera 模板引擎已成功集成到 AgentFlow，所有功能正常运行，测试全部通过。
