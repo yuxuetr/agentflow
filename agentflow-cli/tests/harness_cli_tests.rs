@@ -719,3 +719,116 @@ fn harness_run_without_skill_exercises_the_default_file_tool() {
     .success()
     .stdout(predicate::str::contains("file said: hi from disk"));
 }
+
+/// W0.6 regression: `harness run`'s hook layer used to build its own
+/// independent `AtomicU64::new(0)` seq counter instead of sharing the
+/// runtime's, so the same session JSONL log ended up with two series
+/// both starting at 0 — colliding `(session_id, seq)` pairs the moment
+/// both an approval event and a runtime event landed in one session.
+/// `--profile production` escalates the `http` tool's `POST` method
+/// (classified `NonIdempotent`) to require approval, so this run
+/// produces both `approval_requested`/`approval_decided` (hook layer)
+/// and `tool_call_requested`/`tool_call_completed` (runtime) events in
+/// the same log — exactly the cross-source scenario the pre-fix code
+/// never exercised (existing unit tests only covered a hand-rolled
+/// shared-seq case, not this real dual-emitter path). Targets a
+/// loopback URL the default `SandboxPolicy` denies by default, so the
+/// eventual `http` execute() fails fast with no real network call —
+/// irrelevant here since approval fires before that regardless of the
+/// outcome.
+#[test]
+fn harness_run_shares_one_seq_series_between_hook_and_runtime_events() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let tmp = TempDir::new().unwrap();
+  let run_dir = tmp.path().join("run");
+  let workspace = tmp.path().join("workspace");
+  fs::create_dir_all(&workspace).unwrap();
+  let session_id = "w0-6-seq-session";
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "harness",
+      "run",
+      "post something",
+      "--model",
+      "mock-model",
+      "--workspace",
+    ])
+    .arg(&workspace)
+    .arg("--run-dir")
+    .arg(&run_dir)
+    .arg("--session")
+    .arg(session_id)
+    .arg("--profile")
+    .arg("production")
+    .arg("--approve")
+    .arg("auto-allow")
+    .env("HOME", home.path())
+    .env(
+      "AGENTFLOW_MOCK_TOOL_CALLS",
+      json!([
+        [{ "id": "call_1", "name": "http", "arguments": { "url": "http://127.0.0.1:1/", "method": "POST", "body": "x" } }],
+        [],
+      ])
+      .to_string(),
+    )
+    .env(
+      "AGENTFLOW_MOCK_RESPONSES",
+      json!([
+        "(unused — native tool call)",
+        r#"{"thought":"done","answer":"done"}"#,
+      ])
+      .to_string(),
+    );
+
+  // The POST is denied by the sandbox policy (loopback network access
+  // is off by default) regardless of approval — irrelevant to this
+  // test, which only cares that both event sources fired into one
+  // shared, collision-free seq series.
+  let _ = cmd.assert();
+
+  let log_path = run_dir
+    .join("harness")
+    .join("sessions")
+    .join(format!("{session_id}.jsonl"));
+  let body = fs::read_to_string(&log_path)
+    .unwrap_or_else(|e| panic!("failed to read session log at {}: {e}", log_path.display()));
+  let mut seqs = Vec::new();
+  let mut kinds = Vec::new();
+  for line in body.lines().filter(|l| !l.trim().is_empty()) {
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    seqs.push(v["seq"].as_u64().expect("seq field present"));
+    kinds.push(v["kind"].as_str().unwrap().to_string());
+  }
+
+  assert!(
+    kinds.contains(&"approval_requested".to_string()),
+    "expected a hook-layer approval_requested event; kinds: {kinds:?}"
+  );
+  assert!(
+    kinds.contains(&"approval_decided".to_string()),
+    "expected a hook-layer approval_decided event; kinds: {kinds:?}"
+  );
+  assert!(
+    kinds.contains(&"tool_call_requested".to_string())
+      || kinds.contains(&"tool_call_completed".to_string()),
+    "expected a runtime-layer tool call event; kinds: {kinds:?}"
+  );
+
+  let mut deduped = seqs.clone();
+  deduped.sort_unstable();
+  deduped.dedup();
+  assert_eq!(
+    deduped.len(),
+    seqs.len(),
+    "hook and runtime events must share one seq series with no collisions; got {seqs:?} (kinds: {kinds:?})"
+  );
+  let mut sorted = seqs.clone();
+  sorted.sort_unstable();
+  assert_eq!(
+    seqs, sorted,
+    "seq must be monotonically increasing in file-write order"
+  );
+}

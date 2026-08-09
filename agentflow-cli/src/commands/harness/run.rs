@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result};
 
@@ -17,8 +16,8 @@ use agentflow_harness::{
   AgentsMdProvider, ApprovalProvider, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
   CliApprovalProvider, DeterministicContextSummarizer, HarnessEventSink, HarnessRunOptions,
   HarnessRunResult, HarnessRuntime, HarnessRuntimeKind, HookConfig, JsonlEventSink,
-  RoadmapMdProvider, SinkChain, StdoutEventSink, TodosMdProvider, WorkspaceLayoutProvider,
-  default_session_dir, wrap_registry,
+  RoadmapMdProvider, SeqAllocator, SinkChain, StdoutEventSink, TodosMdProvider,
+  WorkspaceLayoutProvider, default_session_dir, wrap_registry,
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::SqliteMemory;
@@ -164,6 +163,16 @@ pub async fn execute(
   // generate a fresh one.
   let session_id = session.unwrap_or_else(|| format!("session-{}", uuid::Uuid::new_v4().simple()));
 
+  // W0.6: one shared `SeqAllocator` for both the hook layer and the
+  // runtime — pre-fix each built its own independent counter (the hook
+  // config via a bare `AtomicU64::new(0)`, the runtime via its own
+  // default), so the same JSONL sink saw two series both starting at 0
+  // and collided on `(session_id, seq)`. `harness chat`'s
+  // `build_chat_runtime` and the server's `LiveHarnessExecutor` already
+  // share one allocator this way (Q1.7.1 / P-A3.4); this CLI path had
+  // slipped through that fix.
+  let seq_allocator = SeqAllocator::new();
+
   // ── F-A2-11: wrap the agent's tool registry with the approval-gate
   // pipeline if requested. Without this, `agentflow harness run` had
   // no approval flow at all (the bare ReActAgent went straight to the
@@ -176,7 +185,7 @@ pub async fn execute(
     }
     let hook_config = HookConfig::new(session_id.clone(), provider, hook_sinks)
       .with_profile(profile)
-      .with_seq_counter(Arc::new(AtomicU64::new(0)));
+      .with_seq_allocator(seq_allocator.clone());
 
     // Snapshot the agent's current registry into a fresh one so
     // `wrap_registry` can decorate each tool. Tools come back as the
@@ -203,7 +212,9 @@ pub async fn execute(
   } else {
     HarnessRuntime::new(agent.into_runtime_box())
   };
-  runtime = runtime.with_event_sink(jsonl_sink.clone());
+  runtime = runtime
+    .with_event_sink(jsonl_sink.clone())
+    .with_seq_allocator(seq_allocator.clone());
   if !no_default_context {
     runtime = runtime
       .with_context_provider(Arc::new(AgentsMdProvider::new()))
