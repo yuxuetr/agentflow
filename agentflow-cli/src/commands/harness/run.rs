@@ -645,6 +645,7 @@ fn format_stop_reason(reason: &agentflow_agents::runtime::AgentStopReason) -> St
     LoopDetected { tool, repeats } => format!("loop_detected({tool}x{repeats})"),
     Error { message } => format!("error({message})"),
     AwaitingInput { question } => format!("awaiting_input: {question}"),
+    ApprovalDenied { message } => format!("approval_denied({message})"),
   }
 }
 

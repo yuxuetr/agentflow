@@ -443,6 +443,17 @@ pub enum AgentStopReason {
   AwaitingInput {
     question: String,
   },
+  /// W0.5: a tool call was denied with `ApprovalOutcome::DenyAndStop`
+  /// (or the harness's stop-after-deny gate for a subsequent call) —
+  /// the approval layer wants the whole run to stop, not just that one
+  /// tool call skipped. Distinct from `AwaitingInput`: this is terminal,
+  /// not resumable with an answer. See
+  /// `agentflow_tool::ToolError::PolicyDeniedAndStop` and
+  /// `crate::harness::approval::ApprovalOutcome::DenyAndStop`'s doc
+  /// comment, which this variant finally makes true end to end.
+  ApprovalDenied {
+    message: String,
+  },
 }
 
 impl AgentStopReason {

@@ -2024,6 +2024,38 @@ impl ReActAgent {
     .await
     {
       RaceOutcome::Completed(Ok(out)) => out,
+      // W0.5: `PolicyDeniedAndStop` means the approval layer wants the
+      // whole run to stop, not just this call skipped — every other
+      // `Err` here degrades to an observation the LLM sees and can
+      // route around; this one must actually end the loop, otherwise
+      // `DenyAndStop` only ever stalls into `MaxSteps`/`MaxToolCalls`
+      // once every remaining tool call in the session gets the same
+      // denial (see the stop-after-deny gate in
+      // `agentflow-harness::hooks_runtime`).
+      RaceOutcome::Completed(Err(agentflow_tool::ToolError::PolicyDeniedAndStop { message })) => {
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        emit_and_push!(
+          self.live_sink,
+          events,
+          AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.to_string(),
+            is_error: true,
+            duration_ms,
+            source: tool_source.clone(),
+            permissions: tool_permissions.to_vec(),
+            timestamp: Utc::now(),
+          }
+        );
+        return Ok(ToolExecOutcome::Stop(Self::stopped_result(
+          &self.session_id,
+          None,
+          AgentStopReason::ApprovalDenied { message },
+          std::mem::take(steps),
+          std::mem::take(events),
+        )));
+      }
       RaceOutcome::Completed(Err(e)) => {
         warn!(tool = %tool, error = %e, "Tool execution failed");
         agentflow_tool::ToolOutput::error(e.to_string())
@@ -2908,6 +2940,13 @@ impl ReActAgent {
           "delegated sub-agent asked a question but delegation does not support HITL: {question}"
         ),
       }),
+      // W0.5: a delegated sub-agent hit a DenyAndStop tool denial —
+      // surface it to the parent the same way as any other terminal
+      // runtime failure.
+      AgentStopReason::ApprovalDenied { message } => Err(ReActError::ToolError {
+        tool: "runtime".to_string(),
+        message,
+      }),
     }
   }
 
@@ -3433,6 +3472,45 @@ impl ReActAgent {
       };
 
       if let Some(results) = result_set {
+        // W0.5: a `DenyAndStop` denial can land anywhere in the
+        // concurrent group — scan for it before committing outputs, so
+        // the whole batch stops instead of the other calls' results
+        // quietly winning the race. Only the message is cloned (not
+        // the non-`Clone` `ToolError`), so `results` is still movable
+        // for the normal-path loop below.
+        let stop_message: Option<String> = results.iter().find_map(|(_, result, _)| match result {
+          Err(agentflow_tool::ToolError::PolicyDeniedAndStop { message }) => Some(message.clone()),
+          _ => None,
+        });
+        if let Some(message) = stop_message {
+          // Emit each call's real outcome/duration (not a synthetic
+          // 0ms like the timeout/cancel helpers use) so the trace
+          // still reflects what actually happened concurrently.
+          for (i, result, dur) in &results {
+            emit_and_push!(
+              self.live_sink,
+              events,
+              AgentEvent::ToolCallCompleted {
+                session_id: self.session_id.clone(),
+                step_index: prepared[*i].call_step_idx,
+                tool: prepared[*i].tool.clone(),
+                is_error: result.is_err(),
+                duration_ms: *dur,
+                source: prepared[*i].source.clone(),
+                permissions: prepared[*i].permissions.clone(),
+                timestamp: Utc::now(),
+              }
+            );
+          }
+          return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::ApprovalDenied { message },
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
+        }
+
         for (i, result, dur) in results {
           let output = match result {
             Ok(out) => out,
@@ -3486,6 +3564,31 @@ impl ReActAgent {
       let cancel = cancellation_token.as_ref().map(|token| token.cancelled());
       let output = match race_with_limits(call_fut, timeout, cancel).await {
         RaceOutcome::Completed(Ok(out)) => out,
+        // W0.5: same stop semantics as the single-call path — see the
+        // comment on the equivalent arm in `execute_tool_with_limits`.
+        RaceOutcome::Completed(Err(agentflow_tool::ToolError::PolicyDeniedAndStop { message })) => {
+          emit_and_push!(
+            self.live_sink,
+            events,
+            AgentEvent::ToolCallCompleted {
+              session_id: self.session_id.clone(),
+              step_index: prepared[i].call_step_idx,
+              tool: prepared[i].tool.clone(),
+              is_error: true,
+              duration_ms: started.elapsed().as_millis() as u64,
+              source: prepared[i].source.clone(),
+              permissions: prepared[i].permissions.clone(),
+              timestamp: Utc::now(),
+            }
+          );
+          return Ok(BatchOutcome::Stop(Box::new(Self::stopped_result(
+            &self.session_id,
+            None,
+            AgentStopReason::ApprovalDenied { message },
+            std::mem::take(steps),
+            std::mem::take(events),
+          ))));
+        }
         RaceOutcome::Completed(Err(e)) => {
           warn!(tool = %prepared[i].tool, error = %e, "tool execution failed");
           agentflow_tool::ToolOutput::error(e.to_string())
@@ -5633,6 +5736,93 @@ providers:
       .filter(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
       .count();
     assert_eq!(tool_call_count, 1, "expected exactly one ToolCall step");
+
+    // SAFETY: cleanup of the dedicated mock env vars after the test read.
+    unsafe {
+      std::env::remove_var("AGENTFLOW_MOCK_TOOL_CALLS");
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+  }
+
+  /// W0.5 regression: a tool call denied with `ToolError::PolicyDeniedAndStop`
+  /// (what the harness hook layer emits for `ApprovalOutcome::DenyAndStop`
+  /// and for every subsequent call once that gate has tripped) must stop
+  /// the run immediately with `AgentStopReason::ApprovalDenied` — not get
+  /// folded into an `[ERROR] ...` observation the LLM sees and keeps
+  /// looping past. Only one `AGENTFLOW_MOCK_TOOL_CALLS`/`AGENTFLOW_MOCK_RESPONSES`
+  /// entry is queued; if the loop wrongly continued to a second turn, the
+  /// mock provider would have nothing left to return and the test would
+  /// fail on that empty-queue panic instead of the stop_reason assertion —
+  /// proof the fix stops after exactly one turn, not eventually via
+  /// `MaxSteps`/`MaxToolCalls`.
+  #[tokio::test]
+  async fn policy_denied_and_stop_ends_the_run_immediately() {
+    struct DenyAndStopTool;
+
+    #[async_trait]
+    impl Tool for DenyAndStopTool {
+      fn name(&self) -> &str {
+        "guarded"
+      }
+      fn description(&self) -> &str {
+        "A tool the approval layer refuses with stop semantics"
+      }
+      fn parameters_schema(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+      }
+      async fn execute(&self, _params: Value) -> Result<agentflow_tool::ToolOutput, ToolError> {
+        Err(ToolError::PolicyDeniedAndStop {
+          message: "previous approval requested deny-and-stop; aborting further tool calls"
+            .to_string(),
+        })
+      }
+    }
+
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-deny-and-stop-{}", uuid::Uuid::new_v4());
+    // SAFETY: LLM_TEST_LOCK serializes mutation of process-wide mock env vars.
+    unsafe {
+      std::env::set_var(
+        "AGENTFLOW_MOCK_TOOL_CALLS",
+        serde_json::to_string(&vec![vec![serde_json::json!({
+          "id": "call_0",
+          "name": "guarded",
+          "arguments": {}
+        })]])
+        .unwrap(),
+      );
+      std::env::set_var(
+        "AGENTFLOW_MOCK_RESPONSES",
+        serde_json::to_string(&vec!["(unused — native tool call)"]).unwrap(),
+      );
+    }
+    init_mock_model(&model).await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(DenyAndStopTool));
+    let mut agent = ReActAgent::new(
+      ReActConfig::new(&model).with_max_iterations(4),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "session-deny-and-stop",
+        "do the guarded thing",
+        &model,
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::ApprovalDenied {
+        message: "previous approval requested deny-and-stop; aborting further tool calls"
+          .to_string(),
+      }
+    );
+    assert!(result.answer.is_none());
 
     // SAFETY: cleanup of the dedicated mock env vars after the test read.
     unsafe {

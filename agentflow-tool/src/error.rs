@@ -24,6 +24,16 @@ pub enum ToolError {
   #[error("Tool policy denied: {message}")]
   PolicyDenied { message: String },
 
+  /// W0.5: the call was denied *and* the approval layer wants the
+  /// entire run to stop, not just this call skipped — distinct from
+  /// [`Self::PolicyDenied`] so agent runtimes can react structurally
+  /// (stop the loop) instead of treating every denial the same way.
+  /// Emitted by the harness hook layer for `ApprovalOutcome::DenyAndStop`
+  /// and for subsequent calls once that gate has tripped. See
+  /// `agentflow_agent_spi::runtime::AgentStopReason::ApprovalDenied`.
+  #[error("Tool policy denied (stop requested): {message}")]
+  PolicyDeniedAndStop { message: String },
+
   #[error("Sandbox violation: {message}")]
   SandboxViolation { message: String },
 

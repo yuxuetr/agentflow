@@ -339,6 +339,10 @@ impl Tool for HookedTool {
     let result = match proceed {
       Proceed::Allow => self.inner.execute(params).await,
       Proceed::Deny { reason } => Err(ToolError::PolicyDenied { message: reason }),
+      // W0.5: structurally distinct from `Deny` so `ReActAgent` can stop
+      // the whole run instead of treating this like any other failed
+      // tool call — see `ApprovalOutcome::DenyAndStop`'s doc comment.
+      Proceed::DenyAndStop { reason } => Err(ToolError::PolicyDeniedAndStop { message: reason }),
     };
     let duration_ms = tool_started.elapsed().as_millis() as u64;
 
@@ -363,7 +367,15 @@ impl Tool for HookedTool {
 #[derive(Debug, Clone)]
 enum Proceed {
   Allow,
-  Deny { reason: String },
+  Deny {
+    reason: String,
+  },
+  /// W0.5: `Deny` that also carries "stop the agent loop" semantics —
+  /// produced by a fresh `ApprovalOutcome::DenyAndStop` decision and by
+  /// the stop-after-deny gate for every subsequent call in the session.
+  DenyAndStop {
+    reason: String,
+  },
 }
 
 impl HookedTool {
@@ -509,7 +521,10 @@ impl HookedTool {
         self
           .emit_stop_after_deny_gate(pending, risk, &stop_reason)
           .await?;
-        return Ok(Proceed::Deny {
+        // W0.5: this gate exists *because* an earlier call tripped
+        // `DenyAndStop` — every call it intercepts must carry the same
+        // stop semantics, not the plain `Deny` this used to return.
+        return Ok(Proceed::DenyAndStop {
           reason: stop_reason,
         });
       }
@@ -711,7 +726,7 @@ fn decide_from_outcome(outcome: ApprovalOutcome) -> Proceed {
     ApprovalOutcome::Deny => Proceed::Deny {
       reason: "approval denied by approver".into(),
     },
-    ApprovalOutcome::DenyAndStop => Proceed::Deny {
+    ApprovalOutcome::DenyAndStop => Proceed::DenyAndStop {
       reason: "approval denied with stop request".into(),
     },
   }
@@ -1174,9 +1189,13 @@ mod tests {
       .with_pre_hook(Arc::new(RequireApprovalHook));
     let registry = wrap_registry(registry, config);
     let first = registry.execute("probe", serde_json::json!({})).await;
-    assert!(matches!(first, Err(ToolError::PolicyDenied { .. })));
+    // W0.5: `DenyAndStop` now surfaces as the structurally distinct
+    // `PolicyDeniedAndStop`, not `PolicyDenied` — that's what lets
+    // `ReActAgent` actually stop the run instead of treating it like
+    // any other failed tool call.
+    assert!(matches!(first, Err(ToolError::PolicyDeniedAndStop { .. })));
     let second = registry.execute("probe", serde_json::json!({})).await;
-    assert!(matches!(second, Err(ToolError::PolicyDenied { .. })));
+    assert!(matches!(second, Err(ToolError::PolicyDeniedAndStop { .. })));
     assert_eq!(*counter.lock().unwrap(), 0);
     // First call → real provider ApprovalRequested + ApprovalDecided.
     // Second call → Q3.10.2 synthetic `stop-after-deny-*` gate pair

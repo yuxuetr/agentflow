@@ -1393,6 +1393,13 @@ fn stopped_payload_from(reason: &AgentStopReason, answer: Option<&str>) -> Stopp
       final_answer: None,
       error: None,
     },
+    // W0.5: finally makes `StopReason::ApprovalDenied` a live variant —
+    // previously nothing in the runtime ever produced it.
+    AgentStopReason::ApprovalDenied { message } => StoppedPayload {
+      reason: StopReason::ApprovalDenied,
+      final_answer: None,
+      error: Some(message.clone()),
+    },
   }
 }
 
@@ -2373,6 +2380,38 @@ mod tests {
       .expect("stopped event present");
     assert_eq!(stopped.reason, StopReason::LimitReached);
     assert!(stopped.error.as_deref().unwrap().contains("max_steps=4"));
+  }
+
+  /// W0.5: `AgentStopReason::ApprovalDenied` — previously the runtime had
+  /// no way to ever produce this, and `StopReason::ApprovalDenied` was
+  /// wired into `tracing_bridge` mapping tables but never actually
+  /// reachable in production.
+  #[tokio::test]
+  async fn runtime_maps_approval_denied_stop_reason_to_envelope() {
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut inner = make_runtime("ignored", captured.clone());
+    inner.stop_reason = AgentStopReason::ApprovalDenied {
+      message: "previous approval requested deny-and-stop; aborting further tool calls".into(),
+    };
+    use crate::persistence::InMemoryEventSink;
+    let sink = Arc::new(InMemoryEventSink::new());
+    let mut runtime = HarnessRuntime::new(Box::new(inner))
+      .with_event_sink(sink.clone() as Arc<dyn HarnessEventSink>);
+    let dir = tempfile::tempdir().unwrap();
+    let _ = runtime
+      .run(HarnessRunOptions::new("test", dir.path(), "mock"))
+      .await
+      .unwrap();
+    let events = sink.snapshot().await;
+    let stopped = events
+      .iter()
+      .find_map(|event| match &event.body {
+        HarnessEventBody::Stopped(payload) => Some(payload),
+        _ => None,
+      })
+      .expect("stopped event present");
+    assert_eq!(stopped.reason, StopReason::ApprovalDenied);
+    assert!(stopped.error.as_deref().unwrap().contains("deny-and-stop"));
   }
 
   #[tokio::test]

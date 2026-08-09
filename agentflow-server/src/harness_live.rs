@@ -772,6 +772,12 @@ async fn finish_live_result(
     ),
     // Handled by the early return above.
     AgentStopReason::AwaitingInput { .. } => unreachable!("AwaitingInput handled above"),
+    // W0.5: DenyAndStop's terminal state.
+    AgentStopReason::ApprovalDenied { message } => (
+      HarnessSessionStatus::Failed,
+      None,
+      Some(format!("approval_denied:{message}")),
+    ),
   };
   ctx
     .repos

@@ -488,6 +488,7 @@ fn stop_reason_label(reason: &AgentStopReason) -> String {
     AgentStopReason::LoopDetected { .. } => "loop_detected".to_string(),
     AgentStopReason::Error { .. } => "error".to_string(),
     AgentStopReason::AwaitingInput { .. } => "awaiting_input".to_string(),
+    AgentStopReason::ApprovalDenied { .. } => "approval_denied".to_string(),
   }
 }
 

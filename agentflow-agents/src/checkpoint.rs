@@ -55,6 +55,11 @@ pub(crate) fn should_clear_checkpoint(reason: &AgentStopReason) -> bool {
     // checkpoint's `pending_question` is exactly what a resume-with-
     // answer call needs.
     AgentStopReason::AwaitingInput { .. } => false,
+    // W0.5: a deliberate policy decision, not a pause — resuming this
+    // checkpoint would either replay straight into the same denial
+    // (session/run-scoped cache) or silently bypass what the approver
+    // explicitly refused. Same bucket as `Error`: definitively over.
+    AgentStopReason::ApprovalDenied { .. } => true,
   }
 }
 
