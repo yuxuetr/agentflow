@@ -228,6 +228,11 @@ pub struct CreateHarnessSessionRequest {
   /// cost-based stop condition.
   #[serde(default)]
   pub cost_limit_usd: Option<f64>,
+  /// W0.1: maximum agent-loop steps (`RuntimeLimits::max_steps`). Unset
+  /// falls back to a conservative server default; either way the server
+  /// still clamps to its own ceiling — see `harness_live::resolve_max_steps`.
+  #[serde(default)]
+  pub max_steps: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,6 +324,8 @@ pub struct HarnessSessionContext {
   pub skill_name: Option<String>,
   /// U1.3: see `CreateHarnessSessionRequest::cost_limit_usd`.
   pub cost_limit_usd: Option<f64>,
+  /// W0.1: see `CreateHarnessSessionRequest::max_steps`.
+  pub max_steps: Option<usize>,
   pub repos: Repositories,
   /// Forwards events to live SSE subscribers. Persisting to the DB still
   /// has to happen — use [`publish_through`] for the standard path.
@@ -508,6 +515,7 @@ pub async fn submit_harness_session(
         model,
         skill_name: req.skill_name,
         cost_limit_usd: req.cost_limit_usd,
+        max_steps: req.max_steps,
         repos,
         broker,
         initial_seq: 0,
@@ -833,6 +841,9 @@ pub async fn resume_harness_session(
         // it today; persisting + re-applying it across resume is a
         // follow-up if operators need it.
         cost_limit_usd: None,
+        // W0.1: same "not a persisted column" caveat as cost_limit_usd
+        // above — a resume falls back to the server default step cap.
+        max_steps: None,
         repos,
         broker,
         initial_seq,
@@ -980,6 +991,8 @@ pub async fn answer_interrupt(
     model: session.model.clone(),
     skill_name: session.skill_name.clone(),
     cost_limit_usd: None,
+    // W0.1: not a persisted column — see the `reset_for_resume` site above.
+    max_steps: None,
     repos,
     broker,
     initial_seq,

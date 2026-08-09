@@ -32,7 +32,10 @@
 //! ```
 
 pub mod builtin;
+pub mod defaults;
 pub mod sandbox;
+
+pub use defaults::default_governed_registry;
 
 pub use agentflow_tool::{
   AuthDefaults, CorsDefaults, CorsMode, MarketplaceInstallDefaults, PluginExecutionDefaults,

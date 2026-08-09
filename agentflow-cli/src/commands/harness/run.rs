@@ -540,12 +540,20 @@ pub(super) async fn build_agent(
         memory_db.display()
       )
     })?;
+    // W0.1: no `--skill` means no manifest to build tools from, but an
+    // always-empty registry leaves the approval/hook pipeline with
+    // nothing to ever govern. Default to a safe registry instead:
+    // read-only file access scoped to `--workspace`, plus outbound HTTP.
+    let default_tools = Arc::new(
+      agentflow_tools::default_governed_registry(workspace)
+        .with_context(|| "failed to build default tool registry")?,
+    );
     let agent = match runtime_kind {
       HarnessRuntimeKind::PlanExecute => {
         BuiltHarnessAgent::PlanExecute(Box::new(PlanExecuteAgent::new(
           PlanExecuteConfig::new(&model),
           Box::new(memory),
-          Arc::new(ToolRegistry::new()),
+          default_tools,
         )))
       }
       // V2.3: `handoff`/`blackboard`/`debate`/`flow` have no
@@ -556,7 +564,7 @@ pub(super) async fn build_agent(
       _ => BuiltHarnessAgent::React(Box::new(ReActAgent::new(
         ReActConfig::new(&model),
         Box::new(memory),
-        Arc::new(ToolRegistry::new()),
+        default_tools,
       ))),
     };
     Ok((agent, model, None))

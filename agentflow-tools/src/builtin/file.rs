@@ -9,11 +9,26 @@ use crate::{Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput, sandbox:
 /// Read, write, and list filesystem entries with sandbox path enforcement.
 pub struct FileTool {
   policy: Arc<SandboxPolicy>,
+  read_only: bool,
 }
 
 impl FileTool {
   pub fn new(policy: Arc<SandboxPolicy>) -> Self {
-    Self { policy }
+    Self {
+      policy,
+      read_only: false,
+    }
+  }
+
+  /// Same tool, but the `write` operation is rejected with
+  /// `ToolError::PolicyDenied` before any filesystem access. Used by
+  /// callers (server harness sessions, CLI `harness run --model` without
+  /// `--skill`) that want a safe default tool without granting write access.
+  pub fn read_only(policy: Arc<SandboxPolicy>) -> Self {
+    Self {
+      policy,
+      read_only: true,
+    }
   }
 
   pub fn default_policy() -> Self {
@@ -28,18 +43,29 @@ impl Tool for FileTool {
   }
 
   fn description(&self) -> &str {
-    "Read or write files and list directory contents on the local filesystem. \
-        Operations: 'read' returns file contents, 'write' saves content to a path, \
-        'list' shows entries in a directory."
+    if self.read_only {
+      "Read files and list directory contents on the local filesystem (read-only: \
+          'write' is not permitted). Operations: 'read' returns file contents, \
+          'list' shows entries in a directory."
+    } else {
+      "Read or write files and list directory contents on the local filesystem. \
+          Operations: 'read' returns file contents, 'write' saves content to a path, \
+          'list' shows entries in a directory."
+    }
   }
 
   fn parameters_schema(&self) -> Value {
+    let operations: &[&str] = if self.read_only {
+      &["read", "list"]
+    } else {
+      &["read", "write", "list"]
+    };
     json!({
         "type": "object",
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["read", "write", "list"],
+                "enum": operations,
                 "description": "Filesystem operation to perform"
             },
             "path": {
@@ -114,6 +140,12 @@ impl Tool for FileTool {
       }
 
       "write" => {
+        if self.read_only {
+          return Err(ToolError::PolicyDenied {
+            message: "this file tool instance is read-only; 'write' is not permitted".to_string(),
+          });
+        }
+
         if let Some(parent) = path.parent()
           && !parent.as_os_str().is_empty()
           && let Some(reason) = self.policy.path_denial_reason(parent)

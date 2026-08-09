@@ -138,11 +138,13 @@ fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
 /// the test suite doesn't pay for provider config when running the stub
 /// path.
 ///
-/// Tool registry is currently empty: tools come in via subsequent slices
-/// (skill loading, MCP capability, plugin spawn). The approval pipeline
-/// is still wired (`wrap_registry` with `ServerApprovalProvider`) so the
-/// surface area is ready once tools land — confirmed by the
-/// `harness_routes` integration tests that drive the registry directly.
+/// W0.1: every session gets a real, governed tool registry — read-only
+/// file access scoped to `workspace_root` plus outbound HTTP (see
+/// `build_default_tool_registry`) — wrapped through `wrap_registry` with
+/// `ServerApprovalProvider` so the approval pipeline has something to
+/// actually govern. Skill-backed tool loading (`skill_name` beyond this
+/// default) and MCP/plugin capability come in via subsequent slices
+/// (W4.1's tool distribution contract).
 #[derive(Clone)]
 pub struct LiveHarnessExecutor {
   approval_registry: PendingApprovalRegistry,
@@ -332,6 +334,8 @@ struct RunInputs {
   skill_name: Option<String>,
   /// U1.3: see `HarnessSessionContext::cost_limit_usd`.
   cost_limit_usd: Option<f64>,
+  /// W0.1: see `HarnessSessionContext::max_steps`.
+  max_steps: Option<usize>,
   repos: Repositories,
   broker: HarnessEventBroker,
   initial_seq: u64,
@@ -347,10 +351,44 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
     model: ctx.model.clone(),
     skill_name: ctx.skill_name.clone(),
     cost_limit_usd: ctx.cost_limit_usd,
+    max_steps: ctx.max_steps,
     repos: ctx.repos.clone(),
     broker: ctx.broker.clone(),
     initial_seq: ctx.initial_seq,
   }
+}
+
+/// W0.1: default step cap when the request doesn't specify one — matches
+/// `RuntimeLimits::react_defaults()`.
+const DEFAULT_MAX_STEPS: usize = 15;
+
+/// W0.1: hard server-side ceiling regardless of what the request asks
+/// for, so a careless or malicious caller can't run an unbounded loop.
+const MAX_STEPS_CEILING: usize = 50;
+
+fn resolve_max_steps(requested: Option<usize>) -> usize {
+  requested
+    .unwrap_or(DEFAULT_MAX_STEPS)
+    .min(MAX_STEPS_CEILING)
+}
+
+/// W0.1: build the tool registry a harness session governs. Real tools —
+/// not an always-empty `ToolRegistry::new()` — are what makes the
+/// hook/approval pipeline meaningful: without them `wrap_registry` has
+/// nothing to wrap and the session can never produce an
+/// `approval_requested` event, no matter how the profile is configured.
+///
+/// Skill-backed tool loading (`inputs.skill_name`) is not wired yet — the
+/// full form (tool distribution contract, W4.1) is tracked separately.
+/// Until then every session, skill-named or not, gets this same safe
+/// default: read-only file access scoped to the workspace root, plus
+/// outbound HTTP.
+fn build_default_tool_registry(workspace_root: &str) -> Result<ToolRegistry, LiveExecutorError> {
+  agentflow_tools::default_governed_registry(std::path::Path::new(workspace_root)).map_err(|err| {
+    LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+      "failed to build default tool registry: {err}"
+    )))
+  })
 }
 
 /// Runs `HarnessRuntime::run` on a dedicated current-thread Tokio
@@ -468,9 +506,10 @@ async fn run_harness_inner(
     .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
-  let registry = wrap_registry(ToolRegistry::new(), hook_config);
+  let tools = build_default_tool_registry(&inputs.workspace_root)?;
+  let registry = wrap_registry(tools, hook_config);
 
-  let react_config = ReActConfig::new(&inputs.model).with_max_iterations(4);
+  let react_config = ReActConfig::new(&inputs.model);
   // Conversation memory: persistent (keyed by session_id) when the
   // operator configures it, so `:resume` continues prior turns across
   // restarts; otherwise the in-process default (back-compat).
@@ -500,6 +539,7 @@ async fn run_harness_inner(
   .with_session_id(session_id_string)
   .with_loop_checkpointer(checkpointer)
   .with_limits(RuntimeLimits {
+    max_steps: Some(resolve_max_steps(inputs.max_steps)),
     cost_limit_usd: inputs.cost_limit_usd,
     ..Default::default()
   });
@@ -572,7 +612,8 @@ async fn run_harness_resume_inner(
     .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
-  let registry = Arc::new(wrap_registry(ToolRegistry::new(), hook_config));
+  let tools = build_default_tool_registry(&inputs.workspace_root)?;
+  let registry = Arc::new(wrap_registry(tools, hook_config));
   let memory = build_harness_memory().await?;
 
   let checkpointer: Arc<dyn AgentLoopCheckpointer> = Arc::new(DbLoopCheckpointer::new(
@@ -581,7 +622,7 @@ async fn run_harness_resume_inner(
 
   let inner_agent: Box<dyn AgentRuntime> = match checkpoint.runtime_kind {
     LoopRuntimeKind::React => {
-      let react_config = ReActConfig::new(&inputs.model).with_max_iterations(4);
+      let react_config = ReActConfig::new(&inputs.model);
       Box::new(ReActAgent::new(react_config, memory, registry))
     }
     LoopRuntimeKind::PlanExecute => {
@@ -601,6 +642,7 @@ async fn run_harness_resume_inner(
   )
   .with_loop_checkpointer(checkpointer)
   .with_limits(RuntimeLimits {
+    max_steps: Some(resolve_max_steps(inputs.max_steps)),
     cost_limit_usd: inputs.cost_limit_usd,
     ..Default::default()
   });
@@ -874,5 +916,30 @@ mod tests {
     };
     assert_eq!(harness_event_kind(&started.body), "session_started");
     assert_eq!(harness_event_kind(&stopped.body), "stopped");
+  }
+
+  #[test]
+  fn resolve_max_steps_defaults_and_clamps() {
+    assert_eq!(resolve_max_steps(None), DEFAULT_MAX_STEPS);
+    assert_eq!(resolve_max_steps(Some(5)), 5);
+    assert_eq!(resolve_max_steps(Some(10_000)), MAX_STEPS_CEILING);
+  }
+
+  /// W0.1: the default (no-`--skill`) registry must actually contain
+  /// governed tools — this is the regression test for the bug where
+  /// every harness session (server or CLI) started from an always-empty
+  /// `ToolRegistry::new()`, leaving the approval/hook pipeline nothing
+  /// to ever govern.
+  #[test]
+  fn build_default_tool_registry_contains_file_and_http() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = build_default_tool_registry(&tmp.path().display().to_string()).unwrap();
+    let names: Vec<String> = registry
+      .list()
+      .iter()
+      .map(|tool| tool.name().to_string())
+      .collect();
+    assert!(names.contains(&"file".to_string()), "names: {names:?}");
+    assert!(names.contains(&"http".to_string()), "names: {names:?}");
   }
 }

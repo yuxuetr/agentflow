@@ -664,3 +664,58 @@ fn harness_run_prints_question_when_non_interactive_then_resume_loop_answer_cont
     .success()
     .stdout(predicate::str::contains("Editing src/main.rs. Done!"));
 }
+
+/// W0.1 regression: `harness run --model` (no `--skill`) used to build the
+/// agent around an always-empty `ToolRegistry::new()`, so any tool call
+/// the model attempted would fail with "tool not found" regardless of
+/// what was on disk. Drives a real `file` `read` tool call through the
+/// default registry and asserts the content it read back reaches the
+/// final answer — proof the registry is populated, not empty.
+#[test]
+fn harness_run_without_skill_exercises_the_default_file_tool() {
+  let home = TempDir::new().unwrap();
+  write_mock_models_config(home.path());
+  let tmp = TempDir::new().unwrap();
+  let run_dir = tmp.path().join("run");
+  let workspace = tmp.path().join("workspace");
+  fs::create_dir_all(&workspace).unwrap();
+  fs::write(workspace.join("hello.txt"), "hi from disk").unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "harness",
+      "run",
+      "read hello.txt",
+      "--model",
+      "mock-model",
+      "--workspace",
+    ])
+    .arg(&workspace)
+    .arg("--run-dir")
+    .arg(&run_dir)
+    .arg("--approve")
+    .arg("none")
+    .env("HOME", home.path())
+    .env(
+      "AGENTFLOW_MOCK_TOOL_CALLS",
+      json!([
+        [{ "id": "call_1", "name": "file", "arguments": { "operation": "read", "path": workspace.join("hello.txt") } }],
+        [],
+      ])
+      .to_string(),
+    )
+    .env(
+      "AGENTFLOW_MOCK_RESPONSES",
+      json!([
+        "(unused — native tool call)",
+        r#"{"thought":"done","answer":"file said: hi from disk"}"#,
+      ])
+      .to_string(),
+    );
+
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("file said: hi from disk"));
+}

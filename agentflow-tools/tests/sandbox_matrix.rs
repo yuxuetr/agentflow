@@ -194,6 +194,42 @@ async fn file_tool_can_explicitly_allow_hardlink_reads() {
 }
 
 #[tokio::test]
+async fn file_tool_read_only_rejects_write_but_allows_read_and_list() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  std::fs::create_dir_all(&allowed).unwrap();
+  let existing = allowed.join("existing.txt");
+  std::fs::write(&existing, "hello").unwrap();
+
+  let tool = FileTool::read_only(policy_for(&allowed));
+
+  let error = tool
+    .execute(json!({"operation": "write", "path": allowed.join("new.txt"), "content": "x"}))
+    .await
+    .unwrap_err_or_else(|| "write should be denied on a read-only file tool".to_string());
+  assert!(
+    matches!(error, ToolError::PolicyDenied { .. }),
+    "expected PolicyDenied, got {error:?}"
+  );
+  assert!(
+    !allowed.join("new.txt").exists(),
+    "read-only file tool must not touch the filesystem on a denied write"
+  );
+
+  let output = tool
+    .execute(json!({"operation": "read", "path": existing}))
+    .await
+    .unwrap();
+  assert_eq!(output.content, "hello");
+
+  let listing = tool
+    .execute(json!({"operation": "list", "path": allowed}))
+    .await
+    .unwrap();
+  assert!(listing.content.contains("existing.txt"));
+}
+
+#[tokio::test]
 async fn shell_tool_blocks_unallowed_command_before_spawn() {
   let tool = ShellTool::default_policy();
   let error = tool
