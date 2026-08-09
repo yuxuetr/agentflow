@@ -458,6 +458,382 @@ _New entries go here. Will roll into the next tag (likely
   loop / harness / dynamic workflow) converging on the contract kernel, replacing
   the pre-kernel "two first-class paths" framing.
 
+### Fixed
+
+- **ReAct hot path no longer panics on multi-byte UTF-8 observations.**
+  `agentflow-agents`'s ReAct loop truncated tool observations and
+  memory-summary content by byte offset (`&observation[..observation.len().min(200)]`,
+  `content.truncate(160)`), which panics whenever the byte offset lands
+  mid-codepoint — trivially triggered by any non-ASCII tool output (e.g.
+  CJK text) long enough to cross the 200-byte mark. A new
+  `truncate_str_at_char_boundary` helper walks back to the nearest valid
+  `char` boundary before truncating; all three call sites in
+  `agentflow-agents/src/react/agent.rs` now go through it.
+
+- **Benign `run_if`-skipped nodes no longer fail the whole workflow.**
+  Both the serial and concurrent `Flow` execution paths determined
+  overall workflow success with `any(Result::is_err)`, which counts a
+  skipped node (`Err(AgentFlowError::NodeSkipped)`) as a genuine
+  failure — a workflow where a conditional branch legitimately didn't
+  run would be reported and checkpointed as `Failed` instead of
+  `Completed`. New `is_genuine_failure()` / `representative_failure_message()`
+  helpers now treat `NodeSkipped` as benign in both scheduler paths.
+
+### Security
+
+- **`file` node no longer defaults to unrestricted filesystem access.**
+  `FileNode::default()` used `SandboxPolicy::permissive()`, so any
+  absolute path without `..` bypassed the only real guard — if `path`
+  came from `input_mapping` (e.g. an LLM's own output), that was
+  equivalent to arbitrary file read/write. `FileNode::default()` now
+  uses `SandboxPolicy::default()` (empty `allowed_paths` denies
+  everything), and the `file` node's YAML schema now requires
+  `allowed_paths` — `agentflow workflow validate` rejects a `file` node
+  missing it at build time instead of failing (or silently succeeding)
+  at run time. The distributed worker path, which previously ignored
+  the `allowed_paths` parameter and always ran with the permissive
+  default, now builds the same enforced policy from the dispatched
+  node payload.
+
+- **Checkpoint and run-directory paths are now sanitized against
+  traversal.** `agentflow-core`'s checkpoint path construction joined
+  an untrusted `workflow_id` (which can originate from a
+  caller-supplied run id in server scenarios) and `node_id` (from a
+  workflow author's YAML) directly into filesystem paths. Because
+  `..` is resolved at the OS level, a `workflow_id` of `".."` made
+  `delete_all_checkpoints` recursively delete the checkpoint
+  directory's *parent*. A new `is_safe_path_component` check (rejecting
+  empty strings, `.`, `..`, and any path separator) now gates every
+  checkpoint read/write/delete and `Flow`'s `run_dir` / per-node output
+  persistence before any filesystem call is made.
+
+- **Worker gRPC's `submit_task` RPC now enforces admission control.**
+  `AuthenticatedGrpcWorkerService::submit_task` accepted any caller
+  unconditionally, on the assumption that it sat behind the same HTTP
+  bearer-auth middleware as the rest of the API — but
+  `serve_worker_grpc` binds its own independent socket with no such
+  middleware, so anyone who could reach the port could submit arbitrary
+  `WorkerTask`s. A new `WorkerAdmissionPolicy::check_any` /
+  `AuthenticatedControlPlane::admit_any` now gates the call: unconfigured
+  deployments keep today's open dev/local default, while any configured
+  PSK or JWT allowlist makes the RPC fail-closed.
+
+### Fixed
+
+- **Serial and concurrent `Flow` execution now agree on terminal
+  status.** In the serial path, a `gather_inputs` failure previously
+  propagated through `?` and aborted `execute_from_inputs` outright —
+  no `WorkflowFailed` event, no final checkpoint status (it stayed
+  `Running` forever), and a hard `Err` instead of the per-node result
+  shape the concurrent path already produced. Serial execution is now
+  restructured into the same two-stage shape as concurrent, and it now
+  honors `fail_fast` / `continue_on_skip`, which it previously ignored
+  entirely. Two related bugs were fixed alongside it: `agentflow-server`'s
+  run-status determination counted benign skips as run failures (same
+  root cause as the DAG skip-vs-failure fix above), and
+  `agentflow workflow run`'s CLI retry loop never inspected the
+  returned state pool for embedded per-node failures, so it could
+  print "Workflow completed" and exit 0 even when a node had genuinely
+  failed.
+
+- **DAG checkpoint resume is now sound for concurrent runs.**
+  `execute_from_checkpoint` decided what to skip by locating
+  `last_completed_node`'s position in topological order and treating
+  everything before it as done — an assumption that only holds for
+  serial runs. Under concurrent execution a checkpoint only records
+  "the most recently completed node," not "everything earlier in
+  topological order finished"; in the worst case, resume could
+  misjudge an entire workflow as complete and permanently drop
+  unexecuted nodes. Resume now looks up each node's actual recorded
+  state in the restored state pool instead of relying on topological
+  position. This required checkpoints to round-trip `NodeSkipped` and
+  `NodePartialExecutionFailed` faithfully — the latter previously used
+  the same on-disk shape as a plain `Ok`, meaning a partial failure was
+  silently upgraded to success on resume.
+
+- **Fixed a missed-wakeup race in `AgentCancellationToken`.**
+  `cancelled()` checked `is_cancelled()` before awaiting
+  `Notify::notified()`; a `cancel()` landing in the gap between the two
+  could be missed entirely, leaving `cancelled()` able to hang forever
+  even though the token had already been cancelled. The check now
+  follows `tokio::sync::Notify`'s documented subscribe-then-check
+  pattern: `notified()` is constructed before `is_cancelled()` is
+  checked, closing the gap.
+
+- **`Flow`'s timeout and retry now reach the execution engine itself.**
+  `agentflow-core`'s `timeout` / `retry_executor` modules previously had
+  no caller inside `Flow`'s own execution loop, so any retries a
+  workflow performed were invisible to `WorkflowEvent` / trace replay,
+  and the long-defined `WorkflowEvent::RetryAttempt` event was never
+  actually constructed anywhere. `FlowExecutionConfig` gains optional
+  `node_timeout_ms` / `node_retry_policy` fields (both `None` by
+  default — zero behavior change for existing workflows); when set,
+  both scheduler paths now wrap node execution with a timeout and a
+  retry loop that emits a real `WorkflowEvent::RetryAttempt` before
+  each retry.
+
+- **LLM calls now retry transient 429/5xx errors with backoff.**
+  `agentflow-llm` defined `max_retries` / `retry_delay_ms` configuration
+  but never consumed it — any rate limit or transient server error was
+  thrown straight to the caller. A new `LLMError::is_retryable()`
+  classifies rate-limit / service-unavailable / timeout / 429/5xx
+  errors as retryable (4xx parameter/auth errors are not); all three
+  execution paths now retry through exponential backoff driven by the
+  model registry's resolved defaults. Only failures before a request
+  completes (or before a streaming connection opens) are retried —
+  mid-stream failures after chunks have already reached the caller are
+  out of scope.
+
+- **Project-level agent memory is now wired end to end, and a
+  `SemanticMemory` ID-corruption bug is fixed.**
+  `agentflow-memory::ProjectMemoryStore` had a complete storage layer
+  but zero runtime consumers. `agentflow harness run` / `harness chat`
+  now open a per-skill `SqliteProjectMemoryStore` when a skill declares
+  `[memory.project]`, so facts the agent extracts from
+  `shell`/`script`/`code_exec` tool calls persist across sessions for
+  that project. Separately, `SemanticMemory::row_to_message` silently
+  generated a fresh random ID when it encountered a corrupt stored
+  UUID instead of erroring; it now returns `MemoryError::StorageError`
+  like its `sqlite.rs` counterpart.
+
+- **Production logs no longer go through raw `println!`/`eprintln!`,
+  closing a minor information-leak surface.** Over 90 call sites across
+  `agentflow-core`, `agentflow-nodes`, and `agentflow-nodes-ai` printed
+  directly to stdout/stderr as ad hoc logging — polluting CLI/JSON
+  output and, in a few cases, leaking sensitive content (a full prompt,
+  full tool-call parameters, rendered template content). All of these
+  now go through `tracing`. A new `cargo xtask println-lint` CI check
+  statically scans for stray `println!`/`eprintln!` (with an explicit
+  `// allow-println-lint: <reason>` escape hatch) and is wired into
+  the release gate.
+
+### Added
+
+- **Structured output can now be enforced on agent final answers.**
+  `ReActAgent` and `PlanExecuteAgent` both gain an `output_schema`
+  option: a candidate final answer is validated against the JSON
+  schema, and a failed validation triggers a bounded correction retry
+  (default 2 attempts) that feeds the validation error back to the
+  model. Exhausting the retry budget is a hard error on both agents.
+  Along the way, a pre-existing `agentflow-llm` bug was fixed:
+  `response_format` was routed through the generic `parameters` map and
+  silently dropped by Anthropic's and Google's parameter allowlists; it
+  is now a first-class `ProviderRequest` field across all six
+  providers.
+
+- **Token-level streaming events now flow from the LLM through to the
+  CLI, server, and Web UI.** `ReActAgent`'s LLM calls now stream by
+  default, emitting a new `AgentEvent::TokenDelta` per chunk
+  (deliberately excluded from the persisted trace/checkpoint — it's a
+  live-only signal). `harness chat` and `harness run --output text`
+  render them as an in-place typewriter effect; the Web UI's session
+  view accumulates them into a live-growing line above the event
+  timeline. As a side effect, this also fixed a latent gap where a
+  model config with `requires_streaming: true` couldn't be used by
+  `ReActAgent` at all.
+
+- **Agent loops can now pause to ask the user a question mid-run, and
+  resume with the answer.** A new `ask_user` tool is available to both
+  `ReActAgent` and `PlanExecuteAgent`; invoking it stops the loop with
+  a new `AgentStopReason::AwaitingInput{question}` and persists a
+  checkpoint carrying the pending question — distinct from the existing
+  tool-call approval gate, which gates a specific invocation rather
+  than pausing for an open-ended question. Wired through the full
+  stack: new server routes (`GET/POST .../interrupt[/answer]`), CLI
+  support in `harness run`/`chat`/`resume-loop`, and a Web UI
+  `InterruptCard`.
+
+- **Long-running agent loops can now checkpoint and resume mid-loop,
+  not just replay a pending tool call.** A new `AgentLoopCheckpoint`
+  type captures a run's step index, iteration count, tool-call
+  history, and cumulative cost at each step boundary. `agentflow
+  harness run` now checkpoints every turn by default, and a new
+  `agentflow harness resume-loop <session_id>` command resumes
+  execution from the last saved step instead of restarting the whole
+  run.
+
+### Security
+
+- **`agentflow serve` now refuses to start unauthenticated on a
+  non-loopback bind.** A `SecurityProfile` field governing exactly this
+  existed but was never actually read anywhere — so a real deployment
+  binding to `0.0.0.0` (e.g. because a PaaS sets `PORT`) with no auth
+  token configured would start up fine under the default `Local`
+  profile, logging only a warning. The server now refuses to start
+  (both the real startup path and `agentflow serve --check`) unless the
+  bind is loopback or a token is configured. The Docker Compose file
+  and Helm chart, both of which shipped exactly this unsafe combination
+  by default, now wire an `AGENTFLOW_API_TOKEN`.
+
+- **DAG `shell` nodes are now wrapped in the OS-level sandbox under the
+  Production security profile.** A `require_os_sandbox` field had been
+  defined for Production but never consumed by the one call site that
+  needed it — a whitelisted shell command got no OS-level syscall/
+  filesystem/network confinement beyond "is the first token on the
+  allow-list." Under Production, the node is now wrapped in an
+  enforcing sandbox backend, and construction is refused outright if
+  the resolved backend can't actually enforce.
+
+- **Fixed two SSRF bypasses in `HttpTool`'s network-address checks.**
+  IPv4-mapped IPv6 addresses (e.g. `::ffff:169.254.169.254`, the cloud
+  metadata address in its IPv6 form) sailed through classification
+  unnormalized; addresses are now normalized via `to_ipv4_mapped()`
+  first. Separately, `validate_url_allowed` resolved and validated a
+  hostname's IPs, then let `reqwest` resolve the same hostname *again*
+  independently when it actually connected — a DNS-rebinding TOCTOU.
+  Each request now builds a client pinned to exactly the validated
+  address set, so `reqwest` can never connect anywhere that wasn't
+  already checked.
+
+- **Added per-tenant run admission control, and stopped `/metrics`
+  from leaking tenant/run IDs.** `POST /v1/runs` previously spawned
+  every submitted run unconditionally, with no per-tenant or global
+  concurrency/rate limit. A new per-tenant semaphore plus sliding-window
+  submission counter now returns HTTP 429 once a tenant exceeds its
+  configured limits (tightest in Production). Separately, the
+  intentionally-unauthenticated `/metrics` endpoint previously emitted
+  per-tenant and per-run-ID labels, letting any unauthenticated scraper
+  enumerate active tenants and run IDs; both gauges are now aggregate,
+  unlabeled values.
+
+- **Tightened three supply-chain defaults: marketplace signature
+  verification, plugin signing, and MCP stdio input bounds.** The
+  library-level default for remote marketplace/plugin caching now
+  requires real Ed25519 signature verification (was checksum-only) and
+  rejects plain `http://` registry URLs except on loopback. Plugin
+  manifests gain a real signature section — `plugin install --signed`
+  previously took the operator's word for it with zero independent
+  verification; a present signature is now Ed25519-verified against the
+  resolved entrypoint's bytes. `agentflow-mcp`'s stdio transport reader
+  now bounds every line read instead of an unbounded `read_line`, and
+  its notification channel is now bounded and backpressured instead of
+  unbounded.
+
+- **Capped expression-parser recursion depth to prevent stack-overflow
+  crashes from deeply nested `run_if`/`while` expressions.**
+  `agentflow-graph`'s recursive-descent expression parser had no depth
+  limit across its self-recursive paths (unary prefix chains,
+  parenthesized grouping, function-call arguments) — a workflow YAML
+  with a sufficiently deeply nested condition could crash the process
+  with a stack overflow before evaluation ever ran. The parser now
+  rejects expressions past a depth of 64 with a clear error instead of
+  overflowing the stack.
+
+- **`cargo-audit` wired into CI; 11 of 13 pre-existing RUSTSEC
+  advisories resolved.** No CI job had ever run `cargo-audit` against
+  `Cargo.lock`, so known CVEs in dependencies went unverified
+  indefinitely. A new `cargo-audit` job (gated into the release gate)
+  now fails on any newly-introduced advisory not explicitly
+  allow-listed in `.cargo/audit.toml`. Of the 13 advisories present at
+  the time this was wired in, 11 were fixed via individually-verified
+  targeted `cargo update -p <crate>` bumps (`bytes`, `crossbeam-epoch`,
+  `tar`, `tracing-subscriber`, `rustls-webpki`, `quinn-proto`) — a
+  blanket workspace-wide `cargo update` was tried first and discarded
+  because it silently rebalanced the `rustls` crypto-provider feature
+  unification and broke `agentflow-worker`'s real mTLS gRPC test
+  suite. The remaining 2 (`lopdf`, needing a breaking bump incompatible
+  with `agentflow-rag`'s `pdf-extract` dependency; `rsa`, via an
+  unreachable `sqlx-mysql` edge, with no upstream fix available at all)
+  are documented allow-list entries, not silently ignored. Separately,
+  `agentflow-store-spi` (an L0 contract crate) no longer depends on
+  `sqlx` at all — its only use was a single-line `From<sqlx::Error>`
+  error-string conversion, and nothing in the workspace relied on the
+  implicit `?`-based conversion it enabled.
+
+### Fixed
+
+- **`input_mapping` template values with non-canonical whitespace no
+  longer silently resolve to nothing (or, in one case, a corrupted
+  field name).** The executor factory's runtime parser
+  (`agentflow-config::executor::factory`) matched the literal 3-character
+  sequences `"{{ "` / `" }}"` when extracting a `{{ nodes.x.outputs.y }}`
+  mapping, while schema validation already tolerated arbitrary
+  whitespace — so a value like `"{{nodes.x.outputs.y}}"` (no spaces) or
+  `"{{ nodes.x.outputs.y}}"` (asymmetric) passed validation but resolved
+  to no input at all at graph-build time, or in the asymmetric case
+  produced a field name with a stray `"}}"` still attached. The runtime
+  parser now uses the same tolerant trim as validation.
+
+- **Fixed a malformed request URL for the Gemini provider.** The
+  shipped `base_url` for Google (in both `agentflow-llm/config/config.yml`
+  and the embedded `templates/default_models.yml`) was Google's
+  OpenAI-compatibility endpoint prefix (`.../v1beta/openai`), but the
+  `"google"`/`"gemini"` provider dispatch routes to the native
+  `GoogleProvider`, which appends its own `/v1beta/models/{model}:{method}`
+  path — producing a URL with a duplicated `/v1beta/` segment and a
+  stray `/openai` component on every real request. No existing test
+  had ever constructed a `GoogleProvider` from the actual shipped
+  config value, so this was invisible until now. Fixed the config
+  value to match `GoogleProvider`'s own correct hardcoded default.
+
+### Added
+
+- **`agentflow cleanup` now works without a database, for local-only
+  CLI usage — and defaults to the CLI's own run/trace directories.**
+  The retention sweep for `~/.agentflow/runs` / `~/.agentflow/traces`
+  previously hard-required `DATABASE_URL` before touching the
+  filesystem at all, so an operator who only ever ran
+  `agentflow workflow run` locally (never `agentflow serve`, no
+  Postgres anywhere) had no way to reap either directory short of
+  standing up a database just to run a cleanup sweep. A new
+  filesystem-only sweep path (mtime-based, mirroring the existing
+  DB-free trace-dir sweep) now runs whenever `DATABASE_URL` is unset,
+  and `agentflow cleanup` with no flags now defaults `run_dir`/
+  `trace_dir` to the same `~/.agentflow/{runs,traces}` paths
+  `agentflow workflow run` / `agentflow trace *` already write to,
+  instead of silently sweeping nothing.
+
+- **`chunk_strategy = "semantic"` is now available in a skill's
+  `[[knowledge]]` manifest entries.** `agentflow-rag` has long had a
+  fully-implemented embedding-based `SemanticChunker` (splits text at
+  topic boundaries via cosine similarity between sentence embeddings),
+  but it was unreachable from `skill.toml` config — the config-first
+  dispatch path was entirely synchronous, while semantic chunking's
+  real work requires an async call to an embedding provider. A new
+  async-only entry point drives `SemanticChunker` directly (bypassing
+  the shared synchronous `ChunkingStrategy` trait rather than
+  converting it — that would have touched dozens of unrelated call
+  sites, like the RAG evaluation harness, for no benefit to them); a
+  `[[knowledge]]` entry can now set `chunk_strategy = "semantic"` plus
+  `embedding_model` / `chunk_similarity_threshold` /
+  `chunk_min_segment_size` / `chunk_buffer_percentile` (all optional,
+  mirroring the config pattern skills already use for semantic memory).
+  Requires `OPENAI_API_KEY`; every other `chunk_strategy` option
+  continues to work fully offline. Not extended to the RAG evaluation
+  CLI's own `--chunk-strategy` benchmarking flag, and `SKILL.md`
+  frontmatter still has no `[[knowledge]]` support at all — both
+  pre-existing, unrelated gaps.
+
+- **`AGENTS.md` regenerated from current sources.** The agent-facing
+  workspace-instructions file (read by `agentflow-harness`'s
+  `AgentsMdProvider` as high-priority context for every harness-run
+  agent) had drifted badly since its last update: it described 14
+  crates against an actual 25-member workspace, called
+  `agentflow-server`/`agentflow-db` empty scaffolds against a
+  19.5K-LOC gateway and a 9-table/9-repo persistence layer, and never
+  mentioned `agentflow-harness`/`agentflow-config`/`agentflow-value`/
+  `agentflow-graph`/`agentflow-store-spi`/`agentflow-agent-spi`/
+  `agentflow-worker`/`agentflow-ui` at all. Regenerated from `CLAUDE.md`
+  and `docs/CURRENT_STATUS.md`; five superseded root design docs
+  (`ARCHITECTURE.md`, `TERA_INTEGRATION_ANALYSIS.md`,
+  `TERA_INTEGRATION_COMPLETE.md`, `LOOP_NODES_IMPLEMENTATION.md`,
+  `MIGRATION_V2.md`) gained "historical reference" banners pointing at
+  their current replacements.
+
+### Changed
+
+- **`agentflow-cli`'s 2,700-line `main.rs` split into per-domain
+  `commands/*/cli.rs` modules.** All clap argument-parsing structs and
+  dispatch logic for roughly twenty unrelated command domains had
+  accumulated in a single file. Each domain's `#[derive(Args)]` /
+  `#[derive(Subcommand)]` types and its dispatch match arm now live
+  alongside that domain's existing business logic (e.g.
+  `commands/workflow/cli.rs`), leaving `main.rs` at ~130 lines: just
+  the top-level `Cli`/`Commands` enum and a flat dispatch match. Pure
+  code motion — verified via byte-identical `--help` output across
+  every subcommand (both default and `--no-default-features` builds)
+  before and after.
+
 ## [v1.0.0-rc.1] — 2026-05-21
 
 The R1 → R4 reflection arc (see `docs/L1_L3_REFLECTION_R*.md`) drove

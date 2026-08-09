@@ -1,9 +1,9 @@
 # Current Project Status
 
-Last updated: 2026-08-08 (V4.1: refreshed the Active Work section, which
-had gone stale since the 2026-07-28 update — H / P-A / S / L / R / T / U
-have all since closed and archived, and the active segment is now **V**,
-the 2026-08-05 production-readiness remediation — see `TODOs.md`)
+Last updated: 2026-08-09 (V-track closed: all of V0–V4 plus the
+V4.4-FU1 follow-up — the 2026-08-05 production-readiness remediation
+that was active as of the 2026-08-08 update — are now DONE; see
+`TODOs.md`)
 
 This is the current authoritative status entrypoint for AgentFlow. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
@@ -52,7 +52,11 @@ shared contracts (enforced by `cargo xtask check-arch`; see
   call through the Harness approval pipeline.
 - Harness governance shell (`agentflow-harness`): hooks, interactive approval,
   sandbox, audit, run limits, background tasks, and the `HarnessEvent` envelope.
-- Skills through `SKILL.md` and `skill.toml`.
+- Skills through `SKILL.md` and `skill.toml`, including tiered
+  `[[knowledge]]` retrieval (inline `files` tier or indexed `rag` tier)
+  with pluggable chunking strategies — fixed-size, sentence, recursive,
+  paragraph, heading, code-AST, and embedding-based `semantic` chunking
+  (requires `OPENAI_API_KEY`).
 - Tool abstraction through `Tool`, `ToolRegistry`, policy, permissions, and
   typed output parts.
 - MCP client, server scaffolding, workflow nodes, CLI calls, and Skill tool
@@ -107,26 +111,37 @@ contracts.
 ## Active Work
 
 The short-term execution queue remains in [`TODOs.md`](../TODOs.md). As of
-this update, the H (Harness follow-ups), P-A (contract kernel), S (sandbox
-hardening), L (long-horizon/RAG), R (2026-07-28 engineering-readiness),
-T (2026-07-29 architecture-evaluation), and U (2026-07-30 re-review)
-segments have all closed and been archived to `docs/archive/`. The active
-segment is **V (2026-08-05 production-readiness remediation)** — findings
-from six independent parallel sub-agents that each read one architecture
-layer (L0 contract kernel / L1 execution core / L2 capability adapters /
-L3 agent orchestration / L4 platform), cross-checked by the orchestrator
-running `cargo test/clippy/fmt/tree` locally. V0 (blocking correctness/
-security bugs), V1 (core execution/agent robustness), V2 (structured
-output, token streaming, generic HITL interrupt/resume, agent-loop
-checkpoint), and V3 (fail-closed defaults, execution-side sandbox
-enforcement, SSRF hardening, run admission control, supply-chain
-tightening, expr recursion-depth limit) have all closed. **V4
-(documentation and engineering hygiene)** is the remaining segment —
-regenerating this project's stale agent-facing docs (this update is part
-of that), splitting `agentflow-cli/src/main.rs`, wiring `cargo-audit` into
-CI, and a handful of completeness follow-ups (Semantic chunker factory
-exposure, `input_mapping` whitespace drift, a Gemini `base_url` fix, and a
-`~/.agentflow/runs` retention policy).
+this update, **every segment through V has closed** — H, P-A, S, L, R, T,
+and U are archived to `docs/archive/`; V is closed but not yet archived
+(its full item-by-item record is still in `TODOs.md`). The most recent
+closed segment, **V (2026-08-05 production-readiness remediation)**, came
+from findings by six
+independent parallel sub-agents that each read one architecture layer (L0
+contract kernel / L1 execution core / L2 capability adapters / L3 agent
+orchestration / L4 platform), cross-checked by the orchestrator running
+`cargo test/clippy/fmt/tree` locally:
+
+- **V0** — blocking correctness/security bugs (panics, unsafe defaults,
+  terminal-state bugs, path traversal, an auth gap).
+- **V1** — core execution/agent robustness (DAG terminal-state + resume
+  semantics, cancellation races, reliability-stack wiring, LLM retry,
+  memory runtime integration, log normalization).
+- **V2** — structured output, token-level streaming, a generic HITL
+  interrupt/resume protocol (`ask_user`), and agent-loop checkpointing.
+- **V3** — fail-closed defaults on non-loopback binds, execution-side
+  sandbox enforcement for DAG `shell` nodes, two SSRF gaps closed in
+  `HttpTool`, per-tenant run admission control, supply-chain tightening
+  (Ed25519 marketplace/plugin signatures, bounded MCP stdio reads), and an
+  `expr` parser recursion-depth limit.
+- **V4** — `AGENTS.md` regenerated from current sources, `agentflow-cli`'s
+  2700-line `main.rs` split into per-domain `commands/*/cli.rs` modules,
+  `cargo-audit` wired into CI (11 of 13 pre-existing CVEs resolved via
+  targeted dependency bumps), and completeness follow-ups: an
+  `input_mapping` whitespace-parsing bug, a Gemini `base_url` bug, DB-free
+  `~/.agentflow/runs` retention, and (as a follow-up once the rest of V4
+  closed) `chunk_strategy = "semantic"` now reachable from a skill's
+  `[[knowledge]]` manifest entries, backed by `agentflow-rag`'s
+  embedding-based `SemanticChunker`.
 
 The ongoing documentation-convergence convention:
 
