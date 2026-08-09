@@ -557,27 +557,40 @@ impl StreamingResponse for OpenAIStreamingResponse {
     }
 
     loop {
-      // Try to get the next chunk from the stream
+      // W0.3: drain any complete lines already sitting in the buffer
+      // *before* pulling more bytes off the network. A single network
+      // read can contain multiple SSE `data:` lines (e.g. the final
+      // content delta immediately followed by `[DONE]` in the same
+      // read) — draining only inside the `Some(Ok(data))` arm below and
+      // returning on the first parsed line stranded every subsequent
+      // line in the buffer until another network read arrived to
+      // re-trigger the drain. If that never-drained line happened to be
+      // the *last* one because the stream had already ended, it was
+      // silently dropped and `is_final` was never observed from a real
+      // `[DONE]`/finish_reason chunk. See `stepfun.rs`'s
+      // `StepFunStreamingResponse::next_chunk` for the reference fix.
+      if let Some(ref mut buffer) = self.buffer {
+        while let Some(newline_pos) = buffer.find('\n') {
+          let line = buffer[..newline_pos].trim().to_string();
+          buffer.drain(..=newline_pos);
+
+          if !line.is_empty()
+            && let Some(chunk) = Self::parse_sse_chunk(&line)
+          {
+            if chunk.is_final {
+              self.finished = true;
+            }
+            return Ok(Some(chunk));
+          }
+        }
+      }
+
+      // Buffer has no complete parseable line left — pull more from the
+      // network.
       match self.stream.next().await {
         Some(Ok(data)) => {
-          // Add to buffer
           if let Some(ref mut buffer) = self.buffer {
             buffer.push_str(&data);
-
-            // Process complete lines
-            while let Some(newline_pos) = buffer.find('\n') {
-              let line = buffer[..newline_pos].trim().to_string();
-              buffer.drain(..=newline_pos);
-
-              if !line.is_empty()
-                && let Some(chunk) = Self::parse_sse_chunk(&line)
-              {
-                if chunk.is_final {
-                  self.finished = true;
-                }
-                return Ok(Some(chunk));
-              }
-            }
           }
         }
         Some(Err(e)) => return Err(e),

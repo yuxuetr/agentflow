@@ -363,27 +363,36 @@ impl StreamingResponse for MoonshotStreamingResponse {
     }
 
     loop {
-      // Try to get the next chunk from the stream
+      // W0.3: drain any complete lines already sitting in the buffer
+      // *before* pulling more bytes off the network — see `openai.rs`'s
+      // `OpenAIStreamingResponse::next_chunk` (same bug, same fix) and
+      // `stepfun.rs` for the original reference fix. Draining only
+      // inside the `Some(Ok(data))` arm and returning on the first
+      // parsed line stranded every subsequent buffered line until
+      // another network read happened to re-trigger the drain; if the
+      // stream had already ended, that line (e.g. the terminal
+      // `[DONE]`) was silently dropped and `is_final` was never
+      // observed from a real sentinel.
+      if let Some(ref mut buffer) = self.buffer {
+        while let Some(newline_pos) = buffer.find('\n') {
+          let line = buffer[..newline_pos].trim().to_string();
+          buffer.drain(..=newline_pos);
+
+          if !line.is_empty()
+            && let Some(chunk) = Self::parse_sse_chunk(&line)
+          {
+            if chunk.is_final {
+              self.finished = true;
+            }
+            return Ok(Some(chunk));
+          }
+        }
+      }
+
       match self.stream.next().await {
         Some(Ok(data)) => {
-          // Add to buffer
           if let Some(ref mut buffer) = self.buffer {
             buffer.push_str(&data);
-
-            // Process complete lines
-            while let Some(newline_pos) = buffer.find('\n') {
-              let line = buffer[..newline_pos].trim().to_string();
-              buffer.drain(..=newline_pos);
-
-              if !line.is_empty()
-                && let Some(chunk) = Self::parse_sse_chunk(&line)
-              {
-                if chunk.is_final {
-                  self.finished = true;
-                }
-                return Ok(Some(chunk));
-              }
-            }
           }
         }
         Some(Err(e)) => return Err(e),
