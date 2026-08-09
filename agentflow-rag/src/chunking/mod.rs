@@ -109,24 +109,67 @@ pub fn chunk_document_for_knowledge_backend(
 ) -> Result<Vec<ChunkedKnowledgeDocument>> {
   let chunker = create_chunker(strategy, chunk_size, overlap)?;
   let chunks = chunker.chunk(content)?;
+  Ok(package_chunks_for_knowledge_backend(chunks, source_id))
+}
+
+/// V4.4 follow-up: async counterpart to [`chunk_document_for_knowledge_backend`]
+/// for the one chunking strategy (`Semantic`) that needs an embedding
+/// provider and therefore cannot go through the sync [`ChunkingStrategy`]
+/// trait / [`create_chunker`] — [`SemanticChunker`]'s `chunk()` impl of that
+/// trait is a permanent stub (its real work, [`SemanticChunker::chunk_async`],
+/// calls out to the embedding provider). Builds a [`SemanticChunker`]
+/// directly via [`SemanticChunkerBuilder`] and packages its output
+/// identically to the sync path via the same shared internal packaging
+/// helper `chunk_document_for_knowledge_backend` uses.
+#[allow(clippy::too_many_arguments)]
+pub async fn chunk_document_for_knowledge_backend_semantic(
+  embedding_provider: std::sync::Arc<dyn crate::embeddings::EmbeddingProvider>,
+  chunk_size: usize,
+  overlap: usize,
+  similarity_threshold: f32,
+  min_segment_size: usize,
+  buffer_percentile: f32,
+  source_id: &str,
+  content: &str,
+) -> Result<Vec<ChunkedKnowledgeDocument>> {
+  let chunker = SemanticChunker::builder()
+    .with_embedding_provider_arc(embedding_provider)
+    .with_chunk_size(chunk_size)
+    .with_overlap(overlap)
+    .with_similarity_threshold(similarity_threshold)
+    .with_min_segment_size(min_segment_size)
+    .with_buffer_percentile(buffer_percentile)
+    .build()?;
+  let chunks = chunker.chunk_async(content).await?;
+  Ok(package_chunks_for_knowledge_backend(chunks, source_id))
+}
+
+/// Shared packaging logic for both [`chunk_document_for_knowledge_backend`]
+/// and [`chunk_document_for_knowledge_backend_semantic`]: turns a chunker's
+/// raw [`TextChunk`]s into `(id, content, metadata)` triples. `source_id`
+/// becomes the `source` metadata key (unless the chunker already set one)
+/// and the id prefix, suffixed with `#chunkN` only when there's more than
+/// one chunk.
+fn package_chunks_for_knowledge_backend(
+  chunks: Vec<TextChunk>,
+  source_id: &str,
+) -> Vec<ChunkedKnowledgeDocument> {
   let multi = chunks.len() > 1;
-  Ok(
-    chunks
-      .into_iter()
-      .map(|chunk| {
-        let id = if multi {
-          format!("{source_id}#chunk{}", chunk.chunk_index)
-        } else {
-          source_id.to_string()
-        };
-        let mut metadata = chunk.metadata;
-        metadata
-          .entry("source".to_string())
-          .or_insert_with(|| crate::types::MetadataValue::String(source_id.to_string()));
-        (id, chunk.content, metadata)
-      })
-      .collect(),
-  )
+  chunks
+    .into_iter()
+    .map(|chunk| {
+      let id = if multi {
+        format!("{source_id}#chunk{}", chunk.chunk_index)
+      } else {
+        source_id.to_string()
+      };
+      let mut metadata = chunk.metadata;
+      metadata
+        .entry("source".to_string())
+        .or_insert_with(|| crate::types::MetadataValue::String(source_id.to_string()));
+      (id, chunk.content, metadata)
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -241,6 +284,101 @@ mod tests {
       text,
     )
     .expect("chunk ok");
+    assert!(triples.len() > 1);
+    for (id, _, _) in &triples {
+      assert!(id.starts_with("docs/guide.md#chunk"));
+    }
+  }
+
+  /// V4.4 follow-up: deterministic, offline `EmbeddingProvider` test double
+  /// for `chunk_document_for_knowledge_backend_semantic`. Sentences about
+  /// cats/dogs cluster tightly together (identical embedding); sentences
+  /// about rockets/orbits cluster tightly together at a different, far-away
+  /// point — so the cosine-similarity cliff at the topic boundary is
+  /// guaranteed regardless of the real segmentation algorithm's internals,
+  /// without needing a real OpenAI API call.
+  struct TwoClusterEmbedder;
+
+  #[async_trait::async_trait]
+  impl crate::embeddings::EmbeddingProvider for TwoClusterEmbedder {
+    async fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
+      Ok(self.embed_batch(vec![text]).await?.remove(0))
+    }
+
+    async fn embed_batch(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>> {
+      Ok(
+        texts
+          .into_iter()
+          .map(|t| {
+            if t.contains("cat") || t.contains("dog") {
+              vec![1.0, 0.0, 0.0]
+            } else {
+              vec![0.0, 1.0, 0.0]
+            }
+          })
+          .collect(),
+      )
+    }
+
+    fn dimension(&self) -> usize {
+      3
+    }
+
+    fn model_name(&self) -> &str {
+      "mock-two-cluster"
+    }
+  }
+
+  #[tokio::test]
+  async fn chunk_document_for_knowledge_backend_semantic_splits_on_topic_boundary() {
+    let text = "The cat sat on the mat. The dog ran in the yard. \
+                A rocket launched into orbit. The orbit was stable for weeks.";
+    let triples = chunk_document_for_knowledge_backend_semantic(
+      std::sync::Arc::new(TwoClusterEmbedder),
+      1000,
+      0,
+      0.6,
+      5,
+      0.0, // disable dynamic threshold, mirrors semantic.rs's own test convention
+      "docs/guide.md",
+      text,
+    )
+    .await
+    .expect("semantic chunk ok");
+
+    assert!(
+      triples.len() > 1,
+      "expected the topic shift to produce more than one chunk, got {}",
+      triples.len()
+    );
+    for (id, _, metadata) in &triples {
+      assert!(id.starts_with("docs/guide.md"));
+      assert_eq!(
+        metadata.get("source"),
+        Some(&crate::types::MetadataValue::String(
+          "docs/guide.md".to_string()
+        ))
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn chunk_document_for_knowledge_backend_semantic_suffixes_ids_when_multiple_chunks() {
+    let text = "The cat sat on the mat. The dog ran in the yard. \
+                A rocket launched into orbit. The orbit was stable for weeks.";
+    let triples = chunk_document_for_knowledge_backend_semantic(
+      std::sync::Arc::new(TwoClusterEmbedder),
+      1000,
+      0,
+      0.6,
+      5,
+      0.0,
+      "docs/guide.md",
+      text,
+    )
+    .await
+    .expect("semantic chunk ok");
+
     assert!(triples.len() > 1);
     for (id, _, _) in &triples {
       assert!(id.starts_with("docs/guide.md#chunk"));

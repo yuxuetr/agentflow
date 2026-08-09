@@ -164,7 +164,7 @@ impl SkillBuilder {
       skill_dir,
     )?;
     register_mcp_tools(&mut registry, manifest, skill_dir).await?;
-    register_knowledge_backends(&mut registry, manifest, skill_dir)?;
+    register_knowledge_backends(&mut registry, manifest, skill_dir).await?;
     Ok(registry)
   }
 
@@ -651,7 +651,7 @@ fn resolve_skill_relative_command_part(value: &str, skill_dir: &Path) -> String 
 /// backend in an `agentflow_rag::rewrite::MultiQueryKnowledgeBackend` — see
 /// [`KnowledgeConfig::query_rewrite`] for the "first entry wins" semantics
 /// when a skill has more than one rag-tier entry.
-fn register_knowledge_backends(
+async fn register_knowledge_backends(
   registry: &mut ToolRegistry,
   manifest: &SkillManifest,
   skill_dir: &Path,
@@ -688,12 +688,41 @@ fn register_knowledge_backends(
           let strategy = parse_chunk_strategy(strategy_name)?;
           let chunk_size = kc.chunk_size.unwrap_or(1000);
           let overlap = kc.chunk_overlap.unwrap_or(100);
-          let chunked = agentflow_rag::chunking::chunk_document_for_knowledge_backend(
-            strategy, chunk_size, overlap, &id, &content,
-          )
-          .map_err(|e| SkillError::ValidationError {
-            message: format!("Failed to chunk knowledge file {}: {e}", path.display()),
-          })?;
+          let chunked = if strategy == agentflow_rag::types::ChunkingStrategy::Semantic {
+            let model = kc.resolved_embedding_model().to_string();
+            let embedder = OpenAIEmbedding::builder(&model).build().map_err(|e| {
+              SkillError::ValidationError {
+                message: format!(
+                  "Cannot initialise semantic chunking for knowledge file {} (model '{}'): {}. \
+                   Make sure OPENAI_API_KEY is set.",
+                  path.display(),
+                  model,
+                  e
+                ),
+              }
+            })?;
+            agentflow_rag::chunking::chunk_document_for_knowledge_backend_semantic(
+              Arc::new(embedder),
+              chunk_size,
+              overlap,
+              kc.resolved_chunk_similarity_threshold(),
+              kc.resolved_chunk_min_segment_size(),
+              kc.resolved_chunk_buffer_percentile(),
+              &id,
+              &content,
+            )
+            .await
+            .map_err(|e| SkillError::ValidationError {
+              message: format!("Failed to chunk knowledge file {}: {e}", path.display()),
+            })?
+          } else {
+            agentflow_rag::chunking::chunk_document_for_knowledge_backend(
+              strategy, chunk_size, overlap, &id, &content,
+            )
+            .map_err(|e| SkillError::ValidationError {
+              message: format!("Failed to chunk knowledge file {}: {e}", path.display()),
+            })?
+          };
           documents.extend(chunked);
         }
         None => documents.push((id, content, HashMap::new())),
@@ -751,9 +780,10 @@ fn parse_chunk_strategy(name: &str) -> Result<agentflow_rag::types::ChunkingStra
     "paragraph" => Ok(ChunkingStrategy::Paragraph),
     "heading" => Ok(ChunkingStrategy::Heading),
     "code_ast" => Ok(ChunkingStrategy::CodeAst),
+    "semantic" => Ok(ChunkingStrategy::Semantic),
     other => Err(SkillError::ValidationError {
       message: format!(
-        "Unknown knowledge chunk_strategy '{other}'; expected one of fixed_size, sentence, recursive, paragraph, heading, code_ast"
+        "Unknown knowledge chunk_strategy '{other}'; expected one of fixed_size, sentence, recursive, paragraph, heading, code_ast, semantic"
       ),
     }),
   }
@@ -1610,6 +1640,77 @@ chunk_strategy = "fixed_sized"
       Err(SkillError::ValidationError { .. }) => {}
       Err(other) => panic!("expected ValidationError, got a different SkillError: {other}"),
       Ok(_) => panic!("unknown chunk_strategy must be rejected, not silently built"),
+    }
+  }
+
+  /// V4.4 follow-up: `"semantic"` is now a recognized `chunk_strategy` name
+  /// (previously fell into the "unknown chunk_strategy" branch above).
+  #[test]
+  fn parse_chunk_strategy_accepts_semantic() {
+    assert_eq!(
+      parse_chunk_strategy("semantic").unwrap(),
+      agentflow_rag::types::ChunkingStrategy::Semantic
+    );
+  }
+
+  /// V4.4 follow-up: `chunk_strategy = "semantic"` needs an OpenAI embedding
+  /// provider, which needs `OPENAI_API_KEY`. Building without it must fail
+  /// with a clear, actionable `ValidationError` rather than panicking or
+  /// hanging on a network call — and this must be provable without a real
+  /// key or network access, since `OpenAIEmbedding::builder(...).build()`'s
+  /// key check is synchronous and happens before any HTTP call.
+  ///
+  /// **Test isolation**: temporarily clears `OPENAI_API_KEY`, snapshot +
+  /// restore, mirroring `agentflow-cli`'s
+  /// `build_dense_retriever_errors_without_openai_api_key` convention so a
+  /// dev environment with the key set doesn't leak into or out of this test.
+  #[tokio::test]
+  async fn semantic_chunk_strategy_without_openai_api_key_is_a_validation_error() {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join("knowledge").join("manual.md"), "content");
+    write_toml(
+      dir.path(),
+      r#"
+[skill]
+name = "semantic-chunk-skill"
+version = "0.1"
+description = "rag-tier knowledge with semantic chunking"
+
+[persona]
+role = "You are an ops assistant."
+
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+chunk_strategy = "semantic"
+"#,
+    );
+    let manifest = SkillLoader::load(dir.path()).unwrap();
+
+    let snapshot = std::env::var("OPENAI_API_KEY").ok();
+    // SAFETY: dedicated test process; restore at end.
+    unsafe {
+      std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    let result = SkillBuilder::build_registry(&manifest, dir.path()).await;
+
+    // SAFETY: restore before asserting so a panic doesn't pollute env.
+    unsafe {
+      if let Some(value) = snapshot {
+        std::env::set_var("OPENAI_API_KEY", value);
+      }
+    }
+
+    match result {
+      Err(SkillError::ValidationError { message }) => {
+        assert!(
+          message.contains("OPENAI_API_KEY"),
+          "error should hint at the missing key: {message}"
+        );
+      }
+      Err(other) => panic!("expected ValidationError, got a different SkillError: {other}"),
+      Ok(_) => panic!("missing OPENAI_API_KEY must be rejected, not silently built"),
     }
   }
 

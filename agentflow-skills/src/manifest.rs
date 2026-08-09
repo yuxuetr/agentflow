@@ -439,10 +439,13 @@ pub struct KnowledgeConfig {
   pub backend: KnowledgeBackendKind,
   /// Chunking strategy for `backend = "rag"` entries (L4.1): one of
   /// `"fixed_size"`, `"sentence"`, `"recursive"`, `"paragraph"`, `"heading"`,
-  /// or `"code_ast"` (Rust source only, requires `agentflow-rag`'s
-  /// `code-chunking` feature). `None` (the default) preserves the pre-L4.1
-  /// behaviour of indexing each file as one whole-file document — set this
-  /// to opt a knowledge entry into finer-grained, citable chunks.
+  /// `"code_ast"` (Rust source only, requires `agentflow-rag`'s
+  /// `code-chunking` feature), or `"semantic"` (embedding-based, requires
+  /// `OPENAI_API_KEY` — see `embedding_model`/`chunk_similarity_threshold`/
+  /// `chunk_min_segment_size`/`chunk_buffer_percentile` below). `None` (the
+  /// default) preserves the pre-L4.1 behaviour of indexing each file as one
+  /// whole-file document — set this to opt a knowledge entry into
+  /// finer-grained, citable chunks.
   #[serde(default)]
   pub chunk_strategy: Option<String>,
   /// Target chunk size in characters. Only consulted when `chunk_strategy`
@@ -453,6 +456,28 @@ pub struct KnowledgeConfig {
   /// `chunk_strategy` is set. Defaults to 100.
   #[serde(default)]
   pub chunk_overlap: Option<usize>,
+  /// OpenAI embedding model used by `chunk_strategy = "semantic"`.
+  /// Supported: `"text-embedding-3-small"` (default), `"text-embedding-3-large"`,
+  /// `"text-embedding-ada-002"`. Ignored for every other `chunk_strategy`.
+  #[serde(default)]
+  pub embedding_model: Option<String>,
+  /// Similarity threshold (0.0-1.0) below which `chunk_strategy = "semantic"`
+  /// starts a new chunk at a sentence boundary. Lower = more, smaller
+  /// chunks; higher = fewer, larger chunks. Defaults to 0.6. Ignored for
+  /// every other `chunk_strategy`.
+  #[serde(default)]
+  pub chunk_similarity_threshold: Option<f32>,
+  /// Minimum sentence-segment size in characters for `chunk_strategy =
+  /// "semantic"`'s sentence splitter. Defaults to 20. Ignored for every
+  /// other `chunk_strategy`.
+  #[serde(default)]
+  pub chunk_min_segment_size: Option<usize>,
+  /// Buffer percentile (0.0-1.0) `chunk_strategy = "semantic"` uses to
+  /// dynamically derive its boundary threshold from the similarity
+  /// distribution, instead of the fixed `chunk_similarity_threshold`.
+  /// Defaults to 0.25. Ignored for every other `chunk_strategy`.
+  #[serde(default)]
+  pub chunk_buffer_percentile: Option<f32>,
   /// Query rewrite / decomposition strategy for the shared `rag_search`
   /// tool (L4.3): currently only `"split"` (deterministic decomposition on
   /// conjunctions/punctuation — see `agentflow_rag::rewrite::SplitQueryRewriter`)
@@ -466,6 +491,36 @@ pub struct KnowledgeConfig {
   /// rag-tier entry — the common case — have no ambiguity here.
   #[serde(default)]
   pub query_rewrite: Option<String>,
+}
+
+impl KnowledgeConfig {
+  /// Resolves the OpenAI embedding model for `chunk_strategy = "semantic"`,
+  /// defaulting to `"text-embedding-3-small"` — same default and set of
+  /// supported models as [`MemoryConfig::resolved_embedding_model`].
+  pub fn resolved_embedding_model(&self) -> &str {
+    self
+      .embedding_model
+      .as_deref()
+      .unwrap_or("text-embedding-3-small")
+  }
+
+  /// Resolves `chunk_similarity_threshold`, defaulting to 0.6 — matches
+  /// `SemanticChunkerBuilder`'s own default.
+  pub fn resolved_chunk_similarity_threshold(&self) -> f32 {
+    self.chunk_similarity_threshold.unwrap_or(0.6)
+  }
+
+  /// Resolves `chunk_min_segment_size`, defaulting to 20 — matches
+  /// `SemanticChunkerBuilder`'s own default.
+  pub fn resolved_chunk_min_segment_size(&self) -> usize {
+    self.chunk_min_segment_size.unwrap_or(20)
+  }
+
+  /// Resolves `chunk_buffer_percentile`, defaulting to 0.25 — matches
+  /// `SemanticChunkerBuilder`'s own default.
+  pub fn resolved_chunk_buffer_percentile(&self) -> f32 {
+    self.chunk_buffer_percentile.unwrap_or(0.25)
+  }
 }
 
 /// Configures the memory backend for the agent.

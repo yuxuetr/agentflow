@@ -234,8 +234,70 @@ backend = "rag"
 
 All `backend = "rag"` entries across a skill share one `rag_search` tool, so the
 model sees a single "search the knowledge base" affordance. `references/`
-documents are always files-tier (inlined). Each rag-tier file is currently
-indexed as one document; finer chunking is a planned refinement.
+documents are always files-tier (inlined).
+
+### Chunking rag-tier knowledge — `chunk_strategy`
+
+By default each rag-tier file is indexed as one whole-file document. Set
+`chunk_strategy` on a `[[knowledge]]` entry to split it into smaller,
+independently-citable chunks instead:
+
+```toml
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+chunk_strategy = "paragraph"
+chunk_size = 200
+chunk_overlap = 0
+```
+
+`chunk_strategy` accepts:
+
+- `"fixed_size"` — splits at fixed character offsets.
+- `"sentence"` — splits on sentence boundaries.
+- `"recursive"` — splits on a cascade of separators (paragraphs, then
+  sentences, then words) to stay under `chunk_size`.
+- `"paragraph"` — splits on blank lines; never splits a paragraph across two
+  chunks.
+- `"heading"` — splits Markdown documents at heading boundaries.
+- `"code_ast"` — splits Rust source at function/impl boundaries (requires
+  `agentflow-rag`'s `code-chunking` feature; source must be valid Rust).
+- `"semantic"` — splits at topic boundaries detected via embedding
+  similarity between sentences, instead of a fixed size. Requires an OpenAI
+  API key — see below.
+
+`chunk_size` (characters, default 1000) and `chunk_overlap` (characters,
+default 100) apply to every strategy above.
+
+#### Semantic chunking
+
+`chunk_strategy = "semantic"` additionally accepts:
+
+```toml
+[[knowledge]]
+path = "./knowledge/manual.md"
+backend = "rag"
+chunk_strategy = "semantic"
+embedding_model = "text-embedding-3-small"   # default; also "text-embedding-3-large", "text-embedding-ada-002"
+chunk_similarity_threshold = 0.6             # default; lower = more, smaller chunks
+chunk_min_segment_size = 20                  # default; minimum sentence-segment length in characters
+chunk_buffer_percentile = 0.25               # default; dynamic-threshold percentile
+```
+
+Semantic chunking requires the `OPENAI_API_KEY` environment variable to be
+set — it calls OpenAI's embeddings API to compare sentences. Building a skill
+with `chunk_strategy = "semantic"` and no API key set fails fast with a
+validation error explaining this. Every other `chunk_strategy` option above
+works fully offline.
+
+### Multi-query retrieval — `query_rewrite`
+
+Set `query_rewrite = "split"` on a rag-tier `[[knowledge]]` entry to
+decompose a caller's query on conjunctions/punctuation before searching (for
+example, "find X and explain Y" is searched as two sub-queries and results
+merged). All rag-tier entries in a skill share one `rag_search` tool, so this
+is effectively a skill-wide setting: the first entry (in manifest order) that
+sets `query_rewrite` wins.
 
 ## Memory
 
