@@ -71,9 +71,22 @@ where
             error
           );
 
-          return Err(AgentFlowError::RetryExhausted {
-            attempts: context.attempt + 1,
-            last_error: Box::new(error),
+          // W0.4: only wrap as `RetryExhausted` once an actual retry has
+          // happened (`context.attempt > 0`). `should_retry` also returns
+          // `false` on the very first attempt when the error itself isn't
+          // retryable, or when the policy allows zero retries — in both
+          // cases nothing was ever retried, so wrapping discarded the
+          // original error variant (e.g. `NodePartialExecutionFailed`,
+          // `NodeSkipped`) that callers like `Flow`'s checkpoint logic
+          // pattern-match on. See `execute_with_retry_and_context` below,
+          // which already had this guard.
+          return Err(if context.attempt > 0 {
+            AgentFlowError::RetryExhausted {
+              attempts: context.attempt + 1,
+              last_error: Box::new(error),
+            }
+          } else {
+            error
           });
         }
 
@@ -123,9 +136,15 @@ where
       Ok(result) => return Ok(result),
       Err(error) => {
         if !context.should_retry(policy, &error) {
-          return Err(AgentFlowError::RetryExhausted {
-            attempts: context.attempt + 1,
-            last_error: Box::new(error),
+          // W0.4: see the matching comment in `execute_with_retry` above —
+          // only wrap once a retry actually happened.
+          return Err(if context.attempt > 0 {
+            AgentFlowError::RetryExhausted {
+              attempts: context.attempt + 1,
+              last_error: Box::new(error),
+            }
+          } else {
+            error
           });
         }
 
@@ -417,11 +436,18 @@ mod tests {
     )
     .await;
 
-    assert!(result.is_err());
     assert_eq!(
       hook_calls.load(Ordering::SeqCst),
       0,
       "a non-retryable error must not trigger any hook calls"
+    );
+    // W0.4: a non-retryable error must pass through unwrapped, not get
+    // coerced into `RetryExhausted` — no retry ever happened, so wrapping
+    // would discard the original error variant callers pattern-match on
+    // (e.g. `Flow`'s checkpoint logic for `NodePartialExecutionFailed`).
+    assert!(
+      matches!(result, Err(AgentFlowError::ValidationError(ref msg)) if msg == "bad input"),
+      "expected the original ValidationError to pass through, got {result:?}"
     );
   }
 }

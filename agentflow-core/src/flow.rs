@@ -3345,6 +3345,93 @@ mod tests {
     );
   }
 
+  /// W0.4 regression: a node configured with `node_retry_policy` that
+  /// fails with `NodePartialExecutionFailed` on a non-retryable error
+  /// (the default policy only retries Network/Timeout/RateLimit) used to
+  /// have `execute_with_retry_and_hook` unconditionally coerce that into
+  /// `RetryExhausted` even though zero retries ever happened — discarding
+  /// `partial_outputs` before it ever reached `checkpointable_value`,
+  /// which only recognizes `NodeSkipped` / `NodePartialExecutionFailed`
+  /// (anything else, including `RetryExhausted`, is `Err(_) => None` and
+  /// never checkpointed at all). The state pool entry must still be the
+  /// original `NodePartialExecutionFailed`, and it must round-trip
+  /// through the checkpoint encode/decode with `partial_outputs` intact.
+  #[tokio::test]
+  async fn node_retry_policy_does_not_swallow_partial_failure_into_retry_exhausted() {
+    use_writable_home();
+
+    struct PartialFailureNode;
+
+    #[async_trait]
+    impl AsyncNode for PartialFailureNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut partial_outputs = HashMap::new();
+        partial_outputs.insert(
+          "agent_result".to_string(),
+          FlowValue::Json(json!({"steps": ["observe"]})),
+        );
+        Err(AgentFlowError::NodePartialExecutionFailed {
+          message: "interrupted mid-tool-call".to_string(),
+          partial_outputs,
+        })
+      }
+    }
+
+    let flow_nodes = vec![GraphNode {
+      id: "agent".to_string(),
+      node_type: NodeType::Standard(Arc::new(PartialFailureNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    }];
+
+    // Default policy: only Network/Timeout/RateLimit errors are
+    // retryable, so `NodePartialExecutionFailed` is never retried —
+    // exactly the "zero retries actually happened" case this fix covers.
+    let config =
+      FlowExecutionConfig::serial().with_node_retry_policy(crate::retry::RetryPolicy::default());
+
+    let state = Flow::new(flow_nodes)
+      .execute_from_inputs_with_config(HashMap::new(), config)
+      .await
+      .unwrap();
+
+    let partial_outputs = match state.get("agent") {
+      Some(Err(AgentFlowError::NodePartialExecutionFailed {
+        message,
+        partial_outputs,
+      })) => {
+        assert_eq!(message, "interrupted mid-tool-call");
+        partial_outputs.clone()
+      }
+      other => panic!(
+        "expected NodePartialExecutionFailed to survive node_retry_policy wrapping, got {other:?}"
+      ),
+    };
+    assert!(partial_outputs.contains_key("agent_result"));
+
+    // And it must actually make it into the checkpoint, not fall into
+    // `checkpointable_value`'s `Err(_) => None` catch-all.
+    let checkpoint_state =
+      FlowExecutor::new(&Flow::default()).state_pool_to_checkpoint_state(&state);
+    assert!(
+      checkpoint_state.contains_key("agent"),
+      "partial failure must still be checkpointed, not dropped"
+    );
+    let restored = FlowExecutor::checkpoint_state_to_state_pool(&checkpoint_state);
+    match restored.get("agent") {
+      Some(Err(AgentFlowError::NodePartialExecutionFailed {
+        partial_outputs, ..
+      })) => {
+        assert!(partial_outputs.contains_key("agent_result"));
+      }
+      other => {
+        panic!("expected NodePartialExecutionFailed after checkpoint round-trip, got {other:?}")
+      }
+    }
+  }
+
   #[tokio::test]
   async fn concurrent_checkpoint_captures_successful_branch_outputs() {
     use_writable_home();
