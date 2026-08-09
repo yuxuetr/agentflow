@@ -1,11 +1,13 @@
 //! Skill catalog + skill-routes (`GET /v1/skills`, `POST /v1/skills/{name}:run`).
 //!
-//! The catalog wraps `agentflow-skills::SkillRegistryIndex`. v0.3.0 N8
-//! ships read-only listing plus "submit a skill run" — the latter creates
-//! a `runs` row with the workflow column set to `@skill:<name>` and
-//! dispatches to the same `RunExecutor` that handles `/v1/runs`. Real
-//! skill agent invocation is wired into the executor in a follow-up
-//! commit (task #14 of the v0.3.0 series).
+//! The catalog wraps `agentflow-skills::SkillRegistryIndex`. "Submit a
+//! skill run" creates a `runs` row with the workflow column set to the
+//! `@skill:<name>` marker (optionally followed by `\n---\n<user input>`)
+//! and dispatches to the same `RunExecutor` that handles `/v1/runs` —
+//! `RunContext::skill_dir` carries the resolved manifest directory
+//! alongside it so `FlowRunExecutor` (W0.2, `crate::runs::skill_execute`)
+//! builds and runs a real `SkillBuilder`-constructed agent instead of
+//! trying to parse the marker as a Flow definition.
 
 use agentflow_skills::{ResolvedSkillRegistryEntry, SkillError, SkillRegistryIndex};
 use axum::{
@@ -170,8 +172,10 @@ pub struct RunSkillRequest {
 /// Resolution is best-effort: the path matches `:run` literally so the
 /// route conflicts with no existing skill name. If the catalog has no
 /// entry for `name`, return 404. Otherwise persist a queued `runs` row
-/// with `workflow = "@skill:<name>"` and dispatch via the same executor
-/// that handles `/v1/runs`. Skill agent integration lands in task #14.
+/// with `workflow = "@skill:<name>"` (+ optional `\n---\n<input>`) and
+/// dispatch via the same executor that handles `/v1/runs`, carrying the
+/// resolved skill directory on `RunContext::skill_dir` so the executor
+/// can build the agent without re-resolving the name.
 pub async fn run_skill(
   State(state): State<AppState>,
   Extension(tenant): Extension<TenantId>,
@@ -230,6 +234,10 @@ pub async fn run_skill(
   let live_state_registry = state.live_state_registry.clone();
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
+  // W0.2: the resolved skill's directory travels alongside the
+  // `@skill:<name>` marker so `FlowRunExecutor` can build the agent
+  // without re-resolving the name against the catalog.
+  let skill_dir = Some(resolved.path.clone());
   let handle = tokio::spawn(async move {
     executor
       .execute(RunContext {
@@ -241,6 +249,7 @@ pub async fn run_skill(
         broker,
         tenant_id,
         live_state_registry: Some(live_state_registry),
+        skill_dir,
       })
       .await;
     cancellation_registry.complete(run_id);

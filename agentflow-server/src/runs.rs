@@ -32,6 +32,10 @@ use agentflow_core::{
 };
 use agentflow_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
 
+use agentflow_agents::runtime::{AgentContext, AgentRuntime, AgentStopReason};
+use agentflow_llm::AgentFlow;
+use agentflow_skills::{SkillBuilder, SkillLoader};
+
 use crate::events_stream::broker_finalize_grace;
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
 
@@ -160,6 +164,14 @@ pub struct RunContext {
   /// always carry the `AppState`'s shared registry so the `/metrics`
   /// scrape can read what's running.
   pub live_state_registry: Option<crate::live_state_registry::LiveStateRegistry>,
+  /// W0.2: when set, this run is a skill invocation (`workflow` is the
+  /// `@skill:<name>` marker `crate::skills::run_skill` builds, optionally
+  /// followed by `\n---\n<user input>`) and this is the resolved skill
+  /// manifest's directory, already looked up from the catalog at submit
+  /// time. `FlowRunExecutor` branches on this instead of trying to parse
+  /// `workflow` as a Flow YAML/JSON definition. `None` for every
+  /// `POST /v1/runs` submission — only `POST /v1/skills/{name}:run` sets it.
+  pub skill_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -394,13 +406,33 @@ impl RunExecutor for StubExecutor {
   }
 }
 
-/// In-process executor for config-first DAG workflows.
+/// In-process executor for config-first DAG workflows (and, since W0.2,
+/// skill invocations submitted via `POST /v1/skills/{name}:run` —
+/// `ctx.skill_dir` distinguishes the two rather than sniffing the
+/// `workflow` string, since `@skill:<name>` is not valid Flow YAML/JSON).
 #[derive(Clone, Debug, Default)]
 pub struct FlowRunExecutor;
 
 #[async_trait]
 impl RunExecutor for FlowRunExecutor {
   async fn execute(&self, ctx: RunContext) {
+    if ctx.skill_dir.is_some() {
+      if let Err(e) = skill_execute(&ctx).await {
+        error!(run_id = %ctx.run_id, error = %e, "skill executor failed");
+        let _ = ctx
+          .repos
+          .runs
+          .update_status(ctx.run_id, RunStatus::Failed, Some(&e.to_string()))
+          .await;
+        if let Some(registry) = &ctx.live_state_registry {
+          registry.deregister(&ctx.run_id);
+        }
+        ctx
+          .broker
+          .finalise_with_grace(ctx.run_id, broker_finalize_grace());
+      }
+      return;
+    }
     if let Err(e) = flow_execute(&ctx).await {
       error!(run_id = %ctx.run_id, error = %e, "flow executor failed");
       let status = if e.is_cancelled() {
@@ -528,6 +560,129 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   Ok(())
 }
 
+/// W0.2: lazy `AgentFlow::init()` guard, mirroring
+/// `harness_live::ensure_llm_initialized` — a skill run needs the LLM
+/// provider registry loaded exactly like a harness session does, but
+/// `LiveExecutorError` is private to that module so this is a small,
+/// independent copy rather than a cross-module dependency.
+async fn ensure_llm_initialized() -> anyhow::Result<()> {
+  static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+  INIT
+    .get_or_try_init(|| async { AgentFlow::init().await })
+    .await?;
+  Ok(())
+}
+
+/// Split the `@skill:<name>` marker `crate::skills::run_skill` builds
+/// back into the skill name and the optional user input that followed
+/// `\n---\n`. Panics on a malformed marker — `skill_execute` only ever
+/// receives what `run_skill` constructed, so a mismatch is a programming
+/// error in this crate, not a value to degrade gracefully around.
+fn parse_skill_marker(workflow: &str) -> (&str, &str) {
+  let rest = workflow
+    .strip_prefix("@skill:")
+    .expect("skill_execute called with a non-@skill: workflow marker");
+  match rest.split_once("\n---\n") {
+    Some((name, input)) => (name, input),
+    None => (rest, ""),
+  }
+}
+
+/// W0.2: run a skill as a `POST /v1/skills/{name}:run` submission —
+/// build a `ReActAgent` from the resolved manifest via `SkillBuilder`
+/// and drive one turn, instead of `flow_execute`'s DAG path (a skill
+/// invocation is an agent loop, not a `Flow`).
+async fn skill_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError> {
+  ctx
+    .repos
+    .runs
+    .update_status(ctx.run_id, RunStatus::Running, None)
+    .await?;
+
+  let skill_dir = ctx
+    .skill_dir
+    .as_deref()
+    .expect("skill_execute requires RunContext::skill_dir");
+  let (skill_name, user_input) = parse_skill_marker(&ctx.workflow);
+
+  let result = run_skill_agent(skill_dir, user_input, &ctx.run_id.to_string()).await?;
+
+  let (status, error_message) = match &result.stop_reason {
+    AgentStopReason::FinalAnswer => (RunStatus::Succeeded, None),
+    other => (
+      RunStatus::Failed,
+      Some(format!(
+        "skill run did not finish with a final answer: {other:?}"
+      )),
+    ),
+  };
+
+  publish_through(
+    &ctx.repos,
+    &ctx.broker,
+    NewEvent {
+      run_id: ctx.run_id,
+      seq: 0,
+      kind: "skill_run_completed".into(),
+      payload: serde_json::json!({
+        "skill": skill_name,
+        "answer": result.answer,
+        "stop_reason": format!("{:?}", result.stop_reason),
+      }),
+      tenant_id: Some(ctx.tenant_id.clone()),
+    },
+  )
+  .await?;
+
+  ctx
+    .repos
+    .runs
+    .update_status(ctx.run_id, status, error_message.as_deref())
+    .await?;
+
+  if let Some(registry) = &ctx.live_state_registry {
+    registry.deregister(&ctx.run_id);
+  }
+  ctx
+    .broker
+    .finalise_with_grace(ctx.run_id, broker_finalize_grace());
+  info!(run_id = %ctx.run_id, skill = skill_name, "skill executor finished");
+  Ok(())
+}
+
+/// Load the manifest, build the agent, and drive one turn. Split out of
+/// `skill_execute` so the DB/event/status bookkeeping above stays
+/// readable and this half can convert every failure mode uniformly via
+/// `anyhow`.
+async fn run_skill_agent(
+  skill_dir: &FsPath,
+  user_input: &str,
+  session_id: &str,
+) -> anyhow::Result<agentflow_agent_spi::runtime::AgentRunResult> {
+  ensure_llm_initialized().await?;
+
+  let manifest = SkillLoader::load(skill_dir).map_err(|e| {
+    anyhow::anyhow!(
+      "failed to load skill manifest at {}: {e}",
+      skill_dir.display()
+    )
+  })?;
+  let _warnings = SkillLoader::validate(&manifest, skill_dir)
+    .map_err(|e| anyhow::anyhow!("skill validation failed: {e}"))?;
+  let model = manifest.model.resolved_model().to_owned();
+  let mut agent = SkillBuilder::build(&manifest, skill_dir)
+    .await
+    .map_err(|e| anyhow::anyhow!("failed to build agent from skill manifest: {e}"))?;
+
+  let context = AgentContext::new(session_id, user_input, &model);
+  // `ReActAgent` has an inherent `run(&mut self, &str) -> Result<String, _>`
+  // that shadows the `AgentRuntime` trait method of the same name for
+  // direct calls — UFCS picks the trait method we actually want.
+  AgentRuntime::run(&mut agent, context)
+    .await
+    .map_err(|e| anyhow::anyhow!("skill agent run failed: {e}"))
+}
+
 /// Resolve the gateway's opt-in file-backed trace dir. Returns `None`
 /// when `AGENTFLOW_TRACE_DIR` is unset / empty so the default deployment
 /// does not silently accumulate JSON files outside the cleanup sweep.
@@ -648,17 +803,27 @@ pub async fn submit_run(
   Extension(tenant): Extension<TenantId>,
   JsonReq(req): JsonReq<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, ApiError> {
-  let workflow = req.workflow.or_else(|| {
-    req.workflow_id.as_ref().map(|id| {
-      // Reference-by-id is reserved for future use. We persist it as a
-      // marker payload so operators can see what was submitted.
-      format!("@workflow:{}", id)
-    })
-  });
-  let Some(workflow) = workflow else {
-    return Err(ApiError::BadRequest(
-      "request body must include `workflow` (string) or `workflow_id`".into(),
-    ));
+  // W0.2: `workflow_id` (reference-by-id) has no backing store — it used
+  // to be silently accepted and persisted as an opaque `@workflow:<id>`
+  // marker string that the executor could never actually run (it isn't
+  // valid Flow YAML/JSON), so every such submission failed deep inside
+  // `flow_execute` with a confusing parse error instead of a clear 400 at
+  // the API boundary. Reject it explicitly here until a workflow store
+  // exists to resolve it against.
+  let workflow = match (req.workflow, req.workflow_id) {
+    (Some(workflow), _) => workflow,
+    (None, Some(_id)) => {
+      return Err(ApiError::BadRequest(
+        "`workflow_id` (reference-by-id) is not implemented yet — submit an inline \
+         `workflow` string instead"
+          .into(),
+      ));
+    }
+    (None, None) => {
+      return Err(ApiError::BadRequest(
+        "request body must include `workflow` (string)".into(),
+      ));
+    }
   };
 
   let (events_retention_days, artifacts_retention_days) = match req.retention_overrides {
@@ -732,6 +897,7 @@ pub async fn submit_run(
         broker,
         tenant_id,
         live_state_registry: Some(live_state_registry),
+        skill_dir: None,
       })
       .await;
     cancellation_registry.complete(run_id);
