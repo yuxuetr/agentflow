@@ -133,9 +133,76 @@ pub fn validate_flow_definition_with_options(
         ));
       }
     }
+
+    warn_on_input_source_collisions(flow_def, node, &path, &mut report);
   }
 
   report
+}
+
+/// W1.3: `Flow`'s per-node input assembly (`flow.rs`) merges three
+/// sources with `HashMap::extend`, so the *last* extend silently wins on
+/// a name collision: `input_mapping` results first (lowest priority),
+/// then this node's YAML `parameters:` (overrides `input_mapping`),
+/// then the workflow-level `inputs:` block / CLI `--input` (overrides
+/// both). None of that is enforced or even visible at authoring time —
+/// a workflow author renaming/adding a workflow-level input can silently
+/// break a node's `input_mapping` or `parameters` default without any
+/// error, only a confusing runtime value. Warn (not reject: the
+/// precedence is real, working behavior, not an issue) whenever the
+/// same name appears in 2+ of the three sources for a given node, so
+/// the collision is visible during `workflow validate`/`doctor` instead
+/// of during "why is this node getting the wrong value" debugging.
+fn warn_on_input_source_collisions(
+  flow_def: &FlowDefinitionV2,
+  node: &NodeDefinitionV2,
+  path: &str,
+  report: &mut WorkflowValidationReport,
+) {
+  if flow_def.inputs.is_empty() && node.parameters.is_empty() {
+    return;
+  }
+  let mut names: BTreeSet<&str> = BTreeSet::new();
+  names.extend(node.parameters.keys().map(String::as_str));
+  names.extend(node.input_mapping.keys().map(String::as_str));
+  names.extend(flow_def.inputs.keys().map(String::as_str));
+
+  for name in names {
+    let in_workflow_inputs = flow_def.inputs.contains_key(name);
+    let in_parameters = node.parameters.contains_key(name);
+    let in_input_mapping = node.input_mapping.contains_key(name);
+    let source_count = in_workflow_inputs as u8 + in_parameters as u8 + in_input_mapping as u8;
+    if source_count < 2 {
+      continue;
+    }
+
+    let winner = if in_workflow_inputs {
+      "the workflow-level `inputs:` block"
+    } else {
+      "this node's `parameters`"
+    };
+    let mut also_declared_in = Vec::new();
+    if in_workflow_inputs {
+      also_declared_in.push("workflow-level `inputs:`");
+    }
+    if in_parameters {
+      also_declared_in.push("this node's `parameters`");
+    }
+    if in_input_mapping {
+      also_declared_in.push("this node's `input_mapping`");
+    }
+
+    report.warnings.push(format!(
+      "{}.{} input '{}' is declared in {} — {} silently wins at runtime \
+       (Flow's node input assembly order: input_mapping < parameters < \
+       workflow-level inputs). Rename one of them to remove the ambiguity.",
+      path,
+      node.id,
+      name,
+      also_declared_in.join(" and "),
+      winner
+    ));
+  }
 }
 
 fn validate_node_schema(
@@ -669,6 +736,94 @@ nodes:
     let report = validate_flow_definition(&flow);
 
     assert_eq!(report.issues, Vec::<String>::new());
+  }
+
+  /// W1.3 regression: `Flow`'s node input assembly (`flow.rs`) merges
+  /// `input_mapping` results, then node `parameters`, then the
+  /// workflow-level `inputs:` block with `HashMap::extend` — the last
+  /// extend silently wins on a name collision, with no error or warning
+  /// anywhere pre-fix. `topic` here is declared in all three sources on
+  /// the `render` node; the workflow-level value always wins, silently
+  /// discarding both the node's own `parameters.topic` default and its
+  /// `input_mapping.topic` dynamic value. Asserts the collision is now
+  /// surfaced as a warning (not an issue — the precedence is real,
+  /// working behavior) naming all three sources and the actual winner.
+  #[test]
+  fn warns_when_workflow_input_node_parameter_and_input_mapping_collide() {
+    let flow = parse_workflow(
+      r#"
+name: Colliding Inputs
+inputs:
+  topic:
+    default: "from workflow"
+nodes:
+  - id: search
+    type: template
+    parameters:
+      template: "Hello"
+  - id: render
+    type: template
+    dependencies: [search]
+    input_mapping:
+      topic: "{{ nodes.search.outputs.output }}"
+    parameters:
+      topic: "from node parameters"
+      template: "{{ topic }}"
+"#,
+    );
+
+    let report = validate_flow_definition(&flow);
+
+    assert_eq!(report.issues, Vec::<String>::new());
+    let collision_warning = report
+      .warnings
+      .iter()
+      .find(|w| w.contains("nodes[1]") && w.contains("'topic'"))
+      .unwrap_or_else(|| {
+        panic!(
+          "expected a topic collision warning, got {:?}",
+          report.warnings
+        )
+      });
+    assert!(
+      collision_warning.contains("workflow-level `inputs:`")
+        && collision_warning.contains("this node's `parameters`")
+        && collision_warning.contains("this node's `input_mapping`"),
+      "warning should name all three colliding sources: {collision_warning}"
+    );
+    assert!(
+      collision_warning.contains("the workflow-level `inputs:` block silently wins"),
+      "warning should identify the actual winner: {collision_warning}"
+    );
+  }
+
+  /// W1.3: a name declared in only ONE source (or appearing in a
+  /// different node than the workflow-level input, or not declared at
+  /// the workflow level at all) is not a collision and must not warn.
+  #[test]
+  fn no_collision_warning_when_input_names_do_not_overlap() {
+    let flow = parse_workflow(
+      r#"
+name: No Collision
+inputs:
+  topic:
+    default: "hello"
+nodes:
+  - id: render
+    type: template
+    parameters:
+      template: "{{ topic }}"
+      other_param: "unrelated"
+"#,
+    );
+
+    let report = validate_flow_definition(&flow);
+
+    assert!(
+      report.warnings.iter().all(|w| !w.contains("silently wins")),
+      "expected no input-source-collision warnings, got {:?}",
+      report.warnings
+    );
   }
 
   #[test]
