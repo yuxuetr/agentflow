@@ -20,8 +20,10 @@ use std::time::Duration;
 /// Default deadline a `ServerApprovalProvider` waits for an operator
 /// decision before timing out (P-H.5 slice 2). Five minutes balances UI
 /// reaction time against not stalling a multi-tenant deployment
-/// indefinitely.
-const HARNESS_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// indefinitely. `pub(crate)` since W4.1b: skill runs (`runs.rs`/
+/// `skills.rs`) reuse this same deadline for their own
+/// `ServerApprovalProvider` instead of inventing a second constant.
+pub(crate) const HARNESS_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 use serde::Serialize;
 use tracing::{error, info, warn};

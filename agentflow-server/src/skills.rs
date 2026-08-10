@@ -232,6 +232,7 @@ pub async fn run_skill(
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
   let live_state_registry = state.live_state_registry.clone();
+  let approval_registry = state.approval_registry.clone();
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   // W0.2: the resolved skill's directory travels alongside the
@@ -250,6 +251,8 @@ pub async fn run_skill(
         tenant_id,
         live_state_registry: Some(live_state_registry),
         skill_dir,
+        approval_registry,
+        approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
       })
       .await;
     cancellation_registry.complete(run_id);

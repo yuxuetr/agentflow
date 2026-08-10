@@ -113,7 +113,7 @@ impl HarnessEventSink for ServerHarnessEventSink {
   }
 }
 
-fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
+pub(crate) fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
   match body {
     HarnessEventBody::SessionStarted(_) => "session_started",
     HarnessEventBody::StepStarted(_) => "step_started",

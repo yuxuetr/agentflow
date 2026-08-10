@@ -76,8 +76,9 @@ pub use live_state_registry::LiveStateRegistry;
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
   ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunAdmissionError, RunAdmissionGuard,
-  RunAdmissionRegistry, RunCancellationRegistry, RunContext, RunExecutor, RunResponse,
-  StubExecutor, cancel_run, default_executor, get_run, get_run_resume_plan, list_runs, submit_run,
+  RunAdmissionRegistry, RunApprovalDecisionResponse, RunCancellationRegistry, RunContext,
+  RunExecutor, RunResponse, StubExecutor, cancel_run, decide_run_approval, default_executor,
+  get_run, get_run_resume_plan, list_run_approvals, list_runs, submit_run,
 };
 pub use scheduler::{
   AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,
@@ -557,6 +558,11 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/runs/:id/resume-plan", get(get_run_resume_plan))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
+    .route("/v1/runs/:id/approvals", get(list_run_approvals))
+    .route(
+      "/v1/runs/:id/approvals/:request_id",
+      post(decide_run_approval),
+    )
     .route("/v1/skills", get(list_skills))
     // The `:run` suffix is part of the path. Axum's pattern can't match a
     // literal segment containing `:`, so we capture the whole tail and

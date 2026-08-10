@@ -33,8 +33,13 @@ use agentflow_core::{
 use agentflow_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
 
 use agentflow_agents::runtime::{AgentContext, AgentRuntime, AgentStopReason};
+use agentflow_harness::{
+  ApprovalDecision, ApprovalProvider, ApprovalScope, HarnessEvent, HarnessEventSink,
+  HarnessProfile, HookConfig, SinkChain, wrap_registry,
+};
 use agentflow_llm::AgentFlow;
 use agentflow_skills::{SkillBuilder, SkillLoader};
+use agentflow_tools::ToolRegistry;
 
 use crate::events_stream::broker_finalize_grace;
 use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
@@ -42,6 +47,10 @@ use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunS
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
 use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
+use crate::harness_approval::{
+  ApprovalDecisionRequest, ApprovalResolveError, PendingApprovalRegistry, PendingApprovalsResponse,
+  ServerApprovalProvider,
+};
 use crate::tenant::TenantId;
 
 /// JSON body for `POST /v1/runs`.
@@ -172,6 +181,15 @@ pub struct RunContext {
   /// `workflow` as a Flow YAML/JSON definition. `None` for every
   /// `POST /v1/runs` submission — only `POST /v1/skills/{name}:run` sets it.
   pub skill_dir: Option<PathBuf>,
+  /// W4.1b: shared with `AppState::approval_registry` so a skill run's
+  /// tool calls can be gated through the same approval pipeline every
+  /// other tool-execution surface uses. Unused by `flow_execute` (only
+  /// `skill_execute` consults it), but every `RunContext` carries it —
+  /// mirrors how `skill_dir` is `None` on the DAG path.
+  pub approval_registry: PendingApprovalRegistry,
+  /// W4.1b: deadline `ServerApprovalProvider` waits for an operator
+  /// decision on a skill run's pending approval before timing out.
+  pub approval_timeout: Duration,
 }
 
 #[derive(Clone, Default)]
@@ -605,7 +623,7 @@ async fn skill_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError
     .expect("skill_execute requires RunContext::skill_dir");
   let (skill_name, user_input) = parse_skill_marker(&ctx.workflow);
 
-  let result = run_skill_agent(skill_dir, user_input, &ctx.run_id.to_string()).await?;
+  let (result, next_seq) = run_skill_agent(ctx, skill_dir, user_input).await?;
 
   let (status, error_message) = match &result.stop_reason {
     AgentStopReason::FinalAnswer => (RunStatus::Succeeded, None),
@@ -622,7 +640,7 @@ async fn skill_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError
     &ctx.broker,
     NewEvent {
       run_id: ctx.run_id,
-      seq: 0,
+      seq: next_seq,
       kind: "skill_run_completed".into(),
       payload: serde_json::json!({
         "skill": skill_name,
@@ -654,11 +672,26 @@ async fn skill_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError
 /// `skill_execute` so the DB/event/status bookkeeping above stays
 /// readable and this half can convert every failure mode uniformly via
 /// `anyhow`.
+///
+/// W4.1b: the built agent's tool registry is wrapped through
+/// `wrap_registry`/`HookConfig` exactly like the CLI's `harness run` and
+/// the server's own harness-session path already do (`ReActAgent::tools()`
+/// / `with_tools()` is the reusable registry-swap hook both of those use;
+/// `agentflow-cli/src/commands/harness/run.rs:194-199` is the pattern
+/// mirrored here) — before this, a skill's `shell`/`script`/`code_exec`
+/// tools ran with zero approval gating under `/v1/skills/{name}:run`,
+/// unlike every other tool-execution surface. `HarnessProfile::Production`
+/// auto-escalates every `NonIdempotent` tool call to require approval,
+/// matching the "safe by default" posture this API has no per-request
+/// profile knob to opt out of. Returns the next free `events`-table `seq`
+/// alongside the agent result so the caller's own `skill_run_completed`
+/// event doesn't collide with whatever `RunHarnessEventSink` already wrote
+/// (both write into the same `(run_id, seq)`-keyed table).
 async fn run_skill_agent(
+  ctx: &RunContext,
   skill_dir: &FsPath,
   user_input: &str,
-  session_id: &str,
-) -> anyhow::Result<agentflow_agent_spi::runtime::AgentRunResult> {
+) -> anyhow::Result<(agentflow_agent_spi::runtime::AgentRunResult, i64)> {
   ensure_llm_initialized().await?;
 
   let manifest = SkillLoader::load(skill_dir).map_err(|e| {
@@ -674,13 +707,196 @@ async fn run_skill_agent(
     .await
     .map_err(|e| anyhow::anyhow!("failed to build agent from skill manifest: {e}"))?;
 
-  let context = AgentContext::new(session_id, user_input, &model);
+  let session_id = ctx.run_id.to_string();
+  let seq_counter = Arc::new(std::sync::atomic::AtomicI64::new(0));
+  let run_sink: Arc<dyn HarnessEventSink> = Arc::new(RunHarnessEventSink::new(
+    ctx.run_id,
+    ctx.tenant_id.clone(),
+    ctx.repos.clone(),
+    ctx.broker.clone(),
+    seq_counter.clone(),
+  ));
+  let approval_provider: Arc<dyn ApprovalProvider> = Arc::new(ServerApprovalProvider::new(
+    ctx.approval_registry.clone(),
+    ctx.approval_timeout,
+  ));
+  let hook_config = HookConfig::new(
+    session_id.clone(),
+    approval_provider,
+    SinkChain::new().push(run_sink),
+  )
+  .with_profile(HarnessProfile::Production)
+  .with_approval_timeout(ctx.approval_timeout);
+
+  let mut snapshot = ToolRegistry::new();
+  for tool in agent.tools().list() {
+    snapshot.register(tool);
+  }
+  let wrapped = wrap_registry(snapshot, hook_config);
+  agent = agent.with_tools(Arc::new(wrapped));
+
+  let context = AgentContext::new(&session_id, user_input, &model);
   // `ReActAgent` has an inherent `run(&mut self, &str) -> Result<String, _>`
   // that shadows the `AgentRuntime` trait method of the same name for
   // direct calls — UFCS picks the trait method we actually want.
-  AgentRuntime::run(&mut agent, context)
+  let result = AgentRuntime::run(&mut agent, context)
     .await
-    .map_err(|e| anyhow::anyhow!("skill agent run failed: {e}"))
+    .map_err(|e| anyhow::anyhow!("skill agent run failed: {e}"))?;
+
+  let next_seq = seq_counter.load(std::sync::atomic::Ordering::SeqCst);
+  Ok((result, next_seq))
+}
+
+/// Fans every `HarnessEvent` a wrapped skill-run tool call emits
+/// (`tool_call_requested`/`approval_requested`/`approval_decided`/
+/// `tool_call_completed`) into the run's own `events` table, via the same
+/// `publish_through` helper `skill_execute`'s completion event uses — so
+/// these land on the SSE stream `/v1/runs/{id}/events` already serves
+/// instead of an `harness_session_events` row keyed by a session id no
+/// caller is watching (W4.1b). Mirrors `harness_live::ServerHarnessEventSink`,
+/// with two differences: destination table, and `seq` sourced from a
+/// counter private to this one skill run rather than a `SeqAllocator`
+/// shared with a `HarnessRuntime` (a skill run has no such runtime).
+struct RunHarnessEventSink {
+  run_id: Uuid,
+  tenant_id: String,
+  repos: Repositories,
+  broker: EventBroker,
+  seq: Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl RunHarnessEventSink {
+  fn new(
+    run_id: Uuid,
+    tenant_id: String,
+    repos: Repositories,
+    broker: EventBroker,
+    seq: Arc<std::sync::atomic::AtomicI64>,
+  ) -> Self {
+    Self {
+      run_id,
+      tenant_id,
+      repos,
+      broker,
+      seq,
+    }
+  }
+}
+
+#[async_trait]
+impl HarnessEventSink for RunHarnessEventSink {
+  fn name(&self) -> &str {
+    "run"
+  }
+
+  async fn write(&self, event: &HarnessEvent) -> Result<(), agentflow_harness::HarnessError> {
+    let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let kind = crate::harness_live::harness_event_kind(&event.body);
+    let payload = serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);
+    if let Err(err) = publish_through(
+      &self.repos,
+      &self.broker,
+      NewEvent {
+        run_id: self.run_id,
+        seq,
+        kind: kind.to_string(),
+        payload,
+        tenant_id: Some(self.tenant_id.clone()),
+      },
+    )
+    .await
+    {
+      // Non-fatal, mirroring `ServerHarnessEventSink`: dropping a
+      // synthetic event is safer than aborting a real skill run over a
+      // transient DB write failure.
+      error!(
+        run_id = %self.run_id,
+        seq,
+        error = %err,
+        "run harness event sink: persist failed"
+      );
+    }
+    Ok(())
+  }
+}
+
+/// `GET /v1/runs/{id}/approvals` — list pending approvals for a skill
+/// run, oldest first. Mirrors `harness_approval::list_pending_approvals`
+/// but keyed by `run_id` against the same shared
+/// `AppState::approval_registry` (W4.1b).
+pub async fn list_run_approvals(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path(run_id): Path<Uuid>,
+) -> Result<Json<PendingApprovalsResponse>, ApiError> {
+  let run = state
+    .repos
+    .runs
+    .get(run_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
+  // P2.6 tenant boundary, same as the harness-session route.
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", run_id)));
+  }
+
+  let pending = state.approval_registry.list(&run_id.to_string());
+  Ok(Json(PendingApprovalsResponse { approvals: pending }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunApprovalDecisionResponse {
+  pub run_id: Uuid,
+  pub request_id: String,
+  pub resolved: bool,
+}
+
+/// `POST /v1/runs/{id}/approvals/{request_id}` — decide a pending
+/// approval for a skill run. Mirrors `harness_approval::decide_approval`
+/// but keyed by `run_id` (W4.1b).
+pub async fn decide_run_approval(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path((run_id, request_id)): Path<(Uuid, String)>,
+  JsonReq(body): JsonReq<ApprovalDecisionRequest>,
+) -> Result<Json<RunApprovalDecisionResponse>, ApiError> {
+  let run = state
+    .repos
+    .runs
+    .get(run_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {} not found", run_id)))?;
+  if run.tenant_id != tenant.as_str() {
+    return Err(ApiError::NotFound(format!("run {} not found", run_id)));
+  }
+
+  let decision = ApprovalDecision {
+    request_id: request_id.clone(),
+    decision: body.decision,
+    scope: body.scope.unwrap_or(ApprovalScope::Once),
+    decided_by: body.decided_by.unwrap_or_else(|| "user:http".to_string()),
+    decided_at: chrono::Utc::now(),
+    reason: body.reason,
+  };
+
+  match state
+    .approval_registry
+    .decide(&run_id.to_string(), &request_id, decision)
+  {
+    Ok(()) => Ok(Json(RunApprovalDecisionResponse {
+      run_id,
+      request_id,
+      resolved: true,
+    })),
+    Err(ApprovalResolveError::NotFound) => Err(ApiError::NotFound(format!(
+      "no pending approval {} for run {}",
+      request_id, run_id
+    ))),
+    Err(ApprovalResolveError::ProviderGone) => Err(ApiError::BadRequest(format!(
+      "approval {} cannot be decided: provider future already dropped",
+      request_id
+    ))),
+  }
 }
 
 /// Resolve the gateway's opt-in file-backed trace dir. Returns `None`
@@ -881,6 +1097,7 @@ pub async fn submit_run(
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
   let live_state_registry = state.live_state_registry.clone();
+  let approval_registry = state.approval_registry.clone();
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
@@ -898,6 +1115,8 @@ pub async fn submit_run(
         tenant_id,
         live_state_registry: Some(live_state_registry),
         skill_dir: None,
+        approval_registry,
+        approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
       })
       .await;
     cancellation_registry.complete(run_id);
