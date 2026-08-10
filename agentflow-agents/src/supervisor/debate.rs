@@ -30,7 +30,6 @@ use chrono::Utc;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use crate::react::ReActAgent;
 use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason,
@@ -76,8 +75,8 @@ pub enum DebateSupervisorError {
 /// [`AgentNode`]: crate::nodes::AgentNode
 pub struct DebateSupervisor {
   /// Participants in registration order so traces are deterministic.
-  participants: Vec<(String, Arc<AsyncMutex<ReActAgent>>)>,
-  judge: Arc<AsyncMutex<ReActAgent>>,
+  participants: Vec<(String, super::common::SharedAgentRuntime)>,
+  judge: super::common::SharedAgentRuntime,
   rounds: usize,
   judge_prompt_template: String,
   session_id: String,
@@ -215,7 +214,7 @@ impl AgentRuntime for DebateSupervisor {
         let child_ctx = build_child_context(&context, name, &round_input);
         let task = tokio::spawn(async move {
           let mut guard = agent_handle.lock().await;
-          AgentRuntime::run(&mut *guard, child_ctx).await
+          guard.run(child_ctx).await
         });
         handles.push((name.clone(), task));
       }
@@ -292,7 +291,7 @@ impl AgentRuntime for DebateSupervisor {
     let judge_ctx = build_child_context(&context, "judge", &judge_input);
     let judge_result = {
       let mut guard = self.judge.lock().await;
-      AgentRuntime::run(&mut *guard, judge_ctx).await?
+      guard.run(judge_ctx).await?
     };
     step_index = merge_child_into(&mut steps, &mut events, step_index, judge_result.clone());
 
@@ -410,14 +409,14 @@ fn stopped(
 /// Builder for [`DebateSupervisor`].
 pub struct DebateSupervisorBuilder {
   participants: Vec<DebateAgentSpec>,
-  judge: Option<ReActAgent>,
+  judge: Option<Box<dyn AgentRuntime>>,
   rounds: usize,
   judge_prompt_template: String,
 }
 
 struct DebateAgentSpec {
   name: String,
-  agent: ReActAgent,
+  agent: Box<dyn AgentRuntime>,
 }
 
 impl Default for DebateSupervisorBuilder {
@@ -436,18 +435,23 @@ impl DebateSupervisorBuilder {
     Self::default()
   }
 
-  /// Register a participant. Names must be unique.
-  pub fn add_participant(mut self, name: impl Into<String>, agent: ReActAgent) -> Self {
+  /// Register a participant. Names must be unique. Accepts any
+  /// [`AgentRuntime`] (W3.2), not just `ReActAgent`.
+  pub fn add_participant<A: AgentRuntime + 'static>(
+    mut self,
+    name: impl Into<String>,
+    agent: A,
+  ) -> Self {
     self.participants.push(DebateAgentSpec {
       name: name.into(),
-      agent,
+      agent: Box::new(agent),
     });
     self
   }
 
-  /// Set the judge agent. Required.
-  pub fn judge(mut self, agent: ReActAgent) -> Self {
-    self.judge = Some(agent);
+  /// Set the judge agent. Required. Accepts any [`AgentRuntime`] (W3.2).
+  pub fn judge<A: AgentRuntime + 'static>(mut self, agent: A) -> Self {
+    self.judge = Some(Box::new(agent));
     self
   }
 
@@ -480,7 +484,7 @@ impl DebateSupervisorBuilder {
     }
     let judge = self.judge.ok_or(DebateSupervisorError::NoJudge)?;
 
-    let participants: Vec<(String, Arc<AsyncMutex<ReActAgent>>)> = self
+    let participants: Vec<(String, super::common::SharedAgentRuntime)> = self
       .participants
       .into_iter()
       .map(|s| (s.name, Arc::new(AsyncMutex::new(s.agent))))
@@ -757,5 +761,45 @@ providers:
       result.stop_reason,
       AgentStopReason::Cancelled { .. }
     ));
+  }
+
+  /// W3.2 regression: pre-fix, `add_participant`/`judge` required a
+  /// concrete `ReActAgent`. This stub needs no LLM at all, proving any
+  /// `AgentRuntime` impl can now serve as a participant or judge.
+  struct StubRuntime {
+    answer: String,
+  }
+  #[async_trait]
+  impl AgentRuntime for StubRuntime {
+    async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError> {
+      Ok(AgentRunResult {
+        session_id: context.session_id,
+        answer: Some(self.answer.clone()),
+        stop_reason: AgentStopReason::FinalAnswer,
+        steps: Vec::new(),
+        events: Vec::new(),
+      })
+    }
+    fn runtime_name(&self) -> &'static str {
+      "stub"
+    }
+  }
+
+  #[tokio::test]
+  async fn add_participant_and_judge_accept_non_react_agent_runtimes() {
+    let mut supervisor = DebateSupervisorBuilder::new()
+      .add_participant(
+        "alpha",
+        StubRuntime {
+          answer: "alpha proposal".to_string(),
+        },
+      )
+      .judge(StubRuntime {
+        answer: "judge verdict".to_string(),
+      })
+      .build()
+      .unwrap();
+    let answer = supervisor.run("hello").await.unwrap();
+    assert_eq!(answer, "judge verdict");
   }
 }

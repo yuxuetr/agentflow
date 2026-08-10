@@ -32,7 +32,6 @@ use uuid::Uuid;
 
 use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput};
 
-use crate::react::ReActAgent;
 use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason,
@@ -186,7 +185,7 @@ pub enum HandoffSupervisorError {
 /// [`AgentNode`]: crate::nodes::AgentNode
 /// [`PlanExecuteAgent`]: crate::PlanExecuteAgent
 pub struct HandoffSupervisor {
-  agents: HashMap<String, Arc<AsyncMutex<ReActAgent>>>,
+  agents: HashMap<String, super::common::SharedAgentRuntime>,
   /// Insertion-ordered list of (name, description) for trace observability.
   agent_descriptions: Vec<(String, String)>,
   initial_agent: String,
@@ -293,7 +292,7 @@ impl AgentRuntime for HandoffSupervisor {
 
       let child_result = {
         let mut agent = agent_handle.lock().await;
-        AgentRuntime::run(&mut *agent, child_ctx).await?
+        agent.run(child_ctx).await?
       };
 
       step_index = merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
@@ -449,7 +448,7 @@ pub struct HandoffSupervisorBuilder {
 struct HandoffAgentSpec {
   name: String,
   description: String,
-  factory: Box<dyn FnOnce(Arc<HandoffTool>) -> ReActAgent + Send>,
+  factory: Box<dyn FnOnce(Arc<HandoffTool>) -> Box<dyn AgentRuntime> + Send>,
 }
 
 impl Default for HandoffSupervisorBuilder {
@@ -469,20 +468,25 @@ impl HandoffSupervisorBuilder {
   }
 
   /// Register an agent. The factory receives the shared [`HandoffTool`] and
-  /// must include it in the constructed [`ReActAgent`]'s tool registry.
-  pub fn add_agent<F>(
+  /// must include it in the constructed agent's tool registry. Accepts any
+  /// [`AgentRuntime`] (W3.2) — a [`ReActAgent`], a [`PlanExecuteAgent`], or
+  /// even a nested [`Supervisor`](crate::Supervisor) — not just `ReActAgent`.
+  ///
+  /// [`PlanExecuteAgent`]: crate::PlanExecuteAgent
+  pub fn add_agent<F, A>(
     mut self,
     name: impl Into<String>,
     description: impl Into<String>,
     factory: F,
   ) -> Self
   where
-    F: FnOnce(Arc<HandoffTool>) -> ReActAgent + Send + 'static,
+    F: FnOnce(Arc<HandoffTool>) -> A + Send + 'static,
+    A: AgentRuntime + 'static,
   {
     self.pending.push(HandoffAgentSpec {
       name: name.into(),
       description: description.into(),
-      factory: Box::new(factory),
+      factory: Box::new(move |tool| Box::new(factory(tool)) as Box<dyn AgentRuntime>),
     });
     self
   }
@@ -535,7 +539,7 @@ impl HandoffSupervisorBuilder {
     let signal = self.preset_signal.clone().unwrap_or_default();
     let handoff_tool = Arc::new(HandoffTool::new(target_names.clone(), signal.clone()));
 
-    let mut agents: HashMap<String, Arc<AsyncMutex<ReActAgent>>> = HashMap::new();
+    let mut agents: HashMap<String, super::common::SharedAgentRuntime> = HashMap::new();
     let mut agent_descriptions: Vec<(String, String)> = Vec::new();
     for spec in self.pending {
       let agent = (spec.factory)(handoff_tool.clone());
@@ -980,5 +984,44 @@ providers:
     } else {
       panic!("expected ReflectionAdded");
     }
+  }
+
+  /// W3.2 regression: pre-fix, `add_agent`'s factory closure had to return
+  /// a concrete `ReActAgent` — a `PlanExecuteAgent`, a nested `Supervisor`,
+  /// or (as here) any other `AgentRuntime` impl could not participate. This
+  /// stub needs no LLM at all, proving the fix at the type level (the
+  /// closure compiles) and at runtime (the supervisor actually dispatches
+  /// to it and returns its answer).
+  struct StubRuntime {
+    answer: String,
+  }
+  #[async_trait]
+  impl AgentRuntime for StubRuntime {
+    async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError> {
+      Ok(AgentRunResult {
+        session_id: context.session_id,
+        answer: Some(self.answer.clone()),
+        stop_reason: AgentStopReason::FinalAnswer,
+        steps: Vec::new(),
+        events: Vec::new(),
+      })
+    }
+    fn runtime_name(&self) -> &'static str {
+      "stub"
+    }
+  }
+
+  #[tokio::test]
+  async fn add_agent_accepts_a_non_react_agent_runtime() {
+    let mut supervisor = HandoffSupervisorBuilder::new()
+      .add_agent("stub", "a non-ReActAgent participant", |_handoff| {
+        StubRuntime {
+          answer: "stub answer".to_string(),
+        }
+      })
+      .build()
+      .unwrap();
+    let answer = supervisor.run("hello").await.unwrap();
+    assert_eq!(answer, "stub answer");
   }
 }

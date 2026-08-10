@@ -32,7 +32,6 @@ use uuid::Uuid;
 
 use agentflow_tool::{Tool, ToolError, ToolMetadata, ToolOutput};
 
-use crate::react::ReActAgent;
 use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason, BlackboardOpKind,
@@ -316,7 +315,7 @@ pub enum BlackboardSupervisorError {
 ///
 /// [`AgentNode`]: crate::nodes::AgentNode
 pub struct BlackboardSupervisor {
-  agents: HashMap<String, Arc<AsyncMutex<ReActAgent>>>,
+  agents: HashMap<String, super::common::SharedAgentRuntime>,
   agent_descriptions: Vec<(String, String)>,
   schedule: BlackboardSchedule,
   stop: BlackboardStop,
@@ -363,7 +362,10 @@ impl BlackboardSupervisor {
       })
   }
 
-  fn agent_handle(&self, name: &str) -> Result<Arc<AsyncMutex<ReActAgent>>, AgentRuntimeError> {
+  fn agent_handle(
+    &self,
+    name: &str,
+  ) -> Result<super::common::SharedAgentRuntime, AgentRuntimeError> {
     self
       .agents
       .get(name)
@@ -525,7 +527,7 @@ async fn run_schedule(
         let child_ctx = supervisor.build_child_context(parent, name, &parent.input);
         let child_result = {
           let mut guard = agent.lock().await;
-          AgentRuntime::run(&mut *guard, child_ctx).await?
+          guard.run(child_ctx).await?
         };
         *next_index = merge_child_into(steps, events, *next_index, child_result);
         supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
@@ -543,7 +545,7 @@ async fn run_schedule(
         let ctx = supervisor.build_child_context(parent, name, &parent.input);
         handles.push(tokio::spawn(async move {
           let mut guard = agent.lock().await;
-          AgentRuntime::run(&mut *guard, ctx).await
+          guard.run(ctx).await
         }));
       }
       // Order results by schedule order (zip with names) to keep traces stable.
@@ -649,7 +651,7 @@ pub struct BlackboardSupervisorBuilder {
 struct BlackboardAgentSpec {
   name: String,
   description: String,
-  factory: Box<dyn FnOnce(Blackboard) -> ReActAgent + Send>,
+  factory: Box<dyn FnOnce(Blackboard) -> Box<dyn AgentRuntime> + Send>,
 }
 
 impl Default for BlackboardSupervisorBuilder {
@@ -670,20 +672,21 @@ impl BlackboardSupervisorBuilder {
 
   /// Register an agent. The factory receives the shared blackboard so it can
   /// register `bb_read` / `bb_write` tools (or equivalents) on the agent's
-  /// registry.
-  pub fn add_agent<F>(
+  /// registry. Accepts any [`AgentRuntime`] (W3.2), not just `ReActAgent`.
+  pub fn add_agent<F, A>(
     mut self,
     name: impl Into<String>,
     description: impl Into<String>,
     factory: F,
   ) -> Self
   where
-    F: FnOnce(Blackboard) -> ReActAgent + Send + 'static,
+    F: FnOnce(Blackboard) -> A + Send + 'static,
+    A: AgentRuntime + 'static,
   {
     self.pending.push(BlackboardAgentSpec {
       name: name.into(),
       description: description.into(),
-      factory: Box::new(factory),
+      factory: Box::new(move |bb| Box::new(factory(bb)) as Box<dyn AgentRuntime>),
     });
     self
   }
@@ -736,7 +739,7 @@ impl BlackboardSupervisorBuilder {
     };
 
     let blackboard = Blackboard::new();
-    let mut agents: HashMap<String, Arc<AsyncMutex<ReActAgent>>> = HashMap::new();
+    let mut agents: HashMap<String, super::common::SharedAgentRuntime> = HashMap::new();
     let mut agent_descriptions: Vec<(String, String)> = Vec::new();
     for spec in self.pending {
       let agent = (spec.factory)(blackboard.clone());
@@ -1116,5 +1119,51 @@ providers:
       result.stop_reason,
       AgentStopReason::Cancelled { .. }
     ));
+  }
+
+  /// W3.2 regression: pre-fix, `add_agent`'s factory closure had to return
+  /// a concrete `ReActAgent`. This stub needs no LLM at all, proving any
+  /// `AgentRuntime` impl can now participate — it writes its answer to the
+  /// blackboard directly via `BlackboardWriteTool` rather than going
+  /// through an LLM tool-call loop.
+  struct StubRuntime {
+    write_tool: BlackboardWriteTool,
+    answer: String,
+  }
+  #[async_trait]
+  impl AgentRuntime for StubRuntime {
+    async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError> {
+      self
+        .write_tool
+        .execute(json!({"key": "answer", "value": self.answer}))
+        .await
+        .map_err(|err| AgentRuntimeError::ExecutionFailed {
+          message: err.to_string(),
+        })?;
+      Ok(AgentRunResult {
+        session_id: context.session_id,
+        answer: Some(self.answer.clone()),
+        stop_reason: AgentStopReason::FinalAnswer,
+        steps: Vec::new(),
+        events: Vec::new(),
+      })
+    }
+    fn runtime_name(&self) -> &'static str {
+      "stub"
+    }
+  }
+
+  #[tokio::test]
+  async fn add_agent_accepts_a_non_react_agent_runtime() {
+    let mut supervisor = BlackboardSupervisorBuilder::new()
+      .add_agent("stub", "a non-ReActAgent participant", |bb| StubRuntime {
+        write_tool: BlackboardWriteTool::new(bb, "stub"),
+        answer: "stub answer".to_string(),
+      })
+      .answer_from("answer")
+      .build()
+      .unwrap();
+    let answer = supervisor.run("hello").await.unwrap();
+    assert_eq!(answer, "stub answer");
   }
 }

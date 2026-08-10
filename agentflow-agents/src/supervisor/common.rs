@@ -1,7 +1,18 @@
 //! Shared helpers for the multi-agent supervisors (`handoff` / `blackboard`
 //! / `debate`).
 
-use crate::runtime::AgentContext;
+use std::sync::Arc;
+
+use tokio::sync::Mutex as AsyncMutex;
+
+use crate::runtime::{AgentContext, AgentRuntime};
+
+/// A supervisor participant, shared across concurrently-dispatched tasks
+/// (e.g. `BlackboardSchedule::Parallel`, debate rounds) and type-erased
+/// (W3.2) so any [`AgentRuntime`] — not just `ReActAgent` — can be a
+/// `HandoffSupervisor`/`BlackboardSupervisor`/`DebateSupervisor`
+/// participant or judge.
+pub(crate) type SharedAgentRuntime = Arc<AsyncMutex<Box<dyn AgentRuntime>>>;
 
 /// Build a child agent's `AgentContext` for one delegation step, forwarding
 /// everything from `parent` a sub-agent needs to stay governed and
