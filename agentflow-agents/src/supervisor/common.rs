@@ -1,10 +1,12 @@
 //! Shared helpers for the multi-agent supervisors (`handoff` / `blackboard`
 //! / `debate`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::delegation::{DelegationSpec, SchemaValidation, validate_output};
 use crate::runtime::{AgentContext, AgentRuntime};
 
 /// A supervisor participant, shared across concurrently-dispatched tasks
@@ -48,6 +50,33 @@ pub(crate) fn build_child_context(
   ctx.loop_checkpointer = parent.loop_checkpointer.clone();
   ctx.trace_context = parent.trace_context.clone();
   ctx
+}
+
+/// If `agent_name` has a registered [`DelegationSpec`] (W3.3), validate
+/// `answer` against its `expected_output_schema` and record the outcome in
+/// `validations`. A no-op — nothing recorded — when no spec is registered
+/// for `agent_name`, so a supervisor with no `DelegationSpec`s wired in
+/// behaves exactly as it did pre-W3.3.
+///
+/// This wires `agentflow_agent_spi::delegation`'s L5.1 primitive (up to
+/// now a standalone helper callers had to invoke by hand around
+/// `run_delegated`, per `crate::delegation`'s own module doc) directly
+/// into each supervisor's dispatch loop: register a spec once via
+/// `with_delegation_spec`/`with_judge_delegation_spec`, and every future
+/// run validates that participant's answer automatically.
+pub(crate) fn record_delegation_validation(
+  specs: &HashMap<String, DelegationSpec>,
+  validations: &mut HashMap<String, SchemaValidation>,
+  agent_name: &str,
+  answer: Option<&str>,
+) {
+  let Some(spec) = specs.get(agent_name) else {
+    return;
+  };
+  let validation = answer
+    .map(|answer| validate_output(spec, answer))
+    .unwrap_or(SchemaValidation::NotRequired);
+  validations.insert(agent_name.to_string(), validation);
 }
 
 #[cfg(test)]

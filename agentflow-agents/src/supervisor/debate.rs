@@ -65,6 +65,8 @@ pub enum DebateSupervisorError {
   DuplicateParticipant(String),
   #[error("rounds must be ≥ 1")]
   ZeroRounds,
+  #[error("delegation spec registered for unknown participant '{0}'")]
+  UnknownDelegationSpecAgent(String),
 }
 
 /// A multi-agent runtime where participants propose answers in parallel and
@@ -80,6 +82,11 @@ pub struct DebateSupervisor {
   rounds: usize,
   judge_prompt_template: String,
   session_id: String,
+  /// W3.3: optional per-agent `DelegationSpec` (keyed by participant name,
+  /// or `"judge"` for the judge), consulted after each turn to validate
+  /// that agent's answer.
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
+  last_schema_validations: HashMap<String, crate::delegation::SchemaValidation>,
 }
 
 impl std::fmt::Debug for DebateSupervisor {
@@ -100,6 +107,24 @@ impl DebateSupervisor {
 
   pub fn participant_names(&self) -> Vec<&str> {
     self.participants.iter().map(|(n, _)| n.as_str()).collect()
+  }
+
+  /// Schema-validation outcomes (W3.3) from the most recent run, keyed by
+  /// participant name (or `"judge"`) — only populated for agents with a
+  /// [`DelegationSpec`](crate::delegation::DelegationSpec) registered via
+  /// [`DebateSupervisorBuilder::with_delegation_spec`] /
+  /// [`DebateSupervisorBuilder::with_judge_delegation_spec`].
+  pub fn last_schema_validations(&self) -> &HashMap<String, crate::delegation::SchemaValidation> {
+    &self.last_schema_validations
+  }
+
+  fn record_delegation_validation(&mut self, agent_name: &str, answer: Option<&str>) {
+    super::common::record_delegation_validation(
+      &self.delegation_specs,
+      &mut self.last_schema_validations,
+      agent_name,
+      answer,
+    );
   }
 
   /// Convenience: run a one-shot task and return the judge's answer.
@@ -227,6 +252,7 @@ impl AgentRuntime for DebateSupervisor {
             step_index =
               merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
             let proposal = child_result.answer.clone();
+            self.record_delegation_validation(&name, proposal.as_deref());
             let proposal_step_index = step_index;
             steps.push(AgentStep::new(
               proposal_step_index,
@@ -293,6 +319,7 @@ impl AgentRuntime for DebateSupervisor {
       let mut guard = self.judge.lock().await;
       guard.run(judge_ctx).await?
     };
+    self.record_delegation_validation("judge", judge_result.answer.as_deref());
     step_index = merge_child_into(&mut steps, &mut events, step_index, judge_result.clone());
 
     let verdict_index = step_index;
@@ -412,6 +439,7 @@ pub struct DebateSupervisorBuilder {
   judge: Option<Box<dyn AgentRuntime>>,
   rounds: usize,
   judge_prompt_template: String,
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
 }
 
 struct DebateAgentSpec {
@@ -426,6 +454,7 @@ impl Default for DebateSupervisorBuilder {
       judge: None,
       rounds: 1,
       judge_prompt_template: DEFAULT_JUDGE_PROMPT.to_string(),
+      delegation_specs: HashMap::new(),
     }
   }
 }
@@ -467,6 +496,30 @@ impl DebateSupervisorBuilder {
     self
   }
 
+  /// Register a [`DelegationSpec`](crate::delegation::DelegationSpec) for
+  /// an already-registered participant (W3.3): after each of its turns,
+  /// the supervisor validates its answer against the spec's
+  /// `expected_output_schema` (when set) and records the outcome, readable
+  /// via [`DebateSupervisor::last_schema_validations`]. `build()` rejects
+  /// a spec registered for a name that was never passed to
+  /// [`Self::add_participant`].
+  pub fn with_delegation_spec(
+    mut self,
+    name: impl Into<String>,
+    spec: crate::delegation::DelegationSpec,
+  ) -> Self {
+    self.delegation_specs.insert(name.into(), spec);
+    self
+  }
+
+  /// Register a [`DelegationSpec`](crate::delegation::DelegationSpec) for
+  /// the judge (W3.3), validated the same way as a participant's, under
+  /// the fixed key `"judge"` in [`DebateSupervisor::last_schema_validations`].
+  pub fn with_judge_delegation_spec(mut self, spec: crate::delegation::DelegationSpec) -> Self {
+    self.delegation_specs.insert("judge".to_string(), spec);
+    self
+  }
+
   pub fn build(self) -> Result<DebateSupervisor, DebateSupervisorError> {
     if self.participants.is_empty() {
       return Err(DebateSupervisorError::NoParticipants);
@@ -484,6 +537,14 @@ impl DebateSupervisorBuilder {
     }
     let judge = self.judge.ok_or(DebateSupervisorError::NoJudge)?;
 
+    for name in self.delegation_specs.keys() {
+      if name != "judge" && !seen.contains(name) {
+        return Err(DebateSupervisorError::UnknownDelegationSpecAgent(
+          name.clone(),
+        ));
+      }
+    }
+
     let participants: Vec<(String, super::common::SharedAgentRuntime)> = self
       .participants
       .into_iter()
@@ -496,6 +557,8 @@ impl DebateSupervisorBuilder {
       rounds: self.rounds,
       judge_prompt_template: self.judge_prompt_template,
       session_id: Uuid::new_v4().to_string(),
+      delegation_specs: self.delegation_specs,
+      last_schema_validations: HashMap::new(),
     })
   }
 }
@@ -509,6 +572,7 @@ mod tests {
   use agentflow_llm::AgentFlow;
   use agentflow_memory::SessionMemory;
   use agentflow_tool::ToolRegistry;
+  use serde_json::json;
 
   use crate::react::{ReActAgent, ReActConfig};
 
@@ -801,5 +865,72 @@ providers:
       .unwrap();
     let answer = supervisor.run("hello").await.unwrap();
     assert_eq!(answer, "judge verdict");
+  }
+
+  /// W3.3 regression: a `DelegationSpec` registered via
+  /// `with_delegation_spec`/`with_judge_delegation_spec` must actually be
+  /// consulted by the run loop for both participants and the judge.
+  #[tokio::test]
+  async fn delegation_specs_validate_participant_and_judge_answers() {
+    let participant_spec = crate::delegation::DelegationSpec::new("propose")
+      .with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"]
+      }));
+    let judge_spec =
+      crate::delegation::DelegationSpec::new("judge").with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "verdict": { "type": "string" } },
+        "required": ["verdict"]
+      }));
+    let mut supervisor = DebateSupervisorBuilder::new()
+      .add_participant(
+        "alpha",
+        StubRuntime {
+          answer: r#"{"ok":true}"#.to_string(),
+        },
+      )
+      .judge(StubRuntime {
+        answer: "not json".to_string(),
+      })
+      .with_delegation_spec("alpha", participant_spec)
+      .with_judge_delegation_spec(judge_spec)
+      .build()
+      .unwrap();
+    supervisor.run("hello").await.unwrap();
+
+    let validations = supervisor.last_schema_validations();
+    assert_eq!(
+      validations.get("alpha"),
+      Some(&crate::delegation::SchemaValidation::Valid)
+    );
+    assert!(
+      !validations.get("judge").unwrap().is_valid(),
+      "judge's non-JSON answer must fail schema validation"
+    );
+  }
+
+  #[test]
+  fn build_rejects_delegation_spec_for_unknown_participant() {
+    let result = DebateSupervisorBuilder::new()
+      .add_participant(
+        "alpha",
+        StubRuntime {
+          answer: "x".to_string(),
+        },
+      )
+      .judge(StubRuntime {
+        answer: "y".to_string(),
+      })
+      .with_delegation_spec(
+        "does-not-exist",
+        crate::delegation::DelegationSpec::new("goal"),
+      )
+      .build();
+    assert!(matches!(
+      result,
+      Err(DebateSupervisorError::UnknownDelegationSpecAgent(_))
+    ));
   }
 }

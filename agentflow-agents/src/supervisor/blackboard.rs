@@ -306,6 +306,8 @@ pub enum BlackboardSupervisorError {
   UnknownScheduledAgent(String),
   #[error("Duplicate agent name '{0}'")]
   DuplicateAgent(String),
+  #[error("delegation spec registered for unknown agent '{0}'")]
+  UnknownDelegationSpecAgent(String),
 }
 
 /// A multi-agent runtime where agents share state via a [`Blackboard`].
@@ -323,6 +325,16 @@ pub struct BlackboardSupervisor {
   /// Optional key the supervisor reads as the final answer at run end.
   answer_key: Option<String>,
   session_id: String,
+  /// W3.3: optional per-agent `DelegationSpec`, consulted after each turn
+  /// to validate that agent's answer — see
+  /// [`Self::record_delegation_validation`].
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
+  /// `Mutex`-wrapped (not a plain field) because `run_schedule`'s parallel
+  /// path records validations through a shared `&BlackboardSupervisor`
+  /// (agents run concurrently under `tokio::spawn`, so no single call site
+  /// holds `&mut self`) — the same interior-mutability shape [`Blackboard`]
+  /// itself already uses for `entries`/`ops`.
+  last_schema_validations: std::sync::Mutex<HashMap<String, crate::delegation::SchemaValidation>>,
 }
 
 impl std::fmt::Debug for BlackboardSupervisor {
@@ -346,6 +358,29 @@ impl BlackboardSupervisor {
   }
   pub fn blackboard(&self) -> &Blackboard {
     &self.blackboard
+  }
+
+  /// Schema-validation outcomes (W3.3) from the most recent run, keyed by
+  /// agent name — only populated for agents with a
+  /// [`DelegationSpec`](crate::delegation::DelegationSpec) registered via
+  /// [`BlackboardSupervisorBuilder::with_delegation_spec`].
+  pub fn last_schema_validations(&self) -> HashMap<String, crate::delegation::SchemaValidation> {
+    self
+      .last_schema_validations
+      .lock()
+      .map(|guard| guard.clone())
+      .unwrap_or_default()
+  }
+
+  fn record_delegation_validation(&self, agent_name: &str, answer: Option<&str>) {
+    if let Ok(mut validations) = self.last_schema_validations.lock() {
+      super::common::record_delegation_validation(
+        &self.delegation_specs,
+        &mut validations,
+        agent_name,
+        answer,
+      );
+    }
   }
 
   /// Convenience: run a one-shot task and return the final answer string.
@@ -529,6 +564,7 @@ async fn run_schedule(
           let mut guard = agent.lock().await;
           guard.run(child_ctx).await?
         };
+        supervisor.record_delegation_validation(name, child_result.answer.as_deref());
         *next_index = merge_child_into(steps, events, *next_index, child_result);
         supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
         if let Some(reason) = supervisor.check_stop_condition() {
@@ -549,12 +585,13 @@ async fn run_schedule(
         }));
       }
       // Order results by schedule order (zip with names) to keep traces stable.
-      for handle in handles {
+      for (name, handle) in names.iter().zip(handles) {
         let child_result = handle
           .await
           .map_err(|e| AgentRuntimeError::ExecutionFailed {
             message: format!("BlackboardSupervisor: parallel join failed: {e}"),
           })??;
+        supervisor.record_delegation_validation(name, child_result.answer.as_deref());
         *next_index = merge_child_into(steps, events, *next_index, child_result);
       }
       supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
@@ -646,6 +683,7 @@ pub struct BlackboardSupervisorBuilder {
   schedule: Option<BlackboardSchedule>,
   stop: BlackboardStop,
   answer_key: Option<String>,
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
 }
 
 struct BlackboardAgentSpec {
@@ -661,6 +699,7 @@ impl Default for BlackboardSupervisorBuilder {
       schedule: None,
       stop: BlackboardStop::AllAgentsCompleted,
       answer_key: None,
+      delegation_specs: HashMap::new(),
     }
   }
 }
@@ -709,6 +748,22 @@ impl BlackboardSupervisorBuilder {
     self
   }
 
+  /// Register a [`DelegationSpec`](crate::delegation::DelegationSpec) for
+  /// an already-registered agent (W3.3): after each of that agent's turns,
+  /// the supervisor validates its answer against the spec's
+  /// `expected_output_schema` (when set) and records the outcome, readable
+  /// via [`BlackboardSupervisor::last_schema_validations`]. `build()`
+  /// rejects a spec registered for a name that was never passed to
+  /// [`Self::add_agent`].
+  pub fn with_delegation_spec(
+    mut self,
+    name: impl Into<String>,
+    spec: crate::delegation::DelegationSpec,
+  ) -> Self {
+    self.delegation_specs.insert(name.into(), spec);
+    self
+  }
+
   pub fn build(self) -> Result<BlackboardSupervisor, BlackboardSupervisorError> {
     if self.pending.is_empty() {
       return Err(BlackboardSupervisorError::NoAgents);
@@ -738,6 +793,14 @@ impl BlackboardSupervisorBuilder {
       None => BlackboardSchedule::Sequential(self.pending.iter().map(|a| a.name.clone()).collect()),
     };
 
+    for name in self.delegation_specs.keys() {
+      if !known_names.contains(name) {
+        return Err(BlackboardSupervisorError::UnknownDelegationSpecAgent(
+          name.clone(),
+        ));
+      }
+    }
+
     let blackboard = Blackboard::new();
     let mut agents: HashMap<String, super::common::SharedAgentRuntime> = HashMap::new();
     let mut agent_descriptions: Vec<(String, String)> = Vec::new();
@@ -755,6 +818,8 @@ impl BlackboardSupervisorBuilder {
       blackboard,
       answer_key: self.answer_key,
       session_id: Uuid::new_v4().to_string(),
+      delegation_specs: self.delegation_specs,
+      last_schema_validations: std::sync::Mutex::new(HashMap::new()),
     })
   }
 }
@@ -1165,5 +1230,51 @@ providers:
       .unwrap();
     let answer = supervisor.run("hello").await.unwrap();
     assert_eq!(answer, "stub answer");
+  }
+
+  /// W3.3 regression: a `DelegationSpec` registered via
+  /// `with_delegation_spec` must actually be consulted by the run loop —
+  /// pre-fix, `DelegationSpec`/`validate_output` existed only as a
+  /// standalone primitive a caller had to invoke by hand.
+  #[tokio::test]
+  async fn with_delegation_spec_validates_the_agents_answer() {
+    let spec =
+      crate::delegation::DelegationSpec::new("say hi").with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"]
+      }));
+    let mut supervisor = BlackboardSupervisorBuilder::new()
+      .add_agent("stub", "d", |bb| StubRuntime {
+        write_tool: BlackboardWriteTool::new(bb, "stub"),
+        answer: r#"{"ok":true}"#.to_string(),
+      })
+      .answer_from("answer")
+      .with_delegation_spec("stub", spec)
+      .build()
+      .unwrap();
+    supervisor.run("hello").await.unwrap();
+    assert_eq!(
+      supervisor.last_schema_validations().get("stub"),
+      Some(&crate::delegation::SchemaValidation::Valid)
+    );
+  }
+
+  #[test]
+  fn build_rejects_delegation_spec_for_unknown_agent() {
+    let result = BlackboardSupervisorBuilder::new()
+      .add_agent("stub", "d", |bb| StubRuntime {
+        write_tool: BlackboardWriteTool::new(bb, "stub"),
+        answer: "x".to_string(),
+      })
+      .with_delegation_spec(
+        "does-not-exist",
+        crate::delegation::DelegationSpec::new("goal"),
+      )
+      .build();
+    assert!(matches!(
+      result,
+      Err(BlackboardSupervisorError::UnknownDelegationSpecAgent(_))
+    ));
   }
 }

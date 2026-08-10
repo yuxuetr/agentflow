@@ -174,6 +174,8 @@ pub enum HandoffSupervisorError {
   UnknownInitialAgent(String),
   #[error("Duplicate agent name '{0}'")]
   DuplicateAgent(String),
+  #[error("delegation spec registered for unknown agent '{0}'")]
+  UnknownDelegationSpecAgent(String),
 }
 
 /// A multi-agent runtime where each agent decides when to transfer control to
@@ -192,6 +194,11 @@ pub struct HandoffSupervisor {
   max_handoffs: usize,
   signal: HandoffSignal,
   session_id: String,
+  /// W3.3: optional per-agent `DelegationSpec`, consulted after each turn
+  /// to validate that agent's answer — see
+  /// [`super::common::record_delegation_validation`].
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
+  last_schema_validations: HashMap<String, crate::delegation::SchemaValidation>,
 }
 
 impl std::fmt::Debug for HandoffSupervisor {
@@ -215,6 +222,14 @@ impl HandoffSupervisor {
   /// Names + descriptions of all registered agents, in registration order.
   pub fn agent_descriptions(&self) -> &[(String, String)] {
     &self.agent_descriptions
+  }
+
+  /// Schema-validation outcomes (W3.3) from the most recent run, keyed by
+  /// agent name — only populated for agents with a
+  /// [`DelegationSpec`](crate::delegation::DelegationSpec) registered via
+  /// [`HandoffSupervisorBuilder::with_delegation_spec`].
+  pub fn last_schema_validations(&self) -> &HashMap<String, crate::delegation::SchemaValidation> {
+    &self.last_schema_validations
   }
 
   /// Convenience: run a one-shot task and return the final answer string.
@@ -294,6 +309,13 @@ impl AgentRuntime for HandoffSupervisor {
         let mut agent = agent_handle.lock().await;
         agent.run(child_ctx).await?
       };
+
+      super::common::record_delegation_validation(
+        &self.delegation_specs,
+        &mut self.last_schema_validations,
+        &active,
+        child_result.answer.as_deref(),
+      );
 
       step_index = merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
 
@@ -443,6 +465,7 @@ pub struct HandoffSupervisorBuilder {
   initial_agent: Option<String>,
   max_handoffs: usize,
   preset_signal: Option<HandoffSignal>,
+  delegation_specs: HashMap<String, crate::delegation::DelegationSpec>,
 }
 
 struct HandoffAgentSpec {
@@ -458,6 +481,7 @@ impl Default for HandoffSupervisorBuilder {
       initial_agent: None,
       max_handoffs: 5,
       preset_signal: None,
+      delegation_specs: HashMap::new(),
     }
   }
 }
@@ -488,6 +512,22 @@ impl HandoffSupervisorBuilder {
       description: description.into(),
       factory: Box::new(move |tool| Box::new(factory(tool)) as Box<dyn AgentRuntime>),
     });
+    self
+  }
+
+  /// Register a [`DelegationSpec`](crate::delegation::DelegationSpec) for
+  /// an already-registered agent (W3.3): after each of that agent's turns,
+  /// the supervisor validates its answer against the spec's
+  /// `expected_output_schema` (when set) and records the outcome, readable
+  /// via [`HandoffSupervisor::last_schema_validations`]. `build()` rejects
+  /// a spec registered for a name that was never passed to
+  /// [`Self::add_agent`].
+  pub fn with_delegation_spec(
+    mut self,
+    name: impl Into<String>,
+    spec: crate::delegation::DelegationSpec,
+  ) -> Self {
+    self.delegation_specs.insert(name.into(), spec);
     self
   }
 
@@ -536,6 +576,14 @@ impl HandoffSupervisorBuilder {
       None => target_names[0].clone(),
     };
 
+    for name in self.delegation_specs.keys() {
+      if !target_names.contains(name) {
+        return Err(HandoffSupervisorError::UnknownDelegationSpecAgent(
+          name.clone(),
+        ));
+      }
+    }
+
     let signal = self.preset_signal.clone().unwrap_or_default();
     let handoff_tool = Arc::new(HandoffTool::new(target_names.clone(), signal.clone()));
 
@@ -554,6 +602,8 @@ impl HandoffSupervisorBuilder {
       max_handoffs: self.max_handoffs,
       signal,
       session_id: Uuid::new_v4().to_string(),
+      delegation_specs: self.delegation_specs,
+      last_schema_validations: HashMap::new(),
     })
   }
 }
@@ -1023,5 +1073,73 @@ providers:
       .unwrap();
     let answer = supervisor.run("hello").await.unwrap();
     assert_eq!(answer, "stub answer");
+  }
+
+  /// W3.3 regression: a `DelegationSpec` registered via
+  /// `with_delegation_spec` must actually be consulted by the run loop —
+  /// pre-fix, `DelegationSpec`/`validate_output` existed only as a
+  /// standalone primitive a caller had to invoke by hand.
+  #[tokio::test]
+  async fn with_delegation_spec_validates_the_agents_answer() {
+    let spec =
+      crate::delegation::DelegationSpec::new("say hi").with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"]
+      }));
+    let mut supervisor = HandoffSupervisorBuilder::new()
+      .add_agent("stub", "d", |_handoff| StubRuntime {
+        answer: r#"{"ok":true}"#.to_string(),
+      })
+      .with_delegation_spec("stub", spec)
+      .build()
+      .unwrap();
+    supervisor.run("hello").await.unwrap();
+    assert_eq!(
+      supervisor.last_schema_validations().get("stub"),
+      Some(&crate::delegation::SchemaValidation::Valid)
+    );
+  }
+
+  #[tokio::test]
+  async fn with_delegation_spec_reports_invalid_when_answer_violates_schema() {
+    let spec =
+      crate::delegation::DelegationSpec::new("say hi").with_expected_output_schema(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"]
+      }));
+    let mut supervisor = HandoffSupervisorBuilder::new()
+      .add_agent("stub", "d", |_handoff| StubRuntime {
+        answer: "not json".to_string(),
+      })
+      .with_delegation_spec("stub", spec)
+      .build()
+      .unwrap();
+    supervisor.run("hello").await.unwrap();
+    assert!(
+      !supervisor
+        .last_schema_validations()
+        .get("stub")
+        .unwrap()
+        .is_valid()
+    );
+  }
+
+  #[test]
+  fn build_rejects_delegation_spec_for_unknown_agent() {
+    let result = HandoffSupervisorBuilder::new()
+      .add_agent("stub", "d", |_handoff| StubRuntime {
+        answer: "x".to_string(),
+      })
+      .with_delegation_spec(
+        "does-not-exist",
+        crate::delegation::DelegationSpec::new("goal"),
+      )
+      .build();
+    assert!(matches!(
+      result,
+      Err(HandoffSupervisorError::UnknownDelegationSpecAgent(_))
+    ));
   }
 }
