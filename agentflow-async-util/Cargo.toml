@@ -10,9 +10,6 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
-[features]
-observability = ["dep:tracing"]
-
 [dependencies]
 # Combinators surface AgentFlowError today; the error type pins this dep until a
 # future generic-error refactor (RFC §4 envisioned tokio/futures only).
@@ -22,7 +19,10 @@ serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.0", features = ["time", "macros"] }
 humantime-serde = "1.1"
 rand = "0.8"
-tracing = { version = "0.1", optional = true }
+# W0.7: unconditional — was behind an `observability` feature nobody
+# ever enabled. See `agentflow-core/Cargo.toml`'s `tracing` entry for
+# the full rationale.
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }

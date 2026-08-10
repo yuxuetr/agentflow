@@ -246,7 +246,6 @@ where
   match timeout(duration, future).await {
     Ok(result) => result,
     Err(_) => {
-      #[cfg(feature = "observability")]
       tracing::warn!(
         target = "agentflow_async_util::timeout",
         operation,
@@ -255,14 +254,6 @@ where
         duration_ms = duration.as_millis() as u64,
         "operation timed out"
       );
-      // Without `observability` we still need to "use" the names so
-      // they're not silently `_`-prefixed dead params; eprintln keeps
-      // the cost essentially zero in production builds that don't
-      // enable observability but still preserves the contract.
-      #[cfg(not(feature = "observability"))]
-      {
-        let _ = (operation, node_id, workflow_id);
-      }
       Err(AgentFlowError::TimeoutExceeded {
         duration_ms: duration.as_millis() as u64,
       })

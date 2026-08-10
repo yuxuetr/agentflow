@@ -19,7 +19,6 @@ homepage.workspace = true
 
 [features]
 default = []
-observability = ["tracing", "agentflow-async-util/observability"]
 # Enables the subprocess plugin runtime (PluginHost, PluginNode, manifest loading).
 plugin = ["dep:toml"]
 
@@ -49,7 +48,13 @@ pin-project-lite = "0.2"
 # Time and date handling for observability
 chrono = { version = "0.4", features = ["serde"] }
 humantime-serde = "1.1"
-tracing = { version = "0.1", optional = true }
+# W0.7: unconditional (was behind an `observability` feature nobody ever
+# enabled, compiling out every warn/info log — including checkpoint-save
+# failures and corrupt-checkpoint-value downgrades — from every real
+# build). `tracing` macros are free no-ops without a registered
+# subscriber, matching agentflow-nodes/agentflow-skills/agentflow-tools
+# elsewhere in the workspace.
+tracing = "0.1"
 
 # Random number generation for retry jitter
 rand = "0.8"

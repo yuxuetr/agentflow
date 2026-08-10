@@ -84,12 +84,9 @@ impl ShutdownReason {
 pub async fn shutdown_signal_with_reason() -> ShutdownReason {
   let ctrl_c = async {
     if let Err(err) = tokio::signal::ctrl_c().await {
-      // Use eprintln! (not tracing!) because `agentflow-core` keeps
-      // `tracing` behind an optional feature flag — the helper has to
-      // work in any consumer regardless of feature mix. Install
-      // failure here is extremely rare anyway: it means the runtime
+      // Install failure here is extremely rare: it means the runtime
       // refused to install a SIGINT handler at all.
-      eprintln!("agentflow: failed to install ctrl_c handler: {err}");
+      tracing::error!("agentflow: failed to install ctrl_c handler: {err}");
       std::future::pending::<()>().await;
     }
     ShutdownReason::Interrupt
@@ -103,7 +100,7 @@ pub async fn shutdown_signal_with_reason() -> ShutdownReason {
         let _ = sigterm.recv().await;
       }
       Err(err) => {
-        eprintln!("agentflow: failed to install SIGTERM handler: {err}");
+        tracing::error!("agentflow: failed to install SIGTERM handler: {err}");
         std::future::pending::<()>().await;
       }
     }

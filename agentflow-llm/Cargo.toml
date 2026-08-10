@@ -16,11 +16,10 @@ default = ["openai", "anthropic", "google", "logging"]
 openai = []
 anthropic = []
 google = []
-# `tracing` is now a hard dependency (matching every other agentflow-* crate);
-# `observability` is kept as an empty alias so existing callers keep building.
-observability = []
 # `logging` adds the `tracing-subscriber` setup helpers on top of the always-on
-# `tracing` macros.
+# `tracing` macros. (W0.7: the `observability` empty-alias feature that used
+# to sit here was removed — nothing in the workspace enabled it, and
+# `agentflow-core`'s real `observability` feature it aliased is gone too.)
 logging = ["dep:tracing-subscriber"]
 
 [dependencies]

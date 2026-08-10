@@ -158,7 +158,6 @@ impl<'f> FlowExecutor<'f> {
       });
     }
 
-    #[cfg(feature = "observability")]
     tracing::info!(
       "Resuming workflow '{}' from checkpoint at node '{}'",
       workflow_id,
@@ -364,7 +363,6 @@ impl<'f> FlowExecutor<'f> {
         .get(node_id)
         .is_some_and(|result| !is_genuine_failure(result))
       {
-        #[cfg(feature = "observability")]
         tracing::info!(
           "Skipping node '{}' (already resolved in checkpoint)",
           node_id
@@ -387,7 +385,6 @@ impl<'f> FlowExecutor<'f> {
       };
 
       if !should_run {
-        #[cfg(feature = "observability")]
         tracing::info!("Skipping node '{}' due to condition.", node_id);
         let result = Err(AgentFlowError::NodeSkipped);
         self.persist_step_result(&run_dir, node_id, &result)?;
@@ -439,7 +436,6 @@ impl<'f> FlowExecutor<'f> {
             inputs.extend(partial_outputs.clone());
           }
 
-          #[cfg(feature = "observability")]
           tracing::info!("Executing node '{}'", node_id);
           let node_started_at = Instant::now();
           self.emit_event(WorkflowEvent::NodeStarted {
@@ -486,10 +482,8 @@ impl<'f> FlowExecutor<'f> {
           .save_checkpoint(&run_id, node_id, &checkpoint_state)
           .await
         {
-          #[cfg(feature = "observability")]
           tracing::warn!("Failed to save checkpoint after node '{}': {}", node_id, _e);
         } else {
-          #[cfg(feature = "observability")]
           tracing::info!("Checkpoint saved after node '{}'", node_id);
         }
       }
@@ -540,7 +534,6 @@ impl<'f> FlowExecutor<'f> {
         .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
         .await
       {
-        #[cfg(feature = "observability")]
         tracing::warn!("Failed to save final checkpoint: {}", _e);
       }
     }
@@ -572,7 +565,6 @@ impl<'f> FlowExecutor<'f> {
         .get(node_id)
         .is_some_and(|result| !is_genuine_failure(result))
     }) {
-      #[cfg(feature = "observability")]
       tracing::info!("Workflow '{}' was already completed", workflow_id);
       return Ok(state_pool);
     }
@@ -763,11 +755,7 @@ fn representative_failure_message(state_pool: &HashMap<String, AsyncNodeResult>)
 ///    `tests/flow_value_checkpoint_compat.rs::legacy_raw_json_checkpoint_values_read_as_json_flow_values`).
 /// 3. **Non-object value**: wrap as `FlowValue::Json` — primitives,
 ///    arrays, and `null` never used the tagged form.
-fn decode_checkpoint_flow_value(
-  #[allow(unused_variables)] node_id: &str,
-  #[allow(unused_variables)] key: &str,
-  value: &serde_json::Value,
-) -> FlowValue {
+fn decode_checkpoint_flow_value(node_id: &str, key: &str, value: &serde_json::Value) -> FlowValue {
   let tag = value
     .as_object()
     .and_then(|map| map.get("type"))
@@ -778,22 +766,19 @@ fn decode_checkpoint_flow_value(
       // Tagged value — caller expects a specific variant. Only fall
       // back to `Json` if decoding genuinely fails, and warn loudly
       // so the regression is debuggable.
-      serde_json::from_value::<FlowValue>(value.clone()).unwrap_or_else(
-        |#[allow(unused_variables)] err| {
-          #[cfg(feature = "observability")]
-          tracing::warn!(
-            "checkpoint for node '{}' field '{}' is tagged \
+      serde_json::from_value::<FlowValue>(value.clone()).unwrap_or_else(|err| {
+        tracing::warn!(
+          "checkpoint for node '{}' field '{}' is tagged \
            `type: \"{}\"` but failed to deserialize as FlowValue: {}. \
            Falling back to FlowValue::Json — downstream consumers that \
            pattern-match on File/Url will not see this output.",
-            node_id,
-            key,
-            tag.unwrap_or("unknown"),
-            err
-          );
-          FlowValue::Json(value.clone())
-        },
-      )
+          node_id,
+          key,
+          tag.unwrap_or("unknown"),
+          err
+        );
+        FlowValue::Json(value.clone())
+      })
     }
     _ => FlowValue::Json(value.clone()),
   }
@@ -871,7 +856,6 @@ impl<'f> FlowExecutor<'f> {
         };
 
         if !should_run {
-          #[cfg(feature = "observability")]
           tracing::info!("Skipping node '{}' due to condition.", node_id);
           let result = Err(AgentFlowError::NodeSkipped);
           self.persist_step_result(&run_dir, &node_id, &result)?;
@@ -913,7 +897,6 @@ impl<'f> FlowExecutor<'f> {
         inputs.extend(graph_node.initial_inputs.clone());
         inputs.extend(initial_inputs.clone());
 
-        #[cfg(feature = "observability")]
         tracing::info!("Executing node '{}'", node_id);
         let node_started_at = Instant::now();
         self.emit_event(WorkflowEvent::NodeStarted {
@@ -989,7 +972,6 @@ impl<'f> FlowExecutor<'f> {
             .save_checkpoint(&run_id, &node_id, &checkpoint_state)
             .await
           {
-            #[cfg(feature = "observability")]
             tracing::warn!("Failed to save checkpoint after node '{}': {}", node_id, _e);
           }
         }
@@ -1027,7 +1009,6 @@ impl<'f> FlowExecutor<'f> {
         .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
         .await
       {
-        #[cfg(feature = "observability")]
         tracing::warn!("Failed to save final checkpoint: {}", _e);
       }
     }
@@ -1192,7 +1173,6 @@ impl<'f> FlowExecutor<'f> {
       let empty_state_pool = HashMap::new();
 
       while iteration_count < max_iterations {
-        #[cfg(feature = "observability")]
         tracing::debug!(
           "While loop iteration {}, state: {:?}",
           iteration_count + 1,
@@ -1215,7 +1195,6 @@ impl<'f> FlowExecutor<'f> {
           .await?;
 
         let exit_nodes = FlowExecutor::new(&sub_flow).find_exit_nodes();
-        #[cfg(feature = "observability")]
         tracing::debug!(
           "While loop: found {} exit nodes: {:?}",
           exit_nodes.len(),
@@ -1223,11 +1202,9 @@ impl<'f> FlowExecutor<'f> {
         );
         let mut next_loop_inputs = AsyncNodeInputs::new();
         for node_id in &exit_nodes {
-          #[cfg(feature = "observability")]
           tracing::debug!("While loop: checking exit node '{}' in state pool", node_id);
           match sub_flow_state_pool.get(node_id) {
             Some(Ok(outputs)) => {
-              #[cfg(feature = "observability")]
               tracing::debug!(
                 "While loop: exit node '{}' has {} outputs",
                 node_id,
@@ -1236,7 +1213,6 @@ impl<'f> FlowExecutor<'f> {
               next_loop_inputs.extend(outputs.clone());
             }
             Some(Err(_e)) => {
-              #[cfg(feature = "observability")]
               tracing::debug!(
                 "While loop: exit node '{}' failed with error: {:?}",
                 node_id,
@@ -1244,7 +1220,6 @@ impl<'f> FlowExecutor<'f> {
               );
             }
             None => {
-              #[cfg(feature = "observability")]
               tracing::debug!(
                 "While loop: exit node '{}' not found in state pool",
                 node_id
@@ -1252,7 +1227,6 @@ impl<'f> FlowExecutor<'f> {
             }
           }
         }
-        #[cfg(feature = "observability")]
         tracing::debug!(
           "While loop end of iteration {}, sub-flow outputs: {:?}",
           iteration_count + 1,
@@ -1526,9 +1500,7 @@ impl<'f> FlowExecutor<'f> {
     condition: &str,
     state_pool: &HashMap<String, AsyncNodeResult>,
   ) -> Result<bool, AgentFlowError> {
-    #[allow(unused_variables)]
     let normalized = expr::normalize_expression(condition);
-    #[cfg(feature = "observability")]
     tracing::debug!("Evaluating condition: '{}'", normalized);
     expr::evaluate_bool(condition, state_pool, &HashMap::new()).map_err(|err| {
       AgentFlowError::FlowDefinitionError {
@@ -1656,10 +1628,9 @@ fn resolve_item_path(item_value: &FlowValue, dotted_path: &str) -> Option<FlowVa
 /// downstream nodes that need to react to any per-sub-flow failure
 /// without re-parsing the nested `results` JSON.
 ///
-/// Emits a `tracing::warn!` (gated behind the `observability` feature,
-/// matching the existing logging idiom in this file) when any sub-flow
-/// had a node-level failure so operators see the partial failure even
-/// when nothing downstream routes on the summary.
+/// Emits a `tracing::warn!` when any sub-flow had a node-level failure
+/// so operators see the partial failure even when nothing downstream
+/// routes on the summary.
 fn map_outputs_with_summary(
   all_results: Vec<Value>,
   err_indexes: Vec<usize>,
@@ -1668,7 +1639,6 @@ fn map_outputs_with_summary(
   let err = err_indexes.len();
   let ok = total.saturating_sub(err);
 
-  #[cfg(feature = "observability")]
   if err > 0 {
     tracing::warn!(
       "Map node: {err} of {total} sub-flows had at least one node-level error (err_indexes={err_indexes:?}). See results[i] for details, or branch on results_summary.err_indexes."

@@ -238,12 +238,9 @@ if let Err((_, context)) = result {
 
 ### 5. Monitor Retry Metrics
 
-Enable observability feature for automatic logging:
-
-```toml
-[dependencies]
-agentflow-core = { version = "0.2", features = ["observability"] }
-```
+Retry attempts, exhaustion, and success-after-retry are logged
+automatically via `tracing` (unconditional as of W0.7 — no feature flag
+needed). Wire up a `tracing` subscriber in your binary to see them.
 
 ## Examples
 

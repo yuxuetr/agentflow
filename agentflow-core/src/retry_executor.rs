@@ -35,7 +35,7 @@ use std::time::Instant;
 /// ```
 pub async fn execute_with_retry<F, Fut, T>(
   policy: &RetryPolicy,
-  #[allow(unused_variables)] operation_name: &str,
+  operation_name: &str,
   mut operation: F,
 ) -> Result<T, AgentFlowError>
 where
@@ -48,22 +48,18 @@ where
   loop {
     match operation().await {
       Ok(result) => {
-        #[cfg(feature = "observability")]
-        {
-          if context.attempt > 0 {
-            tracing::info!(
-              "Operation '{}' succeeded after {} retries",
-              operation_name,
-              context.attempt
-            );
-          }
+        if context.attempt > 0 {
+          tracing::info!(
+            "Operation '{}' succeeded after {} retries",
+            operation_name,
+            context.attempt
+          );
         }
         return Ok(result);
       }
       Err(error) => {
         // Check if we should retry
         if !context.should_retry(policy, &error) {
-          #[cfg(feature = "observability")]
           tracing::error!(
             "Operation '{}' failed after {} attempts: {}",
             operation_name,
@@ -93,7 +89,6 @@ where
         // Calculate delay
         let delay = policy.calculate_delay(context.attempt);
 
-        #[cfg(feature = "observability")]
         tracing::warn!(
           "Operation '{}' failed (attempt {}), retrying after {:?}: {}",
           operation_name,
@@ -179,15 +174,12 @@ where
 
     match operation().await {
       Ok(result) => {
-        #[cfg(feature = "observability")]
-        {
-          if retry_ctx.attempt > 0 {
-            tracing::info!(
-              "Node '{}' succeeded after {} retries",
-              node_name,
-              retry_ctx.attempt
-            );
-          }
+        if retry_ctx.attempt > 0 {
+          tracing::info!(
+            "Node '{}' succeeded after {} retries",
+            node_name,
+            retry_ctx.attempt
+          );
         }
         return Ok(result);
       }
@@ -207,7 +199,6 @@ where
             error_context.node_type = Some(nt.to_string());
           }
 
-          #[cfg(feature = "observability")]
           tracing::error!(
             "Node '{}' failed after {} attempts: {}",
             node_name,
@@ -230,7 +221,6 @@ where
         // Calculate delay
         let delay = policy.calculate_delay(retry_ctx.attempt);
 
-        #[cfg(feature = "observability")]
         tracing::warn!(
           "Node '{}' failed (attempt {}), retrying after {:?}: {}",
           node_name,

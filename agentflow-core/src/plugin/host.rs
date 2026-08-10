@@ -285,14 +285,11 @@ impl Connection {
 
     // Stderr forwarder (best-effort; plugin authors may use stderr for logs).
     if let Some(stderr) = stderr {
-      #[allow(unused_variables)]
       let plugin_name = plugin_name.to_string();
       tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
-        #[allow(unused_variables)]
         while let Ok(Some(line)) = lines.next_line().await {
-          #[cfg(feature = "observability")]
           tracing::info!("[plugin::{plugin_name}] {line}");
         }
       });
@@ -402,16 +399,10 @@ impl Connection {
   }
 }
 
-async fn handle_inbound_line(
-  #[allow(unused_variables)] plugin_name: &str,
-  line: &str,
-  pending: &PendingTable,
-) {
+async fn handle_inbound_line(plugin_name: &str, line: &str, pending: &PendingTable) {
   let value: Value = match serde_json::from_str(line) {
     Ok(v) => v,
-    #[allow(unused_variables)]
     Err(e) => {
-      #[cfg(feature = "observability")]
       tracing::warn!("[plugin::{plugin_name}] non-JSON line on stdout: {e}");
       return;
     }
@@ -420,9 +411,7 @@ async fn handle_inbound_line(
   if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
     let response: JsonRpcResponse = match serde_json::from_value(value) {
       Ok(r) => r,
-      #[allow(unused_variables)]
       Err(e) => {
-        #[cfg(feature = "observability")]
         tracing::warn!("[plugin::{plugin_name}] malformed JSON-RPC response: {e}");
         return;
       }
@@ -441,19 +430,16 @@ async fn handle_inbound_line(
   } else if let Some(method) = value.get("method").and_then(|v| v.as_str())
     && method == methods::PLUGIN_LOG
   {
-    #[allow(unused_variables)]
     let msg = value
       .get("params")
       .and_then(|p| p.get("message"))
       .and_then(|m| m.as_str())
       .unwrap_or("(empty)");
-    #[allow(unused_variables)]
     let level = value
       .get("params")
       .and_then(|p| p.get("level"))
       .and_then(|l| l.as_str())
       .unwrap_or("info");
-    #[cfg(feature = "observability")]
     tracing::info!("[plugin::{plugin_name}] [{level}] {msg}");
   }
 }

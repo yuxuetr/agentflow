@@ -335,8 +335,9 @@ jobs:
       matrix:
         include:
           # Existing combinations.
-          - name: core-observability
-            command: cargo check -p agentflow-core --features observability
+          # W0.7: `core-observability` removed — agentflow-core's
+          # `observability` feature was deleted (tracing is now an
+          # unconditional dependency; nothing ever enabled the feature).
           - name: mcp-local-transports
             command: cargo check -p agentflow-mcp --features client,server,stdio
           - name: cli-mcp

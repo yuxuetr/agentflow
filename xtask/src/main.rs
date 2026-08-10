@@ -3638,16 +3638,16 @@ const PRINTLN_LINT_CRATES: &[&str] = &["agentflow-core", "agentflow-nodes", "age
 
 /// Deliberate, documented exceptions (see the V1.7 commit that introduced
 /// this gate):
-///  - `shutdown.rs`: the ctrl_c/SIGTERM install-failure `eprintln!`s must
-///    work in consumers that don't enable agentflow-core's `observability`
-///    feature at all — a `tracing` call would silently vanish for them.
 ///  - `bin/echo_plugin.rs`: a standalone reference-plugin binary (its own
 ///    process), meant as a template for plugin authors, not library code
 ///    that pollutes a host application's output.
-const PRINTLN_LINT_EXEMPT_FILES: &[&str] = &[
-  "agentflow-core/src/shutdown.rs",
-  "agentflow-core/src/bin/echo_plugin.rs",
-];
+///
+/// `shutdown.rs` used to be exempt too (its ctrl_c/SIGTERM install-failure
+/// logging had to work in consumers that didn't enable agentflow-core's
+/// `observability` feature) — W0.7 made `tracing` an unconditional
+/// dependency, so it now routes through `tracing::error!` like everything
+/// else and no longer needs the exemption.
+const PRINTLN_LINT_EXEMPT_FILES: &[&str] = &["agentflow-core/src/bin/echo_plugin.rs"];
 
 fn println_lint_at(
   workspace_root: &Path,
@@ -3856,8 +3856,8 @@ mod println_lint_tests {
     write_crate_src(
       workspace,
       "agentflow-core",
-      "shutdown.rs",
-      "fn a() { eprintln!(\"must always work regardless of feature flags\"); }\n",
+      "bin/echo_plugin.rs",
+      "fn a() { eprintln!(\"standalone reference-plugin binary output\"); }\n",
     );
 
     let mut stdout = Vec::new();
