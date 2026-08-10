@@ -319,12 +319,21 @@ impl Tool for HttpTool {
         message: e.to_string(),
       })?;
 
-      // Truncate very long responses
-      let content = if body.len() > self.max_response_chars {
+      // Truncate very long responses. Byte length can't stand in for char
+      // count on multi-byte UTF-8 bodies, and slicing by byte offset can
+      // land mid-character and panic — walk char_indices to find a safe
+      // boundary at the Nth char instead.
+      let char_count = body.chars().count();
+      let content = if char_count > self.max_response_chars {
+        let truncate_at = body
+          .char_indices()
+          .nth(self.max_response_chars)
+          .map(|(byte_index, _)| byte_index)
+          .unwrap_or(body.len());
         format!(
           "{}... [truncated — total {} chars]",
-          &body[..self.max_response_chars],
-          body.len()
+          &body[..truncate_at],
+          char_count
         )
       } else {
         body
@@ -640,6 +649,50 @@ mod tests {
     let policy = Arc::new(SandboxPolicy::default());
     let tool: Result<HttpTool, ToolError> = HttpTool::new(policy);
     assert!(tool.is_ok());
+  }
+
+  #[tokio::test]
+  async fn truncates_multi_byte_utf8_body_on_a_char_boundary() {
+    // 6 four-byte emoji chars — byte length (24) is far from char count
+    // (6), and a naive `&body[..max_response_chars]` byte-slice at
+    // max=5 would land mid-character (byte offset 5 sits inside the
+    // second emoji's 4-byte encoding) and panic.
+    let body = "🎉".repeat(6);
+    let response = format!(
+      "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+      body.len(),
+      body
+    );
+    let (url, server_task) = spawn_one_response_server(Box::leak(response.into_boxed_str())).await;
+    let policy = Arc::new(SandboxPolicy {
+      allow_loopback_network_access: true,
+      ..SandboxPolicy::default()
+    });
+    let tool = test_tool(policy).with_max_response_chars(5);
+
+    let output = tool.execute(json!({ "url": url })).await.unwrap();
+
+    assert_eq!(
+      output.content,
+      format!("{}... [truncated — total 6 chars]", "🎉".repeat(5))
+    );
+    server_task.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn does_not_truncate_body_within_the_char_limit() {
+    let (url, server_task) =
+      spawn_one_response_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+    let policy = Arc::new(SandboxPolicy {
+      allow_loopback_network_access: true,
+      ..SandboxPolicy::default()
+    });
+    let tool = test_tool(policy);
+
+    let output = tool.execute(json!({ "url": url })).await.unwrap();
+
+    assert_eq!(output.content, "ok");
+    server_task.await.unwrap();
   }
 
   async fn spawn_one_response_server(
