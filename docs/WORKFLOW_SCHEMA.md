@@ -52,7 +52,7 @@ agentflow workflow validate path/to/workflow.yml --strict
 | `text_to_image` | `model` | `prompt` | - |
 | `tts` | `model`, `voice` | `input_template` | - |
 | `map` | `template` | - | `parallel` |
-| `while` | `condition`, `max_iterations`, `do` | - | - |
+| `while` | `condition`, `max_iterations`, `do` | - | `continue_on_error`, `fail_on_exhausted` |
 | `mcp` | `server_command`, `tool_name` | - | `tool_params`, `parameters.timeout_ms`/`parameters.max_retries` (MCP-client-only, see note above) |
 | `rag` | `operation`, `collection` | - | `qdrant_url`, `embedding_model`, `query`, `documents`, `top_k`, `search_type`, `alpha`, `rerank`, `lambda`, `vector_size`, `distance` |
 
@@ -72,6 +72,22 @@ agentflow workflow validate path/to/workflow.yml --strict
 - `map.parameters.template` 必须是 workflow node definition 列表。
 - `while.parameters.do` 必须是 workflow node definition 列表。
 - 嵌套节点复用普通节点的 required 参数、类型和 unknown parameter 校验规则。
+
+### `while` 循环可观测性（D11 / W2.4）
+
+- 输出恒定携带 `iterations_used`（实际执行的迭代数）与 `exhausted`
+  （`bool`：因 `condition` 转 false 正常退出为 `false`，因耗尽
+  `max_iterations` 退出为 `true`）。
+- `parameters.continue_on_error`（`Bool`，默认 `false`）：子流程某个 exit
+  节点执行失败时，默认将其上浮为 While 节点级错误（整个 While 节点失败）；
+  设为 `true` 恢复旧行为——记录警告日志后继续下一轮迭代。
+- `parameters.fail_on_exhausted`（`Bool`，默认 `false`）：耗尽
+  `max_iterations` 默认只记一条 `tracing::warn!`（`event =
+  "while_loop_exhausted"`）并正常返回（`exhausted: true`）；设为 `true`
+  则改为让 While 节点失败。
+- 每轮迭代开始时额外记一条 `tracing::info!`（`event =
+  "while_loop_iteration_started"`），带 `iteration`/`max_iterations`
+  字段，便于观测循环进度。
 
 ## 条件表达式
 

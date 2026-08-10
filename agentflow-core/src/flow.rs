@@ -1079,6 +1079,8 @@ impl<'f> FlowExecutor<'f> {
         condition,
         max_iterations,
         template,
+        continue_on_error,
+        fail_on_exhausted,
       } => {
         self
           .execute_while_node(
@@ -1086,6 +1088,8 @@ impl<'f> FlowExecutor<'f> {
             condition,
             *max_iterations,
             template,
+            *continue_on_error,
+            *fail_on_exhausted,
             execution_config,
           )
           .await
@@ -1239,12 +1243,15 @@ impl<'f> FlowExecutor<'f> {
     (sub_flow, sub_config)
   }
 
+  #[allow(clippy::too_many_arguments)]
   fn execute_while_node<'a>(
     &'a self,
     inputs: &'a AsyncNodeInputs,
     condition_template: &'a str,
     max_iterations: u32,
     template: &'a [GraphNode],
+    continue_on_error: bool,
+    fail_on_exhausted: bool,
     execution_config: &'a FlowExecutionConfig,
   ) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
     Box::pin(async move {
@@ -1253,11 +1260,6 @@ impl<'f> FlowExecutor<'f> {
       let empty_state_pool = HashMap::new();
 
       while iteration_count < max_iterations {
-        tracing::debug!(
-          "While loop iteration {}, state: {:?}",
-          iteration_count + 1,
-          loop_inputs
-        );
         let condition_value =
           expr::evaluate_bool(condition_template, &empty_state_pool, &loop_inputs).map_err(
             |err| AgentFlowError::FlowDefinitionError {
@@ -1266,8 +1268,22 @@ impl<'f> FlowExecutor<'f> {
           )?;
 
         if !condition_value {
-          break;
+          // D11 (W2.4): a normal condition-false exit is distinguishable
+          // from exhaustion via `exhausted: false` on the outputs.
+          loop_inputs.insert(
+            "iterations_used".to_string(),
+            FlowValue::Json(Value::from(iteration_count)),
+          );
+          loop_inputs.insert("exhausted".to_string(), FlowValue::Json(Value::Bool(false)));
+          return Ok(loop_inputs);
         }
+
+        tracing::info!(
+          event = "while_loop_iteration_started",
+          iteration = iteration_count + 1,
+          max_iterations,
+          "While loop starting iteration"
+        );
 
         let (sub_flow, sub_config) = self.sub_flow_execution_context(template, execution_config);
         let sub_flow_state_pool = FlowExecutor::new(&sub_flow)
@@ -1275,48 +1291,63 @@ impl<'f> FlowExecutor<'f> {
           .await?;
 
         let exit_nodes = FlowExecutor::new(&sub_flow).find_exit_nodes();
-        tracing::debug!(
-          "While loop: found {} exit nodes: {:?}",
-          exit_nodes.len(),
-          exit_nodes
-        );
         let mut next_loop_inputs = AsyncNodeInputs::new();
         for node_id in &exit_nodes {
-          tracing::debug!("While loop: checking exit node '{}' in state pool", node_id);
           match sub_flow_state_pool.get(node_id) {
             Some(Ok(outputs)) => {
-              tracing::debug!(
-                "While loop: exit node '{}' has {} outputs",
-                node_id,
-                outputs.len()
-              );
               next_loop_inputs.extend(outputs.clone());
             }
-            Some(Err(_e)) => {
-              tracing::debug!(
-                "While loop: exit node '{}' failed with error: {:?}",
-                node_id,
-                _e
+            Some(Err(err)) => {
+              // D11 (W2.4): pre-fix this was swallowed at debug level and
+              // the loop just kept going with whatever partial outputs it
+              // had. Default now surfaces it as a While-node-level error;
+              // `continue_on_error` opts back into the old behavior.
+              if !continue_on_error {
+                return Err(AgentFlowError::NodeExecutionFailed {
+                  message: format!(
+                    "While loop sub-flow node '{}' failed on iteration {}: {}",
+                    node_id,
+                    iteration_count + 1,
+                    err
+                  ),
+                });
+              }
+              tracing::warn!(
+                event = "while_loop_iteration_node_failed",
+                iteration = iteration_count + 1,
+                node_id = %node_id,
+                error = %err,
+                "While loop sub-flow node failed; continuing (continue_on_error=true)"
               );
             }
-            None => {
-              tracing::debug!(
-                "While loop: exit node '{}' not found in state pool",
-                node_id
-              );
-            }
+            None => {}
           }
         }
-        tracing::debug!(
-          "While loop end of iteration {}, sub-flow outputs: {:?}",
-          iteration_count + 1,
-          next_loop_inputs
-        );
         loop_inputs.extend(next_loop_inputs);
 
         iteration_count += 1;
       }
 
+      // D11 (W2.4): reached max_iterations without the condition ever
+      // evaluating false — exhaustion, not a normal exit.
+      if fail_on_exhausted {
+        return Err(AgentFlowError::NodeExecutionFailed {
+          message: format!(
+            "While loop exhausted max_iterations ({}) without its condition evaluating false",
+            max_iterations
+          ),
+        });
+      }
+      tracing::warn!(
+        event = "while_loop_exhausted",
+        max_iterations,
+        "While loop exhausted max_iterations without its condition evaluating false"
+      );
+      loop_inputs.insert(
+        "iterations_used".to_string(),
+        FlowValue::Json(Value::from(iteration_count)),
+      );
+      loop_inputs.insert("exhausted".to_string(), FlowValue::Json(Value::Bool(true)));
       Ok(loop_inputs)
     })
   }
@@ -4440,6 +4471,8 @@ mod tests {
         condition: "{{continue_loop}}".to_string(),
         max_iterations: 10,
         template: vec![increment_node],
+        continue_on_error: false,
+        fail_on_exhausted: false,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -4514,6 +4547,8 @@ mod tests {
         condition: "{{continue_loop}}".to_string(),
         max_iterations: 10,
         template: vec![increment_node],
+        continue_on_error: false,
+        fail_on_exhausted: false,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -4584,6 +4619,8 @@ mod tests {
         condition: "{{continue}}".to_string(),
         max_iterations: 10,
         template: vec![check_node],
+        continue_on_error: false,
+        fail_on_exhausted: false,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -4838,6 +4875,8 @@ mod tests {
         condition: "{{ count < 3 }}".to_string(),
         max_iterations: 10,
         template: vec![increment_node],
+        continue_on_error: false,
+        fail_on_exhausted: false,
       },
       dependencies: vec![],
       input_mapping: None,
@@ -4848,6 +4887,171 @@ mod tests {
     let final_state = Flow::new(vec![while_node]).run().await.unwrap();
     let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
     assert_eq!(while_result.get("count"), Some(&FlowValue::Json(json!(3))));
+  }
+
+  // ── D11 (W2.4): While loop observability ──────────────────────────────
+
+  struct IncrementUntil3;
+  #[async_trait]
+  impl AsyncNode for IncrementUntil3 {
+    async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+      let count = match inputs.get("count") {
+        Some(FlowValue::Json(Value::Number(n))) => n.as_i64().unwrap(),
+        _ => 0,
+      };
+      Ok(HashMap::from([(
+        "count".to_string(),
+        FlowValue::Json(json!(count + 1)),
+      )]))
+    }
+  }
+
+  fn count_while_node(condition: &str, max_iterations: u32, fail_on_exhausted: bool) -> GraphNode {
+    let increment_node = GraphNode {
+      id: "increment".to_string(),
+      node_type: NodeType::Standard(Arc::new(IncrementUntil3)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    GraphNode {
+      id: "while_loop".to_string(),
+      node_type: NodeType::While {
+        condition: condition.to_string(),
+        max_iterations,
+        template: vec![increment_node],
+        continue_on_error: false,
+        fail_on_exhausted,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::from([("count".to_string(), FlowValue::Json(json!(0)))]),
+    }
+  }
+
+  #[tokio::test]
+  async fn while_node_reports_iterations_used_and_exhausted_false_on_normal_exit() {
+    use_writable_home();
+    // Condition turns false once count reaches 3, well before max_iterations
+    // (10) — a normal exit, not exhaustion.
+    let while_node = count_while_node("{{ count < 3 }}", 10, false);
+    let final_state = Flow::new(vec![while_node]).run().await.unwrap();
+    let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
+    assert_eq!(
+      while_result.get("iterations_used"),
+      Some(&FlowValue::Json(json!(3))),
+      "3 iterations must actually run before the condition turns false"
+    );
+    assert_eq!(
+      while_result.get("exhausted"),
+      Some(&FlowValue::Json(json!(false))),
+      "a normal condition-false exit must not report exhausted"
+    );
+  }
+
+  #[tokio::test]
+  async fn while_node_reports_exhausted_true_when_max_iterations_reached() {
+    use_writable_home();
+    // Condition is always true — the loop can only stop via exhaustion.
+    let while_node = count_while_node("true", 3, false);
+    let final_state = Flow::new(vec![while_node]).run().await.unwrap();
+    let while_result = final_state.get("while_loop").unwrap().as_ref().unwrap();
+    assert_eq!(
+      while_result.get("iterations_used"),
+      Some(&FlowValue::Json(json!(3)))
+    );
+    assert_eq!(
+      while_result.get("exhausted"),
+      Some(&FlowValue::Json(json!(true))),
+      "reaching max_iterations without the condition ever going false must report exhausted"
+    );
+  }
+
+  #[tokio::test]
+  async fn while_node_fail_on_exhausted_fails_the_while_node() {
+    use_writable_home();
+    let while_node = count_while_node("true", 3, true);
+    let final_state = Flow::new(vec![while_node]).run().await.unwrap();
+    let while_result = final_state.get("while_loop").unwrap();
+    assert!(
+      while_result.is_err(),
+      "fail_on_exhausted=true must fail the While node on exhaustion, got {:?}",
+      while_result
+    );
+  }
+
+  struct AlwaysFails;
+  #[async_trait]
+  impl AsyncNode for AlwaysFails {
+    async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+      Err(AgentFlowError::NodeExecutionFailed {
+        message: "boom".to_string(),
+      })
+    }
+  }
+
+  fn failing_while_node(continue_on_error: bool) -> GraphNode {
+    let failing_node = GraphNode {
+      id: "fail".to_string(),
+      node_type: NodeType::Standard(Arc::new(AlwaysFails)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    GraphNode {
+      id: "while_loop".to_string(),
+      node_type: NodeType::While {
+        condition: "true".to_string(),
+        max_iterations: 3,
+        template: vec![failing_node],
+        continue_on_error,
+        fail_on_exhausted: false,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    }
+  }
+
+  #[tokio::test]
+  async fn while_node_sub_flow_failure_fails_the_while_node_by_default() {
+    use_writable_home();
+    let final_state = Flow::new(vec![failing_while_node(false)])
+      .run()
+      .await
+      .unwrap();
+    let while_result = final_state.get("while_loop").unwrap();
+    assert!(
+      while_result.is_err(),
+      "a failing sub-flow exit node must fail the While node by default, got {:?}",
+      while_result
+    );
+  }
+
+  #[tokio::test]
+  async fn while_node_continue_on_error_swallows_failures_and_reaches_exhaustion() {
+    use_writable_home();
+    let final_state = Flow::new(vec![failing_while_node(true)])
+      .run()
+      .await
+      .unwrap();
+    let while_result =
+      final_state.get("while_loop").unwrap().as_ref().expect(
+        "continue_on_error=true must swallow the sub-flow failure, not fail the While node",
+      );
+    assert_eq!(
+      while_result.get("iterations_used"),
+      Some(&FlowValue::Json(json!(3))),
+      "all 3 iterations must run despite every one failing"
+    );
+    assert_eq!(
+      while_result.get("exhausted"),
+      Some(&FlowValue::Json(json!(true)))
+    );
   }
 
   /// Q2.4.1 regression: `topological_sort` returns the same node

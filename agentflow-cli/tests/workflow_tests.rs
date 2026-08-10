@@ -1668,6 +1668,8 @@ async fn test_stateful_while_loop_workflow() {
       condition: "{{counter}}".to_string(),
       max_iterations: 5,
       template: sub_flow_template,
+      continue_on_error: false,
+      fail_on_exhausted: false,
     },
     dependencies: vec![],
     input_mapping: None,

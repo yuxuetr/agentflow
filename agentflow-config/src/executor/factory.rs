@@ -233,10 +233,27 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
         .iter()
         .map(create_graph_node)
         .collect::<Result<_>>()?;
+      // D11 (W2.4): both default to `false` — a sub-flow node failure
+      // surfaces as a While-node-level error by default (opt into the
+      // legacy swallow-and-continue behavior via `continue_on_error:
+      // true`), and exhausting `max_iterations` only warns by default
+      // (opt into failing via `fail_on_exhausted: true`).
+      let continue_on_error = node_def
+        .parameters
+        .get("continue_on_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+      let fail_on_exhausted = node_def
+        .parameters
+        .get("fail_on_exhausted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
       Ok(NodeType::While {
         condition,
         max_iterations,
         template,
+        continue_on_error,
+        fail_on_exhausted,
       })
     }
     "map" => {

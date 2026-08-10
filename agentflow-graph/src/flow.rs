@@ -36,6 +36,19 @@ pub enum NodeType {
     condition: String,
     max_iterations: u32,
     template: Vec<GraphNode>,
+    /// D11 (W2.4): a sub-flow node failing mid-iteration used to be
+    /// swallowed (logged at debug level, the loop just kept going with
+    /// whatever partial outputs it had). Default `false` now surfaces
+    /// that failure as a While-node-level error instead — set `true` to
+    /// restore the old swallow-and-continue behavior.
+    continue_on_error: bool,
+    /// D11 (W2.4): exhausting `max_iterations` without `condition` ever
+    /// evaluating false used to be indistinguishable from a normal
+    /// condition-false exit. Default `false` emits a `tracing::warn!`
+    /// (plus the `exhausted`/`iterations_used` outputs, see
+    /// `execute_while_node`) but still returns `Ok`; set `true` to fail
+    /// the While node outright when this happens.
+    fail_on_exhausted: bool,
   },
 }
 

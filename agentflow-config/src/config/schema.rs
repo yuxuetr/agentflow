@@ -474,6 +474,9 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required("condition", ParamType::String),
       ParamSpec::required("max_iterations", ParamType::Integer),
       ParamSpec::required("do", ParamType::Sequence),
+      // D11 (W2.4).
+      ParamSpec::optional("continue_on_error", ParamType::Bool),
+      ParamSpec::optional("fail_on_exhausted", ParamType::Bool),
     ]),
     "shell" => Some(vec![
       // F-A7-2 closure: shell node requires explicit `allowed_commands`
