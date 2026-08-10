@@ -278,6 +278,7 @@ impl PlanExecuteAgent {
         tool: tool.clone(),
         params: step.params.clone(),
         depends_on,
+        run_if: None,
       });
       prev_tool_id = Some(step.id.clone());
     }

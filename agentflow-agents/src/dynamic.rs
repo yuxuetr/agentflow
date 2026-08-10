@@ -68,6 +68,17 @@ pub struct WorkflowPlanStep {
   /// the dependency's step id), and the edges drive ordering + parallelism.
   #[serde(default)]
   pub depends_on: Vec<String>,
+  /// Optional conditional-execution expression (W2.2), in the same `expr`
+  /// syntax as config-YAML `run_if` (e.g. `"nodes.check.outputs.result ==
+  /// 'ok'"`). Compiled and validated by [`compile_plan_to_flow_with_precomputed`]
+  /// at compile time — an invalid expression is rejected before the plan
+  /// ever runs, same as a dangling `depends_on` reference. When the
+  /// expression evaluates falsy at run time, the executor skips the step
+  /// (`AgentFlowError::NodeSkipped`) rather than treating it as a failure.
+  /// Map/While loop steps remain out of scope for the dynamic-plan schema
+  /// (kept deliberately narrow to bound LLM-authored plan complexity).
+  #[serde(default)]
+  pub run_if: Option<String>,
 }
 
 impl WorkflowPlanStep {
@@ -241,6 +252,13 @@ pub fn compile_plan_to_flow_with_precomputed(
         }
       }
     }
+    if let Some(run_if) = &step.run_if
+      && let Err(err) = agentflow_graph::expr::compile(run_if)
+    {
+      return Err(AgentFlowError::FlowDefinitionError {
+        message: format!("step '{}' run_if is invalid: {}", step.id, err),
+      });
+    }
   }
 
   // Each step's primary output key, so a dependent step wires to the right one
@@ -332,7 +350,7 @@ pub fn compile_plan_to_flow_with_precomputed(
         node_type,
         dependencies: step.depends_on.clone(),
         input_mapping,
-        run_if: None,
+        run_if: step.run_if.clone(),
         initial_inputs,
       }
     })
@@ -645,6 +663,7 @@ mod tests {
           tool: "echo".into(),
           params: json!({"v": "A"}),
           depends_on: vec![],
+          run_if: None,
         },
         WorkflowPlanStep {
           id: "b".into(),
@@ -652,6 +671,7 @@ mod tests {
           tool: "echo".into(),
           params: json!({"v": "B"}),
           depends_on: vec![],
+          run_if: None,
         },
         WorkflowPlanStep {
           id: "c".into(),
@@ -659,6 +679,7 @@ mod tests {
           tool: "echo".into(),
           params: json!({}),
           depends_on: vec!["a".into(), "b".into()],
+          run_if: None,
         },
       ],
     };
@@ -682,6 +703,77 @@ mod tests {
     );
   }
 
+  // ── W2.2: run_if conditional steps ──────────────────────────────────
+
+  #[tokio::test]
+  async fn run_if_false_skips_the_step() {
+    let plan = WorkflowPlan {
+      steps: vec![WorkflowPlanStep {
+        id: "a".into(),
+        kind: PlanStepKind::Tool,
+        tool: "echo".into(),
+        params: json!({}),
+        depends_on: vec![],
+        run_if: Some("false".into()),
+      }],
+    };
+    let flow = compile_plan_to_flow(&plan, registry_with_echo()).expect("compiles");
+    let state = CoreFlowRunner::concurrent(8)
+      .run(&flow, HashMap::new())
+      .await
+      .expect("run");
+    assert!(
+      matches!(state.get("a"), Some(Err(AgentFlowError::NodeSkipped))),
+      "a run_if that evaluates false must skip the step rather than run it: {:?}",
+      state.get("a")
+    );
+  }
+
+  #[tokio::test]
+  async fn run_if_true_runs_the_step() {
+    let plan = WorkflowPlan {
+      steps: vec![WorkflowPlanStep {
+        id: "a".into(),
+        kind: PlanStepKind::Tool,
+        tool: "echo".into(),
+        params: json!({}),
+        depends_on: vec![],
+        run_if: Some("true".into()),
+      }],
+    };
+    let flow = compile_plan_to_flow(&plan, registry_with_echo()).expect("compiles");
+    let state = CoreFlowRunner::concurrent(8)
+      .run(&flow, HashMap::new())
+      .await
+      .expect("run");
+    assert!(
+      state.get("a").is_some_and(|r| r.is_ok()),
+      "a run_if that evaluates true must not skip the step: {:?}",
+      state.get("a")
+    );
+  }
+
+  #[test]
+  fn rejects_invalid_run_if_expression() {
+    let plan = WorkflowPlan {
+      steps: vec![WorkflowPlanStep {
+        id: "a".into(),
+        kind: PlanStepKind::Tool,
+        tool: "echo".into(),
+        params: json!({}),
+        depends_on: vec![],
+        run_if: Some("1 +".into()),
+      }],
+    };
+    let result = compile_plan_to_flow(&plan, registry_with_echo());
+    assert!(
+      matches!(result, Err(AgentFlowError::FlowDefinitionError { .. })),
+      "an invalid run_if expression must be rejected at compile time (FlowDefinitionError), \
+       got is_ok={}",
+      result.is_ok()
+    );
+  }
+
   #[test]
   fn rejects_dangling_dependency() {
     let plan = WorkflowPlan {
@@ -691,6 +783,7 @@ mod tests {
         tool: "echo".into(),
         params: json!({}),
         depends_on: vec!["missing".into()],
+        run_if: None,
       }],
     };
     let result = compile_plan_to_flow(&plan, registry_with_echo());
@@ -708,6 +801,7 @@ mod tests {
       tool: "echo".into(),
       params: json!({}),
       depends_on: vec![],
+      run_if: None,
     };
     let plan = WorkflowPlan {
       steps: vec![step.clone(), step],
@@ -827,6 +921,7 @@ mod tests {
       tool: String::new(),
       params,
       depends_on: deps.into_iter().map(String::from).collect(),
+      run_if: None,
     }
   }
 
@@ -868,6 +963,7 @@ mod tests {
         tool: String::new(),
         params: json!({}),
         depends_on: vec![],
+        run_if: None,
       }],
     };
     assert!(matches!(
@@ -889,6 +985,7 @@ mod tests {
           tool: "echo".into(),
           params: json!({}),
           depends_on: vec!["plan".into()],
+          run_if: None,
         },
       ],
     };
@@ -971,6 +1068,7 @@ mod tests {
         tool: "does-not-exist".into(),
         params: json!({}),
         depends_on: vec![],
+        run_if: None,
       }],
     };
     let precomputed = HashMap::from([(
