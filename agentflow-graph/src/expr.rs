@@ -608,6 +608,22 @@ impl<'a> Parser<'a> {
     self.depth -= 1;
   }
 
+  /// Bounds the length of a left-associative same-precedence operator chain
+  /// (e.g. `1+1+1+...`). These chains are parsed with an iterative loop, not
+  /// recursion, so `enter_depth`/`exit_depth` never see them — but each
+  /// iteration still adds one level to the resulting `Expr::Binary` tree,
+  /// which `eval`/`validate`/`Drop` walk recursively. Left unchecked, a long
+  /// enough chain overflows the stack without ever tripping `MAX_EXPR_DEPTH`.
+  fn check_chain_depth(&self, chain_len: usize) -> Result<(), ExprError> {
+    if chain_len > MAX_EXPR_DEPTH {
+      return Err(ExprError::new(
+        self.col(),
+        "expression is too deeply nested",
+      ));
+    }
+    Ok(())
+  }
+
   fn parse(mut self) -> Result<Expr, ExprError> {
     let expr = self.parse_or()?;
     self.skip_ws();
@@ -620,7 +636,10 @@ impl<'a> Parser<'a> {
   fn parse_or(&mut self) -> Result<Expr, ExprError> {
     self.enter_depth()?;
     let mut expr = self.parse_and()?;
+    let mut chain_len = 0usize;
     while self.consume("||") {
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(2);
       let right = self.parse_and()?;
       expr = Expr::Binary {
@@ -636,7 +655,10 @@ impl<'a> Parser<'a> {
 
   fn parse_and(&mut self) -> Result<Expr, ExprError> {
     let mut expr = self.parse_equality()?;
+    let mut chain_len = 0usize;
     while self.consume("&&") {
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(2);
       let right = self.parse_equality()?;
       expr = Expr::Binary {
@@ -651,6 +673,7 @@ impl<'a> Parser<'a> {
 
   fn parse_equality(&mut self) -> Result<Expr, ExprError> {
     let mut expr = self.parse_comparison()?;
+    let mut chain_len = 0usize;
     loop {
       let (op, width) = if self.consume("==") {
         (BinaryOp::Eq, 2)
@@ -659,6 +682,8 @@ impl<'a> Parser<'a> {
       } else {
         break;
       };
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(width);
       let right = self.parse_comparison()?;
       expr = Expr::Binary {
@@ -673,6 +698,7 @@ impl<'a> Parser<'a> {
 
   fn parse_comparison(&mut self) -> Result<Expr, ExprError> {
     let mut expr = self.parse_term()?;
+    let mut chain_len = 0usize;
     loop {
       let (op, width) = if self.consume(">=") {
         (BinaryOp::Ge, 2)
@@ -685,6 +711,8 @@ impl<'a> Parser<'a> {
       } else {
         break;
       };
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(width);
       let right = self.parse_term()?;
       expr = Expr::Binary {
@@ -699,6 +727,7 @@ impl<'a> Parser<'a> {
 
   fn parse_term(&mut self) -> Result<Expr, ExprError> {
     let mut expr = self.parse_factor()?;
+    let mut chain_len = 0usize;
     loop {
       let (op, width) = if self.consume("+") {
         (BinaryOp::Add, 1)
@@ -707,6 +736,8 @@ impl<'a> Parser<'a> {
       } else {
         break;
       };
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(width);
       let right = self.parse_factor()?;
       expr = Expr::Binary {
@@ -721,6 +752,7 @@ impl<'a> Parser<'a> {
 
   fn parse_factor(&mut self) -> Result<Expr, ExprError> {
     let mut expr = self.parse_unary()?;
+    let mut chain_len = 0usize;
     loop {
       let (op, width) = if self.consume("*") {
         (BinaryOp::Mul, 1)
@@ -729,6 +761,8 @@ impl<'a> Parser<'a> {
       } else {
         break;
       };
+      chain_len += 1;
+      self.check_chain_depth(chain_len)?;
       let col = self.col().saturating_sub(width);
       let right = self.parse_unary()?;
       expr = Expr::Binary {
@@ -1047,5 +1081,133 @@ mod tests {
     assert!(compile(&unary).is_ok());
     let parens = format!("{}1{}", "(".repeat(20), ")".repeat(20));
     assert!(compile(&parens).is_ok());
+  }
+
+  #[test]
+  fn rejects_deeply_chained_addition() {
+    let expr = format!("1{}", "+1".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_chained_multiplication() {
+    let expr = format!("1{}", "*1".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_chained_or() {
+    let expr = format!("true{}", "||true".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_chained_and() {
+    let expr = format!("true{}", "&&true".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_chained_equality() {
+    let expr = format!("1{}", "==1".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn rejects_deeply_chained_comparison() {
+    let expr = format!("1{}", ">1".repeat(100_000));
+    let error = compile(&expr).unwrap_err();
+    assert!(error.message.contains("too deeply nested"));
+  }
+
+  #[test]
+  fn accepts_moderately_chained_addition() {
+    let expr = format!("1{}", "+1".repeat(20));
+    assert!(compile(&expr).is_ok());
+  }
+
+  #[test]
+  fn add_concatenates_when_either_side_is_a_string() {
+    let value = evaluate("1 + '2'", &HashMap::new(), &HashMap::new()).unwrap();
+    assert_eq!(value, ExprValue::String("12".to_string()));
+  }
+
+  #[test]
+  fn add_sums_numbers_when_neither_side_is_a_string() {
+    let value = evaluate("1 + 2", &HashMap::new(), &HashMap::new()).unwrap();
+    assert_eq!(value, ExprValue::Number(3.0));
+  }
+
+  #[test]
+  fn arithmetic_ops_coerce_numeric_strings() {
+    assert_eq!(
+      evaluate("'10' - '4'", &HashMap::new(), &HashMap::new()).unwrap(),
+      ExprValue::Number(6.0)
+    );
+    assert_eq!(
+      evaluate("'3' * '4'", &HashMap::new(), &HashMap::new()).unwrap(),
+      ExprValue::Number(12.0)
+    );
+    assert_eq!(
+      evaluate("'10' / '4'", &HashMap::new(), &HashMap::new()).unwrap(),
+      ExprValue::Number(2.5)
+    );
+  }
+
+  #[test]
+  fn division_by_zero_is_an_error() {
+    let error = evaluate("1 / 0", &HashMap::new(), &HashMap::new()).unwrap_err();
+    assert!(error.message.contains("division by zero"));
+  }
+
+  #[test]
+  fn non_numeric_string_arithmetic_is_an_error() {
+    let error = evaluate("'abc' - 1", &HashMap::new(), &HashMap::new()).unwrap_err();
+    assert!(error.message.contains("expected number"));
+  }
+
+  #[test]
+  fn equality_coerces_numeric_strings_but_not_other_strings() {
+    assert!(evaluate_bool("1 == '1'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("1 == 'one'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(evaluate_bool("'a' != 'b'", &HashMap::new(), &HashMap::new()).unwrap());
+  }
+
+  #[test]
+  fn ordering_operators_compare_strings_lexicographically_and_numbers_numerically() {
+    assert!(evaluate_bool("'b' > 'a'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("2 > 10", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(evaluate_bool("10 >= 10", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("5 <= 4", &HashMap::new(), &HashMap::new()).unwrap());
+  }
+
+  #[test]
+  fn truthy_coercion_treats_false_like_strings_and_zero_as_falsy() {
+    assert!(!evaluate_bool("''", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("'false'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("'0'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(evaluate_bool("'no'", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("0", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("null", &HashMap::new(), &HashMap::new()).unwrap());
+  }
+
+  #[test]
+  fn unary_not_and_negate() {
+    assert!(evaluate_bool("!false", &HashMap::new(), &HashMap::new()).unwrap());
+    assert_eq!(
+      evaluate("-5", &HashMap::new(), &HashMap::new()).unwrap(),
+      ExprValue::Number(-5.0)
+    );
+  }
+
+  #[test]
+  fn short_circuits_or_and_and() {
+    assert!(evaluate_bool("true || (1/0 > 0)", &HashMap::new(), &HashMap::new()).unwrap());
+    assert!(!evaluate_bool("false && (1/0 > 0)", &HashMap::new(), &HashMap::new()).unwrap());
   }
 }
