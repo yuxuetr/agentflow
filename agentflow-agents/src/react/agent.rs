@@ -1696,7 +1696,11 @@ impl ReActAgent {
     downgraded
   }
 
-  fn context_for_input(&self, user_input: &str) -> AgentContext {
+  /// `pub(crate)` (rather than private) so [`crate::nodes::AgentNode`] can
+  /// build the same config-derived default context this uses internally,
+  /// then layer in parent-flow governance (W2.3) before calling
+  /// [`Self::run_with_context`] directly instead of [`Self::run_with_trace`].
+  pub(crate) fn context_for_input(&self, user_input: &str) -> AgentContext {
     let mut context = AgentContext::new(&self.session_id, user_input, &self.config.model)
       .with_limits(RuntimeLimits {
         max_steps: Some(self.config.max_iterations),

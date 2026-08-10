@@ -31,7 +31,10 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::react::agent::ReActAgent;
-use crate::runtime::{AgentContext, AgentRunResult, AgentStepKind, AgentStopReason};
+use crate::runtime::{
+  AgentCancellationToken, AgentContext, AgentEventSink, AgentRunResult, AgentStepKind,
+  AgentStopReason, RuntimeLimits,
+};
 
 const AGENT_RESUME_CONTRACT_VERSION: u32 = 1;
 
@@ -213,6 +216,13 @@ pub struct AgentNode {
   /// Logical name for this node (appears in workflow logs).
   pub name: String,
   agent: Arc<Mutex<ReActAgent>>,
+  /// W2.3: parent-flow governance forwarded into this embedded agent's run
+  /// context instead of the agent building an isolated, ungoverned one via
+  /// `run_with_trace`. All `None` by default — set via
+  /// [`Self::with_governance`].
+  cancellation_token: Option<AgentCancellationToken>,
+  event_sink: Option<Arc<dyn AgentEventSink>>,
+  parent_limits: Option<RuntimeLimits>,
 }
 
 impl AgentNode {
@@ -221,13 +231,80 @@ impl AgentNode {
     Self {
       name: name.into(),
       agent: Arc::new(Mutex::new(agent)),
+      cancellation_token: None,
+      event_sink: None,
+      parent_limits: None,
     }
+  }
+
+  /// Govern this embedded agent step with the parent flow's cancellation
+  /// token / event sink / resource limits (W2.3), so a sub-agent step is
+  /// cancellable, budget-constrained, and Harness-visible instead of
+  /// running in an isolated bubble with only its own `ReActConfig`-derived
+  /// defaults. Each parameter independently opts in — pass `None` for any
+  /// governance dimension the caller doesn't have. `parent_limits` is
+  /// merged into (not replacing) the step's own default limits by taking
+  /// the tighter bound field-by-field (a "downgraded copy"): a parent
+  /// constraint can only make the child stricter, never looser.
+  pub fn with_governance(
+    mut self,
+    cancellation_token: Option<AgentCancellationToken>,
+    event_sink: Option<Arc<dyn AgentEventSink>>,
+    parent_limits: Option<RuntimeLimits>,
+  ) -> Self {
+    self.cancellation_token = cancellation_token;
+    self.event_sink = event_sink;
+    self.parent_limits = parent_limits;
+    self
   }
 
   /// Return a cloned handle to the inner agent lock so it can be shared
   /// with an [`AgentTool`](crate::tools::AgentTool).
   pub fn agent_handle(&self) -> Arc<Mutex<ReActAgent>> {
     self.agent.clone()
+  }
+
+  /// Whether any governance dimension is set — when none is, `execute`
+  /// keeps calling `run_with_trace` unchanged (no behavior change for
+  /// every pre-W2.3 caller that never opts in).
+  fn has_governance(&self) -> bool {
+    self.cancellation_token.is_some() || self.event_sink.is_some() || self.parent_limits.is_some()
+  }
+}
+
+/// Take the tighter of two optional bounds — `None` means "no bound from
+/// this side", so the other side's value (if any) wins; when both are
+/// set, the smaller (more restrictive) one wins. Mirrors how a child's own
+/// limit and a parent-imposed limit should combine: a parent constraint
+/// narrows, never widens.
+fn tighter_bound<T: Ord>(child: Option<T>, parent: Option<T>) -> Option<T> {
+  match (child, parent) {
+    (Some(a), Some(b)) => Some(a.min(b)),
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  }
+}
+
+/// Same as [`tighter_bound`] for `f64` (no `Ord` impl, due to `NaN`).
+fn tighter_bound_f64(child: Option<f64>, parent: Option<f64>) -> Option<f64> {
+  match (child, parent) {
+    (Some(a), Some(b)) => Some(a.min(b)),
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  }
+}
+
+/// Downgrade `child`'s limits by `parent`'s — field by field, the tighter
+/// bound wins (W2.3).
+fn downgrade_limits(child: RuntimeLimits, parent: &RuntimeLimits) -> RuntimeLimits {
+  RuntimeLimits {
+    max_steps: tighter_bound(child.max_steps, parent.max_steps),
+    max_tool_calls: tighter_bound(child.max_tool_calls, parent.max_tool_calls),
+    timeout_ms: tighter_bound(child.timeout_ms, parent.timeout_ms),
+    token_budget: tighter_bound(child.token_budget, parent.token_budget),
+    cost_limit_usd: tighter_bound_f64(child.cost_limit_usd, parent.cost_limit_usd),
   }
 }
 
@@ -272,6 +349,23 @@ impl AsyncNode for AgentNode {
       let context = AgentContext::new(&prior.session_id, &message, "");
       agent
         .resume_with_context(context, prior)
+        .await
+        .map_err(|e| AgentFlowError::NodeExecutionFailed {
+          message: format!("AgentNode '{}': {}", self.name, e),
+        })?
+    } else if self.has_governance() {
+      let mut context = agent.context_for_input(&message);
+      if let Some(sink) = &self.event_sink {
+        context = context.with_event_sink(Arc::clone(sink));
+      }
+      if let Some(token) = &self.cancellation_token {
+        context = context.with_cancellation_token(token.clone());
+      }
+      if let Some(parent_limits) = &self.parent_limits {
+        context.limits = downgrade_limits(context.limits, parent_limits);
+      }
+      agent
+        .run_with_context(context)
         .await
         .map_err(|e| AgentFlowError::NodeExecutionFailed {
           message: format!("AgentNode '{}': {}", self.name, e),
@@ -524,6 +618,66 @@ mod tests {
     let h2 = node.agent_handle();
     // Both Arc pointers point to the same allocation
     assert!(Arc::ptr_eq(&h1, &h2));
+  }
+
+  // ── Governance (W2.3) ────────────────────────────────────────────────────
+
+  #[test]
+  fn downgrade_limits_takes_the_tighter_bound_per_field() {
+    let child = RuntimeLimits {
+      max_steps: Some(20),
+      max_tool_calls: None,
+      timeout_ms: Some(10_000),
+      token_budget: Some(50_000),
+      cost_limit_usd: None,
+    };
+    let parent = RuntimeLimits {
+      max_steps: Some(5),        // tighter than child's 20 -> wins
+      max_tool_calls: Some(3),   // child has none -> parent's wins
+      timeout_ms: Some(60_000),  // looser than child's 10_000 -> child's wins
+      token_budget: None,        // parent has none -> child's wins
+      cost_limit_usd: Some(1.5), // child has none -> parent's wins
+    };
+    let downgraded = downgrade_limits(child, &parent);
+    assert_eq!(
+      downgraded,
+      RuntimeLimits {
+        max_steps: Some(5),
+        max_tool_calls: Some(3),
+        timeout_ms: Some(10_000),
+        token_budget: Some(50_000),
+        cost_limit_usd: Some(1.5),
+      }
+    );
+  }
+
+  #[test]
+  fn downgrade_limits_is_a_no_op_against_an_all_none_parent() {
+    let child = RuntimeLimits {
+      max_steps: Some(20),
+      max_tool_calls: Some(4),
+      timeout_ms: Some(10_000),
+      token_budget: Some(50_000),
+      cost_limit_usd: Some(2.0),
+    };
+    let downgraded = downgrade_limits(child.clone(), &RuntimeLimits::default());
+    assert_eq!(
+      downgraded, child,
+      "no parent constraint must leave the child's own limits untouched"
+    );
+  }
+
+  #[test]
+  fn with_governance_sets_has_governance() {
+    let ungoverned = AgentNode::from_agent("test", make_agent());
+    assert!(!ungoverned.has_governance());
+
+    let governed = AgentNode::from_agent("test", make_agent()).with_governance(
+      Some(AgentCancellationToken::new()),
+      None,
+      None,
+    );
+    assert!(governed.has_governance());
   }
 
   // ── execute() input validation ────────────────────────────────────────────

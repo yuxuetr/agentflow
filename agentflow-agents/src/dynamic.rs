@@ -27,6 +27,7 @@ use serde_json::{Map, Value};
 
 use crate::nodes::AgentNode;
 use crate::react::{ReActAgent, ReActConfig};
+use crate::runtime::{AgentCancellationToken, AgentEventSink, RuntimeLimits};
 
 /// One step of a declarative workflow plan — the shape an LLM emits as JSON:
 ///
@@ -183,6 +184,23 @@ impl AsyncNode for PrecomputedResultNode {
   }
 }
 
+/// Parent-flow governance forwarded into every `agent`-kind plan step
+/// (W2.3), so a dynamic-plan sub-agent is cancellable, budget-constrained,
+/// and Harness-visible instead of running in an isolated bubble with only
+/// its own `ReActConfig`-derived defaults. `tool`-kind steps are
+/// unaffected — they're already governed at the shared `ToolRegistry`
+/// (sandbox policy, and Harness `wrap_registry` approval when configured).
+///
+/// `None`/default fields mean "no parent constraint of that kind"; a set
+/// `limits` field narrows (never widens) each `agent` step's own default
+/// limits field-by-field — see [`crate::nodes::AgentNode::with_governance`].
+#[derive(Clone, Default)]
+pub struct AgentStepGovernance {
+  pub cancellation_token: Option<AgentCancellationToken>,
+  pub event_sink: Option<Arc<dyn AgentEventSink>>,
+  pub limits: Option<RuntimeLimits>,
+}
+
 /// Compile a [`WorkflowPlan`] into an executable [`Flow`].
 ///
 /// Each step becomes a graph node that invokes its tool; `depends_on` becomes
@@ -207,11 +225,30 @@ pub fn compile_plan_to_flow(
 /// `precomputed` compiles to a [`PrecomputedResultNode`] instead of a real
 /// tool/agent node — used by [`DynamicWorkflowAgent::run_with_replan`] (L1.1)
 /// so a revised plan can carry forward already-succeeded steps without
-/// re-running them.
+/// re-running them. No parent [`AgentStepGovernance`] — equivalent to
+/// [`compile_plan_to_flow_with_precomputed_and_governance`] with the
+/// default (all-`None`) governance.
 pub fn compile_plan_to_flow_with_precomputed(
   plan: &WorkflowPlan,
   registry: Arc<ToolRegistry>,
   precomputed: &HashMap<String, HashMap<String, FlowValue>>,
+) -> Result<Flow, AgentFlowError> {
+  compile_plan_to_flow_with_precomputed_and_governance(
+    plan,
+    registry,
+    precomputed,
+    &AgentStepGovernance::default(),
+  )
+}
+
+/// Same as [`compile_plan_to_flow_with_precomputed`], additionally forwarding
+/// `governance` (W2.3) into every `agent`-kind step's embedded [`AgentNode`]
+/// via [`AgentNode::with_governance`].
+pub fn compile_plan_to_flow_with_precomputed_and_governance(
+  plan: &WorkflowPlan,
+  registry: Arc<ToolRegistry>,
+  precomputed: &HashMap<String, HashMap<String, FlowValue>>,
+  governance: &AgentStepGovernance,
 ) -> Result<Flow, AgentFlowError> {
   let ids: HashSet<&str> = plan.steps.iter().map(|step| step.id.as_str()).collect();
   if ids.len() != plan.steps.len() {
@@ -333,7 +370,11 @@ pub fn compile_plan_to_flow_with_precomputed(
                 Box::new(SessionMemory::default_window()),
                 Arc::clone(&registry),
               );
-              let node = AgentNode::from_agent(step.id.clone(), agent);
+              let node = AgentNode::from_agent(step.id.clone(), agent).with_governance(
+                governance.cancellation_token.clone(),
+                governance.event_sink.clone(),
+                governance.limits.clone(),
+              );
               // AgentNode reads its `message` input; dependency outputs gate
               // ordering (and are available in the pool) but the message is static.
               let initial = HashMap::from([(
@@ -384,6 +425,9 @@ pub struct DynamicWorkflowAgent {
   model: String,
   tools: Arc<ToolRegistry>,
   runner: Arc<dyn FlowRunner>,
+  /// W2.3: forwarded into every `agent`-kind plan step; defaults to no
+  /// governance (pre-W2.3 behavior) — see [`Self::with_governance`].
+  governance: AgentStepGovernance,
 }
 
 /// Pull the JSON object out of an LLM reply (it may wrap it in prose or a
@@ -408,7 +452,17 @@ impl DynamicWorkflowAgent {
       model: model.into(),
       tools,
       runner,
+      governance: AgentStepGovernance::default(),
     }
+  }
+
+  /// Forward `governance` (cancellation token / event sink / resource
+  /// limits) into every `agent`-kind plan step this agent compiles from
+  /// here on (W2.3). Defaults to no governance, matching pre-W2.3
+  /// behavior, until a caller opts in.
+  pub fn with_governance(mut self, governance: AgentStepGovernance) -> Self {
+    self.governance = governance;
+    self
   }
 
   /// Ask the LLM for a [`WorkflowPlan`] for `goal`, given the available tools.
@@ -450,7 +504,12 @@ impl DynamicWorkflowAgent {
     goal: &str,
   ) -> Result<HashMap<String, AsyncNodeResult>, DynamicWorkflowError> {
     let plan = self.plan(goal).await?;
-    let flow = compile_plan_to_flow(&plan, Arc::clone(&self.tools))?;
+    let flow = compile_plan_to_flow_with_precomputed_and_governance(
+      &plan,
+      Arc::clone(&self.tools),
+      &HashMap::new(),
+      &self.governance,
+    )?;
     Ok(self.runner.run(&flow, HashMap::new()).await?)
   }
 
@@ -479,8 +538,12 @@ impl DynamicWorkflowAgent {
     let mut revisions = 0usize;
 
     loop {
-      let flow =
-        compile_plan_to_flow_with_precomputed(&plan, Arc::clone(&self.tools), &precomputed)?;
+      let flow = compile_plan_to_flow_with_precomputed_and_governance(
+        &plan,
+        Arc::clone(&self.tools),
+        &precomputed,
+        &self.governance,
+      )?;
       let state = self.runner.run(&flow, HashMap::new()).await?;
 
       let mut failures: Vec<(String, String)> = Vec::new();
@@ -936,6 +999,54 @@ mod tests {
     };
     let flow = compile_plan_to_flow(&plan, registry_with_echo()).expect("compiles");
     assert_eq!(flow.nodes().len(), 1);
+  }
+
+  /// W2.3 regression: pre-fix, `compile_plan_to_flow` always hardcoded
+  /// `AgentNode::from_agent` with no governance, so an `agent`-kind plan
+  /// step could not be cancelled by whatever cancelled the parent run — it
+  /// built its own isolated `AgentContext` via `run_with_trace` and just
+  /// kept going. A cancellation check runs before `ReActAgent` ever calls
+  /// the model, so a pre-cancelled token proves propagation without
+  /// needing a real/mocked LLM at all: if governance weren't forwarded,
+  /// this step would instead hang waiting on (or error out reaching) a
+  /// nonexistent "any-model" provider.
+  #[tokio::test]
+  async fn agent_step_honors_a_shared_parent_cancellation_token() {
+    let token = AgentCancellationToken::new();
+    token.cancel();
+    let governance = AgentStepGovernance {
+      cancellation_token: Some(token),
+      event_sink: None,
+      limits: None,
+    };
+    let plan = WorkflowPlan {
+      steps: vec![agent_step(
+        "think",
+        json!({"model": "any-model", "prompt": "hello"}),
+        vec![],
+      )],
+    };
+    let flow = compile_plan_to_flow_with_precomputed_and_governance(
+      &plan,
+      registry_with_echo(),
+      &HashMap::new(),
+      &governance,
+    )
+    .expect("compiles");
+    let state = CoreFlowRunner::concurrent(8)
+      .run(&flow, HashMap::new())
+      .await
+      .expect("run");
+
+    match state.get("think") {
+      Some(Err(AgentFlowError::NodePartialExecutionFailed { message, .. })) => {
+        assert!(
+          message.to_lowercase().contains("cancel"),
+          "expected a cancellation stop reason, got: {message}"
+        );
+      }
+      other => panic!("expected a cancelled partial-execution failure, got {other:?}"),
+    }
   }
 
   #[test]
