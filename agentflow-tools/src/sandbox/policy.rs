@@ -1,5 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// Network destinations that are denied unless a policy explicitly opts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkAddressClass {
@@ -25,7 +27,13 @@ pub enum NetworkAddressClass {
 /// `allowed_paths` falling open) silently exposed `FileTool` to write any
 /// path on the host whenever the policy was constructed via
 /// [`SandboxPolicy::default`].
-#[derive(Debug, Clone)]
+///
+/// W4.1d: serde-ready so a policy can travel inside a
+/// [`crate::manifest::ToolManifestEntry`] across a process boundary (e.g.
+/// to a distributed worker) — every field is a plain value type, so the
+/// derive is a mechanical addition with no behavior change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SandboxPolicy {
   /// Allowed shell commands (first token of the command string).
   /// If **empty**, ALL commands are blocked unless [`allow_all_commands`]
@@ -322,6 +330,50 @@ mod tests {
 
     assert!(policy.is_command_allowed("anything"));
     assert!(policy.path_denial_reason(Path::new("/anywhere")).is_none());
+  }
+
+  /// W4.1d: a policy must survive a JSON round-trip byte-for-byte
+  /// (field-for-field), since it now travels inside a `ToolManifestEntry`.
+  #[test]
+  fn sandbox_policy_round_trips_through_json() {
+    let policy = SandboxPolicy {
+      allowed_commands: vec!["echo".to_string(), "ls".to_string()],
+      allowed_paths: vec![PathBuf::from("/tmp/workspace")],
+      allowed_domains: vec!["example.com".to_string()],
+      allow_loopback_network_access: true,
+      max_memory_bytes: Some(256 * 1024 * 1024),
+      max_pids: Some(32),
+      max_cpu_secs: Some(30),
+      ..SandboxPolicy::default()
+    };
+
+    let json = serde_json::to_string(&policy).expect("serialize");
+    let round_tripped: SandboxPolicy = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(round_tripped.allowed_commands, policy.allowed_commands);
+    assert_eq!(round_tripped.allowed_paths, policy.allowed_paths);
+    assert_eq!(round_tripped.allowed_domains, policy.allowed_domains);
+    assert_eq!(
+      round_tripped.allow_loopback_network_access,
+      policy.allow_loopback_network_access
+    );
+    assert_eq!(round_tripped.max_memory_bytes, policy.max_memory_bytes);
+    assert_eq!(round_tripped.max_pids, policy.max_pids);
+    assert_eq!(round_tripped.max_cpu_secs, policy.max_cpu_secs);
+  }
+
+  /// W4.1d: `#[serde(default)]` means a manifest entry can omit fields
+  /// entirely (e.g. just `{}`) and still get a fully-populated,
+  /// restrictive policy rather than a deserialization error.
+  #[test]
+  fn sandbox_policy_deserializes_from_empty_json_object_with_defaults() {
+    let policy: SandboxPolicy = serde_json::from_str("{}").expect("deserialize");
+    assert_eq!(
+      policy.allowed_commands,
+      SandboxPolicy::default().allowed_commands
+    );
+    assert!(!policy.allow_all_paths);
+    assert!(policy.allowed_paths.is_empty());
   }
 
   #[test]

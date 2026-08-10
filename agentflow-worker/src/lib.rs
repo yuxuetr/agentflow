@@ -890,10 +890,44 @@ async fn execute_mcp_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult 
 /// Minimal ReAct loop dispatcher for distributed `agent` nodes.
 ///
 /// The worker reads the canonical agent inputs (`message`, `model`, optional
-/// `persona` / `max_iterations`) from the gathered input map. The agent runs
-/// against a fresh `SessionMemory` and an empty `ToolRegistry`; richer tool
-/// wiring rides on the same `parameters` plumbing once the tool-distribution
-/// contract is decided (tracked under P5.5 worker admission).
+/// `persona` / `max_iterations`) from the gathered input map. W4.1d: an
+/// optional `payload.parameters["tools"]` field, when present, deserializes
+/// as a `ToolManifest` (`agentflow-tools::manifest`, File+Http only this
+/// pass) and builds a real registry via `build_registry_from_manifest` —
+/// mirrors `execute_file_payload`'s existing `allowed_paths`-from-`parameters`
+/// precedent, no `worker.proto` change needed. Absent the field, the agent
+/// still gets an empty `ToolRegistry` (unchanged, backward-compatible
+/// behavior — no DAG author is required to declare a manifest).
+/// Shell/Script/`code_exec` manifest entries and a worker-side approval RPC
+/// are deferred (`docs/RFC_TOOL_DISTRIBUTION.md`).
+/// W4.1d: parse `payload.parameters["tools"]` as a `ToolManifest` and
+/// build the registry it declares (File+Http only this pass); absent the
+/// field, an empty registry — unchanged, backward-compatible behavior.
+/// Factored out of `execute_agent_payload` so it's unit-testable without
+/// standing up a real (or mock) LLM call.
+fn build_agent_tool_registry(
+  payload: &NodeExecutionPayload,
+) -> Result<ToolRegistry, AgentFlowError> {
+  match payload.parameters.get("tools") {
+    Some(value) => {
+      let manifest: agentflow_tools::ToolManifest =
+        serde_json::from_value(value.clone()).map_err(|e| AgentFlowError::AsyncExecutionError {
+          message: format!("invalid `tools` manifest for agent node: {e}"),
+        })?;
+      // No workspace concept for a distributed `agent` node — this is
+      // only the fallback for an entry that omits its own `sandbox`;
+      // manifest authors should set `sandbox.allowed_paths` explicitly
+      // rather than rely on the worker process's CWD.
+      agentflow_tools::build_registry_from_manifest(&manifest, std::path::Path::new(".")).map_err(
+        |e| AgentFlowError::AsyncExecutionError {
+          message: format!("failed to build tool registry from manifest: {e}"),
+        },
+      )
+    }
+    None => Ok(ToolRegistry::new()),
+  }
+}
+
 async fn execute_agent_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
   let message = required_string_input(payload, "message")?;
   let model = required_string_input(payload, "model")?;
@@ -909,10 +943,12 @@ async fn execute_agent_payload(payload: &NodeExecutionPayload) -> AsyncNodeResul
     config = config.with_max_iterations(max_iterations.min(usize::MAX as u64) as usize);
   }
 
+  let registry = build_agent_tool_registry(payload)?;
+
   let mut agent = ReActAgent::new(
     config,
     Box::new(SessionMemory::default_window()),
-    Arc::new(ToolRegistry::new()),
+    Arc::new(registry),
   );
 
   let result =
@@ -1230,6 +1266,90 @@ mod tests {
       "expected a sandbox denial, got: {error}"
     );
     assert!(!path.exists(), "file must not have been created");
+  }
+
+  /// W4.1d: a `parameters["tools"]` manifest builds a registry with
+  /// exactly the declared File+Http tools instead of the always-empty
+  /// default.
+  #[test]
+  fn build_agent_tool_registry_builds_declared_tools_from_manifest() {
+    let payload = NodeExecutionPayload::new(
+      "agent-node",
+      "agent",
+      std::collections::HashMap::from([(
+        "tools".to_string(),
+        serde_json::json!({
+          "tools": [
+            {
+              "kind": "file",
+              "definition": {
+                "name": "file",
+                "description": "file tool",
+                "parameters": {},
+              },
+            },
+            {
+              "kind": "http",
+              "definition": {
+                "name": "http",
+                "description": "http tool",
+                "parameters": {},
+              },
+            },
+          ]
+        }),
+      )]),
+      std::collections::HashMap::new(),
+    );
+
+    let registry = build_agent_tool_registry(&payload).expect("registry built from manifest");
+    let names: Vec<String> = registry
+      .list()
+      .iter()
+      .map(|tool| tool.name().to_string())
+      .collect();
+    assert!(names.contains(&"file".to_string()));
+    assert!(names.contains(&"http".to_string()));
+    assert_eq!(names.len(), 2);
+  }
+
+  /// W4.1d regression: no `tools` field must still yield an empty
+  /// registry — unchanged, backward-compatible behavior for DAG authors
+  /// who don't declare a manifest.
+  #[test]
+  fn build_agent_tool_registry_with_no_tools_field_is_empty() {
+    let payload = NodeExecutionPayload::new(
+      "agent-node",
+      "agent",
+      std::collections::HashMap::new(),
+      std::collections::HashMap::new(),
+    );
+
+    let registry = build_agent_tool_registry(&payload).expect("empty registry, no manifest");
+    assert!(registry.list().is_empty());
+  }
+
+  /// A malformed `tools` value (fails to deserialize as `ToolManifest`)
+  /// must surface as an error rather than silently falling back to an
+  /// empty registry — a DAG author who typo'd the manifest should see it
+  /// fail loudly, not run with unexpectedly no tools.
+  #[test]
+  fn build_agent_tool_registry_rejects_malformed_manifest() {
+    let payload = NodeExecutionPayload::new(
+      "agent-node",
+      "agent",
+      std::collections::HashMap::from([(
+        "tools".to_string(),
+        serde_json::json!({"tools": [{"kind": "not_a_real_kind"}]}),
+      )]),
+      std::collections::HashMap::new(),
+    );
+
+    let result = build_agent_tool_registry(&payload);
+    assert!(
+      result.is_err(),
+      "malformed manifest must fail, not silently degrade"
+    );
   }
 
   #[tokio::test]
