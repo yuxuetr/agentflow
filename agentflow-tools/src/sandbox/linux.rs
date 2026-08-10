@@ -55,6 +55,15 @@
 //!   if a future caller bypasses the registry merge. A child running under
 //!   a no-`Exec` filter cannot start at all (the initial `execve` from the
 //!   parent fails with `EPERM`) — that is the intended failure mode.
+//! * **`io_uring` always denied** → `io_uring_setup`/`io_uring_enter`/
+//!   `io_uring_register` are denied unconditionally, regardless of granted
+//!   capabilities. Once a ring is armed, the actual read/write/connect/
+//!   openat-equivalent work happens inside the kernel off a shared ring
+//!   buffer with no corresponding per-operation syscall — a child could
+//!   otherwise re-implement network or filesystem-write operations via
+//!   `io_uring` SQEs and bypass the per-syscall `Net`/`FsWrite` denials
+//!   above entirely. No built-in tool needs `io_uring`, so it is treated
+//!   as always out of scope rather than gated behind a capability.
 //!
 //! ## Limits
 //!
@@ -64,7 +73,13 @@
 //! and rules only cover the six `AccessFs` rights defined as of ABI V1,
 //! which this module targets — see `build_landlock_ruleset`). Path-prefix
 //! gating is still enforced in-process too, independent of either kernel
-//! layer, by [`crate::sandbox::SandboxPolicy::is_path_allowed`].
+//! layer, by [`crate::sandbox::SandboxPolicy::is_path_allowed`]. Beyond
+//! `io_uring` (denied outright above), the deny-list model is inherently
+//! incomplete against novel syscall-level bypasses: any future kernel
+//! interface that performs privileged work off a non-syscall control path
+//! (a new io_uring-like ring, a `bpf(2)` program that reaches network/FS
+//! primitives, etc.) is unblocked until this module is updated to name it.
+//! A default-allow blocklist can only ever cover known bypass surfaces.
 //!
 //! ## Architecture support
 //!
@@ -758,6 +773,13 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
     }
   }
 
+  // Always denied, independent of capabilities — see the module doc's
+  // "io_uring always denied" bullet for why a per-syscall net/fs-write
+  // deny list can't cover work submitted through io_uring's ring buffer.
+  for nr in io_uring_syscall_numbers() {
+    rules.insert(*nr, vec![]);
+  }
+
   let filter = SeccompFilter::new(
     rules,
     SeccompAction::Allow,
@@ -830,6 +852,18 @@ fn process_creation_syscall_numbers() -> &'static [i64] {
     libc::SYS_clone3,
     libc::SYS_execve,
     libc::SYS_execveat,
+  ]
+}
+
+/// `io_uring_setup`/`io_uring_enter`/`io_uring_register`: a classic
+/// bypass path for per-syscall net/fs-write denials, see the module doc's
+/// "io_uring always denied" bullet. Denied unconditionally in
+/// `compile_filter`, not gated behind any [`Capability`].
+fn io_uring_syscall_numbers() -> &'static [i64] {
+  &[
+    libc::SYS_io_uring_setup,
+    libc::SYS_io_uring_enter,
+    libc::SYS_io_uring_register,
   ]
 }
 
@@ -986,6 +1020,45 @@ mod tests {
     assert!(rules.contains_key(&libc::SYS_clone3));
     assert!(rules.contains_key(&libc::SYS_execve));
     assert!(rules.contains_key(&libc::SYS_execveat));
+  }
+
+  /// W1.6 regression: `io_uring` is a known seccomp bypass — a child can
+  /// resubmit `connect`/`openat`-equivalent work through the ring instead
+  /// of the syscalls this filter denies above. Unlike `Net`/`FsWrite`/
+  /// `Exec`, no capability legitimately unlocks it, so it must stay in
+  /// the deny set no matter what capabilities are granted.
+  #[test]
+  fn io_uring_syscalls_are_always_denied_regardless_of_capabilities() {
+    let arch = detect_target_arch().expect("running on a supported arch");
+    // Grant every capability the filter understands — if io_uring denial
+    // were mistakenly gated behind a capability check, this is exactly
+    // the filter that would leak it.
+    let fully_permissive = compile_filter(
+      &[Capability::Net, Capability::FsWrite, Capability::Exec],
+      arch,
+    )
+    .unwrap();
+    let truly_empty_program: BpfProgram = SeccompFilter::new(
+      BTreeMap::new(),
+      SeccompAction::Allow,
+      SeccompAction::Errno(libc::EPERM as u32),
+      arch,
+    )
+    .unwrap()
+    .try_into()
+    .unwrap();
+    assert!(
+      fully_permissive.len() > truly_empty_program.len(),
+      "a filter with every capability granted must still carry the unconditional io_uring deny rules"
+    );
+
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    for nr in io_uring_syscall_numbers() {
+      rules.insert(*nr, vec![]);
+    }
+    assert!(rules.contains_key(&libc::SYS_io_uring_setup));
+    assert!(rules.contains_key(&libc::SYS_io_uring_enter));
+    assert!(rules.contains_key(&libc::SYS_io_uring_register));
   }
 
   #[test]
