@@ -379,82 +379,93 @@ impl<'f> FlowExecutor<'f> {
             message: format!("Node '{}' not found in flow definition", node_id),
           })?;
 
-      let should_run = match &graph_node.run_if {
-        Some(condition) => self.evaluate_condition(condition, &state_pool)?,
-        None => true,
+      // W1.2: a `run_if` evaluation failure (malformed expression, e.g.)
+      // used to propagate via `?` and abort this *entire function*
+      // immediately — no `WorkflowFailed` event, no final checkpoint
+      // status write. Downgraded to `Ok`/`Err` here so it flows through
+      // the same unified tail as a skip or a real execution result,
+      // exactly like the `gather_inputs` failure a few lines down
+      // already does (V1.1). Unifying the skip branch into this same
+      // tail also fixes a Serial-vs-Concurrent asymmetry: pre-fix,
+      // Serial skips never called `record_node_result_events`, so no
+      // `NodeSkipped` event ever reached the listener here (the
+      // concurrent path already emitted one).
+      let condition_result = match &graph_node.run_if {
+        Some(condition) => self.evaluate_condition(condition, &state_pool),
+        None => Ok(true),
       };
 
-      if !should_run {
-        tracing::info!("Skipping node '{}' due to condition.", node_id);
-        let result = Err(AgentFlowError::NodeSkipped);
-        self.persist_step_result(&run_dir, node_id, &result)?;
-        state_pool.insert(node_id.to_string(), result);
-        self.notify_state_size(&state_pool);
-        continue;
-      }
-
-      // V1.1: a `gather_inputs` failure (e.g. a required dependency was
-      // skipped, or an upstream node genuinely failed) used to
-      // propagate via `?` and abort this *entire function* — no
-      // `WorkflowFailed` event, no final checkpoint status write, and
-      // the caller got a hard `Err` instead of the per-node result the
-      // concurrent path already produces for the identical case (see
-      // `execute_concurrently`'s matching `gather_inputs` error
-      // branch, which this mirrors: a fresh `Instant::now()` stands in
-      // for `node_started_at` so a gather-input failure reports ~0
-      // duration, since no node code ever ran).
-      let inputs_result = match &graph_node.input_mapping {
-        Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool, &initial_inputs),
-        None => Ok(HashMap::new()),
-      };
-
-      let (result, node_started_at) = match inputs_result {
-        Ok(mut inputs) => {
-          inputs.extend(graph_node.initial_inputs.clone());
-
-          // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
-          // These provide loop variables and context that should be available to all nodes
-          inputs.extend(initial_inputs.clone());
-
-          // V1.2: a node being (re-)executed here was never skipped
-          // above, so any `state_pool` entry it already has can only be
-          // a genuine failure (see the skip check above) — in
-          // particular a `NodePartialExecutionFailed` restored from a
-          // checkpoint. Feed its `partial_outputs` back in as
-          // additional inputs so the node can inspect its own prior
-          // partial progress (e.g. an agent's `agent_result` /
-          // `agent_resume`) and decide what to replay vs. skip
-          // internally, exactly like the pre-V1.2 behavior did — except
-          // that behavior relied on the checkpoint round-trip bug this
-          // fix closes (a restored `NodePartialExecutionFailed` used to
-          // silently decode as `Ok`, which happened to feed the outputs
-          // back in via a bare `Ok` match; now it's explicit).
-          if let Some(Err(AgentFlowError::NodePartialExecutionFailed {
-            partial_outputs, ..
-          })) = state_pool.get(node_id)
-          {
-            inputs.extend(partial_outputs.clone());
-          }
-
-          tracing::info!("Executing node '{}'", node_id);
-          let node_started_at = Instant::now();
-          self.emit_event(WorkflowEvent::NodeStarted {
-            workflow_id: run_id.clone(),
-            node_id: node_id.clone(),
-            timestamp: node_started_at,
-          });
-          let result = self
-            .execute_node_with_reliability(
-              &run_id,
-              node_id,
-              &graph_node.node_type,
-              &inputs,
-              &execution_config,
-            )
-            .await;
-          (result, node_started_at)
-        }
+      let (result, node_started_at) = match condition_result {
         Err(error) => (Err(error), Instant::now()),
+        Ok(false) => {
+          tracing::info!("Skipping node '{}' due to condition.", node_id);
+          (Err(AgentFlowError::NodeSkipped), Instant::now())
+        }
+        Ok(true) => {
+          // V1.1: a `gather_inputs` failure (e.g. a required dependency was
+          // skipped, or an upstream node genuinely failed) used to
+          // propagate via `?` and abort this *entire function* — no
+          // `WorkflowFailed` event, no final checkpoint status write, and
+          // the caller got a hard `Err` instead of the per-node result the
+          // concurrent path already produces for the identical case (see
+          // `execute_concurrently`'s matching `gather_inputs` error
+          // branch, which this mirrors: a fresh `Instant::now()` stands in
+          // for `node_started_at` so a gather-input failure reports ~0
+          // duration, since no node code ever ran).
+          let inputs_result = match &graph_node.input_mapping {
+            Some(mapping) => self.gather_inputs(node_id, mapping, &state_pool, &initial_inputs),
+            None => Ok(HashMap::new()),
+          };
+
+          match inputs_result {
+            Ok(mut inputs) => {
+              inputs.extend(graph_node.initial_inputs.clone());
+
+              // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
+              // These provide loop variables and context that should be available to all nodes
+              inputs.extend(initial_inputs.clone());
+
+              // V1.2: a node being (re-)executed here was never skipped
+              // above, so any `state_pool` entry it already has can only be
+              // a genuine failure (see the skip check above) — in
+              // particular a `NodePartialExecutionFailed` restored from a
+              // checkpoint. Feed its `partial_outputs` back in as
+              // additional inputs so the node can inspect its own prior
+              // partial progress (e.g. an agent's `agent_result` /
+              // `agent_resume`) and decide what to replay vs. skip
+              // internally, exactly like the pre-V1.2 behavior did — except
+              // that behavior relied on the checkpoint round-trip bug this
+              // fix closes (a restored `NodePartialExecutionFailed` used to
+              // silently decode as `Ok`, which happened to feed the outputs
+              // back in via a bare `Ok` match; now it's explicit).
+              if let Some(Err(AgentFlowError::NodePartialExecutionFailed {
+                partial_outputs, ..
+              })) = state_pool.get(node_id)
+              {
+                inputs.extend(partial_outputs.clone());
+              }
+
+              tracing::info!("Executing node '{}'", node_id);
+              let node_started_at = Instant::now();
+              self.emit_event(WorkflowEvent::NodeStarted {
+                workflow_id: run_id.clone(),
+                node_id: node_id.clone(),
+                timestamp: node_started_at,
+              });
+              let result = self
+                .execute_node_with_reliability(
+                  &run_id,
+                  node_id,
+                  &graph_node.node_type,
+                  &inputs,
+                  &execution_config,
+                )
+                .await;
+              (result, node_started_at)
+            }
+            Err(error) => (Err(error), Instant::now()),
+          }
+        }
       };
 
       self.persist_step_result(&run_dir, node_id, &result)?;
@@ -850,9 +861,34 @@ impl<'f> FlowExecutor<'f> {
           })?
           .clone();
 
-        let should_run = match &graph_node.run_if {
-          Some(condition) => self.evaluate_condition(condition, &state_pool)?,
-          None => true,
+        // W1.2: an `evaluate_condition` failure (malformed `run_if`
+        // expression, e.g.) used to propagate via `?` and abort this
+        // *entire function* immediately — no `WorkflowFailed` event, no
+        // final checkpoint status write, and any already-dispatched
+        // in-flight sibling futures silently dropped instead of being
+        // drained. Downgrade to a per-node error and let it flow
+        // through the exact same fail_fast/continue_on_skip machinery
+        // as the `gather_inputs` failure case just below, which already
+        // gets this right.
+        let condition_result = match &graph_node.run_if {
+          Some(condition) => self.evaluate_condition(condition, &state_pool),
+          None => Ok(true),
+        };
+
+        let should_run = match condition_result {
+          Ok(should_run) => should_run,
+          Err(error) => {
+            let result = Err(error);
+            self.persist_step_result(&run_dir, &node_id, &result)?;
+            self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
+            state_pool.insert(node_id, result);
+            self.notify_state_size(&state_pool);
+            if config.fail_fast {
+              fail_fast_triggered = true;
+              break;
+            }
+            continue;
+          }
         };
 
         if !should_run {
@@ -4628,6 +4664,144 @@ mod tests {
 
     let state = Flow::new(vec![search, classify]).run().await.unwrap();
     assert!(state.get("classify").unwrap().is_ok());
+  }
+
+  /// W1.2 regression: a malformed `run_if` (here, referencing a node that
+  /// doesn't exist) used to propagate via `?` and abort
+  /// `execute_with_workflow_id` entirely — the caller got a hard `Err`
+  /// instead of the per-node `Err` result every other node-level failure
+  /// produces, no `WorkflowFailed` event was ever emitted, and (with
+  /// checkpointing enabled) the run's status would stay stuck at
+  /// `Running` forever since no terminal status write ever happened.
+  /// Asserts the call still returns `Ok(state_pool)` with the node's own
+  /// entry holding the evaluation error, plus a `WorkflowFailed` event.
+  #[tokio::test]
+  async fn serial_run_if_evaluation_error_downgrades_to_node_failure() {
+    use_writable_home();
+    struct NeverRunsNode;
+    #[async_trait]
+    impl AsyncNode for NeverRunsNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        panic!("must never execute — run_if should fail before this node runs");
+      }
+    }
+
+    let node = GraphNode {
+      id: "guarded".to_string(),
+      node_type: NodeType::Standard(Arc::new(NeverRunsNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: Some("nodes.does_not_exist.outputs.x > 0".to_string()),
+      initial_inputs: HashMap::new(),
+    };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+    let final_state = Flow::new(vec![node])
+      .with_event_listener(listener)
+      .run()
+      .await
+      .expect("a run_if evaluation error must not abort the whole call");
+
+    assert!(
+      matches!(
+        final_state.get("guarded"),
+        Some(Err(AgentFlowError::FlowDefinitionError { .. }))
+      ),
+      "expected a FlowDefinitionError entry for 'guarded', got {:?}",
+      final_state.get("guarded")
+    );
+    let events = events.lock().unwrap();
+    assert!(
+      events.contains(&"workflow.failed"),
+      "expected a WorkflowFailed event, got {events:?}"
+    );
+  }
+
+  /// W1.2 regression: the concurrent scheduler's `evaluate_condition`
+  /// call had the identical `?`-abort bug as the serial path — fixed in
+  /// lockstep with the serial path above.
+  #[tokio::test]
+  async fn concurrent_run_if_evaluation_error_downgrades_to_node_failure() {
+    use_writable_home();
+    struct NeverRunsNode;
+    #[async_trait]
+    impl AsyncNode for NeverRunsNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        panic!("must never execute — run_if should fail before this node runs");
+      }
+    }
+
+    let node = GraphNode {
+      id: "guarded".to_string(),
+      node_type: NodeType::Standard(Arc::new(NeverRunsNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: Some("nodes.does_not_exist.outputs.x > 0".to_string()),
+      initial_inputs: HashMap::new(),
+    };
+
+    let final_state = Flow::new(vec![node])
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(2))
+      .await
+      .expect("a run_if evaluation error must not abort the whole call");
+
+    assert!(
+      matches!(
+        final_state.get("guarded"),
+        Some(Err(AgentFlowError::FlowDefinitionError { .. }))
+      ),
+      "expected a FlowDefinitionError entry for 'guarded', got {:?}",
+      final_state.get("guarded")
+    );
+  }
+
+  /// W1.2 regression: pre-fix, the Serial execution path's skip branch
+  /// never called `record_node_result_events`, so a skipped node
+  /// produced no `NodeSkipped` event for the listener — asymmetric with
+  /// the Concurrent path, which always emitted one. Both paths now
+  /// route skips through the same unified tail.
+  #[tokio::test]
+  async fn serial_skip_emits_node_skipped_event() {
+    use_writable_home();
+    struct NeverRunsNode;
+    #[async_trait]
+    impl AsyncNode for NeverRunsNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        panic!("must never execute — run_if is false");
+      }
+    }
+
+    let node = GraphNode {
+      id: "skipped".to_string(),
+      node_type: NodeType::Standard(Arc::new(NeverRunsNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: Some("false".to_string()),
+      initial_inputs: HashMap::new(),
+    };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+    let final_state = Flow::new(vec![node])
+      .with_event_listener(listener)
+      .run()
+      .await
+      .unwrap();
+
+    assert!(matches!(
+      final_state.get("skipped"),
+      Some(Err(AgentFlowError::NodeSkipped))
+    ));
+    let events = events.lock().unwrap();
+    assert!(
+      events.contains(&"node.skipped"),
+      "expected a node.skipped event under Serial execution too, got {events:?}"
+    );
   }
 
   #[tokio::test]
