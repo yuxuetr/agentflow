@@ -30,6 +30,25 @@ pub(crate) fn redact_and_cap(mut value: serde_json::Value) -> serde_json::Value 
   cap_value(value, DEFAULT_PARAMS_SUMMARY_CAP_BYTES)
 }
 
+/// Redact secrets in place without `redact_and_cap`'s size cap.
+///
+/// [`agentflow_agent_spi::harness::hooks::PendingToolCall::params`] is
+/// documented "the runtime MUST redact secrets before constructing this
+/// struct" (W1.7 / D4) — pre-fix the runtime copied the raw, unredacted
+/// params straight into that field, so a third-party `PreToolHook` (which
+/// may want structured field access, e.g. a risk classifier reading
+/// `params["command"]`) saw whatever the tool call actually carried,
+/// contract or not. `redact_and_cap`'s cap collapses an oversized value
+/// into an opaque `{"_truncated": true, "preview": ...}` object, which
+/// would corrupt that structured access for any hook inspecting a
+/// specific field on a large-but-otherwise-ordinary payload; only the
+/// human/UI-facing `params_summary` on the approval request needs that
+/// cap, so `PendingToolCall.params` gets redaction only.
+pub(crate) fn redact_only(mut value: serde_json::Value) -> serde_json::Value {
+  redact_value(&mut value, &RedactionConfig::default());
+  value
+}
+
 fn cap_value(value: serde_json::Value, cap: usize) -> serde_json::Value {
   match serde_json::to_string(&value) {
     Ok(serialized) if serialized.len() <= cap => value,

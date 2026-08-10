@@ -259,28 +259,77 @@ struct SharedHookConfig {
 
 #[derive(Default)]
 struct ApprovalCache {
-  /// Cached outcomes keyed by `(tool_name, scope)`. Only `Session`
-  /// and `Run` decisions are cached; `Once` decisions are always
-  /// re-prompted.
-  cached: HashMap<(String, ApprovalScope), ApprovalOutcome>,
+  /// Cached outcomes keyed by `(tool_name, params_digest, scope)`. Only
+  /// `Session` and `Run` decisions are cached; `Once` decisions are
+  /// always re-prompted.
+  ///
+  /// W1.7: `params_digest` (see [`approval_cache_digest`]) is `None` for
+  /// most tools — a session/run-scoped "allow" for e.g. `http` still
+  /// blanket-covers every subsequent `http` call, matching the original
+  /// coarse `(tool_name, scope)` behavior. For `shell`/`script`/
+  /// `code_exec`/`file`(write) it's `Some(prefix)`: an "allow" earned by
+  /// one `rm -rf /tmp/build` invocation must not silently cover a later
+  /// `rm -rf /` in the same session just because both are `shell` calls.
+  cached: HashMap<(String, Option<String>, ApprovalScope), ApprovalOutcome>,
   stop_after_deny: bool,
 }
 
 impl ApprovalCache {
-  fn lookup(&self, tool: &str) -> Option<(ApprovalScope, ApprovalOutcome)> {
+  fn lookup(&self, tool: &str, digest: Option<&str>) -> Option<(ApprovalScope, ApprovalOutcome)> {
     for scope in [ApprovalScope::Run, ApprovalScope::Session] {
-      if let Some(outcome) = self.cached.get(&(tool.to_string(), scope)) {
+      let key = (tool.to_string(), digest.map(str::to_string), scope);
+      if let Some(outcome) = self.cached.get(&key) {
         return Some((scope, *outcome));
       }
     }
     None
   }
 
-  fn record(&mut self, tool: &str, scope: ApprovalScope, outcome: ApprovalOutcome) {
+  fn record(
+    &mut self,
+    tool: &str,
+    digest: Option<&str>,
+    scope: ApprovalScope,
+    outcome: ApprovalOutcome,
+  ) {
     if matches!(scope, ApprovalScope::Run | ApprovalScope::Session) {
-      self.cached.insert((tool.to_string(), scope), outcome);
+      self.cached.insert(
+        (tool.to_string(), digest.map(str::to_string), scope),
+        outcome,
+      );
     }
   }
+}
+
+/// Params digest folded into the approval cache key for tool classes
+/// where the params materially change the call's risk — a session/run
+/// "allow" decided for one invocation must not blanket-approve every
+/// future invocation of the same tool regardless of what it's asked to
+/// do (W1.7). `None` for every other tool, which keeps the original
+/// coarse `(tool_name, scope)` caching behavior unchanged.
+///
+/// The digest is a bounded literal prefix of the risk-bearing field, not
+/// a hash — two calls whose prefixes happen to collide within
+/// `DIGEST_PREFIX_CHARS` still share a cache entry. That's an accepted
+/// granularity/size tradeoff, not a correctness bug: it can only ever
+/// make the cache *more* conservative than exact-match keying, never
+/// less (it still fully replaces the pre-fix "any command, any path"
+/// blanket).
+fn approval_cache_digest(tool: &str, params: &serde_json::Value) -> Option<String> {
+  const DIGEST_PREFIX_CHARS: usize = 64;
+  let field = match tool {
+    "shell" => params.get("command").and_then(serde_json::Value::as_str)?,
+    "script" => params.get("script").and_then(serde_json::Value::as_str)?,
+    "code_exec" => params.get("code").and_then(serde_json::Value::as_str)?,
+    "file" => {
+      if params.get("operation").and_then(serde_json::Value::as_str) != Some("write") {
+        return None;
+      }
+      params.get("path").and_then(serde_json::Value::as_str)?
+    }
+    _ => return None,
+  };
+  Some(field.chars().take(DIGEST_PREFIX_CHARS).collect())
 }
 
 /// Tool decorator emitted by [`wrap_registry`]. Implements
@@ -410,7 +459,11 @@ impl HookedTool {
       source: Some(metadata.source.clone()),
       permissions: metadata.permissions.permissions.clone(),
       idempotency: self.inner.idempotency(params),
-      params: params.clone(),
+      // D4 (W1.7): `PendingToolCall.params` is documented as MUST-redacted
+      // before third-party pre-hooks see it. The raw `params` still gets
+      // passed to the actual tool call in `execute` (a separate, unmoved
+      // binding) — only this hook-facing copy is masked.
+      params: crate::params_summary::redact_only(params.clone()),
       requested_at,
     }
   }
@@ -505,6 +558,7 @@ impl HookedTool {
     };
 
     // Cached decision wins when scope is Session/Run.
+    let digest = approval_cache_digest(&pending.tool, &pending.params);
     if let Some((scope, outcome)) = {
       let cache = self.config.approval_cache.lock().await;
       if cache.stop_after_deny {
@@ -528,7 +582,7 @@ impl HookedTool {
           reason: stop_reason,
         });
       }
-      cache.lookup(&pending.tool)
+      cache.lookup(&pending.tool, digest.as_deref())
     } {
       self
         .emit_cached_decision(pending, scope, outcome, risk, &reason)
@@ -580,7 +634,12 @@ impl HookedTool {
 
     {
       let mut cache = self.config.approval_cache.lock().await;
-      cache.record(&pending.tool, decision.scope, decision.decision);
+      cache.record(
+        &pending.tool,
+        digest.as_deref(),
+        decision.scope,
+        decision.decision,
+      );
       if matches!(decision.decision, ApprovalOutcome::DenyAndStop) {
         cache.stop_after_deny = true;
       }
@@ -759,10 +818,13 @@ mod tests {
 
   // ── Test fixtures ────────────────────────────────────────────────
 
+  type LastParams = Arc<std::sync::Mutex<Option<serde_json::Value>>>;
+
   struct ProbeTool {
     name: &'static str,
     idempotency: ToolIdempotency,
     invocations: Arc<std::sync::Mutex<usize>>,
+    last_params: LastParams,
   }
 
   impl ProbeTool {
@@ -770,14 +832,29 @@ mod tests {
       name: &'static str,
       idempotency: ToolIdempotency,
     ) -> (Self, Arc<std::sync::Mutex<usize>>) {
+      let (tool, counter, _last_params) = Self::new_capturing(name, idempotency);
+      (tool, counter)
+    }
+
+    /// Like [`Self::new`] but also exposes every call's raw `params`, so
+    /// a test can assert the *tool* still receives the unredacted value
+    /// even though `PendingToolCall.params` (seen by pre-hooks) is
+    /// redacted (D4 / W1.7).
+    fn new_capturing(
+      name: &'static str,
+      idempotency: ToolIdempotency,
+    ) -> (Self, Arc<std::sync::Mutex<usize>>, LastParams) {
       let counter = Arc::new(std::sync::Mutex::new(0));
+      let last_params = Arc::new(std::sync::Mutex::new(None));
       (
         Self {
           name,
           idempotency,
           invocations: counter.clone(),
+          last_params: last_params.clone(),
         },
         counter,
+        last_params,
       )
     }
   }
@@ -805,8 +882,9 @@ mod tests {
     fn idempotency(&self, _params: &serde_json::Value) -> ToolIdempotency {
       self.idempotency
     }
-    async fn execute(&self, _params: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolOutput, ToolError> {
       *self.invocations.lock().unwrap() += 1;
+      *self.last_params.lock().unwrap() = Some(params);
       Ok(ToolOutput::success("ok"))
     }
   }
@@ -839,6 +917,21 @@ mod tests {
         risk: ApprovalRisk::High,
         reason: "hook flagged risky".into(),
       })
+    }
+  }
+
+  struct RecordingHook {
+    seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+  }
+
+  #[async_trait]
+  impl PreToolHook for RecordingHook {
+    fn name(&self) -> &str {
+      "recording_hook"
+    }
+    async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError> {
+      self.seen.lock().unwrap().push(call.params.clone());
+      Ok(PreToolDecision::Allow)
     }
   }
 
@@ -1110,6 +1203,165 @@ mod tests {
       *approval_calls.lock().unwrap(),
       2,
       "approval provider should run each time"
+    );
+  }
+
+  /// W1.7: pre-fix the approval cache was keyed only on `(tool, scope)`,
+  /// so a session-scoped "allow" earned by one `shell` command
+  /// blanket-approved every future `shell` command in the session
+  /// regardless of what it actually was. The cache must now re-prompt
+  /// for a materially different command.
+  #[tokio::test]
+  async fn shell_approval_cache_is_scoped_by_command_prefix() {
+    let (tool, counter) = ProbeTool::new("shell", ToolIdempotency::NonIdempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let approval_calls = Arc::new(std::sync::Mutex::new(0_usize));
+    let approval = Arc::new(ScopedAllowOnceProvider {
+      scope: ApprovalScope::Session,
+      calls: approval_calls.clone(),
+    });
+    let config =
+      HookConfig::new("sess-1", approval, sinks).with_pre_hook(Arc::new(RequireApprovalHook));
+    let registry = wrap_registry(registry, config);
+
+    registry
+      .execute("shell", serde_json::json!({"command": "ls -la"}))
+      .await
+      .unwrap();
+    registry
+      .execute("shell", serde_json::json!({"command": "ls -la"}))
+      .await
+      .unwrap();
+    assert_eq!(
+      *approval_calls.lock().unwrap(),
+      1,
+      "an identical command should reuse the cached decision"
+    );
+
+    registry
+      .execute("shell", serde_json::json!({"command": "rm -rf /"}))
+      .await
+      .unwrap();
+    assert_eq!(
+      *approval_calls.lock().unwrap(),
+      2,
+      "a materially different shell command must not reuse another command's cached approval"
+    );
+
+    assert_eq!(*counter.lock().unwrap(), 3);
+  }
+
+  /// W1.7: same coarse-cache bug as shell, for `file` write calls — a
+  /// path digest scopes the cache; non-write operations (lower risk)
+  /// keep sharing the original blanket per-tool bucket.
+  #[tokio::test]
+  async fn file_write_approval_cache_is_scoped_by_path() {
+    let (tool, _counter) = ProbeTool::new("file", ToolIdempotency::NonIdempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let approval_calls = Arc::new(std::sync::Mutex::new(0_usize));
+    let approval = Arc::new(ScopedAllowOnceProvider {
+      scope: ApprovalScope::Session,
+      calls: approval_calls.clone(),
+    });
+    let config =
+      HookConfig::new("sess-1", approval, sinks).with_pre_hook(Arc::new(RequireApprovalHook));
+    let registry = wrap_registry(registry, config);
+
+    registry
+      .execute(
+        "file",
+        serde_json::json!({"operation": "write", "path": "/tmp/a.txt"}),
+      )
+      .await
+      .unwrap();
+    registry
+      .execute(
+        "file",
+        serde_json::json!({"operation": "write", "path": "/tmp/a.txt"}),
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      *approval_calls.lock().unwrap(),
+      1,
+      "the same write path should reuse the cached decision"
+    );
+
+    registry
+      .execute(
+        "file",
+        serde_json::json!({"operation": "write", "path": "/tmp/b.txt"}),
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      *approval_calls.lock().unwrap(),
+      2,
+      "a different write path must not reuse another path's cached approval"
+    );
+
+    registry
+      .execute(
+        "file",
+        serde_json::json!({"operation": "read", "path": "/tmp/a.txt"}),
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      *approval_calls.lock().unwrap(),
+      3,
+      "reads share the coarse blanket bucket, distinct from any write path's bucket"
+    );
+  }
+
+  /// D4 (W1.7): `PendingToolCall.params` is documented "the runtime MUST
+  /// redact secrets before constructing this struct" — pre-fix the raw,
+  /// unredacted params reached third-party pre-hooks regardless.
+  #[tokio::test]
+  async fn pre_hooks_receive_redacted_params_not_raw_secrets() {
+    let (tool, _counter, tool_saw) = ProbeTool::new_capturing("probe", ToolIdempotency::Idempotent);
+    let registry = build_registry(tool);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let config = HookConfig::new("sess-1", Arc::new(AutoAllowApprovalProvider::new()), sinks)
+      .with_pre_hook(Arc::new(RecordingHook { seen: seen.clone() }));
+    let registry = wrap_registry(registry, config);
+
+    registry
+      .execute(
+        "probe",
+        serde_json::json!({"api_key": "sk-live-should-not-leak", "url": "https://example.test"}),
+      )
+      .await
+      .unwrap();
+
+    let captured = seen.lock().unwrap().clone();
+    assert_eq!(captured.len(), 1);
+    let rendered = captured[0].to_string();
+    assert!(
+      !rendered.contains("sk-live-should-not-leak"),
+      "PendingToolCall.params reached a pre-hook unredacted: {rendered}"
+    );
+    assert!(
+      rendered.contains("example.test"),
+      "redaction must not touch non-sensitive fields: {rendered}"
+    );
+
+    // The tool itself must still get the raw, unredacted params — only
+    // the hook-facing PendingToolCall copy is masked.
+    let tool_params = tool_saw
+      .lock()
+      .unwrap()
+      .clone()
+      .expect("tool must have run");
+    assert_eq!(
+      tool_params["api_key"], "sk-live-should-not-leak",
+      "redacting the hook-facing copy must not redact what the tool actually receives"
     );
   }
 
