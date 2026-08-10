@@ -289,14 +289,7 @@ impl AgentRuntime for HandoffSupervisor {
             ),
           })?;
 
-      let child_session = format!("{}::{}", session_id, active);
-      let mut child_ctx =
-        AgentContext::new(child_session, current_input.clone(), context.model.clone())
-          .with_limits(context.limits.clone());
-      if let Some(token) = cancellation.clone() {
-        child_ctx = child_ctx.with_cancellation_token(token);
-      }
-      child_ctx.metadata = context.metadata.clone();
+      let child_ctx = super::common::build_child_context(&context, &active, &current_input);
 
       let child_result = {
         let mut agent = agent_handle.lock().await;

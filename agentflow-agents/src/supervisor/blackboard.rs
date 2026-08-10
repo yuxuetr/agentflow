@@ -379,14 +379,7 @@ impl BlackboardSupervisor {
     agent_name: &str,
     input: &str,
   ) -> AgentContext {
-    let session = format!("{}::{}", parent.session_id, agent_name);
-    let mut ctx =
-      AgentContext::new(session, input, parent.model.clone()).with_limits(parent.limits.clone());
-    if let Some(token) = parent.cancellation_token.clone() {
-      ctx = ctx.with_cancellation_token(token);
-    }
-    ctx.metadata = parent.metadata.clone();
-    ctx
+    super::common::build_child_context(parent, agent_name, input)
   }
 
   fn drain_ops_into_supervisor_trace(

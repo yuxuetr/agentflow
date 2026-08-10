@@ -31,6 +31,7 @@ use crate::react::{ReActAgent, ReActConfig};
 use crate::tools::AgentTool;
 
 pub mod blackboard;
+mod common;
 pub mod debate;
 pub mod handoff;
 

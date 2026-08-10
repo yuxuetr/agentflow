@@ -35,6 +35,7 @@ use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason,
 };
+use crate::supervisor::common::build_child_context;
 
 const DEFAULT_JUDGE_PROMPT: &str = "\
 Several specialist agents have independently considered the following user \
@@ -334,17 +335,6 @@ impl AgentRuntime for DebateSupervisor {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn build_child_context(parent: &AgentContext, agent_name: &str, input: &str) -> AgentContext {
-  let session = format!("{}::{}", parent.session_id, agent_name);
-  let mut ctx =
-    AgentContext::new(session, input, parent.model.clone()).with_limits(parent.limits.clone());
-  if let Some(token) = parent.cancellation_token.clone() {
-    ctx = ctx.with_cancellation_token(token);
-  }
-  ctx.metadata = parent.metadata.clone();
-  ctx
-}
 
 fn merge_child_into(
   steps: &mut Vec<AgentStep>,
