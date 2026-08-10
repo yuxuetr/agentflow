@@ -281,6 +281,97 @@ fn production_profile_with_explicit_auto_allow_still_executes_unattended() {
   );
 }
 
+/// W2.1: `--replan <n>` exposes `DynamicWorkflowAgent::run_with_replan` —
+/// pre-fix `workflow dynamic` only ever called `compile_plan_to_flow` once
+/// and a failed step failed the whole run. Round 1's plan targets a tool
+/// that doesn't exist (an immediate, deterministic failure); the queued
+/// round-2 mock response is a working plan, proving the CLI actually asks
+/// the planner for a revision and executes it rather than giving up after
+/// round 1.
+#[test]
+fn replan_recovers_from_a_failed_step_and_reports_revisions() {
+  let tmp = TempDir::new().unwrap();
+  let cfg = mock_models_config(tmp.path());
+  let out = tmp.path().join("recovered.txt");
+  let failing_plan = r#"{"steps":[{"id":"w","tool":"nonexistent_tool","params":{}}]}"#.to_string();
+  let fixed_plan = format!(
+    r#"{{"steps":[{{"id":"w","tool":"file","params":{{"operation":"write","path":"{}","content":"recovered"}}}}]}}"#,
+    out.display()
+  );
+  let responses = serde_json::to_string(&vec![failing_plan, fixed_plan]).unwrap();
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "dynamic",
+      "--goal",
+      "write a file",
+      "--model",
+      "mock-plan",
+      "--allow-path",
+    ])
+    .arg(tmp.path())
+    .args(["--replan", "1"])
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .env("AGENTFLOW_MOCK_RESPONSES", responses);
+
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Revisions: 1"));
+
+  assert_eq!(
+    fs::read_to_string(&out).unwrap(),
+    "recovered",
+    "the revised (round 2) plan must be the one that actually executed"
+  );
+}
+
+/// W2.1: `--replan` only helps recover from a failure that happens during
+/// execution — under `--dry-run` nothing ever executes, so there is no
+/// failure for a revision to respond to. The command must still just show
+/// the single round-0 plan (proven by asserting the file the round-0 plan
+/// would have written never gets created), not silently attempt to honor
+/// `--replan` some other way.
+#[test]
+fn dry_run_ignores_replan_and_shows_single_round_plan() {
+  let tmp = TempDir::new().unwrap();
+  let cfg = mock_models_config(tmp.path());
+  let out = tmp.path().join("should-not-exist.txt");
+  let plan = format!(
+    r#"{{"steps":[{{"id":"w","tool":"file","params":{{"operation":"write","path":"{}","content":"x"}}}}]}}"#,
+    out.display()
+  );
+
+  let mut cmd = Command::cargo_bin("agentflow").unwrap();
+  cmd
+    .args([
+      "workflow",
+      "dynamic",
+      "--goal",
+      "write a file",
+      "--model",
+      "mock-plan",
+      "--dry-run",
+    ])
+    .args(["--replan", "3"])
+    .env("AGENTFLOW_MODELS_CONFIG", &cfg)
+    .env("MOCK_API_KEY", "x")
+    .env("AGENTFLOW_MOCK_RESPONSES", mock_responses(&plan));
+
+  cmd
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Plan (1 step)"))
+    .stdout(predicate::str::contains(
+      "--replan has no effect without execution",
+    ));
+
+  assert!(!out.exists(), "dry run must not execute the file write");
+}
+
 #[test]
 fn requires_a_model() {
   let mut cmd = Command::cargo_bin("agentflow").unwrap();

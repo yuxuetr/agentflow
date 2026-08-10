@@ -222,6 +222,17 @@ enum WorkflowCommands {
     /// Maximum concurrently running steps.
     #[arg(long, default_value_t = 8)]
     max_concurrency: usize,
+    /// Recover from step failures by asking the planner for a revised
+    /// plan covering only what's still missing, up to this many rounds
+    /// (0, the default, disables replanning — a failed step fails the
+    /// run, same as before this flag existed). Already-succeeded steps
+    /// are never re-run. Every replan round's new tool calls go through
+    /// the same governed registry (and --approve pipeline, when set) as
+    /// the first round — no separate re-approval step is needed. Has no
+    /// effect combined with --dry-run, since nothing executes there for
+    /// a step to fail and trigger a revision.
+    #[arg(long, default_value_t = 0)]
+    replan: usize,
     /// Output format: text (default) or json.
     #[arg(long, default_value = "text", value_parser = ["text", "json"])]
     output: String,
@@ -433,6 +444,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       profile,
       dry_run,
       max_concurrency,
+      replan,
       output,
     } => {
       dynamic::execute(
@@ -444,6 +456,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
         profile,
         dry_run,
         max_concurrency,
+        replan,
         output,
       )
       .await

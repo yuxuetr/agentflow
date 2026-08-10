@@ -175,7 +175,12 @@ The pieces live in `agentflow_agents::dynamic`:
   dependency-ready scheduler that runs hand-written DAGs runs the authored one.
 - **`DynamicWorkflowAgent`** — wires an LLM planner to an injected
   `Arc<dyn FlowRunner>`. `plan(goal)` makes the planning call; `run(goal)` does
-  plan -> compile -> execute. The `FlowRunner` injection (rather than a direct
+  plan -> compile -> execute. `run_with_replan(goal, max_replans)` (L1.1) is
+  `run` with recovery: any step without a successful result — failed outright
+  or blocked by an upstream failure — is left outstanding, already-succeeded
+  steps are carried forward as precomputed pass-throughs (never re-run), and
+  the planner is asked for a revised plan covering just what's still missing,
+  up to `max_replans` rounds. The `FlowRunner` injection (rather than a direct
   dependency on the executor) is what keeps `agentflow-agents` off
   `agentflow-core`; surfaces inject `agentflow_core::CoreFlowRunner::concurrent(n)`.
 
@@ -189,11 +194,18 @@ agentflow workflow dynamic \
   --allow-path ./out \
   --max-concurrency 8 \
   [--dry-run] [--approve none|cli|auto-allow|auto-deny] [--profile dev|production] \
-  [--output text|json]
+  [--replan <n>] [--output text|json]
 ```
 
 One LLM planning call authors a `WorkflowPlan`, which is compiled to a `Flow` and
-executed concurrently via `FlowExt`.
+executed concurrently via `FlowExt`. `--replan <n>` (W2.1, default `0` —
+disabled) switches this to `run_with_replan`: on a step failure the planner is
+asked for a revised plan covering only what's still missing, up to `n` rounds;
+already-succeeded steps are never re-run. Every round's new tool calls go
+through the same governed (and, when `--approve` is set, approval-wrapped)
+registry as round 0. Has no effect combined with `--dry-run`, since nothing
+executes there for a step to fail and trigger a revision — dry-run always
+shows just the round-0 plan.
 
 ### Governance
 

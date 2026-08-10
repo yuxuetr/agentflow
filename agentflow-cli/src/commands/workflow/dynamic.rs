@@ -24,6 +24,15 @@
 //!   `cli` under `local`/`production` — an LLM-authored plan is adversarial
 //!   by construction — and to `none` (unsupervised) only under `dev`. Pass
 //!   `--approve none` explicitly to opt out on any profile.
+//! - `--replan <n>` (W2.1) recovers from step failures instead of failing the
+//!   whole run: [`DynamicWorkflowAgent::run_with_replan`] reuses already-
+//!   succeeded step results and asks the planner for a revised plan covering
+//!   only what's still missing, up to `n` rounds. Every round's new tool
+//!   calls flow through the same governed (and, when `--approve` is set,
+//!   approval-wrapped) registry as round 0 — no separate re-approval wiring
+//!   needed. Defaults to `0` (disabled, a failed step fails the run, matching
+//!   pre-W2.1 behavior); has no effect under `--dry-run`, since nothing
+//!   executes there for a step to fail and trigger a revision.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,7 +42,9 @@ use anyhow::{Context, Result};
 
 use async_trait::async_trait;
 
-use agentflow_agents::dynamic::{DynamicWorkflowAgent, WorkflowPlan, compile_plan_to_flow};
+use agentflow_agents::dynamic::{
+  DynamicWorkflowAgent, DynamicWorkflowRunOutcome, WorkflowPlan, compile_plan_to_flow,
+};
 use agentflow_core::async_node::AsyncNodeResult;
 use agentflow_core::{FlowExecutionConfig, FlowExt, FlowValue};
 use agentflow_harness::{
@@ -59,6 +70,7 @@ pub async fn execute(
   profile: String,
   dry_run: bool,
   max_concurrency: usize,
+  replan: usize,
   output: String,
 ) -> Result<()> {
   let model = model.context(
@@ -117,49 +129,81 @@ pub async fn execute(
     Arc::clone(&registry),
     Arc::new(agentflow_core::CoreFlowRunner::concurrent(max_concurrency)),
   );
-  let plan = agent
-    .plan(&goal)
-    .await
-    .map_err(|err| anyhow::anyhow!("dynamic workflow planning failed: {err}"))?;
-
   if dry_run {
+    let plan = agent
+      .plan(&goal)
+      .await
+      .map_err(|err| anyhow::anyhow!("dynamic workflow planning failed: {err}"))?;
     if as_json {
       println!("{}", serde_json::to_string_pretty(&plan_to_json(&plan))?);
     } else {
       print!("{}", render_plan_text(&plan));
-      println!("\n(dry run — plan not executed)");
+      let note = if replan > 0 {
+        "\n(dry run — plan not executed; --replan has no effect without execution)"
+      } else {
+        "\n(dry run — plan not executed)"
+      };
+      println!("{note}");
     }
     return Ok(());
   }
 
-  // Show the authored plan up front so the executor's per-node progress lines
-  // follow it in reading order.
-  if !as_json {
-    print!("{}", render_plan_text(&plan));
-    println!("\nExecuting...");
-  }
-
-  // Compile the plan to a Flow and execute it via the core engine, sharing the
-  // same governed registry the planner saw.
-  let flow = compile_plan_to_flow(&plan, Arc::clone(&registry))
-    .context("compiling the dynamic plan into a Flow failed")?;
-  let state = flow
-    .execute_from_inputs_with_config(
-      HashMap::new(),
-      FlowExecutionConfig::concurrent(max_concurrency),
-    )
-    .await
-    .context("executing the compiled dynamic workflow failed")?;
+  // replan > 0: recover from step failures by asking the planner for a
+  // revised plan (L1.1's `run_with_replan`) instead of failing outright.
+  // The eventual `plan` can differ from round 0 (steps may be replaced
+  // across revisions), so unlike the no-replan path below there is no
+  // single up-front plan to show before execution starts.
+  let (plan, state, revisions) = if replan > 0 {
+    if !as_json {
+      println!("Executing (up to {replan} replan round(s) on failure)...");
+    }
+    let outcome: DynamicWorkflowRunOutcome = agent
+      .run_with_replan(&goal, replan)
+      .await
+      .map_err(|err| anyhow::anyhow!("dynamic workflow execution with replanning failed: {err}"))?;
+    (outcome.plan, outcome.state, outcome.revisions)
+  } else {
+    let plan = agent
+      .plan(&goal)
+      .await
+      .map_err(|err| anyhow::anyhow!("dynamic workflow planning failed: {err}"))?;
+    // Show the authored plan up front so the executor's per-node progress
+    // lines follow it in reading order.
+    if !as_json {
+      print!("{}", render_plan_text(&plan));
+      println!("\nExecuting...");
+    }
+    // Compile the plan to a Flow and execute it via the core engine,
+    // sharing the same governed registry the planner saw.
+    let flow = compile_plan_to_flow(&plan, Arc::clone(&registry))
+      .context("compiling the dynamic plan into a Flow failed")?;
+    let state = flow
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::concurrent(max_concurrency),
+      )
+      .await
+      .context("executing the compiled dynamic workflow failed")?;
+    (plan, state, 0usize)
+  };
 
   if as_json {
     println!(
       "{}",
       serde_json::to_string_pretty(&json!({
         "plan": plan_to_json(&plan),
+        "revisions": revisions,
         "results": results_to_json(&state),
       }))?
     );
   } else {
+    if replan > 0 {
+      // The plan shown here is the final one that actually ran (merged
+      // across every revision) — printed after execution since it wasn't
+      // known up front.
+      print!("{}", render_plan_text(&plan));
+      println!("Revisions: {revisions}\n");
+    }
     println!("Results:");
     print!("{}", render_results_text(&state));
   }
