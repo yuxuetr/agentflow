@@ -1020,6 +1020,7 @@ impl<'f> FlowExecutor<'f> {
     &self,
     node_type: &NodeType,
     inputs: &AsyncNodeInputs,
+    execution_config: &FlowExecutionConfig,
   ) -> AsyncNodeResult {
     match node_type {
       NodeType::Standard(node) => node.execute(inputs).await,
@@ -1030,10 +1031,12 @@ impl<'f> FlowExecutor<'f> {
       } => {
         if *parallel {
           self
-            .execute_map_node_parallel(inputs, template, *max_concurrent)
+            .execute_map_node_parallel(inputs, template, *max_concurrent, execution_config)
             .await
         } else {
-          self.execute_map_node_sequential(inputs, template).await
+          self
+            .execute_map_node_sequential(inputs, template, execution_config)
+            .await
         }
       }
       NodeType::While {
@@ -1042,7 +1045,13 @@ impl<'f> FlowExecutor<'f> {
         template,
       } => {
         self
-          .execute_while_node(inputs, condition, *max_iterations, template)
+          .execute_while_node(
+            inputs,
+            condition,
+            *max_iterations,
+            template,
+            execution_config,
+          )
           .await
       }
     }
@@ -1081,7 +1090,7 @@ impl<'f> FlowExecutor<'f> {
         Some(timeout_ms) => {
           match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
-            self.execute_node_type(node_type, inputs),
+            self.execute_node_type(node_type, inputs, config),
           )
           .await
           {
@@ -1091,7 +1100,7 @@ impl<'f> FlowExecutor<'f> {
             }),
           }
         }
-        None => self.execute_node_type(node_type, inputs).await,
+        None => self.execute_node_type(node_type, inputs, config).await,
       }
     };
 
@@ -1160,12 +1169,47 @@ impl<'f> FlowExecutor<'f> {
     }
   }
 
+  /// W1.1: build a Map/While sub-flow that inherits the parent's
+  /// observability/cancellation/run-dir context instead of starting
+  /// from a bare `Flow::new` + default `FlowExecutionConfig`. Pre-fix,
+  /// sub-flow nodes were invisible to trace/UI/SSE (no
+  /// `event_listener`), uncancellable (no `cancellation_token`), and
+  /// always wrote under the hardcoded `~/.agentflow/runs/<uuid>`
+  /// default regardless of what `run_base_dir` the parent was actually
+  /// configured with (each sub-flow still gets its own uuid-named
+  /// subdirectory via `execute_from_inputs_with_config`'s fresh
+  /// `run_id` — only the *base* directory is inherited here, so
+  /// concurrent Map items still can't collide with each other).
+  /// Deliberately does NOT inherit `mode`/`node_timeout_ms`/
+  /// `node_retry_policy` — sub-flows stay serial and policy-free unless
+  /// a future change explicitly opts them in.
+  fn sub_flow_execution_context(
+    &self,
+    template: &[GraphNode],
+    execution_config: &FlowExecutionConfig,
+  ) -> (Flow, FlowExecutionConfig) {
+    let mut sub_flow = Flow::new(template.to_vec());
+    if let Some(listener) = self.flow.event_listener() {
+      sub_flow = sub_flow.with_event_listener(listener.clone());
+    }
+    if let Some(observer) = self.flow.state_size_observer() {
+      sub_flow = sub_flow.with_state_size_observer(observer.clone());
+    }
+    let sub_config = FlowExecutionConfig {
+      run_base_dir: execution_config.run_base_dir.clone(),
+      cancellation_token: execution_config.cancellation_token.clone(),
+      ..FlowExecutionConfig::serial()
+    };
+    (sub_flow, sub_config)
+  }
+
   fn execute_while_node<'a>(
     &'a self,
     inputs: &'a AsyncNodeInputs,
     condition_template: &'a str,
     max_iterations: u32,
     template: &'a [GraphNode],
+    execution_config: &'a FlowExecutionConfig,
   ) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
     Box::pin(async move {
       let mut loop_inputs = inputs.clone();
@@ -1189,9 +1233,9 @@ impl<'f> FlowExecutor<'f> {
           break;
         }
 
-        let sub_flow = Flow::new(template.to_vec());
+        let (sub_flow, sub_config) = self.sub_flow_execution_context(template, execution_config);
         let sub_flow_state_pool = FlowExecutor::new(&sub_flow)
-          .execute_from_inputs(loop_inputs.clone())
+          .execute_from_inputs_with_config(loop_inputs.clone(), sub_config)
           .await?;
 
         let exit_nodes = FlowExecutor::new(&sub_flow).find_exit_nodes();
@@ -1245,6 +1289,7 @@ impl<'f> FlowExecutor<'f> {
     &'a self,
     inputs: &'a AsyncNodeInputs,
     template: &'a [GraphNode],
+    execution_config: &'a FlowExecutionConfig,
   ) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
     Box::pin(async move {
       let input_list = match inputs.get("input_list") {
@@ -1259,12 +1304,12 @@ impl<'f> FlowExecutor<'f> {
       let mut all_results = Vec::new();
       let mut err_indexes: Vec<usize> = Vec::new();
       for (idx, item) in input_list.iter().enumerate() {
-        let sub_flow = Flow::new(template.to_vec());
+        let (sub_flow, sub_config) = self.sub_flow_execution_context(template, execution_config);
         let mut initial_inputs = HashMap::new();
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
         let sub_flow_result = FlowExecutor::new(&sub_flow)
-          .execute_from_inputs(initial_inputs)
+          .execute_from_inputs_with_config(initial_inputs, sub_config)
           .await?;
         // F-A6-3: track per-sub-flow node-level failures (see the
         // parallel branch for the design rationale).
@@ -1284,6 +1329,7 @@ impl<'f> FlowExecutor<'f> {
     inputs: &'a AsyncNodeInputs,
     template: &'a [GraphNode],
     max_concurrent: Option<usize>,
+    execution_config: &'a FlowExecutionConfig,
   ) -> Pin<Box<dyn Future<Output = AsyncNodeResult> + Send + 'a>> {
     Box::pin(async move {
       let input_list = match inputs.get("input_list") {
@@ -1315,7 +1361,7 @@ impl<'f> FlowExecutor<'f> {
 
       let mut handles = Vec::new();
       for item in input_list {
-        let sub_flow = Flow::new(template.to_vec());
+        let (sub_flow, sub_config) = self.sub_flow_execution_context(template, execution_config);
         let mut initial_inputs = HashMap::new();
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
@@ -1337,7 +1383,7 @@ impl<'f> FlowExecutor<'f> {
             None => None,
           };
           FlowExecutor::new(&sub_flow)
-            .execute_from_inputs(initial_inputs)
+            .execute_from_inputs_with_config(initial_inputs, sub_config)
             .await
         });
         handles.push(handle);
@@ -3677,6 +3723,168 @@ mod tests {
     assert_eq!(results_array.len(), 5);
   }
 
+  /// W1.1 regression: pre-fix, `execute_map_node_parallel` built each
+  /// sub-flow via a bare `Flow::new` with no `event_listener`, so the
+  /// inner template node's `node.started`/`node.completed` events were
+  /// silently dropped instead of reaching the parent's listener — the
+  /// operator's trace/UI/SSE saw the Map node as a single opaque step
+  /// with no visibility into its 5 sub-flow items. Asserts the listener
+  /// observes one `node.started`/`node.completed` pair for the outer
+  /// `map_node` PLUS one pair per sub-flow item.
+  #[tokio::test]
+  async fn map_node_parallel_sub_flow_events_reach_parent_listener() {
+    use_writable_home();
+    struct MultiplyNode;
+    #[async_trait]
+    impl AsyncNode for MultiplyNode {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let val = match inputs.get("item").unwrap() {
+          FlowValue::Json(Value::Number(n)) => n.as_i64().unwrap(),
+          _ => 0,
+        };
+        let mut outputs = HashMap::new();
+        outputs.insert("result".to_string(), FlowValue::Json(json!(val * 2)));
+        Ok(outputs)
+      }
+    }
+
+    let sub_flow_node = GraphNode {
+      id: "multiply".to_string(),
+      node_type: NodeType::Standard(Arc::new(MultiplyNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "map_node".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: true,
+        max_concurrent: None,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert(
+          "input_list".to_string(),
+          FlowValue::Json(json!([1, 2, 3, 4, 5])),
+        );
+        inputs
+      },
+    };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener {
+      events: events.clone(),
+    });
+    let flow = Flow::new(vec![map_node]).with_event_listener(listener);
+
+    flow.run().await.unwrap();
+
+    let events = events.lock().unwrap();
+    let started = events.iter().filter(|e| **e == "node.started").count();
+    let completed = events.iter().filter(|e| **e == "node.completed").count();
+    assert_eq!(
+      started, 6,
+      "expected 1 (map_node) + 5 (one per sub-flow item), got {started}: {events:?}"
+    );
+    assert_eq!(
+      completed, 6,
+      "expected 1 (map_node) + 5 (one per sub-flow item), got {completed}: {events:?}"
+    );
+  }
+
+  /// W1.1 regression: pre-fix, `execute_map_node_sequential` built each
+  /// sub-flow via a bare `Flow::new` + `execute_from_inputs` (no
+  /// config), so the parent's `cancellation_token` was never threaded
+  /// down — a cancelled parent run would still march every Map item to
+  /// completion instead of stopping. The template node cancels the
+  /// shared token as a side effect of its first call; if the fix is
+  /// working, the second sub-flow's own top-of-run cancellation check
+  /// (the same one a top-level `Flow` run already honors) fails it
+  /// before it ever reaches the node, so `calls` never exceeds 1 and
+  /// the Map node's own `?` propagates `TaskCancelled` up.
+  #[tokio::test]
+  async fn map_node_sequential_sub_flow_respects_parent_cancellation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use_writable_home();
+
+    struct CancelOnFirstCallNode {
+      calls: Arc<AtomicUsize>,
+      token: crate::scheduler::FlowCancellationToken,
+    }
+    #[async_trait]
+    impl AsyncNode for CancelOnFirstCallNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == 1 {
+          self.token.cancel();
+        }
+        let mut outputs = HashMap::new();
+        outputs.insert("ok".to_string(), FlowValue::Json(json!(true)));
+        Ok(outputs)
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let token = crate::scheduler::FlowCancellationToken::new();
+
+    let sub_flow_node = GraphNode {
+      id: "cancel_on_first".to_string(),
+      node_type: NodeType::Standard(Arc::new(CancelOnFirstCallNode {
+        calls: calls.clone(),
+        token: token.clone(),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let map_node = GraphNode {
+      id: "map_node".to_string(),
+      node_type: NodeType::Map {
+        template: vec![sub_flow_node],
+        parallel: false,
+        max_concurrent: None,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3])));
+        inputs
+      },
+    };
+
+    let final_state = Flow::new(vec![map_node])
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial().with_cancellation_token(token),
+      )
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(
+        final_state.get("map_node"),
+        Some(Err(AgentFlowError::TaskCancelled))
+      ),
+      "expected the map_node entry to be TaskCancelled once the shared \
+       token was tripped, got {:?}",
+      final_state.get("map_node")
+    );
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "only the first sub-flow item should have run before cancellation was observed"
+    );
+  }
+
   /// F-A6-1: `max_concurrent: Some(N)` on a parallel map node MUST
   /// hold the number of simultaneously-running sub-flows at or
   /// below N. A probe sub-flow increments a shared counter on
@@ -4224,6 +4432,87 @@ mod tests {
     // Iteration 4: counter=4, sets counter=5, continue_loop=false (4 < 4 = false)
     // Next iteration checks: continue_loop=false, loop exits
     assert_eq!(counter, 5);
+  }
+
+  /// W1.1 regression: pre-fix, `execute_while_node` built each
+  /// iteration's sub-flow via a bare `Flow::new` + `execute_from_inputs`
+  /// (no config), so every iteration ignored whatever `run_base_dir` the
+  /// parent was configured with and instead fell back to the hardcoded
+  /// `~/.agentflow/runs` default. Runs the parent under an explicit
+  /// custom `run_base_dir` and asserts every sub-flow iteration's run
+  /// directory lands underneath it (parent dir + one per iteration),
+  /// not off in the unrelated default location.
+  #[tokio::test]
+  async fn while_node_sub_flow_honors_parent_run_base_dir() {
+    use_writable_home();
+    struct IncrementNode;
+    #[async_trait]
+    impl AsyncNode for IncrementNode {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let counter = match inputs.get("counter") {
+          Some(FlowValue::Json(Value::Number(n))) => n.as_i64().unwrap(),
+          _ => 1,
+        };
+        let mut outputs = HashMap::new();
+        outputs.insert("counter".to_string(), FlowValue::Json(json!(counter + 1)));
+        outputs.insert(
+          "continue_loop".to_string(),
+          FlowValue::Json(json!(counter < 4)),
+        );
+        Ok(outputs)
+      }
+    }
+
+    let increment_node = GraphNode {
+      id: "increment".to_string(),
+      node_type: NodeType::Standard(Arc::new(IncrementNode)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+
+    let while_node = GraphNode {
+      id: "while_loop".to_string(),
+      node_type: NodeType::While {
+        condition: "{{continue_loop}}".to_string(),
+        max_iterations: 10,
+        template: vec![increment_node],
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("counter".to_string(), FlowValue::Json(json!(1)));
+        inputs.insert("continue_loop".to_string(), FlowValue::Json(json!(true)));
+        inputs
+      },
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    Flow::new(vec![while_node])
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial().with_run_base_dir(temp_dir.path()),
+      )
+      .await
+      .unwrap();
+
+    // Parent run dir + 4 while-loop iterations, all nested under the
+    // explicit custom base dir.
+    let run_dirs = std::fs::read_dir(temp_dir.path())
+      .unwrap()
+      .collect::<Result<Vec<_>, _>>()
+      .unwrap();
+    assert_eq!(
+      run_dirs.len(),
+      5,
+      "expected 1 parent + 4 sub-flow iteration dirs under the custom \
+       run_base_dir, got {}: {:?}",
+      run_dirs.len(),
+      run_dirs.iter().map(|e| e.path()).collect::<Vec<_>>()
+    );
   }
 
   #[tokio::test]
