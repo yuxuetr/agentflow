@@ -1,7 +1,8 @@
+use agentflow_llm::AgentFlow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Why a reflection strategy was invoked.
 ///
@@ -237,6 +238,93 @@ impl ReflectionStrategy for FinalReflection {
   }
 }
 
+#[derive(Deserialize)]
+struct ReflectionJudgeResponse {
+  reflection: String,
+}
+
+/// LLM-backed [`ReflectionStrategy`] (W3.4): one structured-output call per
+/// [`Failure`](ReflectionTrigger::Failure) / [`Final`](ReflectionTrigger::Final)
+/// trigger, producing a genuine critique instead of the deterministic
+/// template strings [`FailureReflection`] / [`FinalReflection`] emit.
+/// Mirrors [`crate::citation::LlmCitationChecker`] — the reference pattern
+/// this crate's LLM-backed strategies follow. Skips
+/// [`ReflectionTrigger::Step`] like the deterministic strategies do.
+///
+/// The deterministic strategies remain the default (replay-safe, no
+/// network call) — this is an opt-in strategy for callers who want an
+/// actual model-generated reflection.
+pub struct LlmReflection {
+  model: String,
+}
+
+impl LlmReflection {
+  pub fn new(model: impl Into<String>) -> Self {
+    Self {
+      model: model.into(),
+    }
+  }
+}
+
+#[async_trait]
+impl ReflectionStrategy for LlmReflection {
+  fn name(&self) -> &'static str {
+    "llm"
+  }
+
+  async fn reflect(
+    &self,
+    context: &ReflectionContext,
+  ) -> Result<Option<Reflection>, ReflectionError> {
+    let prompt = match context.trigger {
+      ReflectionTrigger::Failure => {
+        let error = context.error.as_deref().unwrap_or("(no error message)");
+        format!(
+          "An agent step failed at step {}:\n{error}\n\nIn one or two sentences, reflect on \
+           what likely went wrong and what the agent should try differently next.",
+          context.step_index
+        )
+      }
+      ReflectionTrigger::Final => {
+        let answer = context.answer.as_deref().unwrap_or("(no answer)");
+        format!(
+          "An agent produced its final answer at step {}:\n{answer}\n\nIn one or two \
+           sentences, reflect on whether this answer is well-supported and complete, noting \
+           any gaps a reader should be aware of.",
+          context.step_index
+        )
+      }
+      ReflectionTrigger::Step => return Ok(None),
+    };
+    let schema = json!({
+      "type": "object",
+      "properties": {
+        "reflection": { "type": "string" }
+      },
+      "required": ["reflection"]
+    });
+
+    let raw = AgentFlow::model(&self.model)
+      .prompt(&prompt)
+      .json_schema("reflection", schema)
+      .execute()
+      .await
+      .map_err(|e| ReflectionError::Failed {
+        message: e.to_string(),
+      })?;
+    let parsed: ReflectionJudgeResponse =
+      serde_json::from_str(&raw).map_err(|e| ReflectionError::Failed {
+        message: format!("failed to parse reflection response: {e}"),
+      })?;
+
+    Ok(Some(Reflection::new(
+      self.name(),
+      context.trigger.clone(),
+      parsed.reflection,
+    )))
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -273,5 +361,82 @@ mod tests {
     let reflection = strategy.reflect(&final_answer).await.unwrap().unwrap();
     assert_eq!(reflection.strategy, "final");
     assert!(reflection.content.contains("done"));
+  }
+
+  async fn init_mock_model(model: &str, response: &str) {
+    // SAFETY: callers hold LLM_TEST_LOCK while mutating these process-wide vars.
+    unsafe {
+      std::env::set_var("AGENTFLOW_MOCK_RESPONSE", response);
+      // AGENTFLOW_MOCK_RESPONSES (plural, a FIFO queue) takes priority over
+      // AGENTFLOW_MOCK_RESPONSE in the mock provider — a prior test in this
+      // process that set the queue and didn't clear it would otherwise
+      // silently hijack this response. Clear it defensively.
+      std::env::remove_var("AGENTFLOW_MOCK_RESPONSES");
+    }
+    let config_path = std::env::temp_dir().join(format!(
+      "agentflow-reflection-mock-{}.yml",
+      uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+      &config_path,
+      format!(
+        "models:\n  {model}:\n    vendor: mock\n    type: text\n    model_id: {model}\n\
+         providers:\n  mock:\n    api_key_env: MOCK_API_KEY\n"
+      ),
+    )
+    .expect("write mock config");
+    agentflow_llm::AgentFlow::init_with_config(config_path.to_str().expect("utf8 path"))
+      .await
+      .expect("init mock model");
+  }
+
+  /// W3.4 regression: `LlmReflection` must actually issue a structured-
+  /// output call and surface the judge's text as the reflection content,
+  /// for both triggers it handles.
+  #[tokio::test]
+  async fn llm_reflection_handles_failure_and_final_triggers() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let model = format!("mock-reflect-{}", uuid::Uuid::new_v4());
+    init_mock_model(
+      &model,
+      r#"{"reflection":"the tool call likely failed due to a bad argument"}"#,
+    )
+    .await;
+
+    let strategy = LlmReflection::new(&model);
+
+    let failure = ReflectionContext::failure("session-1", 2, "tool timed out");
+    let reflection = strategy.reflect(&failure).await.unwrap().unwrap();
+    assert_eq!(reflection.strategy, "llm");
+    assert_eq!(reflection.trigger, ReflectionTrigger::Failure);
+    assert_eq!(
+      reflection.content,
+      "the tool call likely failed due to a bad argument"
+    );
+
+    let final_answer = ReflectionContext::final_answer("session-1", 5, "the answer is 4");
+    let reflection = strategy.reflect(&final_answer).await.unwrap().unwrap();
+    assert_eq!(reflection.trigger, ReflectionTrigger::Final);
+  }
+
+  /// `ReflectionTrigger::Step` must be skipped without ever calling the
+  /// model — proven by using a model id with no mock config registered at
+  /// all, which would error if `reflect` tried to call it.
+  #[tokio::test]
+  async fn llm_reflection_skips_step_trigger_without_calling_the_model() {
+    let strategy = LlmReflection::new("no-such-model-registered");
+    let context = ReflectionContext {
+      session_id: "session-1".to_string(),
+      step_index: 1,
+      trigger: ReflectionTrigger::Step,
+      thought: None,
+      observation: None,
+      answer: None,
+      error: None,
+      metadata: Value::Object(Default::default()),
+    };
+
+    let reflection = strategy.reflect(&context).await.unwrap();
+    assert!(reflection.is_none());
   }
 }
