@@ -33,6 +33,7 @@ use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -322,6 +323,15 @@ pub struct HarnessSessionContext {
   pub runtime_kind: String,
   pub model: String,
   pub skill_name: Option<String>,
+  /// W4.1c: the resolved skill's directory, when `skill_name` names an
+  /// installed skill — `state.skills.resolve(name)` looked up fresh at
+  /// `HarnessSessionContext`-construction time (not persisted; a skill's
+  /// on-disk path can move between server restarts, and the catalog is
+  /// the source of truth `/v1/skills` already uses). `None` when
+  /// `skill_name` is `None` or the name doesn't resolve — the live
+  /// executor falls back to the hardcoded default tool registry either
+  /// way, matching pre-W4.1c behavior.
+  pub skill_dir: Option<PathBuf>,
   /// U1.3: see `CreateHarnessSessionRequest::cost_limit_usd`.
   pub cost_limit_usd: Option<f64>,
   /// W0.1: see `CreateHarnessSessionRequest::max_steps`.
@@ -504,6 +514,14 @@ pub async fn submit_harness_session(
   let broker = state.harness_broker.clone();
   let workspace_root_owned = workspace_root.to_string();
   let user_input_owned = user_input.to_string();
+  // W4.1c: resolve the skill directory once here, alongside the name, so
+  // the executor can build a skill-backed tool registry instead of the
+  // hardcoded default.
+  let skill_dir = req
+    .skill_name
+    .as_deref()
+    .and_then(|name| state.skills.resolve(name))
+    .map(|entry| entry.path);
   tokio::spawn(async move {
     executor
       .execute(HarnessSessionContext {
@@ -514,6 +532,7 @@ pub async fn submit_harness_session(
         runtime_kind,
         model,
         skill_name: req.skill_name,
+        skill_dir,
         cost_limit_usd: req.cost_limit_usd,
         max_steps: req.max_steps,
         repos,
@@ -822,6 +841,12 @@ pub async fn resume_harness_session(
   let runtime_kind = session.runtime_kind.clone();
   let model = session.model.clone();
   let skill_name = session.skill_name.clone();
+  // W4.1c: re-resolve, same as the create path — the session row only
+  // persists the name.
+  let skill_dir = skill_name
+    .as_deref()
+    .and_then(|name| state.skills.resolve(name))
+    .map(|entry| entry.path);
   let user_input_owned = user_input.clone();
   tokio::spawn(async move {
     executor
@@ -833,6 +858,7 @@ pub async fn resume_harness_session(
         runtime_kind,
         model,
         skill_name,
+        skill_dir,
         // U1.3: cost_limit_usd isn't a persisted `harness_sessions`
         // column (unlike profile/runtime_kind/model/skill_name), so a
         // resume can't recover the original session's limit — it
@@ -982,6 +1008,12 @@ pub async fn answer_interrupt(
   let executor = state.harness_executor.clone();
   let repos = state.repos.clone();
   let broker = state.harness_broker.clone();
+  // W4.1c: re-resolve, same as the create/resume paths.
+  let skill_dir = session
+    .skill_name
+    .as_deref()
+    .and_then(|name| state.skills.resolve(name))
+    .map(|entry| entry.path);
   let ctx = HarnessSessionContext {
     session_id,
     user_input: session.user_input.clone(),
@@ -990,6 +1022,7 @@ pub async fn answer_interrupt(
     runtime_kind: session.runtime_kind.clone(),
     model: session.model.clone(),
     skill_name: session.skill_name.clone(),
+    skill_dir,
     cost_limit_usd: None,
     // W0.1: not a persisted column — see the `reset_for_resume` site above.
     max_steps: None,

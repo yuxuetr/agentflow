@@ -30,6 +30,7 @@ use agentflow_harness::{
 };
 use agentflow_llm::AgentFlow;
 use agentflow_memory::{MemoryStore, SessionMemory, SqliteMemory};
+use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
 
 use agentflow_db::{
@@ -142,9 +143,12 @@ pub(crate) fn harness_event_kind(body: &HarnessEventBody) -> &'static str {
 /// file access scoped to `workspace_root` plus outbound HTTP (see
 /// `build_default_tool_registry`) — wrapped through `wrap_registry` with
 /// `ServerApprovalProvider` so the approval pipeline has something to
-/// actually govern. Skill-backed tool loading (`skill_name` beyond this
-/// default) and MCP/plugin capability come in via subsequent slices
-/// (W4.1's tool distribution contract).
+/// actually govern. W4.1c: when the session names a resolvable skill
+/// (`HarnessSessionContext::skill_dir`), it gets that skill's full agent
+/// (persona/model/memory/knowledge, its tools rewrapped through the same
+/// approval pipeline) instead of the hardcoded default — see
+/// `build_session_react_agent`. MCP/plugin capability beyond a skill's own
+/// declared MCP servers is still a follow-up.
 #[derive(Clone)]
 pub struct LiveHarnessExecutor {
   approval_registry: PendingApprovalRegistry,
@@ -332,6 +336,8 @@ struct RunInputs {
   runtime_kind: String,
   model: String,
   skill_name: Option<String>,
+  /// W4.1c: see `HarnessSessionContext::skill_dir`.
+  skill_dir: Option<PathBuf>,
   /// U1.3: see `HarnessSessionContext::cost_limit_usd`.
   cost_limit_usd: Option<f64>,
   /// W0.1: see `HarnessSessionContext::max_steps`.
@@ -350,6 +356,7 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
     runtime_kind: ctx.runtime_kind.clone(),
     model: ctx.model.clone(),
     skill_name: ctx.skill_name.clone(),
+    skill_dir: ctx.skill_dir.clone(),
     cost_limit_usd: ctx.cost_limit_usd,
     max_steps: ctx.max_steps,
     repos: ctx.repos.clone(),
@@ -372,23 +379,79 @@ fn resolve_max_steps(requested: Option<usize>) -> usize {
     .min(MAX_STEPS_CEILING)
 }
 
-/// W0.1: build the tool registry a harness session governs. Real tools —
-/// not an always-empty `ToolRegistry::new()` — are what makes the
-/// hook/approval pipeline meaningful: without them `wrap_registry` has
-/// nothing to wrap and the session can never produce an
-/// `approval_requested` event, no matter how the profile is configured.
-///
-/// Skill-backed tool loading (`inputs.skill_name`) is not wired yet — the
-/// full form (tool distribution contract, W4.1) is tracked separately.
-/// Until then every session, skill-named or not, gets this same safe
-/// default: read-only file access scoped to the workspace root, plus
-/// outbound HTTP.
+/// W0.1: build the tool registry a harness session governs when it has no
+/// skill to load from. Real tools — not an always-empty
+/// `ToolRegistry::new()` — are what makes the hook/approval pipeline
+/// meaningful: without them `wrap_registry` has nothing to wrap and the
+/// session can never produce an `approval_requested` event, no matter how
+/// the profile is configured. Read-only file access scoped to the
+/// workspace root, plus outbound HTTP.
 fn build_default_tool_registry(workspace_root: &str) -> Result<ToolRegistry, LiveExecutorError> {
   agentflow_tools::default_governed_registry(std::path::Path::new(workspace_root)).map_err(|err| {
     LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
       "failed to build default tool registry: {err}"
     )))
   })
+}
+
+/// W4.1c: build the session's inner `ReActAgent`, skill-backed when
+/// `inputs.skill_dir` resolves, the harness default otherwise.
+///
+/// Mirrors the CLI's own `--skill` branch
+/// (`agentflow-cli/src/commands/harness/run.rs::build_agent`) exactly:
+/// `SkillBuilder::build_with_project_root` builds a *full* agent — its own
+/// persona, model, memory, and knowledge from the manifest, not just its
+/// tools — since a skill-backed harness session should behave like running
+/// that skill under harness governance, not like the harness's own default
+/// persona with borrowed tools. `inputs.model`/`build_harness_memory` are
+/// only consulted in the no-skill branch; the skill manifest wins when one
+/// is present, same as the CLI. The resulting registry is snapshotted and
+/// rewrapped through `hook_config` — `ReActAgent::tools()`/`with_tools()`
+/// is the same post-construction registry-swap hook the CLI (and W4.1b's
+/// `run_skill_agent`) already use, so a skill's tools stay governed by the
+/// harness approval pipeline exactly like the default registry's tools do.
+async fn build_session_react_agent(
+  inputs: &RunInputs,
+  hook_config: HookConfig,
+) -> Result<ReActAgent, LiveExecutorError> {
+  let Some(skill_dir) = inputs.skill_dir.as_deref() else {
+    let tools = build_default_tool_registry(&inputs.workspace_root)?;
+    let registry = wrap_registry(tools, hook_config);
+    let react_config = ReActConfig::new(&inputs.model);
+    let memory = build_harness_memory().await?;
+    return Ok(ReActAgent::new(react_config, memory, Arc::new(registry)));
+  };
+
+  let manifest = SkillLoader::load(skill_dir).map_err(|e| {
+    LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+      "failed to load skill manifest at {}: {e}",
+      skill_dir.display()
+    )))
+  })?;
+  let _warnings = SkillLoader::validate(&manifest, skill_dir).map_err(|e| {
+    LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+      "skill validation failed: {e}"
+    )))
+  })?;
+  let mut agent = SkillBuilder::build_with_project_root(
+    &manifest,
+    skill_dir,
+    Some(std::path::Path::new(&inputs.workspace_root)),
+  )
+  .await
+  .map_err(|e| {
+    LiveExecutorError::Harness(agentflow_harness::HarnessError::Other(format!(
+      "failed to build agent from skill manifest: {e}"
+    )))
+  })?;
+
+  let mut snapshot = ToolRegistry::new();
+  for tool in agent.tools().list() {
+    snapshot.register(tool);
+  }
+  let wrapped = wrap_registry(snapshot, hook_config);
+  agent = agent.with_tools(Arc::new(wrapped));
+  Ok(agent)
 }
 
 /// Runs `HarnessRuntime::run` on a dedicated current-thread Tokio
@@ -506,15 +569,7 @@ async fn run_harness_inner(
     .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
-  let tools = build_default_tool_registry(&inputs.workspace_root)?;
-  let registry = wrap_registry(tools, hook_config);
-
-  let react_config = ReActConfig::new(&inputs.model);
-  // Conversation memory: persistent (keyed by session_id) when the
-  // operator configures it, so `:resume` continues prior turns across
-  // restarts; otherwise the in-process default (back-compat).
-  let memory = build_harness_memory().await?;
-  let agent = ReActAgent::new(react_config, memory, Arc::new(registry));
+  let agent = build_session_react_agent(&inputs, hook_config).await?;
 
   // V2.3: attach the Postgres-backed checkpointer unconditionally — same
   // "on by default" posture the CLI's `harness run` already established.
@@ -612,20 +667,22 @@ async fn run_harness_resume_inner(
     .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
-  let tools = build_default_tool_registry(&inputs.workspace_root)?;
-  let registry = Arc::new(wrap_registry(tools, hook_config));
-  let memory = build_harness_memory().await?;
-
   let checkpointer: Arc<dyn AgentLoopCheckpointer> = Arc::new(DbLoopCheckpointer::new(
     inputs.repos.harness_sessions.pool.clone(),
   ));
 
+  // W4.1c: React is the only runtime kind a skill-backed session can ever
+  // have produced (`SkillBuilder` only ever constructs a `ReActAgent` —
+  // skill manifests don't declare a runtime pattern, matching the CLI's
+  // own `--skill` restriction), so only that arm consults
+  // `inputs.skill_dir`; PlanExecute always uses the harness default
+  // registry, same as before this change.
   let inner_agent: Box<dyn AgentRuntime> = match checkpoint.runtime_kind {
-    LoopRuntimeKind::React => {
-      let react_config = ReActConfig::new(&inputs.model);
-      Box::new(ReActAgent::new(react_config, memory, registry))
-    }
+    LoopRuntimeKind::React => Box::new(build_session_react_agent(&inputs, hook_config).await?),
     LoopRuntimeKind::PlanExecute => {
+      let tools = build_default_tool_registry(&inputs.workspace_root)?;
+      let registry = Arc::new(wrap_registry(tools, hook_config));
+      let memory = build_harness_memory().await?;
       let plan_config = PlanExecuteConfig::new(&inputs.model);
       Box::new(PlanExecuteAgent::new(plan_config, memory, registry))
     }
