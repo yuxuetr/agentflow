@@ -9,10 +9,10 @@
 //! ```
 
 use agentflow_db::{
-  ApprovalIntentRepo, Artifact, ArtifactRepo, Database, EventRepo, HarnessEventRepo,
-  HarnessSessionRepo, HarnessSessionStatus, McpSession, McpSessionRepo, NewArtifact, NewEvent,
-  NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Repositories, RunRepo, RunStatus,
-  SkillInstall, SkillInstallRepo, StepRepo,
+  AdmissionOutcome, ApprovalIntentRepo, Artifact, ArtifactRepo, Database, EventRepo,
+  HarnessEventRepo, HarnessSessionRepo, HarnessSessionStatus, McpSession, McpSessionRepo,
+  NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Repositories,
+  RunRepo, RunStatus, SkillInstall, SkillInstallRepo, StepRepo,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -367,6 +367,125 @@ async fn event_repo_list_pending_approvals_excludes_decided() {
     .expect("list after deciding req-a");
   assert_eq!(pending.len(), 1, "req-a must drop out once decided");
   assert_eq!(pending[0]["id"], "req-b");
+}
+
+fn new_run_for(tenant: &str) -> NewRun {
+  NewRun {
+    id: Uuid::new_v4(),
+    workflow: format!("admission-test-for-{tenant}"),
+    status: RunStatus::Queued,
+    run_dir: None,
+    tenant_id: tenant.to_string(),
+    events_retention_days: None,
+    artifacts_retention_days: None,
+  }
+}
+
+/// W4.2f: `create_if_admitted` admits up to `max_concurrent`
+/// non-terminal runs for a tenant, then rejects — and the count is
+/// derived from `runs.status`, not a separate counter, so completing
+/// one of the admitted runs frees a slot for the next submission.
+#[tokio::test]
+async fn run_repo_create_if_admitted_enforces_concurrency_and_self_heals() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping run_repo_create_if_admitted_enforces_concurrency_and_self_heals");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-admission-concurrency-{}", Uuid::new_v4());
+
+  let first = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 2, 100, 60)
+    .await
+    .expect("first admission call succeeds");
+  let first_run = match first {
+    AdmissionOutcome::Admitted(run) => run,
+    other => panic!("expected Admitted, got {other:?}"),
+  };
+
+  let second = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 2, 100, 60)
+    .await
+    .expect("second admission call succeeds");
+  assert!(matches!(second, AdmissionOutcome::Admitted(_)));
+
+  let third = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 2, 100, 60)
+    .await
+    .expect("third admission call succeeds");
+  match third {
+    AdmissionOutcome::ConcurrencyLimitExceeded { current, limit } => {
+      assert_eq!(current, 2);
+      assert_eq!(limit, 2);
+    }
+    other => panic!("expected ConcurrencyLimitExceeded, got {other:?}"),
+  }
+
+  // Complete one of the two admitted runs — the count must self-heal
+  // without any admission-specific cleanup call.
+  repos
+    .runs
+    .update_status(first_run.id, RunStatus::Succeeded, None)
+    .await
+    .expect("mark first run terminal");
+
+  let fourth = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 2, 100, 60)
+    .await
+    .expect("fourth admission call succeeds");
+  assert!(
+    matches!(fourth, AdmissionOutcome::Admitted(_)),
+    "a terminal run must free its concurrency slot"
+  );
+}
+
+/// W4.2f: `create_if_admitted` rejects once the tenant's submissions
+/// within `window_seconds` exceed `max_per_window`, even though the
+/// concurrency limit is nowhere near reached.
+#[tokio::test]
+async fn run_repo_create_if_admitted_enforces_the_rate_window() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping run_repo_create_if_admitted_enforces_the_rate_window");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-admission-rate-{}", Uuid::new_v4());
+
+  let first = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 100, 1, 60)
+    .await
+    .expect("first admission call succeeds");
+  assert!(matches!(first, AdmissionOutcome::Admitted(_)));
+
+  let second = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 100, 1, 60)
+    .await
+    .expect("second admission call succeeds");
+  match second {
+    AdmissionOutcome::RateLimited {
+      window_count,
+      limit,
+    } => {
+      assert_eq!(window_count, 2);
+      assert_eq!(limit, 1);
+    }
+    other => panic!("expected RateLimited, got {other:?}"),
+  }
+
+  // A different tenant has its own untouched window.
+  let other_tenant = format!("tenant-admission-rate-other-{}", Uuid::new_v4());
+  let unaffected = repos
+    .runs
+    .create_if_admitted(new_run_for(&other_tenant), 100, 1, 60)
+    .await
+    .expect("other tenant's admission call succeeds");
+  assert!(matches!(unaffected, AdmissionOutcome::Admitted(_)));
 }
 
 #[tokio::test]

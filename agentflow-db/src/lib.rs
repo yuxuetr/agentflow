@@ -15,8 +15,9 @@ pub use models::{
 };
 pub use notify::{NotifyListener, notify};
 pub use repo::{
-  ApprovalIntentRepo, ArtifactRepo, EventRepo, HarnessEventRepo, HarnessSessionRepo,
-  McpSessionRepo, PgApprovalIntentRepo, PgArtifactRepo, PgEventRepo, PgHarnessEventRepo,
-  PgHarnessSessionRepo, PgMcpSessionRepo, PgRunRepo, PgSkillInstallRepo, PgStepRepo,
-  PgUserPreferenceRepo, Repositories, RunRepo, SkillInstallRepo, StepRepo, UserPreferenceRepo,
+  AdmissionOutcome, ApprovalIntentRepo, ArtifactRepo, EventRepo, HarnessEventRepo,
+  HarnessSessionRepo, McpSessionRepo, PgApprovalIntentRepo, PgArtifactRepo, PgEventRepo,
+  PgHarnessEventRepo, PgHarnessSessionRepo, PgMcpSessionRepo, PgRunRepo, PgSkillInstallRepo,
+  PgStepRepo, PgUserPreferenceRepo, Repositories, RunRepo, SkillInstallRepo, StepRepo,
+  UserPreferenceRepo,
 };

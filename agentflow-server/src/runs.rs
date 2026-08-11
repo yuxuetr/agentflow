@@ -398,6 +398,22 @@ impl RunAdmissionRegistry {
     self
   }
 
+  /// W4.2f: the configured limits, for callers driving the
+  /// cluster-wide-authoritative `RunRepo::create_if_admitted` DB path.
+  pub fn max_concurrent_per_tenant(&self) -> u32 {
+    self.max_concurrent_per_tenant
+  }
+
+  /// W4.2f: see [`Self::max_concurrent_per_tenant`].
+  pub fn max_submissions_per_minute(&self) -> u32 {
+    self.max_submissions_per_minute
+  }
+
+  /// W4.2f: see [`Self::max_concurrent_per_tenant`].
+  pub fn window(&self) -> Duration {
+    self.window
+  }
+
   /// Same poison-recovery pattern as [`RunCancellationRegistry::lock_inner`].
   fn lock_inner(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<TenantAdmissionState>>> {
     match self.inner.lock() {
@@ -1192,9 +1208,20 @@ pub async fn submit_run(
     )));
   }
 
-  // V3.4: admission control before the run row is even created — an
-  // inadmissible request shouldn't leave a `queued` row behind.
-  let admission_guard = state
+  // V3.4 / W4.2f: admission control before the run row is even created —
+  // an inadmissible request shouldn't leave a `queued` row behind.
+  //
+  // `RunAdmissionRegistry::try_admit` is a process-local pre-check only
+  // (fails fast on an obviously-over-limit local burst without a DB
+  // round trip) — it can no longer reject on its own authority, since
+  // with multiple gateway replicas each replica's local semaphore only
+  // sees its own share of a tenant's traffic. `RunRepo::create_if_admitted`
+  // is the actual source of truth: it re-derives the concurrency count
+  // from `runs.status` and the rate window from a shared Postgres table,
+  // inside one transaction serialized per tenant via an advisory lock,
+  // so the combined count across every replica never exceeds the
+  // configured limit.
+  let local_admission_guard = state
     .run_admission_registry
     .try_admit(&tenant_id)
     .map_err(|err| ApiError::TooManyRequests(err.to_string()))?;
@@ -1203,19 +1230,40 @@ pub async fn submit_run(
   let run_base_dir = run_base_dir_for_request();
   let run_dir = run_dir_for_run(&run_base_dir, run_id);
 
-  let run = state
+  let admission_outcome = state
     .repos
     .runs
-    .create(NewRun {
-      id: run_id,
-      workflow: workflow.clone(),
-      status: RunStatus::Queued,
-      run_dir: Some(run_dir.display().to_string()),
-      tenant_id: tenant_id.clone(),
-      events_retention_days,
-      artifacts_retention_days,
-    })
+    .create_if_admitted(
+      NewRun {
+        id: run_id,
+        workflow: workflow.clone(),
+        status: RunStatus::Queued,
+        run_dir: Some(run_dir.display().to_string()),
+        tenant_id: tenant_id.clone(),
+        events_retention_days,
+        artifacts_retention_days,
+      },
+      state.run_admission_registry.max_concurrent_per_tenant() as i64,
+      state.run_admission_registry.max_submissions_per_minute() as i64,
+      state.run_admission_registry.window().as_secs() as i64,
+    )
     .await?;
+  let run = match admission_outcome {
+    agentflow_db::AdmissionOutcome::Admitted(run) => run,
+    agentflow_db::AdmissionOutcome::ConcurrencyLimitExceeded { current, limit } => {
+      return Err(ApiError::TooManyRequests(format!(
+        "tenant '{tenant_id}' has reached the concurrent-run limit ({current} running, limit {limit})"
+      )));
+    }
+    agentflow_db::AdmissionOutcome::RateLimited {
+      window_count,
+      limit,
+    } => {
+      return Err(ApiError::TooManyRequests(format!(
+        "tenant '{tenant_id}' has exceeded the run submission rate limit ({window_count} submitted, limit {limit} per window)"
+      )));
+    }
+  };
 
   // Dispatch in the background so the HTTP request returns immediately. The
   // executor owns the entire run lifecycle from this point.
@@ -1229,9 +1277,12 @@ pub async fn submit_run(
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
-    // Held until the task completes — releases the tenant's admission
-    // slot on drop (V3.4).
-    let _admission_guard = admission_guard;
+    // Held until the task completes — releases the local pre-check's
+    // admission slot on drop (V3.4). Cluster-wide correctness now comes
+    // from `create_if_admitted`'s DB-derived concurrency count instead
+    // (W4.2f), which self-heals from `runs.status` regardless of this
+    // guard's lifetime.
+    let _admission_guard = local_admission_guard;
     executor
       .execute(RunContext {
         run_id,

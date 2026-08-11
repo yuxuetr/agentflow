@@ -58,6 +58,46 @@ pub trait RunRepo: Send + Sync {
   /// `run_cancellation_intents`'s migration comment for the full
   /// cross-replica mechanism.
   async fn record_cancellation_intent(&self, run_id: Uuid, tenant_id: &str) -> Result<(), DbError>;
+
+  /// W4.2f: cluster-wide admission check + row creation, atomically.
+  ///
+  /// Replaces the per-process `RunAdmissionRegistry` as the source of
+  /// truth for both limits (that registry is retained by callers only
+  /// as an optional pre-check to fail obviously-over-limit local bursts
+  /// without a round trip):
+  ///
+  /// - **Concurrency**: `COUNT(*) FROM runs WHERE tenant_id = $1 AND
+  ///   status IN ('queued', 'running')` — derived from `runs`'s own
+  ///   authoritative status column, not a separately-incremented
+  ///   counter, so a crashed replica's stuck-`running` row can't
+  ///   permanently leak a held slot.
+  /// - **Rate**: a fixed `window_seconds`-wide counter in
+  ///   `tenant_admission_windows`, reset-or-incremented atomically.
+  ///
+  /// Both checks (and the row insert on success) run inside one
+  /// transaction serialized per tenant via
+  /// `pg_advisory_xact_lock(hashtext('run_admission:' || tenant_id))`,
+  /// so concurrent admission attempts for the same tenant — whether
+  /// racing within one replica or across every replica — can't both
+  /// observe "under the limit" and both admit.
+  async fn create_if_admitted(
+    &self,
+    run: NewRun,
+    max_concurrent: i64,
+    max_per_window: i64,
+    window_seconds: i64,
+  ) -> Result<AdmissionOutcome, DbError>;
+}
+
+/// Result of [`RunRepo::create_if_admitted`] — three-way instead of a
+/// plain `Result<Run, DbError>` so callers can distinguish "rejected by
+/// policy" (a normal, expected outcome that should map to HTTP 429)
+/// from an actual `DbError` (a real infrastructure failure).
+#[derive(Debug, Clone)]
+pub enum AdmissionOutcome {
+  Admitted(Run),
+  ConcurrencyLimitExceeded { current: i64, limit: i64 },
+  RateLimited { window_count: i64, limit: i64 },
 }
 
 #[async_trait]
@@ -365,6 +405,88 @@ impl RunRepo for PgRunRepo {
     .execute(&self.pool)
     .await?;
     Ok(())
+  }
+
+  async fn create_if_admitted(
+    &self,
+    run: NewRun,
+    max_concurrent: i64,
+    max_per_window: i64,
+    window_seconds: i64,
+  ) -> Result<AdmissionOutcome, DbError> {
+    let mut tx = self.pool.begin().await?;
+
+    // Serialize concurrent admission attempts for this tenant across
+    // every backend connected to this database (every gateway replica),
+    // not just this transaction. Auto-releases at commit/rollback.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('run_admission:' || $1))")
+      .bind(&run.tenant_id)
+      .execute(&mut *tx)
+      .await?;
+
+    let current: i64 = sqlx::query_scalar(
+      "SELECT count(*) FROM runs WHERE tenant_id = $1 AND status IN ('queued', 'running')",
+    )
+    .bind(&run.tenant_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if current >= max_concurrent {
+      // Dropping `tx` here rolls back — nothing has been written yet,
+      // so an implicit rollback is equivalent to an explicit one.
+      return Ok(AdmissionOutcome::ConcurrencyLimitExceeded {
+        current,
+        limit: max_concurrent,
+      });
+    }
+
+    let (window_count,): (i32,) = sqlx::query_as(
+      r#"INSERT INTO tenant_admission_windows (tenant_id, window_started_at, window_count)
+         VALUES ($1, NOW(), 1)
+         ON CONFLICT (tenant_id) DO UPDATE
+           SET window_count = CASE
+                 WHEN tenant_admission_windows.window_started_at
+                      <= NOW() - make_interval(secs => $2::double precision)
+                 THEN 1
+                 ELSE tenant_admission_windows.window_count + 1
+               END,
+               window_started_at = CASE
+                 WHEN tenant_admission_windows.window_started_at
+                      <= NOW() - make_interval(secs => $2::double precision)
+                 THEN NOW()
+                 ELSE tenant_admission_windows.window_started_at
+               END
+         RETURNING window_count"#,
+    )
+    .bind(&run.tenant_id)
+    .bind(window_seconds as f64)
+    .fetch_one(&mut *tx)
+    .await?;
+    if window_count as i64 > max_per_window {
+      return Ok(AdmissionOutcome::RateLimited {
+        window_count: window_count as i64,
+        limit: max_per_window,
+      });
+    }
+
+    let row = sqlx::query_as::<_, Run>(
+      r#"INSERT INTO runs (id, workflow, status, run_dir, tenant_id,
+                           events_retention_days, artifacts_retention_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, workflow, status, started_at, finished_at, run_dir,
+                   tenant_id, error, events_retention_days, artifacts_retention_days"#,
+    )
+    .bind(run.id)
+    .bind(&run.workflow)
+    .bind(run.status.as_str())
+    .bind(run.run_dir.as_deref())
+    .bind(&run.tenant_id)
+    .bind(run.events_retention_days)
+    .bind(run.artifacts_retention_days)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(AdmissionOutcome::Admitted(row))
   }
 }
 

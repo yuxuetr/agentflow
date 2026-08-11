@@ -580,6 +580,14 @@ async fn list_runs_returns_recent_rows_for_tenant() {
     eprintln!("skipping list_runs_returns_recent_rows_for_tenant");
     return;
   };
+  // W4.2f: suffix with a UUID like every other test in this file that
+  // shares a persistent, non-truncated database — a fixed "tenant-a"
+  // name accumulates rows across repeated suite runs and eventually
+  // breaks this test's exact-count assertion below.
+  let suffix = Uuid::new_v4();
+  let tenant_a = format!("tenant-a-{suffix}");
+  let tenant_b = format!("tenant-b-{suffix}");
+
   let first_id = Uuid::new_v4();
   let second_id = Uuid::new_v4();
   state
@@ -590,7 +598,7 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       workflow: "first".into(),
       status: RunStatus::Queued,
       run_dir: None,
-      tenant_id: "tenant-a".into(),
+      tenant_id: tenant_a.clone(),
       events_retention_days: None,
       artifacts_retention_days: None,
     })
@@ -604,7 +612,7 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       workflow: "second".into(),
       status: RunStatus::Running,
       run_dir: None,
-      tenant_id: "tenant-a".into(),
+      tenant_id: tenant_a.clone(),
       events_retention_days: None,
       artifacts_retention_days: None,
     })
@@ -618,7 +626,7 @@ async fn list_runs_returns_recent_rows_for_tenant() {
       workflow: "other".into(),
       status: RunStatus::Queued,
       run_dir: None,
-      tenant_id: "tenant-b".into(),
+      tenant_id: tenant_b,
       events_retention_days: None,
       artifacts_retention_days: None,
     })
@@ -638,7 +646,7 @@ async fn list_runs_returns_recent_rows_for_tenant() {
         // change and was never updated; it only surfaced once R0.3 put
         // agentflow-server's DB-backed tests in front of a real postgres
         // for the first time instead of self-skipping.
-        .header("X-Agentflow-Tenant", "tenant-a")
+        .header("X-Agentflow-Tenant", &tenant_a)
         .body(Body::empty())
         .unwrap(),
     )
@@ -653,7 +661,7 @@ async fn list_runs_returns_recent_rows_for_tenant() {
   assert_eq!(runs.len(), 2);
   assert!(runs.iter().any(|run| run["id"] == first_id.to_string()));
   assert!(runs.iter().any(|run| run["id"] == second_id.to_string()));
-  assert!(runs.iter().all(|run| run["tenant_id"] == "tenant-a"));
+  assert!(runs.iter().all(|run| run["tenant_id"] == tenant_a));
 }
 
 // (P10.13.1: get_run_graph_returns_visualized_workflow_with_status
@@ -680,7 +688,7 @@ async fn submit_run_rejects_over_the_per_tenant_rate_limit() {
   state = state.with_security_defaults(defaults);
   let app = create_router(state);
 
-  let submit = |app: axum::Router, tenant: &'static str| {
+  let submit = |app: axum::Router, tenant: String| {
     let body = json!({"workflow": FIXED_DAG_WORKFLOW}).to_string();
     async move {
       app
@@ -689,7 +697,7 @@ async fn submit_run_rejects_over_the_per_tenant_rate_limit() {
             .method("POST")
             .uri("/v1/runs")
             .header(CONTENT_TYPE, "application/json")
-            .header("X-Agentflow-Tenant", tenant)
+            .header("X-Agentflow-Tenant", &tenant)
             .body(Body::from(body))
             .unwrap(),
         )
@@ -698,10 +706,19 @@ async fn submit_run_rejects_over_the_per_tenant_rate_limit() {
     }
   };
 
-  let first = submit(app.clone(), "tenant-rate-a").await;
+  // W4.2f: the rate-limit window now persists in Postgres
+  // (`tenant_admission_windows`) instead of resetting on every process
+  // launch, so a fixed tenant name would collide with this same test's
+  // own prior run against a non-truncated DB — suffix with a UUID like
+  // every other test in this file that shares a persistent database.
+  let suffix = Uuid::new_v4();
+  let tenant_a = format!("tenant-rate-a-{suffix}");
+  let tenant_b = format!("tenant-rate-b-{suffix}");
+
+  let first = submit(app.clone(), tenant_a.clone()).await;
   assert_eq!(first.status(), StatusCode::OK);
 
-  let second = submit(app.clone(), "tenant-rate-a").await;
+  let second = submit(app.clone(), tenant_a).await;
   assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
   let bytes = axum::body::to_bytes(second.into_body(), 4096)
     .await
@@ -710,6 +727,6 @@ async fn submit_run_rejects_over_the_per_tenant_rate_limit() {
   assert_eq!(parsed["error"]["code"], "too_many_requests");
 
   // A different tenant still has its own untouched quota.
-  let other_tenant = submit(app, "tenant-rate-b").await;
+  let other_tenant = submit(app, tenant_b).await;
   assert_eq!(other_tenant.status(), StatusCode::OK);
 }
