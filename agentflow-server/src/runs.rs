@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use agentflow_core::{
@@ -42,7 +42,9 @@ use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::ToolRegistry;
 
 use crate::events_stream::broker_finalize_grace;
-use agentflow_db::{EventRepo, NewEvent, NewRun, Repositories, Run, RunRepo, RunStatus};
+use agentflow_db::{
+  EventRepo, NewEvent, NewRun, NotifyListener, Repositories, Run, RunRepo, RunStatus,
+};
 
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
@@ -197,6 +199,11 @@ pub struct RunContext {
   pub run_max_concurrency: usize,
 }
 
+/// Postgres NOTIFY channel carrying cross-replica cancellation intents
+/// (W4.2d). Payload is just the run_id — `RunCancellationRegistry::cancel`
+/// needs nothing else, unlike the events broker's catch-up path.
+pub const RUN_CANCELLATION_NOTIFY_CHANNEL: &str = "agentflow_cancellations";
+
 #[derive(Clone, Default)]
 pub struct RunCancellationRegistry {
   inner: Arc<Mutex<HashMap<Uuid, RunCancellationEntry>>>,
@@ -262,6 +269,50 @@ impl RunCancellationRegistry {
     let mut entries = self.lock_inner();
     entries.remove(&run_id);
   }
+}
+
+/// W4.2d: cross-replica cancellation listener. Spawn one per gateway
+/// replica at boot (mirrors `serve::spawn_cleanup_loop`'s "log and keep
+/// going, never crash the gateway" shape, and
+/// `events_stream::spawn_run_events_listener`'s reconnect posture).
+/// Unlike that events listener, there's no DB catch-up fetch here — the
+/// NOTIFY payload (a bare run_id) is all `RunCancellationRegistry::cancel`
+/// needs, and it's already a safe no-op on every replica that doesn't
+/// hold the entry.
+pub fn spawn_run_cancellation_listener(
+  pool: sqlx::PgPool,
+  cancellation_registry: RunCancellationRegistry,
+) {
+  tokio::spawn(async move {
+    loop {
+      let mut listener =
+        match NotifyListener::connect(&pool, &[RUN_CANCELLATION_NOTIFY_CHANNEL]).await {
+          Ok(listener) => listener,
+          Err(err) => {
+            warn!(error = %err, "run cancellation listener: connect failed, retrying in 5s");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+          }
+        };
+      loop {
+        let (_, payload) = match listener.recv().await {
+          Ok(pair) => pair,
+          Err(err) => {
+            warn!(error = %err, "run cancellation listener: recv failed, reconnecting");
+            break;
+          }
+        };
+        match Uuid::parse_str(&payload) {
+          Ok(run_id) => {
+            cancellation_registry.cancel(run_id);
+          }
+          Err(err) => {
+            warn!(error = %err, payload = %payload, "run cancellation listener: malformed payload, skipping");
+          }
+        }
+      }
+    }
+  });
 }
 
 /// V3.4: per-tenant admission control for `POST /v1/runs`. Bounds how
@@ -1265,7 +1316,30 @@ pub async fn cancel_run(
     }));
   }
 
+  // W4.2d: local fast path (works today, whether or not this replica
+  // actually owns the run) plus a durable, cross-replica intent — see
+  // `RUN_CANCELLATION_NOTIFY_CHANNEL`'s doc comment and the
+  // `run_cancellation_intents` migration for the full mechanism. Both
+  // are best-effort on top of the DB status flip below, which is what
+  // actually makes the cancellation durable regardless of which (or
+  // whether any) replica's live executor task observes it promptly.
   state.cancellation_registry.cancel(id);
+  if let Err(err) = state
+    .repos
+    .runs
+    .record_cancellation_intent(id, &run.tenant_id)
+    .await
+  {
+    warn!(run_id = %id, error = %err, "cancel_run: failed to record cancellation intent");
+  } else if let Err(err) = agentflow_db::notify(
+    &state.repos.runs.pool,
+    RUN_CANCELLATION_NOTIFY_CHANNEL,
+    &id.to_string(),
+  )
+  .await
+  {
+    warn!(run_id = %id, error = %err, "cancel_run: cross-replica NOTIFY failed");
+  }
   state
     .repos
     .runs

@@ -522,6 +522,11 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     state.repos.clone(),
     state.harness_broker.clone(),
   );
+  // W4.2d: cross-replica cancellation listener — same posture.
+  crate::runs::spawn_run_cancellation_listener(
+    db.pool.clone(),
+    state.cancellation_registry.clone(),
+  );
 
   // T1.2: optional worker gRPC control-plane listener. Admission
   // misconfiguration (e.g. production profile with no credentials —

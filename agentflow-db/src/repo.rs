@@ -48,6 +48,16 @@ pub trait RunRepo: Send + Sync {
     limit: i64,
     offset: i64,
   ) -> Result<Vec<Run>, DbError>;
+
+  /// W4.2d: durably record a cancellation request for `run_id`. Idempotent
+  /// (`ON CONFLICT DO NOTHING` — the first request wins; later ones are
+  /// redundant, the row already says "cancel this"). Callers pair this
+  /// with a Postgres NOTIFY on `agentflow_cancellations` so every gateway
+  /// replica's listener can turn it into a local
+  /// `RunCancellationRegistry::cancel(run_id)` call — see
+  /// `run_cancellation_intents`'s migration comment for the full
+  /// cross-replica mechanism.
+  async fn record_cancellation_intent(&self, run_id: Uuid, tenant_id: &str) -> Result<(), DbError>;
 }
 
 #[async_trait]
@@ -316,6 +326,19 @@ impl RunRepo for PgRunRepo {
       .await?
     };
     Ok(rows)
+  }
+
+  async fn record_cancellation_intent(&self, run_id: Uuid, tenant_id: &str) -> Result<(), DbError> {
+    sqlx::query(
+      r#"INSERT INTO run_cancellation_intents (run_id, tenant_id)
+         VALUES ($1, $2)
+         ON CONFLICT (run_id) DO NOTHING"#,
+    )
+    .bind(run_id)
+    .bind(tenant_id)
+    .execute(&self.pool)
+    .await?;
+    Ok(())
   }
 }
 

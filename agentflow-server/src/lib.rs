@@ -75,10 +75,11 @@ pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
 pub use live_state_registry::LiveStateRegistry;
 pub use runs::{
   CancelRunResponse, CreateRunRequest, CreateRunResponse, FlowRunExecutor, ListRunsQuery,
-  ListRunsResponse, ResumePlanQuery, RetentionOverrides, RunAdmissionError, RunAdmissionGuard,
-  RunAdmissionRegistry, RunApprovalDecisionResponse, RunCancellationRegistry, RunContext,
-  RunExecutor, RunResponse, StubExecutor, cancel_run, decide_run_approval, default_executor,
-  get_run, get_run_resume_plan, list_run_approvals, list_runs, submit_run,
+  ListRunsResponse, RUN_CANCELLATION_NOTIFY_CHANNEL, ResumePlanQuery, RetentionOverrides,
+  RunAdmissionError, RunAdmissionGuard, RunAdmissionRegistry, RunApprovalDecisionResponse,
+  RunCancellationRegistry, RunContext, RunExecutor, RunResponse, StubExecutor, cancel_run,
+  decide_run_approval, default_executor, get_run, get_run_resume_plan, list_run_approvals,
+  list_runs, spawn_run_cancellation_listener, submit_run,
 };
 pub use scheduler::{
   AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,

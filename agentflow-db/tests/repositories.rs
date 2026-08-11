@@ -217,6 +217,43 @@ async fn run_repo_update_status_errors_when_missing() {
   );
 }
 
+/// W4.2d: `record_cancellation_intent` must be idempotent (`ON CONFLICT
+/// DO NOTHING`) — the first cancel request for a run wins, redundant
+/// later ones (e.g. a retried client request, or the same request
+/// landing on two replicas' NOTIFY fan-out) must not error.
+#[tokio::test]
+async fn run_repo_record_cancellation_intent_is_idempotent() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping run_repo_record_cancellation_intent_is_idempotent");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-cancel-intent-{}", Uuid::new_v4());
+  let run_id = seed_run(&repos, &tenant).await;
+
+  repos
+    .runs
+    .record_cancellation_intent(run_id, &tenant)
+    .await
+    .expect("first record succeeds");
+  repos
+    .runs
+    .record_cancellation_intent(run_id, &tenant)
+    .await
+    .expect("second record is a no-op, not an error");
+
+  let count: i64 =
+    sqlx::query_scalar("SELECT count(*) FROM run_cancellation_intents WHERE run_id = $1")
+      .bind(run_id)
+      .fetch_one(&db.pool)
+      .await
+      .expect("count query");
+  assert_eq!(
+    count, 1,
+    "duplicate cancellation intents must not create a second row"
+  );
+}
+
 #[tokio::test]
 async fn step_repo_list_for_run_returns_in_seq_order() {
   let Some(db) = fresh_db().await else {
