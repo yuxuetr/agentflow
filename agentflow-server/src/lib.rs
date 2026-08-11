@@ -26,6 +26,7 @@ use agentflow_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 pub mod auth;
 pub mod cleanup;
 pub mod diagnostics;
+pub mod distributed_run;
 pub mod error;
 pub mod events_filter;
 pub mod events_stream;
@@ -51,6 +52,7 @@ pub use cleanup::{
   CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
   cleanup_expired_local,
 };
+pub use distributed_run::validate_distributed_flow;
 pub use error::{ApiError, JsonReq};
 pub use events_stream::{
   EventBroker, EventSink, PersistingEventSink, RUN_EVENTS_NOTIFY_CHANNEL, StreamedEvent,
@@ -169,6 +171,15 @@ pub struct AppState {
   /// W4.3a: max concurrently-running nodes for a `/v1/runs` submission.
   /// See [`RUN_MAX_CONCURRENCY_ENV`] / [`DEFAULT_RUN_MAX_CONCURRENCY`].
   pub run_max_concurrency: usize,
+  /// W4.3b: handle to the worker gRPC control plane, when one is
+  /// configured (`ServeConfig.worker_grpc` / `serve::run`). `None` in
+  /// every deployment that hasn't opted into distributed execution —
+  /// `submit_run` rejects `execution_mode: "distributed"` with a clear
+  /// 400 rather than silently falling back to in-process when this is
+  /// unset. Cheap to clone (`Arc`-backed, same instance
+  /// `worker_grpc::serve_worker_grpc`'s listener task shares).
+  pub worker_control_plane:
+    Option<Arc<scheduler::AuthenticatedControlPlane<scheduler::InMemoryWorkerProtocol>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -184,6 +195,7 @@ impl std::fmt::Debug for AppState {
       .field("harness_executor", &"<dyn HarnessSessionExecutor>")
       .field("harness_broker", &self.harness_broker)
       .field("security", &self.security)
+      .field("worker_control_plane", &self.worker_control_plane.is_some())
       .finish()
   }
 }
@@ -209,6 +221,7 @@ impl AppState {
       security: SecurityProfile::default().defaults(),
       run_admission_registry: run_admission_registry_for(&SecurityProfile::default().defaults()),
       run_max_concurrency: DEFAULT_RUN_MAX_CONCURRENCY,
+      worker_control_plane: None,
     }
   }
 
@@ -261,6 +274,23 @@ impl AppState {
   /// `FlowExecutionConfig::concurrent`'s own clamp).
   pub fn with_run_max_concurrency(mut self, max_concurrency: usize) -> Self {
     self.run_max_concurrency = max_concurrency.max(1);
+    self
+  }
+
+  /// W4.3b: attach the worker gRPC control plane so `submit_run` can
+  /// accept `execution_mode: "distributed"`. `None` keeps distributed
+  /// submission disabled, matching [`Self::with_auth`]'s
+  /// `Option`-accepting shape. `serve::run` passes the same `Arc` it
+  /// hands to the spawned `serve_worker_grpc` listener task — the HTTP
+  /// route layer and the gRPC listener share one control plane instance,
+  /// not two independent ones.
+  pub fn with_worker_control_plane(
+    mut self,
+    control_plane: Option<
+      Arc<scheduler::AuthenticatedControlPlane<scheduler::InMemoryWorkerProtocol>>,
+    >,
+  ) -> Self {
+    self.worker_control_plane = control_plane;
     self
   }
 }
@@ -790,5 +820,42 @@ mod run_max_concurrency_tests {
     unsafe {
       std::env::remove_var(RUN_MAX_CONCURRENCY_ENV);
     }
+  }
+}
+
+#[cfg(test)]
+mod worker_control_plane_tests {
+  use super::*;
+  use crate::scheduler::{AuthenticatedControlPlane, InMemoryWorkerProtocol, WorkerControlPlane};
+
+  /// W4.3b: `AppState::new` defaults to no distributed execution support;
+  /// `with_worker_control_plane` is the only way to opt in, mirroring
+  /// `with_auth`'s `Option`-accepting shape. `submit_run` relies on this
+  /// being `None` by default to reject `execution_mode: "distributed"`
+  /// cleanly rather than silently falling back to in-process.
+  #[tokio::test]
+  async fn defaults_to_none_and_attaches_when_set() {
+    let plane = std::sync::Arc::new(AuthenticatedControlPlane::new(
+      WorkerControlPlane::new(InMemoryWorkerProtocol::new()),
+      crate::scheduler::WorkerAdmissionPolicy::default(),
+    ));
+
+    // No live Postgres needed — `connect_lazy` builds the pool
+    // placeholder `AppState::new` expects, matching the same pattern
+    // `agentflow-server/tests/metrics_endpoint.rs` already uses.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+      .connect_lazy("postgres://postgres:postgres@localhost:5432/agentflow_test")
+      .expect("lazy pg");
+    let bare = AppState::new(agentflow_db::Database {
+      pool,
+      read_pool: None,
+    });
+    assert!(bare.worker_control_plane.is_none());
+
+    let attached = bare.with_worker_control_plane(Some(plane));
+    assert!(attached.worker_control_plane.is_some());
+
+    let detached = attached.with_worker_control_plane(None);
+    assert!(detached.worker_control_plane.is_none());
   }
 }

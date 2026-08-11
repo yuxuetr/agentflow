@@ -484,11 +484,27 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     );
   }
 
+  // W4.3b: build the worker gRPC control plane (if configured) before
+  // `AppState`/the router, so `submit_run` can reach the exact same
+  // instance the listener spawned below serves over the network —
+  // previously this was constructed only inside the listener-spawn block
+  // further down, after the router had already been built from a
+  // `worker_control_plane: None` state, so the HTTP route layer could
+  // never see it even when the listener itself was running.
+  let worker_control_plane = config
+    .worker_grpc
+    .clone()
+    .map(|worker_grpc_cfg| {
+      crate::worker_grpc::build_worker_control_plane(&worker_grpc_cfg, config.security_profile)
+    })
+    .transpose()?;
+
   let state = AppState::new(db.clone())
     .with_security_defaults(security_defaults)
     .with_run_max_concurrency(run_max_concurrency)
     .with_auth(auth)
-    .with_skills(SkillCatalog::from_env());
+    .with_skills(SkillCatalog::from_env())
+    .with_worker_control_plane(worker_control_plane.clone());
   // Swap the default `StubHarnessExecutor` for the LLM-backed
   // `LiveHarnessExecutor` (P-H.5 slice 2). Tests keep the stub by
   // building `AppState::new(db)` without this hop, so unit tests don't
@@ -535,15 +551,19 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     state.approval_registry.clone(),
   );
 
-  // T1.2: optional worker gRPC control-plane listener. Admission
-  // misconfiguration (e.g. production profile with no credentials —
-  // T0.2's fail-closed check) fails startup here, synchronously, same
-  // as a bad `--database-url`. TLS file / bind errors surface only as
-  // an error log from the spawned task — same best-effort precedent as
-  // `spawn_cleanup_loop` above, not a reason to refuse the whole gateway.
-  if let Some(worker_grpc_cfg) = config.worker_grpc.clone() {
-    let plane =
-      crate::worker_grpc::build_worker_control_plane(&worker_grpc_cfg, config.security_profile)?;
+  // T1.2 / W4.3b: optional worker gRPC control-plane listener, serving
+  // the exact `worker_control_plane` instance already attached to
+  // `state` above (real external `agentflow-worker` processes reach it
+  // over gRPC; `submit_run`'s distributed path reaches it in-process via
+  // `AppState::worker_control_plane`). Admission misconfiguration (e.g.
+  // production profile with no credentials — T0.2's fail-closed check)
+  // fails startup here, synchronously, same as a bad `--database-url`.
+  // TLS file / bind errors surface only as an error log from the spawned
+  // task — same best-effort precedent as `spawn_cleanup_loop` above, not
+  // a reason to refuse the whole gateway.
+  if let (Some(worker_grpc_cfg), Some(plane)) =
+    (config.worker_grpc.clone(), worker_control_plane.clone())
+  {
     info!(
       "Starting worker gRPC control plane on {}",
       worker_grpc_cfg.bind
