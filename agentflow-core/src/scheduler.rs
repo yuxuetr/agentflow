@@ -1,3 +1,4 @@
+use crate::resource_limits::ResourceLimits;
 use crate::retry::RetryPolicy;
 use std::{
   path::PathBuf,
@@ -42,6 +43,18 @@ pub struct FlowExecutionConfig {
   /// `agentflow-config`'s per-node YAML `max_retries`, which retries
   /// silently from the executor's point of view.
   pub node_retry_policy: Option<RetryPolicy>,
+  /// W5.3: optional Flow-wide advisory state-pool size limit. `None`
+  /// (default) is unchanged pre-W5.3 behavior: no limit checked. When
+  /// set, every `notify_state_size` call compares the current estimated
+  /// state pool size (already computed for the passive
+  /// `StateSizeObserver`) against [`ResourceLimits::exceeds_state_limit`]
+  /// and emits `WorkflowEvent::ResourceWarning` when exceeded. This is
+  /// advisory-only — no eviction, no rejection, nothing is ever removed
+  /// from the state pool. A prior wire-in attempt (`state_monitor.rs`'s
+  /// LRU eviction, removed in W5.3) was unsafe: a node's output can be a
+  /// real dependency for any later node via `input_mapping` regardless of
+  /// how recently it was "accessed", unlike a cache entry.
+  pub resource_limits: Option<ResourceLimits>,
 }
 
 impl FlowExecutionConfig {
@@ -59,6 +72,7 @@ impl FlowExecutionConfig {
       cancellation_token: None,
       node_timeout_ms: None,
       node_retry_policy: None,
+      resource_limits: None,
     }
   }
 
@@ -83,6 +97,12 @@ impl FlowExecutionConfig {
     self.node_retry_policy = Some(policy);
     self
   }
+
+  /// W5.3: opt into an advisory Flow-wide state-pool size limit.
+  pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+    self.resource_limits = Some(limits);
+    self
+  }
 }
 
 impl Default for FlowExecutionConfig {
@@ -96,6 +116,7 @@ impl Default for FlowExecutionConfig {
       cancellation_token: None,
       node_timeout_ms: None,
       node_retry_policy: None,
+      resource_limits: None,
     }
   }
 }

@@ -6,6 +6,7 @@ use crate::{
   error::AgentFlowError,
   events::WorkflowEvent,
   expr,
+  resource_limits::ResourceLimits,
   resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
   retry_executor::execute_with_retry_and_hook,
   scheduler::{FlowExecutionConfig, FlowExecutionMode},
@@ -89,9 +90,31 @@ impl<'f> FlowExecutor<'f> {
     self.topological_sort()
   }
 
-  fn notify_state_size(&self, state_pool: &HashMap<String, AsyncNodeResult>) {
+  /// W5.3: extends the pre-existing passive `StateSizeObserver` telemetry
+  /// with an advisory `WorkflowEvent::ResourceWarning` when the caller
+  /// opted into `FlowExecutionConfig::resource_limits`. Purely additive —
+  /// the byte count was already computed for the observer; this just adds
+  /// a comparison and an event emission on top, no new state, no eviction.
+  fn notify_state_size(
+    &self,
+    workflow_id: &str,
+    state_pool: &HashMap<String, AsyncNodeResult>,
+    resource_limits: Option<&ResourceLimits>,
+  ) {
+    let bytes = estimated_state_pool_bytes(state_pool);
     if let Some(observer) = self.flow.state_size_observer() {
-      observer.observe(estimated_state_pool_bytes(state_pool));
+      observer.observe(bytes);
+    }
+    if let Some(limits) = resource_limits
+      && limits.exceeds_state_limit(bytes as usize)
+    {
+      self.emit_event(WorkflowEvent::ResourceWarning {
+        workflow_id: workflow_id.to_string(),
+        resource_type: "state_pool_bytes".to_string(),
+        usage: bytes as f64 / limits.max_state_size as f64,
+        limit: limits.max_state_size as f64,
+        timestamp: Instant::now(),
+      });
     }
   }
 
@@ -478,7 +501,11 @@ impl<'f> FlowExecutor<'f> {
       let is_skip = matches!(result, Err(AgentFlowError::NodeSkipped));
 
       state_pool.insert(node_id.to_string(), result);
-      self.notify_state_size(&state_pool);
+      self.notify_state_size(
+        &run_id,
+        &state_pool,
+        execution_config.resource_limits.as_ref(),
+      );
 
       // Save checkpoint if enabled
       if self.flow.is_checkpoint_enabled()
@@ -882,7 +909,7 @@ impl<'f> FlowExecutor<'f> {
             self.persist_step_result(&run_dir, &node_id, &result)?;
             self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
             state_pool.insert(node_id, result);
-            self.notify_state_size(&state_pool);
+            self.notify_state_size(&run_id, &state_pool, config.resource_limits.as_ref());
             if config.fail_fast {
               fail_fast_triggered = true;
               break;
@@ -902,7 +929,7 @@ impl<'f> FlowExecutor<'f> {
             timestamp: Instant::now(),
           });
           state_pool.insert(node_id, result);
-          self.notify_state_size(&state_pool);
+          self.notify_state_size(&run_id, &state_pool, config.resource_limits.as_ref());
           if !config.continue_on_skip {
             fail_fast_triggered = true;
             break;
@@ -919,7 +946,7 @@ impl<'f> FlowExecutor<'f> {
                 self.persist_step_result(&run_dir, &node_id, &result)?;
                 self.record_node_result_events(&run_id, &node_id, Instant::now(), &result);
                 state_pool.insert(node_id, result);
-                self.notify_state_size(&state_pool);
+                self.notify_state_size(&run_id, &state_pool, config.resource_limits.as_ref());
                 if config.fail_fast {
                   fail_fast_triggered = true;
                   break;
@@ -994,7 +1021,7 @@ impl<'f> FlowExecutor<'f> {
         }
 
         state_pool.insert(node_id.clone(), result);
-        self.notify_state_size(&state_pool);
+        self.notify_state_size(&run_id, &state_pool, config.resource_limits.as_ref());
 
         if self.flow.is_checkpoint_enabled()
           && state_pool

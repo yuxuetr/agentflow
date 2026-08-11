@@ -7,8 +7,11 @@
 use agentflow_core::FlowExt;
 use agentflow_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+  events::{EventListener, WorkflowEvent},
   flow::{Flow, GraphNode, NodeType},
-  scheduler::{FlowExecutionConfig, FlowExecutionMode},
+  resource_limits::ResourceLimits,
+  scheduler::FlowExecutionConfig,
+  scheduler::FlowExecutionMode,
   state_size::StateSizeObserver,
   value::FlowValue,
 };
@@ -181,4 +184,109 @@ async fn flow_without_observer_runs_unchanged() {
     .await
     .expect("default flow runs without observer");
   assert!(state.contains_key("a"));
+}
+
+#[derive(Default)]
+struct ResourceWarningListener {
+  warnings: Mutex<Vec<(String, f64, f64)>>,
+}
+
+impl ResourceWarningListener {
+  fn snapshot(&self) -> Vec<(String, f64, f64)> {
+    self.warnings.lock().unwrap().clone()
+  }
+}
+
+impl EventListener for ResourceWarningListener {
+  fn on_event(&self, event: &WorkflowEvent) {
+    if let WorkflowEvent::ResourceWarning {
+      resource_type,
+      usage,
+      limit,
+      ..
+    } = event
+    {
+      self
+        .warnings
+        .lock()
+        .unwrap()
+        .push((resource_type.clone(), *usage, *limit));
+    }
+  }
+}
+
+/// W5.3: `FlowExecutionConfig::resource_limits` is advisory-only — it must
+/// emit `WorkflowEvent::ResourceWarning` once the estimated state pool
+/// size crosses the configured `max_state_size`, without evicting or
+/// rejecting anything (the run still succeeds).
+#[tokio::test]
+async fn resource_limits_emits_warning_event_when_state_pool_exceeds_configured_max() {
+  use_writable_home();
+  let nodes = vec![GraphNode {
+    id: "a".to_string(),
+    node_type: NodeType::Standard(Arc::new(PayloadNode {
+      output: "a payload long enough to blow past a tiny byte limit".to_string(),
+    })),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let listener = Arc::new(ResourceWarningListener::default());
+  let flow = Flow::new(nodes).with_event_listener(listener.clone());
+  let result = flow
+    .execute_from_inputs_with_config(
+      HashMap::new(),
+      FlowExecutionConfig {
+        resource_limits: Some(ResourceLimits::builder().max_state_size(1).build()),
+        ..Default::default()
+      },
+    )
+    .await;
+
+  assert!(
+    result.is_ok(),
+    "advisory resource_limits must never fail the run: {result:?}"
+  );
+
+  let warnings = listener.snapshot();
+  assert_eq!(
+    warnings.len(),
+    1,
+    "expected exactly one ResourceWarning for the single node, got: {warnings:?}"
+  );
+  let (resource_type, usage, limit) = &warnings[0];
+  assert_eq!(resource_type, "state_pool_bytes");
+  assert!(*usage > 1.0, "usage ratio should exceed 1.0 (over limit)");
+  assert_eq!(*limit, 1.0);
+}
+
+/// W5.3 regression: `resource_limits: None` (the default) must never emit
+/// `ResourceWarning`, even for a state pool that would exceed any
+/// realistic limit — this is the pre-W5.3 behavior and must stay
+/// unchanged for every existing caller that doesn't opt in.
+#[tokio::test]
+async fn resource_limits_none_never_emits_warning_event() {
+  use_writable_home();
+  let nodes = vec![GraphNode {
+    id: "a".to_string(),
+    node_type: NodeType::Standard(Arc::new(PayloadNode {
+      output: "some payload".to_string(),
+    })),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let listener = Arc::new(ResourceWarningListener::default());
+  let flow = Flow::new(nodes).with_event_listener(listener.clone());
+  let result = flow.run().await;
+  assert!(result.is_ok());
+
+  assert!(
+    listener.snapshot().is_empty(),
+    "default FlowExecutionConfig (resource_limits: None) must never emit ResourceWarning"
+  );
 }
