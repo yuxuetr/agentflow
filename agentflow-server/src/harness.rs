@@ -38,12 +38,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use agentflow_db::{
   DbError, HarnessEventRepo, HarnessSession, HarnessSessionRepo, HarnessSessionStatus,
-  NewHarnessSession, NewHarnessSessionEvent, Repositories,
+  NewHarnessSession, NewHarnessSessionEvent, NotifyListener, Repositories,
 };
 
 use crate::AppState;
@@ -55,6 +55,10 @@ use crate::tenant::TenantId;
 /// they fall this far behind; the SSE handler logs a warning and lets the
 /// client reconnect with `?after_seq=` to refill from the DB.
 const SESSION_CHANNEL_CAPACITY: usize = 256;
+
+/// Postgres NOTIFY channel carrying cross-replica harness-event
+/// wake-ups (W4.2c). Mirrors `events_stream::RUN_EVENTS_NOTIFY_CHANNEL`.
+pub const HARNESS_EVENTS_NOTIFY_CHANNEL: &str = "agentflow_harness_events";
 
 /// Default profile assigned when the request body omits one. Matches the
 /// CLI default so the surface is consistent across entry points.
@@ -90,13 +94,31 @@ impl From<agentflow_db::HarnessSessionEvent> for StreamedHarnessEvent {
   }
 }
 
-/// Process-local broker over a sharded broadcast channel keyed by
-/// `session_id`. Same pattern as the workflow `EventBroker`; the two are
-/// intentionally distinct types so a slow workflow subscriber can't lag a
-/// harness session and vice versa.
+/// One session's local broadcast channel plus the highest `seq` this
+/// replica has already forwarded into it. Mirrors
+/// `events_stream::RunChannel` — see that type's doc comment for why.
+struct SessionChannel {
+  sender: broadcast::Sender<StreamedHarnessEvent>,
+  last_forwarded_seq: i64,
+}
+
+impl SessionChannel {
+  fn new() -> Self {
+    Self {
+      sender: broadcast::channel(SESSION_CHANNEL_CAPACITY).0,
+      last_forwarded_seq: -1,
+    }
+  }
+}
+
+/// Broker over a sharded broadcast channel keyed by `session_id`. Same
+/// pattern as the workflow `EventBroker` (including W4.2c's
+/// NOTIFY-driven cross-replica catch-up); the two are intentionally
+/// distinct types so a slow workflow subscriber can't lag a harness
+/// session and vice versa.
 #[derive(Clone, Default)]
 pub struct HarnessEventBroker {
-  inner: Arc<Mutex<HashMap<Uuid, broadcast::Sender<StreamedHarnessEvent>>>>,
+  inner: Arc<Mutex<HashMap<Uuid, SessionChannel>>>,
 }
 
 impl std::fmt::Debug for HarnessEventBroker {
@@ -118,9 +140,7 @@ impl HarnessEventBroker {
   /// mutated one channel-entry at a time, so the inner state is sound to
   /// keep using after a poisoning panic. Mirrors `EventBroker::lock_inner`
   /// in `events_stream.rs`. (Q5.1)
-  fn lock_inner(
-    &self,
-  ) -> std::sync::MutexGuard<'_, HashMap<Uuid, broadcast::Sender<StreamedHarnessEvent>>> {
+  fn lock_inner(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, SessionChannel>> {
     match self.inner.lock() {
       Ok(g) => g,
       Err(poisoned) => poisoned.into_inner(),
@@ -134,7 +154,8 @@ impl HarnessEventBroker {
     let mut map = self.lock_inner();
     map
       .entry(session_id)
-      .or_insert_with(|| broadcast::channel(SESSION_CHANNEL_CAPACITY).0)
+      .or_insert_with(SessionChannel::new)
+      .sender
       .subscribe()
   }
 
@@ -142,10 +163,11 @@ impl HarnessEventBroker {
   /// below) when you also want a DB row.
   pub fn publish(&self, event: StreamedHarnessEvent) {
     let mut map = self.lock_inner();
-    let sender = map
+    let channel = map
       .entry(event.session_id)
-      .or_insert_with(|| broadcast::channel(SESSION_CHANNEL_CAPACITY).0);
-    let _ = sender.send(event);
+      .or_insert_with(SessionChannel::new);
+    channel.last_forwarded_seq = channel.last_forwarded_seq.max(event.seq);
+    let _ = channel.sender.send(event);
   }
 
   /// Drop the channel for a finished session so it doesn't leak. Safe to
@@ -181,20 +203,164 @@ impl HarnessEventBroker {
     let map = self.lock_inner();
     map
       .get(&session_id)
-      .map(|sender| sender.receiver_count())
+      .map(|channel| channel.sender.receiver_count())
       .unwrap_or(0)
+  }
+
+  /// W4.2c: mirrors `EventBroker::catchup_baseline` — see that method's
+  /// doc comment.
+  pub fn catchup_baseline(&self, session_id: Uuid) -> Option<i64> {
+    let map = self.lock_inner();
+    let channel = map.get(&session_id)?;
+    if channel.sender.receiver_count() == 0 {
+      return None;
+    }
+    Some(channel.last_forwarded_seq)
   }
 }
 
-/// Persist + publish a harness event in one shot.
+/// Persist + publish a harness event in one shot. Mirrors
+/// `events_stream::publish_through` — see that function's doc comment
+/// for the NOTIFY/best-effort contract.
 pub async fn publish_through(
   repos: &Repositories,
   broker: &HarnessEventBroker,
   event: NewHarnessSessionEvent,
 ) -> Result<(), DbError> {
   let stored = repos.harness_events.append(event).await?;
+  let notify_payload = HarnessEventNotifyPayload {
+    session_id: stored.session_id,
+    seq: stored.seq,
+  };
   broker.publish(StreamedHarnessEvent::from(stored));
+  if let Ok(payload) = serde_json::to_string(&notify_payload)
+    && let Err(err) = agentflow_db::notify(
+      &repos.harness_events.pool,
+      HARNESS_EVENTS_NOTIFY_CHANNEL,
+      &payload,
+    )
+    .await
+  {
+    warn!(
+      session_id = %notify_payload.session_id,
+      error = %err,
+      "harness publish_through: cross-replica NOTIFY failed (local delivery already succeeded)"
+    );
+  }
   Ok(())
+}
+
+/// Payload carried on [`HARNESS_EVENTS_NOTIFY_CHANNEL`]. Mirrors
+/// `events_stream::RunEventNotifyPayload`, minus `tenant_id` —
+/// `harness_session_events` rows don't carry one directly (unlike
+/// `events`), so the listener below looks it up via
+/// `HarnessSessionRepo::get` before paging, same as
+/// `HarnessEventRepo::list_after`'s own callers already do.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HarnessEventNotifyPayload {
+  session_id: Uuid,
+  seq: i64,
+}
+
+/// W4.2c: cross-replica catch-up loop for [`HarnessEventBroker`]. Mirrors
+/// `events_stream::spawn_run_events_listener` — see that function's doc
+/// comment for the full mechanism. The one structural difference:
+/// `HarnessEventRepo::list_after` requires a `tenant_id`, which isn't in
+/// the NOTIFY payload (kept small on purpose) — this listener looks the
+/// session's tenant up once via `HarnessSessionRepo::get` before paging,
+/// tolerating a session that's since been deleted by skipping silently.
+pub fn spawn_harness_events_listener(
+  pool: sqlx::PgPool,
+  repos: Repositories,
+  broker: HarnessEventBroker,
+) {
+  tokio::spawn(async move {
+    loop {
+      let mut listener =
+        match NotifyListener::connect(&pool, &[HARNESS_EVENTS_NOTIFY_CHANNEL]).await {
+          Ok(listener) => listener,
+          Err(err) => {
+            warn!(error = %err, "harness events listener: connect failed, retrying in 5s");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+          }
+        };
+      loop {
+        let (_, payload) = match listener.recv().await {
+          Ok(pair) => pair,
+          Err(err) => {
+            warn!(error = %err, "harness events listener: recv failed, reconnecting");
+            break;
+          }
+        };
+        let notify_payload: HarnessEventNotifyPayload = match serde_json::from_str(&payload) {
+          Ok(parsed) => parsed,
+          Err(err) => {
+            warn!(error = %err, "harness events listener: malformed notify payload, skipping");
+            continue;
+          }
+        };
+        let Some(baseline) = broker.catchup_baseline(notify_payload.session_id) else {
+          continue;
+        };
+        if notify_payload.seq <= baseline {
+          continue;
+        }
+        let tenant_id = match repos.harness_sessions.get(notify_payload.session_id).await {
+          Ok(Some(session)) => session.tenant_id,
+          Ok(None) => continue,
+          Err(err) => {
+            warn!(
+              session_id = %notify_payload.session_id,
+              error = %err,
+              "harness events listener: session lookup failed"
+            );
+            continue;
+          }
+        };
+        if let Err(err) = catch_up_harness_events(
+          &repos,
+          &broker,
+          &tenant_id,
+          notify_payload.session_id,
+          baseline,
+        )
+        .await
+        {
+          warn!(
+            session_id = %notify_payload.session_id,
+            error = %err,
+            "harness events listener: catch-up fetch failed"
+          );
+        }
+      }
+    }
+  });
+}
+
+/// Pages `HarnessEventRepo::list_after` starting from `after_seq` and
+/// republishes every returned row into `broker`'s local channel for
+/// `session_id`.
+async fn catch_up_harness_events(
+  repos: &Repositories,
+  broker: &HarnessEventBroker,
+  tenant_id: &str,
+  session_id: Uuid,
+  mut after_seq: i64,
+) -> Result<(), DbError> {
+  loop {
+    let page = repos
+      .harness_events
+      .list_after(tenant_id, session_id, after_seq, 200)
+      .await?;
+    if page.is_empty() {
+      return Ok(());
+    }
+    after_seq = page.last().map(|e| e.seq).unwrap_or(after_seq);
+    for event in page {
+      broker.publish(StreamedHarnessEvent::from(event));
+    }
+  }
 }
 
 /// JSON body for `POST /v1/harness/sessions`.
@@ -1293,5 +1459,57 @@ mod tests {
     drop(rx_two);
     broker.publish(sample_event(session_id, 1));
     assert_eq!(broker.receiver_count(session_id), 0);
+  }
+
+  /// W4.2c: `catchup_baseline` is the gate `spawn_harness_events_listener`
+  /// uses to decide whether a NOTIFY is worth a DB round-trip. No local
+  /// subscriber (channel never created) → `None`. A local publish must
+  /// advance the baseline so a same-origin NOTIFY resolves to a no-op
+  /// catch-up (an empty `list_after` page) rather than redundant work.
+  #[tokio::test]
+  async fn catchup_baseline_reflects_local_subscriber_and_publish_state() {
+    let broker = HarnessEventBroker::new();
+    let session_id = Uuid::new_v4();
+    assert_eq!(
+      broker.catchup_baseline(session_id),
+      None,
+      "no channel at all yet — no local subscriber to catch up"
+    );
+
+    let _rx = broker.subscribe(session_id);
+    assert_eq!(
+      broker.catchup_baseline(session_id),
+      Some(-1),
+      "fresh channel with a subscriber starts at -1, matching after_seq's own default"
+    );
+
+    broker.publish(sample_event(session_id, 5));
+    assert_eq!(
+      broker.catchup_baseline(session_id),
+      Some(5),
+      "local publish must advance the baseline"
+    );
+  }
+
+  /// A channel that exists (e.g. the run hasn't finished yet) but has no
+  /// *active* subscriber right now must still report `None` — the
+  /// listener should skip the DB round-trip even though the map entry
+  /// is present, matching `EventBroker::catchup_baseline`'s contract.
+  #[tokio::test]
+  async fn catchup_baseline_is_none_after_last_subscriber_disconnects() {
+    let broker = HarnessEventBroker::new();
+    let session_id = Uuid::new_v4();
+    let rx = broker.subscribe(session_id);
+    assert!(broker.catchup_baseline(session_id).is_some());
+    drop(rx);
+    // `tokio::broadcast` updates receiver_count lazily on send/recv;
+    // force an interaction, mirroring `broker_receiver_count_tracks_
+    // subscriber_drops` above.
+    broker.publish(sample_event(session_id, 0));
+    assert_eq!(
+      broker.catchup_baseline(session_id),
+      None,
+      "channel entry survives (run not finalised) but has zero active receivers"
+    );
   }
 }

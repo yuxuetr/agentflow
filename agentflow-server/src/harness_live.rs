@@ -95,6 +95,27 @@ impl HarnessEventSink for ServerHarnessEventSink {
     };
     match self.repos.harness_events.append(new_event).await {
       Ok(stored) => {
+        // W4.2c: best-effort cross-replica wake-up, same contract as
+        // `harness::publish_through` — never fail this write over a
+        // NOTIFY hiccup, local delivery (below) already succeeded.
+        let notify_payload = serde_json::json!({
+          "session_id": stored.session_id,
+          "seq": stored.seq,
+        });
+        if let Ok(payload) = serde_json::to_string(&notify_payload)
+          && let Err(err) = agentflow_db::notify(
+            &self.repos.harness_events.pool,
+            crate::harness::HARNESS_EVENTS_NOTIFY_CHANNEL,
+            &payload,
+          )
+          .await
+        {
+          warn!(
+            session_id = %stored.session_id,
+            error = %err,
+            "harness event sink: cross-replica NOTIFY failed (local delivery already succeeded)"
+          );
+        }
         self.broker.publish(StreamedHarnessEvent::from(stored));
         Ok(())
       }

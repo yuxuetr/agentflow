@@ -53,19 +53,19 @@ pub use cleanup::{
 };
 pub use error::{ApiError, JsonReq};
 pub use events_stream::{
-  EventBroker, EventSink, PersistingEventSink, StreamedEvent, WorkflowEventListener, list_events,
-  publish_through, stream_events,
+  EventBroker, EventSink, PersistingEventSink, RUN_EVENTS_NOTIFY_CHANNEL, StreamedEvent,
+  WorkflowEventListener, list_events, publish_through, spawn_run_events_listener, stream_events,
 };
 pub use harness::{
   AnswerInterruptRequest, AnswerInterruptResponse, CancelHarnessSessionResponse,
-  CreateHarnessSessionRequest, CreateHarnessSessionResponse, HarnessEventBroker,
-  HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor, HarnessSessionResponse,
-  ListHarnessSessionsQuery, ListHarnessSessionsResponse, PendingInterrupt,
+  CreateHarnessSessionRequest, CreateHarnessSessionResponse, HARNESS_EVENTS_NOTIFY_CHANNEL,
+  HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor,
+  HarnessSessionResponse, ListHarnessSessionsQuery, ListHarnessSessionsResponse, PendingInterrupt,
   PendingInterruptResponse, ResumeHarnessSessionRequest, ResumeHarnessSessionResponse,
   StreamedHarnessEvent, StubHarnessExecutor, answer_interrupt, cancel_harness_session,
   default_harness_executor, get_harness_session, get_pending_interrupt, list_harness_events,
   list_harness_sessions, post_harness_session_action, resume_harness_session,
-  stream_harness_events, submit_harness_session,
+  spawn_harness_events_listener, stream_harness_events, submit_harness_session,
 };
 pub use harness_approval::{
   ApprovalDecisionRequest, ApprovalDecisionResponse, ApprovalResolveError, PendingApprovalRegistry,

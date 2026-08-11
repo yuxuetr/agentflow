@@ -508,6 +508,21 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     config.trace_dir.clone(),
   );
 
+  // W4.2c: cross-replica SSE catch-up listeners. Same "log and keep
+  // going, never crash the gateway" posture as `spawn_cleanup_loop`
+  // above — a dead listener degrades cross-replica delivery for this
+  // replica's subscribers, it doesn't take the gateway down.
+  crate::events_stream::spawn_run_events_listener(
+    db.pool.clone(),
+    state.repos.clone(),
+    state.event_broker.clone(),
+  );
+  crate::harness::spawn_harness_events_listener(
+    db.pool.clone(),
+    state.repos.clone(),
+    state.harness_broker.clone(),
+  );
+
   // T1.2: optional worker gRPC control-plane listener. Admission
   // misconfiguration (e.g. production profile with no credentials —
   // T0.2's fail-closed check) fails startup here, synchronously, same

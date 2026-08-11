@@ -1,4 +1,4 @@
-//! In-process broker that forwards persisted run events to SSE subscribers.
+//! Broker that forwards persisted run events to SSE subscribers.
 //!
 //! `GET /v1/runs/{id}/events` first replays everything already in the
 //! `events` table for that run, then keeps the connection open and pushes
@@ -6,9 +6,15 @@
 //! the executor: it writes through the broker, which both persists to the
 //! DB and forwards to live subscribers.
 //!
-//! The broker is intentionally process-local. A multi-replica deployment
-//! would replace it with Redis Pub/Sub or NATS — that's an N9 / N10
-//! follow-up and lives behind the same trait surface.
+//! W4.2c: the broker's live fan-out is still process-local (a
+//! `tokio::sync::broadcast` channel per run_id), but writes now also fire
+//! a Postgres `NOTIFY` (`agentflow_db::notify`) so every other gateway
+//! replica's [`spawn_run_events_listener`] task can catch its own local
+//! subscribers up — see that function's doc comment for the mechanism.
+//! DB is still the sole source of truth; both the local broadcast and the
+//! cross-replica NOTIFY are best-effort delivery paths on top of it, and
+//! `?after_seq=` reconnect (already the client-facing contract) is what
+//! makes that safe.
 
 use async_trait::async_trait;
 use axum::{
@@ -24,13 +30,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
+use tracing::warn;
 use uuid::Uuid;
 
-use agentflow_db::{DbError, EventRepo, NewEvent, Repositories, RunRepo};
+use agentflow_db::{DbError, EventRepo, NewEvent, NotifyListener, Repositories, RunRepo};
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::tenant::TenantId;
+
+/// Postgres NOTIFY channel carrying cross-replica run-event wake-ups.
+pub const RUN_EVENTS_NOTIFY_CHANNEL: &str = "agentflow_run_events";
 
 /// Channel capacity per run. Slow subscribers drop oldest events when
 /// they fall this far behind; the SSE handler logs a warning and lets the
@@ -60,12 +70,37 @@ impl From<agentflow_db::Event> for StreamedEvent {
   }
 }
 
-/// Process-local broker over a sharded broadcast channel keyed by `run_id`.
+/// One run's local broadcast channel plus the highest `seq` this
+/// replica has already forwarded into it — from either a direct local
+/// `publish()` or a cross-replica NOTIFY catch-up fetch (`W4.2c`). Lets
+/// [`EventBroker::catchup_baseline`] tell a NOTIFY listener exactly
+/// where to resume from, and lets it skip the DB round-trip entirely
+/// when the notified seq is already covered.
+struct RunChannel {
+  sender: broadcast::Sender<StreamedEvent>,
+  last_forwarded_seq: i64,
+}
+
+impl RunChannel {
+  fn new() -> Self {
+    Self {
+      sender: broadcast::channel(RUN_CHANNEL_CAPACITY).0,
+      // Mirrors `EventsQuery::after_seq`'s own default — "nothing seen
+      // yet" for a brand-new channel.
+      last_forwarded_seq: -1,
+    }
+  }
+}
+
+/// Broker over a sharded broadcast channel keyed by `run_id`. The live
+/// fan-out itself is process-local; W4.2c's NOTIFY-driven catch-up (see
+/// the module doc comment) is what makes a subscriber on one replica
+/// see events published on another.
 ///
 /// Cloning is cheap — `Arc<Mutex<...>>` inside.
 #[derive(Clone, Default)]
 pub struct EventBroker {
-  inner: Arc<Mutex<HashMap<Uuid, broadcast::Sender<StreamedEvent>>>>,
+  inner: Arc<Mutex<HashMap<Uuid, RunChannel>>>,
 }
 
 impl std::fmt::Debug for EventBroker {
@@ -86,9 +121,7 @@ impl EventBroker {
   /// a panicked publisher can't deadlock every subsequent subscriber. The
   /// map mutates one channel-entry at a time, so the inner state is
   /// always sound to keep using after a poisoning panic. (Q5.1)
-  fn lock_inner(
-    &self,
-  ) -> std::sync::MutexGuard<'_, HashMap<Uuid, broadcast::Sender<StreamedEvent>>> {
+  fn lock_inner(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, RunChannel>> {
     match self.inner.lock() {
       Ok(g) => g,
       Err(poisoned) => poisoned.into_inner(),
@@ -102,19 +135,21 @@ impl EventBroker {
     let mut map = self.lock_inner();
     map
       .entry(run_id)
-      .or_insert_with(|| broadcast::channel(RUN_CHANNEL_CAPACITY).0)
+      .or_insert_with(RunChannel::new)
+      .sender
       .subscribe()
   }
 
   /// Publish without persisting. Use [`publish_through`] instead when
   /// you also want a DB row — keeps the persisted log and live stream in
-  /// sync.
+  /// sync. Advances the channel's `last_forwarded_seq` regardless of
+  /// whether this publish originated locally or came from a NOTIFY
+  /// catch-up fetch — both paths funnel through here.
   pub fn publish(&self, event: StreamedEvent) {
     let mut map = self.lock_inner();
-    let sender = map
-      .entry(event.run_id)
-      .or_insert_with(|| broadcast::channel(RUN_CHANNEL_CAPACITY).0);
-    let _ = sender.send(event);
+    let channel = map.entry(event.run_id).or_insert_with(RunChannel::new);
+    channel.last_forwarded_seq = channel.last_forwarded_seq.max(event.seq);
+    let _ = channel.sender.send(event);
   }
 
   /// Drop the channel for a finished run so it doesn't leak.
@@ -161,8 +196,25 @@ impl EventBroker {
     let map = self.lock_inner();
     map
       .get(&run_id)
-      .map(|sender| sender.receiver_count())
+      .map(|channel| channel.sender.receiver_count())
       .unwrap_or(0)
+  }
+
+  /// W4.2c: the seq a cross-replica NOTIFY catch-up fetch should resume
+  /// from for `run_id`, or `None` if this replica has no active local
+  /// subscriber for that run right now — the caller should skip the DB
+  /// round-trip entirely in that case, since there's nothing local to
+  /// forward to. Checking `receiver_count` (not just "does the map entry
+  /// exist") matters: a channel can outlive its last subscriber until
+  /// [`Self::finalise`]/[`Self::finalise_with_grace`] runs, e.g. between
+  /// an SSE client disconnecting and the run finishing.
+  pub fn catchup_baseline(&self, run_id: Uuid) -> Option<i64> {
+    let map = self.lock_inner();
+    let channel = map.get(&run_id)?;
+    if channel.sender.receiver_count() == 0 {
+      return None;
+    }
+    Some(channel.last_forwarded_seq)
   }
 }
 
@@ -179,16 +231,140 @@ pub fn broker_finalize_grace() -> Duration {
 }
 
 /// Persist + publish an event in one shot. The DB row is the source of
-/// truth; the broker is best-effort (slow subscribers may miss events,
-/// they reconnect with `?after_seq=`).
+/// truth; the broker (local fan-out + cross-replica NOTIFY) is
+/// best-effort (slow subscribers may miss events, they reconnect with
+/// `?after_seq=`).
 pub async fn publish_through(
   repos: &Repositories,
   broker: &EventBroker,
   event: NewEvent,
 ) -> Result<(), DbError> {
   let stored = repos.events.append(event).await?;
+  let notify_payload = RunEventNotifyPayload {
+    tenant_id: stored.tenant_id.clone(),
+    run_id: stored.run_id,
+    seq: stored.seq,
+  };
   broker.publish(StreamedEvent::from(stored));
+  // W4.2c: best-effort — the DB row (already committed above) and the
+  // local broadcast (already delivered above) are what actually matter;
+  // a dropped NOTIFY just means another replica's subscriber lags until
+  // the next successfully-delivered notification for this run, or falls
+  // back to `?after_seq=` reconnect. Never fail the write over this.
+  if let Ok(payload) = serde_json::to_string(&notify_payload)
+    && let Err(err) =
+      agentflow_db::notify(&repos.events.pool, RUN_EVENTS_NOTIFY_CHANNEL, &payload).await
+  {
+    warn!(
+      run_id = %notify_payload.run_id,
+      error = %err,
+      "publish_through: cross-replica NOTIFY failed (local delivery already succeeded)"
+    );
+  }
   Ok(())
+}
+
+/// Payload carried on [`RUN_EVENTS_NOTIFY_CHANNEL`]. Deliberately just
+/// identifiers — never the event body — since Postgres caps a NOTIFY
+/// payload at ~8000 bytes; the receiving replica re-fetches the actual
+/// row(s) via [`EventRepo::list_after`], the same call the SSE handler's
+/// own backfill path already uses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RunEventNotifyPayload {
+  tenant_id: String,
+  run_id: Uuid,
+  seq: i64,
+}
+
+/// W4.2c: cross-replica catch-up loop for [`EventBroker`]. Spawn one of
+/// these per gateway replica at boot (mirrors `spawn_cleanup_loop`'s
+/// "log and keep going, never crash the gateway" shape). On each
+/// notification: if this replica has no active local subscriber for the
+/// notified run ([`EventBroker::catchup_baseline`] returns `None`) or is
+/// already caught up (`seq <= last_forwarded_seq`), it's a cheap no-op —
+/// no DB hit. Otherwise it pages through [`EventRepo::list_after`]
+/// starting at the broker's own `last_forwarded_seq` and republishes
+/// each row locally via [`EventBroker::publish`], which is what actually
+/// reaches this replica's SSE subscribers.
+///
+/// Reconnects on listener error (connection drop, etc.) with a short
+/// backoff rather than ending the task — a permanently-dead listener
+/// would silently degrade every other replica's cross-replica delivery
+/// for every run this replica happens to be serving SSE for.
+pub fn spawn_run_events_listener(pool: sqlx::PgPool, repos: Repositories, broker: EventBroker) {
+  tokio::spawn(async move {
+    loop {
+      let mut listener = match NotifyListener::connect(&pool, &[RUN_EVENTS_NOTIFY_CHANNEL]).await {
+        Ok(listener) => listener,
+        Err(err) => {
+          warn!(error = %err, "run events listener: connect failed, retrying in 5s");
+          tokio::time::sleep(Duration::from_secs(5)).await;
+          continue;
+        }
+      };
+      loop {
+        let (_, payload) = match listener.recv().await {
+          Ok(pair) => pair,
+          Err(err) => {
+            warn!(error = %err, "run events listener: recv failed, reconnecting");
+            break;
+          }
+        };
+        let notify_payload: RunEventNotifyPayload = match serde_json::from_str(&payload) {
+          Ok(parsed) => parsed,
+          Err(err) => {
+            warn!(error = %err, "run events listener: malformed notify payload, skipping");
+            continue;
+          }
+        };
+        let Some(baseline) = broker.catchup_baseline(notify_payload.run_id) else {
+          continue;
+        };
+        if notify_payload.seq <= baseline {
+          continue;
+        }
+        if let Err(err) = catch_up_run_events(
+          &repos,
+          &broker,
+          &notify_payload.tenant_id,
+          notify_payload.run_id,
+          baseline,
+        )
+        .await
+        {
+          warn!(
+            run_id = %notify_payload.run_id,
+            error = %err,
+            "run events listener: catch-up fetch failed"
+          );
+        }
+      }
+    }
+  });
+}
+
+/// Pages `EventRepo::list_after` starting from `after_seq` and republishes
+/// every returned row into `broker`'s local channel for `run_id`.
+async fn catch_up_run_events(
+  repos: &Repositories,
+  broker: &EventBroker,
+  tenant_id: &str,
+  run_id: Uuid,
+  mut after_seq: i64,
+) -> Result<(), DbError> {
+  loop {
+    let page = repos
+      .events
+      .list_after(tenant_id, run_id, after_seq, 200)
+      .await?;
+    if page.is_empty() {
+      return Ok(());
+    }
+    after_seq = page.last().map(|e| e.seq).unwrap_or(after_seq);
+    for event in page {
+      broker.publish(StreamedEvent::from(event));
+    }
+  }
 }
 
 #[derive(Debug, Deserialize)]
@@ -791,6 +967,58 @@ mod tests {
     drop(rx_two);
     broker.publish(sample_event(run_id, 1));
     assert_eq!(broker.receiver_count(run_id), 0);
+  }
+
+  /// W4.2c: `catchup_baseline` is the gate `spawn_run_events_listener`
+  /// uses to decide whether a NOTIFY is worth a DB round-trip. No local
+  /// subscriber (channel never created) → `None`. A local publish must
+  /// advance the baseline so a same-origin NOTIFY resolves to a no-op
+  /// catch-up (an empty `list_after` page) rather than redundant work.
+  #[tokio::test]
+  async fn catchup_baseline_reflects_local_subscriber_and_publish_state() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    assert_eq!(
+      broker.catchup_baseline(run_id),
+      None,
+      "no channel at all yet — no local subscriber to catch up"
+    );
+
+    let _rx = broker.subscribe(run_id);
+    assert_eq!(
+      broker.catchup_baseline(run_id),
+      Some(-1),
+      "fresh channel with a subscriber starts at -1, matching after_seq's own default"
+    );
+
+    broker.publish(sample_event(run_id, 5));
+    assert_eq!(
+      broker.catchup_baseline(run_id),
+      Some(5),
+      "local publish must advance the baseline"
+    );
+  }
+
+  /// A channel that exists (e.g. the run hasn't finished yet) but has no
+  /// *active* subscriber right now must still report `None` — the
+  /// listener should skip the DB round-trip even though the map entry
+  /// is present.
+  #[tokio::test]
+  async fn catchup_baseline_is_none_after_last_subscriber_disconnects() {
+    let broker = EventBroker::new();
+    let run_id = Uuid::new_v4();
+    let rx = broker.subscribe(run_id);
+    assert!(broker.catchup_baseline(run_id).is_some());
+    drop(rx);
+    // `tokio::broadcast` updates receiver_count lazily on send/recv;
+    // force an interaction, mirroring `broker_receiver_count_tracks_
+    // subscriber_drops` above.
+    broker.publish(sample_event(run_id, 0));
+    assert_eq!(
+      broker.catchup_baseline(run_id),
+      None,
+      "channel entry survives (run not finalised) but has zero active receivers"
+    );
   }
 
   #[tokio::test]
