@@ -21,6 +21,20 @@ securityProfile: local
 
 replicaCount: 1
 
+# W4.2a: guarded — the chart refuses to render replicaCount > 1 (or
+# autoscaling.minReplicas > 1) unless this is explicitly set true.
+# `agentflow-server` today keeps several pieces of state process-local:
+# SSE event fan-out (a run's live events only reach subscribers on the
+# same pod that's executing it), per-tenant run-admission concurrency
+# and rate limits (each pod enforces its own independent counter, so N
+# replicas silently multiply the effective limit by N), and harness
+# approval/cancellation routing (a decide/cancel HTTP request landing on
+# a different pod than the one running the session either 404s or
+# silently no-ops while still reporting success). None of this is fixed
+# yet — see TODOs.md W4.2 for the tracked externalization work. Only
+# set this true if you've read that and accept the gaps.
+allowMultiReplica: false
+
 image:
   repository: agentflow
   tag: latest

@@ -173,14 +173,33 @@ production sizing.
 
 A `HorizontalPodAutoscaler` template is available but disabled by
 default (`autoscaling.enabled: false`) to keep the prior single-replica
-behavior for existing installs unchanged. Enable it to scale on CPU
-(and optionally memory) utilization:
+behavior for existing installs unchanged.
+
+**W4.2a — running more than one `agentflow-server` replica is not yet
+safe.** `agentflow-server` keeps several pieces of state process-local:
+SSE event fan-out (a run's live events only reach subscribers on the
+same pod that's executing it), per-tenant run-admission concurrency and
+rate limits (each pod enforces its own independent counter, so N
+replicas silently multiply the effective limit by N), and harness
+approval/cancellation routing (a decide/cancel request landing on a
+different pod than the one running the session either 404s or silently
+no-ops while still reporting success). This is tracked as `TODOs.md`
+W4.2 and not yet fixed. The chart therefore refuses to render
+`replicaCount > 1` or `autoscaling.minReplicas > 1` unless you set
+`allowMultiReplica: true` — an explicit, informed opt-out for operators
+who understand and accept the gaps above (or who have their own
+session-affine routing in front of the gateway that sidesteps most of
+them).
+
+Once you've read that and decided to proceed, enable HPA to scale on
+CPU (and optionally memory) utilization:
 
 ```bash
 helm install agentflow charts/agentflow \
   --set image.repository=agentflow \
   --set image.tag=server \
   --set existingSecret=agentflow-db \
+  --set allowMultiReplica=true \
   --set autoscaling.enabled=true \
   --set autoscaling.minReplicas=2 \
   --set autoscaling.maxReplicas=5 \
