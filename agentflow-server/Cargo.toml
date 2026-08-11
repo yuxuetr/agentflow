@@ -75,3 +75,10 @@ tempfile = "3"
 urlencoding = "2"
 # Q2.3.4 sweep_trace_dir test needs to backdate file mtime.
 filetime = "0.2"
+# W4.3b-d: end-to-end distributed-run test needs a real WorkerRuntime
+# driving genuine node payload execution against a real gRPC-bound
+# control plane, not just raw protocol calls. `agentflow-worker`
+# already dev-depends on `agentflow-server` the other way (its own T1.2
+# TLS e2e test) — a dev-dependency cycle is fine in Cargo since dev-deps
+# never enter the normal build graph either crate exposes to consumers.
+agentflow-worker = { path = "../agentflow-worker", version = "0.1" }

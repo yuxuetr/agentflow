@@ -487,6 +487,7 @@ dependencies = [
  "agentflow-skills",
  "agentflow-tools",
  "agentflow-tracing",
+ "agentflow-worker",
  "agentflow-worker-proto",
  "anyhow",
  "async-trait",
