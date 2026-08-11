@@ -105,6 +105,19 @@ pub const MAX_WORKFLOW_SUBMIT_BYTES_ENV: &str = "AGENTFLOW_MAX_WORKFLOW_SUBMIT_B
 pub const MAX_SKILL_RUN_BYTES_ENV: &str = "AGENTFLOW_MAX_SKILL_RUN_BYTES";
 pub const MAX_CONCURRENT_RUNS_PER_TENANT_ENV: &str = "AGENTFLOW_MAX_CONCURRENT_RUNS_PER_TENANT";
 pub const RUN_SUBMIT_RATE_LIMIT_PER_MINUTE_ENV: &str = "AGENTFLOW_RUN_SUBMIT_RATE_LIMIT_PER_MINUTE";
+/// W4.3a: max concurrently-running nodes within a single `/v1/runs`
+/// workflow submission (`FlowExecutionMode::Concurrent` dispatches
+/// DAG-independent nodes via `FuturesUnordered` up to this bound, same
+/// engine mode `agentflow workflow run --execution-mode concurrent
+/// --max-concurrency` already uses). Unset preserves today's exact
+/// behavior — see [`DEFAULT_RUN_MAX_CONCURRENCY`].
+pub const RUN_MAX_CONCURRENCY_ENV: &str = "AGENTFLOW_RUN_MAX_CONCURRENCY";
+/// Default is `1`: functionally equivalent to the pre-W4.3a hardcoded
+/// `FlowExecutionConfig::serial()` (a single in-flight node at a time),
+/// so upgrading the gateway does not silently reorder any existing
+/// deployment's node execution. Operators opt into real parallelism via
+/// [`RUN_MAX_CONCURRENCY_ENV`].
+pub const DEFAULT_RUN_MAX_CONCURRENCY: usize = 1;
 
 /// Server-wide state injected into every handler.
 #[derive(Clone)]
@@ -151,6 +164,9 @@ pub struct AppState {
   /// whenever `with_security_profile`/`with_security_defaults` sets a
   /// new profile.
   pub run_admission_registry: RunAdmissionRegistry,
+  /// W4.3a: max concurrently-running nodes for a `/v1/runs` submission.
+  /// See [`RUN_MAX_CONCURRENCY_ENV`] / [`DEFAULT_RUN_MAX_CONCURRENCY`].
+  pub run_max_concurrency: usize,
 }
 
 impl std::fmt::Debug for AppState {
@@ -190,6 +206,7 @@ impl AppState {
       live_state_registry: live_state_registry::LiveStateRegistry::new(),
       security: SecurityProfile::default().defaults(),
       run_admission_registry: run_admission_registry_for(&SecurityProfile::default().defaults()),
+      run_max_concurrency: DEFAULT_RUN_MAX_CONCURRENCY,
     }
   }
 
@@ -236,6 +253,14 @@ impl AppState {
     self.run_admission_registry = run_admission_registry_for(&self.security);
     self
   }
+
+  /// W4.3a: override the max concurrently-running nodes for a `/v1/runs`
+  /// submission. Clamped to `>= 1` (mirrors
+  /// `FlowExecutionConfig::concurrent`'s own clamp).
+  pub fn with_run_max_concurrency(mut self, max_concurrency: usize) -> Self {
+    self.run_max_concurrency = max_concurrency.max(1);
+    self
+  }
 }
 
 /// Build a fresh [`RunAdmissionRegistry`] from a [`SecurityProfileDefaults`]'s
@@ -279,6 +304,19 @@ pub fn server_security_defaults_from_env(
   }
 
   Ok(defaults)
+}
+
+/// W4.3a: resolve [`RUN_MAX_CONCURRENCY_ENV`], falling back to
+/// [`DEFAULT_RUN_MAX_CONCURRENCY`] when unset. Kept as its own function
+/// (not folded into `server_security_defaults_from_env`) since this
+/// isn't a security-profile setting — it governs DAG scheduling, not
+/// CORS/body-limits/admission.
+pub fn run_max_concurrency_from_env() -> Result<usize, ServerHttpConfigError> {
+  Ok(
+    u32_env(RUN_MAX_CONCURRENCY_ENV)?
+      .map(|value| value as usize)
+      .unwrap_or(DEFAULT_RUN_MAX_CONCURRENCY),
+  )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -714,4 +752,41 @@ async fn whoami() -> Json<WhoamiResponse> {
   Json(WhoamiResponse {
     authenticated: true,
   })
+}
+
+#[cfg(test)]
+mod run_max_concurrency_tests {
+  use super::*;
+
+  /// W4.3a: single test function (not several `#[test]`s) so the
+  /// `AGENTFLOW_RUN_MAX_CONCURRENCY` mutations below can't race a
+  /// parallel-running sibling test touching the same process-wide env
+  /// var — nothing else in this binary reads it, but keeping every case
+  /// sequential in one function removes any doubt.
+  #[test]
+  fn run_max_concurrency_from_env_defaults_parses_and_rejects_garbage() {
+    // SAFETY: RUN_MAX_CONCURRENCY_ENV is not read by any other test in
+    // this binary.
+    unsafe {
+      std::env::remove_var(RUN_MAX_CONCURRENCY_ENV);
+    }
+    assert_eq!(
+      run_max_concurrency_from_env().unwrap(),
+      DEFAULT_RUN_MAX_CONCURRENCY
+    );
+
+    unsafe {
+      std::env::set_var(RUN_MAX_CONCURRENCY_ENV, "8");
+    }
+    assert_eq!(run_max_concurrency_from_env().unwrap(), 8);
+
+    unsafe {
+      std::env::set_var(RUN_MAX_CONCURRENCY_ENV, "not-a-number");
+    }
+    assert!(run_max_concurrency_from_env().is_err());
+
+    unsafe {
+      std::env::remove_var(RUN_MAX_CONCURRENCY_ENV);
+    }
+  }
 }

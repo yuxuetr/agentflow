@@ -190,6 +190,11 @@ pub struct RunContext {
   /// W4.1b: deadline `ServerApprovalProvider` waits for an operator
   /// decision on a skill run's pending approval before timing out.
   pub approval_timeout: Duration,
+  /// W4.3a: max concurrently-running nodes for this run, sourced from
+  /// `AppState::run_max_concurrency`. Unused by `skill_execute` (a skill
+  /// invocation is a single agent loop, not a DAG) — only `flow_execute`
+  /// consults it.
+  pub run_max_concurrency: usize,
 }
 
 #[derive(Clone, Default)]
@@ -542,8 +547,11 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     flow = flow.with_state_size_observer(registry.observer_for(ctx.run_id));
   }
 
-  let execution_config =
-    server_execution_config(ctx.run_base_dir.clone(), ctx.cancellation_token.clone());
+  let execution_config = server_execution_config(
+    ctx.run_base_dir.clone(),
+    ctx.cancellation_token.clone(),
+    ctx.run_max_concurrency,
+  );
   let state = flow
     .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
     .await?;
@@ -921,12 +929,19 @@ fn attach_file_trace_storage(trace_dir: &FsPath) -> Result<TraceCollector, anyho
   Ok(TraceCollector::new(storage, TraceConfig::production()))
 }
 
+/// W4.3a: `FlowExecutionMode::Concurrent` dispatches DAG-independent
+/// nodes via `FuturesUnordered` up to `max_concurrency`; explicit
+/// dependency edges are unaffected either way — only nodes with no edge
+/// between them (order-agnostic by DAG semantics) can now interleave.
+/// `max_concurrency` defaults to `1` (see `DEFAULT_RUN_MAX_CONCURRENCY`),
+/// which is functionally equivalent to the prior hardcoded `serial()`.
 fn server_execution_config(
   run_base_dir: Option<PathBuf>,
   cancellation_token: FlowCancellationToken,
+  max_concurrency: usize,
 ) -> FlowExecutionConfig {
   let base_dir = run_base_dir.unwrap_or_else(default_run_base_dir);
-  FlowExecutionConfig::serial()
+  FlowExecutionConfig::concurrent(max_concurrency)
     .with_run_base_dir(base_dir)
     .with_cancellation_token(cancellation_token)
 }
@@ -1098,6 +1113,7 @@ pub async fn submit_run(
   let cancellation_registry = state.cancellation_registry.clone();
   let live_state_registry = state.live_state_registry.clone();
   let approval_registry = state.approval_registry.clone();
+  let run_max_concurrency = state.run_max_concurrency;
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
   let handle = tokio::spawn(async move {
@@ -1117,6 +1133,7 @@ pub async fn submit_run(
         skill_dir: None,
         approval_registry,
         approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
+        run_max_concurrency,
       })
       .await;
     cancellation_registry.complete(run_id);
@@ -1573,5 +1590,47 @@ mod first_state_error_tests {
     state.insert("a".to_string(), Ok(HashMap::new()));
     state.insert("b".to_string(), Ok(HashMap::new()));
     assert!(first_state_error(&state).is_none());
+  }
+}
+
+/// W4.3a regression: `/v1/runs` submissions now go through
+/// `FlowExecutionConfig::concurrent(n)` instead of the prior hardcoded
+/// `serial()`, sourced from `RunContext::run_max_concurrency`.
+#[cfg(test)]
+mod server_execution_config_tests {
+  use super::server_execution_config;
+  use agentflow_core::{FlowCancellationToken, FlowExecutionMode};
+  use std::path::PathBuf;
+
+  #[test]
+  fn builds_concurrent_mode_with_the_given_max_concurrency() {
+    let config = server_execution_config(None, FlowCancellationToken::new(), 4);
+    assert_eq!(config.mode, FlowExecutionMode::Concurrent);
+    assert_eq!(config.max_concurrency, 4);
+  }
+
+  /// The pre-W4.3a default (`max_concurrency: 1`) must behave like the
+  /// old `serial()` — a single in-flight node at a time — even though
+  /// the engine now takes the `Concurrent` code path to get there.
+  #[test]
+  fn max_concurrency_one_still_clamps_to_at_least_one() {
+    let config = server_execution_config(None, FlowCancellationToken::new(), 0);
+    assert_eq!(
+      config.max_concurrency, 1,
+      "FlowExecutionConfig::concurrent must clamp 0 up to 1"
+    );
+  }
+
+  #[test]
+  fn falls_back_to_default_run_base_dir_when_none() {
+    let config = server_execution_config(None, FlowCancellationToken::new(), 1);
+    assert!(config.run_base_dir.is_some());
+  }
+
+  #[test]
+  fn honors_an_explicit_run_base_dir() {
+    let explicit = PathBuf::from("/tmp/agentflow-w4-3a-test");
+    let config = server_execution_config(Some(explicit.clone()), FlowCancellationToken::new(), 1);
+    assert_eq!(config.run_base_dir, Some(explicit));
   }
 }

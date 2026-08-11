@@ -466,6 +466,9 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     server_security_defaults_from_env(config.security_profile).map_err(ServeError::HttpConfig)?;
   info!("Using '{}' security profile", config.security_profile);
 
+  let run_max_concurrency =
+    crate::run_max_concurrency_from_env().map_err(ServeError::HttpConfig)?;
+
   let auth = resolve_auth_config_from_env(config.security_profile).map_err(ServeError::Auth)?;
   if auth.is_none() {
     if !allows_unauthenticated_bind(config.security_profile, config.bind) {
@@ -483,6 +486,7 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
 
   let state = AppState::new(db.clone())
     .with_security_defaults(security_defaults)
+    .with_run_max_concurrency(run_max_concurrency)
     .with_auth(auth)
     .with_skills(SkillCatalog::from_env());
   // Swap the default `StubHarnessExecutor` for the LLM-backed
