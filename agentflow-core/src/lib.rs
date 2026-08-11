@@ -4,14 +4,16 @@
 
 // Core abstractions.
 //
-// The execution IR (`async_node` / `node` / `expr` / `error`) moved to the
+// The execution IR (`async_node` / `expr` / `error`) moved to the
 // `agentflow-graph` crate (P-A1.3, IR ≠ executor per RFC §5). Re-export each
 // under its original `agentflow_core::<module>` path so every existing
 // `crate::async_node::AsyncNode` / `agentflow_core::AgentFlowError` consumer —
 // inside core and downstream — keeps compiling unchanged. The `Flow` orchestrator
 // + scheduler stay here for now (sub-step 2 moves the `Flow` *type* to graph).
-pub use agentflow_graph::{async_node, error, expr, node};
-pub mod error_context;
+// (The sync `node` module / `Node` trait that used to live alongside these —
+// superseded by `AsyncNode` before this crate split even happened, zero real
+// callers — was deleted in W5.2.)
+pub use agentflow_graph::{async_node, error, expr};
 pub mod flow;
 
 // `FlowValue` lives in the `agentflow-value` leaf crate (P-A1.5); also re-exported
@@ -24,8 +26,8 @@ pub mod concurrency;
 pub mod health;
 // `retry` + `timeout` combinators moved to `agentflow-async-util` (P-A1.4);
 // `race_with_limits` added there (P-A3.2). Re-export under their original
-// `agentflow_core::{retry,timeout}` paths (+ `race`).
-// `retry_executor` stays here (it builds on `crate::error_context`).
+// `agentflow_core::{retry,timeout}` paths (+ `race`). `retry_executor` stays
+// here (`Flow`'s own retry logic depends on it via `execute_with_retry_and_hook`).
 pub use agentflow_async_util::{RaceOutcome, race, race_with_limits, retry, timeout};
 pub mod retry_executor;
 
@@ -64,11 +66,9 @@ pub use async_node::AsyncNode;
 pub use checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus};
 pub use concurrency::{ConcurrencyConfig, ConcurrencyLimiter, ConcurrencyStats};
 pub use error::{AgentFlowError, Result};
-pub use error_context::{ErrorContext, ErrorInfo};
 pub use events::{ConsoleListener, EventListener, MultiListener, NoOpListener, WorkflowEvent};
 pub use flow::{Flow, FlowExt, GraphNode, NodeType};
 pub use health::{HealthChecker, HealthReport, HealthStatus};
-pub use node::Node;
 pub use resource_limits::ResourceLimits;
 pub use resource_manager::{CombinedResourceStats, ResourceManager, ResourceManagerConfig};
 pub use resume::{
@@ -76,9 +76,7 @@ pub use resume::{
   ResumeSummary, ResumeToolCall, build_resume_plan,
 };
 pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
-pub use retry_executor::{
-  execute_with_retry, execute_with_retry_and_context, execute_with_retry_and_hook,
-};
+pub use retry_executor::{execute_with_retry, execute_with_retry_and_hook};
 pub use scheduler::{FlowCancellationToken, FlowExecutionConfig, FlowExecutionMode};
 pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
 pub use state_size::{StateSizeObserver, estimated_state_pool_bytes};

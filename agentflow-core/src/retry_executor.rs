@@ -3,7 +3,6 @@
 //! This module provides utilities to execute async operations with automatic retry logic.
 
 use crate::error::AgentFlowError;
-use crate::error_context::ErrorContext;
 use crate::retry::{RetryContext, RetryPolicy};
 use std::future::Future;
 use std::time::Instant;
@@ -74,8 +73,7 @@ where
           // cases nothing was ever retried, so wrapping discarded the
           // original error variant (e.g. `NodePartialExecutionFailed`,
           // `NodeSkipped`) that callers like `Flow`'s checkpoint logic
-          // pattern-match on. See `execute_with_retry_and_context` below,
-          // which already had this guard.
+          // pattern-match on.
           return Err(if context.attempt > 0 {
             AgentFlowError::RetryExhausted {
               attempts: context.attempt + 1,
@@ -146,93 +144,6 @@ where
         let delay = policy.calculate_delay(context.attempt);
         on_retry(context.attempt + 1, &error, delay);
         context.record_failure(&error);
-        tokio::time::sleep(delay).await;
-      }
-    }
-  }
-}
-
-/// Execute an async operation with retry and detailed error context
-///
-/// This variant captures more detailed error context for debugging.
-pub async fn execute_with_retry_and_context<F, Fut, T>(
-  policy: &RetryPolicy,
-  run_id: &str,
-  node_name: &str,
-  node_type: Option<&str>,
-  mut operation: F,
-) -> Result<T, (AgentFlowError, ErrorContext)>
-where
-  F: FnMut() -> Fut,
-  Fut: Future<Output = Result<T, AgentFlowError>>,
-{
-  let mut retry_ctx = RetryContext::new();
-  let operation_start = Instant::now();
-
-  loop {
-    let attempt_start = Instant::now();
-
-    match operation().await {
-      Ok(result) => {
-        if retry_ctx.attempt > 0 {
-          tracing::info!(
-            "Node '{}' succeeded after {} retries",
-            node_name,
-            retry_ctx.attempt
-          );
-        }
-        return Ok(result);
-      }
-      Err(error) => {
-        let _attempt_duration = attempt_start.elapsed();
-
-        // Check if we should retry
-        if !retry_ctx.should_retry(policy, &error) {
-          // Build comprehensive error context
-          let mut error_context = ErrorContext::builder(run_id, node_name)
-            .duration(operation_start.elapsed())
-            .retry_attempt(retry_ctx.attempt)
-            .error(&error)
-            .build();
-
-          if let Some(nt) = node_type {
-            error_context.node_type = Some(nt.to_string());
-          }
-
-          tracing::error!(
-            "Node '{}' failed after {} attempts: {}",
-            node_name,
-            retry_ctx.attempt + 1,
-            error_context.summary()
-          );
-
-          let final_error = if retry_ctx.attempt > 0 {
-            AgentFlowError::RetryExhausted {
-              attempts: retry_ctx.attempt + 1,
-              last_error: Box::new(error),
-            }
-          } else {
-            error
-          };
-
-          return Err((final_error, error_context));
-        }
-
-        // Calculate delay
-        let delay = policy.calculate_delay(retry_ctx.attempt);
-
-        tracing::warn!(
-          "Node '{}' failed (attempt {}), retrying after {:?}: {}",
-          node_name,
-          retry_ctx.attempt + 1,
-          delay,
-          error
-        );
-
-        // Record failure
-        retry_ctx.record_failure(&error);
-
-        // Wait before retrying
         tokio::time::sleep(delay).await;
       }
     }
@@ -323,34 +234,6 @@ mod tests {
       }
     } else {
       panic!("Expected RetryExhausted error");
-    }
-  }
-
-  #[tokio::test]
-  async fn test_execute_with_retry_and_context() {
-    let policy = RetryPolicy::builder()
-      .max_attempts(2)
-      .strategy(RetryStrategy::fixed(10))
-      .build();
-
-    let result =
-      execute_with_retry_and_context(&policy, "run-123", "test_node", Some("http"), || async {
-        Err::<String, _>(AgentFlowError::NodeExecutionFailed {
-          message: "Test failure".to_string(),
-        })
-      })
-      .await;
-
-    assert!(result.is_err());
-    if let Err((error, context)) = result {
-      assert!(matches!(error, AgentFlowError::RetryExhausted { .. }));
-      assert_eq!(context.node_name, "test_node");
-      assert_eq!(context.node_type, Some("http".to_string()));
-      // After 2 failed attempts, retry_attempt should be 2 (0-indexed, but we record after failure)
-      assert_eq!(context.retry_attempt, Some(2));
-      assert!(!context.error_chain.is_empty());
-    } else {
-      panic!("Expected error with context");
     }
   }
 

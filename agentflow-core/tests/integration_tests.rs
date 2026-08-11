@@ -1,94 +1,13 @@
 //! Integration tests for AgentFlow Phase 1 improvements.
 //!
-//! These tests verify that the retry mechanism, error context, and resource
-//! management features work correctly together and integrate seamlessly.
+//! These tests verify that the retry mechanism and resource management
+//! features work correctly together and integrate seamlessly.
 
 use agentflow_core::{
-  AgentFlowError, ErrorContext, ErrorInfo, FlowValue, ResourceLimits, RetryPolicy, RetryStrategy,
-  StateMonitor, execute_with_retry_and_context,
+  AgentFlowError, ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor, execute_with_retry,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::time::{Duration, sleep};
-
-// Helper to simulate a failing operation that eventually succeeds
-async fn flaky_operation(
-  attempts: Arc<AtomicUsize>,
-  fail_count: usize,
-) -> Result<String, AgentFlowError> {
-  let attempt = attempts.fetch_add(1, Ordering::SeqCst);
-
-  if attempt < fail_count {
-    sleep(Duration::from_millis(10)).await;
-    Err(AgentFlowError::AsyncExecutionError {
-      message: format!("Network failure on attempt {}", attempt + 1),
-    })
-  } else {
-    Ok("Success".to_string())
-  }
-}
-
-/// Test retry mechanism with error context tracking
-#[tokio::test]
-async fn test_retry_with_error_context_integration() {
-  let policy = RetryPolicy::builder()
-    .max_attempts(5)
-    .strategy(RetryStrategy::ExponentialBackoff {
-      initial_delay_ms: 10,
-      max_delay_ms: 100,
-      multiplier: 2.0,
-      jitter: false,
-    })
-    .build();
-
-  let attempts = Arc::new(AtomicUsize::new(0));
-  let attempts_clone = attempts.clone();
-
-  let result =
-    execute_with_retry_and_context(&policy, "test_run", "flaky_node", Some("test"), || async {
-      flaky_operation(attempts_clone.clone(), 2).await
-    })
-    .await;
-
-  assert!(result.is_ok());
-  assert_eq!(result.unwrap(), "Success");
-  assert_eq!(attempts.load(Ordering::SeqCst), 3); // Failed twice, succeeded on third
-}
-
-/// Test retry mechanism with max attempts exceeded
-#[tokio::test]
-async fn test_retry_max_attempts_with_error_context() {
-  let policy = RetryPolicy::builder()
-    .max_attempts(3)
-    .strategy(RetryStrategy::Fixed { delay_ms: 10 })
-    .build();
-
-  let attempts = Arc::new(AtomicUsize::new(0));
-  let attempts_clone = attempts.clone();
-
-  let result = execute_with_retry_and_context(
-    &policy,
-    "test_run",
-    "failing_node",
-    Some("test"),
-    || async {
-      flaky_operation(attempts_clone.clone(), 10).await // Will never succeed
-    },
-  )
-  .await;
-
-  assert!(result.is_err());
-  // With max_attempts=3, we get 1 initial + 3 retries = 4 total attempts
-  assert_eq!(attempts.load(Ordering::SeqCst), 4);
-
-  // Verify error is returned
-  let (_error, context) = result.unwrap_err();
-
-  // After retry exhaustion, we may get RetryExhausted
-  // The original error should be in the context's error chain
-  assert!(!context.error_chain.is_empty());
-}
 
 /// Test resource monitoring during operations
 #[tokio::test]
@@ -228,26 +147,20 @@ async fn test_comprehensive_integration() {
   monitor.record_allocation("workflow_state", 1024 * 1024);
 
   // Execute with retry
-  let result = execute_with_retry_and_context(
-    &policy,
-    "test_workflow",
-    "processing_node",
-    Some("data_processor"),
-    || async {
-      let attempt = attempts_clone.fetch_add(1, Ordering::SeqCst);
+  let result = execute_with_retry(&policy, "processing_node", || async {
+    let attempt = attempts_clone.fetch_add(1, Ordering::SeqCst);
 
-      // Simulate resource usage during execution
-      if attempt == 0 {
-        // Fail on first attempt with network error
-        Err(AgentFlowError::AsyncExecutionError {
-          message: "Temporary network issue".to_string(),
-        })
-      } else {
-        // Succeed on retry
-        Ok("Processed successfully".to_string())
-      }
-    },
-  )
+    // Simulate resource usage during execution
+    if attempt == 0 {
+      // Fail on first attempt with network error
+      Err(AgentFlowError::AsyncExecutionError {
+        message: "Temporary network issue".to_string(),
+      })
+    } else {
+      // Succeed on retry
+      Ok("Processed successfully".to_string())
+    }
+  })
   .await;
 
   assert!(result.is_ok());
@@ -262,57 +175,6 @@ async fn test_comprehensive_integration() {
   // Cleanup
   monitor.record_deallocation("workflow_state");
   assert_eq!(monitor.current_size(), 0);
-}
-
-/// Test error info creation and formatting
-#[tokio::test]
-async fn test_error_info_integration() {
-  let error = AgentFlowError::NodeInputError {
-    message: "Missing required input 'data'".to_string(),
-  };
-
-  let error_info = ErrorInfo::from_error(&error);
-
-  assert_eq!(error_info.error_type, "NodeInputError");
-  assert!(error_info.message.contains("Missing required input"));
-  assert_eq!(error_info.source, None);
-}
-
-/// Test error context builder with all fields
-#[tokio::test]
-async fn test_error_context_builder_integration() {
-  let error = AgentFlowError::NodeExecutionFailed {
-    message: "Processing failed".to_string(),
-  };
-
-  let mut inputs = HashMap::new();
-  inputs.insert(
-    "data".to_string(),
-    FlowValue::Json(serde_json::json!("test_value")),
-  );
-  inputs.insert("count".to_string(), FlowValue::Json(serde_json::json!(42)));
-
-  let context = ErrorContext::builder("run123", "node_xyz")
-    .node_type("processor")
-    .duration(Duration::from_millis(250))
-    .execution_history(vec!["node1".to_string(), "node2".to_string()])
-    .inputs(&inputs)
-    .error(&error)
-    .retry_attempt(2)
-    .build();
-
-  assert_eq!(context.run_id, "run123");
-  assert_eq!(context.node_name, "node_xyz");
-  assert_eq!(context.node_type, Some("processor".to_string()));
-  assert_eq!(context.retry_attempt, Some(2));
-  assert!(context.execution_history.len() == 2);
-
-  let report = context.detailed_report();
-  assert!(report.contains("run123"));
-  assert!(report.contains("node_xyz"));
-  assert!(report.contains("processor"));
-  // retry_attempt of 2 gets displayed as "Retry Attempt: 3" (0-indexed + 1)
-  assert!(report.contains("Retry Attempt: 3"));
 }
 
 /// Test resource alerts generation

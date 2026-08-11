@@ -3,7 +3,6 @@
 //! These benchmarks verify that all features meet performance targets:
 //! - Retry overhead < 5ms per retry
 //! - Resource limit enforcement < 100μs per operation
-//! - Error context creation < 1ms
 //!
 //! Every benchmark here asserts a hard wall-clock threshold (`avg < Xms/μs`).
 //! Those assertions are meaningful on stable local hardware but **flake on
@@ -21,10 +20,9 @@
 
 use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use agentflow_core::health::{HealthChecker, HealthStatus};
-use agentflow_core::timeout::{TimeoutConfig, with_timeout};
+use agentflow_core::timeout::with_timeout;
 use agentflow_core::{
-  AgentFlowError, ErrorContext, ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor,
-  execute_with_retry, execute_with_retry_and_context,
+  AgentFlowError, ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor, execute_with_retry,
 };
 use std::time::{Duration, Instant};
 
@@ -144,85 +142,6 @@ async fn benchmark_retry_overhead() {
   );
 
   println!("  ✅ Retry mechanism meets performance targets");
-}
-
-#[tokio::test]
-#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
-async fn benchmark_retry_with_error_context() {
-  println!("\n📊 Retry + Error Context Benchmarks");
-  println!("{}", "=".repeat(80));
-
-  let policy = RetryPolicy::builder()
-    .max_attempts(3)
-    .strategy(RetryStrategy::Fixed { delay_ms: 1 })
-    .build();
-
-  let avg = measure_async(
-    "Successful operation with error context",
-    NUM_ITERATIONS,
-    || async {
-      execute_with_retry_and_context(&policy, "run_id", "node_name", Some("test"), || async {
-        Ok::<_, AgentFlowError>(42)
-      })
-      .await
-    },
-  )
-  .await;
-
-  // Target: < 1ms including context creation
-  assert!(
-    avg < Duration::from_millis(1),
-    "Retry with error context overhead: {:?} > 1ms",
-    avg
-  );
-
-  println!("  ✅ Retry with error context meets performance targets");
-}
-
-#[tokio::test]
-#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
-async fn benchmark_error_context_creation() {
-  println!("\n📝 Error Context Creation Benchmarks");
-  println!("{}", "=".repeat(80));
-
-  let error = AgentFlowError::NodeExecutionFailed {
-    message: "Test error".to_string(),
-  };
-
-  let avg = measure_sync("Error context builder", NUM_ITERATIONS, || {
-    ErrorContext::builder("run_id", "node_name")
-      .node_type("test")
-      .duration(Duration::from_millis(100))
-      .error(&error)
-      .build()
-  });
-
-  // Target: < 1ms for context creation
-  assert!(
-    avg < Duration::from_millis(1),
-    "Error context creation: {:?} > 1ms",
-    avg
-  );
-
-  // Benchmark: Detailed report generation
-  let context = ErrorContext::builder("run_id", "node_name")
-    .node_type("test")
-    .duration(Duration::from_millis(100))
-    .error(&error)
-    .build();
-
-  let avg = measure_sync("Detailed report generation", NUM_ITERATIONS, || {
-    context.detailed_report()
-  });
-
-  // Target: < 1ms for report generation
-  assert!(
-    avg < Duration::from_millis(1),
-    "Report generation: {:?} > 1ms",
-    avg
-  );
-
-  println!("  ✅ Error context creation meets performance targets");
 }
 
 #[tokio::test]
@@ -420,17 +339,11 @@ async fn benchmark_combined_overhead() {
     // Record resource allocation
     monitor.record_allocation("input", 1024);
 
-    // Execute with retry and error context
-    let result = execute_with_retry_and_context(
-      &retry_policy,
-      "run_123",
-      "process_node",
-      Some("processor"),
-      || async {
-        // Immediate success to measure pure overhead
-        Ok::<_, AgentFlowError>(42)
-      },
-    )
+    // Execute with retry
+    let result = execute_with_retry(&retry_policy, "process_node", || async {
+      // Immediate success to measure pure overhead
+      Ok::<_, AgentFlowError>(42)
+    })
     .await;
 
     // Record output
@@ -459,8 +372,6 @@ async fn benchmark_timeout_control() {
   println!("\n⏱️  Timeout Control Benchmarks");
   println!("{}", "=".repeat(80));
 
-  let config = TimeoutConfig::default();
-
   // Benchmark: Successful operation with timeout (measure overhead only)
   // Use immediate return to measure pure timeout wrapper overhead
   let avg = measure_async(
@@ -469,7 +380,7 @@ async fn benchmark_timeout_control() {
     || async {
       with_timeout(
         async { Ok::<_, AgentFlowError>(42) },
-        config.default_timeout,
+        Duration::from_secs(30),
       )
       .await
     },

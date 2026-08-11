@@ -35,7 +35,7 @@ use agentflow_core::{
   resource_limits::ResourceLimits,
   resource_manager::{ResourceManager, ResourceManagerConfig},
   retry_executor::execute_with_retry,
-  timeout::{TimeoutConfig, with_timeout_context},
+  timeout::with_timeout_context,
 };
 use std::collections::HashMap;
 use std::env;
@@ -48,7 +48,7 @@ use tracing::{debug, info, instrument, warn};
 #[derive(Debug, Clone)]
 struct WorkflowConfig {
   workflow_id: String,
-  timeout_config: TimeoutConfig,
+  node_execution_timeout: Duration,
   checkpoint_config: CheckpointConfig,
   resource_limits: ResourceLimits,
   retry_policy: RetryPolicy,
@@ -58,15 +58,15 @@ impl Default for WorkflowConfig {
   fn default() -> Self {
     let env = env::var("ENV").unwrap_or_else(|_| "development".to_string());
 
-    let timeout_config = match env.as_str() {
-      "production" => TimeoutConfig::production(),
-      "development" => TimeoutConfig::development(),
-      _ => TimeoutConfig::default(),
+    let node_execution_timeout = match env.as_str() {
+      "production" => Duration::from_secs(3 * 60),
+      "development" => Duration::from_secs(10 * 60),
+      _ => Duration::from_secs(5 * 60),
     };
 
     Self {
       workflow_id: format!("workflow_{}", chrono::Utc::now().timestamp()),
-      timeout_config,
+      node_execution_timeout,
       checkpoint_config: CheckpointConfig::default()
         .with_success_retention_days(7)
         .with_failure_retention_days(30)
@@ -412,7 +412,7 @@ where
   let result = execute_with_retry(&config.retry_policy, step_name, || async {
     with_timeout_context(
       operation(),
-      config.timeout_config.node_execution_timeout,
+      config.node_execution_timeout,
       step_name,
       Some(step_name),
       Some(&config.workflow_id),

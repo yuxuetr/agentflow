@@ -4,7 +4,6 @@
 
 use agentflow_core::{
   AgentFlowError, ErrorPattern, RetryPolicy, RetryStrategy, execute_with_retry,
-  execute_with_retry_and_context,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,12 +28,6 @@ async fn main() -> Result<(), AgentFlowError> {
   println!("Example 3: Selective retry");
   println!("--------------------------");
   example_selective_retry().await?;
-  println!();
-
-  // Example 4: Retry with error context
-  println!("Example 4: Retry with error context");
-  println!("------------------------------------");
-  example_with_context().await?;
   println!();
 
   println!("All examples completed successfully!");
@@ -162,41 +155,6 @@ async fn example_selective_retry() -> Result<(), AgentFlowError> {
     attempt_counter.load(Ordering::SeqCst) - 1,
     result
   );
-
-  Ok(())
-}
-
-/// Example 4: Retry with detailed error context
-async fn example_with_context() -> Result<(), AgentFlowError> {
-  let policy = RetryPolicy::builder()
-    .max_attempts(2)
-    .strategy(RetryStrategy::linear(50, 25))
-    .build();
-
-  let result = execute_with_retry_and_context(
-    &policy,
-    "workflow-run-123",
-    "api_node",
-    Some("http"),
-    || async {
-      Err::<String, _>(AgentFlowError::AsyncExecutionError {
-        message: "API rate limit exceeded".to_string(),
-      })
-    },
-  )
-  .await;
-
-  match result {
-    Ok(_) => unreachable!(),
-    Err((error, context)) => {
-      println!("  Error: {}", error);
-      println!("  Context Summary: {}", context.summary());
-      println!("  Error Chain:");
-      println!("{}", context.error_chain_str());
-      println!("\n  Detailed Report:");
-      println!("{}", context.detailed_report());
-    }
-  }
 
   Ok(())
 }
