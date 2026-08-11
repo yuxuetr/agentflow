@@ -47,6 +47,7 @@ use agentflow_db::{
 };
 
 use crate::AppState;
+use crate::distributed_run::DistributedFlowRunExecutor;
 use crate::error::{ApiError, JsonReq};
 use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
 use crate::harness_approval::{
@@ -83,6 +84,16 @@ pub struct CreateRunRequest {
   /// extend retention, never shorten it.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retention_overrides: Option<RetentionOverrides>,
+  /// W4.3b: opt into distributed execution — dispatched to a
+  /// `DistributedFlowRunExecutor` against worker processes over the
+  /// gRPC control plane instead of running in-process. `None` (or any
+  /// value other than `"distributed"`) keeps today's default in-process
+  /// behavior; unrecognized values are a 400, not a silent fallback.
+  /// Requires `AppState::worker_control_plane` to be configured and the
+  /// workflow to pass `validate_distributed_flow` — both checked before
+  /// the run row is created. "Experimental" per `docs/STABILITY.md`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub execution_mode: Option<String>,
 }
 
 /// Body shape for `retention_overrides:` on `POST /v1/runs`
@@ -1208,6 +1219,34 @@ pub async fn submit_run(
     )));
   }
 
+  // W4.3b: resolve which executor this run dispatches to *before*
+  // admission/DB-row creation — an inadmissible or workflow-invalid
+  // distributed request shouldn't leave a `queued` row behind, matching
+  // the same posture the admission check below already has.
+  let executor: Arc<dyn RunExecutor> = match req.execution_mode.as_deref() {
+    None => state.executor.clone(),
+    Some("in_process") => state.executor.clone(),
+    Some("distributed") => {
+      let control_plane = state.worker_control_plane.clone().ok_or_else(|| {
+        ApiError::BadRequest(
+          "execution_mode: \"distributed\" requires a worker gRPC control plane to be \
+           configured on this gateway (--worker-grpc-bind) — this deployment has none"
+            .to_string(),
+        )
+      })?;
+      let flow_def = agentflow_config::executor::parse_workflow_definition(&workflow)
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+      crate::distributed_run::validate_distributed_flow(&flow_def)?;
+      Arc::new(DistributedFlowRunExecutor::new(control_plane))
+    }
+    Some(other) => {
+      return Err(ApiError::BadRequest(format!(
+        "unrecognized execution_mode '{other}' — expected \"in_process\" (default) or \
+         \"distributed\""
+      )));
+    }
+  };
+
   // V3.4 / W4.2f: admission control before the run row is even created —
   // an inadmissible request shouldn't leave a `queued` row behind.
   //
@@ -1267,7 +1306,6 @@ pub async fn submit_run(
 
   // Dispatch in the background so the HTTP request returns immediately. The
   // executor owns the entire run lifecycle from this point.
-  let executor = state.executor.clone();
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
