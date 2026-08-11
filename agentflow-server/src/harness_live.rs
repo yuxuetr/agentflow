@@ -181,6 +181,24 @@ pub struct LiveHarnessExecutor {
   /// before starting their session's blocking runtime. Default cap
   /// is set by `default_max_concurrent_sessions()` (32) and is
   /// overridable via `with_max_concurrent_sessions()`.
+  ///
+  /// W4.2g: deliberately **not** externalized to Postgres the way
+  /// `agentflow_server::runs::RunAdmissionRegistry` was in W4.2f, and
+  /// this is a permanent design choice, not a gap awaiting a follow-up.
+  /// The two guard different things: `RunAdmissionRegistry` enforces a
+  /// per-tenant business SLA ("this tenant gets N concurrent runs")
+  /// that must hold *across the whole cluster* — a purely local check
+  /// there silently multiplies the effective limit by the replica
+  /// count, a real correctness bug. This semaphore instead protects
+  /// *this one process's* OS-thread budget (global, not per-tenant, by
+  /// design — the DoS vector above is unbounded thread creation on a
+  /// single host, not unbounded work for one tenant); each replica
+  /// independently bounding its own thread count is the *correct*
+  /// behavior for a per-process resource guard, not an instance of the
+  /// same cross-replica multiplication bug. Making it cluster-wide
+  /// would be actively wrong: a busy 3-replica cluster would then only
+  /// ever run `default_max_concurrent_sessions()` (32) harness sessions
+  /// *total*, not 32 per host.
   concurrency_limit: Arc<tokio::sync::Semaphore>,
 }
 
