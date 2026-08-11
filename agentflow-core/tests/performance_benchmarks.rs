@@ -22,7 +22,7 @@ use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use agentflow_core::health::{HealthChecker, HealthStatus};
 use agentflow_core::timeout::with_timeout;
 use agentflow_core::{
-  AgentFlowError, ResourceLimits, RetryPolicy, RetryStrategy, StateMonitor, execute_with_retry,
+  AgentFlowError, ResourceLimits, RetryPolicy, RetryStrategy, execute_with_retry,
 };
 use std::time::{Duration, Instant};
 
@@ -183,176 +183,22 @@ async fn benchmark_resource_limits() {
 
 #[tokio::test]
 #[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
-async fn benchmark_state_monitor_basic() {
-  println!("\n📈 State Monitor (Basic Operations) Benchmarks");
-  println!("{}", "=".repeat(80));
-
-  let limits = ResourceLimits::default();
-  let monitor = StateMonitor::new(limits);
-
-  // Benchmark: Record allocation
-  let avg = measure_sync("Record allocation (detailed mode)", NUM_ITERATIONS, || {
-    monitor.record_allocation("key", 1024);
-  });
-
-  // Target: < 10μs per allocation
-  assert!(
-    avg < Duration::from_micros(10),
-    "Record allocation: {:?} > 10μs",
-    avg
-  );
-
-  // Benchmark: Record access (LRU update)
-  let avg = measure_sync("Record access (LRU tracking)", NUM_ITERATIONS, || {
-    monitor.record_access("key");
-  });
-
-  // Target: < 10μs per access
-  assert!(
-    avg < Duration::from_micros(10),
-    "Record access: {:?} > 10μs",
-    avg
-  );
-
-  // Benchmark: Get stats
-  let avg = measure_sync("Get statistics", NUM_ITERATIONS, || {
-    monitor.get_stats();
-  });
-
-  // Target: < 1μs for stats
-  assert!(avg < Duration::from_micros(1), "Get stats: {:?} > 1μs", avg);
-
-  // Benchmark: Check should_cleanup
-  let avg = measure_sync("Should cleanup check", NUM_ITERATIONS, || {
-    monitor.should_cleanup();
-  });
-
-  // Target: < 1μs
-  assert!(
-    avg < Duration::from_micros(1),
-    "Should cleanup: {:?} > 1μs",
-    avg
-  );
-
-  println!("  ✅ State monitor basic operations meet performance targets");
-}
-
-#[tokio::test]
-#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
-async fn benchmark_state_monitor_fast_mode() {
-  println!("\n⚡ State Monitor (Fast Mode) Benchmarks");
-  println!("{}", "=".repeat(80));
-
-  let limits = ResourceLimits::default();
-  let monitor_detailed = StateMonitor::new(limits.clone());
-  let monitor_fast = StateMonitor::new_fast(limits);
-
-  // Benchmark: Detailed mode allocation
-  let detailed_avg = measure_sync("Allocation (detailed mode)", NUM_ITERATIONS, || {
-    monitor_detailed.record_allocation("key", 1024);
-  });
-
-  // Benchmark: Fast mode allocation
-  let fast_avg = measure_sync("Allocation (fast mode)", NUM_ITERATIONS, || {
-    monitor_fast.record_allocation("key", 1024);
-  });
-
-  println!(
-    "  Fast mode speedup: {:.2}x",
-    detailed_avg.as_nanos() as f64 / fast_avg.as_nanos() as f64
-  );
-
-  // Fast mode should be at least 2x faster
-  assert!(
-    fast_avg < detailed_avg,
-    "Fast mode not faster: {:?} >= {:?}",
-    fast_avg,
-    detailed_avg
-  );
-
-  println!("  ✅ Fast mode provides performance benefit");
-}
-
-#[tokio::test]
-#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
-async fn benchmark_cleanup_operation() {
-  println!("\n🧹 Cleanup Operation Benchmarks");
-  println!("{}", "=".repeat(80));
-
-  let limits = ResourceLimits::builder()
-    .max_state_size(100 * 1024 * 1024)
-    .build();
-
-  let monitor = StateMonitor::new(limits);
-
-  // Allocate many entries for cleanup benchmark
-  for i in 0..100 {
-    monitor.record_allocation(&format!("key_{}", i), 1024 * 1024);
-  }
-
-  // Benchmark: Cleanup operation
-  let start = Instant::now();
-  let result = monitor.cleanup(0.5);
-  let duration = start.elapsed();
-
-  assert!(result.is_ok());
-  println!("  Cleanup 50 entries: {:?}", duration);
-
-  // Target: < 10ms for 50 entries
-  assert!(
-    duration < Duration::from_millis(10),
-    "Cleanup operation: {:?} > 10ms",
-    duration
-  );
-
-  // Benchmark: LRU key retrieval
-  let avg = measure_sync("Get LRU keys (top 10)", 100, || {
-    monitor.get_lru_keys(10);
-  });
-
-  // Target: < 1ms
-  assert!(
-    avg < Duration::from_millis(1),
-    "Get LRU keys: {:?} > 1ms",
-    avg
-  );
-
-  println!("  ✅ Cleanup operations meet performance targets");
-}
-
-#[tokio::test]
-#[ignore = "perf timing assertions are environment-sensitive (wall-clock thresholds flake on shared CI runners); run on demand: cargo test -p agentflow-core --test performance_benchmarks -- --ignored"]
 async fn benchmark_combined_overhead() {
   println!("\n🎯 Combined Feature Overhead Benchmarks");
   println!("{}", "=".repeat(80));
 
-  // Simulate a realistic workflow node execution with all features
+  // Simulate a realistic workflow node execution with retry
   let retry_policy = RetryPolicy::builder()
     .max_attempts(3)
     .strategy(RetryStrategy::Fixed { delay_ms: 1 })
     .build();
 
-  let limits = ResourceLimits::default();
-  let monitor = StateMonitor::new(limits);
-
-  let avg = measure_async("Workflow node with retry + monitoring", 100, || async {
-    // Record resource allocation
-    monitor.record_allocation("input", 1024);
-
-    // Execute with retry
-    let result = execute_with_retry(&retry_policy, "process_node", || async {
+  let avg = measure_async("Workflow node with retry", 100, || async {
+    execute_with_retry(&retry_policy, "process_node", || async {
       // Immediate success to measure pure overhead
       Ok::<_, AgentFlowError>(42)
     })
-    .await;
-
-    // Record output
-    monitor.record_allocation("output", 2048);
-
-    // Cleanup
-    monitor.record_deallocation("input");
-
-    result
+    .await
   })
   .await;
 

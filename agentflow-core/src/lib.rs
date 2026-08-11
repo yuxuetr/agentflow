@@ -22,7 +22,6 @@ pub mod flow;
 pub use agentflow_value as value;
 
 // Execution engine
-pub mod concurrency;
 pub mod health;
 // `retry` + `timeout` combinators moved to `agentflow-async-util` (P-A1.4);
 // `race_with_limits` added there (P-A3.2). Re-export under their original
@@ -40,11 +39,20 @@ pub use runner::CoreFlowRunner;
 
 // Reliability
 pub mod checkpoint;
+// W5.3: `resource_manager` (pure facade over the two modules below) and
+// `state_monitor` (its one real capability, LRU eviction, is unsafe for
+// `Flow`'s state pool — a node's output can be a real dependency for any
+// later node regardless of recency, unlike a cache) and `concurrency`
+// (redundant with `Flow`'s own `FuturesUnordered`+`max_concurrency` DAG
+// dispatch and its separate ad-hoc `Semaphore` for Map fan-out) were all
+// deleted — verified-zero real callers, and (for `state_monitor`)
+// actively unsafe to wire in as designed. `resource_limits` survives:
+// its `ResourceLimits` predicates are pure/safe and are now wired into
+// `Flow` as an advisory `WorkflowEvent::ResourceWarning` (see
+// `FlowExecutionConfig::resource_limits`, `flow.rs::notify_state_size`).
 pub mod resource_limits;
-pub mod resource_manager;
 pub mod resume;
 pub mod scheduler;
-pub mod state_monitor;
 
 // `state_size` (StateSizeObserver) and `events` (EventListener / WorkflowEvent)
 // moved to `agentflow-graph` (P-A1.3 step 2): they are the observability
@@ -64,13 +72,11 @@ pub mod plugin;
 // Core traits and types
 pub use async_node::AsyncNode;
 pub use checkpoint::{Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus};
-pub use concurrency::{ConcurrencyConfig, ConcurrencyLimiter, ConcurrencyStats};
 pub use error::{AgentFlowError, Result};
 pub use events::{ConsoleListener, EventListener, MultiListener, NoOpListener, WorkflowEvent};
 pub use flow::{Flow, FlowExt, GraphNode, NodeType};
 pub use health::{HealthChecker, HealthReport, HealthStatus};
 pub use resource_limits::ResourceLimits;
-pub use resource_manager::{CombinedResourceStats, ResourceManager, ResourceManagerConfig};
 pub use resume::{
   RESUME_PLAN_SCHEMA_VERSION, ResumeDecision, ResumeIdempotency, ResumePlan, ResumePlanOptions,
   ResumeSummary, ResumeToolCall, build_resume_plan,
@@ -78,6 +84,5 @@ pub use resume::{
 pub use retry::{ErrorPattern, RetryContext, RetryPolicy, RetryStrategy};
 pub use retry_executor::{execute_with_retry, execute_with_retry_and_hook};
 pub use scheduler::{FlowCancellationToken, FlowExecutionConfig, FlowExecutionMode};
-pub use state_monitor::{ResourceAlert, ResourceStats, StateMonitor};
 pub use state_size::{StateSizeObserver, estimated_state_pool_bytes};
 pub use value::FlowValue;

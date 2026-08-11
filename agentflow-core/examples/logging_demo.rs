@@ -18,12 +18,9 @@
 //! RUST_LOG=debug cargo run --example logging_demo
 //! ```
 
-use agentflow_core::{
-  checkpoint::{CheckpointConfig, CheckpointManager},
-  resource_manager::{ResourceManager, ResourceManagerConfig},
-};
+use agentflow_core::checkpoint::{CheckpointConfig, CheckpointManager};
 use std::collections::HashMap;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,9 +31,6 @@ async fn main() -> anyhow::Result<()> {
 
   // Demonstrate checkpoint operations with logging
   demonstrate_checkpoint_logging().await?;
-
-  // Demonstrate resource management logging
-  demonstrate_resource_logging().await?;
 
   info!("Logging demonstration completed");
 
@@ -86,57 +80,6 @@ async fn demonstrate_checkpoint_logging() -> anyhow::Result<()> {
 
   // Clean up
   manager.delete_all_checkpoints("demo-workflow-001").await?;
-
-  Ok(())
-}
-
-/// Demonstrate resource management logging
-#[instrument]
-async fn demonstrate_resource_logging() -> anyhow::Result<()> {
-  info!("Demonstrating resource management logging");
-
-  let manager = ResourceManager::new(ResourceManagerConfig::default());
-
-  // Allocate some memory - will log trace messages
-  debug!("Allocating memory resources");
-
-  for i in 1..=5 {
-    let key = format!("resource_{}", i);
-    let size = 1024 * i;
-
-    if manager.record_allocation(&key, size) {
-      debug!(key = %key, size = %size, "Allocation succeeded");
-    } else {
-      warn!(key = %key, size = %size, "Allocation failed");
-    }
-  }
-
-  // Get stats
-  let stats = manager.get_stats().await;
-  info!(
-      memory_usage = %stats.memory.current_size,
-      value_count = %stats.memory.value_count,
-      "Current resource usage"
-  );
-
-  // Trigger cleanup if needed - will log info messages
-  if manager.should_cleanup() {
-    info!("Cleanup threshold reached, performing cleanup");
-    let (freed, removed) = manager.cleanup(0.5).await?;
-    info!(
-        bytes_freed = %freed,
-        entries_removed = %removed,
-        "Cleanup completed"
-    );
-  }
-
-  // Check for alerts - will log warn messages if alerts exist
-  let alerts = manager.get_alerts();
-  if !alerts.is_empty() {
-    warn!(alert_count = %alerts.len(), "Resource alerts detected");
-  } else {
-    debug!("No resource alerts");
-  }
 
   Ok(())
 }

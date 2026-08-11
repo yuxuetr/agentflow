@@ -5,7 +5,6 @@
 //! - Health Checks: Application health monitoring
 //! - Checkpoint Recovery: Workflow state persistence and recovery
 //! - Retry Mechanism: Automatic retry with exponential backoff
-//! - Resource Management: Memory limits and cleanup
 //!
 //! # Usage
 //!
@@ -32,8 +31,6 @@ use agentflow_core::{
   Result, RetryPolicy, RetryStrategy,
   checkpoint::{CheckpointConfig, CheckpointManager, WorkflowStatus},
   health::{HealthChecker, HealthStatus},
-  resource_limits::ResourceLimits,
-  resource_manager::{ResourceManager, ResourceManagerConfig},
   retry_executor::execute_with_retry,
   timeout::with_timeout_context,
 };
@@ -50,7 +47,6 @@ struct WorkflowConfig {
   workflow_id: String,
   node_execution_timeout: Duration,
   checkpoint_config: CheckpointConfig,
-  resource_limits: ResourceLimits,
   retry_policy: RetryPolicy,
 }
 
@@ -71,12 +67,6 @@ impl Default for WorkflowConfig {
         .with_success_retention_days(7)
         .with_failure_retention_days(30)
         .with_auto_cleanup(true),
-      resource_limits: ResourceLimits::builder()
-        .max_state_size(100 * 1024 * 1024) // 100 MB
-        .max_value_size(10 * 1024 * 1024) // 10 MB
-        .cleanup_threshold(0.8)
-        .auto_cleanup(true)
-        .build(),
       retry_policy: RetryPolicy::builder()
         .max_attempts(3)
         .strategy(RetryStrategy::ExponentialBackoff {
@@ -101,7 +91,6 @@ async fn main() -> Result<()> {
   info!("   - Health Checks");
   info!("   - Checkpoint Recovery");
   info!("   - Retry Mechanism");
-  info!("   - Resource Management");
 
   // Load configuration
   let config = WorkflowConfig::default();
@@ -114,16 +103,6 @@ async fn main() -> Result<()> {
   // Initialize checkpoint manager
   let checkpoint_manager = CheckpointManager::new(config.checkpoint_config.clone())?;
   info!("✅ Checkpoint manager initialized");
-
-  // Initialize resource manager
-  let resource_manager = ResourceManager::new(ResourceManagerConfig {
-    memory_limits: config.resource_limits.clone(),
-    concurrency_limits: Default::default(),
-    enable_detailed_tracking: true,
-    workflow_memory_limit: Some(100 * 1024 * 1024),
-    node_memory_limit: Some(10 * 1024 * 1024),
-  });
-  info!("✅ Resource manager initialized");
 
   // Check if we should resume from checkpoint
   let should_resume = env::args().any(|arg| arg == "--resume");
@@ -141,14 +120,7 @@ async fn main() -> Result<()> {
       );
 
       // Resume workflow
-      resume_workflow(
-        &config,
-        checkpoint,
-        &health_checker,
-        &checkpoint_manager,
-        &resource_manager,
-      )
-      .await?;
+      resume_workflow(&config, checkpoint, &health_checker, &checkpoint_manager).await?;
 
       return Ok(());
     } else {
@@ -157,13 +129,7 @@ async fn main() -> Result<()> {
   }
 
   // Run fresh workflow
-  run_workflow(
-    &config,
-    &health_checker,
-    &checkpoint_manager,
-    &resource_manager,
-  )
-  .await?;
+  run_workflow(&config, &health_checker, &checkpoint_manager).await?;
 
   info!("✅ Production workflow completed successfully");
   Ok(())
@@ -209,12 +175,11 @@ async fn setup_health_checks(config: &WorkflowConfig) -> Result<Arc<HealthChecke
 }
 
 /// Run a fresh workflow with all Phase 1.5 features
-#[instrument(skip(health_checker, checkpoint_manager, resource_manager))]
+#[instrument(skip(health_checker, checkpoint_manager))]
 async fn run_workflow(
   config: &WorkflowConfig,
   health_checker: &Arc<HealthChecker>,
   checkpoint_manager: &CheckpointManager,
-  resource_manager: &ResourceManager,
 ) -> Result<()> {
   info!("🏁 Starting workflow execution");
 
@@ -249,7 +214,6 @@ async fn run_workflow(
       }))
     },
     checkpoint_manager,
-    resource_manager,
     &mut state,
   )
   .await?;
@@ -271,7 +235,6 @@ async fn run_workflow(
       }))
     },
     checkpoint_manager,
-    resource_manager,
     &mut state,
   )
   .await?;
@@ -293,7 +256,6 @@ async fn run_workflow(
       }))
     },
     checkpoint_manager,
-    resource_manager,
     &mut state,
   )
   .await?;
@@ -319,25 +281,16 @@ async fn run_workflow(
     "📊 Final health check completed"
   );
 
-  // Resource usage report
-  let resource_stats = resource_manager.get_stats().await;
-  info!(
-    memory_usage = resource_stats.memory.current_size,
-    value_count = resource_stats.memory.value_count,
-    "📈 Resource usage statistics"
-  );
-
   Ok(())
 }
 
 /// Resume workflow from checkpoint
-#[instrument(skip(_health_checker, checkpoint, checkpoint_manager, resource_manager))]
+#[instrument(skip(_health_checker, checkpoint, checkpoint_manager))]
 async fn resume_workflow(
   config: &WorkflowConfig,
   checkpoint: agentflow_core::checkpoint::Checkpoint,
   _health_checker: &Arc<HealthChecker>,
   checkpoint_manager: &CheckpointManager,
-  resource_manager: &ResourceManager,
 ) -> Result<()> {
   info!("♻️  Resuming workflow from checkpoint");
 
@@ -370,7 +323,6 @@ async fn resume_workflow(
         }))
       },
       checkpoint_manager,
-      resource_manager,
       &mut state,
     )
     .await?;
@@ -398,16 +350,12 @@ async fn execute_step_with_features<F, Fut>(
   step_name: &str,
   operation: F,
   checkpoint_manager: &CheckpointManager,
-  resource_manager: &ResourceManager,
   state: &mut HashMap<String, serde_json::Value>,
 ) -> Result<serde_json::Value>
 where
   F: Fn() -> Fut,
   Fut: std::future::Future<Output = Result<serde_json::Value>>,
 {
-  // Record resource allocation
-  resource_manager.record_allocation(step_name, 1024 * 1024); // 1MB
-
   // Execute with retry, timeout, and error context
   let result = execute_with_retry(&config.retry_policy, step_name, || async {
     with_timeout_context(
@@ -430,12 +378,6 @@ where
     .await?;
 
   debug!(step = %step_name, "Checkpoint saved");
-
-  // Check resource usage and cleanup if needed
-  if resource_manager.should_cleanup() {
-    warn!("Resource usage high, performing cleanup");
-    resource_manager.cleanup(0.5).await?;
-  }
 
   Ok(result)
 }
