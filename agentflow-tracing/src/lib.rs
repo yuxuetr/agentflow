@@ -48,6 +48,8 @@ pub mod collector;
 pub mod context;
 pub mod format;
 pub mod otel;
+#[cfg(feature = "otlp-http")]
+pub mod otlp;
 pub mod redaction;
 pub mod replay;
 pub mod storage;
@@ -63,6 +65,8 @@ pub use otel::{
   OtelAttribute, OtelExporterConfig, OtelSpan, OtelSpanEvent, OtelSpanKind, OtelSpanSink,
   OtelStatus, OtelStatusCode, OtelTraceExporter, OtelValue, TraceExporter, trace_to_spans,
 };
+#[cfg(feature = "otlp-http")]
+pub use otlp::{OtlpHttpConfig, OtlpHttpSpanSink};
 pub use redaction::{REDACTED_VALUE, RedactionConfig, redact_text, redact_trace, redact_value};
 pub use replay::{ReplayOptions, format_trace_replay};
 pub use storage::schema::{

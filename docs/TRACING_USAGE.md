@@ -154,21 +154,63 @@ let storage = FileTraceStorage::new(
 - 查询性能差
 - 不适合大规模生产
 
-### 2. PostgreSQL 存储（生产环境，未来支持）
+### 2. PostgreSQL / SQLite 存储（尚未实现）
 
-```rust
-// 未来版本
-use agentflow_tracing::storage::postgres::PostgresTraceStorage;
+W4.4：`storage::schema` 模块导出了两套 DDL 常量
+（`POSTGRES_TRACE_SCHEMA`/`SQLITE_TRACE_SCHEMA`，5 表规范化 schema），但
+**没有任何代码执行这些 DDL 或实现 `TraceStorage` trait**——`agentflow-tracing`
+crate 里唯一的具体存储后端是上面的 `FileTraceStorage`。此前存在的
+`postgres` Cargo feature 只挂了一个零引用的 `sqlx` 可选依赖（一个死
+flag），已在 W4.4 移除；`cargo check --features postgres` 编译通过从来
+不能证明有真实的 Postgres 后端。
 
-let storage = PostgresTraceStorage::new(
-    "postgresql://user:pass@localhost/agentflow"
-).await?;
+如果未来需要 SQL 后端，需要把 `ExecutionTrace` 拆分写入
+`trace_runs`/`trace_steps`/`trace_events`/`trace_tool_calls`/
+`trace_mcp_calls` 五张表（不是简单塞进一个 JSONB 列），这是一项独立的、
+需要单独 RFC 的工作量，不是"填一个存根"级别的任务。
+
+---
+
+## 📡 OTLP 导出（W4.4）
+
+`otlp-http` feature（默认不启用）提供开箱即用的 OTLP/HTTP+JSON span
+导出器 `OtlpHttpSpanSink`，基于官方 `opentelemetry-otlp` crate 构建，
+wire 编码由该 crate 保证符合规范，不需要手写 OTLP 的 JSON schema。
+
+```toml
+[dependencies]
+agentflow-tracing = { version = "0.1", features = ["otlp-http"] }
 ```
 
-**优点**:
-- 高性能查询
-- 支持大规模数据
-- 事务支持
+```rust
+use std::sync::Arc;
+use agentflow_tracing::{
+    OtelExporterConfig, OtelTraceExporter, TraceCollector, TraceConfig,
+};
+use agentflow_tracing::otlp::{OtlpHttpConfig, OtlpHttpSpanSink};
+use agentflow_tracing::storage::file::FileTraceStorage;
+use std::path::PathBuf;
+
+let storage = Arc::new(FileTraceStorage::new(PathBuf::from("./traces"))?);
+
+// OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS 环境变量
+// （标准 OTel SDK 约定），或手动构造：
+let otlp_config = OtlpHttpConfig::from_env()
+    .unwrap_or_else(|| OtlpHttpConfig::new("http://localhost:4318"));
+let sink = OtlpHttpSpanSink::new(otlp_config)?;
+let exporter = OtelTraceExporter::new(
+    OtelExporterConfig::new("my-service"),
+    sink,
+);
+
+let collector = TraceCollector::new(storage, TraceConfig::production())
+    .with_exporter(Arc::new(exporter));
+```
+
+只支持 HTTP 传输（"HTTP 先行"，见 TODOs.md W4.4）；gRPC 传输仍未实现，
+需要的话仍需自行实现 `OtelSpanSink`。批处理粒度是"每个完成的
+`ExecutionTrace` 一次导出"（跟随 `TraceCollector` 自身的批处理边界），
+不经过 OTel SDK 自己的 batch processor / sampler / 全局 tracer 注册。
 
 ---
 
@@ -629,9 +671,13 @@ let answer = AgentFlow::model("gpt-4o-mini")
 - 已经在用 `opentelemetry-rust` ：从 active span 取 `SpanContext`，
   `LlmTraceContext::new(span_ctx.trace_id().to_string(), span_ctx.span_id().to_string())`。
 - 只用 `agentflow-tracing` 内置 exporter：`agentflow-tracing/src/otel.rs`
-  里的 `trace_id(workflow_id)` / `span_id(workflow_id, "llm:{node_id}:{model}")`
-  生成确定性 ID，这与 LLM 出站 traceparent 一致 —— 接收方按 traceparent
-  创建的 child span 会无缝挂回同一棵树。
+  里的 `trace_id`/`span_id` 生成 W3C 规范要求的随机 16/8 字节 ID（Q2.2.2
+  修正——此前是从 `workflow_id` 派生的确定性 ID，违反 W3C "MUST be
+  random" 要求，已废弃）。跨进程一致性通过 `ExecutionTrace.metadata.
+  external_trace_id`/`external_parent_span_id` 承接入站 `traceparent`
+  实现（`trace_to_spans` 优先用这两个字段，没有才回退到随机生成），而不
+  是靠确定性派生。W4.4：`agentflow-tracing::otlp`（`otlp-http` feature）
+  现在提供开箱即用的 OTLP/HTTP 导出器，不必再自己实现 `OtelSpanSink`。
 
 ### 何时不会注入
 

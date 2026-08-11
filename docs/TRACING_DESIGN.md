@@ -572,7 +572,16 @@ impl FileTraceStorage {
     }
 }
 
-// ============ 实现 2: PostgreSQL (生产环境) ============
+// ============ 实现 2: PostgreSQL (生产环境) — 历史设计草稿，未落地 ============
+//
+// W4.4 核实：以下代码从未实现，且与实际的 DDL schema 不一致——
+// `agentflow-tracing::storage::schema::POSTGRES_TRACE_SCHEMA` 是
+// `trace_runs`/`trace_steps`/`trace_events`/`trace_tool_calls`/
+// `trace_mcp_calls` 五表规范化设计，不是下面这种单表 `execution_traces`
+// + JSONB 列的方案。当年支撑这个草稿的 `postgres` Cargo feature（挂了
+// 一个零引用的 `sqlx` 依赖）已在 W4.4 移除。如果未来真的要实现 SQL
+// 存储后端，应该以 `storage/schema.rs` 里的真实 DDL 为准重新设计，而
+// 不是照抄下面这段代码——保留仅作历史参考。
 
 pub struct PostgresTraceStorage {
     pool: sqlx::PgPool,

@@ -360,8 +360,13 @@ jobs:
             command: cargo check -p agentflow-config --all-targets
           - name: config-all-features
             command: cargo check -p agentflow-config --features mcp,rag,plugin --all-targets
-          - name: tracing-postgres
-            command: cargo check -p agentflow-tracing --features postgres
+          # W4.4: the `postgres` feature (a dead flag gating an
+          # unreferenced `sqlx` dep — no code in the crate ever consumed
+          # it) was removed. `otlp-http` is the crate's first real
+          # optional feature; check it compiles on its own matrix leg
+          # since it pulls in the opentelemetry dependency chain.
+          - name: tracing-otlp-http
+            command: cargo check -p agentflow-tracing --features otlp-http --all-targets
           - name: mcp-all-transports
             command: cargo check -p agentflow-mcp --features client,server,stdio,http
           - name: nodes-default

@@ -77,10 +77,12 @@ so the tool tier carries no capability dependencies.
   Linux seccomp+Landlock+cgroup v2) defaults **on** in production;
   `code_exec` runs LLM-generated Python inside a mandatory, strongly
   isolated `ContainerBackend` (zero network, hardcoded resource limits).
-- **Observability** — `EventListener`, JSONL/SQLite/Postgres trace
-  persistence, `trace replay` TUI, OTel span model + W3C context
-  propagation (first-party OTLP transport is still deferred — bring your
-  own `OtelSpanSink`).
+- **Observability** — `EventListener`, JSONL trace persistence
+  (`FileTraceStorage`; SQLite/Postgres are DDL-only schema constants with
+  no implementation), `trace replay` TUI, OTel span model + W3C context
+  propagation, first-party OTLP/HTTP+JSON exporter (`otlp-http` feature,
+  `OtlpHttpSpanSink`) — gRPC transport still deferred, bring your own
+  `OtelSpanSink` for that.
 - **Platform** — `agentflow-server` Axum gateway (`/v1/runs`, SSE,
   skills, Harness sessions/approvals), Postgres-backed `agentflow-db`
   (9 tables / 9 repos), per-tenant run admission control, distributed
