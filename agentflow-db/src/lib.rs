@@ -2,6 +2,7 @@ pub mod database;
 pub mod error;
 pub mod loop_checkpoint;
 pub mod models;
+pub mod notify;
 pub mod repo;
 
 pub use database::Database;
@@ -12,6 +13,7 @@ pub use models::{
   NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep,
   NewUserPreference, Run, RunStatus, SkillInstall, Step, UserPreference,
 };
+pub use notify::{NotifyListener, notify};
 pub use repo::{
   ArtifactRepo, EventRepo, HarnessEventRepo, HarnessSessionRepo, McpSessionRepo, PgArtifactRepo,
   PgEventRepo, PgHarnessEventRepo, PgHarnessSessionRepo, PgMcpSessionRepo, PgRunRepo,
