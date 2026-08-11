@@ -528,7 +528,7 @@ async fn call_llm_with_resilience(prompt: &str) -> Result<String, Box<dyn std::e
 - [Retry Mechanism](RETRY_MECHANISM.md) - Automatic retry with configurable strategies
 - [Health Checks](HEALTH_CHECKS.md) - System health monitoring
 - [Checkpoint Recovery](CHECKPOINT_RECOVERY.md) - Workflow state persistence and recovery
-- [Resource Management](RESOURCE_MANAGEMENT.md) - Memory limits and cleanup
+- [Resource Management (archived)](archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md) - superseded by the advisory-only `ResourceLimits` warning wired into `Flow` (W5.3)
 
 ---
 

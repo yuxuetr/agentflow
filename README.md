@@ -339,7 +339,7 @@ cargo check --workspace
 ### v0.2.0 Feature Guides
 - **[Retry Mechanism](docs/RETRY_MECHANISM.md)**: Comprehensive guide to retry configuration and strategies
 - **[Workflow Debugging](docs/WORKFLOW_DEBUGGING.md)**: CLI debugging tools and workflow visualization
-- **[Resource Management](docs/RESOURCE_MANAGEMENT.md)**: Memory limits, monitoring, and automatic cleanup
+- **[Resource Management (archived)](docs/archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md)**: Superseded by an advisory-only `ResourceLimits` warning (see `agentflow-core/src/scheduler.rs`'s `FlowExecutionConfig::resource_limits`) — the eviction/monitoring design this doc described was never wired in and part of it was found unsafe (W5.3)
 - **[Timeout Control](docs/TIMEOUT_CONTROL.md)**: Operation timeout management and configuration
 - **[Health Checks](docs/HEALTH_CHECKS.md)**: Kubernetes-compatible health and readiness monitoring
 - **[Checkpoint Recovery](docs/CHECKPOINT_RECOVERY.md)**: Workflow state persistence and fault tolerance

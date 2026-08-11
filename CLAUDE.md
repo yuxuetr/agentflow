@@ -36,8 +36,8 @@ DAG execution engine and core abstractions:
 - `AsyncNode` trait + `GraphNode` (dependencies, `input_mapping`, `run_if`, `initial_inputs`)
 - `NodeType::{Standard, Map, While}` with parallel/sequential map and conditional loops
 - `FlowValue::{Json, File, Url}` for explicit, namespaced state pool
-- Wired-in primitives (real callers in `Flow`/the executor): retry/retry_executor, timeout, checkpoint, events
-- Library-only primitives (implemented, tested, exercised by their own examples — but not called from `Flow`/the scheduler itself): `resource_manager`, `resource_limits`, `health`, `state_monitor`. See W5.3 in `TODOs.md` for the pending decision (wire in vs. remove) — don't describe these as production-integrated until that lands
+- Wired-in primitives (real callers in `Flow`/the executor): retry/retry_executor, timeout, checkpoint, events, `resource_limits` (W5.3 — `FlowExecutionConfig::resource_limits: Option<ResourceLimits>`, advisory-only: `notify_state_size` emits `WorkflowEvent::ResourceWarning` when the state pool exceeds the configured limit, never evicts or rejects)
+- `resource_manager`, `concurrency`, `state_monitor` were deleted in W5.3 — zero real callers workspace-wide, and `state_monitor`'s LRU eviction was actively unsafe for `Flow`'s state pool (a node's output can be a real dependency for any later node via `input_mapping`, regardless of recency). `health` (`HealthChecker`) is wired-in for real too, but its consumer lives in `agentflow-server` (`/health/ready` runs a `SELECT 1` DB check, `503` on failure), not in `agentflow-core` itself
 
 #### L2 — agentflow-nodes (tool tier) + agentflow-nodes-ai (capability tier)
 Split by the P-A nodes decomposition (`docs/RFC_NODES_DECOMPOSITION.md`) so the tool-tier crate carries no capability dependencies:
@@ -175,7 +175,7 @@ React + Vite + TypeScript SPA embedded by the server at `/ui`. Implemented: run 
 - **Agent-native runtime** — ReAct, Plan-Execute, Reflection, memory summary backends, hybrid composition (`AgentNode` / `WorkflowTool`)
 - **Multi-agent collaboration** — Handoff, Blackboard, Debate supervisors; `multi_agent` YAML node
 - **RAG** — chunking, embeddings, Qdrant, retrieval, reranking; CLI `rag ops search|index|collections` (operator vector-store ops) + `rag eval`; eval harness with Recall@K / MRR / nDCG@K metrics + paired baseline comparison
-- **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks, checkpoint recovery, retry, resource management, structured logging, Prometheus metrics
+- **Observability/reliability (Phase 1.5)** — timeout control, K8s-compatible health checks (`agentflow-server`'s `/health`/`/health/live` unconditional 200, `/health/ready` runs a real DB `SELECT 1` and returns 503 on failure, W5.3), checkpoint recovery, retry, advisory-only resource-limit warnings (`FlowExecutionConfig::resource_limits` → `WorkflowEvent::ResourceWarning`, W5.3 — no eviction/enforcement mechanism exists), structured logging, Prometheus metrics
 - **Tracing** — `EventListener`, JSONL persistence (`FileTraceStorage`; SQLite/Postgres are DDL-only, unimplemented), `trace replay` TUI, OTel span model + W3C `traceparent` propagation (inbound on workflow start + outbound through LLM HTTP calls). First-party OTLP/HTTP+JSON exporter ships (W4.4, `otlp-http` feature); gRPC transport (+ TLS + auth) is **deferred** — operators wire their own `OtelSpanSink` for that.
 - **OS-level sandbox** — macOS sandbox-exec / Linux seccomp+Landlock+cgroup v2 backends for shell/script tools, `security.os_sandbox` defaults `true` (S3.4 — a skill opts a tool *out*, not in); active backend name + `enforcement_level` (`enforcing` / `permissive` / `disabled`) is visible in `ToolCapabilityDecision` events and `agentflow doctor --format json` output
 - **`code_exec` LLM code execution** (S4.2) — `ContainerBackend` (Apple `container` CLI / rootless Podman) runs LLM-generated Python in a mandatory, strongly-isolated per-call container/microVM, separate from the OS-sandbox tier above; zero network access until an egress allowlist proxy lands; `agentflow doctor` / `skill inspect --explain-permissions` report its status independently
@@ -287,7 +287,7 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 
 ---
 
-**Last Updated**: 2026-08-11 (W4.2 cross-replica gateway state externalized (SSE broker / cancellation / approvals / admission all now cross-replica-safe via Postgres NOTIFY + DB-intent patterns, `replicaCount: 1` no longer a hard constraint); W4.3b wired `DistributedDagScheduler` into `POST /v1/runs` via opt-in `execution_mode: "distributed"`; W5.1 doc-code drift correction pass)
+**Last Updated**: 2026-08-12 (W4.2 cross-replica gateway state externalized (SSE broker / cancellation / approvals / admission all now cross-replica-safe via Postgres NOTIFY + DB-intent patterns, `replicaCount: 1` no longer a hard constraint); W4.3b wired `DistributedDagScheduler` into `POST /v1/runs` via opt-in `execution_mode: "distributed"`; W5.1 doc-code drift correction pass; W5.3 deleted `resource_manager`/`concurrency`/`state_monitor` (zero real callers, `state_monitor`'s LRU eviction unsafe for `Flow`'s state pool), wired `resource_limits` into `Flow` as an advisory-only warning, and wired `HealthChecker` into `agentflow-server`'s `/health/ready`)
 **AgentFlow Version**: 0.2.0+ (targeting v0.3.0)
 **Rust Edition**: 2024 (all workspace members)
 **Composite Maturity Rating**: A (per `docs/archive/PROJECT_EVALUATION_2026-05-19.md`)

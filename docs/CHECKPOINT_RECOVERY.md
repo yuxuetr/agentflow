@@ -868,7 +868,7 @@ println!("Checkpoint directory size: {} MB", size / 1024 / 1024);
 
 - [Timeout Control](TIMEOUT_CONTROL.md) - Operation timeout management
 - [Health Checks](HEALTH_CHECKS.md) - System health monitoring
-- [Resource Management](RESOURCE_MANAGEMENT.md) - Memory limits and cleanup
+- [Resource Management (archived)](archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md) - superseded by the advisory-only `ResourceLimits` warning wired into `Flow` (W5.3)
 - [Retry Mechanism](RETRY_MECHANISM.md) - Automatic retry with backoff
 
 ---

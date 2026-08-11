@@ -1,7 +1,31 @@
+> **STALE — archived 2026-08-12 (W5.3).** This document described
+> `ResourceManager`, `ConcurrencyLimiter`, and `StateMonitor` as
+> production-ready, but none had a real caller anywhere in the workspace —
+> confirmed via a dedicated codebase audit. `StateMonitor`'s LRU eviction
+> in particular was **unsafe** to wire into `Flow`'s actual state pool: a
+> DAG node's output can be a real dependency for *any* later node via
+> `input_mapping`, regardless of how recently it was "accessed" — the
+> exact assumption LRU eviction relies on. All three modules
+> (`resource_manager.rs`, `concurrency.rs`, `state_monitor.rs`) were
+> deleted in W5.3-1.
+>
+> `ResourceLimits` (this doc's "Resource Limits" section only — pure,
+> safe predicates, no eviction) survived and is now wired into `Flow` as
+> an **advisory-only** `WorkflowEvent::ResourceWarning` — see
+> `FlowExecutionConfig::resource_limits` in
+> `agentflow-core/src/scheduler.rs` and the wiring in `flow.rs`'s
+> `notify_state_size`. It never evicts, rejects, or otherwise acts on the
+> state pool; it only emits a warning event when the configured
+> `max_state_size` is exceeded. There is no current replacement for the
+> "State Monitoring" / "Automatic Cleanup" / "Resource Alerts" sections
+> below — see `TODOs.md`'s W5.3 entry for the full decision record.
+>
+> The rest of this document is retained for historical reference only.
+
 # AgentFlow Resource Management
 
 **Version**: 0.1.0
-**Status**: Production Ready ✅
+**Status**: Production Ready ✅ (SUPERSEDED — see banner above)
 **Last Updated**: 2025-10-26
 
 ## Table of Contents

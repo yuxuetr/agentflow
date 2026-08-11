@@ -394,4 +394,4 @@ See [API docs](https://docs.rs/agentflow-core) for complete reference:
 
 ---
 
-**Related**: See [WORKFLOW_DEBUGGING.md](./WORKFLOW_DEBUGGING.md) and [RESOURCE_MANAGEMENT.md](./RESOURCE_MANAGEMENT.md) for adjacent workflow reliability features.
+**Related**: See [WORKFLOW_DEBUGGING.md](./WORKFLOW_DEBUGGING.md) for adjacent workflow reliability features. (The former resource-management guide was archived in W5.3 — see [archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md](./archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md).)

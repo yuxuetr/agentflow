@@ -10,12 +10,20 @@
 > only has `deployment.yaml` / `service.yaml` / `serviceaccount.yaml` /
 > `secret.yaml`). For the actual, tested deployment path, see
 > [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm) and `charts/agentflow/values.yaml`.
-> The Health Check Integration section below (the Rust code + `/health/live`
-> `/health/ready` `/metrics` endpoints) is still accurate and is exactly what
-> the real chart's liveness/readiness probes call. Everything from
-> "Deployment Configuration" onward is retained as a reference sketch for
-> operators who want to build out HPA/PDB/NetworkPolicy/ServiceMonitor
-> support themselves — adapt it, don't `kubectl apply` it as-is.
+> The route shape below (`/health`, `/health/live`, `/health/ready`,
+> `/metrics`) is exactly what the real chart's liveness/readiness probes
+> call — but the "Implementing Health Endpoints" Rust sample (W5.3
+> correction) is illustrative only: `checker.is_alive()`/`checker.is_ready()`
+> never existed on the real `HealthChecker` (see
+> [`HEALTH_CHECKS.md`](HEALTH_CHECKS.md) for its actual, much smaller API).
+> `agentflow-server`'s real implementation doesn't route through
+> `HealthChecker::is_ready()` at all: `/health` and `/health/live` are
+> unconditional `200`s, and `/health/ready` builds a fresh `HealthChecker`
+> per request with a single `"database"` `SELECT 1` check and returns `503`
+> when it fails. Everything from "Deployment Configuration" onward is
+> retained as a reference sketch for operators who want to build out
+> HPA/PDB/NetworkPolicy/ServiceMonitor support themselves — adapt it, don't
+> `kubectl apply` it as-is.
 
 This guide demonstrates how to deploy AgentFlow workflows in Kubernetes with integrated health checks, leveraging Phase 1.5 features for production-ready deployments.
 
@@ -639,22 +647,25 @@ data:
 
 ### 2. Resource Management
 
-**Align Kubernetes and AgentFlow Limits:**
+There is no YAML/env config surface for workflow-level memory limits today
+— `ResourceLimits` is an in-process Rust API only
+(`FlowExecutionConfig::resource_limits`, set programmatically by an
+embedder), and it is advisory-only: it emits a `WorkflowEvent::ResourceWarning`
+when the state pool exceeds the configured limit, but never evicts state or
+rejects work (W5.3; see `agentflow-core/src/scheduler.rs`). The `cleanup_threshold`/
+`auto_cleanup` knobs some earlier drafts of this doc described belonged to
+`StateMonitor`, which was deleted in W5.3 (its LRU eviction was unsafe for
+`Flow`'s state pool) and was never wired into `Flow` regardless.
 
-```yaml
-# Kubernetes
-resources:
-  limits:
-    memory: "2Gi"
-
-# AgentFlow ResourceManagerConfig
-workflow_memory_limit: 2147483648  # 2 GB
-```
-
-**Monitor Memory Usage:**
-- Set up alerts for approaching memory limits
-- Use `cleanup_threshold: 0.8` for proactive cleanup
-- Enable `auto_cleanup: true` in production
+**What to actually align today:**
+- Set the Kubernetes container `resources.limits.memory` based on observed
+  process RSS for your workflows (`/metrics`'s `agentflow_memory_usage_bytes`
+  gauge, Linux only) — this is an OS-level cap, independent of any
+  AgentFlow-side accounting.
+- If you need AgentFlow to warn before OOM, construct a `ResourceLimits` and
+  pass it via `FlowExecutionConfig::resource_limits` when you build the
+  `Flow` in your own embedding code, and subscribe an `EventListener` for
+  `WorkflowEvent::ResourceWarning`.
 
 ### 3. Checkpoint Recovery
 
