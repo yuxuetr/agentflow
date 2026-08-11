@@ -612,6 +612,74 @@ async fn health_route_stays_open_under_auth() {
   );
 }
 
+// ── W5.3: /health/ready actually probes the database ──────────────────────
+
+#[tokio::test]
+async fn readiness_check_returns_200_when_database_reachable() {
+  let Some(state) = fresh_state().await else {
+    eprintln!(
+      "skipping readiness_check_returns_200_when_database_reachable — set AGENTFLOW_DATABASE_TEST_URL"
+    );
+    return;
+  };
+  let app = create_router(state);
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/health/ready")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+
+  let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+    .await
+    .unwrap();
+  let json: Value = serde_json::from_slice(&body).unwrap();
+  assert_eq!(json["status"], "ok");
+  assert_eq!(json["checks"][0]["name"], "database");
+  assert_eq!(json["checks"][0]["status"], "healthy");
+}
+
+/// Hermetic — deliberately does not use `fresh_state()`/
+/// `AGENTFLOW_DATABASE_TEST_URL`. A lazily-connected pool pointed at an
+/// unreachable address never establishes a real connection until first
+/// use, which is exactly when the readiness probe's `SELECT 1` runs and
+/// fails, proving the 503 path without needing live Postgres.
+#[tokio::test]
+async fn readiness_check_returns_503_when_database_unreachable() {
+  let unreachable_pool = sqlx::postgres::PgPoolOptions::new()
+    .connect_lazy("postgres://user:pass@127.0.0.1:1/nonexistent")
+    .expect("connect_lazy never touches the network eagerly");
+  let db = Database {
+    pool: unreachable_pool,
+    read_pool: None,
+  };
+  let state = AppState::new(db);
+  let app = create_router(state);
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/health/ready")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+  let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+    .await
+    .unwrap();
+  let json: Value = serde_json::from_slice(&body).unwrap();
+  assert_eq!(json["status"], "unhealthy");
+  assert_eq!(json["checks"][0]["name"], "database");
+  assert_eq!(json["checks"][0]["status"], "unhealthy");
+}
+
 // P2.6 follow-up after ddc497c: cover every workflow-side endpoint
 // that takes a path-bound `:id` so future handlers added without a
 // tenant boundary trip a CI failure here.

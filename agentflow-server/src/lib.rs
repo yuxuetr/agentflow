@@ -20,6 +20,7 @@ use tower_http::{
   trace::TraceLayer,
 };
 
+use agentflow_core::{AgentFlowError, HealthChecker, HealthStatus};
 use agentflow_db::{Database, Repositories};
 use agentflow_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 
@@ -761,15 +762,82 @@ async fn liveness_check() -> Json<HealthResponse> {
   Json(healthy())
 }
 
-async fn readiness_check() -> Json<HealthResponse> {
-  Json(healthy())
-}
-
 fn healthy() -> HealthResponse {
   HealthResponse {
     status: "ok",
     service: "agentflow-server",
   }
+}
+
+#[derive(Debug, Serialize)]
+struct ReadinessCheckResult {
+  name: String,
+  status: &'static str,
+  message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReadinessResponse {
+  status: &'static str,
+  service: &'static str,
+  checks: Vec<ReadinessCheckResult>,
+}
+
+/// W5.3: unlike `/health`/`/health/live` (always unconditional 200 — K8s
+/// liveness must never depend on external dependencies), `/health/ready`
+/// actually probes the database via the same `SELECT 1` pattern
+/// `refresh_scrape_time_gauges` already runs for the `/metrics` gauge, and
+/// returns 503 when it fails so a load balancer stops routing traffic to
+/// an instance that can't reach Postgres.
+async fn readiness_check(
+  axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl axum::response::IntoResponse {
+  let checker = HealthChecker::new();
+  let pool = state.db.read_pool().clone();
+  checker
+    .add_check("database", move || {
+      let pool = pool.clone();
+      Box::pin(async move {
+        sqlx::query("SELECT 1")
+          .execute(&pool)
+          .await
+          .map(|_| HealthStatus::Healthy)
+          .map_err(|error| AgentFlowError::NetworkError {
+            message: format!("database readiness check failed: {error}"),
+          })
+      })
+    })
+    .await;
+
+  let report = checker.check_health().await;
+  let status_code = if report.is_healthy {
+    axum::http::StatusCode::OK
+  } else {
+    axum::http::StatusCode::SERVICE_UNAVAILABLE
+  };
+
+  let checks = report
+    .checks
+    .into_iter()
+    .map(|check| ReadinessCheckResult {
+      name: check.name,
+      status: match check.status {
+        HealthStatus::Healthy => "healthy",
+        HealthStatus::Degraded => "degraded",
+        HealthStatus::Unhealthy => "unhealthy",
+      },
+      message: check.message,
+    })
+    .collect();
+
+  (
+    status_code,
+    Json(ReadinessResponse {
+      status: if report.is_healthy { "ok" } else { "unhealthy" },
+      service: "agentflow-server",
+      checks,
+    }),
+  )
 }
 
 #[derive(Debug, Serialize)]
