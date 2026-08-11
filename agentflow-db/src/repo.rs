@@ -93,6 +93,22 @@ pub trait EventRepo: Send + Sync {
   /// [`HarnessEventRepo::max_seq`]; SQL is a one-row `MAX(seq)`
   /// scan that uses the `events_tenant_run_idx` covering index.
   async fn max_seq(&self, tenant_id: &str, run_id: Uuid) -> Result<Option<i64>, DbError>;
+
+  /// W4.2e: `approval_requested` event payloads for `(tenant_id, run_id)`
+  /// with no matching `approval_decided` for the same `request_id`,
+  /// oldest first. Derives "pending" from the append-only event log
+  /// (already written by `RunHarnessEventSink`) rather than any
+  /// in-memory registry, so the result is correct regardless of which
+  /// replica actually holds the live `oneshot` for a given request.
+  /// Each returned value is the inner `ApprovalRequest` JSON object
+  /// (`payload->payload->request`, not the whole envelope) — callers
+  /// deserialize it themselves rather than this crate depending on
+  /// `agentflow-harness`'s types.
+  async fn list_pending_approvals(
+    &self,
+    tenant_id: &str,
+    run_id: Uuid,
+  ) -> Result<Vec<serde_json::Value>, DbError>;
 }
 
 #[async_trait]
@@ -201,6 +217,16 @@ pub trait HarnessEventRepo: Send + Sync {
   /// no events exist yet. Used by the `:resume` route's append-mode
   /// flavour to pick a non-colliding `initial_seq` for the next run.
   async fn max_seq(&self, session_id: Uuid) -> Result<Option<i64>, DbError>;
+
+  /// W4.2e: mirrors `EventRepo::list_pending_approvals` — see that
+  /// method's doc comment for the full derivation. Same JOIN-back
+  /// pattern as `list_after` above, since `harness_session_events`
+  /// carries no `tenant_id` column of its own.
+  async fn list_pending_approvals(
+    &self,
+    tenant_id: &str,
+    session_id: Uuid,
+  ) -> Result<Vec<serde_json::Value>, DbError>;
 }
 
 // ----- Postgres implementations -----
@@ -442,6 +468,39 @@ impl EventRepo for PgEventRepo {
         .fetch_optional(&self.read_pool)
         .await?;
     Ok(row.and_then(|(value,)| value))
+  }
+
+  async fn list_pending_approvals(
+    &self,
+    tenant_id: &str,
+    run_id: Uuid,
+  ) -> Result<Vec<serde_json::Value>, DbError> {
+    // `payload` stores the whole serialized `HarnessEventBody`
+    // (`#[serde(tag = "kind", content = "payload")]`), so the inner
+    // `ApprovalRequest`/`ApprovalDecision` live one level deeper than
+    // the `kind` column already tells us — `#>>` extracts a JSONB path
+    // as text so the two sides of the correlation (a request's own id,
+    // a decision's `request_id`) compare directly.
+    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+      r#"SELECT e1.payload #> '{payload,request}'
+         FROM events e1
+         WHERE e1.tenant_id = $1
+           AND e1.run_id = $2
+           AND e1.kind = 'approval_requested'
+           AND NOT EXISTS (
+             SELECT 1 FROM events e2
+             WHERE e2.tenant_id = e1.tenant_id
+               AND e2.run_id = e1.run_id
+               AND e2.kind = 'approval_decided'
+               AND e2.payload #>> '{payload,decision,request_id}' = e1.payload #>> '{payload,request,id}'
+           )
+         ORDER BY e1.seq ASC"#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_all(&self.read_pool)
+    .await?;
+    Ok(rows.into_iter().map(|(payload,)| payload).collect())
   }
 }
 
@@ -827,6 +886,84 @@ impl HarnessEventRepo for PgHarnessEventRepo {
         .await?;
     Ok(row.and_then(|(value,)| value))
   }
+
+  async fn list_pending_approvals(
+    &self,
+    tenant_id: &str,
+    session_id: Uuid,
+  ) -> Result<Vec<serde_json::Value>, DbError> {
+    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+      r#"SELECT e1.payload #> '{payload,request}'
+         FROM harness_session_events e1
+         JOIN harness_sessions s ON s.id = e1.session_id
+         WHERE s.tenant_id = $1
+           AND e1.session_id = $2
+           AND e1.kind = 'approval_requested'
+           AND NOT EXISTS (
+             SELECT 1 FROM harness_session_events e2
+             WHERE e2.session_id = e1.session_id
+               AND e2.kind = 'approval_decided'
+               AND e2.payload #>> '{payload,decision,request_id}' = e1.payload #>> '{payload,request,id}'
+           )
+         ORDER BY e1.seq ASC"#,
+    )
+    .bind(tenant_id)
+    .bind(session_id)
+    .fetch_all(&self.read_pool)
+    .await?;
+    Ok(rows.into_iter().map(|(payload,)| payload).collect())
+  }
+}
+
+/// W4.2e: cross-replica approval decision intents. `session_id` spans two
+/// unrelated ID namespaces (real `harness_sessions.id` and `runs.id`
+/// formatted as text, per `PendingApprovalRegistry`'s own generic
+/// `(session_id, request_id)` key) — kept as a standalone trait rather
+/// than a method on `HarnessSessionRepo`/`RunRepo` since it isn't owned
+/// by either entity's lifecycle. `decision` is stored as opaque JSONB;
+/// this crate doesn't depend on `agentflow-harness`'s `ApprovalDecision`
+/// type, callers serialize/deserialize it themselves.
+#[async_trait]
+pub trait ApprovalIntentRepo: Send + Sync {
+  /// Idempotent (`ON CONFLICT DO NOTHING` — the first decision for a
+  /// given request wins, matching `PendingApprovalRegistry::decide`'s
+  /// own single-resolution oneshot semantics).
+  async fn record_decision_intent(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    tenant_id: &str,
+    decision: &serde_json::Value,
+  ) -> Result<(), DbError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct PgApprovalIntentRepo {
+  pub pool: PgPool,
+}
+
+#[async_trait]
+impl ApprovalIntentRepo for PgApprovalIntentRepo {
+  async fn record_decision_intent(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    tenant_id: &str,
+    decision: &serde_json::Value,
+  ) -> Result<(), DbError> {
+    sqlx::query(
+      r#"INSERT INTO approval_decision_intents (session_id, request_id, tenant_id, decision)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (session_id, request_id) DO NOTHING"#,
+    )
+    .bind(session_id)
+    .bind(request_id)
+    .bind(tenant_id)
+    .bind(decision)
+    .execute(&self.pool)
+    .await?;
+    Ok(())
+  }
 }
 
 /// Convenience bundle of all Pg repositories backed by the same pool.
@@ -844,6 +981,7 @@ pub struct Repositories {
   pub harness_sessions: PgHarnessSessionRepo,
   pub harness_events: PgHarnessEventRepo,
   pub user_preferences: PgUserPreferenceRepo,
+  pub approval_intents: PgApprovalIntentRepo,
 }
 
 impl Repositories {
@@ -893,9 +1031,10 @@ impl Repositories {
         read_pool: read_pool.clone(),
       },
       user_preferences: PgUserPreferenceRepo {
-        pool: write_pool,
+        pool: write_pool.clone(),
         read_pool,
       },
+      approval_intents: PgApprovalIntentRepo { pool: write_pool },
     }
   }
 

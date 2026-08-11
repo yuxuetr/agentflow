@@ -9,10 +9,10 @@
 //! ```
 
 use agentflow_db::{
-  Artifact, ArtifactRepo, Database, EventRepo, HarnessEventRepo, HarnessSessionRepo,
-  HarnessSessionStatus, McpSession, McpSessionRepo, NewArtifact, NewEvent, NewHarnessSession,
-  NewHarnessSessionEvent, NewRun, NewStep, Repositories, RunRepo, RunStatus, SkillInstall,
-  SkillInstallRepo, StepRepo,
+  ApprovalIntentRepo, Artifact, ArtifactRepo, Database, EventRepo, HarnessEventRepo,
+  HarnessSessionRepo, HarnessSessionStatus, McpSession, McpSessionRepo, NewArtifact, NewEvent,
+  NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep, Repositories, RunRepo, RunStatus,
+  SkillInstall, SkillInstallRepo, StepRepo,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -252,6 +252,121 @@ async fn run_repo_record_cancellation_intent_is_idempotent() {
     count, 1,
     "duplicate cancellation intents must not create a second row"
   );
+}
+
+/// W4.2e: `ApprovalIntentRepo::record_decision_intent` must be
+/// idempotent (`ON CONFLICT (session_id, request_id) DO NOTHING`) — the
+/// first decision for a given request wins, matching
+/// `PendingApprovalRegistry::decide`'s own single-resolution oneshot
+/// semantics. Mirrors `run_repo_record_cancellation_intent_is_idempotent`.
+#[tokio::test]
+async fn approval_intent_repo_record_decision_intent_is_idempotent() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping approval_intent_repo_record_decision_intent_is_idempotent");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let session_id = Uuid::new_v4().to_string();
+  let tenant = format!("tenant-approval-intent-{}", Uuid::new_v4());
+  let first_decision = json!({"decision": "allow", "decided_by": "operator-1"});
+  let second_decision = json!({"decision": "deny_and_stop", "decided_by": "operator-2"});
+
+  repos
+    .approval_intents
+    .record_decision_intent(&session_id, "req-1", &tenant, &first_decision)
+    .await
+    .expect("first record succeeds");
+  repos
+    .approval_intents
+    .record_decision_intent(&session_id, "req-1", &tenant, &second_decision)
+    .await
+    .expect("second record is a no-op, not an error");
+
+  let (count, stored): (i64, serde_json::Value) = sqlx::query_as(
+    "SELECT count(*) OVER (), (array_agg(decision))[1] \
+     FROM approval_decision_intents WHERE session_id = $1 AND request_id = $2",
+  )
+  .bind(&session_id)
+  .bind("req-1")
+  .fetch_one(&db.pool)
+  .await
+  .expect("count+fetch query");
+  assert_eq!(
+    count, 1,
+    "duplicate decision intents must not create a second row"
+  );
+  assert_eq!(
+    stored["decided_by"], "operator-1",
+    "the first decision must win, not the second"
+  );
+}
+
+/// W4.2e: `EventRepo::list_pending_approvals` derives "pending" from the
+/// append-only `events` log — an `approval_requested` row surfaces until
+/// a matching `approval_decided` row (correlated by `request_id`)
+/// appears, at which point it's excluded. This is the exact query the
+/// cross-replica list/decide routes lean on, tested directly here since
+/// `cross_replica_run_approvals.rs` only ever exercises the
+/// still-pending half of the contract.
+#[tokio::test]
+async fn event_repo_list_pending_approvals_excludes_decided() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping event_repo_list_pending_approvals_excludes_decided");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-pending-approvals-{}", Uuid::new_v4());
+  let run_id = seed_run(&repos, &tenant).await;
+
+  repos
+    .events
+    .append(NewEvent {
+      run_id,
+      seq: 1,
+      kind: "approval_requested".to_string(),
+      payload: json!({"kind": "approval_requested", "payload": {"request": {"id": "req-a"}}}),
+      tenant_id: Some(tenant.clone()),
+    })
+    .await
+    .expect("append approval_requested for req-a");
+  repos
+    .events
+    .append(NewEvent {
+      run_id,
+      seq: 2,
+      kind: "approval_requested".to_string(),
+      payload: json!({"kind": "approval_requested", "payload": {"request": {"id": "req-b"}}}),
+      tenant_id: Some(tenant.clone()),
+    })
+    .await
+    .expect("append approval_requested for req-b");
+
+  let pending = repos
+    .events
+    .list_pending_approvals(&tenant, run_id)
+    .await
+    .expect("list before any decision");
+  assert_eq!(pending.len(), 2, "both requests are pending so far");
+
+  repos
+    .events
+    .append(NewEvent {
+      run_id,
+      seq: 3,
+      kind: "approval_decided".to_string(),
+      payload: json!({"kind": "approval_decided", "payload": {"decision": {"request_id": "req-a"}}}),
+      tenant_id: Some(tenant.clone()),
+    })
+    .await
+    .expect("append approval_decided for req-a");
+
+  let pending = repos
+    .events
+    .list_pending_approvals(&tenant, run_id)
+    .await
+    .expect("list after deciding req-a");
+  assert_eq!(pending.len(), 1, "req-a must drop out once decided");
+  assert_eq!(pending[0]["id"], "req-b");
 }
 
 #[tokio::test]

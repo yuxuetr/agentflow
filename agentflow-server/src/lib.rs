@@ -68,8 +68,9 @@ pub use harness::{
   spawn_harness_events_listener, stream_harness_events, submit_harness_session,
 };
 pub use harness_approval::{
-  ApprovalDecisionRequest, ApprovalDecisionResponse, ApprovalResolveError, PendingApprovalRegistry,
-  PendingApprovalsResponse, ServerApprovalProvider, decide_approval, list_pending_approvals,
+  APPROVAL_DECISIONS_NOTIFY_CHANNEL, ApprovalDecisionRequest, ApprovalDecisionResponse,
+  ApprovalResolveError, PendingApprovalRegistry, PendingApprovalsResponse, ServerApprovalProvider,
+  decide_approval, list_pending_approvals, spawn_approval_decision_listener,
 };
 pub use harness_live::{LiveHarnessExecutor, ServerHarnessEventSink};
 pub use live_state_registry::LiveStateRegistry;

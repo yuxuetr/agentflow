@@ -51,7 +51,7 @@ use crate::error::{ApiError, JsonReq};
 use crate::events_stream::{EventBroker, WorkflowEventListener, publish_through};
 use crate::harness_approval::{
   ApprovalDecisionRequest, ApprovalResolveError, PendingApprovalRegistry, PendingApprovalsResponse,
-  ServerApprovalProvider,
+  ServerApprovalProvider, spawn_record_decision_intent_and_notify,
 };
 use crate::tenant::TenantId;
 
@@ -899,8 +899,30 @@ pub async fn list_run_approvals(
     return Err(ApiError::NotFound(format!("run {} not found", run_id)));
   }
 
-  let pending = state.approval_registry.list(&run_id.to_string());
-  Ok(Json(PendingApprovalsResponse { approvals: pending }))
+  // W4.2e: union of the local registry (same-replica, always current)
+  // and the DB-derived pending set (correct regardless of which
+  // replica parked the request) — mirrors
+  // `harness_approval::merged_pending_approvals`, keyed by `run_id`
+  // against `EventRepo::list_pending_approvals` instead of
+  // `HarnessEventRepo`'s session-scoped equivalent.
+  let mut by_id: std::collections::HashMap<String, agentflow_harness::ApprovalRequest> =
+    std::collections::HashMap::new();
+  for request in state.approval_registry.list(&run_id.to_string()) {
+    by_id.insert(request.id.clone(), request);
+  }
+  let db_pending = state
+    .repos
+    .events
+    .list_pending_approvals(tenant.as_str(), run_id)
+    .await?;
+  for value in db_pending {
+    if let Ok(request) = serde_json::from_value::<agentflow_harness::ApprovalRequest>(value) {
+      by_id.entry(request.id.clone()).or_insert(request);
+    }
+  }
+  let mut approvals: Vec<agentflow_harness::ApprovalRequest> = by_id.into_values().collect();
+  approvals.sort_by_key(|req| req.requested_at);
+  Ok(Json(PendingApprovalsResponse { approvals }))
 }
 
 #[derive(Debug, Serialize)]
@@ -937,25 +959,64 @@ pub async fn decide_run_approval(
     decided_at: chrono::Utc::now(),
     reason: body.reason,
   };
+  let run_key = run_id.to_string();
 
+  // W4.2e: same local-first-then-DB-fallback shape as
+  // `harness_approval::decide_approval`.
   match state
     .approval_registry
-    .decide(&run_id.to_string(), &request_id, decision)
+    .decide(&run_key, &request_id, decision.clone())
   {
-    Ok(()) => Ok(Json(RunApprovalDecisionResponse {
-      run_id,
-      request_id,
-      resolved: true,
-    })),
-    Err(ApprovalResolveError::NotFound) => Err(ApiError::NotFound(format!(
+    Ok(()) => {
+      spawn_record_decision_intent_and_notify(
+        &state,
+        &run_key,
+        &request_id,
+        tenant.as_str(),
+        &decision,
+      );
+      return Ok(Json(RunApprovalDecisionResponse {
+        run_id,
+        request_id,
+        resolved: true,
+      }));
+    }
+    Err(ApprovalResolveError::ProviderGone) => {
+      return Err(ApiError::BadRequest(format!(
+        "approval {} cannot be decided: provider future already dropped",
+        request_id
+      )));
+    }
+    Err(ApprovalResolveError::NotFound) => {}
+  }
+
+  let db_pending = state
+    .repos
+    .events
+    .list_pending_approvals(tenant.as_str(), run_id)
+    .await?;
+  let exists = db_pending
+    .iter()
+    .any(|value| value.get("id").and_then(|v| v.as_str()) == Some(request_id.as_str()));
+  if !exists {
+    return Err(ApiError::NotFound(format!(
       "no pending approval {} for run {}",
       request_id, run_id
-    ))),
-    Err(ApprovalResolveError::ProviderGone) => Err(ApiError::BadRequest(format!(
-      "approval {} cannot be decided: provider future already dropped",
-      request_id
-    ))),
+    )));
   }
+
+  spawn_record_decision_intent_and_notify(
+    &state,
+    &run_key,
+    &request_id,
+    tenant.as_str(),
+    &decision,
+  );
+  Ok(Json(RunApprovalDecisionResponse {
+    run_id,
+    request_id,
+    resolved: true,
+  }))
 }
 
 /// Resolve the gateway's opt-in file-backed trace dir. Returns `None`

@@ -527,6 +527,13 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     db.pool.clone(),
     state.cancellation_registry.clone(),
   );
+  // W4.2e: cross-replica approval-decision listener — same posture.
+  // Shared by both the harness-session and run-scoped approval routes,
+  // since both resolve entries in the same `AppState::approval_registry`.
+  crate::harness_approval::spawn_approval_decision_listener(
+    db.pool.clone(),
+    state.approval_registry.clone(),
+  );
 
   // T1.2: optional worker gRPC control-plane listener. Admission
   // misconfiguration (e.g. production profile with no credentials —

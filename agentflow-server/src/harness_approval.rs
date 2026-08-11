@@ -37,7 +37,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use agentflow_db::HarnessSessionRepo;
+use tracing::warn;
+
+use agentflow_db::{ApprovalIntentRepo, HarnessEventRepo, HarnessSessionRepo, NotifyListener};
 use agentflow_harness::{
   ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest, ApprovalScope, HarnessError,
 };
@@ -45,6 +47,150 @@ use agentflow_harness::{
 use crate::AppState;
 use crate::error::{ApiError, JsonReq};
 use crate::tenant::TenantId;
+
+/// Postgres NOTIFY channel carrying cross-replica approval decisions
+/// (W4.2e). Unlike [`crate::runs::RUN_CANCELLATION_NOTIFY_CHANNEL`],
+/// `PendingApprovalRegistry::decide` needs the full decision — not just
+/// an id — so the payload is the JSON-encoded [`ApprovalDecisionNotifyPayload`]
+/// rather than a bare id string. Well under Postgres's ~8000-byte NOTIFY
+/// payload cap (a decision is a handful of short strings/timestamps).
+///
+/// Shared between the harness-session routes in this module and the
+/// run-scoped mirror routes in `crate::runs` (W4.1b) — both resolve
+/// entries in the same [`PendingApprovalRegistry`].
+pub const APPROVAL_DECISIONS_NOTIFY_CHANNEL: &str = "agentflow_approval_decisions";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ApprovalDecisionNotifyPayload {
+  session_id: String,
+  request_id: String,
+  decision: ApprovalDecision,
+}
+
+/// W4.2e: cross-replica approval-decision listener. Spawn one per
+/// gateway replica at boot, mirroring
+/// `crate::runs::spawn_run_cancellation_listener`'s shape exactly — a
+/// bare local-registry call on receipt, harmless no-op on every replica
+/// that isn't holding the parked oneshot.
+pub fn spawn_approval_decision_listener(
+  pool: sqlx::PgPool,
+  approval_registry: PendingApprovalRegistry,
+) {
+  tokio::spawn(async move {
+    loop {
+      let mut listener =
+        match NotifyListener::connect(&pool, &[APPROVAL_DECISIONS_NOTIFY_CHANNEL]).await {
+          Ok(listener) => listener,
+          Err(err) => {
+            warn!(error = %err, "approval decision listener: connect failed, retrying in 5s");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+          }
+        };
+      loop {
+        let (_, payload) = match listener.recv().await {
+          Ok(pair) => pair,
+          Err(err) => {
+            warn!(error = %err, "approval decision listener: recv failed, reconnecting");
+            break;
+          }
+        };
+        match serde_json::from_str::<ApprovalDecisionNotifyPayload>(&payload) {
+          Ok(parsed) => {
+            let _ =
+              approval_registry.decide(&parsed.session_id, &parsed.request_id, parsed.decision);
+          }
+          Err(err) => {
+            warn!(error = %err, payload = %payload, "approval decision listener: malformed payload, skipping");
+          }
+        }
+      }
+    }
+  });
+}
+
+/// Best-effort, durable cross-replica record of a decision: writes the
+/// `approval_decision_intents` row (`ON CONFLICT DO NOTHING` — first
+/// decision wins) and fires the NOTIFY every replica's listener above
+/// picks up. Failures are logged, never surfaced to anyone — the local
+/// [`PendingApprovalRegistry::decide`] fast path (tried by the caller
+/// before or after this, depending on which resolved the request) is
+/// what actually matters for the HTTP response; this is purely to wake
+/// up a *different* replica if the request lives there.
+///
+/// Deliberately spawned as a detached background task by every call
+/// site (see [`spawn_record_decision_intent_and_notify`]) rather than
+/// awaited inline: it does two sequential DB round trips, and the
+/// decide routes are on a latency-sensitive path that a live harness
+/// executor's own background polling can already contend for a small
+/// connection pool. Since this write is already best-effort (the local
+/// registry decide is what makes the response correct), there's no
+/// reason to make the HTTP response wait on it too.
+async fn record_decision_intent_and_notify(
+  state: AppState,
+  session_id: String,
+  request_id: String,
+  tenant_id: String,
+  decision: ApprovalDecision,
+) {
+  let decision_json = match serde_json::to_value(&decision) {
+    Ok(value) => value,
+    Err(err) => {
+      warn!(session_id, request_id, error = %err, "decide_approval: failed to serialize decision for intent");
+      return;
+    }
+  };
+  if let Err(err) = state
+    .repos
+    .approval_intents
+    .record_decision_intent(&session_id, &request_id, &tenant_id, &decision_json)
+    .await
+  {
+    warn!(session_id, request_id, error = %err, "decide_approval: failed to record decision intent");
+    return;
+  }
+  let payload = ApprovalDecisionNotifyPayload {
+    session_id: session_id.clone(),
+    request_id: request_id.clone(),
+    decision,
+  };
+  let payload_json = match serde_json::to_string(&payload) {
+    Ok(json) => json,
+    Err(err) => {
+      warn!(session_id, request_id, error = %err, "decide_approval: failed to serialize NOTIFY payload");
+      return;
+    }
+  };
+  if let Err(err) = agentflow_db::notify(
+    &state.repos.approval_intents.pool,
+    APPROVAL_DECISIONS_NOTIFY_CHANNEL,
+    &payload_json,
+  )
+  .await
+  {
+    warn!(session_id, request_id, error = %err, "decide_approval: cross-replica NOTIFY failed");
+  }
+}
+
+/// Spawn [`record_decision_intent_and_notify`] as a detached task —
+/// the shape both `decide_approval` and `crate::runs::decide_run_approval`
+/// call, so the intent write never adds latency (or connection-pool
+/// pressure) to the HTTP response.
+pub(crate) fn spawn_record_decision_intent_and_notify(
+  state: &AppState,
+  session_id: &str,
+  request_id: &str,
+  tenant_id: &str,
+  decision: &ApprovalDecision,
+) {
+  tokio::spawn(record_decision_intent_and_notify(
+    state.clone(),
+    session_id.to_string(),
+    request_id.to_string(),
+    tenant_id.to_string(),
+    decision.clone(),
+  ));
+}
 
 /// Process-local pending-approval registry shared between
 /// [`ServerApprovalProvider`] and the HTTP decide route.
@@ -263,8 +409,46 @@ pub async fn list_pending_approvals(
     )));
   }
 
-  let pending = state.approval_registry.list(&session_id.to_string());
-  Ok(Json(PendingApprovalsResponse { approvals: pending }))
+  let approvals =
+    merged_pending_approvals(&state, &session_id.to_string(), tenant.as_str(), session_id).await?;
+  Ok(Json(PendingApprovalsResponse { approvals }))
+}
+
+/// W4.2e: union of the local [`PendingApprovalRegistry`]'s entries
+/// (same-replica, always up to date) and the DB-derived pending set
+/// (`HarnessEventRepo::list_pending_approvals` — correct regardless of
+/// which replica actually parked the request), deduplicated by request
+/// id. Sorted oldest-first, matching `PendingApprovalRegistry::list`'s
+/// existing contract.
+///
+/// A plain DB-only derivation would be simpler but breaks the moment a
+/// caller parks a request without first persisting the
+/// `approval_requested` event (the harness executor always does that in
+/// order, but tests that park directly via [`ServerApprovalProvider`]
+/// do not) — the union keeps both paths correct.
+async fn merged_pending_approvals(
+  state: &AppState,
+  registry_key: &str,
+  tenant_id: &str,
+  session_id: Uuid,
+) -> Result<Vec<ApprovalRequest>, ApiError> {
+  let mut by_id: HashMap<String, ApprovalRequest> = HashMap::new();
+  for request in state.approval_registry.list(registry_key) {
+    by_id.insert(request.id.clone(), request);
+  }
+  let db_pending = state
+    .repos
+    .harness_events
+    .list_pending_approvals(tenant_id, session_id)
+    .await?;
+  for value in db_pending {
+    if let Ok(request) = serde_json::from_value::<ApprovalRequest>(value) {
+      by_id.entry(request.id.clone()).or_insert(request);
+    }
+  }
+  let mut approvals: Vec<ApprovalRequest> = by_id.into_values().collect();
+  approvals.sort_by_key(|req| req.requested_at);
+  Ok(approvals)
 }
 
 #[derive(Debug, Serialize)]
@@ -326,25 +510,72 @@ pub async fn decide_approval(
     decided_at: Utc::now(),
     reason: body.reason,
   };
+  let session_key = session_id.to_string();
 
+  // W4.2e: try the local registry first (works whether or not any
+  // cross-replica machinery is even needed — the common case on a
+  // single-replica deployment or when this replica happens to own the
+  // request).
   match state
     .approval_registry
-    .decide(&session_id.to_string(), &request_id, decision)
+    .decide(&session_key, &request_id, decision.clone())
   {
-    Ok(()) => Ok(Json(ApprovalDecisionResponse {
-      session_id,
-      request_id,
-      resolved: true,
-    })),
-    Err(ApprovalResolveError::NotFound) => Err(ApiError::NotFound(format!(
+    Ok(()) => {
+      spawn_record_decision_intent_and_notify(
+        &state,
+        &session_key,
+        &request_id,
+        tenant.as_str(),
+        &decision,
+      );
+      return Ok(Json(ApprovalDecisionResponse {
+        session_id,
+        request_id,
+        resolved: true,
+      }));
+    }
+    Err(ApprovalResolveError::ProviderGone) => {
+      return Err(ApiError::BadRequest(format!(
+        "approval {} cannot be decided: provider future already dropped",
+        request_id
+      )));
+    }
+    Err(ApprovalResolveError::NotFound) => {
+      // Not parked on this replica — could be genuinely nonexistent, or
+      // parked on another replica. The DB-derived pending set (already
+      // used by `list_pending_approvals`) tells them apart.
+    }
+  }
+
+  let db_pending = state
+    .repos
+    .harness_events
+    .list_pending_approvals(tenant.as_str(), session_id)
+    .await?;
+  let exists = db_pending
+    .iter()
+    .any(|value| value.get("id").and_then(|v| v.as_str()) == Some(request_id.as_str()));
+  if !exists {
+    return Err(ApiError::NotFound(format!(
       "no pending approval {} for session {}",
       request_id, session_id
-    ))),
-    Err(ApprovalResolveError::ProviderGone) => Err(ApiError::BadRequest(format!(
-      "approval {} cannot be decided: provider future already dropped",
-      request_id
-    ))),
+    )));
   }
+
+  // Genuinely pending, just parked on a different replica: record the
+  // durable intent + NOTIFY so that replica's listener resolves it.
+  spawn_record_decision_intent_and_notify(
+    &state,
+    &session_key,
+    &request_id,
+    tenant.as_str(),
+    &decision,
+  );
+  Ok(Json(ApprovalDecisionResponse {
+    session_id,
+    request_id,
+    resolved: true,
+  }))
 }
 
 #[cfg(test)]
