@@ -57,7 +57,9 @@ pub fn create_chunker(
       Ok(Box::new(RecursiveChunker::try_new(chunk_size, overlap)?))
     }
     crate::types::ChunkingStrategy::Semantic => Err(crate::error::RAGError::chunking(
-      "Semantic chunking not yet implemented",
+      "Semantic chunking is implemented but needs an embedding provider, which this sync \
+       create_chunker path has no way to supply — use \
+       chunk_document_for_knowledge_backend_semantic() / SemanticChunker::chunk_async() instead",
     )),
     crate::types::ChunkingStrategy::Paragraph => {
       Ok(Box::new(ParagraphChunker::try_new(chunk_size, overlap)?))

@@ -16,14 +16,22 @@ use agentflow_tool::{Capability, CapabilityDecisionEntry, SandboxStatus, ToolOut
 /// terminates the run with the corresponding [`AgentStopReason`]. `None`
 /// disables that bound.
 ///
-/// `max_steps` counts every emitted [`AgentStep`] (observe / plan / tool
-/// call / tool result / reflect / final answer). `token_budget` is checked
-/// against the running estimated-token tally for the session memory and is
-/// the primary defence against runaway prompt growth.
+/// `max_steps` is counted differently by each runtime — see the field
+/// doc comment below; this is a shared contract type, not a promise of
+/// uniform semantics. `token_budget` is checked against the running
+/// estimated-token tally for the session memory and is the primary
+/// defence against runaway prompt growth.
 // `Eq` is intentionally not derived: `cost_limit_usd` carries an `f64`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeLimits {
-  /// Maximum total [`AgentStep`]s before the runtime stops.
+  /// Maximum step count before the runtime stops — but "step" is counted
+  /// per runtime, not uniformly across [`AgentStep`] kinds: `ReActAgent`
+  /// compares its per-turn iteration counter (one increment per
+  /// observe/plan/tool/reflect cycle, not per emitted `AgentStep`)
+  /// against this bound; `PlanExecuteAgent` instead checks it once,
+  /// upfront, against the authored plan's step count (`plan.len()`) and
+  /// never increments during execution. Don't assume this field means
+  /// the same thing across runtimes.
   pub max_steps: Option<usize>,
   /// Maximum number of `ToolCall` steps before the runtime stops.
   pub max_tool_calls: Option<usize>,
@@ -414,9 +422,10 @@ pub enum AgentStopReason {
     used: u32,
     budget: u32,
   },
-  /// Accumulated provider cost crossed the eval harness's
-  /// `cost_limit_usd`. Only emitted by the eval runner today; the agent
-  /// runtimes themselves do not enforce cost budgets yet.
+  /// Accumulated provider cost crossed `RuntimeLimits::cost_limit_usd`
+  /// (T1.1). Enforced by both built-in runtimes: `ReActAgent` checks it
+  /// after each LLM call in its turn loop; `PlanExecuteAgent` checks it
+  /// after each step's LLM call during plan execution.
   CostLimitExceeded {
     used_usd: f64,
     budget_usd: f64,

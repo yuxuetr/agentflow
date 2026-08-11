@@ -3,7 +3,11 @@
 > Historical reference：本文档记录的是 Map/While 循环节点最初落地时的
 > 实现总结（早期版本快照）。Map/While 早已是 `agentflow-core` 的稳定
 > 生产能力，细节以当前源码与 `CLAUDE.md` 为准；当前项目状态见
-> `docs/CURRENT_STATUS.md`。
+> `docs/CURRENT_STATUS.md`。**文档内全部行号/文件路径引用均已失效**
+> （`factory` 早已迁移到 `agentflow-config::executor::factory`，
+> `flow.rs` 已膨胀到 5000+ 行，`execute_while_node` 等函数的实际行号
+> 与本文档所写完全对不上）——把本文档当叙事/设计动机参考，不要依赖任何
+> 具体行号或路径去定位代码。
 
 ## 概述
 

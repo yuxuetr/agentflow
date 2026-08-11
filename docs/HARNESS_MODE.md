@@ -642,9 +642,6 @@ cancelled, timeout).
 | H2 | P-H.2 | Hooks + approval (`wrap_registry`, 3 providers, production fail-closed) | **closed** |
 | H3 | P-H.3 | Parallel native tool calls (ReAct batch dispatcher, deterministic LLM-order trace) | **closed** |
 | H4 | P-H.4 | Background task tools (`TaskRuntime` + 5 `task_*` tools, nested-spawn rejection, bounded output buffer) | **closed** |
-| H2 | P-H.2 | Hooks + approval (depends on P1.7 resume policy) | gated |
-| H3 | P-H.3 | Parallel native tool calls (depends on P3.7) | gated |
-| H4 | P-H.4 | Background task tools | gated |
 | H5 | P-H.5 | Server + Web UI (depends on P2.1, P2.2, P2.4, P6.1) | **closed** |
 | H6 | P-H.H6 | Advanced compatibility (TUI, plugin adapters) | deferred — see `docs/H6_PROMOTION_CRITERIA.md` for per-item promotion triggers |
 

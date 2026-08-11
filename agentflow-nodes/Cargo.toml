@@ -13,13 +13,15 @@ homepage.workspace = true
 [features]
 # Q3.8.5: the actual feature gate matrix.
 #
-# - `llm` / `http` / `file` / `template` are the default-on
-#   workflow nodes. Some only gate the module `pub mod ...` in
-#   `nodes/mod.rs`, others additionally gate transitive deps
-#   (`reqwest` for `http`, `handlebars` for `template`). `llm` and
-#   `file` are empty placeholders that only gate `pub use` re-
-#   exports today — kept for symmetry with the documented default
-#   set; pruning them is a breaking API change.
+# - `http` / `file` / `template` are the default-on workflow nodes.
+#   Some only gate the module `pub mod ...` in `nodes/mod.rs`, others
+#   additionally gate transitive deps (`reqwest` for `http`,
+#   `handlebars` for `template`). `file` is an empty placeholder that
+#   only gates a `pub use` re-export today — kept for symmetry with
+#   the documented default set; pruning it is a breaking API change.
+#   (`llm` used to be listed here too, pre-P-A nodes decomposition —
+#   see the P-A comment below: it moved to `agentflow-nodes-ai` and
+#   this crate has no `llm` feature at all anymore.)
 # - `batch` / `conditional` opt-in.
 # - `mcp` / `rag` opt-in; these pull substantial transitive deps.
 #

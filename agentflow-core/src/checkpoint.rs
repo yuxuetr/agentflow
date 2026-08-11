@@ -6,10 +6,12 @@
 //! # Features
 //!
 //! - Incremental checkpointing after each node execution
-//! - Atomic file operations (write-then-rename)
+//! - Atomic file operations (write-then-rename) — no cross-process file
+//!   locking; concurrent writers to the same checkpoint key race at the
+//!   OS rename level (last write to complete the rename wins), rather
+//!   than being serialized by a lock
 //! - Workflow recovery from last checkpoint
 //! - TTL-based cleanup of old checkpoints
-//! - Concurrent-safe with file locking
 //!
 //! # Example
 //!
