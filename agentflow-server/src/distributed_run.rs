@@ -5,9 +5,23 @@
 //! high-level design this implements, and the approved plan this shipped
 //! against for the full research/decision record.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Instant;
+
+use async_trait::async_trait;
+use tracing::error;
+
 use agentflow_config::config::v2::FlowDefinitionV2;
+use agentflow_core::events::{EventListener, WorkflowEvent};
+use agentflow_db::{RunRepo, RunStatus};
 
 use crate::error::ApiError;
+use crate::events_stream::{WorkflowEventListener, broker_finalize_grace};
+use crate::runs::{RunContext, RunExecutor};
+use crate::scheduler::{
+  AuthenticatedControlPlane, DistributedDagScheduler, DistributedNodeStatus, InMemoryWorkerProtocol,
+};
 
 /// Node types `agentflow-worker::execute_supported_node_payload` actually
 /// executes today (`agentflow-worker/src/lib.rs`). Anything outside this
@@ -57,6 +71,239 @@ pub fn validate_distributed_flow(flow: &FlowDefinitionV2) -> Result<(), ApiError
       )));
     }
   }
+  Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum DistributedRunError {
+  #[error(transparent)]
+  Db(#[from] agentflow_db::DbError),
+  #[error(transparent)]
+  Build(#[from] anyhow::Error),
+  #[error(transparent)]
+  Scheduler(#[from] agentflow_core::error::AgentFlowError),
+  #[error("{0}")]
+  Validation(String),
+}
+
+impl From<ApiError> for DistributedRunError {
+  fn from(err: ApiError) -> Self {
+    Self::Validation(err.to_string())
+  }
+}
+
+/// How often the drive loop polls the scheduler between
+/// dispatch/reconcile/requeue passes. Matches the general shape of
+/// `DistributedDagScheduler::drive_until_complete`'s own `idle_sleep`
+/// parameter (that method isn't used directly here since it doesn't
+/// bridge events or check cancellation — see `drive_distributed_run`).
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// W4.3b: `RunExecutor` implementation that drives a
+/// [`DistributedDagScheduler`] to completion instead of running the
+/// workflow in-process. Mirrors `runs::flow_execute`'s shape (parse →
+/// run → map terminal state to `RunStatus`) but the "run" step is a
+/// node-by-node dispatch/reconcile loop against real (or in-process, in
+/// tests) workers instead of a single `agentflow_core::Flow::execute`
+/// call.
+pub struct DistributedFlowRunExecutor {
+  control_plane: Arc<AuthenticatedControlPlane<InMemoryWorkerProtocol>>,
+}
+
+impl DistributedFlowRunExecutor {
+  pub fn new(control_plane: Arc<AuthenticatedControlPlane<InMemoryWorkerProtocol>>) -> Self {
+    Self { control_plane }
+  }
+}
+
+#[async_trait]
+impl RunExecutor for DistributedFlowRunExecutor {
+  async fn execute(&self, ctx: RunContext) {
+    if let Err(e) = drive_distributed_run(&ctx, &self.control_plane).await {
+      error!(run_id = %ctx.run_id, error = %e, "distributed flow executor failed");
+      let _ = ctx
+        .repos
+        .runs
+        .update_status(ctx.run_id, RunStatus::Failed, Some(&e.to_string()))
+        .await;
+      if let Some(registry) = &ctx.live_state_registry {
+        registry.deregister(&ctx.run_id);
+      }
+      ctx
+        .broker
+        .finalise_with_grace(ctx.run_id, broker_finalize_grace());
+    }
+  }
+}
+
+/// Drives one distributed run to a terminal DB/event state.
+///
+/// Node-level `WorkflowEvent`s are synthesized from the scheduler's
+/// polled state rather than pushed by an executing node (unlike
+/// in-process `Flow` execution) — [`DistributedDagScheduler::run_result`]
+/// is a cheap, side-effect-free snapshot of every node's current
+/// `outputs`/failure the scheduler already tracks internally, so each
+/// loop iteration diffs it against what this function has already
+/// emitted and fires the corresponding `NodeCompleted`/`NodeFailed`
+/// event for whatever changed. `NodeStarted` is emitted the moment
+/// [`DistributedDagScheduler::node_status`] first reports `Running` for
+/// a node. Per-node duration is measured from when this function first
+/// observed the node running, not from true worker-side start/end
+/// timestamps (the scheduler doesn't expose those) — an accepted
+/// approximation of a polling design.
+async fn drive_distributed_run(
+  ctx: &RunContext,
+  control_plane: &Arc<AuthenticatedControlPlane<InMemoryWorkerProtocol>>,
+) -> Result<(), DistributedRunError> {
+  ctx
+    .repos
+    .runs
+    .update_status(ctx.run_id, RunStatus::Running, None)
+    .await?;
+
+  let flow_def: FlowDefinitionV2 =
+    agentflow_config::executor::parse_workflow_definition(&ctx.workflow)?;
+  validate_distributed_flow(&flow_def)?;
+  let node_ids: Vec<String> = flow_def.nodes.iter().map(|node| node.id.clone()).collect();
+
+  let workflow_id = ctx.run_id.to_string();
+  let listener = WorkflowEventListener::from_state(
+    ctx.run_id,
+    ctx.tenant_id.clone(),
+    ctx.repos.clone(),
+    ctx.broker.clone(),
+    0,
+  );
+  let run_started_at = Instant::now();
+  listener.on_event(&WorkflowEvent::WorkflowStarted {
+    workflow_id: workflow_id.clone(),
+    timestamp: Instant::now(),
+  });
+
+  let mut scheduler =
+    DistributedDagScheduler::new(ctx.run_id, flow_def, control_plane.inner().clone())?;
+
+  let mut node_started_at: HashMap<String, Instant> = HashMap::new();
+  let mut emitted_started: HashSet<String> = HashSet::new();
+  let mut emitted_completed: HashSet<String> = HashSet::new();
+  let mut emitted_failed: HashSet<String> = HashSet::new();
+
+  loop {
+    if ctx.cancellation_token.is_cancelled() {
+      listener.on_event(&WorkflowEvent::WorkflowCancelled {
+        workflow_id: workflow_id.clone(),
+        reason: "run cancelled".to_string(),
+        duration: run_started_at.elapsed(),
+        timestamp: Instant::now(),
+      });
+      ctx
+        .repos
+        .runs
+        .update_status(ctx.run_id, RunStatus::Cancelled, Some("cancel requested"))
+        .await?;
+      break;
+    }
+
+    let _ = scheduler.requeue_stale_tasks().await?;
+    let _ = scheduler.reconcile_results().await?;
+
+    // Emit completions/failures from *before* this iteration's dispatch,
+    // so a node that just unblocked a dependent (both visible in this
+    // same poll) always reports its own completion first — dispatching
+    // the dependent below, then checking for newly-`Running` nodes
+    // afterward, keeps `NodeCompleted(parent)` ordered before
+    // `NodeStarted(child)` in the emitted stream even though both
+    // transitions happened within one poll window.
+    let snapshot = scheduler.run_result();
+    for node_id in snapshot.state_pool.keys() {
+      if emitted_completed.insert(node_id.clone()) {
+        let duration = node_started_at
+          .get(node_id)
+          .map(|start| start.elapsed())
+          .unwrap_or_default();
+        listener.on_event(&WorkflowEvent::NodeCompleted {
+          workflow_id: workflow_id.clone(),
+          node_id: node_id.clone(),
+          duration,
+          timestamp: Instant::now(),
+        });
+      }
+    }
+    for (node_id, error) in &snapshot.failed_nodes {
+      if emitted_failed.insert(node_id.clone()) {
+        let duration = node_started_at
+          .get(node_id)
+          .map(|start| start.elapsed())
+          .unwrap_or_default();
+        listener.on_event(&WorkflowEvent::NodeFailed {
+          workflow_id: workflow_id.clone(),
+          node_id: node_id.clone(),
+          error: error.clone(),
+          duration,
+          timestamp: Instant::now(),
+        });
+      }
+    }
+
+    let _ = scheduler.dispatch_ready().await?;
+
+    for node_id in &node_ids {
+      if scheduler.node_status(node_id) == Some(DistributedNodeStatus::Running)
+        && emitted_started.insert(node_id.clone())
+      {
+        node_started_at.insert(node_id.clone(), Instant::now());
+        listener.on_event(&WorkflowEvent::NodeStarted {
+          workflow_id: workflow_id.clone(),
+          node_id: node_id.clone(),
+          timestamp: Instant::now(),
+        });
+      }
+    }
+
+    if scheduler.is_terminal() {
+      let result = scheduler.run_result();
+      if result.succeeded {
+        listener.on_event(&WorkflowEvent::WorkflowCompleted {
+          workflow_id: workflow_id.clone(),
+          duration: run_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+        ctx
+          .repos
+          .runs
+          .update_status(ctx.run_id, RunStatus::Succeeded, None)
+          .await?;
+      } else {
+        let error_summary = result
+          .failed_nodes
+          .iter()
+          .map(|(node_id, error)| format!("{node_id}: {error}"))
+          .collect::<Vec<_>>()
+          .join("; ");
+        listener.on_event(&WorkflowEvent::WorkflowFailed {
+          workflow_id: workflow_id.clone(),
+          error: error_summary.clone(),
+          duration: run_started_at.elapsed(),
+          timestamp: Instant::now(),
+        });
+        ctx
+          .repos
+          .runs
+          .update_status(ctx.run_id, RunStatus::Failed, Some(&error_summary))
+          .await?;
+      }
+      break;
+    }
+
+    tokio::time::sleep(POLL_INTERVAL).await;
+  }
+
+  if let Some(registry) = &ctx.live_state_registry {
+    registry.deregister(&ctx.run_id);
+  }
+  ctx
+    .broker
+    .finalise_with_grace(ctx.run_id, broker_finalize_grace());
   Ok(())
 }
 

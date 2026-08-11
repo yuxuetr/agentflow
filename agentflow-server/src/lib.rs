@@ -52,7 +52,7 @@ pub use cleanup::{
   CleanupConfig, CleanupError, CleanupReport, DEFAULT_CLEANUP_INTERVAL, cleanup_expired,
   cleanup_expired_local,
 };
-pub use distributed_run::validate_distributed_flow;
+pub use distributed_run::{DistributedFlowRunExecutor, validate_distributed_flow};
 pub use error::{ApiError, JsonReq};
 pub use events_stream::{
   EventBroker, EventSink, PersistingEventSink, RUN_EVENTS_NOTIFY_CHANNEL, StreamedEvent,
