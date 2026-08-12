@@ -125,6 +125,30 @@ jobs:
       - name: Run check-changelog
         run: cargo xtask check-changelog
 
+  ui-tests:
+    # W5.5: agentflow-ui's 6 hand-written *.test.ts(x) suites were
+    # previously only tsc-checked (never actually executed) — this job
+    # runs them for real via vitest, plus the typecheck they always had.
+    # Mirrors ui-e2e.yml's actions/setup-node@v4 pattern.
+    name: agentflow-ui typecheck + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: agentflow-ui/package-lock.json
+      - name: Install dependencies
+        working-directory: agentflow-ui
+        run: npm ci
+      - name: Typecheck
+        working-directory: agentflow-ui
+        run: npm run typecheck
+      - name: Unit tests
+        working-directory: agentflow-ui
+        run: npm test
+
   clippy-lib-deny:
     # Q5.1: enforce no `unwrap()` / `expect()` in production library
     # code workspace-wide. Tests / examples / benches / build scripts
@@ -578,6 +602,7 @@ jobs:
       - redaction-lint
       - println-lint
       - check-changelog
+      - ui-tests
       - cargo-audit
       - linux-sandbox-check
       - proto-validate
@@ -600,6 +625,7 @@ jobs:
           echo "redaction-lint: ${{ needs.redaction-lint.result }}"
           echo "println-lint: ${{ needs.println-lint.result }}"
           echo "check-changelog: ${{ needs.check-changelog.result }}"
+          echo "ui-tests: ${{ needs.ui-tests.result }}"
           echo "cargo-audit: ${{ needs.cargo-audit.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "proto-validate: ${{ needs.proto-validate.result }}"
@@ -618,6 +644,7 @@ jobs:
           test "${{ needs.redaction-lint.result }}" = "success"
           test "${{ needs.println-lint.result }}" = "success"
           test "${{ needs.check-changelog.result }}" = "success"
+          test "${{ needs.ui-tests.result }}" = "success"
           test "${{ needs.cargo-audit.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.proto-validate.result }}" = "success"

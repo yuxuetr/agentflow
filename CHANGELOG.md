@@ -33,6 +33,14 @@ _New entries go here. Will roll into the next tag (likely
 - **`cargo xtask check-changelog` wired into CI (W5.5).** The gate existed
   since P10.18.2 but was deliberately left unwired pending local-usage
   confidence; it now runs in `quality.yml` and gates `release-gate`.
+- **`agentflow-ui`'s 6 hand-written unit-test files now actually run in CI
+  (W5.5).** They previously only self-described as "run via `npx tsx
+  <path>`" with nothing invoking them — `npm test` only ran `tsc --noEmit`.
+  Added `vitest`; each file's manual assert/throw logic is unchanged, just
+  wrapped in `describe`/`it` blocks so vitest can discover and run it
+  (69 tests total). `npm test` now runs the real suite; the former
+  typecheck-only script moved to `npm run typecheck`. A new `ui-tests` job
+  in `quality.yml` runs both and gates `release-gate`.
 
 - **`agentflow harness chat --approve cli` now works interactively (H.2.1).**
   Previously rejected at startup because the blocking `CliApprovalProvider` reads
