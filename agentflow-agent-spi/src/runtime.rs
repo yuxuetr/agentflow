@@ -1478,9 +1478,9 @@ mod tests {
   //
   // We assert on `tokio::select!` directly rather than spinning up a full
   // ReActAgent: the runtime sites all wrap the tool future in the same
-  // select-vs-`token.cancelled()` shape (see `react/agent.rs:986-1051` and
-  // `plan_execute.rs:526-538`), so this is the smallest reproduction that
-  // pins the contract for all current and future runtimes.
+  // select-vs-`token.cancelled()` shape (see `react/agent/tool_dispatch.rs`
+  // and `plan_execute.rs`), so this is the smallest reproduction that pins
+  // the contract for all current and future runtimes.
 
   #[tokio::test]
   async fn tool_future_drop_runs_when_token_is_cancelled() {
