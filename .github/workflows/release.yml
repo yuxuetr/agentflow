@@ -1,15 +1,27 @@
 name: Release
 
-# P10.0.4 — release-artifact production. Fires on a `v*` tag push (the
-# tag itself is the one-way human decision tracked as P10.0.3). Builds
-# per-arch `agentflow` CLI tarballs + a multi-arch `agentflow-server`
-# Docker image pushed to GHCR + a GitHub Release with all artifacts
-# attached.
+# P10.0.4 — release-artifact production. Builds per-arch `agentflow` CLI
+# tarballs + a multi-arch `agentflow-server` Docker image pushed to GHCR +
+# a GitHub Release with all artifacts attached.
 #
-# Manual `workflow_dispatch` is supported with a `dry_run` flag that
-# skips both the GHCR push and the release publish — useful for
-# verifying the build matrix on a non-tag branch before cutting the
-# real tag.
+# W5.5: this workflow no longer triggers directly on a `v*` tag push.
+# GitHub Actions has no native cross-workflow `needs:`, so before W5.5 a
+# release could be cut (binaries built, image pushed, GitHub Release
+# published) even if `quality.yml`'s `release-gate` was red — the two
+# workflows both fired on the same tag push and raced each other with zero
+# coordination. Instead, this workflow now triggers on `workflow_run` for
+# `quality.yml` ("Quality")'s completion, and `resolve-release-context`
+# (the first job below) decides whether to actually proceed by checking
+# that run's conclusion, trigger event, and ref — see that job's comments
+# for the exact gate logic. Do **not** revert this back to a direct
+# `push: tags:` trigger without re-adding an equivalent gate; that would
+# silently reopen the bypass this change exists to close.
+#
+# Manual `workflow_dispatch` is unchanged: it bypasses the quality-run gate
+# entirely (it IS the human override path) and supports a `dry_run` flag
+# that skips both the GHCR push and the release publish — useful for
+# verifying the build matrix on a non-tag branch before cutting the real
+# tag.
 #
 # Required permissions (the workflow declares both at job scope):
 #   - `contents: write`  — for `softprops/action-gh-release` to create
@@ -38,10 +50,9 @@ name: Release
 #     version tag — keeps `latest` from drifting to an RC.
 
 on:
-  push:
-    tags:
-      # Match `v1.0.0`, `v1.0.0-rc.1`, `v0.3.0-alpha`, etc.
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_run:
+    workflows: ["Quality"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       ref:
@@ -60,11 +71,96 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────
+  # Single source of truth for "should this run actually build/publish a
+  # release, and from which commit/tag" — every other job reads its
+  # outputs instead of re-deriving this logic, so the gate can't drift
+  # out of sync between jobs. Needs no checkout: everything it computes
+  # comes from the trigger event context.
+  # ─────────────────────────────────────────────────────────────────────
+  resolve-release-context:
+    name: resolve release context
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.resolve.outputs.should_release }}
+      should_publish: ${{ steps.resolve.outputs.should_publish }}
+      ref_sha: ${{ steps.resolve.outputs.ref_sha }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
+    steps:
+      - name: Resolve
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual dispatch is the human override path — always allowed
+            # to run regardless of quality.yml's state. `dry_run` (default
+            # true) is the only thing gating an actual GHCR push / GitHub
+            # Release publish; the build/package jobs always run so the
+            # matrix can be validated on a non-tag branch.
+            REF="${{ inputs.ref }}"
+            if [[ -z "${REF}" ]]; then
+              REF="${{ github.ref_name }}"
+            fi
+            REF="${REF#refs/tags/}"
+            echo "should_release=true" >> "${GITHUB_OUTPUT}"
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+            else
+              echo "should_publish=true" >> "${GITHUB_OUTPUT}"
+            fi
+            echo "ref_sha=${{ github.sha }}" >> "${GITHUB_OUTPUT}"
+            echo "tag_name=${REF}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # workflow_run path: only release when the Quality run that
+          # completed just now (a) succeeded, (b) was itself triggered by
+          # a `push` event (excludes PR runs and plain main-branch
+          # pushes — quality.yml also runs on those), and (c) that push's
+          # ref looks like a real release tag. `head_branch` on a
+          # workflow_run event carries the tag name for a tag-triggered
+          # upstream run (despite the "branch" naming).
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          TRIGGER_EVENT="${{ github.event.workflow_run.event }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+
+          echo "workflow_run: conclusion=${CONCLUSION} event=${TRIGGER_EVENT} head_branch=${HEAD_BRANCH} head_sha=${HEAD_SHA}"
+
+          if [[ "${CONCLUSION}" != "success" ]]; then
+            echo "Quality run concluded '${CONCLUSION}', not 'success' — no release." >&2
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+            echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${TRIGGER_EVENT}" != "push" ]]; then
+            echo "Quality run was triggered by '${TRIGGER_EVENT}', not 'push' — no release." >&2
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+            echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! [[ "${HEAD_BRANCH}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Quality run's ref '${HEAD_BRANCH}' doesn't look like a release tag — no release." >&2
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+            echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "Quality succeeded for tag '${HEAD_BRANCH}' at ${HEAD_SHA} — releasing."
+          echo "should_release=true" >> "${GITHUB_OUTPUT}"
+          echo "should_publish=true" >> "${GITHUB_OUTPUT}"
+          echo "ref_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "tag_name=${HEAD_BRANCH}" >> "${GITHUB_OUTPUT}"
+
+  # ─────────────────────────────────────────────────────────────────────
   # CLI binary matrix. Each row produces `agentflow-<target>.tar.gz`
   # containing the `agentflow` binary at the archive root.
   # ─────────────────────────────────────────────────────────────────────
   build-binaries:
     name: build agentflow (${{ matrix.target }})
+    needs: resolve-release-context
+    if: ${{ needs.resolve-release-context.outputs.should_release == 'true' }}
     strategy:
       # `fail-fast: false` so a one-platform problem doesn't kill the
       # other rows — every release ships all 3 even if one is degraded
@@ -84,7 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.resolve-release-context.outputs.ref_sha }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -134,6 +230,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   build-docker:
     name: build + push agentflow-server image
+    needs: resolve-release-context
+    if: ${{ needs.resolve-release-context.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -142,7 +240,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.resolve-release-context.outputs.ref_sha }}
 
       # QEMU registers ARM64 emulation for the buildx step running on
       # an x86_64 runner. Adds ~20-30% build time vs. native, but
@@ -156,12 +254,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          REF_NAME="${{ inputs.ref || github.ref_name }}"
-          # `github.ref_name` for a tag push is the tag (no refs/tags/
-          # prefix); for a branch dispatch the operator passes the tag
-          # explicitly via `inputs.ref`. Strip a leading refs/tags/ if
-          # somehow present.
-          REF_NAME="${REF_NAME#refs/tags/}"
+          REF_NAME="${{ needs.resolve-release-context.outputs.tag_name }}"
           echo "tag=${REF_NAME}" >> "${GITHUB_OUTPUT}"
           # `latest` only on stable releases — pre-release tags
           # (`v1.0.0-rc.1`, `v0.3.0-alpha`, etc.) keep `latest`
@@ -173,10 +266,11 @@ jobs:
           fi
 
       - name: Log in to GHCR
-        # Skip the login on dry runs so the dispatch path doesn't
-        # require credentials. The actual `push: false` happens
-        # inside `build-push-action`.
-        if: ${{ inputs.dry_run != true }}
+        # Skip the login when this run isn't actually going to publish
+        # (workflow_dispatch with dry_run: true) so that path doesn't
+        # require credentials. The actual `push: false` happens inside
+        # `build-push-action` below, gated the same way.
+        if: ${{ needs.resolve-release-context.outputs.should_publish == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -207,15 +301,18 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ inputs.dry_run != true }}
+          push: ${{ needs.resolve-release-context.outputs.should_publish == 'true' }}
           tags: ${{ steps.refs.outputs.tags }}
           # OCI labels surface the source commit + tag on the
           # GHCR package page, so an operator looking at the image
           # in the registry can trace it back to a specific code
           # state without needing to download + introspect.
+          # `ref_sha` (not `github.sha`) — on a `workflow_run` trigger
+          # `github.sha` is release.yml's own default-branch checkout,
+          # not the tagged commit `quality.yml` actually evaluated.
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.resolve-release-context.outputs.ref_sha }}
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
@@ -227,18 +324,20 @@ jobs:
   publish-release:
     name: publish GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binaries, build-docker]
-    # Only fire on a real tag push, never on workflow_dispatch dry-run
-    # (the operator can `dry_run: false` from the dispatch UI when they
-    # explicitly want to publish).
-    if: ${{ github.event_name == 'push' || inputs.dry_run != true }}
+    needs: [resolve-release-context, build-binaries, build-docker]
+    # Only fire when resolve-release-context decided this run should
+    # actually publish — never on a workflow_dispatch dry-run (the
+    # operator can `dry_run: false` from the dispatch UI when they
+    # explicitly want to publish), and never on a workflow_run whose
+    # upstream Quality run didn't succeed for a real tag push.
+    if: ${{ needs.resolve-release-context.outputs.should_publish == 'true' }}
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.resolve-release-context.outputs.ref_sha }}
           # `fetch-depth: 0` so `generate_release_notes` can walk the
           # git log between the previous tag and this one.
           fetch-depth: 0
@@ -276,14 +375,16 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          # Tag is `github.ref_name` on a tag push; `inputs.ref` on a
-          # dispatch (must be a real tag that's already been pushed).
-          tag_name: ${{ inputs.ref || github.ref_name }}
+          # `resolve-release-context` resolves this from `head_branch` on
+          # the workflow_run path (the tag `quality.yml` evaluated) or
+          # `inputs.ref`/`github.ref_name` on a manual dispatch — must be
+          # a real tag that's already been pushed either way.
+          tag_name: ${{ needs.resolve-release-context.outputs.tag_name }}
           files: release/*
           # `prerelease` semantics: every tag carrying a `-` (rc /
           # alpha / beta) is a pre-release; only `v1.0.0` etc. are
           # treated as stable.
-          prerelease: ${{ contains(inputs.ref || github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.resolve-release-context.outputs.tag_name, '-') }}
           # Auto-fill the body with the commit list since the previous
           # tag. The release-notes section header in
           # `docs/RELEASE_NOTES_v*.md` is then linked from the body by

@@ -33,6 +33,22 @@ _New entries go here. Will roll into the next tag (likely
 - **`cargo xtask check-changelog` wired into CI (W5.5).** The gate existed
   since P10.18.2 but was deliberately left unwired pending local-usage
   confidence; it now runs in `quality.yml` and gates `release-gate`.
+- **`release.yml` now actually depends on `quality.yml`'s `release-gate`
+  (W5.5).** Previously the two workflows both triggered directly on the
+  same `v*` tag push and raced each other with zero coordination — a
+  release could ship even with fmt/clippy/tests/audit all red, as long as
+  the tag was pushed. GitHub Actions has no native cross-workflow
+  `needs:`, so `release.yml` now triggers on `workflow_run` for
+  `quality.yml` ("Quality")'s completion instead of directly on the tag
+  push; a new leading `resolve-release-context` job is the single source
+  of truth for whether to proceed, checking the upstream run's conclusion,
+  trigger event, and ref, so a red `release-gate` can no longer produce a
+  published release. Manual `workflow_dispatch` (with its `dry_run` flag)
+  is unchanged as the human override path. **Verification caveat**: this
+  cannot be exercised end-to-end without a real tag push, which was not
+  done as part of this change — review the diff carefully before the next
+  real tag cut; `workflow_dispatch`'s dry-run path validates the build
+  matrix but does not exercise the new `workflow_run` gating branch.
 - **`[workspace.dependencies]` for tokio/sqlx/uuid/reqwest, TLS backend
   unified on rustls (W5.5).** `tokio` had drifted to 2 version strings
   (`"1.0"` vs `"1.35"`) across 12 feature-set combinations; `uuid` similarly
