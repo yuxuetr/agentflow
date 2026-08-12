@@ -13,6 +13,19 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow-llm` modality dispatcher: table-driven construction +
+  diagnosable unsupported-vendor errors (P-LLM2.1).**
+  `modality_dispatch.rs` had 5 near-identical `match vendor.as_str() {
+  "stepfun" | "step" => ..., _ => unsupported_vendor(...) }` blocks, one
+  per modality (ASR/TTS/Text2Image/Image2Image/ImageEdit). Replaced with
+  a `const` constructor table per modality (`ASR_PROVIDERS` etc., each
+  `&[(&str, fn(&str, Option<String>) -> Result<Box<dyn Trait>>)]`) and a
+  single generic `dispatch()` helper all 5 public entry points call.
+  `UnsupportedProvider` errors are now more diagnosable: they name which
+  modalities the vendor *does* already implement (derived from the same
+  constructor tables, so it can't drift from what's actually wired up),
+  e.g. `"openai (no TTS implementation yet — implements: ASR)"` instead
+  of the old bare `"openai (no TTS implementation yet)"`.
 - **LLM model registry split into per-vendor files + `accepts:` backfill +
   CLI `--type`/`--accepts` filters (P-LLM2.0).**
   `agentflow-llm/templates/default_models.yml` (3,165 lines, 198 models,
