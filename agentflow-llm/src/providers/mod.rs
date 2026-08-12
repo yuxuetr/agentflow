@@ -16,6 +16,8 @@ pub mod modality;
 pub mod moonshot;
 pub mod openai;
 pub mod openai_asr;
+pub mod openai_images;
+pub mod openai_tts;
 pub mod stepfun;
 
 pub use anthropic::AnthropicProvider;

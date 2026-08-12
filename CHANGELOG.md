@@ -13,6 +13,29 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **OpenAI Text2Image + ImageEdit + TTS implementations (P-LLM2.3 Batch
+  1).** OpenAI now implements 4 of the 6 modality traits (ASR was
+  already covered by Whisper, P-LLM.5): new `OpenAIImageProvider`
+  (`agentflow-llm/src/providers/openai_images.rs`) implements both
+  `Text2ImageProvider` (`POST /images/generations`) and
+  `ImageEditProvider` (`POST /images/edits`, multipart) on one struct —
+  they share auth/base_url and return the same `{data: [...], created}`
+  shape, mirroring how `StepFunSpecializedClient` implements multiple
+  modality traits on one struct. New `OpenAITtsProvider`
+  (`agentflow-llm/src/providers/openai_tts.rs`) implements `TtsProvider`
+  (`POST /audio/speech`, raw-bytes response, defaults to MP3 unlike
+  StepFun's WAV default). Live-verified against OpenAI's current API
+  docs this session: `gpt-image-2` (added P-LLM2.0) generates but
+  currently **rejects** the edit endpoint — only `gpt-image-1`/
+  `-1.5`/`-1-mini`/`chatgpt-image-latest`/`dall-e-2` support edit — so a
+  new `gpt-image-1` registry entry (`type: image_edit`) was added
+  alongside the existing `gpt-image-2` (`type: text_to_image`,
+  unchanged). Wired into `modality_dispatch.rs`'s constructor tables
+  (P-LLM2.1's table-driven dispatch) and 2 new opt-in
+  `llm-live.yml`-gated real-API tests (`openai_image_generation_via_modality_dispatcher`,
+  `openai_tts_via_modality_dispatcher`) mirroring the existing Whisper
+  dispatcher-test pattern. Batches 2 (Google/DashScope) and 3 (GLM/
+  MiniMax/Moonshot) of P-LLM2.3 remain open.
 - **`Text2VideoProvider` trait + Google Veo implementation (P-LLM2.2).**
   Adds the sixth modality trait, `Text2VideoProvider`
   (`agentflow-llm/src/providers/modality/text_to_video.rs`) — unlike the

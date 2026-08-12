@@ -6,10 +6,11 @@
 //! is the modality counterpart to [`AgentFlow::model`](crate::AgentFlow::model)
 //! (which covers chat).
 //!
-//! StepFun implements 5 of the 6 modality traits; OpenAI adds a second
-//! `AsrProvider` (Whisper, P-LLM.5) and Google adds the sixth,
-//! `Text2VideoProvider` (Veo, P-LLM2.2). Unimplemented vendor/modality
-//! combinations return [`LLMError::UnsupportedProvider`].
+//! StepFun implements 5 of the 6 modality traits. OpenAI adds a second
+//! `AsrProvider` (Whisper, P-LLM.5) plus `Text2ImageProvider` /
+//! `ImageEditProvider` / `TtsProvider` (P-LLM2.3 Batch 1). Google adds
+//! the sixth trait, `Text2VideoProvider` (Veo, P-LLM2.2). Unimplemented
+//! vendor/modality combinations return [`LLMError::UnsupportedProvider`].
 
 use crate::{
   LLMError, Result,
@@ -21,6 +22,8 @@ use crate::{
       TtsProvider,
     },
     openai_asr::OpenAIAsrProvider,
+    openai_images::OpenAIImageProvider,
+    openai_tts::OpenAITtsProvider,
     stepfun::StepFunSpecializedClient,
   },
   registry::ModelRegistry,
@@ -91,6 +94,21 @@ fn build_stepfun_image_edit(
 fn build_openai_asr(api_key: &str, base_url: Option<String>) -> Result<Box<dyn AsrProvider>> {
   Ok(Box::new(OpenAIAsrProvider::new(api_key, base_url)?))
 }
+fn build_openai_text2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2ImageProvider>> {
+  Ok(Box::new(OpenAIImageProvider::new(api_key, base_url)?))
+}
+fn build_openai_image_edit(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn ImageEditProvider>> {
+  Ok(Box::new(OpenAIImageProvider::new(api_key, base_url)?))
+}
+fn build_openai_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
+  Ok(Box::new(OpenAITtsProvider::new(api_key, base_url)?))
+}
 fn build_google_text2video(
   api_key: &str,
   base_url: Option<String>,
@@ -103,11 +121,15 @@ const ASR_PROVIDERS: &[(&str, Ctor<dyn AsrProvider>)] = &[
   ("step", build_stepfun_asr),
   ("openai", build_openai_asr),
 ];
-const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] =
-  &[("stepfun", build_stepfun_tts), ("step", build_stepfun_tts)];
+const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
+  ("stepfun", build_stepfun_tts),
+  ("step", build_stepfun_tts),
+  ("openai", build_openai_tts),
+];
 const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("stepfun", build_stepfun_text2image),
   ("step", build_stepfun_text2image),
+  ("openai", build_openai_text2image),
 ];
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
   ("stepfun", build_stepfun_image2image),
@@ -116,6 +138,7 @@ const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
 const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
   ("stepfun", build_stepfun_image_edit),
   ("step", build_stepfun_image_edit),
+  ("openai", build_openai_image_edit),
 ];
 const TEXT2VIDEO_PROVIDERS: &[(&str, Ctor<dyn Text2VideoProvider>)] =
   &[("google", build_google_text2video)];
@@ -300,23 +323,25 @@ mod tests {
 
   #[test]
   fn unsupported_vendor_message_names_modality() {
-    // openai has no TTS implementation (only ASR), so this is a genuine
-    // unsupported combination.
-    let err = unsupported_vendor::<()>("openai", "TTS").unwrap_err();
+    // openai has no image-to-image implementation (only ASR/TTS/
+    // text-to-image/image-edit), so this is a genuine unsupported
+    // combination.
+    let err = unsupported_vendor::<()>("openai", "image-to-image").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("openai"), "vendor missing: {msg}");
-    assert!(msg.contains("TTS"), "modality missing: {msg}");
+    assert!(msg.contains("image-to-image"), "modality missing: {msg}");
   }
 
   #[test]
   fn unsupported_vendor_message_lists_vendors_other_implemented_modalities() {
-    // openai implements ASR but not TTS: the error for "TTS" should name
-    // ASR as a hint that the vendor isn't wholesale unsupported.
-    let err = unsupported_vendor::<()>("openai", "TTS").unwrap_err();
+    // openai implements ASR/TTS/text-to-image/image-edit but not
+    // image-to-image: the error should name the ones it does implement
+    // as a hint that the vendor isn't wholesale unsupported.
+    let err = unsupported_vendor::<()>("openai", "image-to-image").unwrap_err();
     let msg = err.to_string();
     assert!(
-      msg.contains("implements: ASR"),
-      "should list openai's existing ASR support: {msg}"
+      msg.contains("implements: ASR, TTS, text-to-image, image-edit"),
+      "should list openai's existing modality support: {msg}"
     );
   }
 
@@ -346,8 +371,11 @@ mod tests {
   }
 
   #[test]
-  fn implemented_modalities_for_openai_is_asr_only() {
-    assert_eq!(implemented_modalities_for("openai"), vec!["ASR"]);
+  fn implemented_modalities_for_openai_covers_asr_tts_text_to_image_and_image_edit() {
+    assert_eq!(
+      implemented_modalities_for("openai"),
+      vec!["ASR", "TTS", "text-to-image", "image-edit"]
+    );
   }
 
   #[test]

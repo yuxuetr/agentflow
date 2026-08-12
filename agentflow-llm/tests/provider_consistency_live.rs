@@ -65,6 +65,7 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
       LiveCapability::Llm,
       LiveCapability::Multimodal,
       LiveCapability::Audio,
+      LiveCapability::Image,
     ],
   },
   LiveProviderProfile {
@@ -1524,6 +1525,134 @@ models:
     response.metadata.is_some(),
     "json response_format must carry metadata"
   );
+}
+
+// ============================================================================
+// OpenAI image generation + TTS via the modality dispatcher (P-LLM2.3 Batch 1)
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_image_generation_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Image) {
+    eprintln!("[live] openai image: skipped (AGENTFLOW_LIVE_IMAGE_TESTS not enabled)");
+    return;
+  }
+  let api_key = match std::env::var("OPENAI_API_KEY") {
+    Ok(v) if !v.trim().is_empty() => v,
+    _ => {
+      eprintln!("[live] openai image: skipped (OPENAI_API_KEY missing)");
+      return;
+    }
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("OPENAI_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  gpt-image-2:
+    vendor: openai
+    type: text_to_image
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic gpt-image-2 entry");
+
+  let provider = AgentFlow::text2image_for("gpt-image-2")
+    .await
+    .expect("gpt-image-2 resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "openai",
+    "gpt-image-2 must route to openai"
+  );
+
+  let request = agentflow_llm::Text2ImageRequest {
+    model: "gpt-image-2".to_string(),
+    prompt: "a tiny red square icon on a white background".to_string(),
+    size: Some("1024x1024".to_string()),
+    n: Some(1),
+    response_format: Some("b64_json".to_string()),
+    seed: None,
+    steps: None,
+    cfg_scale: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(60), provider.generate(request))
+    .await
+    .unwrap_or_else(|_| panic!("openai image generation timed out after 60s"))
+    .unwrap_or_else(|e| panic!("openai image generation failed: {e}"));
+
+  let first = response
+    .images
+    .first()
+    .expect("openai image generation response must contain at least one image");
+  assert!(
+    first.b64_json.as_deref().is_some_and(|v| !v.is_empty())
+      || first.url.as_deref().is_some_and(|v| !v.is_empty()),
+    "openai image generation response must contain b64_json or url"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_tts_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Audio) {
+    eprintln!("[live] openai tts: skipped (AGENTFLOW_LIVE_AUDIO_TESTS not enabled)");
+    return;
+  }
+  let api_key = match std::env::var("OPENAI_API_KEY") {
+    Ok(v) if !v.trim().is_empty() => v,
+    _ => {
+      eprintln!("[live] openai tts: skipped (OPENAI_API_KEY missing)");
+      return;
+    }
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("OPENAI_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  gpt-4o-mini-tts:
+    vendor: openai
+    type: tts
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic gpt-4o-mini-tts entry");
+
+  let provider = AgentFlow::tts("gpt-4o-mini-tts")
+    .await
+    .expect("gpt-4o-mini-tts resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "openai",
+    "gpt-4o-mini-tts must route to openai"
+  );
+
+  let request = agentflow_llm::TtsRequest {
+    model: "gpt-4o-mini-tts".to_string(),
+    input: "agentflow modality dispatcher test".to_string(),
+    voice: "coral".to_string(),
+    response_format: Some("mp3".to_string()),
+    speed: None,
+    volume: None,
+    sample_rate: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(30), provider.synthesize(request))
+    .await
+    .unwrap_or_else(|_| panic!("openai TTS request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("openai TTS request failed: {e}"));
+
+  assert!(
+    response.audio.len() > 128,
+    "openai TTS response should contain audio bytes"
+  );
+  assert_eq!(response.mime_type, "audio/mpeg");
 }
 
 fn silent_wav_one_second() -> Vec<u8> {
