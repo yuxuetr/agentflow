@@ -427,10 +427,14 @@ async fn test_failed_initialization_keeps_disconnected_state() {
   let result = client.connect().await;
   assert!(result.is_err());
 
-  // Client should not be in connected state after failed init
-  // Note: The current implementation may have connected=true even if init fails
-  // This test documents the current behavior
-  assert_eq!(client.session_state().await, SessionState::Connected); // Has transport connection but no server capabilities
+  // W5.6: `connect()` now rolls back to `Disconnected` on a failed
+  // `initialize()` instead of leaving the client stuck reporting
+  // `Connected` (transport up, no server capabilities) despite having
+  // returned an `Err` — a caller checking `is_connected()`/
+  // `session_state()` after a failed `connect()` now sees a state
+  // consistent with that failure.
+  assert_eq!(client.session_state().await, SessionState::Disconnected);
+  assert!(!client.is_connected().await);
 }
 
 // ============================================================================
@@ -498,4 +502,57 @@ async fn test_session_id_uniqueness() {
   assert_ne!(id1, id2);
   assert_ne!(id2, id3);
   assert_ne!(id1, id3);
+}
+
+// ============================================================================
+// W5.6: protocol version verification
+// ============================================================================
+
+#[tokio::test]
+async fn test_connect_fails_when_server_returns_mismatched_protocol_version() {
+  let mut transport = MockTransport::new();
+  transport.add_response(json!({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2099-01-01",
+      "capabilities": { "tools": {} },
+      "serverInfo": { "name": "future-server", "version": "1.0.0" }
+    }
+  }));
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+
+  let result = client.connect().await;
+  assert!(
+    result.is_err(),
+    "connect() must reject a server that returns a different protocol version"
+  );
+
+  // No partial state should stick after a rejected handshake.
+  assert!(!client.is_connected().await);
+  assert!(client.server_capabilities().await.is_none());
+  assert!(client.server_info().await.is_none());
+}
+
+#[tokio::test]
+async fn test_connect_succeeds_when_server_returns_matching_protocol_version() {
+  // Regression guard: the existing matching-version path must still work
+  // unchanged after adding the mismatch check.
+  let mut transport = MockTransport::new();
+  transport.add_response(MockTransport::standard_initialize_response());
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+
+  client.connect().await.unwrap();
+  assert!(client.is_connected().await);
+  assert!(client.server_capabilities().await.is_some());
 }

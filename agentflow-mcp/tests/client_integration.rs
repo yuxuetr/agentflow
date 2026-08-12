@@ -353,3 +353,133 @@ trait TapMut {
 }
 
 impl TapMut for serde_json::Value {}
+
+// ============================================================================
+// W5.6: capability gating
+// ============================================================================
+
+/// An `initialize` response advertising only the given top-level
+/// capability keys (e.g. `&["tools"]`) — used to build a server that
+/// deliberately omits one or more capability families, for the negative
+/// capability-gating tests below.
+fn initialize_response_with_capabilities(keys: &[&str]) -> serde_json::Value {
+  let mut capabilities = serde_json::Map::new();
+  for key in keys {
+    capabilities.insert((*key).to_string(), json!({}));
+  }
+  json!({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": capabilities,
+      "serverInfo": { "name": "partial-server", "version": "1.0.0" }
+    }
+  })
+}
+
+#[tokio::test]
+async fn list_resources_fails_fast_when_server_does_not_advertise_resources() {
+  let mut transport = MockTransport::new();
+  transport.add_response(initialize_response_with_capabilities(&["tools"]));
+  let sent = transport.sent_messages_handle();
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+  client.connect().await.unwrap();
+
+  let result = client.list_resources().await;
+  assert!(
+    result.is_err(),
+    "must reject when the server never advertised 'resources'"
+  );
+
+  // The whole point of client-side gating: the request never goes out.
+  let messages = sent.lock().unwrap().clone();
+  assert!(
+    !messages
+      .iter()
+      .any(|m| m["method"].as_str() == Some("resources/list")),
+    "resources/list must never be sent when the server didn't advertise the capability; got: {messages:?}"
+  );
+}
+
+#[tokio::test]
+async fn list_resources_succeeds_when_server_advertises_resources() {
+  // Regression guard: the existing happy path must be unaffected.
+  let mut transport = MockTransport::new();
+  transport.add_response(initialize_response_with_capabilities(&["resources"]));
+  transport.add_response(MockTransport::resources_list_response(vec![]));
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+  client.connect().await.unwrap();
+
+  let result = client.list_resources().await;
+  assert!(
+    result.is_ok(),
+    "must succeed when the server advertised 'resources': {result:?}"
+  );
+}
+
+#[tokio::test]
+async fn list_prompts_fails_fast_when_server_does_not_advertise_prompts() {
+  let mut transport = MockTransport::new();
+  transport.add_response(initialize_response_with_capabilities(&["tools"]));
+  let sent = transport.sent_messages_handle();
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+  client.connect().await.unwrap();
+
+  let result = client.list_prompts().await;
+  assert!(
+    result.is_err(),
+    "must reject when the server never advertised 'prompts'"
+  );
+
+  let messages = sent.lock().unwrap().clone();
+  assert!(
+    !messages
+      .iter()
+      .any(|m| m["method"].as_str() == Some("prompts/list")),
+    "prompts/list must never be sent when the server didn't advertise the capability; got: {messages:?}"
+  );
+}
+
+#[tokio::test]
+async fn list_tools_fails_fast_when_server_does_not_advertise_tools() {
+  let mut transport = MockTransport::new();
+  transport.add_response(initialize_response_with_capabilities(&["resources"]));
+  let sent = transport.sent_messages_handle();
+
+  let mut client = ClientBuilder::new()
+    .with_transport(transport)
+    .build()
+    .await
+    .unwrap();
+  client.connect().await.unwrap();
+
+  let result = client.list_tools().await;
+  assert!(
+    result.is_err(),
+    "must reject when the server never advertised 'tools'"
+  );
+
+  let messages = sent.lock().unwrap().clone();
+  assert!(
+    !messages
+      .iter()
+      .any(|m| m["method"].as_str() == Some("tools/list")),
+    "tools/list must never be sent when the server didn't advertise the capability; got: {messages:?}"
+  );
+}

@@ -34,6 +34,7 @@
 //!   richer transports should drive `handle_request` directly.
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
+use crate::protocol::types::MCP_PROTOCOL_VERSION;
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -42,7 +43,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 /// MCP protocol version this server speaks. Returned by the
 /// `initialize` method's `protocolVersion` field. Bumping this
 /// constant is a breaking change to the Beta wire contract.
-pub const STABLE_PROTOCOL_VERSION: &str = "2024-11-05";
+///
+/// W5.6: re-exports `protocol::types::MCP_PROTOCOL_VERSION` (the
+/// client-side constant) instead of duplicating the literal — the two
+/// used to be independently hand-typed copies of the same string, a
+/// latent drift risk if either was ever edited without the other.
+pub const STABLE_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION;
 
 /// Handler trait for MCP server implementations (simplified for now)
 pub trait MCPServerHandler: Send + Sync {

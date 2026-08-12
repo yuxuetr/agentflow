@@ -110,7 +110,14 @@ impl MockTransport {
     self.sent_messages.lock().unwrap().clear();
   }
 
-  /// Create a standard initialize response
+  /// Create a standard initialize response.
+  ///
+  /// W5.6: advertises `tools`/`resources`/`prompts` (all three core
+  /// server capabilities) — before capability gating landed this only
+  /// mattered cosmetically, but now every `list_prompts`/`get_prompt`/
+  /// `list_resources`/etc. call checks the advertised set first, so a
+  /// "standard" fixture missing one silently broke every test that used
+  /// it for that capability family.
   pub fn standard_initialize_response() -> Value {
     json!({
       "jsonrpc": "2.0",
@@ -119,7 +126,8 @@ impl MockTransport {
         "protocolVersion": "2024-11-05",
         "capabilities": {
           "tools": {},
-          "resources": {}
+          "resources": {},
+          "prompts": {}
         },
         "serverInfo": {
           "name": "mock-server",

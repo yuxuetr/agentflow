@@ -118,6 +118,9 @@ impl MCPClient {
     if !self.is_connected().await {
       return Err(MCPError::connection("Client is not connected"));
     }
+    self
+      .require_server_capability(|c| c.supports_resources(), "resources")
+      .await?;
 
     // Build request
     let request = JsonRpcRequest::new(self.next_request_id(), "resources/list", None);
@@ -210,6 +213,9 @@ impl MCPClient {
     if !self.is_connected().await {
       return Err(MCPError::connection("Client is not connected"));
     }
+    self
+      .require_server_capability(|c| c.supports_resources(), "resources")
+      .await?;
 
     // Build params
     let params = serde_json::json!({
@@ -293,6 +299,9 @@ impl MCPClient {
     if !self.is_connected().await {
       return Err(MCPError::connection("Client is not connected"));
     }
+    self
+      .require_server_capability(|c| c.supports_resources(), "resources")
+      .await?;
 
     // Build params
     let params = serde_json::json!({
@@ -362,6 +371,9 @@ impl MCPClient {
     if !self.is_connected().await {
       return Err(MCPError::connection("Client is not connected"));
     }
+    self
+      .require_server_capability(|c| c.supports_resources(), "resources")
+      .await?;
 
     // Build params
     let params = serde_json::json!({

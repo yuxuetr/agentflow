@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   if let Some(capabilities) = client.server_capabilities().await {
-    println!("Capabilities: {}\n", capabilities);
+    println!("Capabilities: {:?}\n", capabilities);
   }
 
   // List tools

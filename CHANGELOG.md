@@ -13,6 +13,29 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`agentflow-mcp` client: protocol version verification + capability
+  gating (W5.6, contained scope).** The client parsed the server's
+  `initialize` response's `protocolVersion` but never compared it against
+  what it sent — any value was silently accepted. It now rejects a
+  mismatch before storing any session state
+  (`MCPClient::connect`/`initialize`). Separately, `ServerCapabilities`
+  is now stored typed (was round-tripped through `serde_json::Value` for
+  no reason) and consulted before every `list_resources`/`read_resource`/
+  `subscribe_resource`/`unsubscribe_resource`/`list_prompts`/`get_prompt`/
+  `list_tools`/`call_tool` call — a server that never advertised e.g.
+  `resources` during `initialize` now gets a clear client-side error
+  instead of the request going out and (typically) getting a JSON-RPC
+  "method not found" back. Fixes a related pre-existing bug uncovered
+  while adding the version check: `connect()` left `is_connected()`
+  reporting `true` after a failed `initialize()` instead of rolling back
+  to disconnected. `server::STABLE_PROTOCOL_VERSION` and
+  `protocol::types::MCP_PROTOCOL_VERSION` (previously two independently
+  hand-typed copies of the same literal) are now one constant.
+  Streamable HTTP transport and connection-level reconnect logic — the
+  other two items under the former W5.6 TODO — are re-filed separately;
+  this crate's own audit doc's "no JSON-RPC response-id correlation"
+  finding was checked during this work and found to be already fixed
+  (stale audit doc, not a live bug).
 - **`GET /health/ready` now actually checks database connectivity (W5.3).**
   Previously all three health routes (`/health`, `/health/live`,
   `/health/ready`) unconditionally returned `{"status":"ok"}` regardless of

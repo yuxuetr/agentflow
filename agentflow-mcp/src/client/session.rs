@@ -7,7 +7,8 @@ use crate::error::{JsonRpcErrorCode, MCPError, MCPResult, ResultExt};
 #[cfg(test)]
 use crate::protocol::types::ClientCapabilities;
 use crate::protocol::types::{
-  Implementation, InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, RequestId,
+  Implementation, InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse,
+  MCP_PROTOCOL_VERSION, RequestId, ServerCapabilities,
 };
 use crate::transport::Transport;
 use serde_json::Value;
@@ -65,8 +66,11 @@ pub struct MCPClient {
   session_id: String,
   /// Connection state
   connected: Arc<Mutex<bool>>,
-  /// Server capabilities (after initialization)
-  server_capabilities: Arc<Mutex<Option<Value>>>,
+  /// Server capabilities (after initialization). W5.6: stored typed
+  /// (was `Option<Value>`, round-tripped through `serde_json::to_value`
+  /// for no reason — `InitializeResult::capabilities` is already typed)
+  /// so `require_server_capability` can consult `supports_*()` directly.
+  server_capabilities: Arc<Mutex<Option<ServerCapabilities>>>,
   /// Server info (after initialization)
   server_info: Arc<Mutex<Option<Implementation>>>,
   /// Request ID counter
@@ -164,10 +168,19 @@ impl MCPClient {
     }
 
     // Initialize session (already has retry + timeout via send_request)
-    self
-      .initialize()
-      .await
-      .context("Failed to initialize MCP session")?;
+    if let Err(err) = self.initialize().await {
+      // W5.6: pre-existing gap, newly exercised by the protocol-version
+      // check above — `connected` was flipped `true` right after the
+      // transport connected, before `initialize()` ran, and nothing
+      // rolled it back on failure. A caller could get an `Err` from
+      // `connect()` yet see `is_connected() == true` afterward. Tear
+      // down the transport (best-effort; we're already returning the
+      // real error) and reset state so a failed handshake leaves the
+      // client genuinely disconnected.
+      let _ = self.transport.disconnect().await;
+      *self.connected.lock().await = false;
+      return Err(err.context("Failed to initialize MCP session"));
+    }
 
     Ok(())
   }
@@ -218,11 +231,23 @@ impl MCPClient {
     let init_result: InitializeResult = serde_json::from_value(result)
       .map_err(|e| MCPError::from(e).context("Failed to parse initialize result"))?;
 
+    // W5.6: verify the server actually returned the protocol version we
+    // sent, instead of silently accepting whatever came back. This crate
+    // implements exactly one protocol version's wire format today, so
+    // there's nothing to negotiate down/up to yet — a mismatch means the
+    // session never really started, checked before any state is stored.
+    if init_result.protocol_version != MCP_PROTOCOL_VERSION {
+      return Err(MCPError::protocol(
+        format!(
+          "server returned protocol version '{}', client requires '{}'",
+          init_result.protocol_version, MCP_PROTOCOL_VERSION
+        ),
+        JsonRpcErrorCode::InvalidRequest,
+      ));
+    }
+
     // Store server info and capabilities
-    *self.server_capabilities.lock().await = Some(
-      serde_json::to_value(&init_result.capabilities)
-        .map_err(|e| MCPError::from(e).context("Failed to serialize server capabilities"))?,
-    );
+    *self.server_capabilities.lock().await = Some(init_result.capabilities);
     *self.server_info.lock().await = Some(init_result.server_info);
 
     // Send initialized notification
@@ -302,8 +327,29 @@ impl MCPClient {
   }
 
   /// Get server capabilities (if initialized)
-  pub async fn server_capabilities(&self) -> Option<Value> {
+  pub async fn server_capabilities(&self) -> Option<ServerCapabilities> {
     self.server_capabilities.lock().await.clone()
+  }
+
+  /// W5.6: fail fast, client-side, when a caller tries to invoke a
+  /// method the server never advertised support for during `initialize`
+  /// — instead of relying on the server to reject it (typically with a
+  /// JSON-RPC "method not found").
+  pub(crate) async fn require_server_capability(
+    &self,
+    check: impl Fn(&ServerCapabilities) -> bool,
+    capability_name: &str,
+  ) -> MCPResult<()> {
+    match self.server_capabilities.lock().await.as_ref() {
+      Some(caps) if check(caps) => Ok(()),
+      Some(_) => Err(MCPError::protocol(
+        format!("server did not advertise the '{capability_name}' capability during initialize"),
+        JsonRpcErrorCode::MethodNotFound,
+      )),
+      None => Err(MCPError::connection(
+        "client is not initialized (call connect() first)",
+      )),
+    }
   }
 
   /// Get server info (if initialized)
