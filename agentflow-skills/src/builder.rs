@@ -59,7 +59,7 @@ impl SkillBuilder {
     skill_dir: &Path,
     extra_tools: Vec<Arc<dyn Tool>>,
   ) -> Result<ReActAgent, SkillError> {
-    Self::build_core(manifest, skill_dir, extra_tools, None).await
+    Self::build_core(manifest, skill_dir, extra_tools, None, None).await
   }
 
   /// Same as [`Self::build`], but also wires up `[memory.project]` (L3.1)
@@ -80,19 +80,29 @@ impl SkillBuilder {
     skill_dir: &Path,
     project_root: Option<&Path>,
   ) -> Result<ReActAgent, SkillError> {
-    Self::build_core(manifest, skill_dir, Vec::new(), project_root).await
+    Self::build_core(manifest, skill_dir, Vec::new(), project_root, None).await
   }
 
+  /// Shared assembly path for every `build*` entry point. `admit`, when
+  /// present, is applied to every tool (including the auto-registered
+  /// `remember_preference` tool) before it's added to the registry —
+  /// `None` means "admit everything," matching every caller except
+  /// [`Self::build_with_admission`]. Threading admission through here
+  /// (W5.4) replaces what used to be a second, hand-duplicated copy of
+  /// this whole function in `build_with_admission` that had drifted out
+  /// of sync with this one (it never wired up `[memory.project]`).
   async fn build_core(
     manifest: &SkillManifest,
     skill_dir: &Path,
     extra_tools: Vec<Arc<dyn Tool>>,
     project_root: Option<&Path>,
+    admit: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
   ) -> Result<ReActAgent, SkillError> {
     info!(
         skill = %manifest.skill.name,
         version = %manifest.skill.version,
         extra_tool_count = extra_tools.len(),
+        admission_filtered = admit.is_some(),
         "Building agent from skill manifest"
     );
 
@@ -106,23 +116,36 @@ impl SkillBuilder {
       .with_budget_tokens(manifest.model.resolved_budget_tokens());
 
     // 3. Build ToolRegistry, then inject extras (last write wins on name
-    // collision so callers can override defaults if desired).
+    // collision so callers can override defaults if desired), then apply
+    // the admission filter if one was supplied.
     let mut registry = Self::build_registry(manifest, skill_dir).await?;
     for tool in extra_tools {
       registry.register(tool);
+    }
+    if let Some(admit) = admit {
+      let mut filtered = ToolRegistry::new();
+      for tool in registry.list() {
+        if admit(tool.name()) {
+          filtered.register(tool);
+        }
+      }
+      registry = filtered;
     }
 
     // 4. Build MemoryStore
     let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
 
     // 5. U2.2: preference layer (optional). Registers `remember_preference`
-    // into the registry (the write path) and attaches the same store to
-    // the agent for prompt injection (the read path) — see
+    // into the registry (the write path, subject to the same admission
+    // filter as every other tool) and attaches the same store to the
+    // agent for prompt injection (the read path) — see
     // `default_preference_scope`'s doc comment for why there's no
     // per-user scoping yet.
     let preference_config = manifest.memory.as_ref().and_then(|m| m.preference.as_ref());
     let preference_store = build_preference_store(preference_config, &manifest.skill.name).await?;
-    if let Some(store) = &preference_store {
+    if let Some(store) = &preference_store
+      && admit.is_none_or(|admit| admit(RememberPreferenceTool::TOOL_NAME))
+    {
       registry.register(Arc::new(RememberPreferenceTool::new(
         store.clone(),
         default_preference_scope(),
@@ -184,50 +207,9 @@ impl SkillBuilder {
     admit: F,
   ) -> Result<ReActAgent, SkillError>
   where
-    F: Fn(&str) -> bool,
+    F: Fn(&str) -> bool + Send + Sync,
   {
-    info!(
-        skill = %manifest.skill.name,
-        version = %manifest.skill.version,
-        "Building agent from skill manifest (with admission filter)"
-    );
-
-    let persona = build_persona(manifest, skill_dir)?;
-    let config = ReActConfig::new(manifest.model.resolved_model())
-      .with_persona(persona)
-      .with_max_iterations(manifest.model.resolved_max_iterations())
-      .with_budget_tokens(manifest.model.resolved_budget_tokens());
-
-    let source_registry = Self::build_registry(manifest, skill_dir).await?;
-    let mut filtered = ToolRegistry::new();
-    for tool in source_registry.list() {
-      if admit(tool.name()) {
-        filtered.register(tool);
-      }
-    }
-
-    let memory = build_memory(manifest.memory.as_ref(), &manifest.skill.name).await?;
-
-    // U2.2: preference layer (optional), subject to the same admission
-    // filter as every other tool — see `build_with_extra_tools` for the
-    // unfiltered counterpart this mirrors.
-    let preference_config = manifest.memory.as_ref().and_then(|m| m.preference.as_ref());
-    let preference_store = build_preference_store(preference_config, &manifest.skill.name).await?;
-    if let Some(store) = &preference_store
-      && admit(RememberPreferenceTool::TOOL_NAME)
-    {
-      filtered.register(Arc::new(RememberPreferenceTool::new(
-        store.clone(),
-        default_preference_scope(),
-      )));
-    }
-
-    let agent = ReActAgent::new(config, memory, Arc::new(filtered));
-    let agent = match preference_store {
-      Some(store) => agent.with_preference_store(store, default_preference_scope()),
-      None => agent,
-    };
-    Ok(agent)
+    Self::build_core(manifest, skill_dir, Vec::new(), None, Some(&admit)).await
   }
 }
 
