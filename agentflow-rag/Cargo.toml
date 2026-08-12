@@ -31,14 +31,14 @@ agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.35", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 async-trait = "0.1"
 thiserror = "1.0"
 anyhow = "1.0"
 tracing = "0.1"
 
 # HTTP client for API-based embeddings
-reqwest = { version = "0.12", features = ["json", "default-tls"] }
+reqwest = { workspace = true }
 
 # Vector databases
 qdrant-client = { version = "1.11", optional = true }
@@ -65,7 +65,7 @@ tokenizers = { version = "0.19", optional = true, default-features = false, feat
 
 # Utilities
 futures = "0.3"
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Rate limiting

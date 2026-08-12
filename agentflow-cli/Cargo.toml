@@ -56,7 +56,7 @@ clap = { version = "4.4", features = ["derive", "color", "suggestions"] }
 clap_complete = "4.4"
 
 # Async runtime
-tokio = { version = "1.35", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 async-trait = "0.1"
 
 # Serialization
@@ -70,7 +70,7 @@ tera = "1.19"
 
 # HTTP client. `stream` enables `Response::bytes_stream()` for the
 # P10.11.1 `workflow logs --follow` SSE consumer.
-reqwest = { version = "0.12", features = ["json", "multipart", "stream", "default-tls"] }
+reqwest = { workspace = true, features = ["multipart", "stream"] }
 # Stream trait `next()` for the SSE consumer.
 futures = "0.3"
 
@@ -112,7 +112,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rustyline = "14"
 
 # UUID generation
-uuid = { version = "1.6", features = ["v4"] }
+uuid = { workspace = true }
 
 # Lookup binaries on PATH — used by `agentflow doctor --check-installations`
 # (P3.4) to verify declared MCP server commands resolve.
@@ -144,7 +144,7 @@ axum = "0.7"
 # database on the shared AGENTFLOW_DATABASE_TEST_URL Postgres server so
 # a destructive `pg_restore --clean` can never disturb rows other
 # parallel tests seed into the shared test database.
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
+sqlx = { workspace = true }
 # P3.8 E2E cross-hop acceptance test constructs a tonic Request
 # (the worker gRPC carrier) without going through a full Channel.
 # Test-only; the cli library itself doesn't speak gRPC.

@@ -47,6 +47,22 @@ authors = ["yuxuetr", "AgentFlow Contributors"]
 repository = "https://github.com/yuxuetr/agentflow"
 homepage = "https://github.com/yuxuetr/agentflow"
 
+# Shared dependency versions for a handful of workspace-wide deps that had
+# drifted (version splits, inconsistent TLS backends). Every consuming
+# crate opts in via `<dep>.workspace = true`, layering its own extra
+# features on top — this table intentionally does NOT centralize the
+# whole dependency graph, only these four (tokio/sqlx/uuid/reqwest).
+#
+# TLS backend is deliberately unified on rustls (not native-tls) for both
+# sqlx and reqwest: `runtime-tokio-rustls` / `rustls-tls` avoid pulling in
+# `native-tls`/`tokio-native-tls` (which link against the system OpenSSL /
+# Secure Transport) anywhere in the resolved graph.
+[workspace.dependencies]
+tokio = { version = "1.35", features = ["rt", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+uuid = { version = "1.6", features = ["v4"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 [profile.dev.package."*"]
 debug = 1
 

@@ -16,7 +16,7 @@ homepage.workspace = true
 agentflow-graph = { path = "../agentflow-graph", version = "0.1" }
 serde = { version = "1.0", features = ["derive"] }
 # `macros` powers the `tokio::select!` in `race::race_with_limits`.
-tokio = { version = "1.0", features = ["time", "macros"] }
+tokio = { workspace = true, features = ["time", "macros"] }
 humantime-serde = "1.1"
 rand = "0.8"
 # W0.7: unconditional — was behind an `observability` feature nobody
@@ -25,4 +25,4 @@ rand = "0.8"
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

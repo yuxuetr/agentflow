@@ -10,12 +10,12 @@ homepage.workspace = true
 
 [dependencies]
 agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
-tokio = { version = "1.0", features = ["full"] }
+sqlx = { workspace = true, features = ["macros", "migrate", "uuid", "chrono", "json"] }
+tokio = { workspace = true, features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"

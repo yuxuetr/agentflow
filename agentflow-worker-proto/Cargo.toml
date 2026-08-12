@@ -25,7 +25,7 @@ prost = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.0", features = ["sync", "rt", "macros", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 # T1.2: `tls`/`tls-roots` are explicit, not incidental. Without this,
 # `ClientTlsConfig` only compiles today because `qdrant-client` (pulled in
 # transitively by agentflow-rag) happens to unify tonic's TLS feature in —
@@ -33,4 +33,4 @@ tokio = { version = "1.0", features = ["sync", "rt", "macros", "time"] }
 # the worker's TLS wiring.
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 tracing = "0.1"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }

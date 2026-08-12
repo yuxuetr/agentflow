@@ -20,10 +20,10 @@ jsonschema = "0.17"
 # contract trait itself references this type, so `tokio` (process only; no
 # concrete backend spawns anything from this crate) is a real, non-dev
 # dependency here, not just a test convenience.
-tokio = { version = "1.0", features = ["process"] }
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 # NOTE (T3.3): deliberately does NOT dev-depend on `agentflow-tools` (which
 # depends on this crate) — that cyclic dev-dependency produced two distinct
 # compilations of `agentflow-tool` in the graph, so a real `ShellTool` (from

@@ -65,7 +65,7 @@ agentflow-tools = { path = "../agentflow-tools", version = "0.1" }
 # Removed: agentflow-config dependency to break circular dependency
 
 # HTTP client for HTTP node
-reqwest = { version = "0.12", features = ["json", "default-tls"], optional = true }
+reqwest = { workspace = true, optional = true }
 
 # Template engines for template node
 handlebars = { version = "4.0", optional = true }
@@ -75,7 +75,7 @@ tera = "1.19"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-tokio = { version = "1.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 async-trait = "0.1"
 
 # Error handling
@@ -90,7 +90,7 @@ anyhow = "1.0"
 tracing = "0.1"
 
 # Utilities
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.21"
 mime_guess = "2.0"

@@ -33,6 +33,23 @@ _New entries go here. Will roll into the next tag (likely
 - **`cargo xtask check-changelog` wired into CI (W5.5).** The gate existed
   since P10.18.2 but was deliberately left unwired pending local-usage
   confidence; it now runs in `quality.yml` and gates `release-gate`.
+- **`[workspace.dependencies]` for tokio/sqlx/uuid/reqwest, TLS backend
+  unified on rustls (W5.5).** `tokio` had drifted to 2 version strings
+  (`"1.0"` vs `"1.35"`) across 12 feature-set combinations; `uuid` similarly
+  split `"1.0"`/`"1.6"`. `sqlx` (cli/db/server) declared a bare
+  `runtime-tokio` with no explicit TLS backend, and 7 of 8 `reqwest`
+  consumers used `default-tls` (native-tls) while `agentflow-memory`
+  (sqlx) and `agentflow-skills` (reqwest) already forced rustls — the
+  resolved dependency graph compiled **both** native-tls and rustls
+  simultaneously. All 25 workspace members now reference these four
+  dependencies via `{ workspace = true, features = [...] }`, and both
+  sqlx and reqwest are unified on `runtime-tokio-rustls`/`rustls-tls`.
+  `tokio-native-tls` is now fully absent from `Cargo.lock`; the one
+  remaining `native-tls` entry is `ort`'s (ONNX Runtime, via `ureq`) model
+  downloader, unrelated to this change and out of scope. No feature
+  regressions — every crate's existing extra features (`multipart`,
+  `stream`, `serde`, `sqlite`, etc.) are preserved on top of the new
+  shared base.
 - **`agentflow-ui`'s 6 hand-written unit-test files now actually run in CI
   (W5.5).** They previously only self-described as "run via `npx tsx
   <path>`" with nothing invoking them — `npm test` only ran `tsc --noEmit`.

@@ -37,10 +37,10 @@ serde_yaml = "0.9"
 # Error handling and utilities
 anyhow = "1.0"
 thiserror = "1.0"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 
 # Async runtime and traits
-tokio = { version = "1.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 futures = "0.3"
 async-trait = "0.1"
 pin-project-lite = "0.2"
@@ -88,7 +88,7 @@ path = "examples/plugin_host_demo.rs"
 required-features = ["plugin"]
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-test = "0.2"

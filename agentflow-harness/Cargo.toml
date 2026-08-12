@@ -46,9 +46,9 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.0", features = ["fs", "io-util", "sync", "macros", "rt"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "macros", "rt"] }
 tracing = "0.1"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 agentflow-agents = { path = "../agentflow-agents", version = "0.2" }
@@ -61,4 +61,4 @@ agentflow-core = { path = "../agentflow-core", version = "0.2" }
 agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
 agentflow-memory = { path = "../agentflow-memory", version = "0.1" }
 tempfile = "3"
-tokio = { version = "1.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
