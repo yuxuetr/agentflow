@@ -13,6 +13,27 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`GET /health/ready` now actually checks database connectivity (W5.3).**
+  Previously all three health routes (`/health`, `/health/live`,
+  `/health/ready`) unconditionally returned `{"status":"ok"}` regardless of
+  whether the gateway could reach Postgres. `/health/ready` now runs a real
+  `SELECT 1` against the primary pool via `agentflow-core`'s `HealthChecker`
+  and returns `503` with per-check JSON when it fails; `/health`/
+  `/health/live` stay unconditional `200`s per the standard Kubernetes
+  liveness convention (must never depend on external dependencies).
+- **`FlowExecutionConfig::resource_limits` — advisory state-pool size
+  warnings (W5.3).** Opt-in `Option<ResourceLimits>` on `Flow`'s execution
+  config; when set, `Flow` emits `WorkflowEvent::ResourceWarning` once the
+  estimated state-pool size crosses the configured `max_state_size`. Purely
+  advisory — no eviction, no rejection. Replaces an unwired
+  `resource_manager`/`concurrency`/`state_monitor` stack that had zero real
+  callers; the removed `state_monitor`'s LRU eviction model would have been
+  unsafe for `Flow`'s state pool (a node's output can be a real dependency
+  for any later node regardless of recency).
+- **`cargo xtask check-changelog` wired into CI (W5.5).** The gate existed
+  since P10.18.2 but was deliberately left unwired pending local-usage
+  confidence; it now runs in `quality.yml` and gates `release-gate`.
+
 - **`agentflow harness chat --approve cli` now works interactively (H.2.1).**
   Previously rejected at startup because the blocking `CliApprovalProvider` reads
   `std::io::stdin` while the REPL owns the async tokio stdin reader (the two
@@ -96,6 +117,18 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Changed
 
+- **Three giant files split into modules, no behavior change (W5.4).**
+  `agentflow-agents/src/react/agent.rs` (8,254 lines, one inherent
+  `impl ReActAgent` block of 62 methods) split into
+  `react/agent/{config,core,tool_dispatch,batch,memory,verification,
+  checkpoint,prompt,turn_driven,support}.rs` by concern, plus a relocated
+  `tests.rs`; `xtask/src/main.rs` (4,848 lines, 10 subcommands) split into
+  `xtask/src/tasks/<task>.rs`, one file per subcommand;
+  `agentflow-skills::SkillBuilder::build_with_admission` deduplicated
+  against `build_core` (was a ~50-line copy that had drifted out of sync,
+  silently missing `[memory.project]` support). All three are pure code
+  movement — public API surfaces (`react::{ReActAgent, ReActConfig, ...}`,
+  `SkillBuilder`'s 5 public methods, `cargo xtask <subcommand>`) unchanged.
 - **`rag search` / `index` / `collections` CLI demoted under an `ops` group
   (P-A4.1b; RFC §9).** RAG's agent-facing retrieval path is now the `rag_search`
   tool a Skill exposes (P-A4.1/P-A4.2), so the direct vector-store commands move

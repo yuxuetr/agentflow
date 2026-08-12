@@ -107,6 +107,24 @@ jobs:
       - name: Run println-lint
         run: cargo xtask println-lint
 
+  check-changelog:
+    # P10.18.2 / W5.5: fail when a non-trivial source change vs. the base
+    # ref (default origin/main) didn't touch CHANGELOG.md AND no commit
+    # body in the branch range carries the `chore(skip-changelog)`
+    # opt-out marker. Needs the full history (unlike the other xtask lint
+    # jobs above, which only touch the files at HEAD) so the diff against
+    # origin/main actually has something to compare — a shallow checkout
+    # only fetches the current ref.
+    name: cargo xtask check-changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run check-changelog
+        run: cargo xtask check-changelog
+
   clippy-lib-deny:
     # Q5.1: enforce no `unwrap()` / `expect()` in production library
     # code workspace-wide. Tests / examples / benches / build scripts
@@ -559,6 +577,7 @@ jobs:
       - clippy-lib-deny
       - redaction-lint
       - println-lint
+      - check-changelog
       - cargo-audit
       - linux-sandbox-check
       - proto-validate
@@ -580,6 +599,7 @@ jobs:
           echo "clippy-lib-deny: ${{ needs.clippy-lib-deny.result }}"
           echo "redaction-lint: ${{ needs.redaction-lint.result }}"
           echo "println-lint: ${{ needs.println-lint.result }}"
+          echo "check-changelog: ${{ needs.check-changelog.result }}"
           echo "cargo-audit: ${{ needs.cargo-audit.result }}"
           echo "linux-sandbox-check: ${{ needs.linux-sandbox-check.result }}"
           echo "proto-validate: ${{ needs.proto-validate.result }}"
@@ -597,6 +617,7 @@ jobs:
           test "${{ needs.clippy-lib-deny.result }}" = "success"
           test "${{ needs.redaction-lint.result }}" = "success"
           test "${{ needs.println-lint.result }}" = "success"
+          test "${{ needs.check-changelog.result }}" = "success"
           test "${{ needs.cargo-audit.result }}" = "success"
           test "${{ needs.linux-sandbox-check.result }}" = "success"
           test "${{ needs.proto-validate.result }}" = "success"
