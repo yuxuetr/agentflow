@@ -992,7 +992,8 @@ models:
     response_format: null
   veo-2.0-generate-001:
     vendor: google
-    type: chat
+    type: text_to_video
+    accepts: [text]
     model_id: models/veo-2.0-generate-001
     base_url: null
     temperature: 0.7
@@ -1001,13 +1002,14 @@ models:
     frequency_penalty: null
     stop: null
     n: null
-    supports_streaming: true
+    supports_streaming: false
     supports_tools: false
     supports_multimodal: false
     response_format: null
   veo-3.0-fast-generate-preview:
     vendor: google
-    type: chat
+    type: text_to_video
+    accepts: [text]
     model_id: models/veo-3.0-fast-generate-preview
     base_url: null
     temperature: 0.7
@@ -1016,13 +1018,14 @@ models:
     frequency_penalty: null
     stop: null
     n: null
-    supports_streaming: true
+    supports_streaming: false
     supports_tools: false
     supports_multimodal: false
     response_format: null
   veo-3.0-generate-preview:
     vendor: google
-    type: chat
+    type: text_to_video
+    accepts: [text]
     model_id: models/veo-3.0-generate-preview
     base_url: null
     temperature: 0.7
@@ -1031,7 +1034,23 @@ models:
     frequency_penalty: null
     stop: null
     n: null
-    supports_streaming: true
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  veo-3.1-generate-preview:
+    vendor: google
+    type: text_to_video
+    accepts: [text]
+    model_id: models/veo-3.1-generate-preview
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
     supports_tools: false
     supports_multimodal: false
     response_format: null

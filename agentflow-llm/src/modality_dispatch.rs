@@ -6,16 +6,19 @@
 //! is the modality counterpart to [`AgentFlow::model`](crate::AgentFlow::model)
 //! (which covers chat).
 //!
-//! Today only StepFun implements the 5 modality traits — other vendors
-//! return [`LLMError::UnsupportedProvider`]. P-LLM.5 adds OpenAI
-//! Whisper as the second `AsrProvider` implementation.
+//! StepFun implements 5 of the 6 modality traits; OpenAI adds a second
+//! `AsrProvider` (Whisper, P-LLM.5) and Google adds the sixth,
+//! `Text2VideoProvider` (Veo, P-LLM2.2). Unimplemented vendor/modality
+//! combinations return [`LLMError::UnsupportedProvider`].
 
 use crate::{
   LLMError, Result,
   model_types::ModelType,
   providers::{
+    google_veo::GoogleVeoClient,
     modality::{
-      AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, TtsProvider,
+      AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, Text2VideoProvider,
+      TtsProvider,
     },
     openai_asr::OpenAIAsrProvider,
     stepfun::StepFunSpecializedClient,
@@ -88,6 +91,12 @@ fn build_stepfun_image_edit(
 fn build_openai_asr(api_key: &str, base_url: Option<String>) -> Result<Box<dyn AsrProvider>> {
   Ok(Box::new(OpenAIAsrProvider::new(api_key, base_url)?))
 }
+fn build_google_text2video(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2VideoProvider>> {
+  Ok(Box::new(GoogleVeoClient::new(api_key, base_url)?))
+}
 
 const ASR_PROVIDERS: &[(&str, Ctor<dyn AsrProvider>)] = &[
   ("stepfun", build_stepfun_asr),
@@ -108,6 +117,8 @@ const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
   ("stepfun", build_stepfun_image_edit),
   ("step", build_stepfun_image_edit),
 ];
+const TEXT2VIDEO_PROVIDERS: &[(&str, Ctor<dyn Text2VideoProvider>)] =
+  &[("google", build_google_text2video)];
 
 /// The modality labels `vendor` already has a provider implementation
 /// for, derived from the same constructor tables the dispatch functions
@@ -129,6 +140,9 @@ fn implemented_modalities_for(vendor: &str) -> Vec<&'static str> {
   }
   if IMAGE_EDIT_PROVIDERS.iter().any(|(v, _)| *v == vendor) {
     modalities.push("image-edit");
+  }
+  if TEXT2VIDEO_PROVIDERS.iter().any(|(v, _)| *v == vendor) {
+    modalities.push("text-to-video");
   }
   modalities
 }
@@ -240,6 +254,20 @@ pub async fn image_edit_provider(model_name: &str) -> Result<Box<dyn ImageEditPr
   )
 }
 
+/// Build a [`Text2VideoProvider`] for the named text-to-video model.
+/// Unlike the other four modality entry points, the returned provider is
+/// an async job API — see [`Text2VideoProvider::submit`]/[`Text2VideoProvider::poll`].
+pub async fn text2video_provider(model_name: &str) -> Result<Box<dyn Text2VideoProvider>> {
+  let resolved = resolve(model_name, ModelType::Text2Video).await?;
+  dispatch(
+    TEXT2VIDEO_PROVIDERS,
+    &resolved.vendor,
+    &resolved.api_key,
+    resolved.base_url,
+    "text-to-video",
+  )
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -320,5 +348,23 @@ mod tests {
   #[test]
   fn implemented_modalities_for_openai_is_asr_only() {
     assert_eq!(implemented_modalities_for("openai"), vec!["ASR"]);
+  }
+
+  #[test]
+  fn implemented_modalities_for_google_is_text_to_video_only() {
+    assert_eq!(implemented_modalities_for("google"), vec!["text-to-video"]);
+  }
+
+  #[test]
+  fn unsupported_vendor_message_for_text_to_video_names_the_modality() {
+    // stepfun implements the other 5 modalities but not text-to-video.
+    let err = unsupported_vendor::<()>("stepfun", "text-to-video").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("stepfun"), "vendor missing: {msg}");
+    assert!(msg.contains("text-to-video"), "modality missing: {msg}");
+    assert!(
+      msg.contains("implements: ASR, TTS, text-to-image, image-to-image, image-edit"),
+      "should list stepfun's other implemented modalities: {msg}"
+    );
   }
 }

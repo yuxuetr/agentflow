@@ -11,6 +11,7 @@ pub mod image_edit;
 pub mod image_to_image;
 pub mod image_understand;
 pub mod text_to_image;
+pub mod text_to_video;
 
 pub mod asr;
 pub mod tts;

@@ -108,9 +108,10 @@ pub use error::{LLMError, Result};
 pub use model_types::{InputType, ModelCapabilities, ModelType, OutputType};
 pub use multimodal::{ImageData, ImageUrl, MessageContent, MultimodalMessage};
 pub use providers::modality::{
-  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider, Image2ImageRequest,
-  ImageEditProvider, ImageEditRequest, ImageGenerationResponse, Text2ImageProvider,
-  Text2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
+  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, GeneratedVideo, Image2ImageProvider,
+  Image2ImageRequest, ImageEditProvider, ImageEditRequest, ImageGenerationResponse,
+  Text2ImageProvider, Text2ImageRequest, Text2VideoProvider, Text2VideoRequest, TtsProvider,
+  TtsRequest, TtsResponse, VideoGenerationResponse, VideoGenerationStatus, VideoGenerationTask,
 };
 pub use registry::ModelRegistry;
 pub use thinking::{ThinkingConfig, ThinkingKind};
@@ -454,6 +455,14 @@ impl AgentFlow {
   /// Build a boxed [`ImageEditProvider`] for `model_name`.
   pub async fn image_edit(model_name: &str) -> Result<Box<dyn ImageEditProvider>> {
     modality_dispatch::image_edit_provider(model_name).await
+  }
+
+  /// Build a boxed [`Text2VideoProvider`] for `model_name`. Unlike the
+  /// other modality entry points above, the returned provider is an
+  /// async job API — see [`Text2VideoProvider::submit`]/[`Text2VideoProvider::poll`]/
+  /// [`Text2VideoProvider::generate_and_wait`].
+  pub async fn text2video_for(model_name: &str) -> Result<Box<dyn Text2VideoProvider>> {
+    modality_dispatch::text2video_provider(model_name).await
   }
 }
 

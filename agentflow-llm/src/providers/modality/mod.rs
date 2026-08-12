@@ -11,6 +11,9 @@
 //! - [`image_to_image::Image2ImageProvider`] — image+text → image
 //! - [`image_edit::ImageEditProvider`] — image+text → image
 //!   (DALL-E edit, StepFun image edit)
+//! - [`text_to_video::Text2VideoProvider`] — text → video (Google Veo).
+//!   Unlike the other five, this is an async job API (submit + poll),
+//!   not a synchronous request/response.
 //!
 //! Each trait is intentionally narrow — modality shapes diverge enough
 //! that a single "MultimodalProvider" abstraction would leak. Common
@@ -30,12 +33,17 @@ pub mod asr;
 pub mod image_edit;
 pub mod image_to_image;
 pub mod text_to_image;
+pub mod text_to_video;
 pub mod tts;
 
 pub use asr::{AsrProvider, AsrRequest, AsrResponse};
 pub use image_edit::{ImageEditProvider, ImageEditRequest};
 pub use image_to_image::{Image2ImageProvider, Image2ImageRequest};
 pub use text_to_image::{Text2ImageProvider, Text2ImageRequest};
+pub use text_to_video::{
+  GeneratedVideo, Text2VideoProvider, Text2VideoRequest, VideoGenerationResponse,
+  VideoGenerationStatus, VideoGenerationTask,
+};
 pub use tts::{TtsProvider, TtsRequest, TtsResponse};
 
 use serde::{Deserialize, Serialize};

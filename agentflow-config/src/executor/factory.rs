@@ -15,7 +15,7 @@ use agentflow_nodes::nodes::{
 use agentflow_nodes_ai::nodes::{
   asr::ASRNode, image_edit::ImageEditNode, image_to_image::ImageToImageNode,
   image_understand::ImageUnderstandNode, llm::LlmNode, text_to_image::TextToImageNode,
-  tts::TTSNode,
+  text_to_video::TextToVideoNode, tts::TTSNode,
 };
 use agentflow_skills::{SkillBuilder, SkillLoader};
 use agentflow_tools::{SandboxPolicy, ToolRegistry};
@@ -207,6 +207,11 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     "text_to_image" => {
       let model = get_string_param_optional(&node_def.parameters, "model");
       let node = TextToImageNode::new(&node_def.id, &model);
+      Ok(NodeType::Standard(Arc::new(node)))
+    }
+    "text_to_video" => {
+      let model = get_string_param_optional(&node_def.parameters, "model");
+      let node = TextToVideoNode::new(&node_def.id, &model);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "tts" => {

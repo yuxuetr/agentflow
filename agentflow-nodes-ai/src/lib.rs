@@ -15,6 +15,7 @@ pub use nodes::image_to_image::ImageToImageNode;
 pub use nodes::image_understand::ImageUnderstandNode;
 pub use nodes::llm::LlmNode;
 pub use nodes::text_to_image::TextToImageNode;
+pub use nodes::text_to_video::TextToVideoNode;
 pub use nodes::tts::TTSNode;
 
 #[cfg(feature = "mcp")]

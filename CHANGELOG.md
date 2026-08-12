@@ -13,6 +13,38 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`Text2VideoProvider` trait + Google Veo implementation (P-LLM2.2).**
+  Adds the sixth modality trait, `Text2VideoProvider`
+  (`agentflow-llm/src/providers/modality/text_to_video.rs`) — unlike the
+  other five, an explicit async job API (`submit`/`poll`, plus a default
+  `generate_and_wait` convenience method) since video generation takes
+  minutes, not seconds. First implementation is `GoogleVeoClient`
+  (`agentflow-llm/src/providers/google_veo.rs`), talking to Veo 3.1 via
+  the plain Gemini API (not Vertex AI) — same `x-goog-api-key` auth this
+  crate's existing `GoogleProvider` already uses, verified live against
+  `ai.google.dev/gemini-api/docs/veo` this session (submit via
+  `predictLongRunning`, poll via the returned operation name). DashScope
+  was considered and passed over: its text-to-video equivalent needs a
+  different auth scheme nothing in this codebase has wired yet, and
+  TODOs.md's own P-LLM2.3 batch plan only lists DashScope for
+  text-to-*image*, not video. Wired end-to-end: registry entry
+  (`veo-3.1-generate-preview`) plus a fix for 3 **pre-existing** Veo
+  registry entries (`veo-2.0-generate-001`, `veo-3.0-generate-preview`,
+  `veo-3.0-fast-generate-preview`) that were mis-typed `type: chat` —
+  latent since Text2Video dispatch didn't exist until now, so nothing
+  exercised them — corrected to `type: text_to_video` +
+  `accepts: [text]` + `supports_streaming: false`; dispatcher entry
+  (`AgentFlow::text2video_for`); new `TextToVideoNode`
+  (`agentflow-nodes-ai`) mirroring `TextToImageNode`'s no-mock-fallback
+  precedent; `type: text_to_video` YAML node registration in
+  `agentflow-config`'s factory. Tests are pure-unit (request/response
+  JSON shape, status-mapping logic) rather than HTTP-mocked, matching
+  this crate's existing preference (confirmed via code search: `mockito`
+  is a declared-but-unused dev-dependency, and the one full-HTTP test in
+  this crate deliberately avoids it via a hand-rolled TCP listener) — an
+  opt-in `llm-live.yml` real-call test is deferred to P-LLM2.3 per
+  TODOs.md's own wording, and Veo is a paid-preview API with no test
+  credential available regardless.
 - **`agentflow-llm` modality dispatcher: table-driven construction +
   diagnosable unsupported-vendor errors (P-LLM2.1).**
   `modality_dispatch.rs` had 5 near-identical `match vendor.as_str() {
