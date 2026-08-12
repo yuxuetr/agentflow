@@ -211,12 +211,7 @@ impl VendorConfigManager {
           message: format!("Failed to read vendor file: {}", e),
         })?;
 
-    let vendor_config: VendorModelConfig =
-      serde_yaml::from_str(&content).map_err(|e| LLMError::ConfigurationError {
-        message: format!("Failed to parse vendor config: {}", e),
-      })?;
-
-    Ok(vendor_config.models)
+    parse_vendor_models_yaml(&content)
   }
 
   /// Update a specific vendor's models
@@ -271,6 +266,109 @@ impl VendorConfigManager {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct VendorModelConfig {
   models: HashMap<String, ModelConfig>,
+}
+
+/// Parse a single vendor file's YAML content (`models: {...}` top-level
+/// shape) into its models map.
+///
+/// Shared by [`VendorConfigManager::load_vendor_file`] (disk-based, async)
+/// and [`builtin_models_map`] (compile-time, sync via `include_str!`) so
+/// there is exactly one parsing implementation for the vendor-file shape.
+pub(crate) fn parse_vendor_models_yaml(content: &str) -> Result<HashMap<String, ModelConfig>> {
+  let vendor_config: VendorModelConfig =
+    serde_yaml::from_str(content).map_err(|e| LLMError::ConfigurationError {
+      message: format!("Failed to parse vendor config: {}", e),
+    })?;
+  Ok(vendor_config.models)
+}
+
+/// The registry's built-in vendor model files, bundled into the binary at
+/// compile time (T-split, see `docs/` model registry restructuring).
+///
+/// `include_str!` can't glob a directory, so this is nine hardcoded calls
+/// — fine and idiomatic, since the vendor list is fixed at compile time.
+/// Filenames use each vendor's actual name (`stepfun`, not the `vendor:
+/// step` value used inside the YAML — the vendor field and the filename
+/// are independent; the bundler below merges by content, not by name).
+const BUILTIN_VENDOR_FILES: &[(&str, &str)] = &[
+  ("openai", include_str!("../../templates/models/openai.yml")),
+  (
+    "anthropic",
+    include_str!("../../templates/models/anthropic.yml"),
+  ),
+  ("google", include_str!("../../templates/models/google.yml")),
+  (
+    "dashscope",
+    include_str!("../../templates/models/dashscope.yml"),
+  ),
+  (
+    "moonshot",
+    include_str!("../../templates/models/moonshot.yml"),
+  ),
+  (
+    "stepfun",
+    include_str!("../../templates/models/stepfun.yml"),
+  ),
+  ("glm", include_str!("../../templates/models/glm.yml")),
+  (
+    "deepseek",
+    include_str!("../../templates/models/deepseek.yml"),
+  ),
+  (
+    "minimax",
+    include_str!("../../templates/models/minimax.yml"),
+  ),
+];
+
+/// Merge every bundled vendor file into one models map. Sync/compile-time
+/// — no disk I/O, unlike [`VendorConfigManager::load_config`].
+pub(crate) fn builtin_models_map() -> Result<HashMap<String, ModelConfig>> {
+  let mut all_models = HashMap::new();
+  for (vendor, content) in BUILTIN_VENDOR_FILES {
+    let models = parse_vendor_models_yaml(content).map_err(|e| LLMError::ConfigurationError {
+      message: format!("Failed to parse bundled '{}' models: {}", vendor, e),
+    })?;
+    all_models.extend(models);
+  }
+  Ok(all_models)
+}
+
+/// Build the full built-in default [`LLMConfig`]: every bundled vendor
+/// file's models, merged with the `providers:`/`defaults:` parsed from
+/// the slimmed `templates/default_models.yml` (models split out to
+/// `templates/models/*.yml`, T-split).
+///
+/// This is what backs `AgentFlow::init()`'s built-in-default path,
+/// `ModelRegistry::load_builtin_config`, and (re-serialized to a string
+/// by [`builtin_default_config_yaml`]) `AgentFlow::generate_config`'s
+/// starter file.
+pub fn builtin_default_config() -> Result<LLMConfig> {
+  let models = builtin_models_map()?;
+  let mut config: LLMConfig =
+    serde_yaml::from_str(include_str!("../../templates/default_models.yml")).map_err(|e| {
+      LLMError::ConfigurationError {
+        message: format!(
+          "Failed to parse bundled default_models.yml providers/defaults: {}",
+          e
+        ),
+      }
+    })?;
+  config.models = models;
+  Ok(config)
+}
+
+/// [`builtin_default_config`], re-serialized to a single YAML string.
+///
+/// `AgentFlow::generate_config()` writes this out as the user's starter
+/// `~/.agentflow/models.yml` — a single self-contained file is easier to
+/// hand-edit than the split `templates/models/*.yml` layout the crate
+/// ships internally, and matches the file shape `LLMConfig::from_file`
+/// already knows how to read back.
+pub fn builtin_default_config_yaml() -> Result<String> {
+  let config = builtin_default_config()?;
+  serde_yaml::to_string(&config).map_err(|e| LLMError::ConfigurationError {
+    message: format!("Failed to serialize built-in default config: {}", e),
+  })
 }
 
 /// Result of splitting a monolithic configuration

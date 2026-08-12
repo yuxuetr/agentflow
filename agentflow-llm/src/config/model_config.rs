@@ -352,7 +352,13 @@ pub struct RateLimitConfig {
 /// Main configuration structure for all LLM models and providers
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LLMConfig {
-  /// Model configurations keyed by model name
+  /// Model configurations keyed by model name.
+  ///
+  /// `#[serde(default)]` so a `providers:`/`defaults:`-only file (the
+  /// slimmed `templates/default_models.yml`, models split out to
+  /// `templates/models/*.yml`) deserializes without an explicit empty
+  /// `models: {}` key.
+  #[serde(default)]
   pub models: HashMap<String, ModelConfig>,
 
   /// Provider configurations keyed by provider name
@@ -403,6 +409,11 @@ pub enum LLMConfigSourceKind {
   EnvOverride,
   UserModelsYml,
   UserModelsYaml,
+  /// A directory-based config root laid out the way
+  /// [`crate::config::VendorConfigManager`] expects: `<dir>/config.yml`
+  /// (optional — providers/defaults) + `<dir>/models/*.yml` (one file per
+  /// vendor). `LLMConfigSource::path` is the directory itself, not a file.
+  UserModelsDir,
   BuiltInDefault,
 }
 
@@ -434,9 +445,20 @@ impl LLMConfig {
     env_override: Option<OsString>,
   ) -> Result<LLMConfigSource> {
     if let Some(path) = env_override.filter(|value| !value.is_empty()) {
+      let path = PathBuf::from(path);
+      // Directory-based override: `AGENTFLOW_MODELS_CONFIG` pointed at a
+      // `VendorConfigManager`-shaped directory (`<dir>/models/*.yml`)
+      // rather than a single file.
+      if path.join("models").is_dir() {
+        return Ok(LLMConfigSource {
+          kind: LLMConfigSourceKind::UserModelsDir,
+          path: Some(path),
+          warnings: Vec::new(),
+        });
+      }
       return Ok(LLMConfigSource {
         kind: LLMConfigSourceKind::EnvOverride,
-        path: Some(PathBuf::from(path)),
+        path: Some(path),
         warnings: Vec::new(),
       });
     }
@@ -471,6 +493,19 @@ impl LLMConfig {
           warnings: Vec::new(),
         });
       }
+
+      // Directory-based config under the user's own config dir, e.g.
+      // `~/.agentflow/models/*.yml` (+ optional `~/.agentflow/config.yml`
+      // for providers/defaults) — only consulted once neither single-file
+      // form above is present, so existing single-file setups are
+      // unaffected.
+      if config_dir.join("models").is_dir() {
+        return Ok(LLMConfigSource {
+          kind: LLMConfigSourceKind::UserModelsDir,
+          path: Some(config_dir.to_path_buf()),
+          warnings: Vec::new(),
+        });
+      }
     }
 
     Ok(LLMConfigSource {
@@ -478,6 +513,43 @@ impl LLMConfig {
       path: None,
       warnings: Vec::new(),
     })
+  }
+
+  /// Load configuration from an already-resolved [`LLMConfigSource`].
+  ///
+  /// Centralises the per-kind loading strategy: file-based sources
+  /// (`EnvOverride` / `UserModelsYml` / `UserModelsYaml`) go through
+  /// [`Self::from_file`]; `UserModelsDir` routes through
+  /// [`crate::config::VendorConfigManager`] instead (disk-based,
+  /// vendor-file-per-directory loading — the first production caller of
+  /// that manager, previously exercised only by its own tests);
+  /// `BuiltInDefault` uses the compile-time bundled config.
+  pub async fn from_source(source: &LLMConfigSource) -> Result<Self> {
+    match source.kind {
+      LLMConfigSourceKind::BuiltInDefault => crate::config::builtin_default_config(),
+      LLMConfigSourceKind::UserModelsDir => {
+        let dir = source
+          .path
+          .as_ref()
+          .ok_or_else(|| LLMError::ConfigurationError {
+            message: "UserModelsDir source is missing its directory path".to_string(),
+          })?;
+        crate::config::VendorConfigManager::new(dir)
+          .load_config()
+          .await
+      }
+      LLMConfigSourceKind::EnvOverride
+      | LLMConfigSourceKind::UserModelsYml
+      | LLMConfigSourceKind::UserModelsYaml => {
+        let path = source
+          .path
+          .as_ref()
+          .ok_or_else(|| LLMError::ConfigurationError {
+            message: "file-based config source is missing its path".to_string(),
+          })?;
+        Self::from_file(path).await
+      }
+    }
   }
 
   /// Load configuration from a YAML file
@@ -502,10 +574,7 @@ impl LLMConfig {
   /// Load configuration from the default resolved source.
   pub async fn from_default_source() -> Result<(Self, LLMConfigSource)> {
     let source = Self::resolve_default_source()?;
-    let config = match source.path.as_ref() {
-      Some(path) => Self::from_file(path).await?,
-      None => Self::from_yaml(include_str!("../../templates/default_models.yml"))?,
-    };
+    let config = Self::from_source(&source).await?;
     Ok((config, source))
   }
 
@@ -1080,12 +1149,17 @@ models:
   #[test]
   fn bundled_default_models_yaml_uses_post_pllm0_schema() {
     // Snapshot test for the P-LLM.0 Slice 2 migration. Locks down the
-    // post-migration shape of the bundled `default_models.yml` so a
-    // future edit can't accidentally re-introduce the legacy
-    // `text` / `multimodal` / `imageunderstand` / `generateimage` /
-    // `editimage` / `image` strings.
-    let yaml = include_str!("../../templates/default_models.yml");
-    let config = LLMConfig::from_yaml(yaml).unwrap();
+    // post-migration shape of the bundled default config so a future
+    // edit can't accidentally re-introduce the legacy `text` /
+    // `multimodal` / `imageunderstand` / `generateimage` / `editimage` /
+    // `image` strings.
+    //
+    // Reads `builtin_default_config()` (the merged vendor files +
+    // slimmed `default_models.yml`), not `templates/default_models.yml`
+    // directly — since the T-split moved the actual model entries out to
+    // `templates/models/*.yml`, the bare file now carries only
+    // `providers:`/`defaults:`.
+    let config = crate::config::builtin_default_config().unwrap();
 
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let mut accepts_image_count = 0usize;

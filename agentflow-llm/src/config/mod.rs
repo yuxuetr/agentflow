@@ -9,4 +9,5 @@ pub use model_config::{
 pub use validation::validate_config;
 pub use vendor_configs::{
   LoadingBenchmark, PerformanceComparison, SplitResult, VendorConfigManager,
+  builtin_default_config, builtin_default_config_yaml,
 };

@@ -1,0 +1,139 @@
+models:
+  step-1o-turbo-vision:
+    vendor: step
+    type: chat
+    accepts: [text, image]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-2x-large:
+    vendor: step
+    type: text_to_image
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  step-3.5-flash:
+    vendor: step
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 262144
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-3.5-flash-2603:
+    vendor: step
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 262144
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: false
+    response_format: null
+  step-3.7-flash:
+    vendor: step
+    type: chat
+    accepts: [text, image]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 262144
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+  step-asr:
+    vendor: step
+    type: asr
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+  step-image-edit-2:
+    vendor: step
+    type: image_edit
+    accepts: [text, image]
+    model_id: null
+    base_url: null
+    temperature: null
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: true
+    response_format: null
+  step-tts-mini:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  step-tts-vivid:
+    vendor: step
+    type: tts
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: null
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

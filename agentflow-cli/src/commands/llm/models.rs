@@ -12,6 +12,8 @@ pub async fn execute(
   detailed: bool,
   refresh_from_api: bool,
   format: String,
+  type_filter: Option<String>,
+  accepts_filter: Option<String>,
 ) -> Result<()> {
   let source = LLMConfig::resolve_default_source()?;
   for warning in &source.warnings {
@@ -27,14 +29,12 @@ pub async fn execute(
 
   let models = match source.kind {
     LLMConfigSourceKind::BuiltInDefault => printable_models_from_registry().await?,
+    // `LLMConfig::from_source` also covers `UserModelsDir` (routes
+    // through `VendorConfigManager`), not just the single-file kinds.
     _ => {
-      let config_path = source
-        .path
-        .as_ref()
-        .context("resolved config source had no path")?;
-      let config = LLMConfig::from_file(config_path)
+      let config = LLMConfig::from_source(&source)
         .await
-        .with_context(|| format!("Failed to load config file '{}'", config_path.display()))?;
+        .with_context(|| format!("Failed to load config source '{}'", source.display_path()))?;
       printable_models_from_config(&config)
     }
   };
@@ -44,24 +44,37 @@ pub async fn execute(
     return Ok(());
   }
 
-  let filtered_models: Vec<_> = if let Some(ref provider_filter) = provider {
-    models
-      .into_iter()
-      .filter(|model| {
+  // Compose all three filters with AND: each is optional and independent.
+  let filtered_models: Vec<_> = models
+    .into_iter()
+    .filter(|model| {
+      provider
+        .as_ref()
+        .is_none_or(|f| model.vendor.to_lowercase().contains(&f.to_lowercase()))
+    })
+    .filter(|model| {
+      // Exact match: `type` is a closed enum (`ModelType`), not free text.
+      type_filter
+        .as_ref()
+        .is_none_or(|f| model.r#type.eq_ignore_ascii_case(f))
+    })
+    .filter(|model| {
+      // Contains-match: a model can accept multiple modalities, so
+      // "--accepts image" means "accepts at least image", not an
+      // exact-set match against the model's full `accepts` list.
+      accepts_filter.as_ref().is_none_or(|f| {
         model
-          .vendor
-          .to_lowercase()
-          .contains(&provider_filter.to_lowercase())
+          .accepts
+          .iter()
+          .any(|modality| modality.eq_ignore_ascii_case(f))
       })
-      .collect()
-  } else {
-    models
-  };
+    })
+    .collect();
 
   if filtered_models.is_empty() {
     println!(
-      "No models found for provider: {}",
-      provider.unwrap_or_default()
+      "No models found for provider={:?} type={:?} accepts={:?}",
+      provider, type_filter, accepts_filter
     );
     return Ok(());
   }
@@ -75,6 +88,8 @@ pub async fn execute(
       "source": source.display_path(),
       "source_kind": source.kind,
       "provider_filter": provider,
+      "type_filter": type_filter,
+      "accepts_filter": accepts_filter,
       "models": &filtered_models,
       "total": filtered_models.len(),
     });
@@ -389,6 +404,12 @@ struct PrintableModel {
   #[serde(skip_serializing_if = "Option::is_none")]
   max_tokens: Option<u32>,
   supports_streaming: bool,
+  /// Canonical `ModelType` wire string, e.g. `"chat"` / `"embedding"` /
+  /// `"text_to_image"`. Filterable via `--type`.
+  r#type: String,
+  /// Input modalities this model accepts, e.g. `["text", "image"]`.
+  /// Filterable via `--accepts` (contains-match, not exact-set).
+  accepts: Vec<String>,
 }
 
 async fn printable_models_from_registry() -> Result<Vec<PrintableModel>> {
@@ -412,6 +433,8 @@ async fn printable_models_from_registry() -> Result<Vec<PrintableModel>> {
         temperature: model.temperature,
         max_tokens: model.max_tokens,
         supports_streaming: model.supports_streaming,
+        r#type: model.model_type,
+        accepts: model.accepts,
       })
       .collect(),
   )
@@ -426,6 +449,12 @@ fn printable_models_from_config(config: &LLMConfig) -> Vec<PrintableModel> {
         .providers
         .get(&model.vendor)
         .and_then(|provider| provider.base_url.clone());
+      let mut accepts: Vec<String> = model
+        .accepts()
+        .iter()
+        .map(|input_type| input_type.as_str().to_string())
+        .collect();
+      accepts.sort();
       PrintableModel {
         name: name.clone(),
         vendor: model.vendor.clone(),
@@ -434,6 +463,8 @@ fn printable_models_from_config(config: &LLMConfig) -> Vec<PrintableModel> {
         temperature: model.temperature,
         max_tokens: model.max_tokens,
         supports_streaming: model.supports_streaming.unwrap_or(true),
+        r#type: model.granular_type().to_legacy_string().to_string(),
+        accepts,
       }
     })
     .collect();

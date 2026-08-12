@@ -198,17 +198,12 @@ impl AgentFlow {
       eprintln!("Warning: {warning}");
     }
 
-    if let Some(config_path) = source.path {
-      let config_path =
-        config_path
-          .to_str()
-          .ok_or_else(|| crate::LLMError::ConfigurationError {
-            message: format!("Config path contains invalid UTF-8: {:?}", config_path),
-          })?;
-      return Self::init_with_config(config_path).await;
-    }
-
-    Self::init_with_builtin_config().await
+    // Routes on `source.kind`: file-based sources go through
+    // `LLMConfig::from_file`, `UserModelsDir` through
+    // `VendorConfigManager`, and `BuiltInDefault` through the compile-time
+    // bundled config — see `LLMConfig::from_source`.
+    ModelRegistry::global().load_from_source(&source).await?;
+    Ok(())
   }
 
   /// Initialize with built-in default configuration
@@ -229,7 +224,12 @@ impl AgentFlow {
     let config_path = config_dir.join("models.yml");
     let env_path = config_dir.join(".env");
 
-    let config_content = include_str!("../templates/default_models.yml");
+    // The bundled default is now split across `templates/models/*.yml` +
+    // the slimmed `templates/default_models.yml` (providers/defaults
+    // only), so the starter file users get is the merged, re-serialized
+    // form rather than a single `include_str!` — see
+    // `config::builtin_default_config_yaml`.
+    let config_content = crate::config::builtin_default_config_yaml()?;
     let env_content = include_str!("../templates/default.env");
 
     // Create directory if it doesn't exist

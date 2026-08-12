@@ -1,0 +1,65 @@
+models:
+  MiniMax-M2:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.5-highspeed:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.7:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null
+  MiniMax-M2.7-highspeed:
+    vendor: minimax
+    type: chat
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 8192
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    native_tool_calling: true
+    supports_multimodal: false
+    response_format: null

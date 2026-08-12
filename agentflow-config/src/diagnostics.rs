@@ -921,6 +921,10 @@ fn source_label(source: &LLMConfigSource) -> String {
       "{} (via AGENTFLOW_MODELS_CONFIG, overrides ~/.agentflow + built-in)",
       source.display_path()
     ),
+    K::UserModelsDir => format!(
+      "{} (directory-based config, overrides ~/.agentflow + built-in)",
+      source.display_path()
+    ),
   }
 }
 
@@ -979,7 +983,10 @@ async fn inspect_config(source: &LLMConfigSource, env_path: Option<&Path>) -> Co
     };
   }
 
-  match LLMConfig::from_file(path).await {
+  // `from_source` (not `from_file`) so a `UserModelsDir` source (path is
+  // a directory laid out for `VendorConfigManager`, not a single file)
+  // loads correctly instead of erroring on "is a directory".
+  match LLMConfig::from_source(source).await {
     Ok(config) => {
       let configured_env = env_path
         .map(load_env_file_keys)

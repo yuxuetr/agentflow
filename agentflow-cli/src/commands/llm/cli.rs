@@ -13,6 +13,19 @@ enum LlmCommands {
   Models {
     #[arg(short, long)]
     provider: Option<String>,
+    /// Filter by model type — exact match against the canonical
+    /// `ModelType` wire string (e.g. `chat`, `embedding`,
+    /// `text_to_image`, `image_to_image`, `image_edit`, `text_to_video`,
+    /// `tts`, `asr`). Case-insensitive; types are a closed enum so this
+    /// is exact match, not substring.
+    #[arg(long = "type")]
+    model_type: Option<String>,
+    /// Filter by accepted input modality (`text`, `image`, `audio`,
+    /// `video`, `document`). A model can accept multiple modalities —
+    /// this matches models whose `accepts` list *contains* the given
+    /// modality, not an exact-set match. Case-insensitive.
+    #[arg(long)]
+    accepts: Option<String>,
     #[arg(short, long)]
     detailed: bool,
     /// Live-query each OpenAI-compatible provider's `/v1/models`
@@ -60,10 +73,22 @@ pub async fn dispatch(args: LlmArgs) -> anyhow::Result<()> {
   match args.command {
     LlmCommands::Models {
       provider,
+      model_type,
+      accepts,
       detailed,
       refresh_from_api,
       format,
-    } => models::execute(provider, detailed, refresh_from_api, format).await,
+    } => {
+      models::execute(
+        provider,
+        detailed,
+        refresh_from_api,
+        format,
+        model_type,
+        accepts,
+      )
+      .await
+    }
     LlmCommands::Chat { _extra: _ } => Err(anyhow::anyhow!(
       "`agentflow llm chat` has been retired. AgentFlow interactions are agent-first: use `agentflow skill chat`, `agentflow skill run`, or a workflow `skill_agent` node. Use `agentflow llm models` only for model discovery."
     )),

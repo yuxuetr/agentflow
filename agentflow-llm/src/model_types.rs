@@ -184,6 +184,21 @@ pub enum InputType {
 }
 
 impl InputType {
+  /// Canonical lowercase wire string for this variant (matches the
+  /// `#[serde(rename_all = "lowercase")]` serialization). Used by
+  /// diagnostic/inventory surfaces (e.g. `agentflow llm models
+  /// --accepts`) that need a plain string form without round-tripping
+  /// through serde.
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      InputType::Text => "text",
+      InputType::Image => "image",
+      InputType::Audio => "audio",
+      InputType::Video => "video",
+      InputType::Document => "document",
+    }
+  }
+
   /// Get supported file formats for this input type
   pub fn supported_formats(&self) -> Vec<&'static str> {
     match self {

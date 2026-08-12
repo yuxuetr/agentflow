@@ -13,6 +13,34 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **LLM model registry split into per-vendor files + `accepts:` backfill +
+  CLI `--type`/`--accepts` filters (P-LLM2.0).**
+  `agentflow-llm/templates/default_models.yml` (3,165 lines, 198 models,
+  skewed 46% DashScope vs. 3% OpenAI) is now nine
+  `templates/models/<vendor>.yml` files plus a slimmed
+  `default_models.yml` carrying only `providers:`/`defaults:`. Revives
+  `VendorConfigManager`'s previously-dead directory-loading code: its
+  per-vendor-file parser is now shared by a new compile-time
+  9-`include_str!` bundler (`builtin_default_config`, replacing the old
+  single-`include_str!` embed at all three call sites) and, via a new
+  `LLMConfigSourceKind::UserModelsDir` variant, a real runtime path
+  (`AGENTFLOW_MODELS_CONFIG` or `~/.agentflow/` pointed at a
+  `<dir>/models/*.yml` layout). Backfilled `accepts:` on the 133/198
+  entries that were missing it, mechanically derived from each entry's
+  pre-existing `supports_multimodal` flag (`true` → `[text, image]`,
+  `false` → left unset, matching the existing type-default fallback) —
+  verified no entry was mis-classified in either direction. Added
+  current-generation OpenAI/Anthropic/Google model entries (verified
+  live against each vendor's own docs this session): 4 Anthropic
+  (`claude-fable-5`/`claude-opus-5`/`claude-sonnet-5`/
+  `claude-haiku-4-5-20251001`), 7 OpenAI (3 chat, `gpt-image-2`,
+  `gpt-4o-mini-tts`, 2 embedding), 5 Google (3 chat, 1 embedding, 1
+  text-to-image, 1 TTS) — 214 models total, no existing entries lost.
+  `agentflow llm models` gains `--type <ModelType>` (exact match) and
+  `--accepts <InputType>` (contains-match) filters alongside the existing
+  `--provider` substring filter; `PrintableModel`/`ModelInfo` both now
+  carry `type`/`accepts` so there's something to filter on and to expose
+  in `--format json-envelope` output.
 - **`agentflow-mcp` client: protocol version verification + capability
   gating (W5.6, contained scope).** The client parsed the server's
   `initialize` response's `protocolVersion` but never compared it against

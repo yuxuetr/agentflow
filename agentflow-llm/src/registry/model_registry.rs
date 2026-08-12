@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result,
-  config::{GlobalDefaults, LLMConfig, ModelConfig},
+  config::{GlobalDefaults, LLMConfig, LLMConfigSource, ModelConfig},
   providers::{LLMProvider, create_provider},
 };
 use std::collections::{HashMap, HashSet};
@@ -41,34 +41,36 @@ impl ModelRegistry {
   /// Load configuration from a YAML file and initialize providers
   pub async fn load_config(&self, config_path: &str) -> Result<()> {
     let config = LLMConfig::from_file(config_path).await?;
-
-    // Validate configuration
-    config.validate()?;
-
-    // Initialize providers
-    self.initialize_providers(&config).await?;
-
-    // Store the config
-    {
-      let mut config_guard = self.config.write().map_err(|e| LLMError::InternalError {
-        message: format!("Configuration lock poisoned: {}", e),
-      })?;
-      *config_guard = Some(config);
-    }
-
-    Ok(())
+    self.load_config_struct(config).await
   }
 
-  /// Load built-in default configuration
+  /// Load built-in default configuration (compile-time bundled vendor
+  /// files + slimmed `default_models.yml`'s `providers:`/`defaults:` —
+  /// see `crate::config::builtin_default_config`).
   pub async fn load_builtin_config(&self) -> Result<()> {
-    let builtin_yaml = include_str!("../../templates/default_models.yml");
-    self.load_config_from_yaml(builtin_yaml).await
+    let config = crate::config::builtin_default_config()?;
+    self.load_config_struct(config).await
   }
 
   /// Load configuration from YAML string
   pub async fn load_config_from_yaml(&self, yaml_content: &str) -> Result<()> {
     let config = LLMConfig::from_yaml(yaml_content)?;
+    self.load_config_struct(config).await
+  }
 
+  /// Load an already-resolved [`LLMConfigSource`] (file, directory-based
+  /// [`crate::config::VendorConfigManager`] layout, or the built-in
+  /// default) and store it as the active configuration.
+  pub async fn load_from_source(&self, source: &LLMConfigSource) -> Result<()> {
+    let config = LLMConfig::from_source(source).await?;
+    self.load_config_struct(config).await
+  }
+
+  /// Validate, initialize providers for, and store an already-parsed
+  /// config. Shared tail of [`Self::load_config`],
+  /// [`Self::load_builtin_config`], [`Self::load_config_from_yaml`], and
+  /// [`Self::load_from_source`].
+  async fn load_config_struct(&self, config: LLMConfig) -> Result<()> {
     // Validate configuration
     config.validate()?;
 
@@ -225,6 +227,14 @@ impl ModelRegistry {
         .and_then(|p| p.base_url.clone())
     };
 
+    let model_type = model_config.granular_type().to_legacy_string().to_string();
+    let mut accepts: Vec<String> = model_config
+      .accepts()
+      .iter()
+      .map(|input_type| input_type.as_str().to_string())
+      .collect();
+    accepts.sort();
+
     Ok(ModelInfo {
       name: model_name.to_string(),
       vendor: model_config.vendor.clone(),
@@ -238,6 +248,8 @@ impl ModelRegistry {
       temperature: model_config.temperature,
       max_tokens: model_config.max_tokens,
       supports_streaming: model_config.supports_streaming.unwrap_or(true),
+      model_type,
+      accepts,
     })
   }
 
@@ -356,6 +368,12 @@ pub struct ModelInfo {
   pub temperature: Option<f32>,
   pub max_tokens: Option<u32>,
   pub supports_streaming: bool,
+  /// Canonical `ModelType` wire string (e.g. `"chat"`) — see
+  /// `ModelConfig::granular_type().to_legacy_string()`.
+  pub model_type: String,
+  /// Input modalities this model accepts, as canonical lowercase strings
+  /// (e.g. `["text", "image"]`) — see `ModelConfig::accepts()`.
+  pub accepts: Vec<String>,
 }
 
 /// Report from provider validation
