@@ -39,11 +39,11 @@
 //! | Moonshot Kimi (`kimi-k2*`, `moonshot-v1-*`) | `TiktokenCounter` (cl100k_base) | exact for v1 family; close for k2 |
 //! | DeepSeek (`deepseek-v*`, `deepseek-chat`, `deepseek-reasoner`) | `TiktokenCounter` (cl100k_base) | ~5% over (DeepSeek uses a custom BPE with similar density) |
 //! | GLM (`glm-4*`, `chatglm*`) | `TiktokenCounter` (cl100k_base) | ~10% off (GLM uses BBPE) |
-//! | DashScope Qwen (`qwen*`) | `TiktokenCounter` (cl100k_base) | ~10% off (Qwen uses SentencePiece) |
+//! | DashScope Qwen (`qwen*`, `qvq*`, `codeqwen*`) | `TiktokenCounter` (cl100k_base) | ~10% off (Qwen uses SentencePiece) |
 //! | MiniMax (`abab*`, `MiniMax-*`) | `TiktokenCounter` (cl100k_base) | ~10% off |
 //! | StepFun (`step-*`) | `TiktokenCounter` (cl100k_base) | unknown — treat as ±15% |
 //! | Anthropic (`claude-*`) | `HeuristicCounter` | within 15% for English; provider response is exact for post-call accounting |
-//! | Google (`gemini-*`) | `HeuristicCounter` | within 15% for English; provider response is exact |
+//! | Google (`gemini-*`, `gemma-*`) | `HeuristicCounter` | within 15% for English; provider response is exact |
 //! | Mock / unknown | `HeuristicCounter` | the original `len / 4` heuristic |
 //!
 //! The non-OpenAI-family numbers are deliberately rough — the gap
@@ -247,6 +247,8 @@ fn pick_encoding(model_id_lowercase: &str) -> Option<&'static str> {
     || model_id_lowercase.starts_with("glm-")
     || model_id_lowercase.starts_with("chatglm")
     || model_id_lowercase.starts_with("qwen")
+    || model_id_lowercase.starts_with("qvq")
+    || model_id_lowercase.starts_with("codeqwen")
     || model_id_lowercase.starts_with("abab")
     || model_id_lowercase.starts_with("minimax-")
     || model_id_lowercase.starts_with("step-")
@@ -257,10 +259,14 @@ fn pick_encoding(model_id_lowercase: &str) -> Option<&'static str> {
   // Non-BPE families that ship a SentencePiece variant. We don't
   // try to approximate — the post-call provider response is the
   // ground truth, and the pre-call budget check is honest about
-  // being a heuristic.
+  // being a heuristic. `gemma-*` shares Gemini's SentencePiece
+  // lineage (served through the same Google API) so it's listed
+  // here explicitly even though the catch-all below would already
+  // return the same `None`.
   if model_id_lowercase.starts_with("claude-")
     || model_id_lowercase.starts_with("gemini-")
     || model_id_lowercase.starts_with("models/gemini")
+    || model_id_lowercase.starts_with("gemma-")
   {
     return None;
   }
@@ -365,6 +371,8 @@ mod tests {
       "chatglm3",
       "qwen-turbo",
       "qwen-vl-plus",
+      "qvq-plus",
+      "codeqwen1.5-7b-chat",
       "abab6.5-chat",
       "minimax-text-01",
       "step-3.5-flash",
@@ -379,7 +387,12 @@ mod tests {
 
   #[test]
   fn counter_for_model_falls_back_to_heuristic_for_non_bpe() {
-    for model in ["claude-sonnet-4-6", "gemini-2.5-flash", "models/gemini-pro"] {
+    for model in [
+      "claude-sonnet-4-6",
+      "gemini-2.5-flash",
+      "models/gemini-pro",
+      "gemma-3-12b-it",
+    ] {
       assert_eq!(
         counter_for_model(model).name(),
         "heuristic/4-chars",
