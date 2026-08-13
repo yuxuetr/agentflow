@@ -1,0 +1,33 @@
+[package]
+name = "agentflow-tools-ai"
+version = "0.1.0"
+description = "Capability-backed Tool adapters (TTS / ASR / image / video generation) for AgentFlow agent runtimes"
+keywords = ["ai", "agents", "tools", "llm"]
+categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# The Tool contract (trait, ToolRegistry, ToolMetadata, ToolOutputPart, ...).
+agentflow-tool = { path = "../agentflow-tool", version = "0.1" }
+# The per-modality provider traits + vendor dispatch (modality_dispatch.rs)
+# this crate's tools wrap directly — same model registry, same vendor
+# reconciliation, zero duplicated vendor logic. Mirrors agentflow-nodes-ai's
+# role for DAG nodes: an adapter crate that keeps the capability dependency
+# out of the tool-tier `agentflow-tools` crate (P-A0.5 precedent — see that
+# crate's history of having capability deps burned down into a dedicated
+# adapter crate rather than added directly).
+agentflow-llm = { path = "../agentflow-llm", version = "0.2" }
+
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+tokio = { workspace = true, features = ["full"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"

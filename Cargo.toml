@@ -17,6 +17,7 @@ members = [
   "agentflow-tracing",
   "agentflow-tool",
   "agentflow-tools",
+  "agentflow-tools-ai",
   "agentflow-memory",
   "agentflow-skills",
   "agentflow-db",

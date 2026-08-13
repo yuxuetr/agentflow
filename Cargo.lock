@@ -158,6 +158,7 @@ dependencies = [
  "agentflow-server",
  "agentflow-skills",
  "agentflow-tools",
+ "agentflow-tools-ai",
  "agentflow-tracing",
  "anyhow",
  "assert_cmd",
@@ -528,6 +529,7 @@ dependencies = [
  "agentflow-memory",
  "agentflow-rag",
  "agentflow-tools",
+ "agentflow-tools-ai",
  "async-trait",
  "base64 0.21.7",
  "dirs",
@@ -596,6 +598,21 @@ dependencies = [
  "tokio-test",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "agentflow-tools-ai"
+version = "0.1.0"
+dependencies = [
+ "agentflow-llm",
+ "agentflow-tool",
+ "async-trait",
+ "base64 0.21.7",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "tracing",
 ]
 
 [[package]]

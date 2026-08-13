@@ -182,8 +182,10 @@ enum WorkflowCommands {
   /// allows). The plan is LLM-authored then executed, so tool access is
   /// governed: built-in tools are sandboxed (file paths / HTTP domains must
   /// be granted via --allow-path / --allow-domain; shell is never available),
-  /// --dry-run prints the plan without running it, and --approve routes every
-  /// call through the Harness approval pipeline.
+  /// modality tools (tts/asr/image/video generation) are off unless
+  /// --allow-modalities is passed, --dry-run prints the plan without
+  /// running it, and --approve routes every call through the Harness
+  /// approval pipeline.
   Dynamic {
     /// Natural-language goal the LLM plans a workflow for.
     #[arg(long)]
@@ -197,6 +199,15 @@ enum WorkflowCommands {
     /// Grant the built-in HTTP tool access to a domain (repeatable).
     #[arg(long = "allow-domain")]
     allow_domain: Vec<String>,
+    /// Register the modality Tool adapters (tts, asr, text_to_image,
+    /// image_to_image, image_edit, image_understand, text_to_video) so the
+    /// LLM-authored plan can call them — driven entirely by the model
+    /// registry YAML, same as `--allow-path`/`--allow-domain` for
+    /// file/HTTP access. Off by default: these are billed calls to a
+    /// vendor API, so (like shell) they're opt-in rather than always
+    /// available to an adversarial-by-construction plan.
+    #[arg(long = "allow-modalities")]
+    allow_modalities: bool,
     /// Approval pipeline for tool calls: none, cli (interactive),
     /// auto-allow, or auto-deny. Unset defaults to `cli` under
     /// `local`/`production` `--profile` (an LLM-authored plan is
@@ -440,6 +451,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       model,
       allow_path,
       allow_domain,
+      allow_modalities,
       approve,
       profile,
       dry_run,
@@ -452,6 +464,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
         model,
         allow_path,
         allow_domain,
+        allow_modalities,
         approve,
         profile,
         dry_run,

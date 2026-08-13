@@ -17,6 +17,10 @@ agentflow-agents  = { path = "../agentflow-agents", version = "0.2" }
 # independent of the `agentflow-agents` runtime crate.
 agentflow-agent-spi = { path = "../agentflow-agent-spi", version = "0.1" }
 agentflow-tools   = { path = "../agentflow-tools", version = "0.1" }
+# Modality Tool adapters (tts/asr/text_to_image/...) — see that crate's
+# module docs for why it's a separate adapter crate rather than a direct
+# `agentflow-llm` dependency of `agentflow-tools` itself.
+agentflow-tools-ai = { path = "../agentflow-tools-ai", version = "0.1" }
 agentflow-memory  = { path = "../agentflow-memory", version = "0.1" }
 # `code-chunking` (L4.1): enabled here (not just left as a library-only
 # opt-in) so a skill manifest's `knowledge.chunk_strategy = "code_ast"`

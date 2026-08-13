@@ -13,6 +13,11 @@
 //! - the built-in tools carry a **restrictive** [`SandboxPolicy`] — file paths
 //!   and HTTP domains must be granted explicitly via `--allow-path` /
 //!   `--allow-domain`, and the shell tool is never registered;
+//! - `--allow-modalities` opts in the `agentflow-tools-ai` modality Tool
+//!   adapters (tts/asr/text_to_image/image_to_image/image_edit/
+//!   image_understand/text_to_video) — off by default, same rationale as
+//!   shell: they're billed vendor API calls an adversarial-by-construction
+//!   plan shouldn't reach without an explicit operator grant;
 //! - `--dry-run` prints the plan without executing it, so an operator can audit
 //!   what the model intends before any tool runs;
 //! - `--approve none|cli|auto-allow|auto-deny` routes every call through the
@@ -66,6 +71,7 @@ pub async fn execute(
   model: Option<String>,
   allow_path: Vec<String>,
   allow_domain: Vec<String>,
+  allow_modalities: bool,
   approve: Option<String>,
   profile: String,
   dry_run: bool,
@@ -96,6 +102,14 @@ pub async fn execute(
   registry.register(Arc::new(
     HttpTool::new(policy.clone()).context("failed to build the built-in HTTP tool")?,
   ));
+  // `--allow-modalities`: opt the LLM-authored plan into the modality Tool
+  // adapters (tts/asr/text_to_image/...). Off by default — same rationale
+  // as shell never being registered here: these are billed vendor API
+  // calls, so an adversarial-by-construction plan shouldn't reach them
+  // without the operator explicitly granting it.
+  if allow_modalities {
+    agentflow_tools_ai::register_all(&mut registry);
+  }
 
   // Optionally decorate every tool with the Harness approval/audit pipeline.
   let registry = match approve_provider(&approve)? {

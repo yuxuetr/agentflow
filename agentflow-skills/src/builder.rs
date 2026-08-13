@@ -12,6 +12,10 @@ use agentflow_rag::embeddings::OpenAIEmbedding;
 use agentflow_rag::{Bm25KnowledgeBackend, RagSearchTool};
 use agentflow_tools::builtin::{CodeExecTool, FileTool, HttpTool, ScriptTool, ShellTool};
 use agentflow_tools::{Capability, SandboxPolicy, Tool, ToolPolicy, ToolRegistry};
+use agentflow_tools_ai::{
+  AsrTool, Image2ImageTool, ImageEditTool, ImageUnderstandTool, Text2ImageTool, Text2VideoTool,
+  TtsTool,
+};
 use tracing::info;
 
 use crate::{
@@ -418,6 +422,18 @@ fn build_tool_registry(
       "code_exec" => {
         registry.register(Arc::new(CodeExecTool::new()));
       }
+      // Modality Tool adapters (`agentflow-tools-ai`): stateless thin
+      // wrappers over `agentflow_llm::AgentFlow::*` dispatch functions —
+      // no `SandboxPolicy`/OS-sandbox knobs apply to them, unlike the
+      // local-resource tools above; a skill's model access is already
+      // scoped by which models the model registry YAML makes available.
+      "tts" => registry.register(Arc::new(TtsTool::new())),
+      "asr" => registry.register(Arc::new(AsrTool::new())),
+      "text_to_image" => registry.register(Arc::new(Text2ImageTool::new())),
+      "image_to_image" => registry.register(Arc::new(Image2ImageTool::new())),
+      "image_edit" => registry.register(Arc::new(ImageEditTool::new())),
+      "image_understand" => registry.register(Arc::new(ImageUnderstandTool::new())),
+      "text_to_video" => registry.register(Arc::new(Text2VideoTool::new())),
       other => {
         // Already validated by SkillLoader; log and skip unknown tools.
         tracing::warn!(tool = other, "Skipping unknown tool during registry build");
@@ -1328,6 +1344,56 @@ mod tests {
       result.content
     );
     assert_eq!(result.content, "2");
+  }
+
+  /// A `[[tools]]` manifest entry naming any of the seven modality Tool
+  /// adapters from `agentflow-tools-ai` registers the matching stateless
+  /// tool — no `SandboxPolicy`/`os_sandbox` threading applies to them
+  /// (unlike the local-resource tools), matching the builder's dedicated
+  /// match arms.
+  #[tokio::test]
+  async fn build_registers_modality_tools() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = minimal_manifest("modality-skill");
+    manifest.tools = [
+      "tts",
+      "asr",
+      "text_to_image",
+      "image_to_image",
+      "image_edit",
+      "image_understand",
+      "text_to_video",
+    ]
+    .into_iter()
+    .map(|name| ToolConfig {
+      name: name.to_string(),
+      ..ToolConfig::default()
+    })
+    .collect();
+
+    let registry = SkillBuilder::build_registry(&manifest, dir.path())
+      .await
+      .unwrap();
+
+    for name in [
+      "tts",
+      "asr",
+      "text_to_image",
+      "image_to_image",
+      "image_edit",
+      "image_understand",
+      "text_to_video",
+    ] {
+      assert!(
+        registry.get(name).is_some(),
+        "expected \"{name}\" to be registered"
+      );
+      assert_eq!(
+        registry.tool_idempotency(name, &serde_json::json!({})),
+        Some(agentflow_tools::ToolIdempotency::NonIdempotent),
+        "modality tools are billed, non-replayable-safe vendor calls"
+      );
+    }
   }
 
   /// build() with knowledge files injects content into the persona.

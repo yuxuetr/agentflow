@@ -9,7 +9,24 @@ use crate::{error::SkillError, manifest::SkillManifest, skill_md::SkillMd};
 
 const MANIFEST_FILE: &str = "skill.toml";
 const SKILL_MD_FILE: &str = "SKILL.md";
-const KNOWN_TOOLS: &[&str] = &["shell", "file", "http", "script", "code_exec"];
+const KNOWN_TOOLS: &[&str] = &[
+  "shell",
+  "file",
+  "http",
+  "script",
+  "code_exec",
+  // Modality Tool adapters from `agentflow-tools-ai` — thin wrappers over
+  // `agentflow_llm::AgentFlow::tts`/`text2image_for`/etc., driven entirely
+  // by the model registry YAML (`vendor:`/`accepts:`). See that crate's
+  // module docs for the full rationale.
+  "tts",
+  "asr",
+  "text_to_image",
+  "image_to_image",
+  "image_edit",
+  "image_understand",
+  "text_to_video",
+];
 // U2.2: "semantic" was already handled by `builder.rs::build_memory` but
 // missing here, so a valid `type = "semantic"` manifest failed validation
 // before ever reaching the builder — a real bug the U2.4 evaluation
