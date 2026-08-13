@@ -683,9 +683,10 @@ async fn ensure_llm_initialized() -> anyhow::Result<()> {
 /// receives what `run_skill` constructed, so a mismatch is a programming
 /// error in this crate, not a value to degrade gracefully around.
 fn parse_skill_marker(workflow: &str) -> (&str, &str) {
-  let rest = workflow
-    .strip_prefix("@skill:")
-    .expect("skill_execute called with a non-@skill: workflow marker");
+  let rest = match workflow.strip_prefix("@skill:") {
+    Some(rest) => rest,
+    None => unreachable!("skill_execute called with a non-@skill: workflow marker"),
+  };
   match rest.split_once("\n---\n") {
     Some((name, input)) => (name, input),
     None => (rest, ""),
@@ -703,10 +704,10 @@ async fn skill_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError
     .update_status(ctx.run_id, RunStatus::Running, None)
     .await?;
 
-  let skill_dir = ctx
-    .skill_dir
-    .as_deref()
-    .expect("skill_execute requires RunContext::skill_dir");
+  let skill_dir = match ctx.skill_dir.as_deref() {
+    Some(dir) => dir,
+    None => unreachable!("skill_execute requires RunContext::skill_dir"),
+  };
   let (skill_name, user_input) = parse_skill_marker(&ctx.workflow);
 
   let (result, next_seq) = run_skill_agent(ctx, skill_dir, user_input).await?;

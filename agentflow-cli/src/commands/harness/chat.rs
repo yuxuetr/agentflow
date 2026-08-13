@@ -102,14 +102,18 @@ impl ChatProgressSink {
 
   fn typing(&self, delta: &str) {
     use std::io::Write;
-    let mut buf = self.typing.lock().unwrap();
+    let mut buf = self.typing.lock().unwrap_or_else(|e| e.into_inner());
     buf.push_str(delta);
     eprint!("\r\x1b[K💭 {buf}");
     std::io::stderr().flush().ok();
   }
 
   fn reset_typing(&self) {
-    self.typing.lock().unwrap().clear();
+    self
+      .typing
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .clear();
   }
 }
 

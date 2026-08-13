@@ -61,13 +61,17 @@ impl HarnessEventSink for TypingProgressSink {
     }
     match &event.body {
       agentflow_harness::HarnessEventBody::TokenDelta(payload) => {
-        let mut buf = self.typing.lock().unwrap();
+        let mut buf = self.typing.lock().unwrap_or_else(|e| e.into_inner());
         buf.push_str(&payload.delta);
         eprint!("\r\x1b[K💭 {buf}");
         std::io::stderr().flush().ok();
       }
       agentflow_harness::HarnessEventBody::StepStarted(_) => {
-        self.typing.lock().unwrap().clear();
+        self
+          .typing
+          .lock()
+          .unwrap_or_else(|e| e.into_inner())
+          .clear();
       }
       _ => {}
     }
