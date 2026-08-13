@@ -22,12 +22,16 @@
 //!
 //! ## P-LLM.1 contract
 //!
-//! These traits are the seam that lets `agentflow-nodes::{asr, tts,
+//! These traits are the seam that let `agentflow-nodes-ai::{asr, tts,
 //! text_to_image, image_to_image, image_edit}` drop their direct
-//! StepFun coupling (current code calls `AgentFlow::stepfun_client(...)`
-//! and `providers::stepfun::*Request` types directly). Until P-LLM.3
-//! lands, the nodes still go through StepFun directly — this module
-//! is what they'll route through instead.
+//! StepFun coupling (the pre-P-LLM.3 code called
+//! `AgentFlow::stepfun_client(...)` and `providers::stepfun::*Request`
+//! types directly). P-LLM.3 landed this: every one of those nodes now
+//! calls the vendor-agnostic `AgentFlow::{asr,tts,text2image_for,
+//! image2image,image_edit}` entry points (`crate::modality_dispatch`),
+//! which route through these traits to resolve the right vendor by
+//! model name — no node references StepFun (or any other vendor) by
+//! name.
 
 pub mod asr;
 pub mod image_edit;
