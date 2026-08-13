@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod anthropic;
+pub mod dashscope_media;
 pub mod google;
 pub mod google_media;
 pub mod google_veo;

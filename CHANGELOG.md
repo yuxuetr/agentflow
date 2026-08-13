@@ -13,6 +13,37 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **DashScope Text2Image (Wan) + TTS (Qwen-TTS) implementations, ASR
+  skipped (P-LLM2.3 Batch 2b, closes P-LLM2.3 Batch 2).** New
+  `DashScopeMediaProvider` (`agentflow-llm/src/providers/dashscope_media.rs`)
+  implements `Text2ImageProvider` and `TtsProvider`. Unlike every prior
+  batch, DashScope's media APIs are natively async-task-shaped (`POST
+  .../generation` with `X-DashScope-Async: enable` → `{task_id}`, then
+  poll `GET /api/v1/tasks/{task_id}`) — `Text2ImageProvider::generate`
+  wraps submit+poll-until-done internally (bounded at 60s, 2s interval)
+  since the trait itself has no submit/poll surface (unlike
+  `Text2VideoProvider`, deliberately built with one for Veo's
+  minutes-long jobs — DashScope image gen is seconds-to-tens-of-seconds,
+  so blocking internally is reasonable here). Two scope decisions made
+  after live-researching Alibaba Cloud Model Studio's current docs this
+  session: **CosyVoice (the TODO's originally-named TTS target) is
+  WebSocket-only** with no REST variant documented, and this crate has
+  no WebSocket infrastructure anywhere — implemented **Qwen-TTS**
+  instead (`qwen-tts-2025-05-22`, already registered), a different but
+  functionally-equivalent DashScope TTS model with a plain synchronous
+  REST endpoint. Its response carries a presigned URL rather than inline
+  bytes, so `synthesize()` issues a follow-up GET to satisfy
+  `TtsResponse.audio: Vec<u8>`. **DashScope ASR (Paraformer/Fun-ASR) is
+  not implemented** — a hard API constraint: its docs state raw
+  bytes/binary streams aren't supported, only audio already at a public
+  URL, and this codebase has no object-storage integration to produce
+  one from `AsrRequest`'s raw `audio_data: Vec<u8>`. New registry entry
+  `wan2.5-t2i-preview` (`type: text_to_image`); wired into
+  `modality_dispatch.rs`'s constructor tables + 2 new opt-in
+  `llm-live.yml`-gated dispatcher tests (the image-gen one uses a 90s
+  bound, reflecting the real poll loop). This closes out P-LLM2.3 Batch
+  2 (Google done in 2a, DashScope done in 2b); Batch 3 (GLM/MiniMax/
+  Moonshot) remains open.
 - **Google Text2Image + TTS implementations via `generateContent`
   (P-LLM2.3 Batch 2a).** New `GoogleMediaProvider`
   (`agentflow-llm/src/providers/google_media.rs`) implements both

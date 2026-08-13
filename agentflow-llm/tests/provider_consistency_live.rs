@@ -100,7 +100,11 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "dashscope",
-    capabilities: &[LiveCapability::Llm],
+    capabilities: &[
+      LiveCapability::Llm,
+      LiveCapability::Image,
+      LiveCapability::Audio,
+    ],
   },
   LiveProviderProfile {
     name: "deepseek",
@@ -1781,6 +1785,131 @@ models:
   assert!(
     !response.audio.is_empty(),
     "google TTS response should contain audio bytes"
+  );
+}
+
+// ============================================================================
+// DashScope image generation (Wan, async task) + TTS (Qwen-TTS, sync) via
+// the modality dispatcher (P-LLM2.3 Batch 2b) — NOT CosyVoice (WebSocket-
+// only) or ASR (Paraformer requires a public URL, unsupported by this
+// crate's byte-upload-shaped AsrRequest).
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashscope_image_generation_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Image) {
+    eprintln!("[live] dashscope image: skipped (AGENTFLOW_LIVE_IMAGE_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["DASHSCOPE_API_KEY"]) else {
+    eprintln!("[live] dashscope image: skipped (DASHSCOPE_API_KEY not set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("DASHSCOPE_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  wan2.5-t2i-preview:
+    vendor: dashscope
+    type: text_to_image
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic wan2.5-t2i-preview entry");
+
+  let provider = AgentFlow::text2image_for("wan2.5-t2i-preview")
+    .await
+    .expect("wan2.5-t2i-preview resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "dashscope",
+    "wan2.5-t2i-preview must route to dashscope"
+  );
+
+  let request = agentflow_llm::Text2ImageRequest {
+    model: "wan2.5-t2i-preview".to_string(),
+    prompt: "a tiny red square icon on a white background".to_string(),
+    size: Some("1024*1024".to_string()),
+    n: Some(1),
+    response_format: None,
+    seed: None,
+    steps: None,
+    cfg_scale: None,
+  };
+  // Longer bound than the synchronous-request live tests: this is a
+  // real submit+poll loop, not a single request.
+  let response = tokio::time::timeout(Duration::from_secs(90), provider.generate(request))
+    .await
+    .unwrap_or_else(|_| panic!("dashscope image generation timed out after 90s"))
+    .unwrap_or_else(|e| panic!("dashscope image generation failed: {e}"));
+
+  let first = response
+    .images
+    .first()
+    .expect("dashscope image generation response must contain at least one image");
+  assert!(
+    first.url.as_deref().is_some_and(|v| !v.is_empty()),
+    "dashscope image generation response must contain a url"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashscope_tts_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Audio) {
+    eprintln!("[live] dashscope tts: skipped (AGENTFLOW_LIVE_AUDIO_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["DASHSCOPE_API_KEY"]) else {
+    eprintln!("[live] dashscope tts: skipped (DASHSCOPE_API_KEY not set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("DASHSCOPE_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  qwen-tts-2025-05-22:
+    vendor: dashscope
+    type: tts
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic qwen-tts-2025-05-22 entry");
+
+  let provider = AgentFlow::tts("qwen-tts-2025-05-22")
+    .await
+    .expect("qwen-tts-2025-05-22 resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "dashscope",
+    "qwen-tts-2025-05-22 must route to dashscope"
+  );
+
+  let request = agentflow_llm::TtsRequest {
+    model: "qwen-tts-2025-05-22".to_string(),
+    input: "agentflow modality dispatcher test".to_string(),
+    voice: "Cherry".to_string(),
+    response_format: None,
+    speed: None,
+    volume: None,
+    sample_rate: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(30), provider.synthesize(request))
+    .await
+    .unwrap_or_else(|_| panic!("dashscope TTS request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("dashscope TTS request failed: {e}"));
+
+  assert!(
+    !response.audio.is_empty(),
+    "dashscope TTS response should contain audio bytes"
   );
 }
 

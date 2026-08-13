@@ -1369,3 +1369,19 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+  wan2.5-t2i-preview:
+    vendor: dashscope
+    type: text_to_image
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
