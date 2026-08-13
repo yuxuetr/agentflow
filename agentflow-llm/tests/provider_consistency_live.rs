@@ -96,7 +96,11 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "glm",
-    capabilities: &[LiveCapability::Llm, LiveCapability::Multimodal],
+    capabilities: &[
+      LiveCapability::Llm,
+      LiveCapability::Multimodal,
+      LiveCapability::Image,
+    ],
   },
   LiveProviderProfile {
     name: "dashscope",
@@ -112,7 +116,7 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "minimax",
-    capabilities: &[LiveCapability::Llm],
+    capabilities: &[LiveCapability::Llm, LiveCapability::Audio],
   },
 ];
 
@@ -1910,6 +1914,126 @@ models:
   assert!(
     !response.audio.is_empty(),
     "dashscope TTS response should contain audio bytes"
+  );
+}
+
+// ============================================================================
+// GLM image generation (CogView) + MiniMax TTS (T2A) via the modality
+// dispatcher (P-LLM2.3 Batch 3) — Moonshot has no dedicated
+// image/TTS/ASR REST endpoint and is not covered; GLM CogVideo (T2V) is
+// deferred as its own follow-up.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glm_image_generation_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Image) {
+    eprintln!("[live] glm image: skipped (AGENTFLOW_LIVE_IMAGE_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"])
+  else {
+    eprintln!("[live] glm image: skipped (no GLM API key env var set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("GLM_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  glm-image:
+    vendor: glm
+    type: text_to_image
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic glm-image entry");
+
+  let provider = AgentFlow::text2image_for("glm-image")
+    .await
+    .expect("glm-image resolves through dispatcher");
+  assert_eq!(provider.name(), "glm", "glm-image must route to glm");
+
+  let request = agentflow_llm::Text2ImageRequest {
+    model: "glm-image".to_string(),
+    prompt: "a tiny red square icon on a white background".to_string(),
+    size: Some("1280x1280".to_string()),
+    n: None,
+    response_format: None,
+    seed: None,
+    steps: None,
+    cfg_scale: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(60), provider.generate(request))
+    .await
+    .unwrap_or_else(|_| panic!("glm image generation timed out after 60s"))
+    .unwrap_or_else(|e| panic!("glm image generation failed: {e}"));
+
+  let first = response
+    .images
+    .first()
+    .expect("glm image generation response must contain at least one image");
+  assert!(
+    first.url.as_deref().is_some_and(|v| !v.is_empty()),
+    "glm image generation response must contain a url"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minimax_tts_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Audio) {
+    eprintln!("[live] minimax tts: skipped (AGENTFLOW_LIVE_AUDIO_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["MINIMAX_API_KEY"]) else {
+    eprintln!("[live] minimax tts: skipped (MINIMAX_API_KEY not set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("MINIMAX_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  speech-2.8-hd:
+    vendor: minimax
+    type: tts
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic speech-2.8-hd entry");
+
+  let provider = AgentFlow::tts("speech-2.8-hd")
+    .await
+    .expect("speech-2.8-hd resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "minimax",
+    "speech-2.8-hd must route to minimax"
+  );
+
+  let request = agentflow_llm::TtsRequest {
+    model: "speech-2.8-hd".to_string(),
+    input: "agentflow modality dispatcher test".to_string(),
+    voice: "male-qn-qingse".to_string(),
+    response_format: None,
+    speed: None,
+    volume: None,
+    sample_rate: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(30), provider.synthesize(request))
+    .await
+    .unwrap_or_else(|_| panic!("minimax TTS request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("minimax TTS request failed: {e}"));
+
+  assert!(
+    !response.audio.is_empty(),
+    "minimax TTS response should contain audio bytes"
   );
 }
 

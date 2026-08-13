@@ -12,16 +12,20 @@
 //! the sixth trait, `Text2VideoProvider` (Veo, P-LLM2.2), plus a second
 //! `Text2ImageProvider` / `TtsProvider` via `generateContent` (P-LLM2.3
 //! Batch 2a). DashScope adds a third `Text2ImageProvider` (Wan) /
-//! `TtsProvider` (Qwen-TTS) (P-LLM2.3 Batch 2b). Unimplemented
-//! vendor/modality combinations return [`LLMError::UnsupportedProvider`].
+//! `TtsProvider` (Qwen-TTS) (P-LLM2.3 Batch 2b). GLM adds a fourth
+//! `Text2ImageProvider` (CogView) and MiniMax adds a fourth
+//! `TtsProvider` (T2A) (P-LLM2.3 Batch 3). Unimplemented vendor/modality
+//! combinations return [`LLMError::UnsupportedProvider`].
 
 use crate::{
   LLMError, Result,
   model_types::ModelType,
   providers::{
     dashscope_media::DashScopeMediaProvider,
+    glm_images::GlmImageProvider,
     google_media::GoogleMediaProvider,
     google_veo::GoogleVeoClient,
+    minimax_tts::MiniMaxTtsProvider,
     modality::{
       AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, Text2VideoProvider,
       TtsProvider,
@@ -138,6 +142,15 @@ fn build_dashscope_text2image(
 fn build_dashscope_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
   Ok(Box::new(DashScopeMediaProvider::new(api_key, base_url)?))
 }
+fn build_glm_text2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2ImageProvider>> {
+  Ok(Box::new(GlmImageProvider::new(api_key, base_url)?))
+}
+fn build_minimax_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
+  Ok(Box::new(MiniMaxTtsProvider::new(api_key, base_url)?))
+}
 
 const ASR_PROVIDERS: &[(&str, Ctor<dyn AsrProvider>)] = &[
   ("stepfun", build_stepfun_asr),
@@ -150,6 +163,7 @@ const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
   ("openai", build_openai_tts),
   ("google", build_google_tts),
   ("dashscope", build_dashscope_tts),
+  ("minimax", build_minimax_tts),
 ];
 const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("stepfun", build_stepfun_text2image),
@@ -157,6 +171,7 @@ const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("openai", build_openai_text2image),
   ("google", build_google_text2image),
   ("dashscope", build_dashscope_text2image),
+  ("glm", build_glm_text2image),
 ];
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
   ("stepfun", build_stepfun_image2image),

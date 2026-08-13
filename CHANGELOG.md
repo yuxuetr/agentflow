@@ -13,6 +13,39 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **GLM Text2Image (CogView) + MiniMax TTS (T2A) implementations, closes
+  P-LLM2.3 (Batch 3, Moonshot skipped).** New `GlmImageProvider`
+  (`agentflow-llm/src/providers/glm_images.rs`) implements
+  `Text2ImageProvider` via `POST {base_url}/images/generations` — a
+  clean synchronous request/response on the same host GLM's
+  already-registered chat provider uses
+  (`https://open.bigmodel.cn/api/paas/v4`), unlike Google/DashScope's
+  separate media hosts. New `MiniMaxTtsProvider`
+  (`agentflow-llm/src/providers/minimax_tts.rs`) implements `TtsProvider`
+  via `POST /v1/t2a_v2`; MiniMax returns audio as a **hex-encoded**
+  string (not base64/URL like every prior batch), decoded with a small
+  hand-written hex parser rather than adding a `hex` crate dependency
+  for one call site (confirmed via `Cargo.toml` grep that none exists
+  in the workspace). Live-researched this session (Zhipu/BigModel docs,
+  platform.minimax.io docs, Moonshot/Kimi docs) to scope Batch 3 per the
+  TODO's own "决定基于各家实际开放的 API, 不为凑数实现" guidance:
+  **Moonshot is skipped entirely** — no dedicated image/TTS/ASR REST
+  endpoint exists on the Kimi API platform (Kimi-Audio is an
+  open-source HuggingFace model, not a hosted endpoint); **GLM CogVideo
+  (T2V) is deferred**, not skipped — it's real and async-task-shaped
+  (a natural second `Text2VideoProvider` alongside Veo), but its exact
+  poll-endpoint shape isn't yet confirmed to the precision every
+  implemented batch this session required, so it's left as its own
+  follow-up rather than guessed at. MiniMax's regional host ambiguity
+  (`api.minimax.io` international vs. `api.minimaxi.com`/`.chat` China)
+  is documented in a code comment — defaults to `api.minimaxi.com` for
+  consistency with this crate's already-registered MiniMax chat
+  provider, overridable per-model if wrong for a given deployment.
+  New registry entries `glm-image` (`type: text_to_image`) and
+  `speech-2.8-hd` (`type: tts`); wired into `modality_dispatch.rs`'s
+  constructor tables + 2 new opt-in `llm-live.yml`-gated dispatcher
+  tests. This closes out P-LLM2.3's full 3-batch structure (Batch 1:
+  OpenAI; Batch 2: Google + DashScope; Batch 3: GLM + MiniMax).
 - **DashScope Text2Image (Wan) + TTS (Qwen-TTS) implementations, ASR
   skipped (P-LLM2.3 Batch 2b, closes P-LLM2.3 Batch 2).** New
   `DashScopeMediaProvider` (`agentflow-llm/src/providers/dashscope_media.rs`)

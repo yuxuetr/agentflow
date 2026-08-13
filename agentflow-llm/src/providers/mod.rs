@@ -10,9 +10,11 @@ use std::collections::HashMap;
 
 pub mod anthropic;
 pub mod dashscope_media;
+pub mod glm_images;
 pub mod google;
 pub mod google_media;
 pub mod google_veo;
+pub mod minimax_tts;
 pub mod mock;
 pub mod modality;
 pub mod moonshot;
