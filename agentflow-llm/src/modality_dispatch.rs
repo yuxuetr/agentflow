@@ -9,13 +9,16 @@
 //! StepFun implements 5 of the 6 modality traits. OpenAI adds a second
 //! `AsrProvider` (Whisper, P-LLM.5) plus `Text2ImageProvider` /
 //! `ImageEditProvider` / `TtsProvider` (P-LLM2.3 Batch 1). Google adds
-//! the sixth trait, `Text2VideoProvider` (Veo, P-LLM2.2). Unimplemented
-//! vendor/modality combinations return [`LLMError::UnsupportedProvider`].
+//! the sixth trait, `Text2VideoProvider` (Veo, P-LLM2.2), plus a second
+//! `Text2ImageProvider` / `TtsProvider` via `generateContent` (P-LLM2.3
+//! Batch 2a). Unimplemented vendor/modality combinations return
+//! [`LLMError::UnsupportedProvider`].
 
 use crate::{
   LLMError, Result,
   model_types::ModelType,
   providers::{
+    google_media::GoogleMediaProvider,
     google_veo::GoogleVeoClient,
     modality::{
       AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, Text2VideoProvider,
@@ -115,6 +118,15 @@ fn build_google_text2video(
 ) -> Result<Box<dyn Text2VideoProvider>> {
   Ok(Box::new(GoogleVeoClient::new(api_key, base_url)?))
 }
+fn build_google_text2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2ImageProvider>> {
+  Ok(Box::new(GoogleMediaProvider::new(api_key, base_url)?))
+}
+fn build_google_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
+  Ok(Box::new(GoogleMediaProvider::new(api_key, base_url)?))
+}
 
 const ASR_PROVIDERS: &[(&str, Ctor<dyn AsrProvider>)] = &[
   ("stepfun", build_stepfun_asr),
@@ -125,11 +137,13 @@ const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
   ("stepfun", build_stepfun_tts),
   ("step", build_stepfun_tts),
   ("openai", build_openai_tts),
+  ("google", build_google_tts),
 ];
 const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("stepfun", build_stepfun_text2image),
   ("step", build_stepfun_text2image),
   ("openai", build_openai_text2image),
+  ("google", build_google_text2image),
 ];
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
   ("stepfun", build_stepfun_image2image),
@@ -379,8 +393,11 @@ mod tests {
   }
 
   #[test]
-  fn implemented_modalities_for_google_is_text_to_video_only() {
-    assert_eq!(implemented_modalities_for("google"), vec!["text-to-video"]);
+  fn implemented_modalities_for_google_covers_tts_text_to_image_and_text_to_video() {
+    assert_eq!(
+      implemented_modalities_for("google"),
+      vec!["TTS", "text-to-image", "text-to-video"]
+    );
   }
 
   #[test]

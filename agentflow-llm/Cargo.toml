@@ -47,6 +47,12 @@ anyhow = "1.0"
 thiserror = "1.0"
 uuid = { workspace = true, features = ["serde"] }
 
+# Decoding inline base64 media (Google `generateContent` returns
+# inlineData.data as base64 for both TTS and image-in-chat-response
+# output — no other provider needs to decode base64 in production code
+# today, since StepFun/OpenAI return raw bytes or a URL directly).
+base64 = "0.21"
+
 # Environment and configuration
 dotenvy = "0.15"
 dirs = "5.0"
@@ -80,7 +86,6 @@ tracing-test = "0.2"
 env_logger = "0.10"
 tempfile = "3.8"
 futures-util = "0.3"
-base64 = "0.21"
 criterion = { version = "0.5", features = ["async_tokio"] }
 
 [[bench]]

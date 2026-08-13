@@ -13,6 +13,33 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Google Text2Image + TTS implementations via `generateContent`
+  (P-LLM2.3 Batch 2a).** New `GoogleMediaProvider`
+  (`agentflow-llm/src/providers/google_media.rs`) implements both
+  `Text2ImageProvider` and `TtsProvider` on one struct, sharing a
+  `generate_content_media` core that POSTs
+  `{base_url}/v1beta/models/{model}:generateContent` with
+  `generationConfig.responseModalities: ["IMAGE"]` or `["AUDIO"]` and
+  collects every `inlineData` part from the response — the same
+  endpoint family `GoogleProvider` (chat) already speaks, just with
+  different `generationConfig`. Two scope decisions made after live-
+  researching Google's current docs this session: **Imagen (the
+  `:predict` endpoint) is deprecated and shuts down 2026-08-17** (4 days
+  out) with Google's own migration guidance pointing at `generateContent`
+  instead, so Imagen is not implemented at all — Text2Image targets the
+  already-registered `gemini-3.1-flash-image`, not the `imagen-*`
+  entries. Also skips the beta `/v1beta/interactions` endpoint (a
+  different request/response shape some newer doc pages default to)
+  since Google's own TTS docs say to use `generateContent` for "stable
+  production deployments." **No Google `AsrProvider`** in this batch —
+  no dedicated transcription REST endpoint exists; audio input only goes
+  through `generateContent` as multimodal chat content. Promotes
+  `base64 = "0.21"` from `agentflow-llm`'s `[dev-dependencies]` to
+  `[dependencies]` (same version — first production use, decoding the
+  TTS response's base64 PCM audio). Wired into `modality_dispatch.rs`'s
+  constructor tables + 2 new opt-in `llm-live.yml`-gated dispatcher
+  tests. DashScope (Batch 2b) and Batch 3 (GLM/MiniMax/Moonshot) remain
+  open.
 - **OpenAI Text2Image + ImageEdit + TTS implementations (P-LLM2.3 Batch
   1).** OpenAI now implements 4 of the 6 modality traits (ASR was
   already covered by Whisper, P-LLM.5): new `OpenAIImageProvider`

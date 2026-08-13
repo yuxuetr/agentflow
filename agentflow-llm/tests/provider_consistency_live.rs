@@ -74,7 +74,12 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "google",
-    capabilities: &[LiveCapability::Llm, LiveCapability::Multimodal],
+    capabilities: &[
+      LiveCapability::Llm,
+      LiveCapability::Multimodal,
+      LiveCapability::Image,
+      LiveCapability::Audio,
+    ],
   },
   LiveProviderProfile {
     name: "moonshot",
@@ -1653,6 +1658,130 @@ models:
     "openai TTS response should contain audio bytes"
   );
   assert_eq!(response.mime_type, "audio/mpeg");
+}
+
+// ============================================================================
+// Google image generation + TTS via the modality dispatcher, both via
+// `generateContent` (P-LLM2.3 Batch 2a) — NOT the deprecated Imagen
+// `:predict` endpoint.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_image_generation_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Image) {
+    eprintln!("[live] google image: skipped (AGENTFLOW_LIVE_IMAGE_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_KEY"])
+  else {
+    eprintln!("[live] google image: skipped (no Gemini API key env var set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("GEMINI_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  gemini-3.1-flash-image:
+    vendor: google
+    type: text_to_image
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic gemini-3.1-flash-image entry");
+
+  let provider = AgentFlow::text2image_for("gemini-3.1-flash-image")
+    .await
+    .expect("gemini-3.1-flash-image resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "google",
+    "gemini-3.1-flash-image must route to google"
+  );
+
+  let request = agentflow_llm::Text2ImageRequest {
+    model: "gemini-3.1-flash-image".to_string(),
+    prompt: "a tiny red square icon on a white background".to_string(),
+    size: None,
+    n: None,
+    response_format: None,
+    seed: None,
+    steps: None,
+    cfg_scale: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(60), provider.generate(request))
+    .await
+    .unwrap_or_else(|_| panic!("google image generation timed out after 60s"))
+    .unwrap_or_else(|e| panic!("google image generation failed: {e}"));
+
+  let first = response
+    .images
+    .first()
+    .expect("google image generation response must contain at least one image");
+  assert!(
+    first.b64_json.as_deref().is_some_and(|v| !v.is_empty()),
+    "google image generation response must contain b64_json"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_tts_via_modality_dispatcher() {
+  if !live_gate_enabled(LiveCapability::Audio) {
+    eprintln!("[live] google tts: skipped (AGENTFLOW_LIVE_AUDIO_TESTS not enabled)");
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_KEY"])
+  else {
+    eprintln!("[live] google tts: skipped (no Gemini API key env var set)");
+    return;
+  };
+  // SAFETY: tests run with their own env scope.
+  unsafe {
+    std::env::set_var("GEMINI_API_KEY", api_key);
+  }
+
+  let hermetic_registry_yaml = r#"
+models:
+  gemini-3.1-flash-tts-preview:
+    vendor: google
+    type: tts
+    accepts: [text]
+"#;
+  agentflow_llm::ModelRegistry::global()
+    .load_config_from_yaml(hermetic_registry_yaml)
+    .await
+    .expect("seed hermetic gemini-3.1-flash-tts-preview entry");
+
+  let provider = AgentFlow::tts("gemini-3.1-flash-tts-preview")
+    .await
+    .expect("gemini-3.1-flash-tts-preview resolves through dispatcher");
+  assert_eq!(
+    provider.name(),
+    "google",
+    "gemini-3.1-flash-tts-preview must route to google"
+  );
+
+  let request = agentflow_llm::TtsRequest {
+    model: "gemini-3.1-flash-tts-preview".to_string(),
+    input: "agentflow modality dispatcher test".to_string(),
+    voice: "Kore".to_string(),
+    response_format: None,
+    speed: None,
+    volume: None,
+    sample_rate: None,
+  };
+  let response = tokio::time::timeout(Duration::from_secs(30), provider.synthesize(request))
+    .await
+    .unwrap_or_else(|_| panic!("google TTS request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("google TTS request failed: {e}"));
+
+  assert!(
+    !response.audio.is_empty(),
+    "google TTS response should contain audio bytes"
+  );
 }
 
 fn silent_wav_one_second() -> Vec<u8> {
