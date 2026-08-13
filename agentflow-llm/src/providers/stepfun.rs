@@ -4,8 +4,8 @@ use crate::{
   providers::{
     ContentType, LLMProvider, ProviderRequest, ProviderResponse,
     openai::{
-      parse_openai_tool_calls, response_format_to_openai_value, tool_choice_to_openai_value,
-      tool_spec_to_openai_value,
+      OpenAIStreamingToolCall, openai_streaming_tool_call_deltas, parse_openai_tool_calls,
+      response_format_to_openai_value, tool_choice_to_openai_value, tool_spec_to_openai_value,
     },
   },
   tool_calling::StopReason,
@@ -440,6 +440,11 @@ struct StepFunStreamingChoice {
 struct StepFunStreamingDelta {
   role: Option<String>,
   content: Option<serde_json::Value>, // Can be string or array for multimodal
+  /// P-LLM2.5: StepFun speaks the identical OpenAI-compatible
+  /// `delta.tool_calls[]` streaming shape — see
+  /// `openai::OpenAIStreamingToolCall`'s doc comment.
+  #[serde(default)]
+  tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
 }
 
 pub struct StepFunStreamingResponse {
@@ -488,13 +493,28 @@ impl StepFunStreamingResponse {
 
     if let Ok(chunk) = serde_json::from_str::<StepFunStreamingChunk>(data)
       && let Some(choice) = chunk.choices.first()
-      && let Some(content) = &choice.delta.content
     {
       // Handle both string and array content in streaming
-      let content_text = match content {
-        serde_json::Value::String(text) => text.clone(),
-        _ => content.to_string(), // Convert other types to string
+      let content_text = match &choice.delta.content {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(), // Convert other types to string
+        None => String::new(),
       };
+      let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
+
+      // P-LLM2.5: previously this whole branch required `delta.content` to
+      // be present, so a tool-call-only delta (no text) never even reached
+      // the (also previously hardcoded-empty) `tool_call_deltas` — it fell
+      // all the way through to `None` and was silently dropped. Emit a
+      // chunk when there is *any* signal, mirroring the same fix in
+      // `openai.rs`.
+      let has_signal = !content_text.is_empty()
+        || !tool_call_deltas.is_empty()
+        || choice.finish_reason.is_some()
+        || chunk.usage.is_some();
+      if !has_signal {
+        return None;
+      }
 
       return Some(StreamChunk {
         content: content_text,
@@ -506,7 +526,7 @@ impl StepFunStreamingResponse {
           total_tokens: Some(u.total_tokens),
         }),
         content_type: Some("text".to_string()),
-        tool_call_deltas: Vec::new(),
+        tool_call_deltas,
       });
     }
 
@@ -1578,5 +1598,48 @@ mod tests {
     // Unknown format ⇒ default to wav (matches the existing TTS node
     // fallback behaviour, so the post-P-LLM.3 routing change is a no-op).
     assert_eq!(tts_mime_type_for(Some("aac")), "audio/wav");
+  }
+
+  /// P-LLM2.5 regression: StepFun speaks the identical OpenAI-compatible
+  /// `delta.tool_calls[]` streaming shape — mirrors
+  /// `openai::tests::streaming_tool_call_delta_carries_id_and_name`.
+  #[test]
+  fn streaming_tool_call_delta_carries_id_and_name() {
+    let chunk = StepFunStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"step-2-mini\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 0);
+    assert_eq!(delta.id.as_deref(), Some("call_abc"));
+    assert_eq!(delta.name.as_deref(), Some("get_weather"));
+    assert!(!chunk.is_final);
+  }
+
+  #[test]
+  fn streaming_tool_call_subsequent_delta_appends_arguments() {
+    let chunk = StepFunStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"step-2-mini\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert!(delta.id.is_none());
+    assert_eq!(delta.arguments_delta.as_deref(), Some("{\"city\":"));
+  }
+
+  /// A tool-call-only delta (no `content`) must not be silently dropped —
+  /// pre-fix, the required-`content` guard on the whole branch meant this
+  /// case never even reached the (also previously hardcoded-empty)
+  /// `tool_call_deltas` field.
+  #[test]
+  fn streaming_tool_call_only_delta_is_not_dropped() {
+    let chunk = StepFunStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"step-2-mini\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"noop\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}",
+    );
+    assert!(
+      chunk.is_some(),
+      "a tool-call-only delta (no text content) must not be dropped"
+    );
+    assert_eq!(chunk.unwrap().content, "");
   }
 }

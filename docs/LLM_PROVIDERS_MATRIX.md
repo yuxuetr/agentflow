@@ -389,6 +389,29 @@ nightly CI with budget/rate-limit controls.
 - **Streaming consistency tests** — landed 2026-05-08. Cross-provider
   streaming wire formats covered in `provider_consistency.rs` via a
   chunked-encoding mock server.
+- **Streaming tool-call deltas (P-LLM2.5)** — landed 2026-08-13. Google /
+  Moonshot / StepFun's streaming parsers previously hardcoded
+  `tool_call_deltas: Vec::new()` — a tool call requested mid-stream was
+  silently dropped with no error, directly breaking the ReAct agent loop
+  (which streams unconditionally). Moonshot/StepFun speak the identical
+  OpenAI-compatible `delta.tool_calls[]` shape and now share a
+  `pub(crate) openai_streaming_tool_call_deltas` helper extracted from
+  `openai.rs`; both also had the same "drop the whole chunk when
+  `delta.content` is absent" bug OpenAI's `parse_sse_chunk` already fixed
+  (Q2.5.2) but they hadn't inherited, so a tool-call-only delta (no text)
+  was dropped even before reaching the empty-deltas problem. Google's
+  `functionCall` parts were structurally invisible to the parser (it only
+  ever inspected `parts.first()` and only handled a `text` field) — fixed
+  by iterating every part and, since Gemini never fragments a function
+  call's arguments across chunks (the complete `args` object always
+  arrives in one shot), emitting one `ToolCallDelta` per part with a
+  stream-persistent synthesised `call_<index>` id (a per-chunk-local index
+  would risk colliding two distinct calls onto the same index if Gemini
+  ever split them across chunks). `provider_consistency.rs` gained
+  `{google,moonshot,stepfun}_streaming_tool_call_path`, each driving a
+  real `execute_streaming()` call through `collect_streaming_response`
+  (the same reassembly path a real caller uses) over a mocked server and
+  asserting the tool call survives intact.
 - **Multimodal consistency tests** — landed 2026-05-08; corrected under
   P-LLM2.4 (2026-08-13). Each provider receives the *same* OpenAI-shaped
   `image_url` request — the one shape `MultimodalMessage::

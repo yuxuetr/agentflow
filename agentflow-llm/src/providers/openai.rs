@@ -521,8 +521,15 @@ struct OpenAIStreamingDelta {
 }
 
 /// Q2.5.2: incremental tool_call entry inside a streaming delta.
+///
+/// `pub(crate)` (P-LLM2.5): Moonshot and StepFun speak this exact same
+/// OpenAI-compatible `delta.tool_calls[]` streaming shape despite having
+/// their own separate provider structs (they're not composed over
+/// `OpenAIProvider`), so they deserialize into this type directly and
+/// share [`openai_streaming_tool_call_deltas`] rather than each
+/// reimplementing the same mapping.
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIStreamingToolCall {
+pub(crate) struct OpenAIStreamingToolCall {
   index: u32,
   #[serde(default)]
   id: Option<String>,
@@ -533,11 +540,32 @@ struct OpenAIStreamingToolCall {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAIStreamingToolCallFunction {
+pub(crate) struct OpenAIStreamingToolCallFunction {
   #[serde(default)]
   name: Option<String>,
   #[serde(default)]
   arguments: Option<String>,
+}
+
+/// Map a streamed `delta.tool_calls[]` array into [`ToolCallDelta`]s.
+/// Shared by OpenAI, Moonshot, and StepFun — see
+/// [`OpenAIStreamingToolCall`]'s doc comment for why.
+pub(crate) fn openai_streaming_tool_call_deltas(
+  tool_calls: Option<&[OpenAIStreamingToolCall]>,
+) -> Vec<ToolCallDelta> {
+  tool_calls
+    .map(|calls| {
+      calls
+        .iter()
+        .map(|call| ToolCallDelta {
+          index: call.index,
+          id: call.id.clone(),
+          name: call.function.as_ref().and_then(|f| f.name.clone()),
+          arguments_delta: call.function.as_ref().and_then(|f| f.arguments.clone()),
+        })
+        .collect::<Vec<_>>()
+    })
+    .unwrap_or_default()
 }
 
 pub struct OpenAIStreamingResponse {
@@ -595,22 +623,7 @@ impl OpenAIStreamingResponse {
         None => String::new(),
       };
 
-      let tool_call_deltas = choice
-        .delta
-        .tool_calls
-        .as_ref()
-        .map(|calls| {
-          calls
-            .iter()
-            .map(|call| ToolCallDelta {
-              index: call.index,
-              id: call.id.clone(),
-              name: call.function.as_ref().and_then(|f| f.name.clone()),
-              arguments_delta: call.function.as_ref().and_then(|f| f.arguments.clone()),
-            })
-            .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+      let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
 
       // Q2.5.2: emit a chunk when there is *any* signal — text content,
       // tool_call delta, finish_reason, or usage — so tool-call-only

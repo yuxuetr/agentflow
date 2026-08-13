@@ -42,6 +42,7 @@ use std::time::Duration;
 use agentflow_llm::LLMError;
 use agentflow_llm::ResponseFormat;
 use agentflow_llm::client::StreamingResponse;
+use agentflow_llm::client::streaming::collect_streaming_response;
 use agentflow_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
   ProviderRequest, StepFunProvider,
@@ -907,6 +908,136 @@ async fn stepfun_streaming_path() {
     .await
     .expect("stream");
   assert_stream_yields_hello_world(stream).await;
+}
+
+// -----------------------------------------------------------------------------
+// P-LLM2.5: streaming + tool calls
+//
+// Before this fix, Google/Moonshot/StepFun's streaming parsers hardcoded
+// `tool_call_deltas: Vec::new()` — a tool call requested mid-stream was
+// silently dropped, with no error, directly breaking the ReAct agent loop
+// (which streams unconditionally). These drive a real
+// `provider.execute_streaming()` call over a mocked SSE/NDJSON server through
+// `collect_streaming_response` (the same reassembly path a real caller uses)
+// and assert the tool call survives intact — the end-to-end version of the
+// per-provider unit tests already covering `parse_sse_chunk`/`parse_json_chunk`
+// directly.
+// -----------------------------------------------------------------------------
+
+/// OpenAI-compatible `delta.tool_calls[]` streaming events for a
+/// `get_weather(city="Tokyo")` call, fragmented across chunks the way a real
+/// provider streams: identity (id/name) on the first delta, then the
+/// argument JSON split across two more deltas, with `finish_reason:
+/// "tool_calls"` on the last content-bearing chunk.
+fn openai_compat_tool_call_stream_events(model: &str) -> Vec<String> {
+  let chunk1 = json!({
+    "id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 0, "model": model,
+    "choices": [{
+      "index": 0,
+      "delta": {"role": "assistant", "tool_calls": [{
+        "index": 0, "id": "call_abc", "type": "function",
+        "function": {"name": "get_weather", "arguments": ""}
+      }]}
+    }]
+  });
+  let chunk2 = json!({
+    "id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 0, "model": model,
+    "choices": [{
+      "index": 0,
+      "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"city\":"}}]}
+    }]
+  });
+  let chunk3 = json!({
+    "id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 0, "model": model,
+    "choices": [{
+      "index": 0,
+      "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "\"Tokyo\"}"}}]},
+      "finish_reason": "tool_calls"
+    }]
+  });
+  vec![
+    format!("data: {chunk1}\n\n"),
+    format!("data: {chunk2}\n\n"),
+    format!("data: {chunk3}\n\n"),
+    "data: [DONE]\n\n".to_string(),
+  ]
+}
+
+/// Gemini's `functionCall` part carries the complete, non-fragmented
+/// `{"name", "args"}` object in one shot (see `google.rs`'s
+/// `GoogleStreamingResponse::parse_json_chunk` doc comment) — one NDJSON
+/// line with a leading text part plus the function call is enough to cover
+/// the "text and tool call together" case the pre-fix code also mishandled.
+fn google_tool_call_stream_events() -> Vec<String> {
+  let chunk1 = json!({
+    "candidates": [{
+      "content": {"parts": [{"text": "Checking..."}], "role": "model"},
+      "index": 0
+    }]
+  });
+  let chunk2 = json!({
+    "candidates": [{
+      "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}], "role": "model"},
+      "finishReason": "STOP",
+      "index": 0
+    }]
+  });
+  vec![format!("{chunk1}\n"), format!("{chunk2}\n")]
+}
+
+async fn assert_stream_yields_get_weather_tokyo_tool_call(stream: Box<dyn StreamingResponse>) {
+  let response = collect_streaming_response(stream, |_| async {})
+    .await
+    .expect("collect_streaming_response must succeed");
+  assert_eq!(
+    response.tool_calls.len(),
+    1,
+    "expected exactly one reconstructed tool call, got: {:?}",
+    response.tool_calls
+  );
+  let call = &response.tool_calls[0];
+  assert!(!call.id.is_empty(), "tool call id must not be empty");
+  assert_eq!(call.name, "get_weather");
+  assert_eq!(call.arguments, json!({"city": "Tokyo"}));
+  assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_streaming_tool_call_path() {
+  let base_url = spawn_streaming_mock_server(google_tool_call_stream_events()).await;
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("gemini-1.5-pro"))
+    .await
+    .expect("stream");
+  assert_stream_yields_get_weather_tokyo_tool_call(stream).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_streaming_tool_call_path() {
+  let base_url =
+    spawn_streaming_mock_server(openai_compat_tool_call_stream_events("moonshot-v1-8k")).await;
+  let provider =
+    MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("moonshot-v1-8k"))
+    .await
+    .expect("stream");
+  assert_stream_yields_get_weather_tokyo_tool_call(stream).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_streaming_tool_call_path() {
+  let base_url =
+    spawn_streaming_mock_server(openai_compat_tool_call_stream_events("step-1-8k")).await;
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+  let stream = provider
+    .execute_streaming(&provider_request_streaming("step-1-8k"))
+    .await
+    .expect("stream");
+  assert_stream_yields_get_weather_tokyo_tool_call(stream).await;
 }
 
 // -----------------------------------------------------------------------------

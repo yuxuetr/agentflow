@@ -4,8 +4,8 @@ use crate::{
   providers::{
     ContentType, LLMProvider, ProviderRequest, ProviderResponse,
     openai::{
-      parse_openai_tool_calls, response_format_to_openai_value, tool_choice_to_openai_value,
-      tool_spec_to_openai_value,
+      OpenAIStreamingToolCall, openai_streaming_tool_call_deltas, parse_openai_tool_calls,
+      response_format_to_openai_value, tool_choice_to_openai_value, tool_spec_to_openai_value,
     },
   },
   tool_calling::StopReason,
@@ -287,6 +287,11 @@ struct MoonshotStreamingChoice {
 struct MoonshotStreamingDelta {
   role: Option<String>,
   content: Option<String>,
+  /// P-LLM2.5: Moonshot speaks the identical OpenAI-compatible
+  /// `delta.tool_calls[]` streaming shape — see
+  /// `openai::OpenAIStreamingToolCall`'s doc comment.
+  #[serde(default)]
+  tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
 }
 
 pub struct MoonshotStreamingResponse {
@@ -335,10 +340,26 @@ impl MoonshotStreamingResponse {
 
     if let Ok(chunk) = serde_json::from_str::<MoonshotStreamingChunk>(data)
       && let Some(choice) = chunk.choices.first()
-      && let Some(content) = &choice.delta.content
     {
+      let content_text = choice.delta.content.clone().unwrap_or_default();
+      let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
+
+      // P-LLM2.5: previously this whole branch required `delta.content` to
+      // be present (`&& let Some(content) = &choice.delta.content`), so a
+      // tool-call-only delta (no text) never even reached the (also
+      // previously hardcoded-empty) `tool_call_deltas` — it fell all the
+      // way through to `None` and was silently dropped. Emit a chunk when
+      // there is *any* signal, mirroring the same fix in `openai.rs`.
+      let has_signal = !content_text.is_empty()
+        || !tool_call_deltas.is_empty()
+        || choice.finish_reason.is_some()
+        || chunk.usage.is_some();
+      if !has_signal {
+        return None;
+      }
+
       return Some(StreamChunk {
-        content: content.clone(),
+        content: content_text,
         is_final: choice.finish_reason.is_some(),
         metadata: Some(serde_json::to_value(&chunk).ok()?),
         usage: chunk.usage.map(|u| TokenUsage {
@@ -347,7 +368,7 @@ impl MoonshotStreamingResponse {
           total_tokens: Some(u.total_tokens),
         }),
         content_type: Some("text".to_string()),
-        tool_call_deltas: Vec::new(),
+        tool_call_deltas,
       });
     }
 
@@ -489,5 +510,48 @@ mod tests {
     assert!(models.contains(&"moonshot-v1-8k".to_string()));
     assert!(models.contains(&"moonshot-v1-32k".to_string()));
     assert!(models.contains(&"moonshot-v1-128k".to_string()));
+  }
+
+  /// P-LLM2.5 regression: Moonshot speaks the identical OpenAI-compatible
+  /// `delta.tool_calls[]` streaming shape — mirrors
+  /// `openai::tests::streaming_tool_call_delta_carries_id_and_name`.
+  #[test]
+  fn streaming_tool_call_delta_carries_id_and_name() {
+    let chunk = MoonshotStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"moonshot-v1-8k\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 0);
+    assert_eq!(delta.id.as_deref(), Some("call_abc"));
+    assert_eq!(delta.name.as_deref(), Some("get_weather"));
+    assert!(!chunk.is_final);
+  }
+
+  #[test]
+  fn streaming_tool_call_subsequent_delta_appends_arguments() {
+    let chunk = MoonshotStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"moonshot-v1-8k\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}",
+    ).unwrap();
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert!(delta.id.is_none());
+    assert_eq!(delta.arguments_delta.as_deref(), Some("{\"city\":"));
+  }
+
+  /// A tool-call-only delta (no `content`) must not be silently dropped —
+  /// pre-fix, the required-`content` guard on the whole branch meant this
+  /// case never even reached the (also previously hardcoded-empty)
+  /// `tool_call_deltas` field.
+  #[test]
+  fn streaming_tool_call_only_delta_is_not_dropped() {
+    let chunk = MoonshotStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"moonshot-v1-8k\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"noop\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}",
+    );
+    assert!(
+      chunk.is_some(),
+      "a tool-call-only delta (no text content) must not be dropped"
+    );
+    assert_eq!(chunk.unwrap().content, "");
   }
 }

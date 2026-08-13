@@ -1,6 +1,6 @@
 use crate::{
   LLMError, ResponseFormat, Result,
-  client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
+  client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
   providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
@@ -607,6 +607,17 @@ pub struct GoogleStreamingResponse {
   stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
   buffer: Option<String>,
   finished: bool,
+  /// P-LLM2.5: Gemini gives `functionCall` parts no id at all (same as the
+  /// non-streaming path — see `parse_google_function_calls`'s doc comment),
+  /// so we synthesise one. Unlike a per-chunk-local counter, this persists
+  /// across the whole stream: Gemini's real wire behavior for *when*
+  /// parallel function-call parts land (all in one chunk vs. spread across
+  /// several) isn't documented as a hard guarantee, and a per-chunk-local
+  /// index would silently collide two distinct tool calls onto the same
+  /// `ToolCallDelta.index` if they ever arrived in separate chunks —
+  /// `collect_streaming_response` groups deltas by `index`, so a collision
+  /// would merge two unrelated calls into one garbled reconstruction.
+  next_tool_call_index: u32,
 }
 
 // Make it Send + Sync
@@ -627,54 +638,90 @@ impl GoogleStreamingResponse {
       stream: Box::pin(string_stream),
       buffer: Some(String::new()),
       finished: false,
+      next_tool_call_index: 0,
     }
   }
 
-  fn parse_json_chunk(line: &str) -> Option<StreamChunk> {
+  /// Extract and remove one complete newline-terminated line from
+  /// `self.buffer`, if any is currently buffered. Returns `None` (without
+  /// mutating the buffer) when no complete line is available yet.
+  fn drain_next_line(&mut self) -> Option<String> {
+    let buffer = self.buffer.as_mut()?;
+    let newline_pos = buffer.find('\n')?;
+    let line = buffer[..newline_pos].trim().to_string();
+    buffer.drain(..=newline_pos);
+    Some(line)
+  }
+
+  /// P-LLM2.5: unlike OpenAI's `delta.tool_calls[]` / Anthropic's
+  /// `input_json_delta`, Gemini never fragments a function call's
+  /// arguments across chunks — a `functionCall` part always carries the
+  /// complete `{"name": ..., "args": {...}}` object in one shot (mirrors
+  /// `parse_google_function_calls`, the non-streaming equivalent, which
+  /// never needs cross-part accumulation either). So each `functionCall`
+  /// part observed here becomes exactly one `ToolCallDelta` with its full
+  /// arguments already serialized into `arguments_delta` — no follow-up
+  /// delta will ever arrive for that same index.
+  ///
+  /// `&mut self` (not a free function, unlike the sibling OpenAI/Moonshot/
+  /// StepFun parsers) because `next_tool_call_index` must persist across
+  /// calls — see that field's doc comment.
+  fn parse_json_chunk(&mut self, line: &str) -> Option<StreamChunk> {
     if line.trim().is_empty() {
       return None;
     }
 
-    if let Ok(response) = serde_json::from_str::<GoogleResponse>(line)
-      && let Some(candidate) = response.candidates.first()
-    {
-      if let Some(part) = candidate.content.parts.first()
-        && let Some(text) = &part.text
-      {
-        let is_final = candidate.finish_reason.is_some();
+    let response = serde_json::from_str::<GoogleResponse>(line).ok()?;
+    let candidate = response.candidates.first()?;
 
-        return Some(StreamChunk {
-          content: text.clone(),
-          is_final,
-          metadata: Some(serde_json::to_value(&response).ok()?),
-          usage: response.usage_metadata.map(|u| TokenUsage {
-            prompt_tokens: Some(u.prompt_token_count),
-            completion_tokens: Some(u.candidates_token_count),
-            total_tokens: Some(u.total_token_count),
-          }),
-          content_type: Some("text".to_string()),
-          tool_call_deltas: Vec::new(),
-        });
+    // Previously this only ever inspected `parts.first()` and only handled
+    // a `text` field — a `functionCall` part (whether alone or alongside a
+    // text part in the same `parts` array) was invisible to this function
+    // entirely, silently dropping every streamed tool call.
+    let mut content_text = String::new();
+    let mut tool_call_deltas = Vec::new();
+    for part in &candidate.content.parts {
+      if let Some(text) = &part.text {
+        content_text.push_str(text);
       }
-
-      // Check if this is a final chunk without text
-      if candidate.finish_reason.is_some() {
-        return Some(StreamChunk {
-          content: String::new(),
-          is_final: true,
-          metadata: Some(serde_json::to_value(&response).ok()?),
-          usage: response.usage_metadata.map(|u| TokenUsage {
-            prompt_tokens: Some(u.prompt_token_count),
-            completion_tokens: Some(u.candidates_token_count),
-            total_tokens: Some(u.total_token_count),
-          }),
-          content_type: Some("text".to_string()),
-          tool_call_deltas: Vec::new(),
+      if let Some(call) = &part.function_call {
+        let name = call.get("name").and_then(Value::as_str).map(str::to_string);
+        let arguments = call
+          .get("args")
+          .cloned()
+          .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        let index = self.next_tool_call_index;
+        self.next_tool_call_index += 1;
+        tool_call_deltas.push(ToolCallDelta {
+          index,
+          id: Some(format!("call_{index}")),
+          name,
+          arguments_delta: serde_json::to_string(&arguments).ok(),
         });
       }
     }
 
-    None
+    let is_final = candidate.finish_reason.is_some();
+    // Emit a chunk when there is *any* signal — text, a tool-call delta, or
+    // the final marker — so a tool-call-only chunk (no text) doesn't get
+    // silently dropped, mirroring the same fix already applied to OpenAI's
+    // `parse_sse_chunk` for the identical class of bug.
+    if content_text.is_empty() && tool_call_deltas.is_empty() && !is_final {
+      return None;
+    }
+
+    Some(StreamChunk {
+      content: content_text,
+      is_final,
+      metadata: Some(serde_json::to_value(&response).ok()?),
+      usage: response.usage_metadata.map(|u| TokenUsage {
+        prompt_tokens: Some(u.prompt_token_count),
+        completion_tokens: Some(u.candidates_token_count),
+        total_tokens: Some(u.total_token_count),
+      }),
+      content_type: Some("text".to_string()),
+      tool_call_deltas,
+    })
   }
 }
 
@@ -695,20 +742,20 @@ impl StreamingResponse for GoogleStreamingResponse {
       // another network read happened to re-trigger the drain; if the
       // stream had already ended, that line was silently dropped and
       // `is_final` was never observed from a real finish_reason chunk.
-      if let Some(ref mut buffer) = self.buffer {
-        // Google streams JSON objects separated by newlines.
-        while let Some(newline_pos) = buffer.find('\n') {
-          let line = buffer[..newline_pos].trim().to_string();
-          buffer.drain(..=newline_pos);
-
-          if !line.is_empty()
-            && let Some(chunk) = Self::parse_json_chunk(&line)
-          {
-            if chunk.is_final {
-              self.finished = true;
-            }
-            return Ok(Some(chunk));
+      // Google streams JSON objects separated by newlines. `drain_next_line`
+      // borrows `self.buffer` just long enough to extract one already-
+      // complete line, ending that borrow before calling
+      // `self.parse_json_chunk` (which needs `&mut self` as a whole, for
+      // `next_tool_call_index` — see that field's doc comment) — the two
+      // borrows can't overlap.
+      while let Some(line) = self.drain_next_line() {
+        if !line.is_empty()
+          && let Some(chunk) = self.parse_json_chunk(&line)
+        {
+          if chunk.is_final {
+            self.finished = true;
           }
+          return Ok(Some(chunk));
         }
       }
 
@@ -1323,5 +1370,90 @@ mod tests {
       "https://generativelanguage.googleapis.com/v1beta/files/abc"
     ));
     assert!(!is_youtube_url("not a url"));
+  }
+
+  /// A `GoogleStreamingResponse` with no real network stream backing it —
+  /// `parse_json_chunk`/`drain_next_line` never touch `self.stream`, so an
+  /// empty stub is enough to exercise them directly without a live HTTP
+  /// round trip.
+  fn test_streaming_response() -> GoogleStreamingResponse {
+    GoogleStreamingResponse {
+      stream: Box::pin(futures::stream::empty::<Result<String>>()),
+      buffer: Some(String::new()),
+      finished: false,
+      next_tool_call_index: 0,
+    }
+  }
+
+  /// P-LLM2.5 regression: `parse_json_chunk` previously only ever inspected
+  /// `parts.first()` and only handled a `text` field — a `functionCall`
+  /// part was invisible to it, and `tool_call_deltas` was hardcoded to
+  /// `Vec::new()`. Gemini gives function calls no id, so one is synthesised
+  /// (`call_<index>`); the full `args` object is serialized whole into
+  /// `arguments_delta` since Gemini never fragments it across chunks.
+  #[test]
+  fn parse_json_chunk_extracts_function_call_part() {
+    let mut response = test_streaming_response();
+    let line = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}}],"role":"model"},"finishReason":null}]}"#;
+    let chunk = response
+      .parse_json_chunk(line)
+      .expect("must produce a chunk");
+    assert!(chunk.content.is_empty());
+    assert!(!chunk.is_final);
+    assert_eq!(chunk.tool_call_deltas.len(), 1);
+    let delta = &chunk.tool_call_deltas[0];
+    assert_eq!(delta.index, 0);
+    assert_eq!(delta.id.as_deref(), Some("call_0"));
+    assert_eq!(delta.name.as_deref(), Some("get_weather"));
+    let args: Value = serde_json::from_str(delta.arguments_delta.as_deref().unwrap()).unwrap();
+    assert_eq!(args, json!({"city": "Tokyo"}));
+  }
+
+  /// A tool-call-only chunk (no text) must not be silently dropped —
+  /// mirrors the same `has_signal` fix already applied to OpenAI.
+  #[test]
+  fn parse_json_chunk_does_not_drop_tool_call_only_chunk() {
+    let mut response = test_streaming_response();
+    let line = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"noop","args":{}}}],"role":"model"}}]}"#;
+    let chunk = response.parse_json_chunk(line);
+    assert!(
+      chunk.is_some(),
+      "a function-call-only chunk must not be dropped"
+    );
+  }
+
+  /// A part carrying both `text` and a `functionCall` (or two separate
+  /// `functionCall` parts, for parallel tool calls) must surface both —
+  /// not just the first part, like the pre-fix code did.
+  #[test]
+  fn parse_json_chunk_handles_text_and_multiple_function_calls_together() {
+    let mut response = test_streaming_response();
+    let line = r#"{"candidates":[{"content":{"parts":[{"text":"checking..."},{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}},{"functionCall":{"name":"get_time","args":{"tz":"JST"}}}],"role":"model"}}]}"#;
+    let chunk = response.parse_json_chunk(line).unwrap();
+    assert_eq!(chunk.content, "checking...");
+    assert_eq!(chunk.tool_call_deltas.len(), 2);
+    assert_eq!(chunk.tool_call_deltas[0].index, 0);
+    assert_eq!(
+      chunk.tool_call_deltas[0].name.as_deref(),
+      Some("get_weather")
+    );
+    assert_eq!(chunk.tool_call_deltas[1].index, 1);
+    assert_eq!(chunk.tool_call_deltas[1].name.as_deref(), Some("get_time"));
+  }
+
+  /// `next_tool_call_index` must persist *across* calls to
+  /// `parse_json_chunk`, not reset per chunk — otherwise two function
+  /// calls arriving in separate stream chunks would collide onto the same
+  /// `ToolCallDelta.index` and `collect_streaming_response` would merge
+  /// them into one garbled reconstruction.
+  #[test]
+  fn tool_call_index_persists_across_chunks() {
+    let mut response = test_streaming_response();
+    let first = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{}}}],"role":"model"}}]}"#;
+    let second = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{}}}],"role":"model"}}]}"#;
+    let chunk1 = response.parse_json_chunk(first).unwrap();
+    let chunk2 = response.parse_json_chunk(second).unwrap();
+    assert_eq!(chunk1.tool_call_deltas[0].index, 0);
+    assert_eq!(chunk2.tool_call_deltas[0].index, 1);
   }
 }
