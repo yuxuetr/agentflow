@@ -43,15 +43,25 @@ impl McpClientPool {
     );
     let mut guard = self.client.lock().await;
     let client = ensure_client(&self.config, &mut guard).await?;
-    let tools = client.list_tools().await.map_err(|e| {
-      warn!(
-        event = "mcp_tools_list_failed",
-        server = %self.config.name,
-        error = %e,
-        "Failed to list MCP tools"
-      );
-      SkillError::McpError(format!("{}: {}", self.config.name, e))
-    })?;
+    let tools = match client.list_tools().await {
+      Ok(tools) => tools,
+      Err(e) => {
+        warn!(
+          event = "mcp_tools_list_failed",
+          server = %self.config.name,
+          error = %e,
+          "Failed to list MCP tools"
+        );
+        // W5.8-1: a transient (connection/transport/timeout) error means
+        // the cached client is dead — clear the slot so the next call
+        // reconnects instead of repeatedly hitting the same broken
+        // client. Mirrors the timeout-path slot-clearing in call_tool.
+        if e.is_transient() {
+          *guard = None;
+        }
+        return Err(SkillError::McpError(format!("{}: {}", self.config.name, e)));
+      }
+    };
     info!(
       event = "mcp_tools_list_succeeded",
       server = %self.config.name,
@@ -96,7 +106,8 @@ impl McpClientPool {
       "Calling MCP tool"
     );
     let result = match tokio::time::timeout(timeout, client.call_tool(tool_name, params)).await {
-      Ok(result) => result.map_err(|e| {
+      Ok(Ok(result)) => result,
+      Ok(Err(e)) => {
         let message = format!(
           "MCP server '{}' tool '{}' failed: {}",
           self.config.name, tool_name, e
@@ -108,8 +119,16 @@ impl McpClientPool {
           error = %e,
           "MCP tool call failed"
         );
-        ToolError::ExecutionFailed { message }
-      })?,
+        // W5.8-1: only the timeout branch below used to clear the
+        // cached slot. A non-timeout connection error (e.g. the child
+        // process died and the next write/read errors immediately)
+        // fell through here and left a known-dead client cached for
+        // every subsequent call.
+        if e.is_transient() {
+          *guard = None;
+        }
+        return Err(ToolError::ExecutionFailed { message });
+      }
       Err(_) => {
         if let Some(client) = guard.as_mut() {
           let _ = client.disconnect().await;
@@ -501,5 +520,119 @@ mod tests {
     assert!(error.contains("Invalid parameters"));
     assert!(error.contains("search"));
     assert!(error.contains("query"));
+  }
+
+  // ============================================================================
+  // W5.8-1: reconnect-on-error regression tests
+  // ============================================================================
+  //
+  // Each fixture is a one-shot `sh -c` "server": it answers exactly one
+  // initialize handshake + one tools/list (or tools/call), then the shell
+  // script ends and the child process exits. A second call over the same
+  // cached `MCPClient` then hits a connection error (broken pipe / closed
+  // reader) rather than a timeout — the exact gap W5.8-1 closes. Before the
+  // fix, the dead client stayed cached forever; after, the transient error
+  // clears the slot so the next call reconnects (spawns a fresh process,
+  // which — being `sh -c` — replays the same one-shot script and succeeds
+  // again).
+
+  #[cfg(unix)]
+  fn one_shot_tools_list_config(name: &str) -> McpServerConfig {
+    let script = r#"
+read -r line1
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}'
+read -r line2
+read -r line3
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}'
+"#;
+    McpServerConfig {
+      name: name.to_string(),
+      command: "sh".to_string(),
+      args: vec!["-c".to_string(), script.to_string()],
+      env: Default::default(),
+      timeout_secs: Some(5),
+      max_concurrent_calls: None,
+    }
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn list_tools_reconnects_after_transient_error_instead_of_reusing_dead_client() {
+    let pool = McpClientPool::new(one_shot_tools_list_config("flaky-list"));
+
+    // First call: connects, completes the one-shot script, gets an empty
+    // tools list back. The child process then exits.
+    pool.list_tools().await.expect("first call succeeds");
+
+    // Give the reader task time to observe EOF so the second call's
+    // failure is a clean connection error, not a race.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Second call: the cached client's transport is dead. This must fail
+    // (nothing left to serve the request) — that's expected either way,
+    // fixed or not.
+    pool
+      .list_tools()
+      .await
+      .expect_err("cached client is dead, second call must fail");
+
+    // Third call is the actual regression check: with the fix, the
+    // transient error above cleared the cached slot, so this call
+    // reconnects (spawns a fresh one-shot process) and succeeds. Without
+    // the fix, it would keep reusing the same dead client and fail again.
+    pool
+      .list_tools()
+      .await
+      .expect("third call must reconnect instead of reusing the dead client");
+  }
+
+  #[cfg(unix)]
+  fn one_shot_tool_call_config(name: &str) -> McpServerConfig {
+    let script = r#"
+read -r line1
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}'
+read -r line2
+read -r line3
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"content":[]}}'
+"#;
+    McpServerConfig {
+      name: name.to_string(),
+      command: "sh".to_string(),
+      args: vec!["-c".to_string(), script.to_string()],
+      env: Default::default(),
+      timeout_secs: Some(5),
+      max_concurrent_calls: None,
+    }
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn call_tool_reconnects_after_transient_error_instead_of_reusing_dead_client() {
+    let pool = Arc::new(McpClientPool::new(one_shot_tool_call_config("flaky-call")));
+    let adapter = McpToolAdapter::new(
+      pool.clone(),
+      McpTool {
+        name: "noop".to_string(),
+        description: Some("Noop".to_string()),
+        input_schema: serde_json::json!({"type": "object"}),
+      },
+    );
+
+    adapter
+      .execute(serde_json::json!({}))
+      .await
+      .expect("first call succeeds");
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    adapter
+      .execute(serde_json::json!({}))
+      .await
+      .expect_err("cached client is dead, second call must fail");
+
+    adapter
+      .execute(serde_json::json!({}))
+      .await
+      .expect("third call must reconnect instead of reusing the dead client");
   }
 }
