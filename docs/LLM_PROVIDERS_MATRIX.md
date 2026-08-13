@@ -21,7 +21,7 @@ field on `ProviderRequest` fails CI until this section is updated.**
 | Field | Type | Required | Description |
 | --- | --- | :-: | --- |
 | `model` | `String` | ✅ | Provider-resolved model identifier (e.g. `gpt-4o-mini`, `claude-3-5-sonnet-20241022`). Adapters translate to the wire shape each provider expects. |
-| `messages` | `Vec<Value>` | ✅ | OpenAI-style message array. Multimodal content is encoded as `image_url` blocks; adapters translate to provider-native shapes (Anthropic `image`, Google `inline_data`). |
+| `messages` | `Vec<Value>` | ✅ | OpenAI-style message array. Multimodal content is encoded as `image_url` blocks (and, Anthropic-only, `document_url`; Google-only, `video_url`); adapters translate to provider-native shapes (Anthropic `image`/`document`, Google `inline_data`/`file_data`). |
 | `stream` | `bool` | ✅ | When `true`, the provider returns a chunked / SSE response. `ModelCapabilities::requires_streaming` rejects `stream = false` for streaming-only models. |
 | `parameters` | `HashMap<String, Value>` | ✅ | Free-form provider passthrough (temperature, top_p, max_tokens, custom flags). Adapters whitelist and rename as needed; unknown keys are ignored. |
 | `tools` | `Option<Vec<ToolSpec>>` | – | Native tool / function-calling specification. `None` skips tool wiring entirely. |
@@ -384,19 +384,6 @@ nightly CI with budget/rate-limit controls.
 - **Quota / cost dashboards**: currently each provider exposes raw
   `TokenUsage` on responses; a higher-level cost roll-up keyed by model is
   not implemented.
-- **Document (PDF) and video chat input** (P-LLM2.4 audit): `InputType`
-  has `Document` and `Video` variants and `ModelCapabilities::
-  validate_request` already takes `has_video`/`has_audio` parameters, but
-  no provider's `accepts:` registry entry ever declares `document` or
-  `video`, and `multimodal::MessageContent` has no variant a caller could
-  use to attach either — there is currently no code path, in any provider,
-  that can construct or send document/video chat input. Anthropic's real
-  API accepts PDF documents as a native content block; Google's Gemini
-  `generateContent` accepts video via `inline_data`/`file_data`. Adding
-  either is future work (new `MessageContent` variant + builder method +
-  registry `accepts:` entry + adapter translation + `validate_request`
-  wiring), not something the current implementation silently mishandles.
-
 ## Closed follow-ups
 
 - **Streaming consistency tests** — landed 2026-05-08. Cross-provider
@@ -431,6 +418,46 @@ nightly CI with budget/rate-limit controls.
     silent-drop/malformed-block bug for every OpenAI-compatible vendor and
     for Google's base64 path in the same change), and the integration test
     now drives the real translation path.
+- **Anthropic document (PDF) input, Google video input** — landed
+  2026-08-13 (P-LLM2.4 follow-up), based on the current official API
+  reference at the time (`platform.claude.com/docs/en/build-with-claude/
+  pdf-support`; `ai.google.dev/api/generate-content` for the REST `Part`
+  schema; `ai.google.dev/gemini-api/docs/video-understanding` for YouTube
+  `file_data` usage). `MessageContent` gained `DocumentUrl`/`DocumentData`
+  (Anthropic-only) and `VideoUrl`/`VideoData` (Google-only) variants, with
+  matching `MultimodalMessageBuilder` methods
+  (`.add_document_url()`/`.add_document_data()`/`.add_video_url()`/
+  `.add_video_url_with_media_type()`/`.add_video_data()`).
+  - **Anthropic**: `document_url` blocks translate into native
+    `{"type":"document","source":{...}}` blocks, same base64-vs-URL split
+    as `image` blocks. All active Claude models accept PDF documents — no
+    beta header required — so all 13 registry entries in `anthropic.yml`
+    now declare `accepts: [text, image, document]`.
+  - **Google**: `video_url` blocks translate into `inline_data` (base64) or
+    `file_data` (remote reference) — YouTube links (`youtube.com/watch`,
+    `youtu.be/`) omit `mime_type` per the documented shape; any other
+    remote reference (e.g. a Files API URI) requires one, taken from an
+    explicit `media_type` hint or defaulting to `video/mp4`. All 42 `type:
+    chat` entries in `google.yml` that already declared `accepts: [text,
+    image]` now additionally declare `video`.
+  - `ModelCapabilities::validate_request` (and the `ModelConfig` wrapper)
+    gained a `has_document` parameter — previously the function signature
+    only had `has_video`, but every `LLMClient` call site hardcoded it
+    `false`, so a model's `accepts: video`/`accepts: document` could never
+    actually be checked. Both flags are now computed from the real
+    `MultimodalMessage` content at all four call sites
+    (`execute`/`execute_full`/`execute_streaming`/
+    `build_multimodal_messages`), so an unsupported combination — e.g.
+    video input against a non-Google model — fails at validation time with
+    a clear `LLMError::InvalidModelConfig` naming the rejected modality,
+    per `agentflow-llm/tests/multimodal_input_validation.rs`.
+  - Video and document remain unimplemented for every other provider by
+    design: OpenAI's Chat Completions API has no video or document content
+    block at all (its file/PDF support lives only in the separate
+    Responses API, which this crate doesn't implement), and Claude has no
+    video input capability. Sending either to a model outside its one
+    supporting vendor is rejected by `validate_request`, not silently
+    dropped or malformed.
 - **Live LLM nightly CI job** — landed 2026-05-08.
   `agentflow-llm/tests/provider_consistency_live.rs` plus
   `.github/workflows/llm-live.yml` (cron + `workflow_dispatch`). Tests

@@ -268,12 +268,14 @@ impl ModelConfig {
   }
 
   /// Validate a request against this model's capabilities
+  #[allow(clippy::too_many_arguments)]
   pub fn validate_request(
     &self,
     has_text: bool,
     has_images: bool,
     has_audio: bool,
     has_video: bool,
+    has_document: bool,
     requires_streaming: bool,
     uses_tools: bool,
   ) -> Result<()> {
@@ -285,6 +287,7 @@ impl ModelConfig {
         has_images,
         has_audio,
         has_video,
+        has_document,
         requires_streaming,
         uses_tools,
       )

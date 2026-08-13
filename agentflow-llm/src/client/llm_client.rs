@@ -164,12 +164,23 @@ impl LLMClient {
       .as_ref()
       .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
       .unwrap_or(false);
+    let has_video = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_video()))
+      .unwrap_or(false);
+    let has_document = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_document()))
+      .unwrap_or(false);
 
     model_config.validate_request(
       true, // has text
       has_images,
-      false,                // has audio
-      false,                // has video
+      false, // has audio
+      has_video,
+      has_document,
       false,                // requires streaming (this is non-streaming)
       self.tools.is_some(), // uses tools
     )?;
@@ -322,8 +333,26 @@ impl LLMClient {
       .as_ref()
       .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
       .unwrap_or(false);
+    let has_video = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_video()))
+      .unwrap_or(false);
+    let has_document = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_document()))
+      .unwrap_or(false);
 
-    model_config.validate_request(true, has_images, false, false, false, self.tools.is_some())?;
+    model_config.validate_request(
+      true,
+      has_images,
+      false,
+      has_video,
+      has_document,
+      false,
+      self.tools.is_some(),
+    )?;
     let provider = registry.get_provider(&model_config.vendor)?;
     let defaults = registry.get_defaults()?;
 
@@ -390,12 +419,23 @@ impl LLMClient {
       .as_ref()
       .map(|msgs| msgs.iter().any(|msg| msg.has_images()))
       .unwrap_or(false);
+    let has_video = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_video()))
+      .unwrap_or(false);
+    let has_document = self
+      .multimodal_messages
+      .as_ref()
+      .map(|msgs| msgs.iter().any(|msg| msg.has_document()))
+      .unwrap_or(false);
 
     model_config.validate_request(
       true, // has text
       has_images,
-      false,                // has audio
-      false,                // has video
+      false, // has audio
+      has_video,
+      has_document,
       true,                 // requires streaming
       self.tools.is_some(), // uses tools
     )?;
@@ -561,6 +601,8 @@ impl LLMClient {
 
     // Analyze input types in the messages
     let has_images = multimodal_messages.iter().any(|msg| msg.has_images());
+    let has_video = multimodal_messages.iter().any(|msg| msg.has_video());
+    let has_document = multimodal_messages.iter().any(|msg| msg.has_document());
     let has_text = multimodal_messages
       .iter()
       .any(|msg| !msg.get_text().is_empty());
@@ -569,8 +611,9 @@ impl LLMClient {
     model_config.validate_request(
       has_text,
       has_images,
-      false,                // audio
-      false,                // video
+      false, // audio
+      has_video,
+      has_document,
       false,                // streaming (checked separately)
       self.tools.is_some(), // uses tools
     )?;
@@ -586,6 +629,16 @@ impl LLMClient {
         if msg.has_images() {
           return Err(crate::LLMError::InvalidModelConfig {
             message: format!("Model {} does not support image input", self.model_name),
+          });
+        }
+        if msg.has_document() {
+          return Err(crate::LLMError::InvalidModelConfig {
+            message: format!("Model {} does not support document input", self.model_name),
+          });
+        }
+        if msg.has_video() {
+          return Err(crate::LLMError::InvalidModelConfig {
+            message: format!("Model {} does not support video input", self.model_name),
           });
         }
         messages.push(serde_json::json!({

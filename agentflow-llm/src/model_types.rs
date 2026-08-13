@@ -359,12 +359,14 @@ impl ModelCapabilities {
   }
 
   /// Validate a request against model capabilities
+  #[allow(clippy::too_many_arguments)]
   pub fn validate_request(
     &self,
     has_text: bool,
     has_images: bool,
     has_audio: bool,
     has_video: bool,
+    has_document: bool,
     requires_streaming: bool,
     uses_tools: bool,
   ) -> Result<(), String> {
@@ -380,6 +382,9 @@ impl ModelCapabilities {
     }
     if has_video && !self.accepts.contains(&InputType::Video) {
       return Err("Model does not support video input".to_string());
+    }
+    if has_document && !self.accepts.contains(&InputType::Document) {
+      return Err("Model does not support document input".to_string());
     }
 
     // Check streaming requirements
@@ -503,7 +508,7 @@ mod tests {
     let chat = ModelCapabilities::from_model_type(ModelType::Chat);
     assert!(
       chat
-        .validate_request(true, true, false, false, false, false)
+        .validate_request(true, true, false, false, false, false, false)
         .is_err()
     );
 
@@ -513,15 +518,31 @@ mod tests {
     vision_chat.accepts.insert(InputType::Image);
     assert!(
       vision_chat
-        .validate_request(true, true, false, false, false, false)
+        .validate_request(true, true, false, false, false, false, false)
         .is_ok()
     );
 
     // Audio is still rejected since accepts doesn't include it.
     assert!(
       vision_chat
-        .validate_request(true, false, true, false, false, false)
+        .validate_request(true, false, true, false, false, false, false)
         .is_err()
+    );
+
+    // Document (PDF) is still rejected since accepts doesn't include it.
+    assert!(
+      vision_chat
+        .validate_request(true, false, false, false, true, false, false)
+        .is_err()
+    );
+
+    // ...but adding Document to accepts unlocks the path too.
+    let mut document_chat = vision_chat.clone();
+    document_chat.accepts.insert(InputType::Document);
+    assert!(
+      document_chat
+        .validate_request(true, false, false, false, true, false, false)
+        .is_ok()
     );
   }
 

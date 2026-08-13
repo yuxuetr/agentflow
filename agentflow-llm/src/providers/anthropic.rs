@@ -185,6 +185,11 @@ impl AnthropicProvider {
 ///    `{"type":"image","source":{"type":"base64","media_type":...,"data":...}}`
 ///  - `image_url` whose URL is a remote `http(s)` reference →
 ///    `{"type":"image","source":{"type":"url","url":...}}`
+///  - `document_url` (PDF), translated the same way as `image_url` above but
+///    into `{"type":"document",...}` blocks — see the Anthropic PDF-support
+///    docs (`platform.claude.com/docs/en/build-with-claude/pdf-support`):
+///    all active Claude models accept `document` blocks, no beta header
+///    required.
 ///
 /// P-LLM2.4: pre-fix, `build_request_body` forwarded the OpenAI-shaped array
 /// verbatim as Anthropic `content` — Anthropic's real API recognizes neither
@@ -193,12 +198,12 @@ impl AnthropicProvider {
 /// Claude model was rejected, despite the model registry declaring
 /// `accepts: [text, image]`.
 ///
-/// Unrecognized block kinds are dropped rather than erroring here — today
-/// the only kinds `MultimodalMessage` can ever produce are `text` and
-/// `image_url` (see `multimodal.rs`), so this arm is unreachable in
-/// practice; `validate_request` is where an unsupported *modality* (e.g. a
-/// model without `accepts: image`) is rejected before a request is ever
-/// built.
+/// Unrecognized block kinds are dropped rather than erroring here — the
+/// only kinds `MultimodalMessage` can produce that this function doesn't
+/// handle are `video_url`/`video_data` (Google-only; see `google.rs`), and
+/// `validate_request` already rejects video input for any model — including
+/// every Anthropic model — whose `accepts:` doesn't declare `video`, before
+/// a request is ever built.
 fn openai_content_to_anthropic_content(content: &Value) -> Value {
   let Some(items) = content.as_array() else {
     // Plain string (or any other non-array shape) — pass through unchanged.
@@ -227,6 +232,28 @@ fn openai_content_to_anthropic_content(content: &Value) -> Value {
           } else {
             Some(json!({
               "type": "image",
+              "source": { "type": "url", "url": url }
+            }))
+          }
+        }
+        // P-LLM2.4 follow-up: PDF/document input. `MultimodalMessage::
+        // to_openai_format` collapses `DocumentData` (base64) into the same
+        // `document_url` kind with a `data:` URI, same as image_url/image_data
+        // — see `multimodal.rs`'s `MessageContent::DocumentData` handling.
+        "document_url" => {
+          let url = obj.get("document_url").and_then(|v| match v {
+            Value::String(s) => Some(s.as_str()),
+            Value::Object(map) => map.get("url").and_then(Value::as_str),
+            _ => None,
+          })?;
+          if let Some((media_type, data)) = super::parse_data_url(url) {
+            Some(json!({
+              "type": "document",
+              "source": { "type": "base64", "media_type": media_type, "data": data }
+            }))
+          } else {
+            Some(json!({
+              "type": "document",
               "source": { "type": "url", "url": url }
             }))
           }
@@ -878,6 +905,57 @@ mod tests {
 
     let body = provider.build_request_body(&request);
     assert_eq!(body["system"], "Be concise.");
+  }
+
+  /// P-LLM2.4 follow-up: a `MultimodalMessage` built with `.add_document_url()`
+  /// / `.add_document_data()` must translate into Anthropic-native `document`
+  /// content blocks, mirroring the `image` translation above.
+  #[test]
+  fn build_request_body_translates_document_content_to_anthropic_blocks() {
+    use crate::multimodal::MultimodalMessage;
+
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+
+    let remote = MultimodalMessage::user()
+      .add_text("what are the key findings")
+      .add_document_url("https://example.com/report.pdf")
+      .build()
+      .to_openai_format();
+    let base64 = MultimodalMessage::user()
+      .add_document_data("aGVsbG8=", "application/pdf")
+      .build()
+      .to_openai_format();
+
+    let request = ProviderRequest {
+      model: "claude-opus-5".to_string(),
+      messages: vec![remote, base64],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let body = provider.build_request_body(&request);
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+
+    let remote_blocks = messages[0]["content"].as_array().unwrap();
+    assert_eq!(remote_blocks[0]["type"], "text");
+    assert_eq!(remote_blocks[1]["type"], "document");
+    assert_eq!(remote_blocks[1]["source"]["type"], "url");
+    assert_eq!(
+      remote_blocks[1]["source"]["url"],
+      "https://example.com/report.pdf"
+    );
+    assert!(remote_blocks[1].get("document_url").is_none());
+
+    let base64_blocks = messages[1]["content"].as_array().unwrap();
+    assert_eq!(base64_blocks[0]["type"], "document");
+    assert_eq!(base64_blocks[0]["source"]["type"], "base64");
+    assert_eq!(base64_blocks[0]["source"]["media_type"], "application/pdf");
+    assert_eq!(base64_blocks[0]["source"]["data"], "aGVsbG8=");
   }
 
   #[test]

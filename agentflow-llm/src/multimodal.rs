@@ -22,7 +22,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Content types that can be included in multimodal messages
+/// Content types that can be included in multimodal messages.
+///
+/// `Document*` and `Video*` are provider-restricted today: only Anthropic
+/// translates `Document*` (PDF) content, and only Google translates `Video*`
+/// content (see `providers::anthropic::openai_content_to_anthropic_content`
+/// and `providers::google::openai_content_to_gemini_parts`). Sending either
+/// to a model whose registry `accepts:` doesn't declare that modality fails
+/// at `validate_request` time with `LLMError::InvalidModelConfig`, before a
+/// request is ever built.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
@@ -32,6 +40,14 @@ pub enum MessageContent {
   ImageUrl { image_url: ImageUrl },
   /// Base64 encoded image
   ImageData { image_data: ImageData },
+  /// PDF/document from a URL (Anthropic only)
+  DocumentUrl { document_url: DocumentUrl },
+  /// Base64 encoded PDF/document (Anthropic only)
+  DocumentData { document_data: DocumentData },
+  /// Video from a URL, including YouTube links (Google only)
+  VideoUrl { video_url: VideoUrl },
+  /// Base64 encoded video (Google only)
+  VideoData { video_data: VideoData },
 }
 
 /// Image URL configuration
@@ -49,6 +65,42 @@ pub struct ImageData {
   pub media_type: String, // "image/jpeg", "image/png", etc.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detail: Option<String>, // "low", "high", "auto"
+}
+
+/// PDF/document URL configuration. No `media_type` field — Anthropic's
+/// `document` content block infers it server-side for a `url` source (see
+/// the `source: { type: "url", url: ... }` shape in the Anthropic API
+/// docs); it's only required alongside base64 payloads ([`DocumentData`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentUrl {
+  pub url: String,
+}
+
+/// Base64 PDF/document data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentData {
+  pub data: String,       // base64 encoded data
+  pub media_type: String, // "application/pdf"
+}
+
+/// Video URL configuration. `media_type` is an optional hint for a remote
+/// reference whose MIME type can't be inferred from the URL — Google's
+/// `file_data` accepts an explicit `mime_type` alongside `file_uri`, but
+/// omits it entirely for YouTube links (`youtube.com/watch` /
+/// `youtu.be/`), which the adapter detects and handles regardless of
+/// whether this field is set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoUrl {
+  pub url: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub media_type: Option<String>, // "video/mp4", etc.
+}
+
+/// Base64 video data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoData {
+  pub data: String,       // base64 encoded data
+  pub media_type: String, // "video/mp4", etc.
 }
 
 impl MessageContent {
@@ -99,6 +151,53 @@ impl MessageContent {
     }
   }
 
+  /// Create PDF/document URL content (Anthropic only — see [`MessageContent`] docs)
+  pub fn document_url<S: Into<String>>(url: S) -> Self {
+    Self::DocumentUrl {
+      document_url: DocumentUrl { url: url.into() },
+    }
+  }
+
+  /// Create base64 PDF/document content (Anthropic only)
+  pub fn document_data<S: Into<String>>(data: S, media_type: S) -> Self {
+    Self::DocumentData {
+      document_data: DocumentData {
+        data: data.into(),
+        media_type: media_type.into(),
+      },
+    }
+  }
+
+  /// Create video URL content (Google only — see [`MessageContent`] docs)
+  pub fn video_url<S: Into<String>>(url: S) -> Self {
+    Self::VideoUrl {
+      video_url: VideoUrl {
+        url: url.into(),
+        media_type: None,
+      },
+    }
+  }
+
+  /// Create video URL content with an explicit MIME-type hint (Google only)
+  pub fn video_url_with_media_type<S: Into<String>>(url: S, media_type: S) -> Self {
+    Self::VideoUrl {
+      video_url: VideoUrl {
+        url: url.into(),
+        media_type: Some(media_type.into()),
+      },
+    }
+  }
+
+  /// Create base64 video content (Google only)
+  pub fn video_data<S: Into<String>>(data: S, media_type: S) -> Self {
+    Self::VideoData {
+      video_data: VideoData {
+        data: data.into(),
+        media_type: media_type.into(),
+      },
+    }
+  }
+
   /// Check if this content is text
   pub fn is_text(&self) -> bool {
     matches!(self, MessageContent::Text { .. })
@@ -109,6 +208,22 @@ impl MessageContent {
     matches!(
       self,
       MessageContent::ImageUrl { .. } | MessageContent::ImageData { .. }
+    )
+  }
+
+  /// Check if this content is a PDF/document
+  pub fn is_document(&self) -> bool {
+    matches!(
+      self,
+      MessageContent::DocumentUrl { .. } | MessageContent::DocumentData { .. }
+    )
+  }
+
+  /// Check if this content is a video
+  pub fn is_video(&self) -> bool {
+    matches!(
+      self,
+      MessageContent::VideoUrl { .. } | MessageContent::VideoData { .. }
     )
   }
 
@@ -164,6 +279,17 @@ impl MultimodalMessage {
   /// Check if message contains images
   pub fn has_images(&self) -> bool {
     self.content.iter().any(|c| c.is_image())
+  }
+
+  /// Check if message contains a PDF/document (Anthropic only — see
+  /// [`MessageContent`] docs)
+  pub fn has_document(&self) -> bool {
+    self.content.iter().any(|c| c.is_document())
+  }
+
+  /// Check if message contains a video (Google only — see [`MessageContent`] docs)
+  pub fn has_video(&self) -> bool {
+    self.content.iter().any(|c| c.is_video())
   }
 
   /// Get all text content concatenated
@@ -222,6 +348,36 @@ impl MultimodalMessage {
           "image_url": image_url
         })
       }
+      MessageContent::DocumentUrl { document_url } => serde_json::json!({
+        "type": "document_url",
+        "document_url": document_url
+      }),
+      MessageContent::DocumentData { document_data } => {
+        let document_url = DocumentUrl {
+          url: format!(
+            "data:{};base64,{}",
+            document_data.media_type, document_data.data
+          ),
+        };
+        serde_json::json!({
+          "type": "document_url",
+          "document_url": document_url
+        })
+      }
+      MessageContent::VideoUrl { video_url } => serde_json::json!({
+        "type": "video_url",
+        "video_url": video_url
+      }),
+      MessageContent::VideoData { video_data } => {
+        let video_url = VideoUrl {
+          url: format!("data:{};base64,{}", video_data.media_type, video_data.data),
+          media_type: None,
+        };
+        serde_json::json!({
+          "type": "video_url",
+          "video_url": video_url
+        })
+      }
     }
   }
 
@@ -238,6 +394,10 @@ impl MultimodalMessage {
           MessageContent::Text { text } => text.clone(),
           MessageContent::ImageUrl { .. } => "[Image from URL]".to_string(),
           MessageContent::ImageData { .. } => "[Image Data]".to_string(),
+          MessageContent::DocumentUrl { .. } => "[Document from URL]".to_string(),
+          MessageContent::DocumentData { .. } => "[Document Data]".to_string(),
+          MessageContent::VideoUrl { .. } => "[Video from URL]".to_string(),
+          MessageContent::VideoData { .. } => "[Video Data]".to_string(),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -291,6 +451,43 @@ impl MultimodalMessageBuilder {
     self.content.push(MessageContent::image_data_with_detail(
       data, media_type, detail,
     ));
+    self
+  }
+
+  /// Add PDF/document from a URL (Anthropic only — see [`MessageContent`] docs)
+  pub fn add_document_url<S: Into<String>>(mut self, url: S) -> Self {
+    self.content.push(MessageContent::document_url(url));
+    self
+  }
+
+  /// Add base64 PDF/document data (Anthropic only)
+  pub fn add_document_data<S: Into<String>>(mut self, data: S, media_type: S) -> Self {
+    self
+      .content
+      .push(MessageContent::document_data(data, media_type));
+    self
+  }
+
+  /// Add video from a URL, including YouTube links (Google only — see
+  /// [`MessageContent`] docs)
+  pub fn add_video_url<S: Into<String>>(mut self, url: S) -> Self {
+    self.content.push(MessageContent::video_url(url));
+    self
+  }
+
+  /// Add video from a URL with an explicit MIME-type hint (Google only)
+  pub fn add_video_url_with_media_type<S: Into<String>>(mut self, url: S, media_type: S) -> Self {
+    self
+      .content
+      .push(MessageContent::video_url_with_media_type(url, media_type));
+    self
+  }
+
+  /// Add base64 video data (Google only)
+  pub fn add_video_data<S: Into<String>>(mut self, data: S, media_type: S) -> Self {
+    self
+      .content
+      .push(MessageContent::video_data(data, media_type));
     self
   }
 
@@ -447,5 +644,107 @@ mod tests {
     let json = msg.to_openai_format();
     let parts = json["content"].as_array().unwrap();
     assert!(parts[0]["image_url"].get("detail").is_none());
+  }
+
+  #[test]
+  fn has_document_and_has_video_reflect_content() {
+    let text_only = MultimodalMessage::text("user", "hi");
+    assert!(!text_only.has_document());
+    assert!(!text_only.has_video());
+
+    let with_document = MultimodalMessage::user()
+      .add_document_url("https://example.com/report.pdf")
+      .build();
+    assert!(with_document.has_document());
+    assert!(!with_document.has_video());
+    assert!(!with_document.has_images());
+
+    let with_video = MultimodalMessage::user()
+      .add_video_url("https://example.com/clip.mp4")
+      .build();
+    assert!(with_video.has_video());
+    assert!(!with_video.has_document());
+  }
+
+  #[test]
+  fn to_openai_format_document_url_round_trips() {
+    let msg = MultimodalMessage::user()
+      .add_document_url("https://example.com/report.pdf")
+      .build();
+
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "document_url");
+    assert_eq!(
+      parts[0]["document_url"]["url"],
+      "https://example.com/report.pdf"
+    );
+  }
+
+  /// Base64 documents collapse into the same `document_url` kind as remote
+  /// URLs, with the payload embedded as a `data:` URI — mirroring how
+  /// `ImageData` collapses into `image_url`.
+  #[test]
+  fn to_openai_format_encodes_document_data_as_data_uri_document_url() {
+    let msg = MultimodalMessage::user()
+      .add_document_data("aGVsbG8=", "application/pdf")
+      .build();
+
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "document_url");
+    assert_eq!(
+      parts[0]["document_url"]["url"],
+      "data:application/pdf;base64,aGVsbG8="
+    );
+    assert!(parts[0].get("document_data").is_none());
+  }
+
+  #[test]
+  fn to_openai_format_video_url_carries_optional_media_type() {
+    let msg = MultimodalMessage::user()
+      .add_video_url("https://example.com/clip.mp4")
+      .build();
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "video_url");
+    assert_eq!(parts[0]["video_url"]["url"], "https://example.com/clip.mp4");
+    assert!(parts[0]["video_url"].get("media_type").is_none());
+
+    let msg = MultimodalMessage::user()
+      .add_video_url_with_media_type("https://example.com/clip.webm", "video/webm")
+      .build();
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts[0]["video_url"]["media_type"], "video/webm");
+  }
+
+  /// Base64 video collapses into the same `video_url` kind as remote URLs.
+  #[test]
+  fn to_openai_format_encodes_video_data_as_data_uri_video_url() {
+    let msg = MultimodalMessage::user()
+      .add_video_data("AAAA", "video/mp4")
+      .build();
+
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "video_url");
+    assert_eq!(parts[0]["video_url"]["url"], "data:video/mp4;base64,AAAA");
+    assert!(parts[0].get("video_data").is_none());
+  }
+
+  #[test]
+  fn to_text_format_placeholders_cover_all_variants() {
+    let msg = MultimodalMessage::user()
+      .add_text("hi")
+      .add_image_url("https://example.com/a.jpg")
+      .add_document_url("https://example.com/a.pdf")
+      .add_video_url("https://example.com/a.mp4")
+      .build();
+    let text = msg.to_text_format();
+    assert!(text.contains("hi"));
+    assert!(text.contains("[Image from URL]"));
+    assert!(text.contains("[Document from URL]"));
+    assert!(text.contains("[Video from URL]"));
   }
 }

@@ -190,12 +190,18 @@ impl GoogleProvider {
 /// Convert an OpenAI-shaped `content` field (string, or an array of typed
 /// parts) into a Gemini `parts` array.
 ///
-/// Supported part types: `text` and `image_url`. An `image_url` value can be
-/// either a string or an object `{ "url": "..." }`. Data URLs of the form
+/// Supported part types: `text`, `image_url`, and `video_url` (P-LLM2.4
+/// follow-up — Gemini's `generateContent` accepts video the same way it
+/// accepts images: `inline_data` for base64, `file_data` for a remote
+/// reference, including YouTube links passed directly without the Files
+/// API). An `image_url` value can be either a string or an object
+/// `{ "url": "..." }`; a `video_url` value is always an object
+/// `{ "url": "...", "media_type": "..." }` (`media_type` optional — see
+/// [`crate::multimodal::VideoUrl`]). Data URLs of the form
 /// `data:<mime>;base64,<payload>` are decoded into Gemini's `inline_data`
-/// shape; remote `http(s)` URLs are passed through as `file_data` references.
-/// Unknown part shapes are dropped — multimodal flows should not crash on a
-/// single unrecognised part.
+/// shape; remote `http(s)` URLs are passed through as `file_data`
+/// references. Unknown part shapes are dropped — multimodal flows should
+/// not crash on a single unrecognised part.
 pub(crate) fn openai_content_to_gemini_parts(content: &Value) -> Vec<Value> {
   if let Some(text) = content.as_str() {
     return vec![json!({"text": text})];
@@ -248,10 +254,75 @@ pub(crate) fn openai_content_to_gemini_parts(content: &Value) -> Vec<Value> {
           }));
         }
       }
+      // P-LLM2.4 follow-up: video input. `MultimodalMessage::
+      // to_openai_format` collapses `VideoData` (base64) into the same
+      // `video_url` kind with a `data:` URI, same as image_url/image_data.
+      "video_url" => {
+        let video_url_obj = obj.get("video_url").and_then(Value::as_object);
+        let url = video_url_obj
+          .and_then(|m| m.get("url"))
+          .and_then(Value::as_str)
+          .unwrap_or("");
+        if url.is_empty() {
+          continue;
+        }
+        let media_type_hint = video_url_obj
+          .and_then(|m| m.get("media_type"))
+          .and_then(Value::as_str);
+        if let Some((mime_type, data)) = super::parse_data_url(url) {
+          parts.push(json!({
+            "inline_data": {
+              "mime_type": mime_type,
+              "data": data,
+            }
+          }));
+        } else if is_youtube_url(url) && media_type_hint.is_none() {
+          // YouTube links are passed via `file_data` with no `mime_type` —
+          // per the Gemini video-understanding docs, Gemini resolves the
+          // format itself; sending a guessed `mime_type` alongside a
+          // YouTube `file_uri` is not part of the documented shape.
+          parts.push(json!({
+            "file_data": { "file_uri": url }
+          }));
+        } else {
+          // Any other remote reference (a Files API `file_uri`, or a plain
+          // external URL) — Gemini's `file_data` requires `mime_type`
+          // alongside `file_uri`. Callers should supply an explicit
+          // `media_type` (`VideoUrl::media_type` /
+          // `.add_video_url_with_media_type()`) since it can't be inferred
+          // from the URL; `video/mp4` is used as a last-resort default,
+          // matching this file's existing `image/jpeg` fallback for
+          // remote images above.
+          let mime_type = media_type_hint.unwrap_or("video/mp4");
+          parts.push(json!({
+            "file_data": {
+              "mime_type": mime_type,
+              "file_uri": url,
+            }
+          }));
+        }
+      }
       _ => {}
     }
   }
   parts
+}
+
+/// Whether `url` is a YouTube video link (`youtube.com/watch...` or
+/// `youtu.be/...`) — Gemini accepts these directly via `file_data` without
+/// requiring the Files API, and without a `mime_type` field.
+fn is_youtube_url(url: &str) -> bool {
+  let Some(rest) = url
+    .strip_prefix("https://")
+    .or_else(|| url.strip_prefix("http://"))
+  else {
+    return false;
+  };
+  let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+  matches!(
+    host,
+    "youtube.com" | "www.youtube.com" | "m.youtube.com" | "youtu.be"
+  )
 }
 
 /// Encode a `ToolSpec` as a Gemini `functionDeclaration` entry.
@@ -1086,6 +1157,94 @@ mod tests {
     assert_eq!(parts[0], json!({"text": "ok"}));
   }
 
+  /// P-LLM2.4 follow-up: base64 video routes to `inline_data`, same as images.
+  #[test]
+  fn openai_content_to_gemini_parts_handles_base64_video_data_url() {
+    let content = json!([
+      {
+        "type": "video_url",
+        "video_url": {"url": "data:video/mp4;base64,AAAA"}
+      }
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(
+      parts[0],
+      json!({
+        "inline_data": {
+          "mime_type": "video/mp4",
+          "data": "AAAA",
+        }
+      })
+    );
+  }
+
+  /// A YouTube `file_uri` omits `mime_type` entirely, matching the Gemini
+  /// video-understanding docs' documented shape for YouTube links.
+  #[test]
+  fn openai_content_to_gemini_parts_youtube_url_omits_mime_type() {
+    let content = json!([
+      {
+        "type": "video_url",
+        "video_url": {"url": "https://www.youtube.com/watch?v=9hE5-98ZeCg"}
+      }
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(
+      parts[0],
+      json!({
+        "file_data": { "file_uri": "https://www.youtube.com/watch?v=9hE5-98ZeCg" }
+      })
+    );
+  }
+
+  /// A non-YouTube remote reference (e.g. a Files API URI) requires
+  /// `mime_type` alongside `file_uri`; an explicit `media_type` hint is
+  /// honored when supplied.
+  #[test]
+  fn openai_content_to_gemini_parts_remote_video_url_uses_media_type_hint() {
+    let content = json!([
+      {
+        "type": "video_url",
+        "video_url": {
+          "url": "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+          "media_type": "video/webm",
+        }
+      }
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(
+      parts[0],
+      json!({
+        "file_data": {
+          "mime_type": "video/webm",
+          "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+        }
+      })
+    );
+  }
+
+  /// Without a `media_type` hint, a non-YouTube remote video URL falls back
+  /// to `video/mp4` rather than being dropped.
+  #[test]
+  fn openai_content_to_gemini_parts_remote_video_url_defaults_mime_type() {
+    let content = json!([
+      {
+        "type": "video_url",
+        "video_url": {"url": "https://example.com/clip.mov"}
+      }
+    ]);
+    let parts = openai_content_to_gemini_parts(&content);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["file_data"]["mime_type"], "video/mp4");
+    assert_eq!(
+      parts[0]["file_data"]["file_uri"],
+      "https://example.com/clip.mov"
+    );
+  }
+
   #[test]
   fn build_request_body_routes_multimodal_user_content_to_inline_data() {
     let provider = GoogleProvider::new("test-key", None).unwrap();
@@ -1115,5 +1274,54 @@ mod tests {
     assert_eq!(parts[0]["text"], "describe");
     assert_eq!(parts[1]["inline_data"]["mime_type"], "image/png");
     assert_eq!(parts[1]["inline_data"]["data"], "AAAA");
+  }
+
+  /// P-LLM2.4 follow-up: exercises the real public-API path — a
+  /// `MultimodalMessage` built via `.add_video_url()` — end to end through
+  /// `build_request_body`, not just the lower-level content converter.
+  #[test]
+  fn build_request_body_routes_multimodal_video_to_file_data() {
+    use crate::multimodal::MultimodalMessage;
+
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    let message = MultimodalMessage::user()
+      .add_text("summarize this video")
+      .add_video_url("https://www.youtube.com/watch?v=9hE5-98ZeCg")
+      .build()
+      .to_openai_format();
+
+    let request = ProviderRequest {
+      model: "gemini-1.5-pro".to_string(),
+      messages: vec![message],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let body = provider.build_request_body(&request);
+    let parts = body["contents"][0]["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["text"], "summarize this video");
+    assert_eq!(
+      parts[1]["file_data"]["file_uri"],
+      "https://www.youtube.com/watch?v=9hE5-98ZeCg"
+    );
+    assert!(parts[1]["file_data"].get("mime_type").is_none());
+  }
+
+  #[test]
+  fn is_youtube_url_recognizes_standard_and_short_forms() {
+    assert!(is_youtube_url("https://www.youtube.com/watch?v=abc123"));
+    assert!(is_youtube_url("https://youtube.com/watch?v=abc123"));
+    assert!(is_youtube_url("https://m.youtube.com/watch?v=abc123"));
+    assert!(is_youtube_url("https://youtu.be/abc123"));
+    assert!(!is_youtube_url("https://example.com/watch?v=abc123"));
+    assert!(!is_youtube_url(
+      "https://generativelanguage.googleapis.com/v1beta/files/abc"
+    ));
+    assert!(!is_youtube_url("not a url"));
   }
 }

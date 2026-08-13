@@ -2,7 +2,7 @@ models:
   claude-3-5-haiku-20241022:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -18,7 +18,7 @@ models:
   claude-3-5-sonnet:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: claude-3-5-sonnet-20241022
     base_url: null
     temperature: 0.6
@@ -34,7 +34,7 @@ models:
   claude-3-5-sonnet-20240620:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -50,7 +50,7 @@ models:
   claude-3-5-sonnet-20241022:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -66,7 +66,7 @@ models:
   claude-3-7-sonnet-20250219:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -84,7 +84,7 @@ models:
   claude-3-haiku:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: claude-3-haiku-20240307
     base_url: null
     temperature: 0.3
@@ -100,7 +100,7 @@ models:
   claude-3-haiku-20240307:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -116,7 +116,7 @@ models:
   claude-3-opus-20240229:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -132,7 +132,7 @@ models:
   claude-fable-5:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -148,7 +148,7 @@ models:
   claude-haiku-4-5-20251001:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -181,7 +181,7 @@ models:
   claude-opus-5:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -197,7 +197,7 @@ models:
   claude-sonnet-4-20250514:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
@@ -215,7 +215,7 @@ models:
   claude-sonnet-5:
     vendor: anthropic
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, document]
     model_id: null
     base_url: null
     temperature: 0.6
