@@ -51,16 +51,22 @@
 //! - `client` - Production-ready MCP client implementation
 //! - `error` - Error types with context tracking
 //! - `protocol` - JSON-RPC and MCP protocol types
-//! - `transport` - Transport layer (stdio; HTTP transport types are reserved)
+//! - `transport` - Transport layer: `StdioTransport` (Legacy era,
+//!   `2024-11-05`) and `StreamableHttpTransport` (Modern era,
+//!   `2026-07-28`, W5.8-3)
 //! - `server` - MCP server implementation. **Beta** (P10.5.2): the
 //!   closed method set + wire shapes are pinned by fixture tests in
 //!   `agentflow-mcp/tests/server_contracts.rs`. See
 //!   `docs/STABILITY.md` for the full Beta promise.
+//! - `server_streamable_http` - Modern-era (`2026-07-28`) Streamable
+//!   HTTP server endpoint (W5.8-7). **Experimental** — see
+//!   `docs/STABILITY.md`.
 
 pub mod client;
 pub mod error;
 pub mod protocol;
 pub mod server;
+pub mod server_streamable_http;
 pub mod tools;
 pub mod transport;
 

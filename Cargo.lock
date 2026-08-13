@@ -353,6 +353,7 @@ dependencies = [
  "agentflow-tracing",
  "anyhow",
  "async-trait",
+ "axum",
  "futures",
  "jsonschema",
  "proptest",
