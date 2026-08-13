@@ -85,11 +85,12 @@ fn explicit_effort_string_maps_to_token_budget() {
 #[test]
 fn output_only_thinking_kind_does_not_accept_input_serialisation() {
   assert!(!ThinkingKind::OutputOnly.accepts_input());
-  // The other three kinds DO accept input — provider adapters serialise
+  // Every other kind DOES accept input — provider adapters serialise
   // them onto the wire.
   assert!(ThinkingKind::Effort.accepts_input());
   assert!(ThinkingKind::BudgetTokens.accepts_input());
   assert!(ThinkingKind::ThinkingConfigBudget.accepts_input());
+  assert!(ThinkingKind::DeepSeekReasoningEffort.accepts_input());
 }
 
 /// Building a `ProviderRequest` with `thinking: Some(...)` works because

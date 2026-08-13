@@ -1,4 +1,11 @@
 models:
+  # 2026-08-13: per api-docs.deepseek.com's pricing/model page, deepseek-chat
+  # and deepseek-reasoner no longer appear in DeepSeek's current model
+  # catalog — deepseek-chat's deprecation (announced for 2026-07-24, per
+  # provider_consistency_live.rs's DeepSeek live-test comments) has passed as
+  # of this writing. Kept in the registry (not deleted) so existing configs
+  # referencing them by name don't silently break, but new integrations
+  # should target deepseek-v4-flash / deepseek-v4-pro below.
   deepseek-chat:
     vendor: deepseek
     type: chat
@@ -48,6 +55,13 @@ models:
     supports_tools: true
     native_tool_calling: true
     supports_multimodal: false
+    # V4-Flash-0731. Both current DeepSeek models support thinking mode via
+    # the nested `thinking: {type, reasoning_effort}` request block (see
+    # `ThinkingKind::DeepSeekReasoningEffort`) — unlike legacy
+    # deepseek-reasoner above, this is a real caller-facing input knob, not
+    # output-only.
+    supports_thinking: true
+    thinking_kind: deep_seek_reasoning_effort
     response_format: null
   deepseek-v4-pro:
     vendor: deepseek
@@ -64,4 +78,7 @@ models:
     supports_tools: true
     native_tool_calling: true
     supports_multimodal: false
+    # V4-Pro-0813. See deepseek-v4-flash's comment above.
+    supports_thinking: true
+    thinking_kind: deep_seek_reasoning_effort
     response_format: null

@@ -9,10 +9,16 @@
 //!   "minimal" | "low" | "medium" | "high"` on the request body.
 //! - **Google Gemini 2.5+**: `generationConfig.thinkingConfig.thinkingBudget:
 //!   N` (a token budget in the model's reasoning space).
-//! - **DeepSeek-R1** (OpenAI-compat): no input knob; the model returns
-//!   `reasoning_content` alongside `content`. AgentFlow surfaces that via
-//!   [`crate::providers::ProviderResponse::thinking`] /
+//! - **DeepSeek-R1 (legacy `deepseek-reasoner`)**: no input knob; the model
+//!   always returns `reasoning_content` alongside `content`. AgentFlow
+//!   surfaces that via [`crate::providers::ProviderResponse::thinking`] /
 //!   [`crate::LLMResponse::thinking`].
+//! - **DeepSeek V4** (`deepseek-v4-flash`/`deepseek-v4-pro`, OpenAI-compat):
+//!   unlike real OpenAI, thinking is a *nested* object —
+//!   `thinking: { type: "enabled" | "disabled", reasoning_effort: "low" |
+//!   "high" | "max" }` — and defaults to enabled, so turning it off requires
+//!   actively sending `type: "disabled"` rather than omitting the field.
+//!   `reasoning_content` is still surfaced the same way as R1's.
 //!
 //! The high-level intent (`Auto` / `Low` / `Medium` / `High` / `Disabled`)
 //! is mapped per provider into the native wire shape. When a caller needs
@@ -151,18 +157,27 @@ pub enum ThinkingKind {
   BudgetTokens,
   /// Google Gemini 2.5+: emits `generationConfig.thinkingConfig.thinkingBudget`.
   ThinkingConfigBudget,
-  /// DeepSeek-R1 and similar: no input knob; the model always returns
-  /// `reasoning_content` and we surface it on the response. `.thinking()`
-  /// is accepted (and silently produces no wire-level config) so callers
-  /// can express "I want the reasoning text" portably.
+  /// Legacy DeepSeek-R1 (`deepseek-reasoner`) and similar: no input knob;
+  /// the model always returns `reasoning_content` and we surface it on the
+  /// response. `.thinking()` is accepted (and silently produces no
+  /// wire-level config) so callers can express "I want the reasoning text"
+  /// portably.
   OutputOnly,
+  /// DeepSeek V4 (`deepseek-v4-flash`/`deepseek-v4-pro`): emits a nested
+  /// `thinking: { type, reasoning_effort }` block — see
+  /// `providers::openai::thinking_config_to_deepseek_value`. Distinct from
+  /// [`Self::Effort`] (OpenAI's flat `reasoning_effort` string) despite
+  /// `deepseek-v4-*` otherwise routing through the same "OpenAI-compatible"
+  /// provider, and distinct from [`Self::OutputOnly`] since — unlike legacy
+  /// R1 — V4 *does* accept caller-supplied input configuration.
+  DeepSeekReasoningEffort,
 }
 
 impl ThinkingKind {
   /// Whether this kind accepts caller-supplied input configuration. Used
   /// by the response-side paths to know whether to silently skip wire-level
-  /// serialisation (`OutputOnly` returns `false` here, the other three
-  /// return `true`).
+  /// serialisation (`OutputOnly` returns `false` here, every other variant
+  /// returns `true`).
   pub fn accepts_input(&self) -> bool {
     !matches!(self, ThinkingKind::OutputOnly)
   }
@@ -244,5 +259,6 @@ mod tests {
     assert!(ThinkingKind::Effort.accepts_input());
     assert!(ThinkingKind::BudgetTokens.accepts_input());
     assert!(ThinkingKind::ThinkingConfigBudget.accepts_input());
+    assert!(ThinkingKind::DeepSeekReasoningEffort.accepts_input());
   }
 }
