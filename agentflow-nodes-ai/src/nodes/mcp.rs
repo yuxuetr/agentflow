@@ -154,7 +154,7 @@ impl AsyncNode for MCPNode {
     tracing::debug!("connected to MCP server");
 
     // 4. Call the tool
-    tracing::debug!(tool = %tool_name, params = %tool_params, "calling MCP tool");
+    tracing::debug!(tool = %tool_name, "calling MCP tool");
 
     let result = client
       .call_tool(&tool_name, tool_params)
