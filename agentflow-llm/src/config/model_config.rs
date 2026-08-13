@@ -388,9 +388,24 @@ pub struct ProviderConfig {
   pub rate_limit: Option<RateLimitConfig>,
 }
 
+/// P-LLM2.7: this used to be parsed, validated (`requests_per_minute != 0`
+/// only, in `config::validation`), and then discarded at
+/// `ModelRegistry::initialize_providers` — nothing consumed it anywhere in
+/// the crate. `requests_per_minute` is now enforced: `ModelRegistry`
+/// builds one `governor` token bucket per vendor from it, and
+/// `LLMClient::execute`/`execute_full`/`execute_streaming` wait on it
+/// before dispatching (see `ModelRegistry::get_rate_limiter`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
   pub requests_per_minute: u32,
+  /// **Not enforced.** Throttling by token volume (rather than request
+  /// count) needs a pre-call token estimate, which is only solid for the
+  /// OpenAI-BPE-family vendors today (`tokenizer.rs`) — Anthropic/Google
+  /// fall back to a heuristic counter there, so enforcing this uniformly
+  /// across all 9 vendors would silently under- or over-throttle some of
+  /// them. Parsed and kept for forward compatibility (a future TPM
+  /// limiter can read it once a good enough per-vendor token estimate
+  /// exists) rather than removed.
   pub tokens_per_minute: Option<u32>,
 }
 

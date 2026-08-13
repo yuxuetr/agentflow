@@ -43,6 +43,20 @@ pub fn prompt_fingerprint(text: &str) -> String {
 /// pre-V1.5 behavior. Non-retryable errors (bad request, auth,
 /// unsupported feature, ...) always propagate on the first attempt;
 /// see [`LLMError::is_retryable`].
+///
+/// P-LLM2.7: the computed exponential delay is equal-jittered (half
+/// fixed, half randomized) so concurrent callers retrying the same
+/// transient failure don't all wake up and re-hit the provider at the
+/// exact same instant — a thundering herd the pre-fix pure-exponential
+/// formula did nothing to prevent. When the error carries a server-
+/// supplied `Retry-After` value ([`LLMError::retry_after_ms`], set by
+/// [`crate::providers::chat_http_error`]), that value is honored
+/// directly instead of the computed delay — the server knows its own
+/// recovery time better than a guess does — though jitter is still
+/// **not** applied on top of it, since a `Retry-After` value already
+/// represents a concrete floor and the retry loop only has one caller
+/// per invocation anyway (jitter's benefit is decorrelating *many*
+/// concurrent callers, which the guessed path can't otherwise achieve).
 async fn retry_transient<F, Fut, T>(defaults: &GlobalDefaults, mut call: F) -> Result<T>
 where
   F: FnMut() -> Fut,
@@ -55,7 +69,10 @@ where
     match call().await {
       Ok(value) => return Ok(value),
       Err(err) if attempt < max_retries && err.is_retryable() => {
-        let delay_ms = base_delay_ms.saturating_mul(1u64 << attempt.min(20));
+        let computed_delay_ms = base_delay_ms.saturating_mul(1u64 << attempt.min(20));
+        let delay_ms = err
+          .retry_after_ms()
+          .unwrap_or_else(|| jittered_delay_ms(computed_delay_ms));
         #[cfg(feature = "logging")]
         warn!(
           "LLM call failed with a transient error (attempt {}/{}), retrying in {}ms: {}",
@@ -70,6 +87,14 @@ where
       Err(err) => return Err(err),
     }
   }
+}
+
+/// Equal-jitter backoff: half of `computed_delay_ms` is fixed, half is
+/// randomized uniformly — see `retry_transient`'s doc comment for why.
+fn jittered_delay_ms(computed_delay_ms: u64) -> u64 {
+  use rand::Rng;
+  let half = computed_delay_ms / 2;
+  half + rand::thread_rng().gen_range(0..=half)
 }
 
 /// Response format options for model output
@@ -185,6 +210,12 @@ impl LLMClient {
       self.tools.is_some(), // uses tools
     )?;
     let provider = registry.get_provider(&model_config.vendor)?;
+    // P-LLM2.7: wait for this vendor's token bucket before dispatching —
+    // `None` means no `rate_limit` configured for this vendor (no
+    // enforcement, matching pre-fix behavior).
+    if let Some(limiter) = registry.get_rate_limiter(&model_config.vendor) {
+      limiter.until_ready().await;
+    }
     let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, false)?;
@@ -354,6 +385,12 @@ impl LLMClient {
       self.tools.is_some(),
     )?;
     let provider = registry.get_provider(&model_config.vendor)?;
+    // P-LLM2.7: wait for this vendor's token bucket before dispatching —
+    // `None` means no `rate_limit` configured for this vendor (no
+    // enforcement, matching pre-fix behavior).
+    if let Some(limiter) = registry.get_rate_limiter(&model_config.vendor) {
+      limiter.until_ready().await;
+    }
     let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, false)?;
@@ -441,6 +478,12 @@ impl LLMClient {
     )?;
 
     let provider = registry.get_provider(&model_config.vendor)?;
+    // P-LLM2.7: wait for this vendor's token bucket before dispatching —
+    // `None` means no `rate_limit` configured for this vendor (no
+    // enforcement, matching pre-fix behavior).
+    if let Some(limiter) = registry.get_rate_limiter(&model_config.vendor) {
+      limiter.until_ready().await;
+    }
     let defaults = registry.get_defaults()?;
 
     let request = self.build_request(&model_config, true)?;
@@ -1022,5 +1065,67 @@ mod retry_transient_tests {
 
     assert!(matches!(result, Err(LLMError::RateLimitExceeded { .. })));
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
+  }
+
+  /// P-LLM2.7: equal jitter must stay within `[computed/2, computed]` —
+  /// never below half (that would defeat exponential backoff's purpose)
+  /// and never above the computed delay (that would slow retries down
+  /// beyond what was configured). Run many iterations since it's
+  /// randomized.
+  #[test]
+  fn jittered_delay_stays_within_equal_jitter_bounds() {
+    for computed in [0u64, 1, 2, 1000, 60_000] {
+      for _ in 0..200 {
+        let delay = jittered_delay_ms(computed);
+        assert!(
+          delay >= computed / 2,
+          "delay {delay} below half of computed {computed}"
+        );
+        assert!(delay <= computed, "delay {delay} above computed {computed}");
+      }
+    }
+  }
+
+  /// P-LLM2.7: a `RateLimitedWithRetryAfter` error's delay must be
+  /// honored exactly, not the computed exponential+jitter delay — proven
+  /// by pausing the clock and asserting the retry only becomes observable
+  /// once *exactly* `retry_after_ms` has elapsed, not a moment before.
+  #[tokio::test(start_paused = true)]
+  async fn retry_after_ms_is_honored_exactly_instead_of_computed_backoff() {
+    let attempts = AtomicU32::new(0);
+    // A large retry_delay_ms so the computed exponential delay (1 hour on
+    // attempt 0) would be trivially distinguishable from the much shorter
+    // retry_after_ms this test expects to actually be honored.
+    let defaults = defaults_with(1, 3_600_000);
+
+    let call = retry_transient(&defaults, || {
+      let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        if attempt == 0 {
+          Err(LLMError::RateLimitedWithRetryAfter {
+            status_code: 429,
+            message: "slow down".to_string(),
+            retry_after_ms: 5_000,
+          })
+        } else {
+          Ok(())
+        }
+      }
+    });
+    tokio::pin!(call);
+
+    // Not enough time has passed yet for the honored retry_after_ms —
+    // the future must still be pending.
+    tokio::time::advance(std::time::Duration::from_millis(4_999)).await;
+    assert!(
+      matches!(futures::poll!(&mut call), std::task::Poll::Pending),
+      "must still be waiting just before retry_after_ms elapses"
+    );
+
+    // The remaining 1ms crosses the retry_after_ms threshold.
+    tokio::time::advance(std::time::Duration::from_millis(1)).await;
+    let result = call.await;
+    assert!(result.is_ok());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
   }
 }

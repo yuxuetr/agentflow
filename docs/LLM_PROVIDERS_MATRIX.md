@@ -179,22 +179,48 @@ Status vocabulary:
 
 ## Rate-limit handling
 
-AgentFlow does **not** auto-retry rate-limited requests by default.
-Provider adapters preserve the upstream `Retry-After` header (when
-present) in `LLMError::HttpError::message` so downstream consumers
-(workflow retry middleware, the `agentflow-core` `retry_executor`)
-can react with exponential backoff or queue back-pressure.
+Two independent mechanisms, corrected here as of P-LLM2.7 (this section
+previously described neither accurately — it claimed no auto-retry exists
+at all, missing the V1.5 `retry_transient` mechanism entirely, and claimed
+`Retry-After` was preserved when the header was never read anywhere):
 
-| Layer | Behavior |
-| --- | --- |
-| Provider adapter (per `LLMProvider`) | Maps `HTTP 429` to `LLMError::HttpError { status_code: 429, message }`. Adapter never sleeps. |
-| `LLMClient` (high-level helper) | Reads `RetryPolicy` from the registry's model config. When set, drives backoff via `agentflow-core::retry_executor`. Default is no retry. |
-| Workflow / agent retry executor | Applies `retry::ErrorPattern::Status(429)` if the workflow config declares retries. ReActAgent has its own `max_iterations` ceiling unrelated to rate-limit retry. |
-| Operator-visible behavior | A 429 response surfaces as a `ToolError::PolicyDenied`-style `LLMError` in the agent step trace; the operator sees the upstream message verbatim. |
+1. **Proactive per-vendor rate limiting** (`ModelRegistry`, P-LLM2.7).
+   Each vendor's `ProviderConfig.rate_limit.requests_per_minute` (set for
+   all 9 vendors in `templates/default_models.yml`) now builds one
+   `governor` token bucket, keyed by vendor name. `LLMClient::execute`/
+   `execute_full`/`execute_streaming` call `.until_ready().await` on it
+   immediately before dispatching, so a caller that would exceed the
+   configured RPM waits rather than firing the request and eating a 429.
+   `tokens_per_minute` is parsed but **not** enforced — TPM throttling
+   needs a pre-call token estimate, which is only solid for the
+   OpenAI-BPE-family vendors (`tiktoken-rs`, see `tokenizer.rs`); left as
+   documented future work. Before P-LLM2.7 this whole field was
+   decorative — parsed, validated (`requests_per_minute != 0` only), then
+   discarded at `create_provider(vendor, api_key, base_url)`, which never
+   even accepted a rate-limit parameter.
+2. **Reactive retry on a 429/5xx that happens anyway** (`retry_transient`,
+   V1.5 + P-LLM2.7 jitter/`Retry-After`). Driven by the registry's
+   `defaults.max_retries` / `defaults.retry_delay_ms` (`0`/unset
+   `max_retries` disables retry entirely — the original pre-V1.5
+   behavior). The delay between attempts is chosen in this priority
+   order:
+   - a server-supplied `Retry-After` header, when the response had one
+     and it parsed (`LLMError::RateLimitedWithRetryAfter`, built by
+     `providers::chat_http_error` — only the chat `execute`/
+     `execute_streaming` methods that route through `retry_transient`
+     construct this; one-shot modality endpoints like TTS/ASR/image/video
+     never retry, so they keep using plain `HttpError` and don't parse
+     the header at all);
+   - otherwise, `base_delay_ms * 2^attempt`, equal-jittered (half fixed,
+     half randomized) so concurrent callers retrying the same transient
+     failure don't all wake up and re-hit the provider at the same
+     instant — pure exponential backoff with zero jitter did nothing to
+     prevent that before this fix.
 
-If a deployment needs aggressive 429 handling, set
-`max_retries` + an exponential `RetryPolicy` in the model YAML and the
-high-level helper will respect it.
+Only the delta-seconds form of `Retry-After` (RFC 7231 §7.1.3, e.g.
+`Retry-After: 30`) is parsed; the rarely-used HTTP-date form falls back
+to the computed exponential+jitter delay, same as when the header is
+absent entirely.
 
 ## Error mapping (verified contract)
 

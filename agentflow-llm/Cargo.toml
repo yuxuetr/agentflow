@@ -79,8 +79,23 @@ tiktoken-rs = "0.6"
 # bloating compile times and creating a false impression of a coupling
 # direction (llm → core) that doesn't actually exist.
 
+# P-LLM2.7: per-vendor RPM enforcement for the registry's `RateLimitConfig`
+# (previously parsed, validated, then discarded — a token bucket per
+# `ModelRegistry`-managed provider). Already a workspace dependency of
+# `agentflow-rag` (same `OpenAIEmbedding::rate_limiter` pattern this
+# mirrors), so this adds no new external dependency to the project's
+# trust surface.
+governor = "0.6"
+# P-LLM2.7: jitter for `retry_transient`'s exponential backoff, so
+# concurrent callers retrying the same transient failure don't all wake
+# up and re-hit the provider at the exact same instant.
+rand = "0.8"
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+# P-LLM2.7: `test-util` (paused/advanceable clock) for
+# `retry_after_ms_is_honored_exactly_instead_of_computed_backoff` — not
+# part of `full`, must be requested separately.
+tokio = { workspace = true, features = ["full", "test-util"] }
 mockito = "1.0"
 tracing-test = "0.2"
 env_logger = "0.10"

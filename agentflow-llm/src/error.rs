@@ -29,6 +29,25 @@ pub enum LLMError {
   #[error("HTTP request failed: {status_code} - {message}")]
   HttpError { status_code: u16, message: String },
 
+  /// P-LLM2.7: a 429/5xx response that carried a server-supplied
+  /// `Retry-After` header, successfully parsed. Distinct from
+  /// [`Self::HttpError`] so [`retry_transient`](crate::client::llm_client)
+  /// can honor the server's requested wait exactly (still jittered, as a
+  /// floor) instead of guessing via pure exponential backoff.
+  ///
+  /// Only the chat `execute`/`execute_streaming` methods that route
+  /// through `retry_transient` construct this (via
+  /// `providers::chat_http_error`) — one-shot modality endpoints
+  /// (TTS/ASR/image/video) that never retry keep constructing
+  /// `HttpError` directly, since a `Retry-After` value is meaningless
+  /// without a retry loop to consume it.
+  #[error("HTTP request failed: {status_code} - {message} (retry after {retry_after_ms}ms)")]
+  RateLimitedWithRetryAfter {
+    status_code: u16,
+    message: String,
+    retry_after_ms: u64,
+  },
+
   #[error("Request timeout after {timeout_ms}ms")]
   TimeoutError { timeout_ms: u64 },
 
@@ -99,11 +118,22 @@ impl LLMError {
     match self {
       LLMError::RateLimitExceeded { .. }
       | LLMError::ServiceUnavailable { .. }
-      | LLMError::TimeoutError { .. } => true,
+      | LLMError::TimeoutError { .. }
+      | LLMError::RateLimitedWithRetryAfter { .. } => true,
       LLMError::HttpError { status_code, .. } => {
         *status_code == 429 || (500..=599).contains(status_code)
       }
       _ => false,
+    }
+  }
+
+  /// P-LLM2.7: the server-supplied `Retry-After` delay, in milliseconds,
+  /// when this error carries one. `retry_transient` prefers this over its
+  /// own computed exponential+jitter delay when present.
+  pub fn retry_after_ms(&self) -> Option<u64> {
+    match self {
+      LLMError::RateLimitedWithRetryAfter { retry_after_ms, .. } => Some(*retry_after_ms),
+      _ => None,
     }
   }
 }

@@ -170,6 +170,47 @@ pub(crate) fn parse_data_url(url: &str) -> Option<(String, String)> {
   Some((mime, data.to_string()))
 }
 
+/// Build an [`LLMError`] from a non-2xx chat-completion HTTP response,
+/// honoring a server-supplied `Retry-After` header when present.
+///
+/// Only the delta-seconds form of `Retry-After` (RFC 7231 §7.1.3, e.g.
+/// `Retry-After: 30`) is parsed — every LLM vendor observed sends this
+/// form, not the HTTP-date alternative; an absent or unparseable header
+/// falls back to `LLMError::HttpError`, same as before this existed, so
+/// `retry_transient` computes its own exponential+jitter delay.
+///
+/// Used by the chat `execute`/`execute_streaming` methods that route
+/// through `retry_transient` (OpenAI, Anthropic, Google, Moonshot,
+/// StepFun, and — since they share `OpenAIProvider` — DashScope/GLM/
+/// DeepSeek/MiniMax too). One-shot modality endpoints (TTS/ASR/image/
+/// video) that never retry keep constructing `LLMError::HttpError`
+/// directly — a `Retry-After` value is meaningless without a retry loop
+/// to consume it.
+pub(crate) fn chat_http_error(
+  status_code: u16,
+  message: String,
+  headers: &reqwest::header::HeaderMap,
+) -> LLMError {
+  let is_retryable_status = status_code == 429 || (500..=599).contains(&status_code);
+  if is_retryable_status
+    && let Some(retry_after_ms) = headers
+      .get("retry-after")
+      .and_then(|v| v.to_str().ok())
+      .and_then(|s| s.trim().parse::<u64>().ok())
+      .map(|secs| secs.saturating_mul(1000))
+  {
+    return LLMError::RateLimitedWithRetryAfter {
+      status_code,
+      message,
+      retry_after_ms,
+    };
+  }
+  LLMError::HttpError {
+    status_code,
+    message,
+  }
+}
+
 /// Concatenate the textual portion of an OpenAI-shaped `content` value
 /// (a plain string, or an array of typed blocks). Used wherever a provider's
 /// native system-message field is text-only (Google's `systemInstruction`,
@@ -382,5 +423,98 @@ pub fn create_provider(
     _ => Err(LLMError::UnsupportedProvider {
       provider: provider_name.to_string(),
     }),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use reqwest::header::HeaderMap;
+
+  fn headers_with_retry_after(value: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after", value.parse().unwrap());
+    headers
+  }
+
+  /// P-LLM2.7: a 429 with a valid delta-seconds `Retry-After` must
+  /// produce `RateLimitedWithRetryAfter`, converted to milliseconds.
+  #[test]
+  fn chat_http_error_honors_retry_after_on_429() {
+    let headers = headers_with_retry_after("30");
+    let err = chat_http_error(429, "rate limited".to_string(), &headers);
+    match err {
+      LLMError::RateLimitedWithRetryAfter {
+        status_code,
+        retry_after_ms,
+        ..
+      } => {
+        assert_eq!(status_code, 429);
+        assert_eq!(retry_after_ms, 30_000);
+      }
+      other => panic!("expected RateLimitedWithRetryAfter, got {other:?}"),
+    }
+  }
+
+  /// Same, for a 503 — any retryable 5xx should honor the header, not
+  /// just 429.
+  #[test]
+  fn chat_http_error_honors_retry_after_on_503() {
+    let headers = headers_with_retry_after("5");
+    let err = chat_http_error(503, "unavailable".to_string(), &headers);
+    assert!(matches!(
+      err,
+      LLMError::RateLimitedWithRetryAfter {
+        retry_after_ms: 5_000,
+        ..
+      }
+    ));
+  }
+
+  /// A non-retryable status (e.g. 400) must stay a plain `HttpError` even
+  /// if a `Retry-After` header is somehow present — retrying a caller
+  /// mistake makes no sense regardless of what the header says.
+  #[test]
+  fn chat_http_error_ignores_retry_after_on_non_retryable_status() {
+    let headers = headers_with_retry_after("30");
+    let err = chat_http_error(400, "bad request".to_string(), &headers);
+    assert!(matches!(
+      err,
+      LLMError::HttpError {
+        status_code: 400,
+        ..
+      }
+    ));
+  }
+
+  /// No `Retry-After` header at all → plain `HttpError`, so
+  /// `retry_transient` falls back to its own computed exponential+jitter
+  /// delay, same as before this existed.
+  #[test]
+  fn chat_http_error_falls_back_to_http_error_when_header_absent() {
+    let err = chat_http_error(429, "rate limited".to_string(), &HeaderMap::new());
+    assert!(matches!(
+      err,
+      LLMError::HttpError {
+        status_code: 429,
+        ..
+      }
+    ));
+  }
+
+  /// An unparseable `Retry-After` value (e.g. the HTTP-date form this
+  /// function deliberately doesn't parse) must not panic — fall back to
+  /// `HttpError`, same as an absent header.
+  #[test]
+  fn chat_http_error_falls_back_when_retry_after_unparseable() {
+    let headers = headers_with_retry_after("Fri, 31 Dec 1999 23:59:59 GMT");
+    let err = chat_http_error(429, "rate limited".to_string(), &headers);
+    assert!(matches!(
+      err,
+      LLMError::HttpError {
+        status_code: 429,
+        ..
+      }
+    ));
   }
 }

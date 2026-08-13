@@ -3,8 +3,24 @@ use crate::{
   config::{GlobalDefaults, LLMConfig, LLMConfigSource, ModelConfig},
   providers::{LLMProvider, create_provider},
 };
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::InMemoryState, state::NotKeyed};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock, RwLock};
+
+/// Per-vendor request-rate limiter, keyed the same way [`ModelRegistry::providers`]
+/// is (by vendor name — see [`ModelRegistry::initialize_providers`]).
+///
+/// `pub(crate)`, not `pub` — an internal implementation detail consumed
+/// only by [`crate::client::llm_client`]; deliberately not part of this
+/// crate's public API surface so `governor`'s types don't leak into it.
+pub(crate) type VendorRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
+/// Fallback RPM used only if a vendor's configured `requests_per_minute`
+/// is somehow `0` despite [`crate::config::validation`] rejecting that at
+/// config-load time — defends `NonZeroU32::new` against a `None` it
+/// should never actually see, without a production `unwrap`/`expect`.
+const FALLBACK_REQUESTS_PER_MINUTE: u32 = 60;
 
 /// Global model registry that manages model configurations and provider instances
 pub struct ModelRegistry {
@@ -20,6 +36,16 @@ pub struct ModelRegistry {
   ///
   /// See P10.3.1: lenient init.
   missing_key_providers: Arc<RwLock<HashSet<String>>>,
+  /// P-LLM2.7: one token bucket per vendor, sized from that vendor's
+  /// `ProviderConfig.rate_limit.requests_per_minute`. Populated by
+  /// [`Self::initialize_providers`] alongside `providers`; absent for a
+  /// vendor with no `rate_limit` configured (no enforcement, matching
+  /// pre-fix behavior for that vendor). `tokens_per_minute` is parsed
+  /// but **not** enforced — TPM throttling needs a pre-call token
+  /// estimate, which is only solid for the OpenAI-BPE-family vendors
+  /// today (see `tokenizer.rs`); left as documented future work rather
+  /// than a half-correct implementation for the other vendors.
+  rate_limiters: Arc<RwLock<HashMap<String, Arc<VendorRateLimiter>>>>,
 }
 
 impl ModelRegistry {
@@ -29,6 +55,7 @@ impl ModelRegistry {
       config: Arc::new(RwLock::new(None)),
       providers: Arc::new(RwLock::new(HashMap::new())),
       missing_key_providers: Arc::new(RwLock::new(HashSet::new())),
+      rate_limiters: Arc::new(RwLock::new(HashMap::new())),
     }
   }
 
@@ -123,6 +150,20 @@ impl ModelRegistry {
         .map(|config| config.defaults.clone())
         .unwrap_or_default(),
     )
+  }
+
+  /// P-LLM2.7: the token bucket for `provider_name`, when its
+  /// `ProviderConfig.rate_limit` was set at load time. `None` means "no
+  /// enforcement" — either the vendor has no `rate_limit` configured, or
+  /// no configuration has been loaded yet — matching how
+  /// [`Self::get_defaults`] treats an unloaded config as "no retry"
+  /// rather than an error.
+  pub(crate) fn get_rate_limiter(&self, provider_name: &str) -> Option<Arc<VendorRateLimiter>> {
+    self
+      .rate_limiters
+      .read()
+      .ok()
+      .and_then(|guard| guard.get(provider_name).cloned())
   }
 
   /// Get a provider instance by name
@@ -292,6 +333,7 @@ impl ModelRegistry {
 
   async fn initialize_providers(&self, config: &LLMConfig) -> Result<()> {
     let mut providers = HashMap::new();
+    let mut rate_limiters: HashMap<String, Arc<VendorRateLimiter>> = HashMap::new();
     let mut unique_providers = HashSet::new();
     let mut missing_keys: HashSet<String> = HashSet::new();
 
@@ -317,12 +359,24 @@ impl ModelRegistry {
         Err(other) => return Err(other),
       };
 
-      let base_url = config
-        .get_provider(&provider_name)
-        .and_then(|p| p.base_url.clone());
+      let provider_config = config.get_provider(&provider_name);
+      let base_url = provider_config.and_then(|p| p.base_url.clone());
 
       let provider = create_provider(&provider_name, &api_key, base_url)?;
-      providers.insert(provider_name, Arc::from(provider));
+      providers.insert(provider_name.clone(), Arc::from(provider));
+
+      // P-LLM2.7: build a token bucket from this vendor's configured RPM
+      // — previously parsed into `ProviderConfig.rate_limit` and then
+      // discarded; nothing ever consumed it. `requests_per_minute == 0`
+      // is rejected by `config::validation` at load time, so the
+      // `unwrap_or` fallback here is a defensive backstop, not the
+      // expected path.
+      if let Some(rate_limit) = provider_config.and_then(|p| p.rate_limit.as_ref()) {
+        let rpm = NonZeroU32::new(rate_limit.requests_per_minute)
+          .unwrap_or(NonZeroU32::new(FALLBACK_REQUESTS_PER_MINUTE).unwrap_or(NonZeroU32::MIN));
+        let limiter = RateLimiter::direct(Quota::per_minute(rpm));
+        rate_limiters.insert(provider_name, Arc::new(limiter));
+      }
     }
 
     // Store providers
@@ -334,6 +388,18 @@ impl ModelRegistry {
           message: format!("Providers lock poisoned: {}", e),
         })?;
       *providers_guard = providers;
+    }
+
+    // Store rate limiters (P-LLM2.7).
+    {
+      let mut rate_limiters_guard =
+        self
+          .rate_limiters
+          .write()
+          .map_err(|e| LLMError::InternalError {
+            message: format!("Rate limiters lock poisoned: {}", e),
+          })?;
+      *rate_limiters_guard = rate_limiters;
     }
 
     // Track providers we skipped so lookup-path errors are accurate.
@@ -457,6 +523,65 @@ providers:
     // SAFETY: cleanup of the dedicated test env var after the test read.
     unsafe {
       env::remove_var("TEST_OPENAI_API_KEY");
+    }
+  }
+
+  /// P-LLM2.7: a vendor whose `ProviderConfig.rate_limit` is set gets a
+  /// real token bucket; a vendor with no `rate_limit` configured gets
+  /// none — `get_rate_limiter` returning `None` means "no enforcement",
+  /// not "error".
+  #[tokio::test]
+  async fn initialize_providers_builds_rate_limiter_only_for_configured_vendors() {
+    // Real vendor names are required — `create_provider` rejects
+    // anything it doesn't recognize. Dedicated per-test env var *names*
+    // (not vendor names) keep this isolated from other tests running in
+    // parallel in the same process.
+    unsafe {
+      env::set_var("TEST_RATELIMIT_OPENAI_KEY", "test-key");
+      env::set_var("TEST_RATELIMIT_ANTHROPIC_KEY", "test-key");
+    }
+
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+  claude:
+    vendor: anthropic
+
+providers:
+  openai:
+    api_key_env: "TEST_RATELIMIT_OPENAI_KEY"
+    rate_limit:
+      requests_per_minute: 42
+  anthropic:
+    api_key_env: "TEST_RATELIMIT_ANTHROPIC_KEY"
+"#;
+
+    let registry = ModelRegistry::new();
+    registry
+      .load_config_from_yaml(yaml)
+      .await
+      .expect("hermetic mock config must load");
+
+    assert!(
+      registry.get_rate_limiter("openai").is_some(),
+      "a vendor with rate_limit configured must get a token bucket"
+    );
+    assert!(
+      registry.get_rate_limiter("anthropic").is_none(),
+      "a vendor with no rate_limit configured must get no enforcement"
+    );
+    assert!(
+      registry
+        .get_rate_limiter("never-heard-of-this-vendor")
+        .is_none(),
+      "an unknown vendor must not panic, just report no enforcement"
+    );
+
+    // SAFETY: cleanup.
+    unsafe {
+      env::remove_var("TEST_RATELIMIT_OPENAI_KEY");
+      env::remove_var("TEST_RATELIMIT_ANTHROPIC_KEY");
     }
   }
 

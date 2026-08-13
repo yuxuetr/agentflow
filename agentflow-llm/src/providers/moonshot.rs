@@ -118,11 +118,9 @@ impl LLMProvider for MoonshotProvider {
 
     if !response.status().is_success() {
       let status_code = response.status().as_u16();
+      let headers = response.headers().clone();
       let error_text = response.text().await.unwrap_or_default();
-      return Err(LLMError::HttpError {
-        status_code,
-        message: error_text,
-      });
+      return Err(super::chat_http_error(status_code, error_text, &headers));
     }
 
     let moonshot_response: MoonshotResponse = response.json().await?;
@@ -188,11 +186,9 @@ impl LLMProvider for MoonshotProvider {
 
     if !response.status().is_success() {
       let status_code = response.status().as_u16();
+      let headers = response.headers().clone();
       let error_text = response.text().await.unwrap_or_default();
-      return Err(LLMError::HttpError {
-        status_code,
-        message: error_text,
-      });
+      return Err(super::chat_http_error(status_code, error_text, &headers));
     }
 
     Ok(Box::new(MoonshotStreamingResponse::new(response)))
