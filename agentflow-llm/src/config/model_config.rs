@@ -1,6 +1,6 @@
 use crate::{
   LLMError, Result,
-  model_types::{InputType, ModelCapabilities, ModelType},
+  model_types::{InputType, ModelCapabilities, ModelType, OutputType},
   thinking::ThinkingKind,
 };
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,30 @@ pub struct ModelConfig {
   /// can be wired into vision nodes.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub accepts: Option<Vec<InputType>>,
+
+  /// Output modalities this model can produce (`text` / `image` / `audio`
+  /// / `video` / `vector` / `function_call`).
+  ///
+  /// P-LLM2.6: reserved schema field, mirroring `accepts` on the output
+  /// side. When `Some`, this is the authoritative source —
+  /// `ModelConfig::outputs()` returns it directly. When `None`, the value
+  /// is inferred from `granular_type().primary_output()` (e.g. `Chat`
+  /// defaults to `[text]`, `Text2Image` to `[image]`).
+  ///
+  /// Exists for chat models whose responses are *not* single-modality —
+  /// e.g. `gemini-2.0-flash-preview-image-generation` returns inline
+  /// image parts alongside text in an ordinary chat turn, so `type: chat`
+  /// alone (→ `primary_output() == Text`) undersells what the model
+  /// actually emits. Declaring `outputs: [text, image]` records that
+  /// distinction in the registry today; **this field is metadata only —
+  /// no provider response parser yet constructs `ContentType::Image` for
+  /// a chat response** (`ContentType::{Image,Audio,Mixed}` are fully
+  /// modeled but currently unconstructed dead variants — see
+  /// `providers::ContentType`). Wiring that parsing up is separate,
+  /// larger follow-on work; this field just lets a caller ask "does this
+  /// model produce image output at all" without it.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub outputs: Option<Vec<OutputType>>,
 
   /// Detailed model capabilities (computed from type)
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +184,20 @@ impl ModelConfig {
     self.granular_type().supported_inputs()
   }
 
+  /// Output modalities this model can produce.
+  ///
+  /// Returns the explicit `outputs` field when set; otherwise derives the
+  /// default from `granular_type().primary_output()` (e.g. a `Chat` model
+  /// with no explicit `outputs` returns `[Text]`). See the `outputs` field
+  /// doc comment for why this exists and its current scope (metadata
+  /// only — see that comment for what's *not* wired up yet).
+  pub fn outputs(&self) -> std::collections::HashSet<OutputType> {
+    if let Some(explicit) = self.outputs.as_ref() {
+      return explicit.iter().cloned().collect();
+    }
+    std::iter::once(self.granular_type().primary_output()).collect()
+  }
+
   /// Get or compute model capabilities
   pub fn get_capabilities(&self) -> ModelCapabilities {
     if let Some(ref capabilities) = self.capabilities {
@@ -178,6 +216,10 @@ impl ModelConfig {
       if self.supports_multimodal.unwrap_or(false) {
         capabilities.accepts.insert(InputType::Image);
       }
+
+      // P-LLM2.6: same overlay for the output side — see `outputs`'s doc
+      // comment for scope (metadata only, no parser wired to it yet).
+      capabilities.outputs = self.outputs();
 
       // Override with explicit config values
       if let Some(streaming) = self.supports_streaming {
@@ -1147,6 +1189,86 @@ models:
     assert!(claude_accepts.contains(&InputType::Text));
     assert!(!claude_accepts.contains(&InputType::Image));
     assert_eq!(claude_accepts.len(), 1);
+  }
+
+  /// P-LLM2.6: mirrors `accepts_field_overrides_inferred_modalities` for
+  /// the output side — a chat model that also emits images (e.g. Gemini's
+  /// image-generation chat variants) can declare `outputs: [text, image]`
+  /// without needing a dedicated `type:`.
+  #[test]
+  fn outputs_field_overrides_inferred_modalities() {
+    let yaml = r#"
+models:
+  gemini-image-chat:
+    vendor: google
+    type: chat
+    outputs: [text, image]
+  plain-chat:
+    vendor: openai
+    type: chat
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+
+    let image_chat = config.get_model("gemini-image-chat").unwrap();
+    let image_chat_outputs = image_chat.outputs();
+    assert!(image_chat_outputs.contains(&OutputType::Text));
+    assert!(image_chat_outputs.contains(&OutputType::Image));
+    assert_eq!(image_chat_outputs.len(), 2);
+
+    let plain = config.get_model("plain-chat").unwrap();
+    let plain_outputs = plain.outputs();
+    assert!(plain_outputs.contains(&OutputType::Text));
+    assert_eq!(plain_outputs.len(), 1);
+  }
+
+  /// P-LLM2.6: an unset `outputs` field falls back to
+  /// `granular_type().primary_output()` — a `text_to_image` model with no
+  /// explicit `outputs` still correctly reports `[Image]`, not `[Text]`.
+  #[test]
+  fn outputs_falls_back_to_type_default_when_unset() {
+    let yaml = r#"
+models:
+  chat-model:
+    vendor: openai
+    type: chat
+  image-gen-model:
+    vendor: openai
+    type: text_to_image
+  tts-model:
+    vendor: openai
+    type: tts
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+
+    let chat_outputs = config.get_model("chat-model").unwrap().outputs();
+    assert_eq!(chat_outputs, [OutputType::Text].into_iter().collect());
+
+    let image_outputs = config.get_model("image-gen-model").unwrap().outputs();
+    assert_eq!(image_outputs, [OutputType::Image].into_iter().collect());
+
+    let tts_outputs = config.get_model("tts-model").unwrap().outputs();
+    assert_eq!(tts_outputs, [OutputType::Audio].into_iter().collect());
+  }
+
+  /// `get_capabilities()` must copy the resolved `outputs()` set onto
+  /// `ModelCapabilities`, mirroring how it already does for `accepts`.
+  #[test]
+  fn get_capabilities_copies_outputs_onto_capabilities() {
+    let yaml = r#"
+models:
+  gemini-image-chat:
+    vendor: google
+    type: chat
+    outputs: [text, image]
+"#;
+    let config = LLMConfig::from_yaml(yaml).unwrap();
+    let capabilities = config
+      .get_model("gemini-image-chat")
+      .unwrap()
+      .get_capabilities();
+    assert!(capabilities.outputs.contains(&OutputType::Text));
+    assert!(capabilities.outputs.contains(&OutputType::Image));
+    assert_eq!(capabilities.outputs.len(), 2);
   }
 
   #[test]

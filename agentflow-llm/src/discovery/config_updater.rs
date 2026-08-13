@@ -116,6 +116,7 @@ impl ConfigUpdater {
       vendor: vendor.to_string(),
       r#type: Some("text".to_string()), // Default type
       accepts: None,                    // Defaults inferred from type
+      outputs: None,                    // Defaults inferred from type
       capabilities: None,               // Will be computed from type
       model_id: if model.id != self.generate_model_key(&model.id, vendor) {
         Some(model.id.clone())

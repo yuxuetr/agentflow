@@ -59,6 +59,7 @@ provider-side validation and ReAct fallback behavior:
 | `max_output_tokens` | `Option<u32>` | Hard ceiling on a single response. |
 | `supports_system_messages` | `bool` | When `false`, the adapter folds system content into the first user message. |
 | `custom_capabilities` | `HashMap<String, Value>` | Provider-specific opt-ins (vision detail mode, JSON-mode strictness, etc). Stable surface but opaque to the registry. |
+| `outputs` | `HashSet<OutputType>` | Output modalities this model can produce (P-LLM2.6). Populated from `ModelConfig::outputs` (explicit YAML `outputs: [...]`) when set, else seeded to `{model_type.primary_output()}`. **Metadata only** — no provider response parser constructs `ContentType::Image`/`Audio`/`Mixed` for a chat response yet, so this records that e.g. `gemini-2.0-flash-preview-image-generation` *can* return inline image parts in a chat turn without this crate being able to surface that data today. |
 
 ## Configuration source
 

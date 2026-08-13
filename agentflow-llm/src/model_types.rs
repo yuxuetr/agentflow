@@ -284,6 +284,18 @@ pub struct ModelCapabilities {
   /// `accepts.contains(&InputType::Image)`, not match on `model_type`.
   #[serde(default)]
   pub accepts: HashSet<InputType>,
+  /// Output modalities this model can produce.
+  ///
+  /// P-LLM2.6: populated from `ModelConfig::outputs` (explicit) when
+  /// present, otherwise seeded to `{model_type.primary_output()}` — the
+  /// output-side counterpart to `accepts`. **Metadata only**: no provider
+  /// response parser constructs `ContentType::Image`/`Audio`/`Mixed` for
+  /// a chat response yet, so a caller checking
+  /// `outputs.contains(&OutputType::Image)` learns the model *can*
+  /// produce image output, not that this crate can currently surface it.
+  /// See `ModelConfig::outputs`'s doc comment for the full rationale.
+  #[serde(default)]
+  pub outputs: HashSet<OutputType>,
   /// Whether the model supports streaming responses
   pub supports_streaming: bool,
   /// Whether the model requires streaming (no non-streaming mode)
@@ -324,6 +336,7 @@ impl ModelCapabilities {
   /// `ModelConfig::get_capabilities()`.
   pub fn from_model_type(model_type: ModelType) -> Self {
     let accepts = model_type.supported_inputs();
+    let outputs = std::iter::once(model_type.primary_output()).collect();
     let supports_system_messages = matches!(model_type, ModelType::Chat);
     Self {
       supports_streaming: model_type.supports_streaming(),
@@ -335,6 +348,7 @@ impl ModelCapabilities {
       max_output_tokens: None,
       custom_capabilities: std::collections::HashMap::new(),
       accepts,
+      outputs,
       model_type,
     }
   }
@@ -500,6 +514,36 @@ mod tests {
     assert!(caps.supports_input(&InputType::Image));
     assert!(caps.supports_input(&InputType::Text));
     assert!(!caps.supports_input(&InputType::Audio));
+  }
+
+  /// P-LLM2.6: `from_model_type` seeds `outputs` from
+  /// `model_type.primary_output()`, mirroring `accepts`/
+  /// `supported_inputs()` on the input side.
+  #[test]
+  fn from_model_type_seeds_outputs_from_primary_output() {
+    let chat = ModelCapabilities::from_model_type(ModelType::Chat);
+    assert_eq!(chat.outputs, [OutputType::Text].into_iter().collect());
+
+    let text2image = ModelCapabilities::from_model_type(ModelType::Text2Image);
+    assert_eq!(
+      text2image.outputs,
+      [OutputType::Image].into_iter().collect()
+    );
+
+    let tts = ModelCapabilities::from_model_type(ModelType::Tts);
+    assert_eq!(tts.outputs, [OutputType::Audio].into_iter().collect());
+  }
+
+  /// Explicit `outputs` (e.g. a chat model that also emits images) can be
+  /// layered onto the default-from-type set without changing `model_type`
+  /// — same override mechanism `accepts` already has.
+  #[test]
+  fn capabilities_with_explicit_outputs_report_extra_modality() {
+    let mut caps = ModelCapabilities::from_model_type(ModelType::Chat);
+    assert_eq!(caps.outputs, [OutputType::Text].into_iter().collect());
+    caps.outputs.insert(OutputType::Image);
+    assert!(caps.outputs.contains(&OutputType::Text));
+    assert!(caps.outputs.contains(&OutputType::Image));
   }
 
   #[test]

@@ -251,6 +251,12 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    # P-LLM2.6: this model returns inline image parts alongside text in an
+    # ordinary chat turn — metadata only for now, see
+    # ModelConfig::outputs's doc comment for what's not wired up yet
+    # (no response parser constructs ContentType::Image for a chat
+    # response).
+    outputs: [text, image]
     response_format: null
   gemini-2.0-flash-lite:
     vendor: google
@@ -347,6 +353,8 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
+    # P-LLM2.6: see gemini-2.0-flash-exp-image-generation's comment above.
+    outputs: [text, image]
     response_format: null
   gemini-2.0-flash-thinking-exp:
     vendor: google
