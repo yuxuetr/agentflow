@@ -1,0 +1,21 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "server/discover",
+    "params": null
+  },
+  "expected_response_required_fields": [
+    "jsonrpc",
+    "id",
+    "result.supportedVersions",
+    "result.capabilities",
+    "result.serverInfo"
+  ],
+  "expected_values": {
+    "jsonrpc": "2.0",
+    "id": 8
+  },
+  "expected_array_field": "result.supportedVersions",
+  "expected_array_non_empty": true
+}

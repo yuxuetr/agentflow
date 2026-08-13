@@ -175,6 +175,48 @@ async fn unknown_method_returns_method_not_found_error() {
   run_fixture("method_not_found").await;
 }
 
+/// W5.8-6: `server/discover` is additive (per the "new methods may be
+/// added" clause in this module's own stability doc comment) — this
+/// fixture pins its shape the same way the four Beta methods above are
+/// pinned, without claiming Beta stability for it (see
+/// `docs/STABILITY.md`: Experimental tier).
+#[tokio::test]
+async fn server_discover_returns_supported_versions_capabilities_and_server_info() {
+  run_fixture("server_discover").await;
+}
+
+/// The fixture harness only checks `result.supportedVersions` is a
+/// non-empty array (dotted-path lookup doesn't do "array contains X").
+/// This test pins the actual content: both the Legacy and Modern
+/// protocol versions this server understands.
+#[tokio::test]
+async fn server_discover_supported_versions_lists_both_legacy_and_modern() {
+  let server = MCPServer::new(Box::new(AgentFlowServerHandler::new()));
+  let response = server
+    .handle_request(serde_json::json!({
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "server/discover"
+    }))
+    .await
+    .expect("handle_request ok")
+    .expect("response present");
+  let versions: Vec<&str> = response["result"]["supportedVersions"]
+    .as_array()
+    .expect("supportedVersions is an array")
+    .iter()
+    .map(|v| v.as_str().expect("version is a string"))
+    .collect();
+  assert!(
+    versions.contains(&STABLE_PROTOCOL_VERSION),
+    "must list the Legacy stdio protocol version: {versions:?}"
+  );
+  assert!(
+    versions.contains(&"2026-07-28"),
+    "must list the Modern protocol version: {versions:?}"
+  );
+}
+
 /// P10.5.2: the protocol version returned by `initialize` must
 /// match the publicly-exported `STABLE_PROTOCOL_VERSION` constant.
 /// Bumping the constant is the explicit signal that the wire

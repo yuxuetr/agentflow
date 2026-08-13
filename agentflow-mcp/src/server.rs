@@ -32,8 +32,13 @@
 //! - The stdio I/O loop's exact framing (line-delimited UTF-8 with
 //!   `\n` separator) is intentionally narrow — operators wanting
 //!   richer transports should drive `handle_request` directly.
+//! - `server/discover` (W5.8-6, additive per the "new methods may be
+//!   added" clause above) and the new [`crate::server_streamable_http`]
+//!   endpoint (W5.8-7) are **Experimental**, not Beta — see
+//!   `docs/STABILITY.md`.
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
+use crate::protocol::modern::{MCP_PROTOCOL_VERSION_2026_07_28, SERVER_DISCOVER_METHOD};
 use crate::protocol::types::MCP_PROTOCOL_VERSION;
 use crate::tools::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{Value, json};
@@ -198,6 +203,30 @@ impl MCPServer {
       "notifications/initialized" => {
         // Initialization complete notification - no response needed
         Ok(None)
+      }
+
+      SERVER_DISCOVER_METHOD => {
+        // W5.8-6 (RFC_MCP_PROTOCOL_MODERNIZATION.md Phase 3): additive
+        // per the Beta promise in docs/STABILITY.md ("new methods may
+        // be added in future minor releases; the existing four stay
+        // wire-stable") — the four methods above are untouched.
+        //
+        // `handle_request` is transport-agnostic and its signature is
+        // itself part of the frozen Beta contract, so this response
+        // can't vary by which transport actually called it. It reports
+        // every protocol version this server (as a whole, across both
+        // its stdio and Streamable HTTP surfaces) understands, rather
+        // than only the one reachable on the current connection.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "supportedVersions": [MCP_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION_2026_07_28],
+                "capabilities": self.handler.get_capabilities(),
+                "serverInfo": self.handler.get_server_info()
+            }
+        });
+        Ok(Some(response))
       }
 
       "tools/list" => {
