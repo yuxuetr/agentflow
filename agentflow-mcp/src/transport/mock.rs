@@ -61,6 +61,16 @@ pub struct MockTransport {
   connected: Arc<Mutex<bool>>,
   /// Messages that were sent
   sent_messages: Arc<Mutex<Vec<Value>>>,
+  /// W5.8-4: the transport type this mock reports via
+  /// [`Transport::transport_type`]. Defaults to [`TransportType::Stdio`]
+  /// (unchanged from every pre-W5.8 usage of this fixture — always
+  /// Legacy era per `client::era::era_for_transport`). Tests exercising
+  /// the Modern-era client path set this to
+  /// [`TransportType::StreamableHttp`] via [`Self::with_transport_type`]
+  /// so `MCPClient::connect()` picks the Modern branch without spinning
+  /// up a real HTTP server — this mock's queue-based `send_message`
+  /// works identically either way.
+  transport_type: TransportType,
 }
 
 impl MockTransport {
@@ -70,7 +80,14 @@ impl MockTransport {
       responses: Arc::new(Mutex::new(VecDeque::new())),
       connected: Arc::new(Mutex::new(false)),
       sent_messages: Arc::new(Mutex::new(Vec::new())),
+      transport_type: TransportType::Stdio,
     }
+  }
+
+  /// Override the reported transport type (see the struct field doc).
+  pub fn with_transport_type(mut self, transport_type: TransportType) -> Self {
+    self.transport_type = transport_type;
+    self
   }
 
   /// Add a response that will be returned for the next send_message call
@@ -266,7 +283,7 @@ impl Transport for MockTransport {
   }
 
   fn transport_type(&self) -> TransportType {
-    TransportType::Stdio // Mock uses stdio type
+    self.transport_type
   }
 }
 

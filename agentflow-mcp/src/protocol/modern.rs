@@ -210,6 +210,39 @@ pub fn as_unsupported_protocol_version_error(
   )
 }
 
+/// Pick a protocol version worth retrying a request with, given the
+/// server's `UnsupportedProtocolVersionError.supported` list and the
+/// version just tried (RFC: "the client retries with a mutually
+/// supported version"). Only ever returns a *Modern*-era version from
+/// `candidates` — retrying with a Legacy version makes no sense on the
+/// `_meta`-carried per-request path — preferring the newest mutually
+/// supported one. Returns `None` when nothing in `candidates` is both
+/// Modern and in `supported` (other than `already_tried` itself).
+///
+/// `candidates` is a parameter (rather than hardcoding
+/// [`KNOWN_PROTOCOL_VERSIONS`]) so the selection algorithm is
+/// unit-testable independent of how many Modern versions this crate
+/// actually implements today — currently exactly one (`2026-07-28`), so
+/// the real caller ([`crate::client`]'s `send_request`, passing
+/// `KNOWN_PROTOCOL_VERSIONS`) rarely has anything to switch to in
+/// practice; this only becomes load-bearing once a second Modern
+/// revision ships.
+pub fn pick_mutually_supported_modern_version<'a>(
+  supported: &[String],
+  candidates: &[&'a str],
+  already_tried: &str,
+) -> Option<&'a str> {
+  candidates
+    .iter()
+    .rev()
+    .find(|&&v| {
+      v != already_tried
+        && McpEra::for_version(v) == McpEra::Modern
+        && supported.iter().any(|s| s == v)
+    })
+    .copied()
+}
+
 /// `true` when a [`JsonRpcError`]'s code is one this crate recognizes as
 /// "the server is Modern-era" per the RFC's era-detection rules — used
 /// by the era-probe (W5.8-4) to distinguish a real Modern rejection
@@ -449,6 +482,61 @@ mod tests {
     let error = JsonRpcError::new(-32601, "method not found".to_string());
     assert!(!is_recognized_modern_error(&error));
     assert!(as_unsupported_protocol_version_error(&error).is_none());
+  }
+
+  // ── version-retry selection ───────────────────────────────────────
+
+  #[test]
+  fn picks_the_modern_candidate_when_not_yet_tried() {
+    // `McpEra::for_version` only recognizes `2026-07-28` as Modern today
+    // (W5.8-2), so a realistic candidate set has exactly one eligible
+    // entry — this proves the era + supported + already-tried filters
+    // all pass it through when nothing disqualifies it, using an
+    // `already_tried` value that (unrealistically, since this crate
+    // only ever sends `2026-07-28` first) isn't the candidate itself,
+    // to actually exercise the "found a pick" branch.
+    let supported = vec!["2024-11-05".to_string(), "2026-07-28".to_string()];
+    let candidates = [
+      MCP_PROTOCOL_VERSION_2024_11_05,
+      MCP_PROTOCOL_VERSION_2026_07_28,
+    ];
+    assert_eq!(
+      pick_mutually_supported_modern_version(&supported, &candidates, "2020-01-01"),
+      Some(MCP_PROTOCOL_VERSION_2026_07_28)
+    );
+  }
+
+  #[test]
+  fn never_picks_already_tried_version_even_if_supported() {
+    let supported = vec!["2026-07-28".to_string()];
+    let candidates = [MCP_PROTOCOL_VERSION_2026_07_28];
+    assert_eq!(
+      pick_mutually_supported_modern_version(&supported, &candidates, "2026-07-28"),
+      None
+    );
+  }
+
+  #[test]
+  fn never_picks_a_legacy_version() {
+    let supported = vec!["2025-11-25".to_string()];
+    let candidates = [
+      MCP_PROTOCOL_VERSION_2025_11_25,
+      MCP_PROTOCOL_VERSION_2026_07_28,
+    ];
+    assert_eq!(
+      pick_mutually_supported_modern_version(&supported, &candidates, "2026-07-28"),
+      None
+    );
+  }
+
+  #[test]
+  fn returns_none_when_no_overlap() {
+    let supported = vec!["2099-01-01".to_string()];
+    let candidates = [MCP_PROTOCOL_VERSION_2026_07_28];
+    assert_eq!(
+      pick_mutually_supported_modern_version(&supported, &candidates, "2020-01-01"),
+      None
+    );
   }
 
   // ── server/discover ───────────────────────────────────────────────

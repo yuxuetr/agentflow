@@ -4,6 +4,11 @@
 //! connection state tracking, and message correlation.
 
 use crate::error::{JsonRpcErrorCode, MCPError, MCPResult, ResultExt};
+use crate::protocol::modern::{
+  KNOWN_PROTOCOL_VERSIONS, MCP_PROTOCOL_VERSION_2026_07_28, McpEra,
+  as_unsupported_protocol_version_error, inject_modern_meta_into_request, is_input_required_result,
+  pick_mutually_supported_modern_version,
+};
 #[cfg(test)]
 use crate::protocol::types::ClientCapabilities;
 use crate::protocol::types::{
@@ -18,6 +23,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::builder::ClientConfig;
+use super::era::era_for_transport;
 
 /// MCP client with session management
 ///
@@ -75,6 +81,13 @@ pub struct MCPClient {
   server_info: Arc<Mutex<Option<Implementation>>>,
   /// Request ID counter
   request_counter: Arc<AtomicU64>,
+  /// W5.8-4: which protocol era this connection speaks, set by
+  /// `connect()` from the transport type (see
+  /// [`super::era::era_for_transport`]). Defaults to `Legacy` before
+  /// the first successful `connect()` — matches every pre-W5.8 code
+  /// path's behavior, since nothing meaningfully reads this before a
+  /// connection exists.
+  era: Arc<Mutex<McpEra>>,
 }
 
 impl std::fmt::Debug for MCPClient {
@@ -110,6 +123,7 @@ impl MCPClient {
       server_capabilities: Arc::new(Mutex::new(None)),
       server_info: Arc::new(Mutex::new(None)),
       request_counter: Arc::new(AtomicU64::new(1)),
+      era: Arc::new(Mutex::new(McpEra::Legacy)),
     }
   }
 
@@ -165,6 +179,17 @@ impl MCPClient {
           Some(timeout.as_millis() as u64),
         ));
       }
+    }
+
+    // W5.8-4: era is a property of the transport (see
+    // `era::era_for_transport`'s doc comment for why this is
+    // transport-type-based rather than a runtime wire probe). Modern
+    // has no handshake — stateless, per-request `_meta` instead — so
+    // only Legacy runs `initialize()` below.
+    let era = era_for_transport(self.transport.transport_type());
+    *self.era.lock().await = era;
+    if era == McpEra::Modern {
+      return Ok(());
     }
 
     // Initialize session (already has retry + timeout via send_request)
@@ -335,11 +360,20 @@ impl MCPClient {
   /// method the server never advertised support for during `initialize`
   /// — instead of relying on the server to reject it (typically with a
   /// JSON-RPC "method not found").
+  ///
+  /// W5.8-4: Modern era has no `initialize`/`ServerCapabilities`
+  /// handshake to consult (the RFC: the server "accepts or rejects each
+  /// request independently") — bypassed unconditionally for a Modern
+  /// connection; the server rejects unsupported methods per-request
+  /// instead of the client gating on a stale up-front capability set.
   pub(crate) async fn require_server_capability(
     &self,
     check: impl Fn(&ServerCapabilities) -> bool,
     capability_name: &str,
   ) -> MCPResult<()> {
+    if *self.era.lock().await == McpEra::Modern {
+      return Ok(());
+    }
     match self.server_capabilities.lock().await.as_ref() {
       Some(caps) if check(caps) => Ok(()),
       Some(_) => Err(MCPError::protocol(
@@ -355,6 +389,12 @@ impl MCPClient {
   /// Get server info (if initialized)
   pub async fn server_info(&self) -> Option<Implementation> {
     self.server_info.lock().await.clone()
+  }
+
+  /// Which protocol era this connection speaks (W5.8-4). `Legacy` before
+  /// the first successful `connect()`.
+  pub async fn era(&self) -> McpEra {
+    *self.era.lock().await
   }
 
   /// Get session ID
@@ -379,6 +419,19 @@ impl MCPClient {
     // P3.8: traceparent injection for cross-hop OTel.
     let mut request = request;
     crate::protocol::traceparent::inject_traceparent_into_request(&mut request);
+
+    // W5.8-4: Modern era carries protocol version + client identity
+    // per-request instead of via a one-time `initialize()` handshake.
+    let era = *self.era.lock().await;
+    let sent_protocol_version = MCP_PROTOCOL_VERSION_2026_07_28;
+    if era == McpEra::Modern {
+      inject_modern_meta_into_request(
+        &mut request,
+        sent_protocol_version,
+        &self.config.client_info,
+        &self.config.capabilities,
+      );
+    }
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
@@ -404,6 +457,58 @@ impl MCPClient {
       }
     })
     .await?;
+
+    if era != McpEra::Modern {
+      return Ok(response);
+    }
+
+    // Modern-only post-processing: retry once on a recognized version
+    // mismatch, and refuse to silently misinterpret an MRTR
+    // `InputRequiredResult` as an ordinary result.
+    let Ok(parsed) = serde_json::from_value::<JsonRpcResponse>(response.clone()) else {
+      // Not a well-formed JSON-RPC response envelope — nothing
+      // Modern-specific to do; let the caller's own parsing surface
+      // whatever's wrong.
+      return Ok(response);
+    };
+
+    if let Some(error) = parsed.error.as_ref()
+      && let Some(data) = as_unsupported_protocol_version_error(error)
+      && let Some(retry_version) = pick_mutually_supported_modern_version(
+        &data.supported,
+        KNOWN_PROTOCOL_VERSIONS,
+        sent_protocol_version,
+      )
+    {
+      inject_modern_meta_into_request(
+        &mut request,
+        retry_version,
+        &self.config.client_info,
+        &self.config.capabilities,
+      );
+      let retry_value = serde_json::to_value(&request)
+        .map_err(|e| MCPError::from(e).context("Failed to serialize version-retry request"))?;
+      let retried = tokio::time::timeout(timeout, transport.send_message(retry_value))
+        .await
+        .map_err(|_| {
+          MCPError::timeout(
+            format!("Request timeout after {:?}", timeout),
+            Some(timeout.as_millis() as u64),
+          )
+        })?
+        .map_err(|e| e.context("Failed to send version-retry request"))?;
+      return Ok(retried);
+    }
+
+    if let Some(result) = parsed.result.as_ref()
+      && is_input_required_result(result)
+    {
+      return Err(MCPError::protocol(
+        "server requested MRTR input (InputRequiredResult) but this client has no \
+         sampling/elicitation/roots input-response handler wired up yet",
+        JsonRpcErrorCode::InternalError,
+      ));
+    }
 
     Ok(response)
   }

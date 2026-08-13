@@ -64,6 +64,7 @@
 //! - `retry` - Retry logic with exponential backoff
 
 mod builder;
+mod era;
 mod prompts;
 mod resources;
 pub mod retry; // Public for direct access to retry utilities
