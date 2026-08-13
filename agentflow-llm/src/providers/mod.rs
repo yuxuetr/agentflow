@@ -149,6 +149,55 @@ impl ProviderRequest {
   }
 }
 
+/// Parse a `data:<mime>;base64,<payload>` URL into its `(mime_type, payload)`
+/// parts. Returns `None` for anything else (e.g. a remote `http(s)` URL),
+/// which callers treat as "not embedded data — reference it by URL instead".
+///
+/// Shared by every provider adapter that must distinguish a base64-embedded
+/// image (translated into that provider's native inline/base64 content
+/// block) from a remote URL reference (passed through as a URL reference) —
+/// [`crate::multimodal::MultimodalMessage::to_openai_format`] represents both
+/// as an `image_url` block, so this is the one place that tells them apart.
+pub(crate) fn parse_data_url(url: &str) -> Option<(String, String)> {
+  let rest = url.strip_prefix("data:")?;
+  let (meta, data) = rest.split_once(',')?;
+  let meta = meta.strip_suffix(";base64")?;
+  let mime = if meta.is_empty() {
+    "application/octet-stream".to_string()
+  } else {
+    meta.to_string()
+  };
+  Some((mime, data.to_string()))
+}
+
+/// Concatenate the textual portion of an OpenAI-shaped `content` value
+/// (a plain string, or an array of typed blocks). Used wherever a provider's
+/// native system-message field is text-only (Google's `systemInstruction`,
+/// Anthropic's `system`) so a multimodal system message's text survives
+/// instead of being silently dropped just because `content` is an array
+/// rather than a string.
+pub(crate) fn openai_content_to_text(content: &Value) -> String {
+  if let Some(text) = content.as_str() {
+    return text.to_string();
+  }
+  let Some(items) = content.as_array() else {
+    return String::new();
+  };
+  let mut out = String::new();
+  for item in items {
+    if let Some(obj) = item.as_object()
+      && obj.get("type").and_then(Value::as_str) == Some("text")
+      && let Some(text) = obj.get("text").and_then(Value::as_str)
+    {
+      if !out.is_empty() {
+        out.push(' ');
+      }
+      out.push_str(text);
+    }
+  }
+  out
+}
+
 /// Content types that can be returned by LLM providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentType {

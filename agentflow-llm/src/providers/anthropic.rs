@@ -77,12 +77,22 @@ impl AnthropicProvider {
       {
         match role.as_str() {
           Some("system") => {
-            system_message = content.as_str().map(|s| s.to_string());
+            // System messages stay text-only on Anthropic (mirrors Google's
+            // `systemInstruction`); flatten any array parts to their
+            // concatenated text rather than dropping non-string content
+            // silently (P-LLM2.4 — pre-fix this was `content.as_str()`,
+            // which yielded `None` — the whole system prompt vanishing —
+            // for any multimodal system message, since `content` is an
+            // array in that case, not a string).
+            let text = super::openai_content_to_text(content);
+            if !text.is_empty() {
+              system_message = Some(text);
+            }
           }
           Some("user") | Some("assistant") => {
             anthropic_messages.push(json!({
               "role": role,
-              "content": content
+              "content": openai_content_to_anthropic_content(content)
             }));
           }
           _ => {}
@@ -160,6 +170,72 @@ impl AnthropicProvider {
 
     body
   }
+}
+
+/// Translate an OpenAI-shaped `content` field (string, or an array of typed
+/// parts as produced by [`crate::multimodal::MultimodalMessage::to_openai_format`])
+/// into Anthropic's native content-block shape.
+///
+/// Plain string content passes through unchanged — Anthropic accepts a bare
+/// string for text-only turns, same as OpenAI, so this is a no-op for the
+/// (overwhelmingly common) text-only case. Array content is translated
+/// block-by-block:
+///  - `text` → `{"type":"text","text":...}`
+///  - `image_url` whose URL is a `data:<mime>;base64,<payload>` URI →
+///    `{"type":"image","source":{"type":"base64","media_type":...,"data":...}}`
+///  - `image_url` whose URL is a remote `http(s)` reference →
+///    `{"type":"image","source":{"type":"url","url":...}}`
+///
+/// P-LLM2.4: pre-fix, `build_request_body` forwarded the OpenAI-shaped array
+/// verbatim as Anthropic `content` — Anthropic's real API recognizes neither
+/// `"type":"image_url"` nor `"type":"image_data"`, so every multimodal
+/// request built through `MultimodalMessage`/`.multimodal_prompt()` against a
+/// Claude model was rejected, despite the model registry declaring
+/// `accepts: [text, image]`.
+///
+/// Unrecognized block kinds are dropped rather than erroring here — today
+/// the only kinds `MultimodalMessage` can ever produce are `text` and
+/// `image_url` (see `multimodal.rs`), so this arm is unreachable in
+/// practice; `validate_request` is where an unsupported *modality* (e.g. a
+/// model without `accepts: image`) is rejected before a request is ever
+/// built.
+fn openai_content_to_anthropic_content(content: &Value) -> Value {
+  let Some(items) = content.as_array() else {
+    // Plain string (or any other non-array shape) — pass through unchanged.
+    return content.clone();
+  };
+  let blocks: Vec<Value> = items
+    .iter()
+    .filter_map(|item| {
+      let obj = item.as_object()?;
+      match obj.get("type").and_then(Value::as_str)? {
+        "text" => {
+          let text = obj.get("text").and_then(Value::as_str)?;
+          Some(json!({ "type": "text", "text": text }))
+        }
+        "image_url" => {
+          let url = obj.get("image_url").and_then(|v| match v {
+            Value::String(s) => Some(s.as_str()),
+            Value::Object(map) => map.get("url").and_then(Value::as_str),
+            _ => None,
+          })?;
+          if let Some((media_type, data)) = super::parse_data_url(url) {
+            Some(json!({
+              "type": "image",
+              "source": { "type": "base64", "media_type": media_type, "data": data }
+            }))
+          } else {
+            Some(json!({
+              "type": "image",
+              "source": { "type": "url", "url": url }
+            }))
+          }
+        }
+        _ => None,
+      }
+    })
+    .collect();
+  Value::Array(blocks)
 }
 
 /// Encode a [`ThinkingConfig`] as Anthropic's `thinking` request block.
@@ -719,6 +795,89 @@ mod tests {
     assert_eq!(body["system"], "You are helpful");
     assert_eq!(body["messages"].as_array().unwrap().len(), 1); // Only user message
     assert!(body.get("tools").is_none());
+  }
+
+  /// P-LLM2.4 regression: a real `MultimodalMessage` (via
+  /// `to_openai_format()`) built through the public builder API must
+  /// translate into Anthropic-native `image` content blocks, not pass
+  /// through the OpenAI-shaped `image_url`/`image_data` tags verbatim
+  /// (which the real Anthropic API rejects outright).
+  #[test]
+  fn build_request_body_translates_multimodal_content_to_anthropic_blocks() {
+    use crate::multimodal::MultimodalMessage;
+
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+
+    let remote = MultimodalMessage::user()
+      .add_text("what is this")
+      .add_image_url("https://example.com/cat.jpg")
+      .build()
+      .to_openai_format();
+    let base64 = MultimodalMessage::user()
+      .add_image_data("aGVsbG8=", "image/png")
+      .build()
+      .to_openai_format();
+
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![remote, base64],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let body = provider.build_request_body(&request);
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+
+    let remote_blocks = messages[0]["content"].as_array().unwrap();
+    assert_eq!(remote_blocks[0]["type"], "text");
+    assert_eq!(remote_blocks[0]["text"], "what is this");
+    assert_eq!(remote_blocks[1]["type"], "image");
+    assert_eq!(remote_blocks[1]["source"]["type"], "url");
+    assert_eq!(
+      remote_blocks[1]["source"]["url"],
+      "https://example.com/cat.jpg"
+    );
+    assert!(remote_blocks[1].get("image_url").is_none());
+
+    let base64_blocks = messages[1]["content"].as_array().unwrap();
+    assert_eq!(base64_blocks[0]["type"], "image");
+    assert_eq!(base64_blocks[0]["source"]["type"], "base64");
+    assert_eq!(base64_blocks[0]["source"]["media_type"], "image/png");
+    assert_eq!(base64_blocks[0]["source"]["data"], "aGVsbG8=");
+  }
+
+  /// P-LLM2.4 regression: a system message whose `content` is an array
+  /// (because it went through `MultimodalMessage`) must still surface its
+  /// text — pre-fix, `content.as_str()` returned `None` for array content
+  /// and the entire system prompt vanished from the request.
+  #[test]
+  fn build_request_body_flattens_multimodal_system_message_text() {
+    use crate::multimodal::MultimodalMessage;
+
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let system = MultimodalMessage::system()
+      .add_text("Be concise.")
+      .build()
+      .to_openai_format();
+
+    let request = ProviderRequest {
+      model: "claude-3-5-sonnet-20241022".to_string(),
+      messages: vec![system, json!({"role": "user", "content": "hi"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    };
+
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["system"], "Be concise.");
   }
 
   #[test]

@@ -384,19 +384,53 @@ nightly CI with budget/rate-limit controls.
 - **Quota / cost dashboards**: currently each provider exposes raw
   `TokenUsage` on responses; a higher-level cost roll-up keyed by model is
   not implemented.
+- **Document (PDF) and video chat input** (P-LLM2.4 audit): `InputType`
+  has `Document` and `Video` variants and `ModelCapabilities::
+  validate_request` already takes `has_video`/`has_audio` parameters, but
+  no provider's `accepts:` registry entry ever declares `document` or
+  `video`, and `multimodal::MessageContent` has no variant a caller could
+  use to attach either — there is currently no code path, in any provider,
+  that can construct or send document/video chat input. Anthropic's real
+  API accepts PDF documents as a native content block; Google's Gemini
+  `generateContent` accepts video via `inline_data`/`file_data`. Adding
+  either is future work (new `MessageContent` variant + builder method +
+  registry `accepts:` entry + adapter translation + `validate_request`
+  wiring), not something the current implementation silently mishandles.
 
 ## Closed follow-ups
 
 - **Streaming consistency tests** — landed 2026-05-08. Cross-provider
   streaming wire formats covered in `provider_consistency.rs` via a
   chunked-encoding mock server.
-- **Multimodal consistency tests** — landed 2026-05-08. Each provider
-  receives a text + image user message in its native format
-  (OpenAI/Moonshot/StepFun: `image_url`; Anthropic: `image` content block;
-  Google: OpenAI-style → translated to `inline_data` by the adapter).
-  Tests assert the captured request body preserves the base64 payload and
-  that the response parses to the same `(text, Stop, populated usage)`
-  contract as the text-only path.
+- **Multimodal consistency tests** — landed 2026-05-08; corrected under
+  P-LLM2.4 (2026-08-13). Each provider receives the *same* OpenAI-shaped
+  `image_url` request — the one shape `MultimodalMessage::
+  to_openai_format()` ever produces — and its adapter translates that into
+  its own native format (OpenAI/Moonshot/StepFun: `image_url` passed
+  through as-is; Anthropic: native `image` content block with a base64 or
+  URL `source`; Google: rewritten into `inline_data`/`file_data`). Tests
+  assert the captured request body preserves the base64 payload and that
+  the response parses to the same `(text, Stop, populated usage)` contract
+  as the text-only path.
+  - **P-LLM2.4 finding**: pre-fix, `AnthropicProvider::build_request_body`
+    forwarded the OpenAI-shaped `content` array to Anthropic verbatim —
+    Anthropic's real API recognizes neither `"type":"image_url"` nor a
+    `"type":"image_data"` block (the latter was `MessageContent::ImageData`'s
+    own non-standard, never-OpenAI-compatible wire tag), so every real
+    multimodal call built through `MultimodalMessage`/`.multimodal_prompt()`
+    against a Claude model was rejected outright, despite the model
+    registry declaring `accepts: [text, image]`. The integration test
+    didn't catch this because it fed `AnthropicProvider::execute` an
+    already-Anthropic-native payload directly, bypassing translation
+    entirely. Fixed: `build_request_body` now translates OpenAI-shaped
+    `text`/`image_url` blocks (both remote-URL and `data:` URI forms) into
+    native Anthropic `text`/`image` blocks, a multimodal *system* message
+    (an array, not a string) has its text flattened instead of silently
+    dropped, `MessageContent::ImageData` now serializes as a standard
+    `image_url` `data:` URI (the real OpenAI wire shape — fixing the same
+    silent-drop/malformed-block bug for every OpenAI-compatible vendor and
+    for Google's base64 path in the same change), and the integration test
+    now drives the real translation path.
 - **Live LLM nightly CI job** — landed 2026-05-08.
   `agentflow-llm/tests/provider_consistency_live.rs` plus
   `.github/workflows/llm-live.yml` (cron + `workflow_dispatch`). Tests

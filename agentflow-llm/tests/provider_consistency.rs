@@ -961,32 +961,6 @@ fn provider_request_multimodal_openai_style(model: &str) -> ProviderRequest {
   }
 }
 
-fn provider_request_multimodal_anthropic_style(model: &str) -> ProviderRequest {
-  ProviderRequest {
-    model: model.to_string(),
-    messages: vec![json!({
-      "role": "user",
-      "content": [
-        {"type": "text", "text": "What's in this image?"},
-        {
-          "type": "image",
-          "source": {
-            "type": "base64",
-            "media_type": "image/png",
-            "data": IMAGE_MARKER,
-          }
-        }
-      ]
-    })],
-    stream: false,
-    parameters: HashMap::new(),
-    tools: None,
-    tool_choice: None,
-    thinking: None,
-    response_format: None,
-  }
-}
-
 async fn run_multimodal<F, Fut>(fixture: &str, build_provider: F) -> String
 where
   F: FnOnce(String) -> Fut,
@@ -1024,11 +998,17 @@ async fn openai_multimodal_path() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn anthropic_multimodal_path() {
+  // P-LLM2.4: exercises the real translation path — the request is built in
+  // the same OpenAI-shaped `image_url` form `MultimodalMessage::
+  // to_openai_format()` actually produces, and `AnthropicProvider::
+  // build_request_body` must translate it into a native `image` block
+  // rather than forwarding the OpenAI shape verbatim (which the real
+  // Anthropic API rejects).
   let captured = run_multimodal(ANTHROPIC_SUCCESS, |base_url| async move {
     let provider = AnthropicProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
       .expect("provider");
     let response = provider
-      .execute(&provider_request_multimodal_anthropic_style(
+      .execute(&provider_request_multimodal_openai_style(
         "claude-3-5-sonnet",
       ))
       .await
@@ -2021,11 +2001,13 @@ async fn cross_provider_token_usage_populated_uniformly_on_success() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cross_provider_multimodal_paths_produce_uniform_response_shape() {
-  // Each provider's multimodal adapter takes a different request shape
-  // (OpenAI/Moonshot/StepFun: `image_url` parts; Anthropic: `image` parts
-  // with base64 `source`; Google rewrites OpenAI-style input into
-  // `inline_data`). The success response shape, however, must be
-  // identical across the matrix.
+  // Every provider is fed the same OpenAI-shaped `image_url` request (the
+  // one shape `MultimodalMessage::to_openai_format()` ever produces); each
+  // adapter's `build_request_body` translates it into its own native wire
+  // shape internally (OpenAI/Moonshot/StepFun: `image_url` parts passed
+  // through as-is; Anthropic: native `image` parts with a base64 `source`;
+  // Google: rewritten into `inline_data`). The success response shape must
+  // be identical across the matrix regardless.
   let mut responses: Vec<(&str, agentflow_llm::providers::ProviderResponse)> = Vec::new();
 
   let (base_url, _) = spawn_mock_server(200, OPENAI_SUCCESS.to_string()).await;
@@ -2045,7 +2027,7 @@ async fn cross_provider_multimodal_paths_produce_uniform_response_shape() {
   responses.push((
     "anthropic",
     provider
-      .execute(&provider_request_multimodal_anthropic_style(
+      .execute(&provider_request_multimodal_openai_style(
         "claude-3-5-sonnet",
       ))
       .await

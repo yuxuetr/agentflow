@@ -78,7 +78,7 @@ impl GoogleProvider {
             // System messages stay text-only on Gemini; flatten any array parts
             // to their concatenated text rather than dropping non-text content
             // silently.
-            let text = openai_content_to_text(content);
+            let text = super::openai_content_to_text(content);
             if !text.is_empty() {
               system_instruction = Some(json!({"parts": [{"text": text}]}));
             }
@@ -230,7 +230,7 @@ pub(crate) fn openai_content_to_gemini_parts(content: &Value) -> Vec<Value> {
         if url.is_empty() {
           continue;
         }
-        if let Some((mime_type, data)) = parse_data_url(url) {
+        if let Some((mime_type, data)) = super::parse_data_url(url) {
           parts.push(json!({
             "inline_data": {
               "mime_type": mime_type,
@@ -252,44 +252,6 @@ pub(crate) fn openai_content_to_gemini_parts(content: &Value) -> Vec<Value> {
     }
   }
   parts
-}
-
-/// Concatenate the textual portion of an OpenAI-shaped `content`. Used for
-/// system instructions (Gemini's `systemInstruction` is text-only).
-pub(crate) fn openai_content_to_text(content: &Value) -> String {
-  if let Some(text) = content.as_str() {
-    return text.to_string();
-  }
-  let Some(items) = content.as_array() else {
-    return String::new();
-  };
-  let mut out = String::new();
-  for item in items {
-    if let Some(obj) = item.as_object()
-      && obj.get("type").and_then(Value::as_str) == Some("text")
-      && let Some(text) = obj.get("text").and_then(Value::as_str)
-    {
-      if !out.is_empty() {
-        out.push(' ');
-      }
-      out.push_str(text);
-    }
-  }
-  out
-}
-
-/// Parse `data:<mime>;base64,<payload>` URLs into `(mime, base64_payload)`.
-/// Returns `None` for non-`data:` URLs or malformed payloads.
-fn parse_data_url(url: &str) -> Option<(String, String)> {
-  let rest = url.strip_prefix("data:")?;
-  let (meta, data) = rest.split_once(',')?;
-  let meta = meta.strip_suffix(";base64")?;
-  let mime = if meta.is_empty() {
-    "application/octet-stream".to_string()
-  } else {
-    meta.to_string()
-  };
-  Some((mime, data.to_string()))
 }
 
 /// Encode a `ToolSpec` as a Gemini `functionDeclaration` entry.

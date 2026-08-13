@@ -177,12 +177,52 @@ impl MultimodalMessage {
       .join(" ")
   }
 
-  /// Convert to OpenAI-compatible JSON format
+  /// Convert to OpenAI-compatible JSON format.
+  ///
+  /// This is the one boundary every provider adapter's `build_request_body`
+  /// consumes (`ProviderRequest::messages: Vec<Value>`), so each
+  /// [`MessageContent`] variant must serialize into the shape OpenAI's real
+  /// Chat Completions API — and every OpenAI-compatible vendor riding the
+  /// same wire format (Moonshot, StepFun, DashScope, GLM, DeepSeek, MiniMax)
+  /// — actually accepts. Crucially, `ImageData` (base64) is *not* its own
+  /// content-block type on that wire format; OpenAI only recognizes
+  /// `image_url`, with a `data:<mime>;base64,<payload>` URI standing in for
+  /// an inline image. Serializing `ImageData` under its own derived
+  /// `"image_data"` tag (P-LLM2.4 finding) produced a block no real provider
+  /// understands, silently breaking every base64-image call.
   pub fn to_openai_format(&self) -> Value {
+    let content: Vec<Value> = self
+      .content
+      .iter()
+      .map(Self::content_to_openai_value)
+      .collect();
     serde_json::json!({
       "role": self.role,
-      "content": self.content
+      "content": content
     })
+  }
+
+  fn content_to_openai_value(content: &MessageContent) -> Value {
+    match content {
+      MessageContent::Text { text } => serde_json::json!({
+        "type": "text",
+        "text": text
+      }),
+      MessageContent::ImageUrl { image_url } => serde_json::json!({
+        "type": "image_url",
+        "image_url": image_url
+      }),
+      MessageContent::ImageData { image_data } => {
+        let image_url = ImageUrl {
+          url: format!("data:{};base64,{}", image_data.media_type, image_data.data),
+          detail: image_data.detail.clone(),
+        };
+        serde_json::json!({
+          "type": "image_url",
+          "image_url": image_url
+        })
+      }
+    }
   }
 
   /// Convert to simple text format (for text-only models)
@@ -374,5 +414,38 @@ mod tests {
     assert_eq!(json["role"], "user");
     assert!(json["content"].is_array());
     assert_eq!(json["content"].as_array().unwrap().len(), 2);
+  }
+
+  /// P-LLM2.4 regression: base64 image content must serialize as an
+  /// `image_url` block with a `data:` URI — the real OpenAI-compatible wire
+  /// shape — not the non-standard derived `"image_data"` tag no provider
+  /// (OpenAI-compatible or otherwise) actually understands.
+  #[test]
+  fn to_openai_format_encodes_image_data_as_data_uri_image_url() {
+    let msg = MultimodalMessage::user()
+      .add_text("what is this")
+      .add_image_data("aGVsbG8=", "image/png")
+      .build();
+
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[1]["type"], "image_url");
+    assert_eq!(
+      parts[1]["image_url"]["url"],
+      "data:image/png;base64,aGVsbG8="
+    );
+    assert!(parts[1].get("image_data").is_none());
+  }
+
+  #[test]
+  fn to_openai_format_image_data_omits_detail_when_unset() {
+    let msg = MultimodalMessage::user()
+      .add_image_data("aGVsbG8=", "image/png")
+      .build();
+
+    let json = msg.to_openai_format();
+    let parts = json["content"].as_array().unwrap();
+    assert!(parts[0]["image_url"].get("detail").is_none());
   }
 }
