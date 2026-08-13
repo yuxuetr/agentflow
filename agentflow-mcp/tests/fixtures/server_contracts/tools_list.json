@@ -19,6 +19,6 @@
   "expected_array_item_required_fields": [
     "name",
     "description",
-    "input_schema"
+    "inputSchema"
   ]
 }

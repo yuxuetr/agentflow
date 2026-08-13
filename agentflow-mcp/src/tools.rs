@@ -5,17 +5,39 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 /// Represents an MCP tool definition
+///
+/// W5.8-8: `camelCase` on the wire (`inputSchema`) — the MCP spec's
+/// actual `tools/list` item shape, and what `client::tools::Tool`
+/// (`#[serde(rename_all = "camelCase")]`) has always expected. Found
+/// via the same first-ever real client↔server round trip
+/// (`tests/streamable_http_server.rs`) that surfaced the `ToolCall`
+/// `parameters`/`arguments` gap above: before this, `MCPClient::
+/// list_tools()` failed to parse *any* tool this server returned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
   pub name: String,
   pub description: String,
   pub input_schema: Value,
 }
 
-/// Tool call request  
+/// Tool call request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
   pub name: String,
+  /// W5.8-8: accepts the wire-standard `arguments` key (what
+  /// `client/tools.rs::call_tool` actually sends: `{"name":...,
+  /// "arguments":...}`, matching the MCP spec) as an alias for the
+  /// original `parameters` key. Discovered while building the first
+  /// real end-to-end client↔server round trip in this crate's test
+  /// suite (`tests/streamable_http_server.rs`) — before this, a
+  /// `tools/call` request built by this crate's own `MCPClient` (or any
+  /// spec-compliant external client sending `arguments`) failed to
+  /// deserialize against this crate's own `MCPServer`, since only
+  /// `parameters` was ever accepted. Purely additive: existing callers
+  /// sending `parameters` (e.g. `tests/fixtures/server_contracts/
+  /// tools_call_success.json`) are unaffected.
+  #[serde(alias = "arguments")]
   pub parameters: Value,
 }
 
