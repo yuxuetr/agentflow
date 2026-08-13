@@ -13,10 +13,22 @@ use serde_json::Value;
 pub enum TransportType {
   /// Standard I/O transport (local process)
   Stdio,
-  /// HTTP transport (remote server)
+  /// HTTP transport (remote server). Reflects the old, deprecated
+  /// `2024-11-05` dual-endpoint HTTP+SSE shape's plain-POST half —
+  /// unimplemented as an actual transport in this crate (stdio is the
+  /// only real transport prior to W5.8-3).
   Http,
-  /// HTTP with Server-Sent Events for bidirectional communication
+  /// HTTP with Server-Sent Events for bidirectional communication.
+  /// Reflects the Legacy `2025-03-26`–`2025-11-25` session-based
+  /// Streamable HTTP v1 shape (`Mcp-Session-Id`, persistent GET SSE
+  /// stream, resumable). Also unimplemented as an actual transport.
   HttpWithSSE,
+  /// Modern-era (`2026-07-28`) Streamable HTTP v2: stateless, POST-only,
+  /// response is either a single JSON object or an SSE stream scoped to
+  /// exactly that one request (no session, no persistent GET stream, no
+  /// resumability). See [`crate::transport::StreamableHttpTransport`]
+  /// (W5.8-3) and `docs/RFC_MCP_PROTOCOL_MODERNIZATION.md`.
+  StreamableHttp,
 }
 
 impl std::fmt::Display for TransportType {
@@ -25,6 +37,7 @@ impl std::fmt::Display for TransportType {
       Self::Stdio => write!(f, "stdio"),
       Self::Http => write!(f, "http"),
       Self::HttpWithSSE => write!(f, "http+sse"),
+      Self::StreamableHttp => write!(f, "streamable-http"),
     }
   }
 }
@@ -121,7 +134,7 @@ pub trait Transport: Send + Sync {
   fn supports_server_messages(&self) -> bool {
     matches!(
       self.transport_type(),
-      TransportType::Stdio | TransportType::HttpWithSSE
+      TransportType::Stdio | TransportType::HttpWithSSE | TransportType::StreamableHttp
     )
   }
 }
@@ -156,12 +169,14 @@ mod tests {
     assert_eq!(TransportType::Stdio.to_string(), "stdio");
     assert_eq!(TransportType::Http.to_string(), "http");
     assert_eq!(TransportType::HttpWithSSE.to_string(), "http+sse");
+    assert_eq!(TransportType::StreamableHttp.to_string(), "streamable-http");
   }
 
   #[test]
   fn test_transport_type_equality() {
     assert_eq!(TransportType::Stdio, TransportType::Stdio);
     assert_ne!(TransportType::Stdio, TransportType::Http);
+    assert_ne!(TransportType::StreamableHttp, TransportType::HttpWithSSE);
   }
 
   // Note: Actual transport implementations will have their own tests

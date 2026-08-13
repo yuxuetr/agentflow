@@ -28,9 +28,11 @@
 
 pub mod mock;
 pub mod stdio;
+pub mod streamable_http;
 pub mod traits;
 
 // Re-export commonly used types
 pub use mock::MockTransport;
 pub use stdio::StdioTransport;
+pub use streamable_http::StreamableHttpTransport;
 pub use traits::{Transport, TransportConfig, TransportType};

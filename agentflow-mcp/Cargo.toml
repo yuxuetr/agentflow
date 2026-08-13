@@ -30,6 +30,9 @@ uuid = { workspace = true }
 tracing = "0.1"
 async-trait = "0.1"
 futures = "0.3"
+# W5.8-3: Streamable HTTP transport (client side). Workspace-pinned
+# (rustls-tls, W5.5) — no new dependency version to introduce.
+reqwest = { workspace = true }
 # P3.8: cross-hop W3C traceparent propagation. Used to read the
 # active context from `agentflow_tracing::context::current_traceparent`
 # at request emission time and inject it into `params._meta.traceparent`.
